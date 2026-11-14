@@ -4,6 +4,7 @@ package testhooks
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -33,8 +34,17 @@ func AfterPost() {
 //go:noinline
 func crashSelf() { os.Exit(137) }
 
-// SlackAPIURL returns AGENTKOURIER_SLACK_API_URL, to point Agent Kourier at the fake Slack.
-func SlackAPIURL() string { return os.Getenv(SlackAPIURLEnv) }
+// Overrides are the values a unit test sets in place of the ones a test image reads from its environment. The environment is
+// the process's, one value for every test, so a test that sets it cannot run alongside another; an Overrides is per broker.
+// The zero value overrides nothing. A production build's Overrides has no field (off.go).
+type Overrides struct {
+	// SlackAPIURL, if not empty, is what SlackAPIURL returns in place of AGENTKOURIER_SLACK_API_URL.
+	SlackAPIURL string
+}
+
+// SlackAPIURL returns o.SlackAPIURL if it is set, and AGENTKOURIER_SLACK_API_URL otherwise, to point Agent Kourier at the
+// fake Slack.
+func SlackAPIURL(o Overrides) string { return cmp.Or(o.SlackAPIURL, os.Getenv(SlackAPIURLEnv)) }
 
 // BeforeSend parks a test runner at the private stub control gate when the before-send fault is armed.
 func BeforeSend(ctx context.Context, messageID string) error {

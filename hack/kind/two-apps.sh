@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# The scenarios of a broker that serves two Slack apps (make e2e-two-apps): every MC_ test in a Job of its own, and then the one that needs Helm, which the E2E
-# Job (a distroless image with no tools) does not have: a team taken off config.connectionNamespaces, and put back, and then a broker with no ChatConnection of
-# its own (config.chatConnection empty), with the platform's connection off the list and on it. The MC_ tests are not in the Job of make
-# e2e-fast: with the failover cases they would bring its run close to the Job's time limit. The broker reads the admission list at start, so each change of it
-# is a Helm upgrade and a rollout. The fast tier must be up with two Slack apps on custom resources:
+# The scenarios of a broker that serves two Slack apps (make e2e-two-apps): every MC_ test in a Job of its own, and then the ones that need Helm or kubectl, which
+# the E2E Job (a distroless image with no tools) does not have: a team taken off config.connectionNamespaces, and put back; a broker with no ChatConnection of
+# its own (config.chatConnection empty), with the platform's connection off the list and on it; a team admitted by a label that
+# config.connectionNamespaceSelector matches, which is taken away and put back; and a broker with no own connection that serves every namespace, with nothing
+# set and with the selector {}. The MC_ tests are not in the Job of make e2e-fast: with the failover cases they would bring its run close to the Job's time
+# limit. The broker reads the admission list and the selector at start, so each change of them is a Helm upgrade and a rollout; it follows the labels of
+# namespaces live, so a change of a label is not. The fast tier must be up with two Slack apps on custom resources:
 #   E2E_TWO_APPS=1 E2E_CONFIG_SOURCE=crds E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up
 # (one replica on SQLite runs it too: the record of what the broker served is in its store either way).
 #
@@ -21,10 +23,22 @@
 #      and a team's grants its own): the platform's connection is served as a team connection and its Bindings are Accepted again.  (platform-admitted)
 #      On Postgres with two replicas the leader's container is then killed: the replica that takes over, with no own connection, serves every team
 #      connection.                                                                                                  (takeover)
-# The phases of steps 1 and 2 are the E2E test TestMC_ATeamTakenOffTheAdmissionListIsNotServed, those of 3 and 4 TestMC_ABrokerWithNoOwnConnectionServesTheTeams
-# (hack/kind/e2e-run.sh with E2E_PHASE). A step that fails does not stop the run.
-# On any exit the tier is put back on its own connection and the full list (the list is the tier's own, hack/kind/two-apps-values.yaml); TWO_APPS_KEEP=1 leaves the release as it is, for
-# a look. Everything the phases print goes to TWO_APPS_OUT (a new temporary directory by default); no token or Secret value is in it.
+#   5. The tier's own connection, the list emptied and config.connectionNamespaceSelector {matchLabels: {agentkourier.dev/serve: "true"}}, with team-a
+#      unlabelled: each replica's config route line says connection_admission selector and the selector, the ClusterRole lists and watches namespaces,
+#      and team-a's Binding says ConnectionNotServed, as a connection the broker served before (kubectl). Then, with no rollout, team-a labelled
+#      (restored, as selector-labelled), the label taken off (removed, as selector-unlabelled, and the Binding says the connection was served before), and
+#      put back (restored, as selector-relabelled): the broker's pods are the same pods, none restarted, through all three.
+#   6. No own connection, no list and no selector (team-a's label taken off): every namespace. Each route line says connection_admission all and names no
+#      connection and no selector, the ClusterRole has no rule on namespaces, the platform's Bindings are Accepted, and both connections are served as team
+#      connections.                                                                                                 (platform-admitted, as all)
+#   7. The same with the selector {}: the broker starts and serves every namespace with a ClusterRole that has no rule on namespaces, which a broker that
+#      read namespaces for an empty selector would be refused.                                               (platform-admitted, as empty-selector)
+# The phases of steps 1, 2 and 5 are the E2E test TestMC_ATeamTakenOffTheAdmissionListIsNotServed, those of 3, 4, 6 and 7
+# TestMC_ABrokerWithNoOwnConnectionServesTheTeams (hack/kind/e2e-run.sh with E2E_PHASE; the Job reads the admission from the Deployment, and the labels of
+# the namespaces, as the run starts). A step that fails does not stop the run; an upgrade that does not roll out does.
+# On any exit the tier is put back on its own connection and the full list (the list is the tier's own, hack/kind/two-apps-values.yaml), with no selector and
+# team-a's label taken off; TWO_APPS_KEEP=1 leaves the release and the label as they are, for a look. Everything the phases print goes to TWO_APPS_OUT (a new
+# temporary directory by default); no token or Secret value is in it.
 #
 # Every kubectl and helm call names --context kind-agent-kourier-fast, as the tier's scripts do; assert_context aborts unless that is the local kind cluster.
 set -eEuo pipefail
@@ -84,10 +98,10 @@ run() {
   fi
   grep -E '^[[:space:]]+(mc[a-z_0-9]*|wait|threads)\.go|^--- |^(ok|FAIL|PASS)|^e2e fast' "${OUT}/${name}.log" | cut -c1-600 || true
 }
-# phase NAME: the admission test in that phase.
-phase() { run "phase-$1" '^TestMC_ATeamTakenOffTheAdmissionListIsNotServed$' "$1" TestMC_ATeamTakenOffTheAdmissionListIsNotServed; }
-# teamonly NAME: the test of a broker with no connection of its own, in that phase.
-teamonly() { run "phase-$1" '^TestMC_ABrokerWithNoOwnConnectionServesTheTeams$' "$1" TestMC_ABrokerWithNoOwnConnectionServesTheTeams; }
+# phase PHASE [NAME]: the admission test in that phase, noted as NAME (the phase when there is none), since a step may run a phase again.
+phase() { run "phase-${2:-$1}" '^TestMC_ATeamTakenOffTheAdmissionListIsNotServed$' "$1" TestMC_ATeamTakenOffTheAdmissionListIsNotServed; }
+# teamonly PHASE [NAME]: the test of a broker with no connection of its own, in that phase, noted as NAME.
+teamonly() { run "phase-${2:-$1}" '^TestMC_ABrokerWithNoOwnConnectionServesTheTeams$' "$1" TestMC_ABrokerWithNoOwnConnectionServesTheTeams; }
 
 # The platform's Bindings of the tier with two apps (hack/kind/fast/two-apps), on the connection agent-kourier/slack-fast.
 PLATFORM_BINDINGS=(mc-platform mc-platform-final mc-platform-loop)
@@ -149,18 +163,121 @@ check() {
     cut -c1-600 "${OUT}/${name}.log" || true
   fi
 }
-# no_own_connection: the Deployment has no AGENTKOURIER_CHAT_CONNECTION, and its admission list is WANT.
+# no_own_connection LIST [SELECTOR]: the Deployment has no AGENTKOURIER_CHAT_CONNECTION, its admission list is LIST and its selector SELECTOR (none when not given).
 no_own_connection() {
   [ -z "$(env_of AGENTKOURIER_CHAT_CONNECTION)" ] || die "the Deployment's AGENTKOURIER_CHAT_CONNECTION is set after the upgrade; want none"
-  [ "$(env_of AGENTKOURIER_CONNECTION_NAMESPACES)" = "$1" ] || die "the Deployment's admission list is '$(env_of AGENTKOURIER_CONNECTION_NAMESPACES)' after the upgrade; want $1"
+  admission_is "$1" "${2:-}"
+}
+# admission_is LIST SELECTOR: the Deployment's admission list is LIST and its AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR is SELECTOR (empty: none).
+admission_is() {
+  [ "$(env_of AGENTKOURIER_CONNECTION_NAMESPACES)" = "$1" ] || die "the Deployment's admission list is '$(env_of AGENTKOURIER_CONNECTION_NAMESPACES)' after the upgrade; want '$1'"
+  [ "$(env_of AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR)" = "$2" ] || die "the Deployment's namespace selector is '$(env_of AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR)' after the upgrade; want '$2'"
+}
+
+# The label that step 5's selector matches, and the selector as the chart renders it (compact JSON) and as the broker's log line says it (labels.Selector).
+SERVE_LABEL=agentkourier.dev/serve
+SERVE_SELECTOR='{"matchLabels":{"agentkourier.dev/serve":"true"}}'
+SERVE_SELECTOR_STRING=agentkourier.dev/serve=true
+# label_team_a on|off: team-a's namespace with the label SERVE_LABEL=true, or without it (no error when it has none).
+label_team_a() {
+  case "$1" in
+    on) "${K[@]}" label namespace team-a "${SERVE_LABEL}=true" --overwrite >/dev/null ;;
+    off) "${K[@]}" label namespace team-a "${SERVE_LABEL}-" >/dev/null 2>&1 || [ -z "$("${K[@]}" get namespace team-a -o "jsonpath={.metadata.labels.agentkourier\.dev/serve}")" ] ;;
+  esac
+}
+# broker_pods: the broker's pods, one to a line, sorted: name, UID and the restart count of its container. A pod that is being deleted is left out.
+broker_pods() {
+  "${K[@]}" -n agent-kourier get pods -l app.kubernetes.io/name=agent-kourier,app.kubernetes.io/instance=agent-kourier \
+    -o 'jsonpath={range .items[*]}{.metadata.name} {.metadata.uid} {.status.containerStatuses[0].restartCount} {.metadata.deletionTimestamp}{"\n"}{end}' |
+    awk 'NF == 3' | sort
+}
+# steady_pods: broker_pods once the rollout's old pods are gone, every pod is running and there are as many as the Deployment's replicas; dies after two
+# minutes. The baseline of a step that must not restart the broker.
+steady_pods() {
+  local deadline=$((SECONDS + 120)) pods all
+  while [ "${SECONDS}" -lt "${deadline}" ]; do
+    pods=$(broker_pods)
+    all=$("${K[@]}" -n agent-kourier get pods -l app.kubernetes.io/name=agent-kourier,app.kubernetes.io/instance=agent-kourier --no-headers 2>/dev/null | wc -l | tr -d ' ')
+    if [ -n "${pods}" ] && [ "$(wc -l <<<"${pods}" | tr -d ' ')" = "${replicas}" ] && [ "${all}" = "${replicas}" ]; then
+      printf '%s\n' "${pods}"
+      return 0
+    fi
+    sleep 3
+  done
+  die "the broker's pods did not settle at ${replicas} in two minutes: $(broker_pods | tr '\n' ';')"
+}
+# same_pods BEFORE: the broker's pods are BEFORE (steady_pods): the same pods, by UID, none restarted. Prints what changed.
+same_pods() {
+  local now
+  now=$(broker_pods)
+  [ "${now}" = "$1" ] && return 0
+  printf 'the broker'"'"'s pods were:\n%s\nand are:\n%s\nwant the same pods (name, UID), none restarted: the label is followed live\n' "$1" "${now}" >&2
+  return 1
+}
+# route_says ADMISSION [SELECTOR]: the config route line, the first of each replica's log, says connection_admission ADMISSION, and connection_namespace_selector
+# SELECTOR (none when not given). With ADMISSION all it names no own connection either. Prints what failed.
+route_says() {
+  local pod log line rc=0 n=0
+  for pod in $(broker_pods | awk '{print $1}'); do
+    n=$((n + 1))
+    # The whole log first: grep -m1 on a pipe from kubectl ends it early, and under pipefail kubectl's broken pipe would read as no line.
+    log=$("${K[@]}" -n agent-kourier logs "${pod}") || {
+      echo "could not read the log of pod ${pod}" >&2
+      rc=1
+      continue
+    }
+    line=$(grep -m1 '"msg":"config route"' <<<"${log}") || {
+      echo "pod ${pod} has no config route line in its log" >&2
+      rc=1
+      continue
+    }
+    case "${line}" in *"\"connection_admission\":\"$1\""*) ;; *) echo "pod ${pod}: ${line}; want connection_admission $1" >&2 && rc=1 ;; esac
+    if [ -n "${2:-}" ]; then
+      case "${line}" in *"\"connection_namespace_selector\":\"$2\""*) ;; *) echo "pod ${pod}: ${line}; want connection_namespace_selector $2" >&2 && rc=1 ;; esac
+    else
+      case "${line}" in *connection_namespace_selector*) echo "pod ${pod}: ${line}; want no connection_namespace_selector" >&2 && rc=1 ;; esac
+    fi
+    if [ "$1" = all ]; then
+      case "${line}" in *'"connection":'*) echo "pod ${pod}: ${line}; want no own connection" >&2 && rc=1 ;; esac
+    fi
+  done
+  [ "${n}" -gt 0 ] || { echo "no pod of the broker to read" >&2 && rc=1; }
+  return "${rc}"
+}
+# namespaces_rule present|absent: the release's ClusterRole lists and watches namespaces (no other verb), or has no rule on namespaces at all. Prints its rules.
+namespaces_rule() {
+  local rules
+  rules=$("${K[@]}" get clusterrole agent-kourier-agent-kourier-crs -o 'jsonpath={range .rules[*]}{.resources} {.verbs}{"\n"}{end}') || return 1
+  echo "the ClusterRole's rules:"
+  echo "${rules}"
+  [ -n "${rules}" ] || return 1
+  case "$1" in
+    present) grep -qx '\["namespaces"\] \["list","watch"\]' <<<"${rules}" ;;
+    absent) ! grep -q namespaces <<<"${rules}" ;;
+  esac
+}
+# team_a_stopped: team-a's Binding says Accepted=False, ConnectionNotServed, as a connection the broker served before and does not now (the reason it is told
+# when its namespace stops being admitted, whether by the list or by a label). Prints what failed.
+team_a_stopped() {
+  local message
+  wait_binding_field team-a team-a Accepted reason ConnectionNotServed || return 1
+  message=$(binding_field team-a team-a Accepted message)
+  case "${message}" in
+    *"team-a/team-a is not served by this broker: this broker served it before and does not serve it now"*) ;;
+    *) echo "Binding team-a/team-a: Accepted says '${message}'; want it to say this broker served team-a/team-a before and does not now" >&2 && return 1 ;;
+  esac
 }
 
 RESTORE=
 cleanup() {
   local rc=$?
   if [ -n "${RESTORE}" ] && [ "${TWO_APPS_KEEP:-}" != 1 ]; then
-    echo "==> the tier back on its own connection and the full admission list"
-    { upgrade && rolled_out; } >"${OUT}/restore.log" 2>&1 || {
+    echo "==> the tier back on its own connection and the full admission list, with no selector and team-a unlabelled"
+    # Each part runs whatever the other did: a failed unlabel must not leave the tier on the selector or "all" values.
+    local restored=1
+    label_team_a off >"${OUT}/restore.log" 2>&1 || restored=
+    { upgrade && rolled_out; } >>"${OUT}/restore.log" 2>&1 || restored=
+    [ -n "${restored}" ] || {
       echo "error: putting the own connection and the admission list back failed; see ${OUT}/restore.log (hack/kind/down.sh fast and a bring-up is the way out)" >&2
       [ "${rc}" -ne 0 ] || rc=1
     }
@@ -204,6 +321,50 @@ if [ "${store}" = postgres ] && [ "${replicas}" -ge 2 ]; then
 else
   echo "==> takeover not run: it needs the tier on Postgres with two replicas (this one is ${store}, ${replicas} replica(s))"
 fi
+
+# A selector in place of the list, beside the own connection: team-a is admitted while it has the label, and the broker follows the label with no restart.
+echo "==> step 5: config.connectionNamespaceSelector in place of the list; team-a admitted by its label, live"
+label_team_a off
+upgrade --set-json 'config.connectionNamespaces=[]' --set-json "config.connectionNamespaceSelector=${SERVE_SELECTOR}"
+rolled_out
+[ "$(env_of AGENTKOURIER_CHAT_CONNECTION)" = agent-kourier/slack-fast ] || die "the Deployment's AGENTKOURIER_CHAT_CONNECTION is '$(env_of AGENTKOURIER_CHAT_CONNECTION)' after the upgrade; want agent-kourier/slack-fast"
+admission_is "" "${SERVE_SELECTOR}"
+check selector-route route_says selector "${SERVE_SELECTOR_STRING}"
+check selector-namespaces-rule namespaces_rule present
+check selector-team-a-unlabelled-not-served team_a_stopped
+pods=$(steady_pods)
+label_team_a on
+phase restored selector-labelled
+check selector-labelled-same-pods same_pods "${pods}"
+label_team_a off
+phase removed selector-unlabelled
+check selector-unlabelled-stopped team_a_stopped
+check selector-unlabelled-same-pods same_pods "${pods}"
+label_team_a on
+phase restored selector-relabelled
+check selector-relabelled-same-pods same_pods "${pods}"
+
+# Every namespace: no own connection, no list and no selector. team-a has no label, so that a label does not explain its being served. The platform's Secret is
+# granted by name, as in step 4.
+echo "==> step 6: no own connection, no list, no selector: every namespace"
+label_team_a off
+upgrade --set config.chatConnection= --set-json 'config.connectionNamespaces=[]' --set 'rbac.secretNames.agent-kourier={agent-kourier-agent-token,slack-fast}'
+rolled_out
+no_own_connection ""
+check all-route route_says all
+check all-namespaces-rule namespaces_rule absent
+check all-platform-bindings-accepted platform_accepted
+teamonly platform-admitted all
+
+# The selector {} is every namespace too, and reads no namespace: the chart grants no rule on them for it, so a broker that read them would not start.
+echo "==> step 7: no own connection, the selector {}: every namespace, with no rule on namespaces"
+upgrade --set config.chatConnection= --set-json 'config.connectionNamespaces=[]' --set-json 'config.connectionNamespaceSelector={}' --set 'rbac.secretNames.agent-kourier={agent-kourier-agent-token,slack-fast}'
+rolled_out
+no_own_connection "" "{}"
+check empty-selector-route route_says all
+check empty-selector-namespaces-rule namespaces_rule absent
+check empty-selector-platform-bindings-accepted platform_accepted
+teamonly platform-admitted empty-selector
 
 echo "==> results"
 printf '%s\n' "${RESULTS[@]}"

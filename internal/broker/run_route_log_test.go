@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/labels"
+
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
@@ -87,34 +89,47 @@ func logRecords(t *testing.T, out *logBuffer) []map[string]any {
 }
 
 // The broker names the route it reads its resources from, once, before anything else is logged, so that a log tells the two routes apart: on
-// the custom resources it also names its own ChatConnection when it has one, and the namespaces whose ChatConnections it serves when it has an
-// admission list; the files route learns its connection from its directory and logs it later. With no own connection there is no connection
-// field, not an empty one.
+// the custom resources it also names its own ChatConnection when it has one, the namespaces whose ChatConnections it serves when it has an
+// admission list, the selector when it has one that reads labels, and, in connection_admission, which namespaces it admits: all, list,
+// selector, list+selector, or own (none: its own connection alone). The files route learns its connection from its directory and logs it
+// later, and has no admission. With no own connection there is no connection field, not an empty one.
 func TestRunNamesTheConfigRouteAtStart(t *testing.T) {
 	named := func(t *testing.T) RunConfig {
 		c := startConfig(t)
 		c.ConfigSource = SourceFiles
 		return c
 	}
+	team := labels.SelectorFromSet(labels.Set{"team": "yes"})
+	cr := func(own bool, namespaces []string, selector labels.Selector) func(*testing.T) RunConfig {
+		return func(t *testing.T) RunConfig {
+			c := crStartConfig(t, nil)
+			if !own {
+				c.ChatConnection = v1alpha1.ObjectRef{}
+			}
+			c.ConnectionNamespaces, c.ConnectionNamespaceSelector = namespaces, selector
+			return c
+		}
+	}
 	for name, tc := range map[string]struct {
 		config         func(*testing.T) RunConfig
 		wantRoute      string
 		wantConnection string // "" is no connection field
 		wantNamespaces string // "" is no connection_namespaces field
+		wantAdmission  string // "" is no connection_admission field
+		wantSelector   string // "" is no connection_namespace_selector field
 	}{
-		"files":                        {startConfig, "files", "", ""},
-		"files, named":                 {named, "files", "", ""},
-		"custom resources, connection": {func(t *testing.T) RunConfig { return crStartConfig(t, nil) }, "crds", "agent-kourier-system/slack-main", ""},
-		"custom resources, connection and namespaces": {func(t *testing.T) RunConfig {
-			c := crStartConfig(t, nil)
-			c.ConnectionNamespaces = []string{"team-b", "team-a"}
-			return c
-		}, "crds", "agent-kourier-system/slack-main", "team-b,team-a"},
-		"custom resources, no own connection": {func(t *testing.T) RunConfig {
-			c := crStartConfig(t, nil)
-			c.ChatConnection, c.ConnectionNamespaces = v1alpha1.ObjectRef{}, []string{"team-a", "team-b"}
-			return c
-		}, "crds", "", "team-a,team-b"},
+		"files":                        {startConfig, "files", "", "", "", ""},
+		"files, named":                 {named, "files", "", "", "", ""},
+		"custom resources, connection": {cr(true, nil, nil), "crds", "agent-kourier-system/slack-main", "", "own", ""},
+		"custom resources, connection and namespaces": {cr(true, []string{"team-b", "team-a"}, nil),
+			"crds", "agent-kourier-system/slack-main", "team-b,team-a", "list", ""},
+		"custom resources, no own connection": {cr(false, []string{"team-a", "team-b"}, nil), "crds", "", "team-a,team-b", "list", ""},
+		"custom resources, nothing set":       {cr(false, nil, nil), "crds", "", "", "all", ""},
+		"custom resources, a selector":        {cr(false, nil, team), "crds", "", "", "selector", "team=yes"},
+		"custom resources, connection, namespaces and a selector": {cr(true, []string{"team-a"}, team),
+			"crds", "agent-kourier-system/slack-main", "team-a", "list+selector", "team=yes"},
+		"custom resources, an empty selector":                {cr(false, nil, labels.Everything()), "crds", "", "", "all", ""},
+		"custom resources, connection and an empty selector": {cr(true, []string{"team-a"}, labels.Everything()), "crds", "agent-kourier-system/slack-main", "team-a", "all", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			out := &logBuffer{}
@@ -143,9 +158,13 @@ func TestRunNamesTheConfigRouteAtStart(t *testing.T) {
 			if tc.wantConnection != "" && got != tc.wantConnection {
 				t.Errorf("connection = %v, want %q", got, tc.wantConnection)
 			}
-			gotNS, hasNS := routes[0]["connection_namespaces"]
-			if tc.wantNamespaces == "" && hasNS || tc.wantNamespaces != "" && gotNS != tc.wantNamespaces {
-				t.Errorf("connection_namespaces = %v (present %v), want %q", gotNS, hasNS, tc.wantNamespaces)
+			for field, want := range map[string]string{
+				"connection_namespaces": tc.wantNamespaces, "connection_admission": tc.wantAdmission, "connection_namespace_selector": tc.wantSelector,
+			} {
+				got, has := routes[0][field]
+				if want == "" && has || want != "" && got != want {
+					t.Errorf("%s = %v (present %v), want %q", field, got, has, want)
+				}
 			}
 			if recs[0]["msg"] != "config route" {
 				t.Errorf("the first line is %q; want the route, so that a log opens with it", recs[0]["msg"])

@@ -145,18 +145,35 @@ it cannot use. A restart fails the same way. The text after `the broker cannot b
 
 - `v1 serves exactly one ChatConnection, and the config has` a count other than 1: this is the files route
   (`config.source: files`), whose directory must hold exactly one. Keep exactly one entry under `config.chatConnections`. With
-  `config.source: crds` a cluster may hold many, and the broker serves its own, if it has one, and those of the namespaces it is told to admit, so this message does not occur.
+  `config.source: crds` a cluster may hold many, and the broker serves its own, if it has one, and those of the namespaces it admits, so this message does not occur.
 - `ChatConnection agent-kourier/slack was not found: AGENTKOURIER_CHAT_CONNECTION names the one connection this broker serves, and it must exist`:
   the custom resource route, with an own connection. The ChatConnection that `config.chatConnection` names, the broker's own, is not in the cluster. Apply it, or name the one that exists. The pod
   restarts until it does, and starts at the next restart after it exists. `ChatConnection agent-kourier/slack is invalid` says why instead, in the
-  same way as the files' `load config` problems below. A broker with no own connection has no such start failure: a listed namespace that holds no ChatConnection yet is not an error.
+  same way as the files' `load config` problems below. A broker with no own connection has no such start failure: an admitted namespace that holds no ChatConnection yet is not an error.
 - `the custom resource definitions are not installed`: the custom resource route, and the CRDs are not in the cluster. Install them first, as in
   [Move the config between a ConfigMap and custom resources](migrate-config-source.md#1-install-the-crds-still-on-the-configmap-route).
-- `with AGENTKOURIER_CONFIG_SOURCE=crds, set AGENTKOURIER_CHAT_CONNECTION to the broker's own ChatConnection, or AGENTKOURIER_CONNECTION_NAMESPACES to the namespaces whose ChatConnections it serves, or both`:
-  the custom resource route has neither the broker's own ChatConnection nor an admission list, so it could serve nothing until a restart, since it reads the list at start. The chart
-  refuses to render this shape (`config.source crds ... needs config.chatConnection`), so it comes from a Deployment of your own. Set `AGENTKOURIER_CONNECTION_NAMESPACES` to the namespaces to serve, or
-  `AGENTKOURIER_CHAT_CONNECTION` to an own connection; with the chart, `config.connectionNamespaces` or `config.chatConnection`
+- `AGENTKOURIER_CONNECTION_NAMESPACES is set and names no namespace (only commas and spaces): unset it, or name the namespaces`: the admission list
+  holds nothing but commas and spaces. Read as no list, it would make a broker with no own connection and no selector serve the ChatConnections of
+  every namespace, which is not what a list says, so the broker refuses it, with an own connection too. The chart does not render this (its values
+  schema refuses an empty item), so it comes from `extraEnv` or a Deployment of your own. Name the namespaces, or unset the variable: no list is
+  the broker's own connection alone, or, with no own connection and no selector, every namespace
   ([A broker with no connection of its own](team-slack-app.md#a-broker-with-no-connection-of-its-own)).
+- `AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR` followed by what is wrong with it, and `(its value is not shown)`: the selector is not a label selector the
+  broker can read. The chart renders the variable as JSON from `config.connectionNamespaceSelector`, and its values schema refuses most of these before
+  it renders, so a selector in `extraEnv`, or a Deployment of your own, meets them here. Fix the selector, or unset it for no selector. The message
+  never quotes the value, a label or a field name. What it says:
+    - `is not JSON; want a LabelSelector as a JSON object, such as {"matchLabels":{...}}, or {} for every namespace`, `has more after the selector; want one JSON object`,
+      and `is not a JSON object; want a LabelSelector, or {} for every namespace (unset it for no selector)`: the value is not one JSON object. `null`,
+      a list or a quoted string is refused; an empty value is no selector.
+    - `has a field that a LabelSelector does not have; want matchLabels and matchExpressions, whose items have key, operator and values (names are case-sensitive)`,
+      `has a field twice`, and `does not have the shape of a LabelSelector; want matchLabels an object of strings and matchExpressions a list of objects`:
+      the object is decoded as the API server decodes one, so a misspelt field (`matchlabels`: names are case-sensitive), a field or a label given twice,
+      or a label value that is not a string (`true` where `"true"` belongs) is refused.
+    - `matchLabels holds a key or a value that is not a valid label key or value`,
+      `matchExpressions item 1 has an operator that is not In, NotIn, Exists or DoesNotExist`, and
+      `matchExpressions item 1 is not a valid requirement: its key or a value is not a valid label key or value, or its values do not suit its operator (In and NotIn need at least one, Exists and DoesNotExist none)`:
+      Kubernetes' own rules for a label selector. The number is the item's place in `matchExpressions`, from 1.
+    - `is not a valid label selector`: the selector as a whole fails those rules.
 - `N outbox rows and M button presses were written before connections were recorded, and this broker has no ChatConnection of its own to give them to: set config.chatConnection (AGENTKOURIER_CHAT_CONNECTION) to the ChatConnection that served them, let the broker start once, then unset it`:
   a broker with no own connection became the leader on a store that holds rows written before migration 0029 recorded connections, or by an older image after a rollback. They have no connection, and an own
   connection is what gives them one. Do what the message says: set `config.chatConnection` to the connection that served them, upgrade, wait for the leader to log `store: gave the rows written before connections were recorded to this broker's own connection`,
@@ -165,7 +182,8 @@ it cannot use. A restart fails the same way. The text after `the broker cannot b
   `is set with AGENTKOURIER_CONFIG_SOURCE=files, which serves the one ChatConnection of its directory: unset it`, and
   `AGENTKOURIER_CONFIG_SOURCE is "...", want files or crds`: the variables disagree. The chart sets them from `config.source` and
   `config.chatConnection`; check `extraEnv` for one of your own.
-- `AGENTKOURIER_CONNECTION_NAMESPACES item 2 is not a namespace name` (the position among the comma-separated items, never the value), and `AGENTKOURIER_CONNECTION_NAMESPACES is set with AGENTKOURIER_CONFIG_SOURCE=files`: the admission list has an item that is not a DNS-1123 label (no wildcard), or is set on the files route, which serves the one ChatConnection of its directory. The chart sets it from `config.connectionNamespaces` and refuses a non-empty list with `files` while it renders.
+- `AGENTKOURIER_CONNECTION_NAMESPACES item 2 is not a namespace name` (the position among the comma-separated items, never the value), and `AGENTKOURIER_CONNECTION_NAMESPACES is set with AGENTKOURIER_CONFIG_SOURCE=files`
+  or `AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR is set with AGENTKOURIER_CONFIG_SOURCE=files`: the admission list has an item that is not a DNS-1123 label (no wildcard), or the list or the selector is set on the files route, which serves the one ChatConnection of its directory. The chart sets them from `config.connectionNamespaces` and `config.connectionNamespaceSelector`, and refuses a non-empty list, or any selector, `{}` included, with `files` while it renders.
 - `ChatConnection agent-kourier/slack: read botToken of Secret agent-kourier/slack:` (or `appToken`): the
   key is in the Secret but its value is empty. `kubectl create secret --from-literal=botToken="$SLACK_BOT_TOKEN"` stores an
   empty value when the variable is not set in that shell. Check that both variables are set, and replace the Secret as
@@ -189,7 +207,9 @@ each Secret its config names through an informer of its own. What a refusal does
   stop the pod: that reload fails with the same message, the log says `config reload failed; keeping the last good snapshot`, and the last good
   config stays in force.
 - **Custom resources (`config.source: crds`).** Only the Secrets the broker itself needs, the connection's tokens and the Postgres DSN's, end the
-  start with exit code 3, as does a refusal to list the custom resources. A Secret that a team's Binding or AgentBackend names, and that the
+  start with exit code 3, as does a refusal to list the custom resources, and, with a connection namespace selector that matches by label, a refusal to
+  list or watch namespaces (`namespaces: the ServiceAccount needs list and watch on namespaces, which the connection namespace selector reads`). The
+  chart grants that one with the selector; with `rbac.create: false`, add `list` and `watch` on `namespaces` to your ClusterRole. A Secret that a team's Binding or AgentBackend names, and that the
   ServiceAccount may not read, stops nothing and fails no reload: the Binding stays served, and the log says its `BackendReachable` condition is
   false with the reason `CredentialsUnreadable`. The condition's `message` names the Secret when it is in the Binding's namespace, and says that Agent Kourier's ServiceAccount needs `list`
   and `watch` on it. The fix is a grant for that Secret: a Role and RoleBinding in the Secret's namespace for the ServiceAccount, which the team that owns the
@@ -387,8 +407,10 @@ applies: a problem in one resource stops the whole config, as in [The pod exits 
 
 A Binding with no status at all, and empty `READY` and `REASON` columns, is either new (the broker writes its status within about 10 seconds) or names a ChatConnection
 that exists and that no broker serves: nothing reads it. Point its `connectionRef` at a connection a broker serves: the one in that broker's
-`AGENTKOURIER_CHAT_CONNECTION` (a broker may have none), or one in a namespace on its `config.connectionNamespaces`. A team's own ChatConnection is in that state until the platform team admits its
-namespace ([Let a team bring its own Slack app](team-slack-app.md)). No metric counts such a Binding: this broker leaves it to the broker that serves its connection, and cannot tell whether one does.
+`AGENTKOURIER_CHAT_CONNECTION` (a broker may have none), or one in a namespace the broker admits, on its `config.connectionNamespaces` or with labels that
+match its `config.connectionNamespaceSelector` (a broker with no own connection and neither of them admits every namespace). A team's own ChatConnection is in that state until the platform team admits its
+namespace ([Let a team bring its own Slack app](team-slack-app.md#3-the-platform-team-admits-the-namespace)); for a namespace that should match a selector, see
+[A team's connection is not served on a label selector](#a-teams-connection-is-not-served-on-a-label-selector). No metric counts such a Binding: this broker leaves it to the broker that serves its connection, and cannot tell whether one does.
 
 A Binding that is refused after an edit keeps running as it was: `message` says `serving generation 1`, and the other conditions describe that
 generation, while `Ready` is `False` with `Accepted:InvalidSpec`. A Binding with no earlier generation to serve is not served at all.
@@ -404,6 +426,43 @@ generation, while `Ready` is `False` with `Accepted:InvalidSpec`. A Binding with
 | `NamespaceNotAllowed` | The AgentBackend or ChatConnection is in another namespace and its `allowedNamespaces` does not list the Binding's. The answer is the same whether the object is valid or not. | Ask the owner to list your namespace, or use an object of your own. |
 | `AgentNamespaceNotAllowed` | The AgentBackend it names sets `agents`, and `spec.agent.namespace` is not a namespace it allows: `spec.agent.namespace: AgentBackend team-a/kagent does not allow agents in namespace kagent`. The Binding is not served. The limit applied is that of the AgentBackend generation being served, which is an older one if the latest is invalid, and `message` then says so. | Name an agent in a namespace the AgentBackend allows. If the agent is in the Binding's own namespace, ask the owner to set `agents.sameNamespace: true`; otherwise ask the owner to list the agent's namespace in `agents.namespaces`. |
 | `ChannelConflict` | Another Binding on the same ChatConnection holds the channel. The older one holds it, by `creationTimestamp`. If that Binding is in another namespace, `message` says only `a Binding in another namespace`. | Choose another channel. To find the holder, the operator reads the log line: it names it. [Who holds a channel](../explanation/config-routes.md#who-holds-a-channel) says how it is decided. |
+
+## A team's connection is not served on a label selector
+
+The platform admits namespaces by label (`config.connectionNamespaceSelector`), a team's namespace should match, and its ChatConnection is not
+served: the leader logs no `serving a ChatConnection` for it, and its Bindings have no status, or the `ConnectionNotFound` written before the
+connection existed.
+
+Read what the broker was started with. The first line of its log, `config route`, has `connection_admission` (`selector`, or `list+selector`
+with a list too) and `connection_namespace_selector`, the selector in Kubernetes' text form, such as `agentkourier.dev/serve=true`:
+
+```sh
+kubectl -n agent-kourier logs deploy/agent-kourier | grep '"config route"'
+```
+
+Then compare the namespace's labels with it. `kubectl get -l` takes the selector as the line writes it, and lists the namespaces it matches:
+
+```sh
+kubectl get namespace team-a --show-labels
+kubectl get namespaces -l 'agentkourier.dev/serve=true'
+```
+
+- **The namespace does not have the label.** It is missing, or its key or value differs (a typo, or `True` for `true`: keys and values are
+  matched exactly), or it is on another namespace. Label it: `kubectl label namespace team-a agentkourier.dev/serve=true --overwrite`. No restart is
+  needed: the broker admits the namespace at its next read of the config, within about 10 seconds, and logs
+  `a namespace is admitted by the connection namespace selector: its ChatConnections are served, up to the limit` with its name. A namespace that is on
+  the list too gets no such line, since the list admits it already.
+- **The broker has no selector.** `connection_admission` is `own` or `list`, and there is no `connection_namespace_selector` field: the values do not
+  set `config.connectionNamespaceSelector`, or the change to them was not upgraded. The broker reads the selector at start: set it and upgrade. With
+  `all` the broker admits every namespace already, and the cause is below.
+- **The broker cannot read namespaces.** A selector that matches by label needs `list` and `watch` on namespaces, which the chart adds to its
+  ClusterRole for such a selector (`{}` reads none and gets none). Without them at start the pod exits with [code 3](#the-pod-exits-with-code-3). If the
+  right is taken away while the broker runs, it keeps the labels it last read, so a namespace labelled since is not admitted and one whose label was
+  removed since stays admitted, and `agentkourier_config_stale` is 1. Check the right as the pod's ServiceAccount:
+  `kubectl auth can-i watch namespaces --as system:serviceaccount:agent-kourier:<serviceaccount>`.
+- **The namespace is admitted, and the connection is still not served.** It is past the 16 the broker serves, or a second connection of a Slack app
+  that an older connection uses: its Bindings say `ConnectionNotServed`, and `message` says which. Or it is served and has not started, because its
+  Secret cannot be read: its Bindings say `ChatUnavailable`. [What the team sees in its Binding's status](team-slack-app.md#what-the-team-sees-in-its-bindings-status) has each.
 
 ## A Binding is not ready
 
@@ -482,7 +541,7 @@ ends with a fixed message and decides nothing, unless they are in a group earlie
 
 With the config read from custom resources, the leader writes the status of each Binding it serves, and writes it back if it differs. If something else keeps changing it, the two go on at each other once each gap, and `agentkourier_binding_status_writes_total{result="put_back"}` climbs steadily. After three put-backs in a row, each within five gaps of the one before, the leader's log says, once for the Binding, `something else keeps changing the status of a Binding, and this broker keeps putting it back`, and names it.
 
-What else writes a Binding's status is either another Agent Kourier that serves the same Binding, or a controller of your own. The first happens when two installs name the same ChatConnection (`AGENTKOURIER_CHAT_CONNECTION`), or admit the same namespace (`config.connectionNamespaces`): each then serves that namespace's ChatConnections and writes the status of their Bindings, and each opens Socket Mode on the app of every one of them, so Slack gives each event of the app to one of the two brokers and the other misses it, as in the warning in [Configure Slack](configure-slack.md). Give each install its own connections and its own list, so that each serves its own Bindings. For the second, look at the `managedFields` of the Binding (`kubectl get akbinding <name> -n <namespace> -o yaml --show-managed-fields`): the manager `agent-kourier` owns the conditions of the types `Accepted`, `BackendReachable`, `ChannelJoined`, `ApproversReadable` and `Ready`, and any other manager that writes them is the one to stop. A person's edit is put back once and is no fight. A controller that writes the status less often than once in five gaps stays below the three, and shows only in the metric. The numbers are on [Limits](../reference/limits.md#run-the-broker).
+What else writes a Binding's status is either another Agent Kourier that serves the same Binding, or a controller of your own. The first happens when two installs name the same ChatConnection (`AGENTKOURIER_CHAT_CONNECTION`), or admit the same namespace (on both lists, or matched by both selectors, or one of each): each then serves that namespace's ChatConnections and writes the status of their Bindings, and each opens Socket Mode on the app of every one of them, so Slack gives each event of the app to one of the two brokers and the other misses it, as in the warning in [Configure Slack](configure-slack.md). A broker that serves every namespace (its `config route` line says `connection_admission` `all`) does this beside any other broker in the cluster, even one that serves its own connection alone, since it serves that connection too. Give each install its own connections and namespaces that no other install admits, and keep every namespace for a cluster with one broker, so that each serves its own Bindings. For the second, look at the `managedFields` of the Binding (`kubectl get akbinding <name> -n <namespace> -o yaml --show-managed-fields`): the manager `agent-kourier` owns the conditions of the types `Accepted`, `BackendReachable`, `ChannelJoined`, `ApproversReadable` and `Ready`, and any other manager that writes them is the one to stop. A person's edit is put back once and is no fight. A controller that writes the status less often than once in five gaps stays below the three, and shows only in the metric. The numbers are on [Limits](../reference/limits.md#run-the-broker).
 
 ## An agent on kagent 0.9.x answers, but the answer can appear twice
 

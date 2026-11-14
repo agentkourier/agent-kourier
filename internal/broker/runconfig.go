@@ -14,6 +14,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 
 	"go.opentelemetry.io/otel/trace"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -24,6 +25,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/retention"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testhooks"
 )
 
 // RunConfig is what Run is built from. Everything in it is injected: Run reads no environment
@@ -34,16 +36,25 @@ type RunConfig struct {
 	// ConfigDir is the directory of resource files, read with SourceFiles and required then; with SourceCRDs it is ignored.
 	// DBPath is the SQLite file on the volume (read only with the SQLite store, and required then).
 	ConfigDir, DBPath string
-	// ChatConnection is this broker's own ChatConnection, which it always serves and runs. With SourceCRDs it is optional if
-	// ConnectionNamespaces is not empty: the zero value is a broker with no ChatConnection of its own, which serves the ChatConnections of the
-	// admitted namespaces alone (spec D53), and a reference with only a namespace or only a name is refused. With SourceFiles it is
-	// refused, since the directory must hold exactly one.
+	// ChatConnection is this broker's own ChatConnection, which it always serves and runs. With SourceCRDs it is optional: the zero value
+	// is a broker with no ChatConnection of its own, which serves the ChatConnections of the admitted namespaces alone (spec D53), and a
+	// reference with only a namespace or only a name is refused. With SourceFiles it is refused, since the directory must hold exactly one.
 	ChatConnection v1alpha1.ObjectRef
-	// ConnectionNamespaces is the platform's admission list (AGENTKOURIER_CONNECTION_NAMESPACES): the namespaces whose ChatConnections
-	// the broker serves besides its own, which the source reads (crsource.Options.ConnectionNamespaces). Each is a DNS-1123 label. None
-	// serves the own connection alone, as before the list existed, and is refused when there is no own connection either. It is
-	// refused with SourceFiles.
+	// ConnectionNamespaces is the platform's admission list (AGENTKOURIER_CONNECTION_NAMESPACES): namespaces whose ChatConnections the
+	// broker serves besides its own, which the source reads once, at start (crsource.Options.ConnectionNamespaces). Each is a DNS-1123
+	// label. It is refused with SourceFiles.
 	ConnectionNamespaces []string
+	// ConnectionNamespaceSelector admits, besides the list's, the namespaces whose labels it matches
+	// (AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR), read live from an informer on namespaces, so a namespace that gains or loses a
+	// matching label is admitted or stops being admitted with no restart (crsource.Options.ConnectionNamespaceSelector). nil is no
+	// selector; an empty one (labels.Everything()) admits every namespace. A selector that selects nothing (labels.Nothing(), what
+	// metav1.LabelSelectorAsSelector makes of a nil LabelSelector) is refused: unset is nil. It is refused with SourceFiles.
+	//
+	// With ChatConnection and ConnectionNamespaces it makes the admission (spec D54). The broker serves its own connection, if it has one,
+	// and the ChatConnections of: every namespace, when it has no own connection, no list and no selector, or when the selector is empty;
+	// otherwise the namespaces of the list and those the selector matches; none besides its own when it has an own connection and nothing
+	// else. RunConfig.admission names the case.
+	ConnectionNamespaceSelector labels.Selector
 	// Dynamic reads the custom resources with SourceCRDs. Nil means InClusterDynamicClient.
 	Dynamic dynamic.Interface
 	// statusWarnings is the counter of the WarningHandler of a StatusClient that a test gives, which feeds it itself: nil makes
@@ -81,6 +92,10 @@ type RunConfig struct {
 	// The renderer and the interactions are not here: Run builds them, from its own store, outbox and
 	// Slack client, so that no config can run a broker without them.
 
+	// hooks are what this package's tests of a testhooks build set in place of the test image's environment (the fake Slack's
+	// URL), so that brokers with fakes of their own can run alongside each other. In a production build the type has no field,
+	// so there is nothing to set (testhooks.Overrides).
+	hooks testhooks.Overrides
 	// newSlack builds the Slack client from its config; nil means slack.New. It is a seam for this
 	// package's tests, which run Run offline with a client that does not call Slack. It is
 	// unexported, so no other package, and no config, can replace the client.
@@ -88,6 +103,9 @@ type RunConfig struct {
 	// slackHTTPTimeout is the bound of one Slack Web API call (slackAPITimeout if zero): a seam for this package's tests,
 	// which cannot wait for 30 seconds.
 	slackHTTPTimeout time.Duration
+	// renderThrottle is the live renderer's Throttle, the least time between two writes to one message (live.Config; its default of
+	// 2 seconds if zero): a seam for this package's tests, whose shutdown would otherwise wait out a turn's last throttle.
+	renderThrottle time.Duration
 	// sink replaces the renderer Run builds, for this package's tests that need to see what a turn
 	// or a notice was handed. Like newSlack it is unexported, so nothing else can swap the renderer.
 	sink renderSink
@@ -110,6 +128,9 @@ type RunConfig struct {
 	probeEvery, probeTick time.Duration
 	// probeGap is the least time between a pass of the verification and one that a change of the config calls for (30 seconds if zero).
 	probeGap time.Duration
+	// statusTimes are the status writer's Gap, Tick and Slow (statusConfig; statusGap, statusTick and statusSlow where zero): a seam for
+	// this package's tests, which cannot wait for a gap of 10 seconds between a Binding's writes.
+	statusTimes struct{ Gap, Tick, Slow time.Duration }
 	// shutdownTrace is told as each shutdown step begins, so a test can see the order and act in between.
 	shutdownTrace func(step string)
 	// stopTrace is told the name of each stop of the interactions' step as it begins, so a test can see
@@ -165,6 +186,42 @@ const (
 	SourceCRDs ConfigSource = "crds"
 )
 
+// admission names which namespaces' ChatConnections a broker on the custom resources serves besides its own (spec D54), as the config route
+// line says it.
+type admission string
+
+// The admissions, by what RunConfig sets.
+const (
+	// admitAll is every namespace: no own connection, no list and no selector, or an empty selector.
+	admitAll admission = "all"
+	// admitList is the namespaces of ConnectionNamespaces.
+	admitList admission = "list"
+	// admitSelector is the namespaces ConnectionNamespaceSelector matches, read live.
+	admitSelector admission = "selector"
+	// admitListAndSelector is the namespaces of the list and those the selector matches.
+	admitListAndSelector admission = "list+selector"
+	// admitOwn is no namespace: the broker serves its own connection alone.
+	admitOwn admission = "own"
+)
+
+// admission names the admission of c, which crsource applies (crsource.Options.ConnectionNamespaceSelector). It means nothing with SourceFiles.
+func (c RunConfig) admission() admission {
+	sel, list := c.ConnectionNamespaceSelector, len(c.ConnectionNamespaces) > 0
+	switch {
+	case sel != nil && sel.Empty():
+		return admitAll
+	case sel != nil && list:
+		return admitListAndSelector
+	case sel != nil:
+		return admitSelector
+	case list:
+		return admitList
+	case c.ChatConnection == (v1alpha1.ObjectRef{}):
+		return admitAll
+	}
+	return admitOwn
+}
+
 // source returns the config source, files if none is set.
 func (c RunConfig) source() ConfigSource { return cmp.Or(c.ConfigSource, SourceFiles) }
 
@@ -179,13 +236,13 @@ func (c RunConfig) validateSource() error {
 		if len(c.ConnectionNamespaces) > 0 {
 			return fmt.Errorf("%w: ConnectionNamespaces is set with the %s config source, which serves the one ChatConnection of its directory: unset it", ErrWiring, SourceFiles)
 		}
+		if c.ConnectionNamespaceSelector != nil {
+			return fmt.Errorf("%w: ConnectionNamespaceSelector is set with the %s config source, which serves the one ChatConnection of its directory: unset it", ErrWiring, SourceFiles)
+		}
 	case SourceCRDs:
 		switch {
-		case !haveConn && len(c.ConnectionNamespaces) == 0:
-			// The list is read at start, so such a broker could serve nothing until a restart.
-			return fmt.Errorf("%w: with the %s config source, set ChatConnection to the broker's own ChatConnection, or ConnectionNamespaces to the namespaces whose ChatConnections it serves, or both", ErrWiring, SourceCRDs)
 		case haveConn && (c.ChatConnection.Namespace == "" || c.ChatConnection.Name == ""):
-			return fmt.Errorf("%w: ChatConnection must be set to a namespace and a name with the %s config source, or left out when ConnectionNamespaces is set: a cluster may hold the connections of several brokers, and this one serves only the ones it is told", ErrWiring, SourceCRDs)
+			return fmt.Errorf("%w: ChatConnection must be set to a namespace and a name with the %s config source, or left out for a broker with no ChatConnection of its own", ErrWiring, SourceCRDs)
 		case haveConn && (len(validation.IsDNS1123Label(c.ChatConnection.Namespace)) > 0 || len(validation.IsDNS1123Subdomain(c.ChatConnection.Name)) > 0):
 			// Neither part is echoed: the value is logged with the route at start, and a token pasted in its place must not follow it there.
 			return fmt.Errorf("%w: ChatConnection is not a namespace that is a DNS-1123 label and a name that is a DNS-1123 subdomain, which are all Kubernetes can hold (its value is not shown)", ErrWiring)
@@ -193,6 +250,12 @@ func (c RunConfig) validateSource() error {
 		for i, ns := range c.ConnectionNamespaces {
 			if len(validation.IsDNS1123Label(ns)) > 0 {
 				return fmt.Errorf("%w: ConnectionNamespaces item %d is not a namespace name, which is a DNS-1123 label (no wildcard; its value is not shown)", ErrWiring, i+1)
+			}
+		}
+		if c.ConnectionNamespaceSelector != nil {
+			if _, selectable := c.ConnectionNamespaceSelector.Requirements(); !selectable {
+				// labels.Nothing(): the source would read namespaces, and need the right to, to admit none. Unset is nil.
+				return fmt.Errorf("%w: ConnectionNamespaceSelector selects nothing; leave it nil for no selector", ErrWiring)
 			}
 		}
 	default:

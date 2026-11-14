@@ -192,9 +192,12 @@ func TestDocumentedOwnAppInstallsGrantTheConnectionsSecret(t *testing.T) {
 	}
 }
 
-// TestDocumentedTeamAppInstalls: the install that the chart README and Install with Helm lead with is a broker with no Slack app of its own, which
-// admits team-a. Their values must render that broker (the list, and no own connection) and grant no Secret, since both say the team grants its own,
-// and the ServiceAccount their RoleBinding names must be the one the chart renders.
+// TestDocumentedTeamAppInstalls: the install that the chart README and Install with Helm lead with is a broker with no Slack app of its own. The
+// values of both are comments only (Install with Helm's is what init writes), which show team-a in config.connectionNamespaces commented out
+// and render every namespace: no list, no selector and no own connection. Both must grant no Secret, since both say the team grants its own,
+// and the ServiceAccount their RoleBinding names must be the one the chart renders. The controls the comments show must be values the chart
+// takes: uncommented, the block renders the list team-a, the selector as JSON and the ClusterRole's rule on namespaces, so a typo in a
+// commented control fails here and not in a reader's install.
 func TestDocumentedTeamAppInstalls(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
@@ -214,7 +217,7 @@ func TestDocumentedTeamAppInstalls(t *testing.T) {
 				}
 			}
 			if block == "" {
-				t.Fatalf("%s has no values block that admits team-a in config.connectionNamespaces", doc)
+				t.Fatalf("%s has no values block that shows team-a in config.connectionNamespaces", doc)
 			}
 			file := filepath.Join(t.TempDir(), "my-values.yaml")
 			if err := os.WriteFile(file, []byte(block), 0o600); err != nil {
@@ -222,11 +225,31 @@ func TestDocumentedTeamAppInstalls(t *testing.T) {
 			}
 			objs := mustRender(t, "agent-kourier", "agent-kourier", "--kube-version", "v1.33.2", "--set", "image.repository=agent-kourier", "-f", file)
 			env := podEnv(deployment(t, objs))
-			if v, has := env["AGENTKOURIER_CHAT_CONNECTION"]; has || env["AGENTKOURIER_CONFIG_SOURCE"] != "crds" || env["AGENTKOURIER_CONNECTION_NAMESPACES"] != "team-a" {
-				t.Errorf("environment %v (own connection %q); want crds, the list team-a and no own connection", env, v)
+			if v, has := env["AGENTKOURIER_CHAT_CONNECTION"]; has || env["AGENTKOURIER_CONFIG_SOURCE"] != "crds" {
+				t.Errorf("environment %v (own connection %q); want crds and no own connection", env, v)
+			}
+			if list, has := env["AGENTKOURIER_CONNECTION_NAMESPACES"]; has {
+				t.Errorf("the list is %q; want none (every namespace)", list)
+			}
+			if sel, has := env["AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR"]; has {
+				t.Errorf("the selector is %q; want none (every namespace)", sel)
 			}
 			if got := secretRoles(t, objs); len(got) != 0 {
 				t.Errorf("Secret Roles %v; want none (the team grants its own)", got)
+			}
+			if err := os.WriteFile(file, []byte(uncommentConfig(t, block)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			objs2 := mustRender(t, "agent-kourier", "agent-kourier", "--kube-version", "v1.33.2", "--set", "image.repository=agent-kourier", "-f", file)
+			env2 := podEnv(deployment(t, objs2))
+			if v, has := env2["AGENTKOURIER_CHAT_CONNECTION"]; has || env2["AGENTKOURIER_CONNECTION_NAMESPACES"] != "team-a" {
+				t.Errorf("uncommented: environment %v (own connection %q); want the list team-a and no own connection", env2, v)
+			}
+			if want := `{"matchLabels":{"agentkourier.dev/serve":"true"}}`; env2["AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR"] != want {
+				t.Errorf("uncommented: AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR = %q; want %s", env2["AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR"], want)
+			}
+			if rules := clusterRoleRules(t, objs2); !slices.ContainsFunc(rules, func(r rbacv1.PolicyRule) bool { return equality.Semantic.DeepEqual(r, namespacesRule) }) {
+				t.Errorf("uncommented: ClusterRole rules %+v; want %+v among them", rules, namespacesRule)
 			}
 			ms := regexp.MustCompile(`--serviceaccount=([a-z0-9-]+):([a-z0-9-]+)`).FindAllStringSubmatch(string(raw), -1)
 			if ms == nil {
@@ -241,6 +264,27 @@ func TestDocumentedTeamAppInstalls(t *testing.T) {
 			}
 		})
 	}
+}
+
+// uncommentConfig returns the values block with its commented-out controls switched on: the comment lines from "# config:" to the end of
+// the block lose their "#" and the one space after it, as a reader uncommenting them would do. A line after "# config:" that is not a
+// comment fails the test.
+func uncommentConfig(t *testing.T, block string) string {
+	t.Helper()
+	head, controls, ok := strings.Cut(block, "\n# config:\n")
+	if !ok {
+		t.Fatalf("the values block does not show config commented out:\n%s", block)
+	}
+	var b strings.Builder
+	b.WriteString(head + "\nconfig:\n")
+	for line := range strings.Lines(controls) {
+		rest, ok := strings.CutPrefix(line, "#")
+		if !ok {
+			t.Fatalf("line %q after # config: is not a comment", line)
+		}
+		b.WriteString(strings.TrimPrefix(rest, " "))
+	}
+	return b.String()
 }
 
 // TestCRDsInstallFollowsTheRoute: an unset crds.install is true with config.source crds and false with files, and an explicit value wins. The

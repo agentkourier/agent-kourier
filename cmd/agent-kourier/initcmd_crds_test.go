@@ -190,6 +190,10 @@ func checkInitWritesTheTeamApp(t *testing.T, section string) {
 		if !strings.Contains(got, "\n# ") && !strings.Contains(got, "\n  # ") {
 			t.Errorf("%s has no comments:\n%s", f.path, got)
 		}
+		// The platform team's file sets no key, so its comments are all it says: the page shows them as written.
+		if f.path == "my-values.yaml" && got != want {
+			t.Errorf("init's my-values.yaml is not the page's, word for word:\ninit:\n%s\npage:\n%s", got, want)
+		}
 	}
 	// Each of the page's commands is printed as the page shows it, its lines together.
 	for _, block := range codeBlocks(t, section, "```sh") {
@@ -236,6 +240,52 @@ func TestInitWithAnAgentTokenPutsTheSecretInTheTeamsNamespace(t *testing.T) {
 	}
 }
 
+// assertNoValues fails unless the values file parses as YAML and sets no key: with no own connection, no list and no
+// selector the chart renders "all", so the platform team's file has nothing to set.
+func assertNoValues(t *testing.T, values string) {
+	t.Helper()
+	var got map[string]any
+	if err := yaml.Unmarshal([]byte(values), &got); err != nil {
+		t.Fatalf("the values file is not YAML: %v\n%s", err, values)
+	}
+	if len(got) != 0 {
+		t.Errorf("the values file sets %v; want comments only\n%s", got, values)
+	}
+}
+
+// The platform team's values file holds comments only, so that "helm install -f" takes it and the chart serves every
+// namespace, and the comments name the two optional controls, commented out, with the team's namespace in the list.
+func TestInitCRValuesHoldCommentsOnly(t *testing.T) {
+	for _, team := range []string{"team-a", "payments"} {
+		t.Run(team, func(t *testing.T) {
+			out := outFile(t)
+			args := crArgs(out)
+			args = append(args, "--team-namespace", team)
+			if _, stderr, code := initRun(t, "", env{}.get, "", args...); code != exitOK {
+				t.Fatalf("exit code %d, stderr %q", code, stderr)
+			}
+			values := readFile(t, out)
+			assertNoValues(t, values)
+			for _, want := range []string{
+				"# config:\n", "#   connectionNamespaces: [" + team + "]\n", "#   connectionNamespaceSelector:\n",
+				"#     matchLabels: {agentkourier.dev/serve: \"true\"}\n", "every namespace",
+			} {
+				if !strings.Contains(values, want) {
+					t.Errorf("the values file lacks %q:\n%s", want, values)
+				}
+			}
+			for line := range strings.Lines(values) {
+				if strings.TrimSpace(line) != "" && !strings.HasPrefix(line, "#") {
+					t.Errorf("line %q is not a comment", strings.TrimRight(line, "\n"))
+				}
+			}
+			if n := strings.Count(values, "\n"); n > 20 {
+				t.Errorf("the values file has %d lines; keep it short", n)
+			}
+		})
+	}
+}
+
 // Each dialect, with and without the token, makes a team file whose references resolve, in the team's namespace, whatever
 // the agent's and the release's namespaces are.
 func TestInitTeamAppResolves(t *testing.T) {
@@ -275,15 +325,7 @@ func TestInitTeamAppResolves(t *testing.T) {
 			if (b.Spec.Identity.TokenSecretRef != nil) != tc.agentToken {
 				t.Errorf("tokenSecretRef = %+v; want one: %v", b.Spec.Identity.TokenSecretRef, tc.agentToken)
 			}
-			var values struct {
-				Config map[string]any `json:"config"`
-			}
-			if err := yaml.Unmarshal([]byte(readFile(t, out)), &values); err != nil {
-				t.Fatal(err)
-			}
-			if want := map[string]any{"connectionNamespaces": []any{tc.team}}; !reflect.DeepEqual(values.Config, want) {
-				t.Errorf("config = %v; want %v", values.Config, want)
-			}
+			assertNoValues(t, readFile(t, out))
 			for _, want := range []string{
 				"kubectl create namespace kourier\n", "-n kourier -f " + out + "\n",
 				"--serviceaccount=kourier:agent-kourier\n", "kubectl apply -f " + teamFile(out, tc.team) + "\n",

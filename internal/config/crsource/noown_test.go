@@ -17,7 +17,7 @@ import (
 )
 
 // startTeamOnly is startAdmitted for a broker with no ChatConnection of its own: it serves the connections of the namespaces and
-// nothing else.
+// nothing else (with none, it serves every namespace's: see TestTheAdmissionRules).
 func (c *cluster) startTeamOnly(t *testing.T, clock *testClock, namespaces ...string) (*crsource.Source, *logSink) {
 	t.Helper()
 	logs := &logSink{}
@@ -106,17 +106,6 @@ func TestWithoutAnOwnConnectionAFormerOwnIsServedWhenItsNamespaceIsAdmitted(t *t
 	}
 	if got := bindingNames(s); !slices.Equal(got, []string{"sre/chat-only", "sre/sre-alerts"}) {
 		t.Errorf("Bindings = %v; want those of slack-main", got)
-	}
-}
-
-// With nothing admitted and no own connection the Source serves no connection. The broker refuses to start in that case; the Source
-// is not the place that says so, and reads nothing.
-func TestWithoutAnOwnConnectionAndNoNamespaceNothingIsServed(t *testing.T) {
-	leakCheck(t)
-	src, _ := newCluster(t, corpus(t)...).startTeamOnly(t, nil)
-	s, _ := set(t, src)
-	if len(s.ChatConnections) != 0 || len(s.Invalid) != 0 || len(s.UnservedConnections) != 0 {
-		t.Errorf("connections %v, Invalid %+v, unserved %+v; want nothing", connectionNames(s), s.Invalid, s.UnservedConnections)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -144,7 +145,15 @@ func TestTaskLeftByACardThatIsTooLargeIsReadOnceAndCancellableOnceTheCardIsFixed
 	if turns != 1 {
 		t.Errorf("the sink was given %d turns; want one, recovered, to end the message of the process before", turns)
 	}
-	// A reply is queued behind the task, which nothing follows, and the card is fixed.
+	// A reply is queued behind the task, which nothing follows, and the card is fixed. Stop clears the record and wakes the queue
+	// before it returns, and the fake names the task of the reply's send t1 as well: the send is held until the record has been
+	// read, or a reply that got as far as naming its task would be taken for the task Stop did not clear.
+	f.agent.mu.Lock()
+	f.agent.hold = make(chan struct{})
+	hold := f.agent.hold
+	f.agent.mu.Unlock()
+	release := sync.OnceFunc(func() { close(hold) })
+	defer release() // also when a Fatal ends the test: the runner must not wait for ever
 	if _, err := f.submit(inbound("9")); err != nil {
 		t.Fatal(err)
 	}
@@ -156,6 +165,7 @@ func TestTaskLeftByACardThatIsTooLargeIsReadOnceAndCancellableOnceTheCardIsFixed
 	if id := f.taskID(); id != "" {
 		t.Errorf("task %q recorded after Stop; want it cleared", id)
 	}
+	release()
 	waitFinal(t, sink) // the queued reply, sent once the task is over
 	f.retired(t)
 	if got := f.sentIDs(); !slices.Equal(got, []string{inbound("9").MessageID}) {

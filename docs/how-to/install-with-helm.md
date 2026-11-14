@@ -59,9 +59,11 @@ The chart is `ghcr.io/agentkourier/charts/agent-kourier@sha256:<chart digest>`, 
 
 `agent-kourier init` writes the files of a first install with your values in them. By default they are the files of
 [the recorded path](team-slack-app.md#the-whole-path-recorded) for a broker with no Slack app of its own: the team brings its own app, and
-the broker serves the ChatConnection the team makes in its namespace. It writes two files:
+the broker serves the ChatConnections of every namespace, the team's included. It writes two files:
 
-- `my-values.yaml`, the platform team's values: `config.connectionNamespaces` with the team's namespace, and no `config.chatConnection`.
+- `my-values.yaml`, the platform team's values: comments only, and no key, so the chart renders a broker with no `config.chatConnection` that serves
+  the ChatConnections of every namespace. The comments show `config.connectionNamespaces` with the team's namespace in it, and
+  `config.connectionNamespaceSelector`, commented out, for a platform that serves fewer.
 - `<team>.yaml`, named after the team's namespace, the team's resources, all in that namespace: the ChatConnection `<team>-slack` for the
   team's app, which reads the Secret `<team>-slack`; the AgentBackend `agent`; and the Binding `my-binding`, which names the two.
 
@@ -86,7 +88,8 @@ first. They are the commands of [Install on custom resources](#install-on-custom
 [Check it](#check-it).
 
 Releases before 0.1.3 do not have `init`, and releases up to 0.3.1 write only the ConfigMap route, as `--source files` does now, and have no
-`--team-namespace`. Run the image of the release you install, in the directory that should get the files. `-it`
+`--team-namespace`. Release 0.3.2 writes `config.connectionNamespaces` with the team's namespace into `my-values.yaml` instead of comments
+only, so the broker it installs serves that namespace alone. Run the image of the release you install, in the directory that should get the files. `-it`
 lets it ask its questions, and `--user` runs it as you, so it can write the files into your directory (the image's own user is 65532):
 
 ```sh
@@ -138,11 +141,30 @@ administrator. A team that is not one first needs the Roles that let it write it
 ([Let a team add its own Binding](migrate-config-source.md#let-a-team-add-its-own-binding)). `agent-kourier init`
 [writes these files](#write-the-files-with-init) with your names in them.
 
-The platform team's values list the namespaces whose ChatConnections the broker serves, and name no ChatConnection of its own:
+The platform team's values file holds comments only. With no ChatConnection of its own, no list of namespaces and no selector, the chart
+sets none of `config.chatConnection`, `config.connectionNamespaces` and `config.connectionNamespaceSelector`, and the broker serves the
+ChatConnections of every namespace. To serve `team-a` alone, uncomment `config:` and `connectionNamespaces`. To admit by label, uncomment `config:` and `connectionNamespaceSelector` with its `matchLabels` line:
 
 ```yaml title="my-values.yaml"
-config:
-  connectionNamespaces: [team-a]
+# A first install of the Agent Kourier Helm chart on custom resources, the chart's default route, for a broker
+# with no Slack app of its own: it serves the ChatConnections that teams make in their namespaces with their own apps.
+#
+# Written by "agent-kourier init", with team-a.yaml beside it, which the team applies once the chart is installed. The
+# steps are in https://agentkourier.dev/how-to/team-slack-app/#the-whole-path-recorded.
+# Keep the file: an upgrade passes it again.
+#
+# Nothing is set, so the broker serves the ChatConnections of every namespace. That is a setting for a cluster with one
+# broker: this one would also serve a second broker's connections, its own included, and one Slack app would then have
+# two Socket Mode connections that split its events. To serve fewer, uncomment "config:" and one or both controls under
+# it. A namespace is admitted if it is on the list or its labels match the selector.
+#
+# config:
+#   # The namespaces by name. The broker reads the list at start, so a change restarts it.
+#   connectionNamespaces: [team-a]
+#   # The namespaces by label, followed live: a namespace that gains the label is admitted at the next read, and one
+#   # that loses it stops being admitted.
+#   connectionNamespaceSelector:
+#     matchLabels: {agentkourier.dev/serve: "true"}
 ```
 
 ```sh
@@ -304,8 +326,9 @@ rbac:
     my-team: [agent-kourier-agent-token]
 ```
 
-A broker with an app of its own can serve teams' apps too, with `config.connectionNamespaces` beside `config.chatConnection`
-([Let a team bring its own Slack app](team-slack-app.md)). Then go to [Check it](#check-it).
+A broker with an app of its own can serve teams' apps too, with `config.connectionNamespaces` (by name) or `config.connectionNamespaceSelector`
+(by label) beside `config.chatConnection` ([Let a team bring its own Slack app](team-slack-app.md#3-the-platform-team-admits-the-namespace)).
+With neither, it serves its own connection alone. Then go to [Check it](#check-it).
 
 ## Create the Secrets
 
@@ -493,8 +516,12 @@ slack: socket mode connected
 
 `config route` is the first line, and it is how the log says which of [the two routes](../explanation/config-routes.md) the broker reads: its `config_source` field is
 `crds` or `files`. With `crds` and an own connection it also has a `connection` field, the namespace/name of the ChatConnection the broker is set to serve
-(`AGENTKOURIER_CHAT_CONNECTION`), and the later `serving a ChatConnection` line confirms that the cluster has it. With `crds` and a list of namespaces
-(`AGENTKOURIER_CONNECTION_NAMESPACES`) it also has a `connection_namespaces` field with the namespace names, comma-joined; a broker with no own connection has no `connection` field,
+(`AGENTKOURIER_CHAT_CONNECTION`), and the later `serving a ChatConnection` line confirms that the cluster has it. With `crds` it also has a
+`connection_admission` field, which says whose ChatConnections the broker serves besides its own: `all` (every namespace: no own connection, no list
+and no selector, or a selector of `{}`), `list` (`AGENTKOURIER_CONNECTION_NAMESPACES`), `selector` (`AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR`),
+`list+selector`, or `own` (none: its own connection alone). With a list there is a `connection_namespaces` field with the namespace names,
+comma-joined, and with a selector other than `{}` a `connection_namespace_selector` field with the selector in Kubernetes' text form, such as
+`agentkourier.dev/serve=true`. A broker with no own connection has no `connection` field,
 and `serving a ChatConnection` is logged each time it starts a team connection, after `ready`, since the leader starts them. With `files` there is no `connection` field: the one
 ChatConnection of the directory is named by `serving a ChatConnection` alone. The line is logged at `info`: at the default level, the log of a container that has just started and has no `config route` line is from a release older than the one that added it. With `logLevel: warn` or `error` no start line is shown, and a log that kubelet has rotated no longer has its first lines. The order of the first five lines is read from the code and was checked, on both
 routes, against the broker started with a fake cluster; the three `slack:` lines were not re-run against a cluster for this page.

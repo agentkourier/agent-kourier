@@ -75,6 +75,10 @@ echo "== a successful workflow with a failed job fails closed"
 run_case job-failure 1 job-failure
 contains "job-failure: names the failed required job" "required job 'test' is failure" "${TMP}/job-failure.out"
 
+echo "== a failed leg of a split test pass fails closed, though its required check passed"
+run_case leg-failure 1 leg-failure
+contains "leg-failure: names the failed leg" "non-successful jobs: test-shard (2)=failure" "${TMP}/leg-failure.out"
+
 echo "== the newest attempt overrides an older successful attempt"
 run_case latest-failure 1 latest-failure
 contains "latest-failure: uses the latest attempt" "latest push run 701" "${TMP}/latest-failure.out"

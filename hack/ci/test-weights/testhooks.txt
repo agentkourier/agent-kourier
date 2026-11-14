@@ -1,0 +1,18 @@
+# Seconds each package's tests took in CI's testhooks pass (make test-testhooks on a 4-vCPU runner, four packages at a
+# time), which hack/ci/test-shard.sh balances the test-testhooks-shard legs by. A package not listed weighs 10.
+# test-shard.sh says how to refresh this file from a push run on main.
+
+115 github.com/agentkourier/agent-kourier/internal/broker
+75 github.com/agentkourier/agent-kourier/internal/chat/slack
+48 github.com/agentkourier/agent-kourier/internal/config/crsource
+12 github.com/agentkourier/agent-kourier/internal/feedback
+92 github.com/agentkourier/agent-kourier/internal/interact
+26 github.com/agentkourier/agent-kourier/internal/outbox
+63 github.com/agentkourier/agent-kourier/internal/render/live
+3 github.com/agentkourier/agent-kourier/internal/retention
+80 github.com/agentkourier/agent-kourier/internal/session
+1 github.com/agentkourier/agent-kourier/internal/store/postgres
+69 github.com/agentkourier/agent-kourier/internal/store/sqlite
+1 github.com/agentkourier/agent-kourier/internal/store/storetest
+38 github.com/agentkourier/agent-kourier/internal/testhooks
+24 github.com/agentkourier/agent-kourier/internal/trigger

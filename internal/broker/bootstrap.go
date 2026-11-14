@@ -9,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
@@ -48,11 +49,15 @@ type CRDSource struct {
 	// Client reads the three resources: InClusterDynamicClient's.
 	Client dynamic.Interface
 	// Connection is the broker's own ChatConnection (AGENTKOURIER_CHAT_CONNECTION), which it always serves. The zero reference means the broker
-	// has none (spec D53): it serves the ChatConnections of ConnectionNamespaces alone (crsource.Options.Connection).
+	// has none (spec D53): it serves the ChatConnections of the admitted namespaces alone (crsource.Options.Connection).
 	Connection v1alpha1.ObjectRef
 	// ConnectionNamespaces is the admission list (AGENTKOURIER_CONNECTION_NAMESPACES): the source also reads the ChatConnections of these
-	// namespaces, and the Bindings that name them (crsource.Options.ConnectionNamespaces). None reads the own connection alone.
+	// namespaces, and the Bindings that name them (crsource.Options.ConnectionNamespaces).
 	ConnectionNamespaces []string
+	// ConnectionNamespaceSelector admits the namespaces whose labels it matches besides the list's, read live; nil is none and empty is every
+	// namespace (crsource.Options.ConnectionNamespaceSelector, which also says what no own connection, no list and no selector admit: every
+	// namespace).
+	ConnectionNamespaceSelector labels.Selector
 }
 
 // Config is the loaded config and the Secrets it reads: a Reloader whose snapshots are checked
@@ -142,7 +147,10 @@ func Bootstrap(ctx context.Context, client kubernetes.Interface, opts BootstrapO
 // is the operator's to fix wraps ErrWiring (a CRD that is not installed, an own connection that is not usable) or
 // k8ssecrets.ErrAccessDenied or crsource.ErrAccessDenied (RBAC). On failure nothing is left running.
 func bootstrapCRDs(ctx context.Context, client kubernetes.Interface, opts BootstrapOptions, log *slog.Logger) (*Config, error) {
-	src, err := crsource.New(crsource.Options{Client: opts.CRDs.Client, Connection: opts.CRDs.Connection, ConnectionNamespaces: opts.CRDs.ConnectionNamespaces, Logger: log})
+	src, err := crsource.New(crsource.Options{
+		Client: opts.CRDs.Client, Connection: opts.CRDs.Connection, ConnectionNamespaces: opts.CRDs.ConnectionNamespaces,
+		ConnectionNamespaceSelector: opts.CRDs.ConnectionNamespaceSelector, Logger: log,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrWiring, err)
 	}

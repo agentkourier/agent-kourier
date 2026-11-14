@@ -150,7 +150,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	// The renderer posts a turn's first message through the outbox and edits or streams it through the
 	// chat platform (the Slack adapter over the client); a notice is only queued on the outbox, off Slack's
 	// acknowledgement path.
-	renderer, err := live.New(live.Config{Sender: ob, Audit: auditor, Platforms: platforms, Store: st, Logger: log})
+	renderer, err := live.New(live.Config{Sender: ob, Audit: auditor, Platforms: platforms, Store: st, Throttle: cfg.renderThrottle, Logger: log})
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +261,8 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 		}
 		statusW, err = newStatusWriter(statusConfig{
 			Client: h.status.client, Report: func() config.Report { return refused.overlay(boot.Reloader.Report()) }, Conditions: func() map[string][]bindingcheck.Condition { return prober.State().Snapshot() },
-			Observed: boot.Source.BindingStatus, Version: boot.Source.BindingEvents, Served: served, Timeout: statusCallTimeout(h.cfg.Election, h.leaseFence != nil), Fence: h.leaseFence, Warnings: h.status.warnings, Log: log, OnWrite: metrics.StatusWrite, OnUnserved: metrics.UnservedBindings,
+			Observed: boot.Source.BindingStatus, Version: boot.Source.BindingEvents, Served: served, Timeout: statusCallTimeout(h.cfg.Election, h.leaseFence != nil),
+			Gap: h.cfg.statusTimes.Gap, Tick: h.cfg.statusTimes.Tick, Slow: h.cfg.statusTimes.Slow, Fence: h.leaseFence, Warnings: h.status.warnings, Log: log, OnWrite: metrics.StatusWrite, OnUnserved: metrics.UnservedBindings,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("binding status: %w", err)

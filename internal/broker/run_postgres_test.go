@@ -184,7 +184,7 @@ func postgresReplica(t *testing.T, first RunConfig, identity string) (RunConfig,
 	c.Logger = slog.New(slog.NewTextHandler(rep.logs, nil))
 	c.newSlack = func(slack.Config) slackAPI { rep.built.Add(1); return idleSlack{} }
 	c.exit = func(code int) { rep.exits <- code }
-	c.leaveKlog = true // two Runs in one process
+	runsAlongside(&c) // two Runs in one process
 	return c, rep
 }
 
@@ -193,7 +193,7 @@ func postgresReplica(t *testing.T, first RunConfig, identity string) (RunConfig,
 func TestRunOnPostgresLeadsWithTheEpochAndAStandbyTakesOver(t *testing.T) {
 	dsn, schema := freshSchema(t)
 	ca := postgresConfig(t, dsn)
-	ca.leaveKlog = true
+	runsAlongside(&ca)
 	a := &replica{exits: make(chan int, 4), logs: &logBuffer{}}
 	ca.newSlack = func(slack.Config) slackAPI { a.built.Add(1); return idleSlack{} }
 	a.running = start(t, ca)
@@ -225,7 +225,7 @@ func TestRunOnPostgresLeadsWithTheEpochAndAStandbyTakesOver(t *testing.T) {
 func TestRunOnPostgresTheProcessExitsWhenAWriteFindsTheEpochStale(t *testing.T) {
 	dsn, _ := freshSchema(t)
 	c := postgresConfig(t, dsn)
-	c.leaveKlog = true
+	runsAlongside(&c)
 	a := &replica{exits: make(chan int, 4), logs: &logBuffer{}}
 	c.Logger = slog.New(slog.NewTextHandler(a.logs, nil))
 	c.newSlack = func(slack.Config) slackAPI { a.built.Add(1); return idleSlack{} }

@@ -97,6 +97,7 @@ func isolationWorld(t *testing.T) (*connWorld, *statusCluster, *running) {
 	runsAlongside(&w.c)
 	cluster := newStatusClusterOn(w.dyn)
 	w.c.StatusClient = cluster.dyn
+	paceStatusQuickly(&w.c)
 	w.c.probeEvery, w.c.probeTick, w.c.probeGap = 50*time.Millisecond, 10*time.Millisecond, time.Millisecond
 	w.team("team-a", "tok-a")
 	w.binding("team-a", "on-a", "C0TEAMA0001")

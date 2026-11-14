@@ -18,24 +18,43 @@ lint: ## Run golangci-lint (also over the e2e, image, crdcorpus and testhooks ta
 
 test: test-race test-testhooks test-scripts ## Run all the unit tests: with the race detector, again with the testhooks tag where it changes the build, the scripts' own (CI runs the three apart)
 
-test-race: ## Run unit tests with the race detector (the chart tests need helm; AGENTKOURIER_REQUIRE_HELM=1 fails without it)
+# TEST_SHARD=I/N runs only leg I of N of a pass, test-race or test-testhooks: hack/ci/test-shard.sh splits the pass's
+# packages over N legs by the seconds in hack/ci/test-weights, so that the N legs together run each package once. CI's
+# matrix legs set it. Unset, as make test leaves it, a pass runs all its packages.
+TEST_SHARD ?=
+
+test-race: ## Run unit tests with the race detector (the chart tests need helm; AGENTKOURIER_REQUIRE_HELM=1 fails without it); TEST_SHARD=I/N runs one leg
+ifeq ($(TEST_SHARD),)
 	go test -race -timeout 20m ./...
+else
+	pkgs=$$(go list -race ./...) && \
+		pkgs=$$(hack/ci/test-shard.sh pick hack/ci/test-weights/race.txt '$(TEST_SHARD)' $$pkgs) && \
+		go test -race -timeout 20m $$pkgs
+endif
 
 # The testhooks pass's build flags besides -tags. The selector lists packages under the same ones: they select files too.
 TESTHOOKS_BUILD_FLAGS := -race
 
-test-testhooks: ## Run with the race detector and the testhooks tag the internal packages whose test build the tag changes (hack/ci/testhooks-packages.sh); the others compile as in test-race, which ran them
+test-testhooks: ## Run with the race detector and the testhooks tag the internal packages whose test build the tag changes (hack/ci/testhooks-packages.sh); the others compile as in test-race, which ran them; TEST_SHARD=I/N runs one leg
+ifeq ($(TEST_SHARD),)
 	pkgs=$$(TESTHOOKS_BUILD_FLAGS='$(TESTHOOKS_BUILD_FLAGS)' hack/ci/testhooks-packages.sh ./internal/...) && \
 		go test $(TESTHOOKS_BUILD_FLAGS) -timeout 20m -tags testhooks $$pkgs
+else
+	pkgs=$$(TESTHOOKS_BUILD_FLAGS='$(TESTHOOKS_BUILD_FLAGS)' hack/ci/testhooks-packages.sh ./internal/...) && \
+		pkgs=$$(hack/ci/test-shard.sh pick hack/ci/test-weights/testhooks.txt '$(TEST_SHARD)' $$pkgs) && \
+		go test $(TESTHOOKS_BUILD_FLAGS) -timeout 20m -tags testhooks $$pkgs
+endif
 
-test-scripts: ## Run kind, security policy, release gate, PR label, CI tool installer, testhooks package selection and Actions cache upkeep tests (no cluster)
+test-scripts: ## Run kind, security policy, release gate, PR label, CI tool installer, testhooks package selection, test leg split, Actions cache upkeep and docs-only classification tests (no cluster)
 	hack/kind/netpol_test.sh
 	hack/security/test.sh
 	hack/release/test.sh
 	hack/github/test.sh
 	hack/ci/test.sh
 	hack/ci/testhooks-packages_test.sh
+	hack/ci/test-shard_test.sh
 	hack/ci/actions-cache_test.sh
+	hack/ci/docs-only_test.sh
 
 lint-workflows: ## Lint .github/workflows with zizmor after proving its policy fails each unsafe fixture (installs the pinned zizmor unless ZIZMOR_BIN is set; needs jq)
 	hack/security/lint-workflows.sh
@@ -112,7 +131,7 @@ e2e-crs-scenarios: ## The custom resource scenarios that need kubectl or Helm: u
 e2e-crs-migration: ## Move the fast tier between the ConfigMap and the custom resources with Helm, and back, with a session in flight (the tier up on Postgres, two replicas, files)
 	hack/kind/crs-migration.sh
 
-e2e-two-apps: ## Run the MC_ tests (a broker with two Slack apps) as a Job of their own, then take a team off the platform's admission list with Helm and put it back, then run with no ChatConnection of its own, the platform's namespace off the list and then on it (with a leader takeover on Postgres with two replicas): the fast tier up on E2E_TWO_APPS=1 E2E_CONFIG_SOURCE=crds
+e2e-two-apps: ## Run the MC_ tests (a broker with two Slack apps) as a Job of their own, then take a team off the platform's admission list with Helm and put it back, then run with no ChatConnection of its own, the platform's namespace off the list and then on it (with a leader takeover on Postgres with two replicas), then admit a team by a namespace label with no restart, and serve every namespace with nothing set and with the selector {}: the fast tier up on E2E_TWO_APPS=1 E2E_CONFIG_SOURCE=crds
 	hack/kind/two-apps.sh
 
 sandbox-up: ## Dogfood tier on the full tier: Agent Kourier on a real Slack, a read-only SRE agent on a real model, seeded faults (secrets file: SANDBOX_ENV)

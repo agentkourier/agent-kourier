@@ -4,6 +4,11 @@ name: codeql
 # intentionally skipped while this repository is private so a Free-plan repo
 # never starts a paid Advanced Security analysis; making the repository public
 # activates the same workflow without a repository-file change.
+#
+# On a docs-only pull request (the header of ci.yml says what that is and why skipping is safe), analyze starts and
+# reports success under its own name but skips every step after its docs-only step, so it uploads no analysis for
+# that pull request: no Go file changed. The `main` ruleset has no code scanning rule that would wait for one. On any
+# other event the docs-only step does not run, and analyze runs in full.
 on:
   pull_request:
   push:
@@ -32,18 +37,33 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The merge commit and both its parents, for the docs-only step.
+          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
+      # On a docs-only pull request every step after this one skips; the header says why that is safe.
+      - id: docs-only
+        name: Classify the pull request's changes
+        if: ${{ github.event_name == 'pull_request' }}
+        continue-on-error: true
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          scope=$(hack/ci/docs-only.sh)
+          echo "${scope}" >>"${GITHUB_OUTPUT}"
       # The job's own Go cache, as ci.yml describes.
       - id: setup-go
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: false
       - id: go-env
         name: Locate the Go caches
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         run: |
           echo "modcache=$(go env GOMODCACHE)" >>"${GITHUB_OUTPUT}"
           echo "gocache=$(go env GOCACHE)" >>"${GITHUB_OUTPUT}"
       - id: go-cache
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -57,11 +77,14 @@ jobs:
           CACHE_KEY: ${{ steps.go-cache.outputs.cache-primary-key }}
           CACHE_RESTORED_KEY: ${{ steps.go-cache.outputs.cache-matched-key }}
         run: hack/ci/actions-cache.sh mark
-      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+      - if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           languages: ${{ matrix.language }}
-      - uses: github/codeql-action/autobuild@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
-      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+      - if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        uses: github/codeql-action/autobuild@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+      - if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           category: /language:${{ matrix.language }}
       - id: go-trim

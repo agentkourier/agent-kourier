@@ -176,7 +176,7 @@ func TestRunTheWritersWarningsAreTheCountersOfTheClient(t *testing.T) {
 	c := crStartConfig(t, nil)
 	logs := &lockedBuffer{}
 	c.Logger = slog.New(slog.NewTextHandler(logs, nil))
-	c.leaveKlog = true
+	runsAlongside(&c)
 	warnings := &warningCounter{}
 	c.statusWarnings = warnings
 	cluster := newStatusClusterOn(c.Dynamic.(*dynamicfake.FakeDynamicClient))

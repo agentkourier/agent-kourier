@@ -45,6 +45,9 @@ func startConfig(t *testing.T) RunConfig {
 	c.Client = cluster()
 	c.SyncTimeout = 30 * time.Second
 	c.newSlack = func(slack.Config) slackAPI { return idleSlack{} } // offline: the default build cannot reach a fake
+	// No test of this package is about the renderer's pace (internal/render/live's are, on its own clock): a turn's writes, and the
+	// shutdown that waits for its last one, need not take 2 seconds each.
+	c.renderThrottle = 100 * time.Millisecond
 	return c
 }
 
@@ -191,7 +194,7 @@ func TestRunBuildsTheSlackConfigFromTheConnectionSecret(t *testing.T) {
 	if got.AuthzTimeout != interact.PressAuthzTimeout {
 		t.Errorf("AuthzTimeout = %s, want the %s a press is given for its membership checks", got.AuthzTimeout, interact.PressAuthzTimeout)
 	}
-	if wantURL := testhooks.SlackAPIURL(); got.APIURL != wantURL {
+	if wantURL := testhooks.SlackAPIURL(c.hooks); got.APIURL != wantURL {
 		t.Errorf("APIURL = %q, want %q: the testhooks value, and nothing from the environment in any other build", got.APIURL, wantURL)
 	}
 }
@@ -204,11 +207,18 @@ type running struct {
 	done   chan error
 }
 
-// runsAlongside readies c for a broker that runs while other tests' brokers do (t.Parallel): it leaves klog's process-wide logger
-// alone (leaveKlog), which each Run would otherwise set while the others' informers read it. A test runs in parallel only when all
+// runsAlongside readies c for a broker that runs while other brokers do, other tests' (t.Parallel) or a second one of its own test's:
+// it leaves klog's process-wide logger alone (leaveKlog), which each Run would otherwise set while the others' informers read it. It is
+// the one way a test sets leaveKlog. A test runs in parallel only when all
 // it starts is its own (a fake cluster, a store, a listener, doubles) and it reads or sets no environment variable, goroutine count
 // (goleak) or other process-wide value.
 func runsAlongside(c *RunConfig) { c.leaveKlog = true }
+
+// paceStatusQuickly gives c's status writer a gap of 200 ms between a Binding's writes, a look at what moved each 20 ms and a whole pass
+// each 200 ms, in place of 10 s, 1 s and 10 s, for a test that waits on what a status says and not on how often it is written.
+func paceStatusQuickly(c *RunConfig) {
+	c.statusTimes.Gap, c.statusTimes.Tick, c.statusTimes.Slow = 200*time.Millisecond, 20*time.Millisecond, 200*time.Millisecond
+}
 
 func start(t *testing.T, c RunConfig) *running {
 	t.Helper()
