@@ -192,11 +192,18 @@ func FuzzSecretValueNeverShown(f *testing.F) {
 // of the arguments: every leaf was bounded, but together they were not.
 func TestTheJoinedSummaryIsBounded(t *testing.T) {
 	t.Parallel()
-	args := map[string]any{}
-	for i := range 100 {
-		args[strings.Repeat("k", i+1)] = strings.Repeat("word ", 800)
+	// Five arguments, each under the bound, come to more than four times it: more than the token layer reads of a text
+	// as it came, so the join is cut there too. More of them cost a redaction each under -race and test nothing more.
+	const n = 5
+	args, total := map[string]any{}, 0
+	for i := range n {
+		k, v := strings.Repeat("k", i+1), strings.Repeat("word ", 800)
+		args[k], total = v, total+len(k)+len(v)
+	}
+	if len(strings.Repeat("word ", 800)) > maxRedactBytes || total <= 4*maxRedactBytes {
+		t.Fatalf("the arguments are not each under the bound and together over four times it: %d bytes", total)
 	}
 	if got := toolSummary(redactArgs(args).(map[string]any)); len(got) > maxRedactBytes+len(chat.Truncated) {
-		t.Errorf("a summary of 100 arguments kept %d bytes; want at most %d", len(got), maxRedactBytes+len(chat.Truncated))
+		t.Errorf("a summary of %d arguments kept %d bytes; want at most %d", n, len(got), maxRedactBytes+len(chat.Truncated))
 	}
 }
