@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -530,15 +531,30 @@ func TestThreadRepliesKeepTheStartOfALongUnbrokenReply(t *testing.T) {
 
 func TestThreadRepliesBlockIsBoundedAndKeepsTheNewest(t *testing.T) {
 	t.Parallel()
-	for size := 1; size <= MaxThreadReplyUnits; size += 37 {
-		for _, n := range []int{3, 10, 30, 50, 60} {
+	sizes, counts := sweep(1, MaxThreadReplyUnits, 37), []int{3, 10, 30, 50, 60}
+	entriesOf := func(n, size int) []ThreadReply {
+		entries := make([]ThreadReply, n)
+		for i := range entries {
+			entries[i] = ThreadReply{UserID: "U1", Name: "Ada", Text: fmt.Sprintf("%03d", i) + strings.Repeat("b", size)}
+		}
+		return entries
+	}
+	// The block that ThreadRepliesCounted renders, laid out from replies cleaned once for every count of a size.
+	cleaned := cleanedOnce(sizes, func(size int) []untrustedItem {
+		return threadRepliesBlock(entriesOf(slices.Max(counts), size), 0).Items
+	})
+	for k, size := range sizes {
+		for _, n := range counts {
 			t.Run(fmt.Sprintf("%d x %d", n, size), func(t *testing.T) {
 				t.Parallel()
-				entries := make([]ThreadReply, n)
-				for i := range entries {
-					entries[i] = ThreadReply{UserID: "U1", Name: "Ada", Text: fmt.Sprintf("%03d", i) + strings.Repeat("b", size)}
+				entries := entriesOf(n, size)
+				b := threadRepliesBlock(entries, 0)
+				got, left := laidOut(t, b, cleaned(t, size, b.Items), false)
+				if k == 0 { // from end to end: the block is the one ThreadRepliesCounted renders
+					if want, wantLeft := ThreadRepliesCounted(entries, 0); got != want || left != wantLeft {
+						t.Fatalf("the block laid out is not what ThreadRepliesCounted returns (%d left out, want %d)", left, wantLeft)
+					}
 				}
-				got, left := ThreadRepliesCounted(entries, 0)
 				if units := chat.Units(got); units > MaxThreadBlockUnits {
 					t.Fatalf("the section is %d units, want at most %d", units, MaxThreadBlockUnits)
 				}
