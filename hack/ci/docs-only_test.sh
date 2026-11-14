@@ -21,7 +21,7 @@ export GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.com
 export GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.com
 
 # Every class the script knows, in the order of the columns of the page cases below.
-CLASSES='tests scan crd-corpus docs-agent echo-agent'
+CLASSES='tests scan crd-corpus docs-agent echo-agent prompt-agent'
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -37,7 +37,8 @@ for path in AGENTS.md README.md spec.md docs/index.md docs/how-to/install.md doc
   docs/spikes/probe.md internal/broker/run.go internal/broker/README.md go.mod Makefile \
   examples/recipes/docs-agent/README.md examples/recipes/docs-agent/agent/corpus/load.go \
   examples/recipes/docs-agent/agent/corpus/testdata/docs/index.md examples/recipes/echo-agent/agent/agent.py \
-  examples/recipes/echo-agent/agent/README.md charts/agent-kourier/README.md test/fixtures/pkg/pkg.go \
+  examples/recipes/echo-agent/agent/README.md examples/recipes/prompt-agent/agent/agent.py \
+  examples/recipes/prompt-agent/agent/README.md charts/agent-kourier/README.md test/fixtures/pkg/pkg.go \
   test/fixtures/pkg/sub/deeper/page.md; do
   mkdir -p "$(dirname "${REPO}/${path}")"
   printf 'base %s\n' "${path}" >"${REPO}/${path}"
@@ -147,31 +148,34 @@ for change in \
 done
 
 # Markdown off the docs-only list: each class skips what it does not read. Columns: tests, scan, crd-corpus,
-# docs-agent, echo-agent. The tests read pages anywhere; the docs agent reads docs/ and its recipe's directory; the echo
-# agent's jobs read its agent directory; no class but tests skips a page in a Go package's tree, at any depth below it.
+# docs-agent, echo-agent, prompt-agent. The tests read pages anywhere; the docs agent reads docs/ and its recipe's
+# directory; the echo and prompt agents' jobs read their agent directories; no class but tests skips a page in a Go
+# package's tree, at any depth below it.
 while IFS='|' read -r wants change; do
   merge_case "${change}"
   expect_classes "${wants}" "page: ${change}"
 done <<'EOF'
-rssss|echo x >>README.md
-rssrs|echo x >>docs/index.md
-rssrs|echo x >>docs/how-to/install.md
-rssrs|mkdir -p docs/reference && echo x >docs/reference/new-page.md
-rssrs|git rm -q docs/how-to/install.md
-rssrs|echo x >docs/assets/clip/notes.md
-rssss|echo x >>charts/agent-kourier/README.md
-rssss|mkdir -p examples/recipes/echo-agent && echo x >examples/recipes/echo-agent/README.md
-rsssr|echo x >>examples/recipes/echo-agent/agent/README.md
-rssrs|echo x >>examples/recipes/docs-agent/README.md
-rssss|mkdir -p .github && echo x >.github/pull_request_template.md
-rrrrr|echo x >>internal/broker/README.md
-rrrrr|mkdir -p internal/broker/testdata && echo x >internal/broker/testdata/page.md
-rrrrr|echo x >>examples/recipes/docs-agent/agent/corpus/testdata/docs/index.md
-rrrrr|echo x >>test/fixtures/pkg/sub/deeper/page.md
-rssrs|echo x >>README.md; echo x >>docs/index.md; echo x >>AGENTS.md; echo x >>docs/assets/clip/team.gif
-rssrs|git mv docs/index.md docs/start.md
-rrrrr|git mv internal/broker/README.md docs/broker.md
-rrrrr|echo x >>README.md; echo x >>internal/broker/README.md
+rsssss|echo x >>README.md
+rssrss|echo x >>docs/index.md
+rssrss|echo x >>docs/how-to/install.md
+rssrss|mkdir -p docs/reference && echo x >docs/reference/new-page.md
+rssrss|git rm -q docs/how-to/install.md
+rssrss|echo x >docs/assets/clip/notes.md
+rsssss|echo x >>charts/agent-kourier/README.md
+rsssss|mkdir -p examples/recipes/echo-agent && echo x >examples/recipes/echo-agent/README.md
+rsssss|mkdir -p examples/recipes/prompt-agent && echo x >examples/recipes/prompt-agent/README.md
+rsssrs|echo x >>examples/recipes/echo-agent/agent/README.md
+rssssr|echo x >>examples/recipes/prompt-agent/agent/README.md
+rssrss|echo x >>examples/recipes/docs-agent/README.md
+rsssss|mkdir -p .github && echo x >.github/pull_request_template.md
+rrrrrr|echo x >>internal/broker/README.md
+rrrrrr|mkdir -p internal/broker/testdata && echo x >internal/broker/testdata/page.md
+rrrrrr|echo x >>examples/recipes/docs-agent/agent/corpus/testdata/docs/index.md
+rrrrrr|echo x >>test/fixtures/pkg/sub/deeper/page.md
+rssrss|echo x >>README.md; echo x >>docs/index.md; echo x >>AGENTS.md; echo x >>docs/assets/clip/team.gif
+rssrss|git mv docs/index.md docs/start.md
+rrrrrr|git mv internal/broker/README.md docs/broker.md
+rrrrrr|echo x >>README.md; echo x >>internal/broker/README.md
 EOF
 
 # A Go file at the root puts every path in a Go package's tree, whose package could embed README.md: then no class

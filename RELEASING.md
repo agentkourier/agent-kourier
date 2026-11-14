@@ -273,7 +273,7 @@ holds a second entry of each cache it saves until the prune runs: about 9.4 GB w
 admin or organization owner can raise it, and use past 10 GB is then billed. Past it GitHub evicts the least recently
 accessed entries first, so a cache that was accessed longest ago (one the prune would delete anyway, or a `docs.yml`
 cache, restored only on a docs change) can go, and the next run that wants it starts cold. The jobs that
-install Python packages, `echo-agent` in `ci.yml` and `build` in `docs.yml`, keep pip's cache under an exact key on
+install Python packages, `echo-agent` and `prompt-agent` in `ci.yml` and `build` in `docs.yml`, keep pip's cache under an exact key on
 the job, the runner OS, the Python version and the requirements files they install from: a push to `main` saves it
 only when those files or the Python version change, and `cache-prune` then deletes the old entry. `docs.yml` runs on a push to
 `main` only when the push changes a path in its `push` trigger, so only such a push saves the `build` job's caches. Each job has its own timeout, set from the times seen on a cold cache. The kind
@@ -296,12 +296,13 @@ scanner or CodeQL reads, but for two tests of the docs checks that `make docs-ch
   extracts `.go` files; `crd-corpus` builds and runs `test/crdcorpus` and reads only YAML from its corpus.
 - `docs-agent`: the same Markdown except under `docs/`, its corpus, and `examples/recipes/docs-agent/`.
 - `echo-agent`: the same Markdown except under `examples/recipes/echo-agent/agent/`, the one directory it reads.
+- `prompt-agent`: the same Markdown except under `examples/recipes/prompt-agent/agent/`, the one directory it reads.
 
 A Go package's tree is a directory of the merge commit with a `.go` file in it, and everything below it; the script
 finds them on each run, so no class skips a page under a new package's directory, which the package could embed, with
 no list to edit. The rule is wider than what Go embeds: a page in such a tree runs the jobs whether or not anything
 embeds it. So a pull request that changes `README.md` and pages under `docs/` skips both `crd-corpus` jobs,
-`echo-agent`, the `govulncheck` and `trivy` jobs and `analyze`; one that changes only `README.md` also skips
+`echo-agent`, `prompt-agent`, the `govulncheck` and `trivy` jobs and `analyze`; one that changes only `README.md` also skips
 `docs-agent`; one that changes only the docs-only list skips every gated job, and `test` and `test-testhooks` pass as
 their legs did. A pull request that skips `govulncheck` or `trivy` does not see a vulnerability published since its
 base was scanned; `main`'s push runs do, and so does the nightly `security` run's `govulncheck`. `lint`, with its zizmor

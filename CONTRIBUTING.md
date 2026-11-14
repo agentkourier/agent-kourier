@@ -70,10 +70,10 @@ A gated job checks out and passes without running its other steps when every pat
 regular file or deleted, is one its class in `hack/ci/docs-only.sh` does not read. Every job skips on the docs-only
 list there (maintainer prose, `docs/brand`, `docs/spikes`, the site's media under `docs/assets`). The test jobs read
 `README.md` and the pages, so they run on those; the scanners (`govulncheck`, `trivy`, `analyze`) and `crd-corpus` also
-skip Markdown outside every directory that holds Go code and the directories below it, `echo-agent` the same except
-under `examples/recipes/echo-agent/agent/`, and `docs-agent` the same except under `docs/` and
+skip Markdown outside every directory that holds Go code and the directories below it, `echo-agent` and `prompt-agent` the same
+except under their own `agent/` directories in `examples/recipes/`, and `docs-agent` the same except under `docs/` and
 `examples/recipes/docs-agent/`. A pull request that changes `README.md` and pages under `docs/` therefore
-runs `lint`, the test jobs and `docs-agent`, and skips the scanners, `crd-corpus` and `echo-agent`. `lint` and
+runs `lint`, the test jobs and `docs-agent`, and skips the scanners, `crd-corpus`, `echo-agent` and `prompt-agent`. `lint` and
 `gitleaks` always run.
 
 `lint` also runs `make lint-workflows`, which audits the workflows under `.github/workflows` with

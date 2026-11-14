@@ -1,0 +1,43 @@
+# Only Agent Kourier's pods may reach the agent, on 8080: the pods labelled app.kubernetes.io/name=agent-kourier (the
+# chart labels the broker's pods so) in the namespace agent-kourier. If Agent Kourier runs in another namespace, change
+# the namespace name below. The policy takes effect only if the cluster's network plugin enforces NetworkPolicy; without
+# that, anything in the cluster can call the agent, and only its token check stands in the way. Like the other files
+# here, it names no namespace of its own: apply it with them (kubectl apply -n prompt-agent -f manifests/).
+#
+# Egress is left open: the agent calls a model provider and the MCP servers agent.yaml names, and which addresses those
+# are is yours to say. To close it, add Egress to policyTypes and an egress list such as the commented one below: DNS,
+# the MCP server's namespace, and the model provider's addresses (an ipBlock; a NetworkPolicy cannot name a host).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: prompt-agent
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: prompt-agent}
+  policyTypes: [Ingress] # [Ingress, Egress] with the egress list below
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: agent-kourier}
+          podSelector:
+            matchLabels: {app.kubernetes.io/name: agent-kourier}
+      ports:
+        - {protocol: TCP, port: 8080}
+  # egress:
+  #   - to: # DNS, from the cluster's DNS pods
+  #       - namespaceSelector:
+  #           matchLabels: {kubernetes.io/metadata.name: kube-system}
+  #         podSelector:
+  #           matchLabels: {k8s-app: kube-dns}
+  #     ports:
+  #       - {protocol: UDP, port: 53}
+  #       - {protocol: TCP, port: 53}
+  #   - to: # the MCP server of agent.yaml's example, in namespace ops
+  #       - namespaceSelector:
+  #           matchLabels: {kubernetes.io/metadata.name: ops}
+  #     ports:
+  #       - {protocol: TCP, port: 8080}
+  #   - to: # the model provider: its addresses, which you look up; this one is a placeholder
+  #       - ipBlock: {cidr: 192.0.2.0/24}
+  #     ports:
+  #       - {protocol: TCP, port: 443}

@@ -28,6 +28,7 @@ var gated = map[string]map[string]string{
 		"crd-corpus":           "crd-corpus",
 		"docs-agent":           "docs-agent",
 		"echo-agent":           "echo-agent",
+		"prompt-agent":         "prompt-agent",
 		"test-postgres":        "tests",
 		"test-scripts":         "tests",
 		"test-shard":           "tests",

@@ -1,0 +1,35 @@
+# Your agent.yaml, which the Deployment mounts at /etc/prompt-agent/agent.yaml. It starts as ../agent.yaml, the example,
+# copied verbatim (this repository's tests keep the two equal). The agent reads it at start, so a change needs a restart.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prompt-agent
+  labels: {app.kubernetes.io/name: prompt-agent}
+data:
+  agent.yaml: |
+    # An agent, in Pydantic AI's agent spec format: nothing here is specific to Agent Kourier. agent.py reads this file and
+    # stops at start, naming what it refuses (load_agent in agent.py), on anything that could give the agent a tool this file
+    # does not list: a capability other than MCP, an MCP key other than url, allowed_tools, native: false,
+    # authorization_token, headers, description and id, a url that is not http(s)://host/..., a model_settings key that is
+    # not provider-neutral (extra_body and extra_headers included), a provider it has no client for, a model that searches
+    # the web on its own or names an OpenRouter preset (an @ in the name), or a key the spec does not have. The model check
+    # reads only the name: what a gateway does behind it, such as an endpoint that openai-chat: or openai: reaches through
+    # OPENAI_BASE_URL, or the model openrouter/auto picks, it cannot see. What it allows it takes as written: list in
+    # allowed_tools only the tools the agent may call, on a server you trust.
+    #
+    # model is provider:name, of anthropic, openai, openai-responses, openai-chat, openrouter, ollama or bedrock. The
+    # provider reads its key from the environment (anthropic: ANTHROPIC_API_KEY, openai: OPENAI_API_KEY, openrouter:
+    # OPENROUTER_API_KEY); openai-chat: and ollama: read OPENAI_BASE_URL and OLLAMA_BASE_URL.
+    model: anthropic:claude-haiku-5-5
+    name: ops-helper
+    description: Answers questions about alerts using the team's runbooks.
+    instructions: |
+      You help on-call engineers with alerts. Look up the runbook before you answer, and keep answers short.
+      If you need something only the person can tell you, ask with ask_user.
+    capabilities:
+      # MCP is the only capability allowed, over http(s), with allowed_tools: the agent can call exactly these MCP tools
+      # (and ask_user). ${NAME} is replaced with the environment variable NAME, in authorization_token and headers only.
+      - MCP:
+          url: http://runbooks-mcp.ops.svc.cluster.local:8080/mcp
+          authorization_token: Bearer ${RUNBOOKS_MCP_TOKEN}
+          allowed_tools: [runbook, recent_deploys]
