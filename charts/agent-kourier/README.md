@@ -292,7 +292,7 @@ The Secret Roles change too: with `crds` each names the Secrets the chart can se
 see, such as a Binding's token in the release namespace. That works because Agent Kourier's informers ask for each Secret by name (a `metadata.name`
 field selector), and Kubernetes authorizes `list` and `watch` by `resourceNames` for such a request: a list without the selector, a Secret the Role
 does not name, and a `get` are forbidden (measured on kind, Kubernetes 1.30.13 and 1.37.0). A namespace in `rbac.secretNamespaces` is still granted whole.
-A team that makes its own Bindings grants its own Secrets the same way (and the Secret of its own ChatConnection, in a namespace on `config.connectionNamespaces`), with a Role in its namespace and a RoleBinding to this ServiceAccount
+A team that makes its own Bindings grants its own Secrets the same way (and the Secret of its own ChatConnection, in a namespace the broker admits), with a Role in its namespace and a RoleBinding to this ServiceAccount
 (here `agent-kourier` in namespace `agent-kourier`; without the binding the Role grants nothing, and `kubectl auth can-i` says no). Give the Role a name the chart would not (`<fullname>-secrets` is the chart's own, which is `agent-kourier-secrets` here), so that the two never meet (a chart that renders its own Role of that name in the team's namespace, as `rbac.secretNamespaces` does, fails with `invalid ownership metadata` over a Role it did not make):
 
 ```yaml

@@ -101,8 +101,11 @@ served is not run, and the broker does not read the Secret it names. There are t
 - **A list**, `config.connectionNamespaces`: the namespaces by name. Listing one is the platform's consent to the ChatConnections created there.
   The broker reads the list at start: taking a namespace off it is a restart, after which the connection is no longer served.
 - **A selector**, `config.connectionNamespaceSelector`: the namespaces whose labels match it. The consent is a namespace's label, so whoever may
-  set the labels of a namespace, or create a namespace with them, decides. A namespace is cluster-scoped, so a Role in the namespace cannot grant
-  that, and it is usually a platform right; check who holds `update` or `patch` on namespaces, and `create`, before you choose a label.
+  set the labels of a namespace, or create a namespace with them, decides. `update` or `patch` on a namespace can come from a ClusterRole, for
+  every namespace, or from a Role in that namespace, for that namespace alone; `create` is a cluster right. The built-in `admin` and `edit`
+  roles hold no write on namespaces, but a Role of your own that lets a team label its own namespace (for a service mesh's injection, say, or
+  Pod Security) also lets that team admit itself under a selector (Kubernetes's behaviour, read from its source; not run here). Check the
+  ClusterRoleBindings and each namespace's RoleBindings for who may write namespaces before you choose a label.
   A selector that matches the absence of a label (`NotIn`, `DoesNotExist`) admits a namespace that nobody labelled, a new one included. The broker
   follows the labels live, with an informer on namespaces: a namespace that gains a matching label is admitted at the next read (every 10 seconds), and
   one that loses it stops being admitted, with its Bindings told `ConnectionNotServed`, with no restart. While the broker cannot reach the API server

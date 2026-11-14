@@ -46,7 +46,7 @@ refused to start. [Which ChatConnections a broker serves](explanation/config-rou
 - **The `config route` log line says what the broker admits**: `connection_admission` is `all`, `list`, `selector`, `list+selector` or `own`
   (its own connection alone), with `connection_namespaces` for a list and `connection_namespace_selector` for a selector other than `{}`.
 
-### Other changes to `init`
+### Changes to `init`
 
 - **`agent-kourier init` writes the platform team's values as comments only**, so the broker it installs serves every namespace; the comments show
   the list and the selector for a platform that serves fewer. A values file that an earlier `init` wrote keeps its list, and its meaning. See [Write the files with `init`](how-to/install-with-helm.md#write-the-files-with-init).
