@@ -63,9 +63,13 @@ func requireTwoApps(t *testing.T) Env {
 	if env.Tier != "fast" {
 		t.Skipf("the scenarios of several Slack apps reach the stub agent and the fake Slack's apps, which the %s tier does not run", env.Tier)
 	}
-	if env.ConfigSource != "crds" || !env.Admits(kube.MultiTeamNamespace) {
-		t.Skipf("the broker does not admit the ChatConnections of %s here (config source %s, admitted namespaces %q); bring the tier up with: E2E_TWO_APPS=1 E2E_CONFIG_SOURCE=crds make e2e-fast-up (add E2E_STORE=postgres E2E_REPLICAS=2 for the failover cases), and run them with: make e2e-two-apps (the Job of make e2e-fast leaves them out)",
-			kube.MultiTeamNamespace, env.ConfigSource, env.ConnectionNamespaces)
+	admitted, err := env.Admits(kube.MultiTeamNamespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !admitted {
+		t.Skipf("the broker does not admit the ChatConnections of %s here (%s); bring the tier up with: E2E_TWO_APPS=1 E2E_CONFIG_SOURCE=crds make e2e-fast-up (add E2E_STORE=postgres E2E_REPLICAS=2 for the failover cases), and run them with: make e2e-two-apps (the Job of make e2e-fast leaves them out)",
+			kube.MultiTeamNamespace, env.Admission())
 	}
 	return env
 }

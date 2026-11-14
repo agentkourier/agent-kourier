@@ -42,10 +42,10 @@ cluster_exists || die "kind cluster ${CLUSTER} does not exist; bring it up with:
 assert_owned
 assert_context "${tier}"
 refuse_while_sandbox_up
-# On any exit: the scratch build directory (made below), the Job and any probe or token pod (the cluster itself is never torn down
+# On any exit: the scratch build directory (made below), the Job and its ConfigMap e2e-admission, and any probe or token pod (the cluster itself is never torn down
 # here). Set before the network policy check, whose probe pod a Ctrl-C would otherwise leave behind.
 BUILD=
-trap '[ -z "${BUILD}" ] || rm -rf "${BUILD}"; "${K[@]}" -n e2e delete job "${JOB}" --ignore-not-found --wait=false >/dev/null 2>&1 || true; delete_agentkourier_pod "${DEX_TOKEN_POD:-}"; delete_netpol_probes' EXIT
+trap '[ -z "${BUILD}" ] || rm -rf "${BUILD}"; "${K[@]}" -n e2e delete job "${JOB}" --ignore-not-found --wait=false >/dev/null 2>&1 || true; "${K[@]}" -n e2e delete configmap e2e-admission --ignore-not-found --wait=false >/dev/null 2>&1 || true; delete_agentkourier_pod "${DEX_TOKEN_POD:-}"; delete_netpol_probes' EXIT
 trap 'exit 130' INT TERM
 # The full tier's tests lean on its NetworkPolicy, which kindnet stops applying when it loses the API server (lib.sh): refuse
 # a run on a tier where it is not live. The fast tier has no kagent and no NetworkPolicy, and the AX tier has no kagent
@@ -95,11 +95,10 @@ case "${config_source}" in
   *) die "the Deployment's AGENTKOURIER_CONFIG_SOURCE is '${config_source}'; want files or crds" ;;
 esac
 echo "config source: ${config_source}"
-# The namespaces whose ChatConnections the broker admits, as its Deployment says (the chart sets AGENTKOURIER_CONNECTION_NAMESPACES only for a list that is
-# not empty): the MC_ tests skip unless team-a is among them. A Deployment that cannot be read was read above.
-connection_namespaces=$("${K[@]}" -n agent-kourier get deploy/agent-kourier -o 'jsonpath={.spec.template.spec.containers[0].env[?(@.name=="AGENTKOURIER_CONNECTION_NAMESPACES")].value}' --ignore-not-found) || die "could not read the Deployment agent-kourier to see which namespaces' ChatConnections it admits"
-[[ "${connection_namespaces}" =~ ^[a-z0-9,-]*$ ]] || die "the Deployment's AGENTKOURIER_CONNECTION_NAMESPACES is '${connection_namespaces}'; want namespace names separated by commas"
-echo "admitted namespaces: ${connection_namespaces:-none}"
+# The broker's admission, as its Deployment says (the chart sets AGENTKOURIER_CHAT_CONNECTION, AGENTKOURIER_CONNECTION_NAMESPACES and
+# AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR only when each is set), and the labels of the namespaces the MC_ tests ask about: the ConfigMap e2e-admission,
+# which the Job's variables read (lib.sh's runner_admission). The MC_ tests skip unless it admits team-a. A Deployment that cannot be read was read above.
+runner_admission "${BUILD}/admission"
 # The scenarios release their gates (Stub.Release) where the tier holds them: the stub agent in the fast tier, and
 # the scenario model in the full one, which has the stub's release path.
 case "${tier}" in
@@ -107,7 +106,7 @@ case "${tier}" in
   full) gate_url=http://scenariollm.kagent.svc.cluster.local:8080 ;;
   ax) gate_url=http://ax-gates.e2e.svc.cluster.local:8080 ;;
 esac
-sed -e "s/@TIER@/${tier}/" -e "s|@STUB_URL@|${gate_url}|" -e "s/@CONFIG_SOURCE@/${config_source}/" -e "s/@PHASE@/${E2E_PHASE:-}/" -e "s/@CONNECTION_NAMESPACES@/${connection_namespaces}/" "${HERE}/e2e/runner.yaml" |
+sed -e "s/@TIER@/${tier}/" -e "s|@STUB_URL@|${gate_url}|" -e "s/@CONFIG_SOURCE@/${config_source}/" -e "s/@PHASE@/${E2E_PHASE:-}/" "${HERE}/e2e/runner.yaml" |
   { if [ -n "${E2E_RUN:-}" ]; then sed -e "s#-test.run=[^\"]*#-test.run=${E2E_RUN}#"; else cat; fi; } |
   "${K[@]}" apply -f - >/dev/null # the tier is fast or full: use_tier checked it
 result=
