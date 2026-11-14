@@ -1,0 +1,65 @@
+# The documentation as two read-only MCP tools, search_docs and read_page, for an agent that searches and cites by
+# itself instead of calling the docs agent. The same image carries /docs-mcp, which serves the corpus baked into the
+# image over streamable HTTP. No model and no Secret: it only reads the Markdown in the image.
+#
+# A kagent agent lists the tools by name:
+#   tools:
+#     - type: McpServer
+#       mcpServer: {apiGroup: kagent.dev, kind: RemoteMCPServer, name: docs-mcp, toolNames: [search_docs, read_page]}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: docs-mcp
+  namespace: kagent
+  labels: {app.kubernetes.io/name: docs-mcp}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: docs-mcp}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: docs-mcp}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: docs-mcp
+          image: agent-kourier-docs-agent:dev # the docs agent's image; replace it as in docs-agent.yaml
+          imagePullPolicy: IfNotPresent
+          command: [/docs-mcp]
+          args: [-corpus, /corpus, -http, ":8090", -site-url, "https://agentkourier.dev"]
+          ports:
+            - {name: mcp, containerPort: 8090}
+          readinessProbe:
+            tcpSocket: {port: mcp}
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: docs-mcp
+  namespace: kagent
+spec:
+  selector: {app.kubernetes.io/name: docs-mcp}
+  ports:
+    - {name: mcp, port: 8090, targetPort: mcp}
+---
+apiVersion: kagent.dev/v1alpha2
+kind: RemoteMCPServer
+metadata:
+  name: docs-mcp
+  namespace: kagent
+spec:
+  description: Agent Kourier documentation, read-only (search_docs, read_page)
+  protocol: STREAMABLE_HTTP
+  url: http://docs-mcp.kagent.svc.cluster.local:8090/mcp

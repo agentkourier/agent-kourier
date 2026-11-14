@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2acompat/a2av0"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	adkagent "google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
@@ -49,6 +50,19 @@ of the question.`
 // DefaultSubject is what the documentation is about unless Config.Subject says otherwise.
 const DefaultSubject = "Agent Kourier"
 
+// CheckV03URL applies the rule for Config.V03URL: an absolute http or https URL with no credentials, query or fragment,
+// whose path is empty or /, because the 0.3 endpoint is served at the root. The error never quotes the URL.
+func CheckV03URL(raw string) error {
+	u, err := urlcheck.HTTP(raw)
+	if err != nil {
+		return err
+	}
+	if u.Path != "" && u.Path != "/" {
+		return errors.New("must name the server's root (path empty or /): the A2A 0.3 endpoint is served at /")
+	}
+	return nil
+}
+
 // Instruction returns the agent's system prompt for documentation about subject, such as "Agent Kourier".
 func Instruction(subject string) string {
 	return strings.ReplaceAll(instructionTemplate, "{{subject}}", subject)
@@ -64,6 +78,11 @@ type Config struct {
 	// ignores the interface URLs of a card and calls the AgentBackend's url, so this matters to other clients.
 	// Required.
 	PublicURL string
+	// V03URL turns on the A2A 0.3 surface for clients that do not speak 1.0, such as kagent 0.9 calling the agent as
+	// a sub-agent: 0.3 JSON-RPC at POST / and a 0.3-shaped card at /.well-known/agent-card.json that names V03URL.
+	// It is where those clients reach this server's root, an absolute http or https URL whose path is empty or /.
+	// Empty means no 0.3 surface.
+	V03URL string
 	// Subject is what the documentation is about, named in the prompt and on the card. Empty means DefaultSubject.
 	Subject string
 	// MaxSessions is how many conversations the agent keeps: when a new one would make more, the least recently
@@ -80,6 +99,11 @@ type Config struct {
 //	/a2a/.well-known/agent-card.json      the agent card
 //	/healthz                              200 once the handler is built
 //
+// and, when Config.V03URL is set, the A2A 0.3 surface at the root:
+//
+//	POST /                                A2A 0.3 JSON-RPC (message/send, message/stream, tasks/get, ...)
+//	GET /.well-known/agent-card.json      the card in the 0.3 shape, naming V03URL
+//
 // which is what an a2a AgentBackend whose url ends in /a2a needs. Sessions and tasks live in memory, bounded by
 // Config.MaxSessions and Config.MaxTasks: a restart forgets every conversation, and so does the bound for the
 // least recently used one. The next message in a forgotten conversation is answered with no history.
@@ -92,6 +116,11 @@ func New(cfg Config) (http.Handler, error) {
 	}
 	if _, err := urlcheck.HTTP(cfg.PublicURL); err != nil {
 		return nil, fmt.Errorf("docsagent: PublicURL %w", err)
+	}
+	if cfg.V03URL != "" {
+		if err := CheckV03URL(cfg.V03URL); err != nil {
+			return nil, fmt.Errorf("docsagent: V03URL %w", err)
+		}
 	}
 	subject := cmp.Or(cfg.Subject, DefaultSubject)
 	root, err := llmagent.New(llmagent.Config{
@@ -126,9 +155,20 @@ func New(cfg Config) (http.Handler, error) {
 			Tags:        []string{"documentation", "question-answering"},
 		}},
 	}
+	// One request handler, so both protocol versions share the sessions and the task store.
+	requests := a2asrv.NewHandler(executor, a2asrv.WithTaskStore(newBoundedTasks(cmp.Or(cfg.MaxTasks, defaultMaxTasks))))
 	mux := http.NewServeMux()
+	if cfg.V03URL != "" {
+		// The 0.3 card is a copy that names only the 0.3 endpoint; the 1.0 card at /a2a stays as it is.
+		v03 := a2a.NewAgentInterface(cfg.V03URL, a2a.TransportProtocolJSONRPC)
+		v03.ProtocolVersion = a2av0.Version
+		v03Card := *card
+		v03Card.SupportedInterfaces = []*a2a.AgentInterface{v03}
+		mux.Handle("GET /.well-known/agent-card.json", a2asrv.NewAgentCardHandler(a2av0.NewStaticAgentCardProducer(&v03Card)))
+		mux.Handle("POST /{$}", a2av0.NewJSONRPCHandler(requests))
+	}
 	mux.Handle("/a2a/.well-known/agent-card.json", a2asrv.NewStaticAgentCardHandler(card))
-	mux.Handle("/a2a", a2asrv.NewJSONRPCHandler(a2asrv.NewHandler(executor, a2asrv.WithTaskStore(newBoundedTasks(cmp.Or(cfg.MaxTasks, defaultMaxTasks))))))
+	mux.Handle("/a2a", a2asrv.NewJSONRPCHandler(requests))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	return mux, nil
 }
