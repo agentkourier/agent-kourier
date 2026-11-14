@@ -53,9 +53,13 @@ A pull request merges into `main` only when these checks pass and its branch is 
 `main`:
 
 - From `ci`: `lint` (`make fmt` leaves no diff, `make lint`, `make docs-check`, `make build`),
-  `test` (`make test-race` with helm installed, so the chart tests cannot skip, then
+  `test` (`make test-race` with helm installed, so the chart tests cannot skip, and
   `make test-scripts`), `test-testhooks` (`make test-testhooks`) and `docs-agent` (the tests and
-  lint of the separate module under `examples/recipes/docs-agent/agent`).
+  lint of the separate module under `examples/recipes/docs-agent/agent`). Each race pass runs split over
+  two jobs that run side by side, `test-shard (1)` and `(2)` and `test-testhooks-shard (1)` and `(2)`, each
+  running part of the pass's packages, and `make test-scripts` runs in `test-scripts`; `test` and
+  `test-testhooks` pass only when every one of those jobs passed. `make test-race TEST_SHARD=1/2` runs
+  one leg locally.
 - From `security`: `govulncheck (root)`, `govulncheck (ax)` and `govulncheck (docs-agent)` (one
   per Go module), `gitleaks` (a secret scan of the whole git history), and `trivy (linux-amd64)` and
   `trivy (linux-arm64)` (a vulnerability scan of the production image built for each platform).
@@ -72,7 +76,7 @@ a full commit SHA. It is not a required check yet. If you change a workflow, run
 fixed or suppressed.
 
 `ci` also runs `test-postgres` (`make test-postgres`), the Postgres store's tests and the broker's Postgres tests
-against a throwaway Postgres container; in `test` and `test-testhooks`, which have no database, those tests skip. It is
+against a throwaway Postgres container; in the race passes, which have no database, those tests skip. It is
 not a required check yet. If you change the store or a migration, run it locally; it needs Docker.
 
 `ci` also runs `crd-corpus` (`make crd-corpus`): a throwaway kind cluster with only the CRDs from
