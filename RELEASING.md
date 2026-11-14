@@ -282,6 +282,42 @@ tiers are not in CI, which is why "Cut a release" has you run them, with the cus
 against a pinned sha256), and the pinned node and base images pulled (the tiers
 take minutes to bring up, so they are best as a separate nightly or label-triggered workflow, not on every PR). The `crd-corpus` job is not a tier: its cluster has only the CRDs, and it runs on every PR but one that changes only paths it does not read (below).
 
+A pull request's `test-shard` and `test-testhooks-shard` legs reuse the test results that the latest push to `main`
+saved: `go test` reports a package `(cached)`, and does not run it, when its test binary and the environment variables
+and files of the module its tests read are as they were in that push's run. `go test` compares such a file's size, mode
+and modification time, not its contents, and a checkout gives every file the time of the checkout, so before `make` each
+leg runs `go run ./hack/ci/testmtimes`. It sets every tracked file's time to 2001-01-01 plus the first 58 bits of its
+blob hash as nanoseconds (a time from 2001 to early 2010), a symbolic link's own time the same way from its blob, and
+the time of every directory that holds a tracked path, and of the top directory's `.git`, to 2000-01-01; it leaves
+untracked files, and tracked files that differ from the index, alone. The same step puts a directory unique to the run
+on `PATH`. `go test` cannot see what a program that a test starts reads (`helm` the chart, `bash` a script, `go list`
+the packages), but a test that looks a program up on `PATH` has read `PATH`, so such a package (`test/chart`,
+`test/kindmanifests`, `cmd/agent-kourier`, `api/v1alpha1`, the packages whose tests run `go list -deps`, and others)
+never reuses a result. A push to `main` reuses none: it runs `go clean -testcache` first, so every test runs on every
+push, those are the runs the release gate reads, and their results are the ones pull requests reuse. The legs' make step
+sets `GODEBUG=gocachetest=1`, so the log says for each package whether it reused a result and, for one that ran, whether
+no result was saved for its test binary (`input list not found`: the binary changed) or one was, for other inputs
+(`test output not found`: a file or variable its tests read changed). `go test` keys results on `GODEBUG` too: removing
+it from the legs makes pull requests run every package until a push to `main` saves results without it. `test-postgres`
+and `crd-corpus` run `go test` with `-count=1`, which reuses nothing, and `docs-agent` does not run
+`hack/ci/testmtimes`: its smoke test reads `docs/`, outside its module, where `go test` checks nothing, so only the
+checkout's times make it run again on a pull request that changes the docs. `hack/ci/testshards`' test holds the legs to
+these steps and every other job to none of them. The limits of the reuse, none of which a setting changes:
+
+- A changed file that keeps its size reuses a stale result if its new blob draws the same time: the odds are 2^-58
+  (about 3.5 × 10^-18) per changed file where the file system keeps times to the nanosecond, as APFS and ext4 do, and
+  about 3.5 × 10^-9 (2^58 ns is about 2.9 × 10^8 s) where it keeps whole seconds; `hack/ci/testmtimes` says how many
+  times its file system cut short. The pull request then passes on the old result, and the push run on `main` after the
+  merge, which runs everything, runs it again. The 58 bits are `hashBits` in `hack/ci/testmtimes`: 59 would end in 2019
+  and 60 in 2037, and `go test` saves no result of a test that read a file whose time is less than 2 s before the read,
+  a time to come included.
+- A test that starts a program by its path, not looked up on `PATH`, or reads a file outside its module, reuses a result
+  when only what that program or file holds changed. `hack/ci/docsonly`'s test, which runs `hack/ci/docs-only.sh` by its
+  path, reads the script itself so that a change to it runs the test again; `docs-agent`'s smoke test reads `docs/`,
+  outside its module, and its job does not derive times. A new test of either kind needs the same care.
+- A test that is flaky, or that depends on the date, passes on a pull request when its package reuses a pass; the push
+  run on `main` runs it again.
+
 Each gated job passes a class to `hack/ci/docs-only.sh` in its first step after the checkout, and on a pull request
 whose changed paths are all, as regular files or deleted, paths its class does not read, it skips its other steps and
 still reports success under its own name. Every class skips the docs-only list (maintainer prose such as `spec.md` and

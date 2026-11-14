@@ -181,6 +181,21 @@ jobs:
   # own (go-test-<leg>-): one cache that one leg saved would hold only that leg's packages and test results. The job
   # test below is the required check. Observed on a cold cache: go test -race ./... took 16 minutes in one job, with no
   # failure; 30 is nearly twice that, for a leg that builds about half of it.
+  #
+  # A pull request reuses the result main's push saved for each package whose test binary, and the environment
+  # variables and files of the module its tests read, it did not change (go test reports it "(cached)"). go test
+  # compares such a file's size, mode and modification time, not its contents, and a checkout gives every file the time
+  # of the checkout, so before make the legs run hack/ci/testmtimes: each tracked file gets a time derived from its blob
+  # hash, and each directory a fixed one. go test cannot see what a program a test starts reads (helm the chart, bash a
+  # script, go list the packages), so the same step puts a directory unique to the run on PATH: a test that looks a
+  # program up on PATH has read PATH, which then differs in every run, so it never reuses a result. A push to main
+  # reuses none: it expires the restored results (go clean -testcache) and runs every test, so the push runs the
+  # release gate reads rest on no reused result, and it saves fresh ones for the pull requests. GODEBUG=gocachetest=1
+  # makes go test print, for each package, whether it reused a result and why not; go test keys results on GODEBUG
+  # too, so main and pull requests set it alike. RELEASING.md gives the odds of reusing a stale result. Only these legs
+  # run the step: test-postgres and crd-corpus run go test with -count=1, which reuses no result, and docs-agent's smoke
+  # test reads docs/, outside its module, where go test checks nothing, so only the checkout's times make it run again
+  # on a pull request that changes docs/. hack/ci/testshards' test holds the legs to these steps and the rest to none.
   test-shard:
     name: test-shard (${{ matrix.leg }})
     runs-on: ubuntu-26.04
@@ -242,10 +257,20 @@ jobs:
         with:
           # The version test/chart passes with; release.yml pins the same one.
           version: v4.3.2
+      # The job's comment says what these two steps are for.
+      - name: Key the test results on what the tests read
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        run: |
+          go run ./hack/ci/testmtimes
+          echo "${RUNNER_TEMP}/path-of-run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >>"${GITHUB_PATH}"
+      - name: Expire the restored test results
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: go clean -testcache
       - if: ${{ steps.docs-only.outputs.skip != 'true' }}
         run: make test-race TEST_SHARD="$((LEG_INDEX + 1))/${LEG_COUNT}"
         env:
           AGENTKOURIER_REQUIRE_HELM: "1"
+          GODEBUG: gocachetest=1
           LEG_INDEX: ${{ strategy.job-index }}
           LEG_COUNT: ${{ strategy.job-total }}
       - id: go-trim
@@ -376,9 +401,19 @@ jobs:
           CACHE_KEY: ${{ steps.go-cache.outputs.cache-primary-key }}
           CACHE_RESTORED_KEY: ${{ steps.go-cache.outputs.cache-matched-key }}
         run: hack/ci/actions-cache.sh mark
+      # test-shard's comment says what these two steps are for.
+      - name: Key the test results on what the tests read
+        if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        run: |
+          go run ./hack/ci/testmtimes
+          echo "${RUNNER_TEMP}/path-of-run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >>"${GITHUB_PATH}"
+      - name: Expire the restored test results
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: go clean -testcache
       - if: ${{ steps.docs-only.outputs.skip != 'true' }}
         run: make test-testhooks TEST_SHARD="$((LEG_INDEX + 1))/${LEG_COUNT}"
         env:
+          GODEBUG: gocachetest=1
           LEG_INDEX: ${{ strategy.job-index }}
           LEG_COUNT: ${{ strategy.job-total }}
       - id: go-trim

@@ -386,6 +386,11 @@ func TestEveryClassIsTheScripts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// go test reuses this test's result while the files this process opened are unchanged, and cannot see what the
+	// script's own process reads: reading the script here makes a change to it run the test again.
+	if _, err := os.ReadFile(script); err != nil {
+		t.Fatal(err)
+	}
 	// stderr runs the script on class, with no PR_HEAD_SHA, which it checks right after the class, from a directory that
 	// is no repository, and returns what it printed there.
 	stderr := func(class string) string {
