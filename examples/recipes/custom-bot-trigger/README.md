@@ -34,9 +34,9 @@ What happens to a post from the CI bot in the channel:
 | A `FAILED` post for a pipeline and branch with no thread | A new thread under the post, and the agent's investigation streams into it. |
 | The same pipeline and branch fails again, while its thread is open or soon after it closed | A `Fired again at <time>` note in that thread. No new investigation. |
 | A `PASSED` post for that pipeline and branch | A `Resolved at <time>` note, and the thread closes. |
-| A failure a limit stops | Nothing in its thread. Once per window, one line in the channel: "2 alert messages not investigated in the last 15m (rate limit)." |
+| A failure a limit stops | Nothing in its thread. Once per window, one line in the channel: "2 messages not investigated in the last 15m (rate limit)." |
 
-The count line says "alert messages" for any `botMessage` trigger, whatever the bot posts.
+The count line says "messages", whatever the bot posts.
 
 To see it work without waiting for a real failure, post the made-up message through a Slack incoming webhook. Create the
 webhook in the Binding's channel (a webhook posts into the one channel you give it). The trigger accepts only the bot in
@@ -147,7 +147,7 @@ evals/
       ghcr.io/agentkourier/agent-kourier:v0.3.2 dry-run --config /config --binding agent-kourier/ci-failures
     ```
 
-    Each of the bot's posts should come out `matched`, with the state, pipeline and key you expect, `excluded` for a
+    Each of the bot's posts should come out `matched`, with the state and key you expect (`--json` adds every extracted field, such as the pipeline), `excluded` for a
     retry or flaky marker, or `unmatched` with the step that turned it away (a `match` regex, an `extract`, or the
     sender's kind). A post of a bot the Binding does not name comes out `other_bot`, with its bot ID in the `SENDER`
     column. See [Tune triggers with a dry run](../../../docs/how-to/tune-triggers.md).

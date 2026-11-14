@@ -95,7 +95,7 @@ the broker could not read it and would exit with code 3 in a loop. The pod exits
 Secrets, and a dry run that finds a misspelt field before the pod does. The published chart has `image.repository` and
 `image.digest` stamped with the release's image. From source (`charts/agent-kourier` in a checkout) the chart also
 needs `image.repository`. Check a values file with `helm template` before installing, or from a checkout with
-`helm lint --strict -f my-values.yaml charts/agent-kourier`. `ci/` holds the values the tests render: `minimal`, `crds` (the route of custom resources, with grants of Secrets by name, which `helm template` renders only with `--kube-version` and `--api-versions agentkourier.dev/v1alpha1`), `postgres` (minimal on Postgres, with a NetworkPolicy), `full` (everything switched on), and the kind tiers' Agent Kourier, which
+`helm lint --strict -f my-values.yaml charts/agent-kourier`. `ci/` holds the values the tests render: `minimal`, `crds` (the route of custom resources, with grants of Secrets by name, which `helm template` renders only with `--api-versions agentkourier.dev/v1alpha1`, and with `--kube-version` on a Helm whose own default is below 1.33), `postgres` (minimal on Postgres, with a NetworkPolicy), `full` (everything switched on), and the kind tiers' Agent Kourier, which
 `hack/kind` installs with this chart: `fast` (the fast tier's, and the full tier's), `fast-postgres` (the fast tier's on Postgres:
 `E2E_STORE=postgres make e2e-fast-up`; `fast-postgres-ha` is an overlay on it, layered with a second `-f`, for two replicas and a shorter lease:
 `E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up`, which the two-replica failover end-to-end test runs on), `ax` (the AX tier's, with a database file of its own) and `sandbox` (the sandbox
@@ -106,7 +106,7 @@ tier's, with the token-refresh CronJob).
 | Object | When | Notes |
 |---|---|---|
 | Deployment `<fullname>` | always | one container, config at `/etc/agent-kourier` (the ConfigMap of `config.source: files`; the default, `crds`, mounts none), SQLite at `/data` (with `store.type: sqlite`, strategy Recreate), `/tmp` an emptyDir; with Postgres strategy RollingUpdate (one surge, none unavailable) |
-| ServiceAccount, and a Role and RoleBinding for Secrets | always (`rbac.create`) | one Role in each namespace that holds a Secret the config names (with `config.source: crds`, only the Secrets the chart can name: `config.*`, the broker's own ChatConnection's Secret, if it has one (`config.chatConnection`, named like it unless `config.chatConnectionSecret` says otherwise) and `rbac.secretNames`), and in the release namespace with Postgres (the DSN's Secret). It covers every Secret of the namespace; with `config.source: crds` it names the Secrets (`resourceNames`), except in the namespaces of `rbac.secretNamespaces` |
+| ServiceAccount, and a Role and RoleBinding for Secrets | the ServiceAccount with `serviceAccount.create`; the Role and RoleBinding with `rbac.create`, and with `config.source: crds` only where the chart can name a Secret | one Role in each namespace that holds a Secret the config names (with `config.source: crds`, only the Secrets the chart can name: `config.*`, the broker's own ChatConnection's Secret, if it has one (`config.chatConnection`, named like it unless `config.chatConnectionSecret` says otherwise) and `rbac.secretNames`), and in the release namespace with Postgres (the DSN's Secret). It covers every Secret of the namespace; with `config.source: crds` it names the Secrets (`resourceNames`), except in the namespaces of `rbac.secretNamespaces` |
 | Lease `<fullname>-leader` | `store.type: postgres` | empty; the replicas elect their leader with it. Kept on `helm uninstall` (`helm.sh/resource-policy: keep`), with its release annotations, so a reinstall under the same release name adopts it; only another release that renders the same name (`fullnameOverride`) would conflict. Do not delete it while Agent Kourier runs: Agent Kourier may not create a Lease, so leadership stops until `helm upgrade` recreates it |
 | Role and RoleBinding `<fullname>-leader` | `store.type: postgres` (`rbac.create`) | `get` and `update` on that one Lease, in the release namespace; no `create`, which cannot be limited by name |
 | ConfigMap `<fullname>-config` | `config.source: files`, unless `config.existingConfigMap` | one `*.yaml` file per resource, from `config.*` |
@@ -208,7 +208,7 @@ helm upgrade agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --ver
 kubectl get akbinding,akbackend,akconnection -A
 ```
 
-`--reuse-values` works from the previous release (0.1.6) too: the chart reads the keys it adds as unset when the old values lack them, and an unset `config.source` as `files`.
+`--reuse-values` works from a release before `config.source` existed (0.1.6 and earlier) too: the chart reads the keys it adds as unset when the old values lack them, and an unset `config.source` as `files`.
 
 `kubectl get akbinding`, `akbackend` and `akconnection` (or `bindings.agentkourier.dev` and so on, and `kubectl get agentkourier` for all
 three) list them. **Never `kubectl get bindings`**: that is the core `bindings` resource, which is something else and fails. Going back, with
@@ -282,7 +282,7 @@ Whoever can write a Binding and an AgentBackend in a namespace can have any Secr
 AgentBackend's URL, so that grant is also what bounds what they can reach.
 
 To preview a render, use `helm template` and give it what a cluster would: `--kube-version` (Helm's default is its own) and `--api-versions
-agentkourier.dev/v1alpha1`, which a tool that renders with `helm template` for you (a GitOps controller) must pass from the cluster. Without them
+agentkourier.dev/v1alpha1`, which a tool that renders with `helm template` for you (a GitOps controller) must pass from the cluster. Without the API version, or without the version on a Helm whose own default is below 1.33,
 `helm template` fails with the chart's message, and `helm install --dry-run=client` likewise. `helm lint` takes no API versions, and in its mode Helm
 logs the chart's refusal and goes on, so a lint of such a values file passes without having checked the CRDs.
 
@@ -304,8 +304,8 @@ store:
 
 The render refuses `store.type: postgres` without the Secret, a `dsnSecret` (or `timeouts`) with SQLite, an `existingClaim` with
 Postgres, and a `postgres://` URL with a password anywhere in the values. With Postgres no volume is mounted and no claim is made.
-Agent Kourier reads the Secret through the API, like its others, so the Role below covers it: list and watch on every Secret of the
-release namespace. The DSN is read once at start; rotate the password by changing the Secret and the database role, then restart the
+Agent Kourier reads the Secret through the API, like its others, so the Role below covers it: list and watch on that Secret by name with `config.source: crds`, and on every Secret of the
+release namespace with `config.source: files` or with the release namespace in `rbac.secretNamespaces`. The DSN is read once at start; rotate the password by changing the Secret and the database role, then restart the
 pod. An unreadable or empty Secret fails the start with an error that names the Secret and the key, never the DSN. The role in the
 DSN needs the right to create tables in its schema, as Agent Kourier applies its own migrations at start (under an advisory lock). With
 `networkPolicy.enabled`, `networkPolicy.postgres.to` (NetworkPolicyPeers: an ipBlock, or a namespaceSelector and podSelector) and
@@ -433,7 +433,7 @@ For an AgentBackend whose front door verifies Dex ID tokens (the sandbox tier's,
 by `targetSecret` and `targetKey` in `targetNamespace` (default: the release's): the Binding's `identity.tokenSecretRef` and the
 Binding's namespace. With the config inline on the files route the render fails unless some Binding in that namespace names that Secret and key, so
 a token is never refreshed where nothing reads it. With `config.source: crds` the chart does not look (a team applies its own Binding, which the chart cannot see), so that check is yours. The Job's Role and RoleBinding are made in that namespace (the Job's
-ServiceAccount stays in the release's). The Secret must exist before Agent Kourier starts; make it with a placeholder, then run the
+ServiceAccount stays in the release's). The Job patches the Secret and does not create it, and with `config.source: files` the Secret must exist before Agent Kourier starts; make it with a placeholder, then run the
 first refresh by hand:
 
 ```sh

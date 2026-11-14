@@ -42,7 +42,7 @@ and the agent lists its six read tools by name. The prompt tells it the same.
     thread        the agent's answer streams in: likely cause, what it checked, next steps
     thread        Fired again at <time>                   the same alert group fires again inside the cooldown
     thread        Resolved at <time>                      the RESOLVED message arrives; the thread closes
-  Agent Kourier   3 alert messages not investigated in the last 10m (rate limit).
+  Agent Kourier   3 messages not investigated in the last 10m (rate limit).
                                                           one line per window, when a limit stopped some
 ```
 

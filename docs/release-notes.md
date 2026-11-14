@@ -52,7 +52,7 @@ makes there beside its own, if it has one: a broker may now have none. The broke
 and the warning on rolling back below, before you set it. [Upgrade to the release that serves team connections](how-to/upgrade.md#upgrade-to-the-release-that-serves-team-connections) has the checklist for every install: the CRDs, the queries and log alerts to change, what changes with the list empty, and the rollback. An AgentBackend on `dialect: kagent-v1` can also limit which agent namespaces its Bindings may name; nothing changes for one that
 does not set the new field, and [the upgrade section](how-to/upgrade.md#upgrade-to-the-release-that-limits-the-agents-a-binding-may-name) says what to read before you set it.
 
-The release candidates before it (`v0.3.0-rc.1` and `v0.3.0-rc.2`) are prereleases on GitHub; what they changed is in this entry.
+The release candidates before it (`v0.3.0-rc.1`, `v0.3.0-rc.2` and `v0.3.0-rc.3`) are prereleases on GitHub; what they changed is in this entry.
 
 ### Breaking changes
 

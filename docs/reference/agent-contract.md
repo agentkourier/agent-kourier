@@ -29,7 +29,8 @@ change.
 | `CancelTask` (`tasks/cancel`) | When a question times out; for a question the Binding does not allow or the dialect cannot show; for a task that shows no sign of life for an hour after its stream was lost; after the agent rejects an answer | The cancel is retried a few times and reported as failed. The task keeps running on the agent |
 | `ListTasks` (1.0 only) | Before a turn whose outcome is unknown is sent again into an existing context, and on recovery after a restart | The lookup is retried, then the turn fails after 15 minutes |
 
-`ListTasks` is called with the session's `contextId` and follows `nextPageToken` for up to 100 pages. A turn counts
+`ListTasks` is called with the session's `contextId` and follows `nextPageToken` for up to 200 pages and five
+minutes in all. A turn counts
 as found only if a task's `history` holds a message with the turn's `messageId`. A list without history makes every
 turn look absent, so it is sent, and may run, again. An A2A 0.3 agent is never asked; its turns are always sent
 again.
@@ -277,6 +278,8 @@ Notes for an agent author:
 | JSON-RPC `-32001` (task not found) while a task is followed | The session is gone: the thread is told and the next turn starts a new context |
 | Another HTTP 4xx, other than 408 and 429, before any event | Not sent: retried, then failed after 15 minutes |
 | HTTP 5xx, or a dropped connection, before any event | Outcome unknown: looked up with `ListTasks` where it can be, then sent again |
+| One event of a stream of more than 2 MiB, an answer to a call of more than 4 MiB, or more than 341 KiB of reply in one turn | Not read past the bound: the turn ends with the outcome `response_too_large`, and the task is cancelled if it was named. [Limits](limits.md#build-or-connect-an-agent-backend) has each bound and what it counts |
+| A `ListTasks` walk that cannot be read in full (a page of more than 4 MiB at the smallest page size it is asked for at, more than 200 pages, more than five minutes, or a page token that comes again) before it finds the turn | The turn is not sent again, since the agent may have it: it ends with the outcome `lookup_incomplete` |
 
 A `Retry-After` header is honoured on reconnects, up to a day. An error's message is never shown in the thread. For
 a `failed` task, the status message's text, up to 32 parts and 4096 characters, and the metadata keys `code`,

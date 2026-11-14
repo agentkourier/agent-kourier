@@ -41,7 +41,10 @@ grant; for another authentication flow, arrange an external process to update th
     kubectl -n payments create secret generic payments-agent-token --from-literal=token=placeholder
     ```
 
-    Create the namespace first if needed. The Secret must exist before Agent Kourier starts. A placeholder is not
+    Create the namespace first if needed. The refresh Job patches the Secret and does not create it. With
+    `config.source: files` the Secret must also exist before Agent Kourier starts, because a Secret the config names
+    and the broker cannot find fails the load. With custom resources the broker starts without it, and the Binding's
+    `BackendReachable` condition reads `CredentialsUnreadable` until the Secret is there. A placeholder is not
     a valid credential; wait for the first refresh to succeed before sending messages to the agent. If you already
     stored the first token using the identity guide, keep that Secret and skip this step.
 3. Enable the CronJob:
@@ -58,7 +61,9 @@ grant; for another authentication flow, arrange an external process to update th
         credentialsSecret: agent-kourier-dex
     ```
 
-    With the config inline, the render fails unless some Binding in that namespace names that Secret and key.
+    With `config.source: files` and the config inline, the render fails unless some Binding in that namespace names that
+    Secret and key. With custom resources, the default, or with `config.existingConfigMap`, the chart cannot see the
+    Bindings and does not check: compare the three values with the Binding yourself.
     The client ID must match the registered Dex client and the audience accepted by the front door.
 
 4. Run the first refresh by hand:

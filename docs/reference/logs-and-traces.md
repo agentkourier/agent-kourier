@@ -64,7 +64,7 @@ cannot keep up or the process is killed. Metrics are not derived from sampled tr
 ## Exporter diagnostics
 
 Collector error details never reach the SDK's diagnostics, and none of the SDK's own
-diagnostics reach stderr outside Agent Kourier's logger. Three things log, all as warnings:
+diagnostics reach stderr outside Agent Kourier's logger. Five things log, all as warnings:
 
 - A failed export logs `trace export failed` with `error_type`, one of `refused`,
   `timeout`, `dns`, `tls`, `http_<status>` (for example `http_401`), `http_retryable`
@@ -76,6 +76,9 @@ diagnostics reach stderr outside Agent Kourier's logger. Three things log, all a
   certificate file, logs `otel: <what it was doing>`, with no value from the variable.
 - Any other OpenTelemetry error logs `otel: OpenTelemetry error` with `error_type`, at
   most once a minute.
+- An exporter that fails to shut down logs `trace exporter shutdown failed` with `error_type`.
+- A flush of the spans still held at shutdown that fails or takes more than 3 seconds logs
+  `trace export flush failed` with `error_type`.
 
 ## Trace boundaries
 

@@ -44,7 +44,8 @@ spec:
   kagent does; see [Tool calls and results](../reference/agent-contract.md#tool-calls-and-results).
 - The reference agent's `ask_user` call shows no step card. It is a long-running call, and ADK's A2A executor moves a
   long-running call out of the turn's artifacts into the `input-required` status message. Agent Kourier reads that
-  message as the question, not as a tool part: it reads tool parts only in `working` status messages and in artifacts.
+  message as the question, not as a tool part: it reads tool parts only in `working` status messages, in artifacts, and in the agent's
+  messages in a task snapshot's history since the user's last message.
   The AX kind tier's question scenario agrees: it shows no step card.
 - The AX kind tier (`make e2e-ax-up`, `make e2e-ax`) runs the shared Slack scenarios against a real AX and Substrate
   install with a deterministic model: streaming, context across restarts, actor suspend and resume, queued replies and
