@@ -64,6 +64,10 @@ spec:
             {{- with .Values.config.connectionNamespaces }}
             - {name: AGENTKOURIER_CONNECTION_NAMESPACES, value: {{ join "," . | quote }}}
             {{- end }}
+            {{- /* Compact JSON, {} included: an empty map is false in a template, so the with is on the helper's JSON, never on the value. */}}
+            {{- with include "agentkourier.connectionNamespaceSelector" . }}
+            - {name: AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR, value: {{ . | quote }}}
+            {{- end }}
             {{- else }}
             - {name: AGENTKOURIER_CONFIG_DIR, value: /etc/agent-kourier}
             {{- end }}
