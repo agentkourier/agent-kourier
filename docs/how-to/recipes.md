@@ -2,9 +2,11 @@
 
 For a team that wants an agent in a Slack channel and would rather start from a working example than from a blank file:
 at the end, you have applied a recipe's Agent Kourier resources, and its agent if the recipe has one, and know which
-checks come with it. There are three recipes: one for Alertmanager alerts, with an agent, one for another bot's
-posts, which holds the Agent Kourier resources only, and one that answers questions from documentation, with an agent that
-runs on any cluster. A team that is new to Agent Kourier should start with the last one.
+checks come with it. There are four recipes: one for Alertmanager alerts, with an agent, one for another bot's
+posts, which holds the Agent Kourier resources only, one that answers questions from documentation, with an agent that
+runs on any cluster, and one whose agent you define in a YAML file: a prompt, a model and the MCP tools it may call. A
+team that is new to Agent Kourier should start with the documentation agent; a team that wants its own agent without
+writing one, with the last.
 
 A recipe is a directory under
 [`examples/recipes`](https://github.com/agentkourier/agent-kourier/tree/main/examples/recipes) with the resources that
@@ -252,3 +254,60 @@ against the scenario. One of them:
 
 The search ranks pages by shared words and knows no synonyms. The agent keeps its conversations in memory and runs one
 replica, and it checks no token, so it relies on the NetworkPolicy. The README lists the rest.
+
+## Define an agent from a prompt
+
+The `prompt-agent` recipe is an agent that a team writes as one `agent.yaml` in Pydantic AI's agent spec format: a
+prompt, a model, and the MCP tools it may call. A small Python server serves it over A2A, reached through the generic
+`a2a` dialect, so it runs as a plain Deployment on any cluster that can reach a model provider and the MCP server.
+Switching between providers (OpenRouter, Anthropic, OpenAI, an OpenAI-compatible endpoint, Ollama) is a change to the
+`model:` line and the key's variable. The README lists the ones that have been run, and how: Anthropic's and OpenAI's own
+APIs, and Bedrock, have not.
+
+```yaml title="agent/agent.yaml"
+--8<-- "prompt-agent/agent/agent.yaml"
+```
+
+Chat and alert text is untrusted, so the agent refuses to start on anything in the file that could give it a tool the
+file does not list: any capability but MCP, an MCP entry without `allowed_tools`, a provider-specific model setting, a
+model that searches the web, and more. It can then call the listed MCP tools and one tool of its own, `ask_user`, which
+asks the thread a question. The tool list is enforced; what the model says it did is not.
+
+### Before you start
+
+- A Slack app with the bot invited to the channel: [Configure Slack](configure-slack.md). You need the channel's ID.
+- A model provider's key, a model that supports tool calls, and an MCP server with the tools the agent may call.
+- Docker, to build the agent's image: Agent Kourier's releases publish the broker's image and chart, not this agent's.
+
+### Agent Kourier's resources
+
+Three files, in the namespace `agent-kourier`. The Binding is the recipe: a `mention` trigger, `askUser` on, and the
+token that the agent checks, from the Secret `prompt-agent-bearer`, which `rbac.secretNames` grants. Replace
+`CREPLACEPROMPT`.
+
+```yaml title="kourier/binding.yaml"
+--8<-- "prompt-agent/kourier/binding.yaml"
+```
+
+```yaml title="kourier/agentbackend.yaml"
+--8<-- "prompt-agent/kourier/agentbackend.yaml"
+```
+
+```yaml title="kourier/chatconnection.yaml"
+--8<-- "prompt-agent/kourier/chatconnection.yaml"
+```
+
+A mention trigger takes no limits, so anyone who can mention the bot in the channel can spend model quota, and a bot's
+mention is held only to the broker's fixed limits. Bound the key at the provider.
+
+The agent refuses to start without the token's file, unless it is told to accept every caller, so the same value goes
+in a Secret in the agent's namespace too. The recipe's
+[README](https://github.com/agentkourier/agent-kourier/blob/main/examples/recipes/prompt-agent/README.md) has the steps
+in order (build the image, write `agent.yaml`, make the Secrets, apply the agent and Agent Kourier's resources), each
+field of `agent.yaml`, the providers that have been run, everything the agent refuses and why, and its limits.
+
+### Check it
+
+`make prompt-agent-test` drives the agent over A2A with a scripted model and a real MCP server: streaming, follow-ups,
+the tool policy, cancel, questions, and the token check. `go test ./test/recipes` loads the three resources with Agent
+Kourier's loader. The agent keeps its conversations in memory and runs one replica.

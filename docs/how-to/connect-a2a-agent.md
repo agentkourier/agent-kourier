@@ -3,6 +3,11 @@
 For a team with an agent that speaks A2A but does not run on kagent: at the end, Agent Kourier sends a Binding's turns
 to that agent through the generic `a2a` dialect.
 
+To start from a working agent instead, the
+[`prompt-agent`](https://github.com/agentkourier/agent-kourier/blob/main/examples/recipes/prompt-agent/README.md) recipe
+is a plain A2A agent defined in one YAML file (a prompt, a model, the MCP tools it may call), with the AgentBackend and
+the Binding that connect it; [Start from a recipe](recipes.md) has the others.
+
 ## Before you start
 
 The agent must:
