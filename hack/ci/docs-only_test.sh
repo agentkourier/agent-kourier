@@ -13,6 +13,10 @@ trap 'rm -rf "${TMP}"' EXIT
 # The fixture repository is not this one: no user or system git config (commit signing, hooks, a default branch) may
 # reach it.
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+# No automatic maintenance or gc: git may start one in the background after a commit, and a copy of the repository
+# (the broken-tree cases below) would race its lock files.
+export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=maintenance.auto GIT_CONFIG_VALUE_0=false GIT_CONFIG_KEY_1=gc.auto \
+  GIT_CONFIG_VALUE_1=0
 export GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.com
 export GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.com
 
