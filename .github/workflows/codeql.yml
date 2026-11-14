@@ -44,6 +44,8 @@ jobs:
         name: Classify the pull request's changes
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           scope=$(hack/ci/docs-only.sh)
           echo "${scope}" >>"${GITHUB_OUTPUT}"

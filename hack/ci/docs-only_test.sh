@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for docs-only.sh. Offline: each case commits to a branch of a throwaway repository, merges it into the base
-# with a merge commit, as GitHub makes a pull request's, and runs the script on that commit. Run as
-# `hack/ci/docs-only_test.sh`.
+# with a merge commit, as GitHub makes a pull request's, and runs the script on that commit with the branch as
+# PR_HEAD_SHA. Run as `hack/ci/docs-only_test.sh`.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -35,8 +35,9 @@ BASE=$(git -C "${REPO}" rev-parse HEAD)
 
 CASE=0
 
-# merge_case COMMAND...: on a new branch from the base, runs COMMAND in the repository (sh -c), commits what it left,
-# and merges the branch into the base with a merge commit, which it leaves checked out (detached).
+# merge_case COMMAND: on a new branch from the base, runs COMMAND in the repository (sh -c), commits what it left,
+# and merges the branch into the base with a merge commit, which it leaves checked out (detached). PR_HEAD_SHA is
+# then the branch's tip, the pull request's head.
 merge_case() {
   CASE=$((CASE + 1))
   git -C "${REPO}" checkout -q --detach "${BASE}"
@@ -44,12 +45,14 @@ merge_case() {
   (cd "${REPO}" && sh -c "$1")
   git -C "${REPO}" add -A
   git -C "${REPO}" commit -q --allow-empty -m "case ${CASE}"
+  PR_HEAD_SHA=$(git -C "${REPO}" rev-parse HEAD)
+  export PR_HEAD_SHA
   git -C "${REPO}" checkout -q --detach "${BASE}"
   git -C "${REPO}" merge -q --no-ff --no-edit "case-${CASE}"
 }
 
 # expect WANT NAME [DIR [COMMIT]]: the script, run in DIR (default the repository) on COMMIT (default HEAD), prints
-# exactly the line WANT and exits 0.
+# exactly the line WANT and exits 0. Its stderr is left in ${TMP}/stderr.
 expect() {
   local want=$1 name=$2 dir=${3:-${REPO}} out status=0
   out=$(cd "${dir}" && "${SCRIPT}" "${@:4}" 2>"${TMP}/stderr") || status=$?
@@ -62,8 +65,8 @@ for change in \
   'echo x >>AGENTS.md' \
   'echo x >>spec.md' \
   'printf "x\n" >RELEASING.md; printf "x\n" >CONTRIBUTING.md; printf "x\n" >CODE_OF_CONDUCT.md; printf "x\n" >SECURITY.md' \
-  'ln -s AGENTS.md CLAUDE.md' \
   'echo x >>docs/assets/clip/team.gif' \
+  'chmod +x docs/spikes/probe.md' \
   'mkdir -p docs/assets/film && echo WEBVTT >docs/assets/film/captions.vtt' \
   'mkdir -p docs/brand/film && echo "{}" >docs/brand/film/package.json' \
   'echo x >>docs/spikes/probe.md' \
@@ -106,6 +109,44 @@ for change in \
   merge_case "${change}"
   expect skip=false "off the list: ${change}"
 done
+
+# A listed path that is not a regular file selects run: a walk of docs/ sees a symlink whatever its name, and the
+# docs agent's corpus refuses one. So does a submodule (a gitlink; its directory is left empty, as git leaves it).
+for change in \
+  'ln -s AGENTS.md CLAUDE.md' \
+  'ln -s ../../brand/mark.png docs/assets/clip/mark.png' \
+  'mkdir -p docs/brand && ln -s ../spikes/probe.md docs/brand/probe.md' \
+  'rm docs/spikes/probe.md && ln -s ../index.md docs/spikes/probe.md' \
+  "mkdir -p docs/brand/sub && git update-index --add --cacheinfo 160000,${BASE},docs/brand/sub"; do
+  merge_case "${change}"
+  expect skip=false "not a regular file: ${change}"
+  grep -q 'has mode 1[26]0000' "${TMP}/stderr" || fail "not a regular file: ${change}: refused for another reason: $(cat "${TMP}/stderr")"
+done
+
+# The merge commit's second parent must be the pull request's head. Here the head is itself a merge of the base, which
+# gained a docs-only commit, into a branch with a Go change: against its first parent the head changes only AGENTS.md,
+# but it is not a pull request's merge commit, and its second parent is not the head.
+git -C "${REPO}" checkout -q --detach "${BASE}"
+git -C "${REPO}" checkout -q -b reversed
+echo '// x' >>"${REPO}/internal/broker/run.go"
+git -C "${REPO}" commit -q -am 'a Go change'
+git -C "${REPO}" checkout -q --detach "${BASE}"
+echo x >>"${REPO}/AGENTS.md"
+git -C "${REPO}" commit -q -am 'a docs-only commit on the base'
+DOCS_ON_BASE=$(git -C "${REPO}" rev-parse HEAD)
+git -C "${REPO}" checkout -q reversed
+git -C "${REPO}" merge -q --no-ff --no-edit "${DOCS_ON_BASE}"
+PR_HEAD_SHA=$(git -C "${REPO}" rev-parse HEAD) expect skip=false 'the head checked out, a merge of the base into it'
+PR_HEAD_SHA=${DOCS_ON_BASE} expect skip=true 'the same merge read with its second parent as the head (control)'
+
+# PR_HEAD_SHA unset or empty selects run.
+merge_case 'echo x >>AGENTS.md'
+expect skip=true 'a docs-only merge (control for the cases below)'
+(
+  unset PR_HEAD_SHA
+  expect skip=false 'PR_HEAD_SHA unset'
+)
+PR_HEAD_SHA='' expect skip=false 'PR_HEAD_SHA empty'
 
 # A merge that changes nothing against its base (the branch's change is already there) lists no path: run.
 merge_case 'true'

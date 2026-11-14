@@ -61,6 +61,9 @@ A pull request merges into `main` only when these checks pass and its branch is 
   `trivy (linux-arm64)` (a vulnerability scan of the production image built for each platform).
 - From `codeql`: `analyze (go)` (CodeQL code scanning).
 
+On a pull request whose changed paths are all on the list in `hack/ci/docs-only.sh`, the code jobs check out and pass
+without running their steps; `lint`, `zizmor` and `gitleaks` always run.
+
 `ci` also runs `zizmor` (`make lint-workflows`), which audits the workflows under `.github/workflows` with
 [zizmor](https://docs.zizmor.sh) and fails on any finding: a `pull_request_target` or `workflow_run` trigger,
 expansion of a value an outsider controls (a pull request title, a branch name) into a `run` step, a checkout that

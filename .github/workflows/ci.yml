@@ -6,24 +6,28 @@
 # (make e2e-fast and the others) are not here; RELEASING.md says what they would need. The one job that uses kind is
 # crd-corpus, whose cluster has only the CRDs.
 #
-# A docs-only pull request is one whose changed paths are all on the list in hack/ci/docs-only.sh: maintainer prose such
-# as spec.md and AGENTS.md, docs/brand, docs/spikes, and the site's media under docs/assets, which no Go test, script
-# test, image build, scanner or CodeQL reads but for two tests that repeat make docs-check, which lint runs (the script
-# says which). README.md and the pages under docs/ are not on it: tests read them. On one, test, test-testhooks,
-# test-postgres, crd-corpus, docs-agent and echo-agent still start, check out and run the docs-only step, then skip
-# every other step, and each reports success under its own name, as do govulncheck and trivy in security.yml and analyze
-# in codeql.yml. They skip steps, not the job: a job-level if is evaluated before the matrix expands (it cannot read
-# matrix), so a crd-corpus skipped there reports no check named crd-corpus (1.37) or crd-corpus (1.33), and those
-# required checks would wait forever. lint runs in full: it takes about a minute and a half, and its make docs-check
-# reads the text files under docs/assets (SVG, captions), as docs.yml's build does on a pull request that touches docs/.
-# zizmor runs in full, and gitleaks in security.yml.
+# A docs-only pull request is one whose changed paths are all on the list in hack/ci/docs-only.sh, each as a regular
+# file or deleted: maintainer prose such as spec.md and AGENTS.md, docs/brand, docs/spikes, and the site's media under
+# docs/assets, whose content no Go test, script test, image build, scanner or CodeQL reads but for two tests that repeat
+# make docs-check, which lint runs (the script says which). A symlink or submodule anywhere on the list runs everything:
+# the docs agent's tests walk the real docs/ and refuse any symlink in it. README.md and the pages under docs/ are not
+# on it: tests read them. On one, test, test-testhooks, test-postgres, crd-corpus, docs-agent and echo-agent still
+# start, check out and run the docs-only step, then skip every other step, and each reports success under its own name,
+# as do govulncheck and trivy in security.yml and analyze in codeql.yml. They skip steps, not the job: a job-level if is
+# evaluated before the matrix expands (it cannot read matrix), so a crd-corpus skipped there reports no check named
+# crd-corpus (1.37) or crd-corpus (1.33), and those required checks would wait forever. lint runs in full: it takes
+# about a minute and a half, and its make docs-check reads the text files under docs/assets (SVG, captions), as
+# docs.yml's build does on a pull request that touches docs/. zizmor runs in full, and gitleaks in security.yml.
+# hack/ci/docsonly's test holds every copy of the docs-only step and its checkout to one text, and every later step that
+# a pull request runs to the gate.
 #
 # The docs-only step fails open. It runs only on a pull_request event and lists the paths with git, the merge commit
 # against its first parent (the checkout fetches both parents on a pull request), so there is no cap on how many paths
-# it lists. Only its exact answer skip=true skips anything: a path off the list, a listing that fails or is empty, a
-# commit that is not a merge, or the step failing (continue-on-error keeps the job going) runs every step. A push to
-# main never runs the step and so runs everything, as before: main's push runs, which the release gate
-# (hack/release/check-ci.sh) reads and which save the caches, are unchanged.
+# it lists. Only its exact answer skip=true skips anything: a path off the list or not a regular file, a listing that
+# fails or is empty, a commit that is not a merge whose second parent is the pull request's head
+# (github.event.pull_request.head.sha, through env), or the step failing (continue-on-error keeps the job going) runs
+# every step. A push to main never runs the step and so runs everything, as before: main's push runs, which the release
+# gate (hack/release/check-ci.sh) reads and which save the caches, are unchanged.
 name: ci
 
 on:
@@ -140,6 +144,8 @@ jobs:
         name: Classify the pull request's changes
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           scope=$(hack/ci/docs-only.sh)
           echo "${scope}" >>"${GITHUB_OUTPUT}"
@@ -216,6 +222,8 @@ jobs:
         name: Classify the pull request's changes
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           scope=$(hack/ci/docs-only.sh)
           echo "${scope}" >>"${GITHUB_OUTPUT}"
@@ -279,6 +287,8 @@ jobs:
         name: Classify the pull request's changes
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           scope=$(hack/ci/docs-only.sh)
           echo "${scope}" >>"${GITHUB_OUTPUT}"
@@ -341,6 +351,8 @@ jobs:
         name: Classify the pull request's changes
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           scope=$(hack/ci/docs-only.sh)
           echo "${scope}" >>"${GITHUB_OUTPUT}"
@@ -422,6 +434,8 @@ jobs:
         name: Classify the pull request's changes
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           scope=$(hack/ci/docs-only.sh)
           echo "${scope}" >>"${GITHUB_OUTPUT}"
@@ -491,6 +505,8 @@ jobs:
         name: Classify the pull request's changes
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           scope=$(hack/ci/docs-only.sh)
           echo "${scope}" >>"${GITHUB_OUTPUT}"
