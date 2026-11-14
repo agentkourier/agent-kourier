@@ -10,6 +10,8 @@
 //	MCP_URL          use this MCP server's tools instead of serving CORPUS_DIR
 //	LISTEN_ADDR      the A2A server's address (default :8080)
 //	PUBLIC_URL       the endpoint the agent card names (default http://localhost:8080/a2a)
+//	A2A_V03_URL      where A2A 0.3 clients reach this server's root, such as kagent 0.9 calling the agent as a
+//	                 sub-agent; turns on the 0.3 surface at / (default: off; see docsagent.Config.V03URL)
 //	DOCS_SUBJECT     what the documentation is about, named in the prompt (default Agent Kourier)
 package main
 
@@ -39,6 +41,7 @@ type settings struct {
 	mcpURL    string
 	listen    string
 	publicURL string
+	v03URL    string
 	subject   string
 }
 
@@ -56,6 +59,7 @@ func settingsFromEnv(getenv func(string) string) (settings, error) {
 		mcpURL:    getenv("MCP_URL"),
 		listen:    or("LISTEN_ADDR", ":8080"),
 		publicURL: or("PUBLIC_URL", "http://localhost:8080/a2a"),
+		v03URL:    getenv("A2A_V03_URL"),
 		subject:   or("DOCS_SUBJECT", docsagent.DefaultSubject),
 	}
 	if s.siteURL == "-" {
@@ -68,6 +72,11 @@ func settingsFromEnv(getenv func(string) string) (settings, error) {
 	}
 	if _, err := urlcheck.HTTP(s.publicURL); err != nil {
 		return settings{}, fmt.Errorf("PUBLIC_URL %w", err)
+	}
+	if s.v03URL != "" {
+		if _, err := urlcheck.HTTP(s.v03URL); err != nil {
+			return settings{}, fmt.Errorf("A2A_V03_URL %w", err)
+		}
 	}
 	return s, nil
 }
@@ -101,7 +110,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	mcpCtx, stopMCP := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopMCP()
 	handler, mcpDone, err := docsagent.Assemble(mcpCtx, docsagent.AssembleOptions{
-		Corpus: s.corpus, Exclude: s.exclude, SiteURL: s.siteURL, MCPURL: s.mcpURL, Model: llm, PublicURL: s.publicURL, Subject: s.subject,
+		Corpus: s.corpus, Exclude: s.exclude, SiteURL: s.siteURL, MCPURL: s.mcpURL, Model: llm, PublicURL: s.publicURL, V03URL: s.v03URL, Subject: s.subject,
 	})
 	if err != nil {
 		return err
@@ -110,7 +119,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
-	log.Info("serving A2A", "addr", ln.Addr().String(), "model", llm.Name(), "mcp", map[bool]string{true: "external", false: "embedded"}[s.mcpURL != ""])
+	log.Info("serving A2A", "addr", ln.Addr().String(), "a2a_v03", s.v03URL != "", "model", llm.Name(), "mcp", map[bool]string{true: "external", false: "embedded"}[s.mcpURL != ""])
 	return serve(ctx, ln, handler, mcpDone, stopMCP, a2aGrace)
 }
 
