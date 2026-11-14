@@ -52,7 +52,8 @@ end-to-end tiers (`make e2e-fast-up`, then `make e2e-fast`) need Docker and kind
 A pull request merges into `main` only when these checks pass and its branch is up to date with
 `main`:
 
-- From `ci`: `lint` (`make fmt` leaves no diff, `make lint`, `make docs-check`, `make build`),
+- From `ci`: `lint` (`make fmt` leaves no diff, `make lint`, `make docs-check`, `make build`,
+  `make lint-workflows`),
   `test` (`make test-race` with helm installed, so the chart tests cannot skip, and
   `make test-scripts`), `test-testhooks` (`make test-testhooks`) and `docs-agent` (the tests and
   lint of the separate module under `examples/recipes/docs-agent/agent`). Each race pass runs split over
@@ -72,15 +73,19 @@ list there (maintainer prose, `docs/brand`, `docs/spikes`, the site's media unde
 skip Markdown outside every directory that holds Go code and the directories below it, `echo-agent` the same except
 under `examples/recipes/echo-agent/agent/`, and `docs-agent` the same except under `docs/` and
 `examples/recipes/docs-agent/`. A pull request that changes `README.md` and pages under `docs/` therefore
-runs `lint`, the test jobs and `docs-agent`, and skips the scanners, `crd-corpus` and `echo-agent`. `lint`, `zizmor`
-and `gitleaks` always run.
+runs `lint`, the test jobs and `docs-agent`, and skips the scanners, `crd-corpus` and `echo-agent`. `lint` and
+`gitleaks` always run.
 
-`ci` also runs `zizmor` (`make lint-workflows`), which audits the workflows under `.github/workflows` with
+`lint` also runs `make lint-workflows`, which audits the workflows under `.github/workflows` with
 [zizmor](https://docs.zizmor.sh) and fails on any finding: a `pull_request_target` or `workflow_run` trigger,
 expansion of a value an outsider controls (a pull request title, a branch name) into a `run` step, a checkout that
 keeps its credentials, `actions/cache` or a setup action's cache in a release workflow, or an action not pinned by
-a full commit SHA. It is not a required check yet. If you change a workflow, run `make lint-workflows` (it installs the pinned zizmor and needs `jq`); `.github/zizmor.yml` says how a finding is
-fixed or suppressed.
+a full commit SHA. `lint` is a required check, so a finding blocks the merge; the audit runs even when an earlier
+step of `lint` failed, so its findings show in the same run. Its online audits can fail `lint` with no change in your
+pull request: an advisory published against a pinned action fails every pull request, docs-only ones included, until
+the pin moves. A failed zizmor download or a GitHub API error during those audits fails `lint` too; re-run the job.
+If you change a workflow, run `make lint-workflows` (it installs the pinned zizmor and needs `jq`);
+`.github/zizmor.yml` says how a finding is fixed or suppressed.
 
 `ci` also runs `test-postgres` (`make test-postgres`), the Postgres store's tests and the broker's Postgres tests
 against a throwaway Postgres container; in the race passes, which have no database, those tests skip. It is

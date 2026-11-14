@@ -1,4 +1,4 @@
-# zizmor's policy for the workflows (hack/security/lint-workflows.sh, the zizmor job in ci.yml). The regular persona
+# zizmor's policy for the workflows (hack/security/lint-workflows.sh, a step of ci.yml's lint job). The regular persona
 # runs and any finding fails. A finding is fixed, or suppressed in the workflow itself with an inline
 # `# zizmor: ignore[<audit>]` comment next to the line and a reason; there are no file-wide ignores here.
 #

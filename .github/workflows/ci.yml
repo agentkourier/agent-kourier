@@ -30,12 +30,13 @@
 # checks out and runs the docs-only step, and reports success under its own name; test and test-testhooks then pass,
 # as their legs did. They skip steps, not the job: a job-level if is evaluated before the matrix expands (it cannot
 # read matrix), so a crd-corpus skipped there reports no check named crd-corpus (1.37) or crd-corpus (1.33), and those
-# required checks would wait forever. lint runs in full: it takes about a minute and a half, and its make docs-check
+# required checks would wait forever. lint runs in full: it takes about a minute and a half, its make docs-check
 # reads the text files under docs/assets (SVG, captions) and the pages, as docs.yml's build does on a pull request that
-# touches docs/. zizmor runs in full, and gitleaks in security.yml. hack/ci/docsonly's test holds every copy of the
-# docs-only step to one text, with the class it names for the job (a job given another job's class fails it), the
-# checkouts before it alike, and every later step to the gate unless its if holds only on a push; it reads each if as
-# terms joined by && and refuses one with ||, a negated event or a bracket (status calls such as always() aside).
+# touches docs/, and its zizmor step audits the workflows. gitleaks in security.yml runs in full too. hack/ci/docsonly's
+# test holds lint to its audit step, and every copy of the docs-only step to one text, with the class it names for the
+# job (a job given another job's class fails it), the checkouts before it alike, and every later step to the gate
+# unless its if holds only on a push; it reads each if as terms joined by && and refuses one with ||, a negated event
+# or a bracket (status calls such as always() aside).
 #
 # The docs-only step fails open. It runs only on a pull_request event and lists the paths with git, the merge commit
 # against its first parent (the checkout fetches both parents on a pull request), so there is no cap on how many paths
@@ -60,7 +61,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Observed on a cold cache: setup, fmt and lint took about 7 minutes. 15 leaves room for twice that, and for build.
+  # Observed on a cold cache: setup, fmt and lint took about 7 minutes. 15 leaves room for twice that, and for build
+  # and the workflow audit (about 10 s).
   lint:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
@@ -138,6 +140,21 @@ jobs:
         env:
           CONTENTCHECK_WORKSPACE: ${{ secrets.CONTENTCHECK_WORKSPACE }}
       - run: make build
+      # zizmor audits every workflow and fails on any finding: pull_request_target and workflow_run triggers, template
+      # injection of outsider-controlled values into run steps, persisted checkout credentials, caches in a release
+      # workflow (zizmor.yml names the gap), actions not pinned by SHA. .github/zizmor.yml is its policy and
+      # hack/security/lint-workflows.sh what the step proves. It needs no Go and about 10 s, so it is a step here rather
+      # than a job of its own, and it runs whatever the steps before it did (!cancelled()), so a lint or build failure
+      # does not hide a finding; hack/ci/docsonly's test holds it to that and to its env. GH_TOKEN is for zizmor's online
+      # audits (impostor commits, known vulnerable actions); without it the script runs zizmor offline and skips them.
+      # This is the only run step with the job's token in its environment, so make lint, make build and the other steps
+      # that run the pull request's code never see it (actions/checkout and setup-go take it through their own token
+      # input). It is the job's read-only token, as on a fork's pull request. Findings print in the log; none is
+      # uploaded as SARIF, which needs security-events: write.
+      - if: ${{ !cancelled() }}
+        run: make lint-workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
       - id: go-trim
         name: Trim the Go caches to what this run used
         if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -530,22 +547,6 @@ jobs:
             ${{ steps.go-env.outputs.modcache }}
             ${{ steps.go-env.outputs.gocache }}
           key: ${{ steps.go-cache.outputs.cache-primary-key }}
-
-  # zizmor audits every workflow and fails on any finding: pull_request_target and workflow_run triggers, template
-  # injection of outsider-controlled values into run steps, persisted checkout credentials, caches in a release
-  # workflow (zizmor.yml names the gap), actions not pinned by SHA. .github/zizmor.yml is its policy and
-  # hack/security/lint-workflows.sh what the job proves. The token is only for zizmor's online audits (impostor commits, known vulnerable actions) and is read-only,
-  # as on a fork's pull request. Findings print in the log; none is uploaded as SARIF, which needs security-events: write.
-  zizmor:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - run: make lint-workflows
-        env:
-          GH_TOKEN: ${{ github.token }}
 
   # The docs-agent recipe is a separate Go module (examples/recipes/docs-agent/agent), so the jobs above do not build
   # or test it. Its tests include the refusals that keep its corpus reader inside the corpus.

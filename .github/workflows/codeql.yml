@@ -21,6 +21,16 @@ on:
 
 permissions: {}
 
+# A pull request's newer push cancels its run in progress, as in ci.yml. Every other run (a push to main, the schedule,
+# a run started by hand) is a group of its own, keyed by its run id, so nothing cancels it: the release gate
+# (hack/release/check-ci.sh) needs the main push run of the commit it releases to complete, and GitHub cancels a run
+# that is pending in a group whenever a newer one joins it, whatever cancel-in-progress says, so main's pushes cannot
+# share a group the way ci.yml's do. A pull request's ref (refs/pull/<number>/merge) never equals a run id, and the
+# workflow's name keeps the groups apart from the other workflows'.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   analyze:
     if: ${{ github.event.repository.private == false }}
