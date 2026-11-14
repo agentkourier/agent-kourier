@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
@@ -645,6 +647,55 @@ func itemBlock(oldest bool, n, size int) untrustedBlock {
 	return b
 }
 
+// cleanedOnce cleans the items that items(size) makes once for each of sizes, on first use, for the subtests of a sweep
+// to share: cleaning is redaction, nearly all of a sweep's cost under the race detector, and its blocks take the same
+// items again and again (see untrustedBlock.layout). A block of the sweep takes the first n of them, which are its items
+// cleaned only if no item cleans to nothing, so the getter fails the test if one does.
+func cleanedOnce(sizes []int, items func(size int) []untrustedItem) func(t *testing.T, size int) []cleanedItem {
+	once := make(map[int]func() ([]cleanedItem, int), len(sizes))
+	for _, size := range sizes {
+		once[size] = sync.OnceValues(func() ([]cleanedItem, int) {
+			raw := items(size)
+			return untrustedBlock{Items: raw}.cleanItems(), len(raw)
+		})
+	}
+	return func(t *testing.T, size int) []cleanedItem {
+		t.Helper()
+		get, ok := once[size]
+		if !ok {
+			t.Fatalf("no items of size %d were cleaned", size)
+		}
+		cleaned, n := get()
+		if len(cleaned) != n {
+			t.Fatalf("%d of the %d items of size %d cleaned to nothing", n-len(cleaned), n, size)
+		}
+		return cleaned
+	}
+}
+
+// laidOut is b laid out from items, which must be b's items cleaned. With whole it renders b as well, cleaning its items
+// again, and fails the test if the two differ: a sweep sets it for one block of each subtest, so that items it shares are
+// seen to be the ones its blocks hold.
+func laidOut(t *testing.T, b untrustedBlock, items []cleanedItem, whole bool) (section string, leftOut int) {
+	t.Helper()
+	section, leftOut = b.layout(items)
+	if whole {
+		if want, wantLeft := b.render(); section != want || leftOut != wantLeft {
+			t.Fatalf("the block laid out from the shared items (%d left out) is not the block rendered (%d left out):\n%s\n%s", leftOut, wantLeft, section, want)
+		}
+	}
+	return section, leftOut
+}
+
+// sweep is from, from+step and so on, up to to.
+func sweep(from, to, step int) []int {
+	var out []int
+	for v := from; v <= to; v += step {
+		out = append(out, v)
+	}
+	return out
+}
+
 // itemTarget is hostileTarget for checkSection of itemBlock.
 func itemTarget(limit int) hostileTarget {
 	return hostileTarget{
@@ -657,14 +708,17 @@ func itemTarget(limit int) hostileTarget {
 // it can be: the next older item would not have fitted, but for the room that the line takes at its widest.
 func TestUntrustedBlockDropOldest(t *testing.T) {
 	t.Parallel()
+	sizes, counts := sweep(1, 1000, 111), []int{1, 2, 3, 8, 13, 60}
+	cleaned := cleanedOnce(sizes, func(size int) []untrustedItem { return itemBlock(true, slices.Max(counts), size).Items })
 	for _, dropped := range []int{0, 9, 99, 99_999} {
-		for _, n := range []int{1, 2, 3, 8, 13, 60} {
+		for _, n := range counts {
 			t.Run(fmt.Sprintf("%d dropped, %d items", dropped, n), func(t *testing.T) {
 				t.Parallel()
-				for size := 1; size <= 1000; size += 111 {
+				for k, size := range sizes {
 					b := itemBlock(true, n, size)
 					b.Oldest.Dropped = dropped
-					got, left := b.render()
+					items := cleaned(t, size)[:n]
+					got, left := laidOut(t, b, items, k == 0)
 					_, body := checkSection(t, itemTarget(b.MaxUnits), got)
 					shown := strings.Count(body, "<entry>")
 					if shown == 0 {
@@ -688,13 +742,7 @@ func TestUntrustedBlockDropOldest(t *testing.T) {
 						t.Fatalf("%d x %d, %d dropped: the block does not end with %q:\n%s", n, size, dropped, line, got)
 					}
 					if n-shown > 0 && shown < b.Oldest.MaxItems { // the next older item would have fitted, but for the line's room at its widest
-						// Only that item is cleaned: cleaning all n again would repeat render's redaction of every one of them.
-						// Every item of itemBlock has a body, so none is dropped and its index among the cleaned is n-shown-1.
-						one := untrustedBlock{Items: b.Items[n-shown-1 : n-shown]}.cleanItems()
-						if len(one) != 1 {
-							t.Fatalf("the item %d cleaned to nothing", n-shown-1)
-						}
-						older, ok := one[0].render(math.MaxInt / 4)
+						older, ok := items[n-shown-1].render(math.MaxInt / 4)
 						if !ok {
 							t.Fatal("an item does not render")
 						}
@@ -777,12 +825,14 @@ func TestUntrustedBlockDropTrailing(t *testing.T) {
 		return out
 	}
 	tg := hostileTarget{name: "trailing", prefix: "test-block-", plural: true, maxUnits: 6000, many: true, elements: []string{"text"}}
-	for _, n := range []int{1, 2, 3, 5} {
+	sizes, counts := sweep(1, 3000, 97), []int{1, 2, 3, 5}
+	cleaned := cleanedOnce(sizes, func(size int) []untrustedItem { return items(slices.Max(counts), size) })
+	for _, n := range counts {
 		t.Run(fmt.Sprintf("%d items", n), func(t *testing.T) {
 			t.Parallel()
-			for size := 1; size <= 3000; size += 97 {
+			for k, size := range sizes {
 				b := untrustedBlock{Opening: "Notes", Plural: true, TagPrefix: "test-block-", MaxUnits: 6000, Items: items(n, size)}
-				got, left := b.render()
+				got, left := laidOut(t, b, cleaned(t, size)[:n], k == 0)
 				_, body := checkSection(t, tg, got)
 				lines := strings.Split(strings.TrimSuffix(body, "\n"), "\n")
 				shown := 0
@@ -857,15 +907,24 @@ func TestUntrustedBlockWritesTheCloseTagWhateverTheCap(t *testing.T) {
 // section lands on each unit of the cap, and none may pass it, whatever number of digits the line comes to.
 func TestUntrustedBlockReservesTheLeftOutLineAtItsWidest(t *testing.T) {
 	t.Parallel()
+	counts, lasts := []int{4, 5, 6}, sweep(1, 120, 1)
+	// The items before the last are those of itemBlock, and the last is one of them with its body replaced.
+	before := cleanedOnce([]int{20}, func(size int) []untrustedItem { return itemBlock(true, slices.Max(counts)-1, size).Items })
+	newest := cleanedOnce(lasts, func(last int) []untrustedItem {
+		items := itemBlock(true, 1, 20).Items
+		items[0].Fields[1].Value = strings.Repeat("e", last)
+		return items
+	})
 	for _, dropped := range []int{0, 8, 9, 98, 99, 998, 999, 99_998, 99_999} {
 		t.Run(fmt.Sprintf("%d dropped", dropped), func(t *testing.T) {
 			t.Parallel()
-			for _, n := range []int{4, 5, 6} {
-				for last := 1; last <= 120; last++ {
+			for _, n := range counts {
+				for _, last := range lasts {
 					b := itemBlock(true, n, 20)
 					b.MaxUnits, b.Oldest.Dropped = 800, dropped
 					b.Items[n-1].Fields[1].Value = strings.Repeat("e", last)
-					got, left := b.render()
+					items := append(slices.Clone(before(t, 20)[:n-1]), newest(t, last)...)
+					got, left := laidOut(t, b, items, last == 1 || last == lasts[len(lasts)-1])
 					if units := chat.Units(got); units > b.MaxUnits {
 						t.Fatalf("%d dropped, %d items, the last of %d: %d units for a cap of %d, with %d left out", dropped, n, last, units, b.MaxUnits, left)
 					}
