@@ -247,6 +247,15 @@ REFUSALS = {  # an agent.yaml `capabilities:` list, and what the refusal must na
         "- MCP: {url: 'http://x/mcp', allowed_tools: [a], headers: [a]}",
         "headers",
     ),
+    "MCP with a literal header value that holds a control character": (
+        "- MCP: {url: 'http://x/mcp', allowed_tools: [a], headers: {X-Id: \"a\\x07b\"}}",
+        "X-Id",
+    ),
+    "MCP with a literal authorization_token that holds a newline": (
+        "- MCP: {url: 'http://x/mcp', allowed_tools: [a], authorization_token: \"Bearer x\\ny\"}",
+        "authorization_token",
+    ),
+    "MCP with an IPv6 url and no id": ("- MCP: {url: 'http://[::1]:8080/mcp', allowed_tools: [a]}", "colon"),
     "MCP with a header value that is not a string": (
         "- MCP: {url: 'http://x/mcp', allowed_tools: [a], headers: {X-Id: 5}}",
         "headers",
@@ -290,6 +299,7 @@ def test_mcp_keywords_the_policy_allows_still_load(tmp_path):
     path.write_text(
         "model: test\ncapabilities:\n  - MCP: {url: 'https://x/mcp', allowed_tools: [a], native: false, id: runbooks,"
         " description: The runbooks, headers: {X-Team: ops}}\n"
+        "  - MCP: {url: 'http://y/mcp', allowed_tools: [b], headers: null}\n"
     )
     loaded, secrets = agent.load_agent(str(path), scripted())
     assert loaded.name is None and secrets == set()
@@ -339,6 +349,8 @@ MODEL_REFUSALS = {  # a model: line the agent refuses, and what the refusal must
     "a deep research model": ("openai-responses:o5-deep-research", "search"),
     "a Perplexity model through OpenRouter": ("openrouter:perplexity/sonar-pro", "perplexity"),
     "search in upper case": ("openai-chat:My-SEARCH-model", "search"),
+    "an OpenRouter preset as the model": ("openrouter:@preset/web", "preset"),
+    "an OpenRouter preset after a model": ("openrouter:openai/gpt-6-luna@preset/x", "preset"),
 }
 
 
@@ -495,16 +507,25 @@ async def test_a_provider_key_in_the_environment_is_redacted_from_the_failed_mes
     monkeypatch.setenv("FAKE_PROVIDER_API_KEY", f" {key}\n")
     monkeypatch.setenv("FAKE_WEBHOOK_SECRET", "fake-webhook-secret")
     monkeypatch.setenv("SHORT_TOKEN", "1234567")  # under 8 characters: a word like this would be cut from any text
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "fake-bedrock-bearer")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "fake-aws-secret-access")
     monkeypatch.setenv("FAKE_REGION", "us-east-1-fake-region")  # not a secret's name: left alone
+    monkeypatch.setenv("FAKE_KEYBOARD", "fake-keyboard-layout")  # KEY must be a whole part of the name
 
     async def stream(messages, info):
-        raise RuntimeError(f"Incorrect API key provided: {key}; fake-webhook-secret 1234567 us-east-1-fake-region")
+        raise RuntimeError(
+            f"Incorrect API key provided: {key}; fake-webhook-secret 1234567 fake-bedrock-bearer"
+            " fake-aws-secret-access us-east-1-fake-region fake-keyboard-layout"
+        )
         yield ""
 
     async with serve(spec, FunctionModel(stream_function=stream)) as client:
         _, task = await say(client, "hi")
     text = task.status.message.parts[0].text
-    assert text == ("RuntimeError: Incorrect API key provided: [redacted]; [redacted] 1234567 us-east-1-fake-region")
+    assert text == (
+        "RuntimeError: Incorrect API key provided: [redacted]; [redacted] 1234567 [redacted] [redacted]"
+        " us-east-1-fake-region fake-keyboard-layout"
+    )
 
 
 @pytest.mark.anyio
@@ -817,6 +838,24 @@ async def test_anything_but_http_and_lifespan_without_the_bearer_is_closed(spec,
     app = agent.build_app(URL, spec, str(token_file), scripted())
     await app({"type": "websocket", "headers": []}, None, send)
     assert sent == [{"type": "websocket.close"}]
+
+
+@pytest.mark.parametrize(
+    ("name", "reason"), [(" ", "No such file or directory"), ("missing", "No such file"), (".", "Is a directory")]
+)
+def test_a_token_file_that_cannot_be_read_stops_the_agent_with_the_reason(spec, tmp_path, name, reason):
+    token_file = name if name == " " else str(tmp_path / name)
+    with pytest.raises(SystemExit, match=f"{token_file}: {reason}") as stopped:
+        agent.build_app(URL, spec, token_file, scripted())
+    assert isinstance(stopped.value.code, str)
+
+
+def test_an_ipv6_mcp_url_loads_once_the_entry_has_an_id(tmp_path):
+    """Pydantic AI derives the capability's id from the url's host, and refuses one with a colon in it."""
+    path = tmp_path / "agent.yaml"
+    mcp = "{url: 'http://[::1]:8080/mcp', allowed_tools: [a], id: local}"
+    path.write_text(f"model: test\ncapabilities:\n  - MCP: {mcp}\n")
+    agent.load_agent(str(path), scripted())
 
 
 def test_an_empty_token_file_stops_the_agent_instead_of_accepting_a_bare_bearer(spec, tmp_path):

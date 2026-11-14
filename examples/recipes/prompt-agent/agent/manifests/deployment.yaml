@@ -12,7 +12,12 @@
 #     ANTHROPIC_API_KEY, for the example's model: anthropic:...; change the variable's name with the model: line.
 #   prompt-agent-mcp, key token: the bearer token for the MCP server, which agent.yaml writes as ${RUNBOOKS_MCP_TOKEN}.
 #   prompt-agent-bearer, key token: the token Agent Kourier sends as Authorization: Bearer. The same value goes in the
-#     Secret the Binding names in namespace agent-kourier (../../kourier/binding.yaml).
+#     Secret the Binding names in namespace agent-kourier (../../kourier/binding.yaml). Make the value once and both
+#     Secrets from it, without printing it:
+#       token="$(openssl rand -hex 32)"
+#       kubectl create secret generic prompt-agent-bearer -n prompt-agent --from-literal=token="$token"
+#       kubectl create secret generic prompt-agent-bearer -n agent-kourier --from-literal=token="$token"
+#       unset token
 # The first two reach the agent as environment variables, so a changed value needs a restart of the pod. The third is a
 # mounted file the agent reads on every request, so a rotated token works without a restart.
 #

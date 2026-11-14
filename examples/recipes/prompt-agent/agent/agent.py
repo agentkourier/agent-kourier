@@ -50,9 +50,9 @@ MAX_KEPT = 1000
 # (Contract, Errors), so the cut only makes it shorter.
 MAX_FAILED_TEXT = 1000
 # Bytes of a request body: past it the agent answers 413 and reads no more (LimitBody). The broker's largest message is
-# a person's turn: a trigger's prompt is at most 12002 UTF-16 units (docs/reference/limits.md), about 36 KiB of UTF-8,
-# and a chat message is Slack's (40,000 characters at most, Slack's rule, not checked here), at most about 240 KiB of
-# JSON even if every character were escaped. 1 MiB is four times that.
+# a person's turn. Counted at the worst, 6 bytes of JSON for each character (escaped as \u0000), a trigger's prompt of
+# at most 12002 UTF-16 units (docs/reference/limits.md) is about 70 KiB, and a chat message of Slack's 40,000 characters
+# at most (Slack's rule, not checked here) about 235 KiB. 1 MiB is four times the larger.
 MAX_BODY = 1024 * 1024
 ENV = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
@@ -98,18 +98,20 @@ def expand(value: str, path: str, secrets: set[str]) -> str:
     return ENV.sub(environment, value)
 
 
-SECRET_NAMES = ("_API_KEY", "_TOKEN", "_SECRET")
+SECRET_NAMES = {"KEY", "TOKEN", "SECRET", "PASSWORD"}
 
 
 def environment_secrets() -> set[str]:
-    """The values of the variables named like a secret (..._API_KEY, ..._TOKEN, ..._SECRET), for redact().
+    """The values of the variables named like a secret, for redact(): a part of the name between underscores is KEY,
+    TOKEN, SECRET or PASSWORD (ANTHROPIC_API_KEY, AWS_SECRET_ACCESS_KEY, AWS_BEARER_TOKEN_BEDROCK).
 
     A provider's error can quote its key, which agent.yaml never names. Only a value quoted whole is found: a key quoted
     in part, with stars between its ends, stays as it is. A value under 8 characters is left out, so that a short word
-    is not cut out of every text.
+    is not cut out of every text. A few values that are no secret are caught too, such as PROMPT_AGENT_TOKEN_FILE's
+    path; a failed message that quoted one would show [redacted] in its place, and lose nothing else.
     """
-    values = {value.strip() for name, value in os.environ.items() if name.upper().endswith(SECRET_NAMES)}
-    return {value for value in values if len(value) >= 8}
+    named = {value.strip() for name, value in os.environ.items() if SECRET_NAMES & set(name.upper().split("_"))}
+    return {value for value in named if len(value) >= 8}
 
 
 def redact(text: str, secrets) -> str:
@@ -146,7 +148,11 @@ MCP_KEYS = {"url", "allowed_tools", "native", "authorization_token", "headers", 
 
 
 def check_model(path: str, model) -> None:
-    """The spec's model must be provider:name, of a provider in PROVIDERS, and not a model that searches the web."""
+    """The spec's model must be provider:name, of a provider in PROVIDERS, and not a model that searches the web.
+
+    The name check is a heuristic: it reads only the name. What a gateway does behind it, such as an endpoint that
+    openai-chat: or openai: reaches through OPENAI_BASE_URL, or the model openrouter/auto picks, it cannot see.
+    """
     if not isinstance(model, str) or not model:
         raise SystemExit(f"{path}: model is required, as provider:name")
     provider, _, name = model.partition(":")
@@ -154,6 +160,10 @@ def check_model(path: str, model) -> None:
         raise SystemExit(f"{path}: model {model!r}: the provider must be one of {', '.join(sorted(PROVIDERS))}")
     if found := SEARCHES.search(name):
         raise SystemExit(f"{path}: model {model!r} ({found.group()}) makes the provider search the web itself")
+    # An OpenRouter preset (@preset/..., anywhere in the name) keeps settings in OpenRouter's dashboard, server tools
+    # among them, where agent.yaml cannot see them.
+    if "@" in name:
+        raise SystemExit(f"{path}: model {model!r} names an OpenRouter preset, whose tools agent.yaml cannot see")
 
 
 def load_agent(path: str, model=None) -> tuple[Agent, set[str]]:
@@ -189,6 +199,10 @@ def load_agent(path: str, model=None) -> tuple[Agent, set[str]]:
         parts = urlparse(url)
         if parts.scheme not in ("http", "https") or not parts.netloc or url.lower().endswith((".py", ".js")):
             raise SystemExit(f"{path}: an MCP entry needs url: http(s)://host/..., as a keyword, and not a script")
+        # Pydantic AI names the entry after the url's host and refuses a name with a colon, so an IPv6 host
+        # (http://[::1]:8080/mcp) needs an id: of its own.
+        if ":" in (parts.hostname or "") and "id" not in args:
+            raise SystemExit(f"{path}: an MCP entry with an IPv6 url needs an id:, since its host has a colon")
         # Pydantic AI filters tools only for a list: null, or no list at all, would offer every tool the server has.
         tools = args.get("allowed_tools")
         if not (isinstance(tools, list) and tools and all(isinstance(t, str) for t in tools)):
@@ -207,6 +221,10 @@ def load_agent(path: str, model=None) -> tuple[Agent, set[str]]:
             if not (isinstance(headers, dict) and all(isinstance(v, str) for v in headers.values())):
                 raise SystemExit(f"{path}: headers must be a mapping of names to string values")
             args["headers"] = {name: expand(value, path, secrets) for name, value in headers.items()}
+        # A control character is not legal in a header, whether written here or expanded; never quote the value.
+        written = {"authorization_token": args.get("authorization_token", ""), **(args.get("headers") or {})}
+        if held := sorted(name for name, value in written.items() if CONTROL.search(value)):
+            raise SystemExit(f"{path}: MCP {', '.join(held)} holds a control character")
         cap.arguments = args
     # Limits Pydantic AI sets, which agent.yaml cannot: the MCP client waits 5 seconds to connect and initialize, and
     # 5 minutes for an answer. A server that does not connect in time fails the task; a tool call with no answer in time
@@ -459,9 +477,13 @@ def build_app(url: str, spec_path: str = "agent.yaml", token_file: str = "", mod
     handler = DefaultRequestHandler(agent_executor=executor, task_store=InMemoryTaskStore(), agent_card=card)
     app = LimitBody(Starlette(routes=create_agent_card_routes(card) + create_jsonrpc_routes(handler, rpc_url="/")))
     if token_file:
-        with open(token_file, "rb") as f:  # a missing or empty file stops the agent at start
-            if not f.read().strip():
-                raise SystemExit(f"{token_file} is empty")
+        try:  # a file that is missing, empty or not a file stops the agent at start
+            with open(token_file, "rb") as f:
+                token = f.read().strip()
+        except OSError as e:
+            raise SystemExit(f"{token_file}: {e.strerror}") from None
+        if not token:
+            raise SystemExit(f"{token_file} is empty")
         app = RequireBearer(app, token_file)  # outermost: a caller without the token gets 401, and its body is not read
     return app
 

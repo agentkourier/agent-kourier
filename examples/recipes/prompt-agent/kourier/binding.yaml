@@ -13,17 +13,22 @@
 # identity.tokenSecretRef names the Secret prompt-agent-bearer, key token (the default key), in this Binding's namespace,
 # agent-kourier: Agent Kourier sends its value as Authorization: Bearer on every call to the agent, the card's included.
 # The agent checks it against its own copy, so the same value goes in two Secrets: this one, which Agent Kourier reads,
-# and prompt-agent-bearer in namespace prompt-agent, which the agent mounts (agent/manifests/deployment.yaml). You make
-# both, from one value with no trailing newline (kubectl create secret generic prompt-agent-bearer
-# --from-literal=token=...): Agent Kourier refuses a value with a control character, such as the newline that
-# --from-file keeps. With the chart's custom resources, grant Agent Kourier this one: rbac.secretNames: {agent-kourier:
-# [prompt-agent-bearer]}.
+# and prompt-agent-bearer in namespace prompt-agent, which the agent mounts (agent/manifests/deployment.yaml). Make the
+# value once, in a shell variable, and both Secrets from it, without printing it:
+#
+#   token="$(openssl rand -hex 32)"
+#   kubectl create secret generic prompt-agent-bearer -n agent-kourier --from-literal=token="$token"
+#   kubectl create secret generic prompt-agent-bearer -n prompt-agent --from-literal=token="$token"
+#   unset token
+#
+# --from-literal adds no trailing newline. Agent Kourier refuses a value with a control character, such as the newline
+# that --from-file keeps from a file. With the chart's custom resources, grant Agent Kourier this one:
+# rbac.secretNames: {agent-kourier: [prompt-agent-bearer]}.
 #
 # When the two values differ the agent answers 401. A new turn then fails without a retry (the thread is told the
-# request failed and will not be tried again), an answer to a question leaves the question open, Agent Kourier reads
-# its Secret again for the next call, and
-# agentkourier_credential_rejections_total counts the rejection. The Binding's BackendReachable condition says
-# CredentialsRejected once its check fetches the agent card and gets the 401.
+# request failed and will not be tried again), an answer to a question leaves the question open, Agent Kourier reads its
+# Secret again for the next call, and agentkourier_credential_rejections_total counts the rejection. The Binding's
+# BackendReachable condition says CredentialsRejected once its check fetches the agent card and gets the 401.
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata: {name: prompt-chat, namespace: agent-kourier}
