@@ -59,7 +59,7 @@ The chart is `ghcr.io/agentkourier/charts/agent-kourier@sha256:<chart digest>`, 
 
 `agent-kourier init` writes the files of a first install with your values in them. By default they are the files of
 [the recorded path](team-slack-app.md#the-whole-path-recorded) for a broker with no Slack app of its own: the team brings its own app, and
-the broker serves the ChatConnection the team makes in its namespace. It writes two files:
+the broker serves the ChatConnections of every namespace, the team's included. It writes two files:
 
 - `my-values.yaml`, the platform team's values: comments only, and no key, so the chart renders a broker with no `config.chatConnection` that serves
   the ChatConnections of every namespace. The comments show `config.connectionNamespaces` with the team's namespace in it, and
@@ -142,7 +142,7 @@ administrator. A team that is not one first needs the Roles that let it write it
 
 The platform team's values file holds comments only. With no ChatConnection of its own, no list of namespaces and no selector, the chart
 sets none of `config.chatConnection`, `config.connectionNamespaces` and `config.connectionNamespaceSelector`, and the broker serves the
-ChatConnections of every namespace. To serve `team-a` alone, uncomment `connectionNamespaces`:
+ChatConnections of every namespace. To serve `team-a` alone, uncomment `config:` and `connectionNamespaces`. To admit by label, uncomment `config:` and `connectionNamespaceSelector` with its `matchLabels` line:
 
 ```yaml title="my-values.yaml"
 # A first install of the Agent Kourier Helm chart on custom resources, the chart's default route, for a broker
@@ -153,12 +153,15 @@ ChatConnections of every namespace. To serve `team-a` alone, uncomment `connecti
 # Keep the file: an upgrade passes it again.
 #
 # Nothing is set, so the broker serves the ChatConnections of every namespace. That is a setting for a cluster with one
-# broker. To serve fewer, uncomment one or both of these; a namespace is served if it is on the list or matches the selector.
+# broker: this one would also serve a second broker's connections, its own included, and one Slack app would then have
+# two Socket Mode connections that split its events. To serve fewer, uncomment "config:" and one or both controls under
+# it. A namespace is admitted if it is on the list or its labels match the selector.
 #
 # config:
 #   # The namespaces by name. The broker reads the list at start, so a change restarts it.
 #   connectionNamespaces: [team-a]
-#   # The namespaces by label, followed live: one that gains the label is served with no restart, and one that loses it stops.
+#   # The namespaces by label, followed live: a namespace that gains the label is admitted at the next read, and one
+#   # that loses it stops being admitted.
 #   connectionNamespaceSelector:
 #     matchLabels: {agentkourier.dev/serve: "true"}
 ```

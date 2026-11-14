@@ -566,12 +566,15 @@ const (
 # Keep the file: an upgrade passes it again.
 #
 # Nothing is set, so the broker serves the ChatConnections of every namespace. That is a setting for a cluster with one
-# broker. To serve fewer, uncomment one or both of these; a namespace is served if it is on the list or matches the selector.
+# broker: this one would also serve a second broker's connections, its own included, and one Slack app would then have
+# two Socket Mode connections that split its events. To serve fewer, uncomment "config:" and one or both controls under
+# it. A namespace is admitted if it is on the list or its labels match the selector.
 #
 # config:
 #   # The namespaces by name. The broker reads the list at start, so a change restarts it.
 #   connectionNamespaces: [{{ q .TeamNamespace }}]
-#   # The namespaces by label, followed live: one that gains the label is served with no restart, and one that loses it stops.
+#   # The namespaces by label, followed live: a namespace that gains the label is admitted at the next read, and one
+#   # that loses it stops being admitted.
 #   connectionNamespaceSelector:
 #     matchLabels: {agentkourier.dev/serve: "true"}
 `
