@@ -1,7 +1,8 @@
 """A tiny Streamable HTTP MCP server for the tests: three tools, a bearer check, and a call log.
 
 MCP_TOKEN (env) is the bearer it requires; MCP_CALL_LOG (env) is a JSONL file of every tool event, so a test can
-see what reached the server, when, and whether a call was cancelled. The tests start it as a subprocess on a free port.
+see what reached the server, when, and whether a call was cancelled. The tests start it as a subprocess on a free port,
+and the fast kind tier runs it as a pod for the e2e of the prompt agent, with MCP_HOST=0.0.0.0.
 """
 
 import asyncio
@@ -70,4 +71,5 @@ class RequireBearer:
 app = mcp.http_app(path="/mcp", transport="streamable-http", middleware=[Middleware(RequireBearer)])
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=int(sys.argv[1]), log_level="warning")
+    # Loopback unless MCP_HOST says otherwise: the tier's pod sets 0.0.0.0, so that its Service reaches it.
+    uvicorn.run(app, host=os.environ.get("MCP_HOST", "127.0.0.1"), port=int(sys.argv[1]), log_level="warning")
