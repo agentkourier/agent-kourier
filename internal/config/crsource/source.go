@@ -63,7 +63,7 @@
 // that has not taken effect, stays served at its last good generation as if it were still there, with no word of it in
 // Set.Invalid, and the Binding status finds no object behind it, as for a held one (a ChatConnection while its namespace is
 // admitted and the cap keeps its place, and a Binding while the connection it names is served or is none that exists, so that a Set
-// never holds a Binding without its connection). At the first read that finds nothing newly
+// never holds a Binding whose connection exists and is not in the Set). At the first read that finds nothing newly
 // gone, and no sooner than settleFloor after the last read that did, they take effect together: they are not served, and are
 // kept, not served, for goneGrace more, so that a connection deleted inside that takes them into the hold. A stream of deletions
 // cannot keep an object served for ever: one first found gone goneGrace ago takes effect whatever else is found. A connection
@@ -831,10 +831,12 @@ func (s *Source) serveDeferred(l listing, served servedConnections, set *config.
 	}
 }
 
-// deferredBindingOwned says whether a Binding whose deletion is deferred is still the broker's to serve, as owns says of one that is
-// listed: its connection is served, or is no connection at all. One whose connection exists, listed or gone with its deletion
-// deferred, and is not served (its namespace is no longer admitted, or the cap now leaves it out) is that connection's broker's, and
-// is not served here: a Set never holds a Binding without the connection it names. The caller holds s.mu.
+// deferredBindingOwned says whether a Binding whose deletion is deferred is still the broker's to serve: its connection is served, or
+// is no connection at all. One whose connection exists, listed or gone with its deletion deferred, and is not served (its namespace
+// is no longer admitted, or the cap now leaves it out) is that connection's broker's, and is not served here: a Set never holds a
+// Binding whose connection exists and is not in the Set. It differs from owns, which judges a listed Binding, on one state: a
+// connection that is gone with its deletion deferred counts as existing here and as not existing there, since a Binding that is
+// gone has no one to report to and one that is listed is told the truth, ConnectionNotFound. The caller holds s.mu.
 func (s *Source) deferredBindingOwned(l listing, served servedConnections, g goodObject) bool {
 	ref := refOf(config.KindChatConnection, g.obj, "spec", "chat", "connectionRef")
 	if served.keys[ref] {
