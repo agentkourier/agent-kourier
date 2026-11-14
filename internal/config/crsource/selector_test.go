@@ -341,24 +341,31 @@ func TestADeferredDeletionInANamespaceNoLongerAdmittedTakesNoPlace(t *testing.T)
 	leakCheck(t)
 	objs := corpus(t)
 	old := teamConnection(objs, "old-team", "slack", created.Add(-time.Hour))
-	extra := []*unstructured.Unstructured{old, namespaceObject("old-team", "1", admitLabel, "yes"), namespaceObject("teams", "1", admitLabel, "yes")}
+	onOld := bindingOn(objs, "old-team", "on-old", "old-team", "slack")
+	extra := []*unstructured.Unstructured{old, onOld, namespaceObject("old-team", "1", admitLabel, "yes"), namespaceObject("teams", "1", admitLabel, "yes")}
 	for i := 1; i <= crsource.MaxServedConnections; i++ { // c16 is the youngest, and is left out
 		extra = append(extra, teamConnection(objs, "teams", fmt.Sprintf("c%02d", i), created.Add(time.Duration(i)*time.Hour)))
 	}
 	c := newCluster(t, append(objs, extra...)...)
 	clock := &testClock{now: time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)}
 	src, _ := c.startWith(t, clock, crsource.Options{ConnectionNamespaceSelector: admitSelector})
-	if s, _ := read(t, src); !slices.Contains(connectionNames(s), "old-team/slack") || !slices.Equal(unservedNames(s.UnservedConnections), []string{"teams/c16 cap"}) {
-		t.Fatalf("connections %v, unserved %v; want old-team's served and c16 left out", connectionNames(s), unservedNames(s.UnservedConnections))
+	if s, _ := read(t, src); !slices.Contains(connectionNames(s), "old-team/slack") || !slices.Contains(bindingNames(s), "old-team/on-old") ||
+		!slices.Equal(unservedNames(s.UnservedConnections), []string{"teams/c16 cap"}) {
+		t.Fatalf("connections %v, Bindings %v, unserved %v; want old-team's served with its Binding, and c16 left out",
+			connectionNames(s), bindingNames(s), unservedNames(s.UnservedConnections))
 	}
 
-	until(t, func() { c.remove(old); c.apply(namespaceObject("old-team", "2")) }, func() bool {
+	until(t, func() { c.remove(onOld); c.remove(old); c.apply(namespaceObject("old-team", "2")) }, func() bool {
 		ns := src.CachedNamespaceForTest("old-team")
-		return src.CachedGenerationForTest("ChatConnection", "old-team", "slack") < 0 && ns != nil && ns.GetLabels() == nil
+		return src.CachedGenerationForTest("ChatConnection", "old-team", "slack") < 0 && src.CachedGenerationForTest("Binding", "old-team", "on-old") < 0 &&
+			ns != nil && ns.GetLabels() == nil
 	})
-	s, _ := read(t, src) // the deletion is deferred, but old-team is no longer admitted
+	s, _ := read(t, src) // the deletions are deferred, but old-team is no longer admitted
 	if got := connectionNames(s); slices.Contains(got, "old-team/slack") || !slices.Contains(got, "teams/c16") || len(s.UnservedConnections) != 0 {
 		t.Errorf("connections %v, unserved %v; want old-team's not served and c16 in its place", got, unservedNames(s.UnservedConnections))
+	}
+	if got := bindingNames(s); slices.Contains(got, "old-team/on-old") {
+		t.Errorf("Bindings = %v; want old-team/on-old not served: its connection is not, and a Set never holds a Binding without it", got)
 	}
 }
 
@@ -385,8 +392,9 @@ func TestStartWithoutTheRightToReadNamespaces(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second) // without the probe, Start would wait out its sync
 			defer cancel()
 			err = src.Start(ctx)
-			if !errors.Is(err, crsource.ErrAccessDenied) || !strings.Contains(err.Error(), "namespaces") || errors.Is(err, crsource.ErrCRDsAbsent) {
-				t.Errorf("Start = %v; want ErrAccessDenied naming namespaces", err)
+			if !errors.Is(err, crsource.ErrAccessDenied) || !strings.Contains(err.Error(), "list and watch on namespaces, which the connection namespace selector reads") ||
+				errors.Is(err, crsource.ErrCRDsAbsent) {
+				t.Errorf("Start = %v; want ErrAccessDenied saying that the selector needs list and watch on namespaces", err)
 			}
 		})
 	}
@@ -469,5 +477,171 @@ func TestASetAndItsFingerprintAgreeOnTheAdmittedNamespaces(t *testing.T) {
 	}
 	if len(seen) != 2 {
 		t.Errorf("fingerprints %v; want two, one with team-a admitted and one without", slices.Collect(maps.Keys(seen)))
+	}
+}
+
+// A Binding whose deletion is deferred is served as if it were there only while it is still the broker's: its connection is served,
+// or is no connection that exists. One whose connection is no longer served, because its namespace lost the label or because a newly
+// admitted, older connection pushed it past the cap, is that connection's, and leaves the Set at once with it: a Set never holds a
+// Binding without its connection. One that names no connection that exists stays served until its deletion takes effect.
+func TestADeferredBindingOfAConnectionNoLongerServedIsNotServed(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		binding [2]string // the namespace and name of the Binding deleted
+		extra   func(objs []*unstructured.Unstructured) []*unstructured.Unstructured
+		change  func(c *cluster)
+		changed func(src *crsource.Source) bool
+		served  bool // the Binding is still served at the read after the change
+	}{
+		{
+			name:    "its namespace loses the label",
+			binding: [2]string{"team-a", "on-a"},
+			extra: func(objs []*unstructured.Unstructured) []*unstructured.Unstructured {
+				return []*unstructured.Unstructured{teamConnection(objs, "team-a", "slack", created), bindingOn(objs, "team-a", "on-a", "team-a", "slack"),
+					namespaceObject("team-a", "1", admitLabel, "yes")}
+			},
+			change: func(c *cluster) { c.apply(namespaceObject("team-a", "2")) },
+			changed: func(src *crsource.Source) bool {
+				ns := src.CachedNamespaceForTest("team-a")
+				return ns != nil && ns.GetLabels() == nil
+			},
+		},
+		{
+			name:    "its connection is pushed past the cap",
+			binding: [2]string{"teams", "on-c16"},
+			extra: func(objs []*unstructured.Unstructured) []*unstructured.Unstructured {
+				out := []*unstructured.Unstructured{namespaceObject("teams", "1", admitLabel, "yes"), namespaceObject("older", "1"),
+					teamConnection(objs, "older", "slack", created), bindingOn(objs, "teams", "on-c16", "teams", "c16")}
+				for i := 1; i <= crsource.MaxServedConnections; i++ { // c16 is the youngest, and the 16th place is its own until older is admitted
+					out = append(out, teamConnection(objs, "teams", fmt.Sprintf("c%02d", i), created.Add(time.Duration(i)*time.Hour)))
+				}
+				return out
+			},
+			change: func(c *cluster) { c.apply(namespaceObject("older", "2", admitLabel, "yes")) },
+			changed: func(src *crsource.Source) bool {
+				ns := src.CachedNamespaceForTest("older")
+				return ns != nil && ns.GetLabels()[admitLabel] == "yes"
+			},
+		},
+		{
+			name:    "it names no connection that exists",
+			binding: [2]string{"sre", "dangling"},
+			extra: func(objs []*unstructured.Unstructured) []*unstructured.Unstructured {
+				return []*unstructured.Unstructured{bindingOn(objs, "sre", "dangling", "team-z", "gone"), namespaceObject("team-a", "1", admitLabel, "yes")}
+			},
+			change:  func(*cluster) {},
+			changed: func(*crsource.Source) bool { return true },
+			served:  true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			leakCheck(t)
+			objs := corpus(t)
+			extra := tc.extra(objs)
+			c := newCluster(t, append(objs, extra...)...)
+			clock := &testClock{now: time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)}
+			src, _ := c.startWith(t, clock, crsource.Options{ConnectionNamespaceSelector: admitSelector})
+			name := tc.binding[0] + "/" + tc.binding[1]
+			if s, _ := read(t, src); !slices.Contains(bindingNames(s), name) {
+				t.Fatalf("Bindings = %v, Invalid %+v; want %s served before the change", bindingNames(s), s.Invalid, name)
+			}
+			b := extra[slices.IndexFunc(extra, func(u *unstructured.Unstructured) bool {
+				return u.GetKind() == "Binding" && u.GetNamespace() == tc.binding[0] && u.GetName() == tc.binding[1]
+			})]
+			until(t, func() { c.remove(b); tc.change(c) }, func() bool {
+				return src.CachedGenerationForTest("Binding", tc.binding[0], tc.binding[1]) < 0 && tc.changed(src)
+			})
+			s, _ := read(t, src) // the Binding's deletion is deferred
+			if got := slices.Contains(bindingNames(s), name); got != tc.served {
+				t.Errorf("%s served = %v while its deletion is deferred (Bindings %v, connections %v); want %v", name, got, bindingNames(s), connectionNames(s), tc.served)
+			}
+			for _, bd := range s.Bindings {
+				ref := bd.Spec.Chat.ConnectionRef
+				conn := ref.NamespaceOr(bd.Namespace) + "/" + ref.Name
+				if src.CachedGenerationForTest("ChatConnection", ref.NamespaceOr(bd.Namespace), ref.Name) >= 0 && !slices.Contains(connectionNames(s), conn) {
+					t.Errorf("the Set holds %s/%s without its connection %s, which exists", bd.Namespace, bd.Name, conn)
+				}
+			}
+		})
+	}
+}
+
+// Caches that have not synced publish nothing, the namespace cache too: while it has not synced, though the three kinds' have, Start
+// fails at its context's end, Set fails and Fingerprint says why. An empty namespace cache is not every label removed.
+func TestNothingIsReadBeforeTheNamespaceCacheSyncs(t *testing.T) {
+	leakCheck(t)
+	objs := corpus(t)
+	c := newCluster(t, append(objs, teamConnection(objs, "team-a", "slack", created), namespaceObject("team-a", "1", admitLabel, "yes"))...)
+	var mu sync.Mutex
+	lists, failing := 0, true
+	// A failure and not a held list: the fake client holds its lock while a reactor runs, so a held list would hold the other
+	// informers' lists too, and the test would prove nothing.
+	c.client.PrependReactor("list", "namespaces", func(clienttesting.Action) (bool, runtime.Object, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		lists++
+		if lists > 1 && failing { // the probe passes; the informer's list fails
+			return true, nil, errors.New("the API server is not ready")
+		}
+		return false, nil, nil
+	})
+	src, err := crsource.New(crsource.Options{Client: c.client, ConnectionNamespaceSelector: admitSelector, Logger: slog.New(slog.DiscardHandler)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(src.Stop)
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	defer cancel()
+	if err := src.Start(ctx); !errors.Is(err, crsource.ErrNotSynced) {
+		t.Errorf("Start = %v; want ErrNotSynced: the namespace cache has not synced", err)
+	}
+	until(t, func() {}, func() bool { return src.CachedGenerationForTest("ChatConnection", "team-a", "slack") >= 0 })
+	if s, fp, err := src.Set(t.Context()); !errors.Is(err, crsource.ErrNotSynced) || !strings.HasPrefix(fp, "!") {
+		t.Errorf("Set = connections %v, fingerprint %q, error %v; want ErrNotSynced and a fingerprint that says so", connectionNames(s), fp, err)
+	}
+	mu.Lock()
+	failing = false
+	mu.Unlock()
+	until(t, func() {}, func() bool { _, _, err := src.Set(t.Context()); return err == nil })
+	if s, _ := set(t, src); !slices.Equal(connectionNames(s), []string{"team-a/slack"}) {
+		t.Errorf("connections = %v once the namespace cache has synced; want team-a's", connectionNames(s))
+	}
+}
+
+// While the namespace informer cannot watch (a Role revoked), its cache keeps its last state and the source says it is stale, naming
+// namespaces, as it does for the three kinds: the admitted set and the fingerprint hold.
+func TestStaleWhileTheNamespaceInformerFails(t *testing.T) {
+	leakCheck(t)
+	objs := corpus(t)
+	c := newCluster(t, append(objs, teamConnection(objs, "team-a", "slack", created), namespaceObject("team-a", "1", admitLabel, "yes"))...)
+	var mu sync.Mutex
+	failing, opened := false, 0
+	c.client.PrependWatchReactor("namespaces", func(clienttesting.Action) (bool, watch.Interface, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		opened++
+		if opened > 1 && failing { // the probe's watch is the first
+			return true, nil, apierrors.NewForbidden(namespaces.GroupResource(), "", errors.New("RBAC revoked"))
+		}
+		return false, nil, nil
+	})
+	src, err := crsource.New(crsource.Options{Client: c.client, ConnectionNamespaceSelector: admitSelector, Logger: slog.New(slog.DiscardHandler)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	failing = true
+	mu.Unlock()
+	t.Cleanup(src.Stop)
+	if err := src.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	_, fp := set(t, src)
+	until(t, func() {}, func() bool { return src.Stale() != nil })
+	if err := src.Stale(); !strings.HasPrefix(err.Error(), "namespaces: ") || !apierrors.IsForbidden(err) {
+		t.Errorf("Stale = %v; want the namespace informer's forbidden watch, naming namespaces", err)
+	}
+	if s, got := set(t, src); !slices.Equal(connectionNames(s), []string{"team-a/slack"}) || got != fp {
+		t.Errorf("connections %v while stale, fingerprint moved %v; want team-a's kept and the fingerprint as it was", connectionNames(s), got != fp)
 	}
 }
