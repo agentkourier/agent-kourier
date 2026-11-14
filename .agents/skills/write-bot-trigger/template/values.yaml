@@ -1,0 +1,16 @@
+# The same Binding as template/files, for the Helm chart's values. Merge it into your values file: each entry is
+# keyed by its name and holds the resource's spec. Replace every replace-me and CREPLACEME; the write-bot-trigger
+# skill writes the trigger. Until it does, the Binding has no trigger and answers mentions only.
+config:
+  bindings:
+    replace-me:
+      spec:
+        agent:
+          backendRef: { name: replace-me }
+          name: replace-me
+          namespace: replace-me
+        identity: { userId: replace-me }
+        chat:
+          connectionRef: { name: slack }
+          channel: CREPLACEME
+          triggers: []
