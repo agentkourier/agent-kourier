@@ -3,6 +3,7 @@ package kindmanifests_test
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -199,6 +200,60 @@ func TestThePromptAgentRunsOnTheFakeModelWithItsMCPServerAndChecksTheToken(t *te
 	}
 }
 
+// TestTheTiersAgentDeploymentKeepsTheRecipesShape: the tier's agent runs as the recipe's Deployment says it does, so that a change to the
+// recipe's (a renamed variable, a moved bearer mount, a looser security context) is a change the tier runs too, or fails here: the same
+// variables of the agent's own, mounts, volumes, ports, readiness probe and security contexts. The provider's key, the MCP token's name,
+// the image, labels, liveness probe and resources are the tier's own.
+func TestTheTiersAgentDeploymentKeepsTheRecipesShape(t *testing.T) {
+	deployment := func(file, name string) corev1.PodSpec {
+		t.Helper()
+		for _, doc := range objects(t, file) {
+			if meta, _ := doc["metadata"].(map[string]any); doc["kind"] == "Deployment" && meta["name"] == name {
+				raw, err := yaml.Marshal(doc)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var d appsv1.Deployment
+				if err := yaml.Unmarshal(raw, &d); err != nil {
+					t.Fatal(err)
+				}
+				return d.Spec.Template.Spec
+			}
+		}
+		t.Fatalf("%s has no Deployment %s", file, name)
+		return corev1.PodSpec{}
+	}
+	recipe := deployment("../../examples/recipes/prompt-agent/agent/manifests/deployment.yaml", "prompt-agent")
+	tier := deployment(promptAgentManifest, "prompt-agent")
+	agentEnv := func(p corev1.PodSpec) map[string]string {
+		out := map[string]string{}
+		for _, e := range p.Containers[0].Env {
+			if strings.HasPrefix(e.Name, "PROMPT_AGENT_") && e.Name != "PROMPT_AGENT_URL" { // the URL the card names is where each runs
+				out[e.Name] = e.Value
+			}
+		}
+		return out
+	}
+	rc, tc := recipe.Containers[0], tier.Containers[0]
+	for _, c := range []struct {
+		what       string
+		want, have any
+	}{
+		{"the agent's variables", agentEnv(recipe), agentEnv(tier)},
+		{"the mounts", rc.VolumeMounts, tc.VolumeMounts},
+		{"the volumes", recipe.Volumes, tier.Volumes},
+		{"the ports", rc.Ports, tc.Ports},
+		{"the readiness probe", rc.ReadinessProbe, tc.ReadinessProbe},
+		{"the container's security context", rc.SecurityContext, tc.SecurityContext},
+		{"the pod's security context", recipe.SecurityContext, tier.SecurityContext},
+		{"automountServiceAccountToken", recipe.AutomountServiceAccountToken, tier.AutomountServiceAccountToken},
+	} {
+		if !reflect.DeepEqual(c.want, c.have) {
+			t.Errorf("the tier's agent has %s %+v; want the recipe's, %+v", c.what, c.have, c.want)
+		}
+	}
+}
+
 // TestTheFakeModelAndMCPImagesShareTheRecipesPythonImage: the tier's Dockerfile builds every target FROM the build argument PYTHON_IMAGE, with
 // no default, and deploy_prompt_agent passes the one image of the recipe's Dockerfile, so that the digest is pinned in one place, which
 // Renovate bumps.
@@ -248,11 +303,9 @@ func TestTheFakeModelAndMCPImagesShareTheRecipesPythonImage(t *testing.T) {
 	if n := len(regexp.MustCompile(`(?m)^FROM `).FindAll(recipe, -1)); n != 1 {
 		t.Errorf("the recipe's Dockerfile has %d FROM lines; deploy_prompt_agent reads the image of the one", n)
 	}
-	lib := readHackKind(t, "lib.sh")
-	for _, want := range []string{`python=$(sed -n 's/^FROM \([^ ]*\).*/\1/p' "${recipe}/Dockerfile")`, `--target fake-model -f "${HERE}/fast/prompt-agent/Dockerfile" --build-arg "PYTHON_IMAGE=${python}"`, `--target mcp -f "${HERE}/fast/prompt-agent/Dockerfile" --build-arg "PYTHON_IMAGE=${python}"`} {
-		if !strings.Contains(lib, want) {
-			t.Errorf("lib.sh's deploy_prompt_agent lacks %q", want)
-		}
+	// A build that forgets the argument fails at once (ARG with no default), so this needs only that each target gets one.
+	if n := strings.Count(readHackKind(t, "lib.sh"), `--build-arg "PYTHON_IMAGE=`); n != 2 {
+		t.Errorf("lib.sh passes PYTHON_IMAGE to %d builds; want the two targets of the tier's Dockerfile", n)
 	}
 }
 

@@ -11,8 +11,6 @@ request alone (no state of its own):
 - anything else: "Messages from you in this conversation: N. The first: <first>", which only the history can tell.
 
 Text streams a word at a time, FAKE_MODEL_DELAY seconds apart (0.02 unless set), so a reply arrives as many appends.
-kagent-dev/mockllm, the full tier's model, streams tool calls too, but it matches the last message alone, and so
-cannot answer from the history.
 """
 
 import json

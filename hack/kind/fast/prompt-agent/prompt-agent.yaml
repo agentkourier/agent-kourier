@@ -8,8 +8,10 @@
 # sends and the agent checks, also made in namespace agent-kourier for the Binding; prompt-agent-mcp (key token), the MCP server's bearer,
 # which the agent sends as agent.yaml says.
 #
-# The agent's Deployment is the recipe's (manifests/deployment.yaml), with this tier's model and MCP server in place of Anthropic's and the
-# runbooks server: model openai-chat:fake with OPENAI_BASE_URL at the fake. Every Service is ClusterIP, published nowhere.
+# The agent's Deployment is modelled on the recipe's (manifests/deployment.yaml): the same variables of the agent, mounts, readiness probe
+# and security contexts, which test/kindmanifests holds equal, with this tier's model and MCP server in place of Anthropic's and the
+# runbooks server (model openai-chat:fake with OPENAI_BASE_URL at the fake), the tier's image and labels, and no liveness probe or
+# resources. Every Service is ClusterIP, published nowhere.
 apiVersion: v1
 kind: ConfigMap
 metadata:

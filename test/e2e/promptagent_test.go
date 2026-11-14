@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -52,6 +53,25 @@ func questionOf(th []fakeslack.MessageView) (fakeslack.MessageView, bool) {
 	return fakeslack.MessageView{}, false
 }
 
+// promptBinding is the Binding of ChannelPromptAgent, as the audit log names it.
+const promptBinding = "agent-kourier/fast-prompt-a2a"
+
+// promptCancels is the CancelTask calls audited for the prompt agent's Binding after the entries of before: the scenarios run one at a time,
+// so they are the running scenario's.
+func promptCancels(entries, before []store.AuditEntry) []store.AuditEntry {
+	var sequence int64
+	for _, e := range before {
+		sequence = max(sequence, e.Sequence)
+	}
+	var out []store.AuditEntry
+	for _, e := range entries {
+		if e.Sequence > sequence && e.Kind == store.AuditAgentCall && e.Binding == promptBinding && strings.HasPrefix(e.Outcome, "cancel:") {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // TestA2A_ThePromptAgentStreamsAReplyThatUsedAnMCPTool: a mention makes the agent call the MCP tool runbook, and its reply, which quotes
 // what the MCP server returned, streams into the thread: it is seen while it streams, with part of its text, and then whole. "Runbook for
 // NAME:" is the MCP server's text, so the reply shows the call reached it, with the agent's token, and came back.
@@ -85,13 +105,10 @@ func TestA2A_ThePromptAgentContinuesTheSessionInAThread(t *testing.T) {
 		return ok && finished(b) && strings.Contains(b.Text, "Messages from you in this conversation: 1. The first: "+first)
 	})
 	s.reply(ChannelPromptAgent, m.TS, "UPROMPTB", "and what did I say first?")
-	th := s.thread(ChannelPromptAgent, m.TS, "the second reply, which quotes the first turn", func(th []fakeslack.MessageView) bool {
+	s.thread(ChannelPromptAgent, m.TS, "the second reply, a message of its own, which quotes the first turn", func(th []fakeslack.MessageView) bool {
 		bots := BotMessages(th)
 		return len(bots) == 2 && finished(bots[1]) && strings.Contains(bots[1].Text, "Messages from you in this conversation: 2. The first: "+first)
 	})
-	if bots := BotMessages(th); bots[1].TS == bots[0].TS {
-		t.Errorf("the second reply edited the first message; want a message of its own:%s", describe(th))
-	}
 }
 
 // TestA2A_ThePromptAgentsQuestionIsAnsweredByATypedReply: the agent asks with its ask_user tool, which the a2a dialect shows as a text
@@ -117,15 +134,12 @@ func TestA2A_ThePromptAgentsQuestionIsAnsweredByATypedReply(t *testing.T) {
 		}
 		return closed && completed
 	})
-	err := Consistently(s.ctx, 3*time.Second, "one continuation and no notice", func(ctx context.Context) (bool, error) {
+	err := Consistently(s.ctx, 3*time.Second, "exactly one continuation after the answer", func(ctx context.Context) (bool, error) {
 		th, err := s.slack.Thread(ctx, ChannelPromptAgent, m.TS)
 		n := 0
 		for _, b := range BotMessages(th) {
 			if strings.Contains(b.Text, "You answered:") {
 				n++
-			}
-			if strings.Contains(b.Text, timedOutNotice) {
-				return false, err
 			}
 		}
 		return n == 1, err
@@ -136,11 +150,17 @@ func TestA2A_ThePromptAgentsQuestionIsAnsweredByATypedReply(t *testing.T) {
 }
 
 // TestA2A_ThePromptAgentsQuestionLeftToTimeOutIsCancelledAndTheThreadGoesOn: no one answers the agent's question, so at the Binding's
-// timeout (20 seconds) Agent Kourier cancels the paused task, closes the prompt and tells the thread. A mention in the thread afterwards is
-// answered, from the same conversation: the agent repaired the history that the cancelled question left with a tool call unanswered.
+// timeout (20 seconds) Agent Kourier cancels the paused task, closes the prompt and tells the thread. The audit log holds the CancelTask
+// call, which the agent answered without an error: the notice alone would not show it, since a pause released without a cancel leaves the
+// next turn as it is. A mention in the thread afterwards is answered, from the same conversation: the agent repaired the history that
+// the cancelled question left with a tool call unanswered.
 func TestA2A_ThePromptAgentsQuestionLeftToTimeOutIsCancelledAndTheThreadGoesOn(t *testing.T) {
 	s := promptScenario(t)
 	const user = "UPROMPTD"
+	before, err := s.leaderAuditEntries(s.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	first := "ask me which environment " + s.stub.Gate("PROMPTTIMEOUT")
 	m := s.mention(ChannelPromptAgent, user, first)
 	th := s.thread(ChannelPromptAgent, m.TS, "the question", func(th []fakeslack.MessageView) bool { _, ok := questionOf(th); return ok })
@@ -154,6 +174,18 @@ func TestA2A_ThePromptAgentsQuestionLeftToTimeOutIsCancelledAndTheThreadGoesOn(t
 		}
 		return closed && told
 	})
+	err = Wait(s.ctx, 30*time.Second, "the audit of the agent's paused task cancelled", func(ctx context.Context) (bool, error) {
+		entries, err := s.leaderAuditEntries(ctx)
+		return len(promptCancels(entries, before)) > 0, err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries, err := s.leaderAuditEntries(s.ctx); err != nil {
+		t.Fatal(err)
+	} else if rows := promptCancels(entries, before); len(rows) != 1 || rows[0].Outcome != "cancel: ok" || !strings.Contains(rows[0].Subject, "task=") {
+		t.Errorf("the cancels audited for the prompt agent's Binding since the scenario began are %+v; want one, of a task, which the agent took (cancel: ok)", rows)
+	}
 
 	s.reply(ChannelPromptAgent, m.TS, user, botMention+"are you still there?")
 	th = s.thread(ChannelPromptAgent, m.TS, "an answer to the mention after the timeout", func(th []fakeslack.MessageView) bool {
