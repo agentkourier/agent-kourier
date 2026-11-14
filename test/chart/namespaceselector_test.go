@@ -3,6 +3,7 @@ package chart_test
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -145,6 +146,72 @@ func TestDefaultsWithNoConfigServeEveryNamespace(t *testing.T) {
 	}
 	if got := secretRoles(t, objs); len(got) != 0 {
 		t.Errorf("Secret Roles %v; want none (each team grants its own)", got)
+	}
+}
+
+// TestSelectorInValuesFiles: Helm merges maps across values files, so a selector in a later -f file does not replace an earlier one: {}
+// leaves it as it was, and another selector is merged into it, which ANDs the two (a list, matchExpressions, is replaced). A file that sets
+// it to null before the new one clears it, and --set-json key=value replaces it; --set-json's whole-object form merges, as a file does. The values.yaml comment and the docs say so; this pins it. With nothing earlier, one file's {} is {}.
+func TestSelectorInValuesFiles(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	dir := t.TempDir()
+	file := func(name, body string) string {
+		p := filepath.Join(dir, name+".yaml")
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	teamA := file("team-a", "config:\n  connectionNamespaceSelector:\n    matchLabels: {team: a}\n")
+	everything := file("everything", "config:\n  connectionNamespaceSelector: {}\n")
+	tierB := file("tier-b", "config:\n  connectionNamespaceSelector:\n    matchLabels: {tier: b}\n")
+	cleared := file("cleared", "config:\n  connectionNamespaceSelector: null\n")
+	tierExists := file("tier-exists", "config:\n  connectionNamespaceSelector:\n    matchExpressions: [{key: tier, operator: Exists}]\n")
+	noTeam := file("no-team", "config:\n  connectionNamespaceSelector:\n    matchExpressions: [{key: team, operator: DoesNotExist}]\n")
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"{} in one file over the default", []string{"-f", everything}, `{}`},
+		{"{} in a later file keeps the earlier selector", []string{"-f", teamA, "-f", everything}, `{"matchLabels":{"team":"a"}}`},
+		{"a selector in a later file is merged into the earlier one", []string{"-f", teamA, "-f", tierB}, `{"matchLabels":{"team":"a","tier":"b"}}`},
+		{"matchExpressions in a later file replaces the earlier list", []string{"-f", tierExists, "-f", noTeam}, `{"matchExpressions":[{"key":"team","operator":"DoesNotExist"}]}`},
+		{"null in a file between them clears the earlier selector", []string{"-f", teamA, "-f", cleared, "-f", tierB}, `{"matchLabels":{"tier":"b"}}`},
+		{"null in a file between them, then {}", []string{"-f", teamA, "-f", cleared, "-f", everything}, `{}`},
+		{"--set-json {} replaces a file's selector", []string{"-f", teamA, "--set-json", "config.connectionNamespaceSelector={}"}, `{}`},
+		{"--set-json's whole-object form merges, as a file does", []string{"-f", teamA, "--set-json", `{"config":{"connectionNamespaceSelector":{}}}`}, `{"matchLabels":{"team":"a"}}`},
+		{"--set-json replaces a file's selector", []string{"-f", teamA, "--set-json", `config.connectionNamespaceSelector={"matchLabels":{"tier":"b"}}`}, `{"matchLabels":{"tier":"b"}}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			args := append(crMode("--set", "image.repository=agent-kourier,config.source=crds"), tc.args...)
+			got, has := podEnv(deployment(t, mustRender(t, "agent-kourier", "rel-ns", args...)))[selectorKey]
+			if !has || got != tc.want {
+				t.Errorf("%s = %q (set: %v); want %s", selectorKey, got, has, tc.want)
+			}
+		})
+	}
+}
+
+// TestNullChatConnectionsServeEveryNamespace: config.chatConnections set to null, as --set config.chatConnections=null does, is no entry: with
+// nothing else set the broker serves every namespace, as with the default {}, and the render is the default's.
+func TestNullChatConnectionsServeEveryNamespace(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	base := []string{"--set", "image.repository=agent-kourier"}
+	want, err := render(t.Context(), t, "agent-kourier", "agent-kourier", base...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := render(t.Context(), t, "agent-kourier", "agent-kourier", append(slices.Clone(base), "--set", "config.chatConnections=null")...)
+	if err != nil {
+		t.Fatalf("config.chatConnections=null: %v; want it to render every namespace", err)
+	}
+	if got != want {
+		t.Errorf("config.chatConnections=null changes the render:\n%s", firstDifference(want, got))
 	}
 }
 

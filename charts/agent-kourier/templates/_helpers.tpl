@@ -97,10 +97,11 @@ with two or more entries there is no guess to make, and the render fails. Empty 
 {{- define "agentkourier.chatConnection" -}}
 {{- $ref := .Values.config.chatConnection -}}
 {{- if and (not $ref) (not .Values.config.connectionNamespaces) (not (include "agentkourier.connectionNamespaceSelector" .)) -}}
-{{- if gt (len .Values.config.chatConnections) 1 -}}
-{{- fail (printf "config.source crds (the chart's default unless your values set it) needs config.chatConnection: the namespace/name of the one ChatConnection this broker serves as its own, and config.chatConnections has %d entries. A cluster may hold the connections of several brokers, so an entry is read as the own connection only when it is the only one. A broker with no connection of its own leaves config.chatConnection empty and admits the namespaces whose ChatConnections it serves: by name in config.connectionNamespaces, or by label in config.connectionNamespaceSelector; with both unset and no entry in config.chatConnections it serves the ChatConnections of every namespace. To supply the config as a ConfigMap instead, set config.source: files; https://agentkourier.dev/how-to/install-with-helm/ describes both routes" (len .Values.config.chatConnections)) -}}
+{{- $entries := default (dict) .Values.config.chatConnections -}}
+{{- if gt (len $entries) 1 -}}
+{{- fail (printf "config.source crds (the chart's default unless your values set it) needs config.chatConnection: the namespace/name of the one ChatConnection this broker serves as its own, and config.chatConnections has %d entries. A cluster may hold the connections of several brokers, so an entry is read as the own connection only when it is the only one. A broker with no connection of its own leaves config.chatConnection empty and admits the namespaces whose ChatConnections it serves: by name in config.connectionNamespaces, or by label in config.connectionNamespaceSelector; with both unset and no entry in config.chatConnections it serves the ChatConnections of every namespace. To supply the config as a ConfigMap instead, set config.source: files; https://agentkourier.dev/how-to/install-with-helm/ describes both routes" (len $entries)) -}}
 {{- end -}}
-{{- range $name, $r := .Values.config.chatConnections -}}
+{{- range $name, $r := $entries -}}
 {{- $ref = printf "%s/%s" (default $.Release.Namespace $r.namespace) $name -}}
 {{- end -}}
 {{- else if and $ref (not (contains "/" $ref)) -}}
