@@ -1,7 +1,8 @@
 # Pull requests and pushes to main: the checks `make` runs locally, nothing else. `make test` is
 # test-race, test-testhooks and test-scripts in turn; here they are jobs of their own, which run side by side,
 # because the two race passes alone outlast one job's budget on a runner of this size. make test-postgres, which make
-# test does not run, is a job of its own too. Nothing is retried or skipped. The kind tiers (make e2e-fast and the
+# test does not run, is a job of its own too. Nothing is retried. test-testhooks runs only the packages the testhooks
+# tag changes, as its comment explains; nothing else is skipped. The kind tiers (make e2e-fast and the
 # others) are not here; RELEASING.md says what they would need. The one job that uses kind is crd-corpus, whose cluster
 # has only the CRDs.
 name: ci
@@ -127,9 +128,10 @@ jobs:
           key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
   # The ./internal/... packages whose test build the testhooks tag changes, built with the tag: those with a file the tag
-  # selects or drops, and those whose code or tests reach one. hack/ci/testhooks-packages.sh computes the list with go
-  # list on each run, so a package that gains such an import joins it, and fails rather than run an empty one. Every
-  # other package compiles to the same test binary with the tag as without it, so the first pass has already run it.
+  # selects or drops, test files included, and those whose code or tests reach, in any module, a package whose
+  # importers compile other files under the tag. hack/ci/testhooks-packages.sh computes the list with go list on each
+  # run, so a package that gains such an import joins it, and fails rather than run an empty one. Every other package
+  # compiles to the same packages with the tag as without it, so the first pass has already run it.
   # It has no chart tests, so no helm. 30 is the same budget as the first pass, whose build it repeats in part.
   test-testhooks:
     runs-on: ubuntu-26.04

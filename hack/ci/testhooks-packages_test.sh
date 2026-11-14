@@ -8,8 +8,9 @@ SCRIPT=${HERE}/testhooks-packages.sh
 MOD=example.com/fixture
 
 # The fixture module is not this repository's, so neither a go.work above the temporary directory nor this job's
-# GOFLAGS may reach it.
+# GOFLAGS may reach it. The selector's default build flags (-race) apply unless a case sets its own.
 export GOWORK=off GOFLAGS=
+unset TESTHOOKS_BUILD_FLAGS
 
 TMP=$(mktemp -d)
 trap 'rm -rf "${TMP}"' EXIT
@@ -47,7 +48,14 @@ select_in() {
 #   internal/transitive imports direct, so reaches hooked through it
 #   internal/viatest    imports hooked only from a _test.go file
 #   internal/viaxtest   imports hookedoff only from an external (package x_test) test file
-#   internal/viacmd     imports, from its test, a package outside the pattern that has a tagged test file
+#   internal/viacmd     imports, from its test, other/hookedtest, whose tagged test file no importer compiles
+#   internal/testonly   has a tagged _test.go file (as internal/outbox), which selects only itself
+#   internal/testonlyuser imports testonly in its code, so is not selected
+#   internal/onlytag    has only files the tag selects, so a `...` pattern matches it only under the tag
+#   internal/racy       has a file only `testhooks && race` selects: the pass's -race decides it
+#   internal/raceuser   imports racy
+#   internal/raceonly   has only `testhooks && race` files, so the pattern matches it only with -race too
+#   internal/usesdep    imports example.com/dep, a dependency module (replaced by ../dep) with a tagged file
 #   internal/bridge     imports leaf only from a file the tag selects
 #   internal/user       imports bridge from its test, so its test build under the tag reaches leaf
 #   internal/leaf       has no tagged file and imports nothing: a tag-only import of it does not select it
@@ -81,6 +89,30 @@ write "${M}" internal/viacmd/viacmd.go 'package viacmd' '' 'func Name() string {
 write "${M}" internal/viacmd/viacmd_test.go 'package viacmd' '' \
   'import (' '	"testing"' '' "	\"${MOD}/other/hookedtest\"" ')' '' \
   'func TestName(t *testing.T) { _ = hookedtest.Name() }'
+write "${M}" internal/testonly/testonly.go 'package testonly' '' 'const Name = "testonly"'
+write "${M}" internal/testonly/on_test.go '//go:build testhooks' '' 'package testonly' '' \
+  'import "testing"' '' 'func TestOn(t *testing.T) {}'
+write "${M}" internal/testonlyuser/testonlyuser.go 'package testonlyuser' '' \
+  "import \"${MOD}/internal/testonly\"" '' 'const Name = testonly.Name'
+write "${M}" internal/testonlyuser/testonlyuser_test.go 'package testonlyuser' '' 'import "testing"' '' \
+  'func TestName(t *testing.T) { _ = Name }'
+write "${M}" internal/onlytag/onlytag.go '//go:build testhooks' '' 'package onlytag' '' 'const Name = "onlytag"'
+write "${M}" internal/onlytag/onlytag_test.go '//go:build testhooks' '' 'package onlytag' '' \
+  'import "testing"' '' 'func TestName(t *testing.T) { _ = Name }'
+write "${M}" internal/racy/racy.go 'package racy' '' 'const Name = "racy"'
+write "${M}" internal/racy/racy_hooks.go '//go:build testhooks && race' '' 'package racy' '' 'const On = true'
+write "${M}" internal/raceuser/raceuser.go 'package raceuser' '' "import \"${MOD}/internal/racy\"" '' \
+  'const Name = racy.Name'
+write "${M}" internal/raceonly/raceonly.go '//go:build testhooks && race' '' 'package raceonly'
+write "${M}" internal/raceonly/raceonly_test.go '//go:build testhooks && race' '' 'package raceonly' '' \
+  'import "testing"' '' 'func TestOn(t *testing.T) {}'
+D=${TMP}/dep
+mkdir -p "${D}"
+write "${D}" go.mod 'module example.com/dep' '' 'go 1.21'
+write "${D}" dep.go 'package dep' '' 'const Name = "dep"'
+write "${D}" on.go '//go:build testhooks' '' 'package dep' '' 'const On = true'
+write "${M}" go.mod "module ${MOD}" '' 'go 1.21' '' 'require example.com/dep v0.0.0' '' 'replace example.com/dep => ../dep'
+write "${M}" internal/usesdep/usesdep.go 'package usesdep' '' 'import "example.com/dep"' '' 'const Name = dep.Name'
 write "${M}" internal/leaf/leaf.go 'package leaf' '' 'const Leaf = "leaf"'
 write "${M}" internal/leaf/leaf_test.go 'package leaf' '' 'import "testing"' '' 'func TestLeaf(t *testing.T) {}'
 write "${M}" internal/bridge/bridge.go 'package bridge' '' 'func Name() string { return "bridge" }'
@@ -103,7 +135,7 @@ write "${M}" internal/plain/plain.go 'package plain' '' 'import "strings"' '' \
 write "${M}" internal/plain/plain_test.go 'package plain' '' 'import "testing"' '' \
   'func TestName(t *testing.T) { _ = Name() }'
 
-echo "== the packages the tag changes, and those that reach one from code or tests, are selected; leaf and plain are not"
+echo "== the packages the tag changes, and those that reach one from code or tests, are selected; the rest are not"
 got=$(select_in "${M}" ./internal/...)
 want="internal/base
 internal/bridge
@@ -111,12 +143,23 @@ internal/direct
 internal/hooked
 internal/hookedoff
 internal/hookuser
+internal/onlytag
+internal/raceonly
+internal/raceuser
+internal/racy
+internal/testonly
 internal/transitive
 internal/user
-internal/viacmd
+internal/usesdep
 internal/viatest
 internal/viaxtest"
 [ "${got}" = "${want}" ] || fail "selected [${got}], want [${want}]"
+echo "ok"
+
+echo "== the build flags decide which files the tag changes: without -race, the race packages drop out"
+got=$(TESTHOOKS_BUILD_FLAGS='' select_in "${M}" ./internal/...)
+want_norace=$(printf '%s\n' "${want}" | grep -vx -e internal/raceonly -e internal/raceuser -e internal/racy)
+[ "${got}" = "${want_norace}" ] || fail "without -race selected [${got}], want [${want_norace}]"
 echo "ok"
 
 echo "== the default pattern is ./internal/..."

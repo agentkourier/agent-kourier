@@ -21,8 +21,12 @@ test: test-race test-testhooks test-scripts ## Run all the unit tests: with the 
 test-race: ## Run unit tests with the race detector (the chart tests need helm; AGENTKOURIER_REQUIRE_HELM=1 fails without it)
 	go test -race -timeout 20m ./...
 
-test-testhooks: ## Run with the race detector and the testhooks tag the internal packages whose test build the tag changes (hack/ci/testhooks-packages.sh); the others build as in test-race, which ran them
-	pkgs=$$(hack/ci/testhooks-packages.sh ./internal/...) && go test -race -timeout 20m -tags testhooks $$pkgs
+# The testhooks pass's build flags besides -tags. The selector lists packages under the same ones: they select files too.
+TESTHOOKS_BUILD_FLAGS := -race
+
+test-testhooks: ## Run with the race detector and the testhooks tag the internal packages whose test build the tag changes (hack/ci/testhooks-packages.sh); the others compile as in test-race, which ran them
+	pkgs=$$(TESTHOOKS_BUILD_FLAGS='$(TESTHOOKS_BUILD_FLAGS)' hack/ci/testhooks-packages.sh ./internal/...) && \
+		go test $(TESTHOOKS_BUILD_FLAGS) -timeout 20m -tags testhooks $$pkgs
 
 test-scripts: ## Run kind, security policy, release gate, PR label, CI tool installer and testhooks package selection tests (no cluster)
 	hack/kind/netpol_test.sh
