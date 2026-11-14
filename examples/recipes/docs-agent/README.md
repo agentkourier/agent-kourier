@@ -262,7 +262,8 @@ never enter the other agent's context.
 
 1. Make the model Secret in `kagent` (step 2, with `-n kagent`), replace the image and `MODEL_NAME` in
    `kagent/docs-agent.yaml`, and apply it with `kagent/networkpolicy.yaml`. kagent runs the image as a BYO Agent: a
-   Deployment and a Service named `docs-agent` on port 8080.
+   Deployment and a Service named `docs-agent` on port 8080 (kagent 0.9.4's behaviour, read in its source and seen on
+   a cluster).
 2. Add the tool to the agent that owns the channel:
 
    ```yaml
@@ -278,13 +279,14 @@ never enter the other agent's context.
 
 kagent 0.9 speaks A2A 0.3, and the docs agent speaks 1.0, so `kagent/docs-agent.yaml` sets `A2A_V03_URL`. With it set,
 the agent also serves A2A 0.3 JSON-RPC at `POST /` and a 0.3-shaped card at `/.well-known/agent-card.json` that names
-`A2A_V03_URL` as its endpoint: kagent's readiness probe reads that card, and so does the calling agent before it sends
-the question. `A2A_V03_URL` must be the root of the agent's own Service (`http://docs-agent.kagent:8080/` here); the
-agent refuses to start if its path is anything but `/`. Without it, the root serves nothing and the agent speaks only
+`A2A_V03_URL` as its endpoint. In kagent 0.9.4 (read in its source, not in this repository) the BYO readiness probe
+reads that card, and so does the calling agent before it sends the question to the card's URL. `A2A_V03_URL` must be the
+root of the agent's own Service (`http://docs-agent.kagent:8080/` here); the agent refuses to start if its path is
+anything but empty or `/`. The 1.0 card at `/a2a` still names only `PUBLIC_URL`. Without it, the root serves nothing and the agent speaks only
 A2A 1.0 at `/a2a`, as in the rest of this recipe. Both versions share the agent's conversations and tasks.
 
-In Slack, the call shows as one step card named after kagent's tool (`kagent__NS__docs_agent`), and then the owning
-agent's answer.
+In Slack, the call shows as one step card named after kagent's tool for it (`kagent__NS__docs_agent` with kagent 0.9.4,
+as seen in a Slack thread), and then the owning agent's answer.
 
 **The documentation as tools.** The agent that owns the channel calls `search_docs` and `read_page` itself.
 `kagent/docs-mcp.yaml` runs `/docs-mcp`, which is in the same image, as a Deployment and a Service on port 8090, and
@@ -420,7 +422,8 @@ them, for a person to read the agent's answers against.
   the 200 conversations above.
 - **Under kagent, the answer arrives whole.** kagent calls the sub-agent with a blocking `message/send`, so nothing of the
   answer streams to Slack: the step card for the call stays open until the docs agent has finished. How long kagent
-  waits is its own default (the Agent resource does not set it in 0.9.4); it was not measured here.
+  waits is its own default: kagent 0.9.4's Agent resource has no setting for it (read in its source), and the value was
+not measured here.
 - **Two model providers, over HTTPS.** OpenRouter and OpenAI-compatible endpoints, through the Chat Completions API.
   `MODEL_BASE_URL` must be an `https` URL, so an in-cluster `http` gateway needs a TLS front.
 - **Not run in a cluster, and not against a live model, by the checks in this repository.** The live-model smoke and an

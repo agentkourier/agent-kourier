@@ -50,6 +50,19 @@ of the question.`
 // DefaultSubject is what the documentation is about unless Config.Subject says otherwise.
 const DefaultSubject = "Agent Kourier"
 
+// CheckV03URL applies the rule for Config.V03URL: an absolute http or https URL with no credentials, query or fragment,
+// whose path is empty or /, because the 0.3 endpoint is served at the root. The error never quotes the URL.
+func CheckV03URL(raw string) error {
+	u, err := urlcheck.HTTP(raw)
+	if err != nil {
+		return err
+	}
+	if u.Path != "" && u.Path != "/" {
+		return errors.New("must name the server's root (path empty or /): the A2A 0.3 endpoint is served at /")
+	}
+	return nil
+}
+
 // Instruction returns the agent's system prompt for documentation about subject, such as "Agent Kourier".
 func Instruction(subject string) string {
 	return strings.ReplaceAll(instructionTemplate, "{{subject}}", subject)
@@ -105,12 +118,8 @@ func New(cfg Config) (http.Handler, error) {
 		return nil, fmt.Errorf("docsagent: PublicURL %w", err)
 	}
 	if cfg.V03URL != "" {
-		u, err := urlcheck.HTTP(cfg.V03URL)
-		if err != nil {
+		if err := CheckV03URL(cfg.V03URL); err != nil {
 			return nil, fmt.Errorf("docsagent: V03URL %w", err)
-		}
-		if u.Path != "" && u.Path != "/" {
-			return nil, errors.New("docsagent: V03URL must name the server's root: the 0.3 endpoint is served at /")
 		}
 	}
 	subject := cmp.Or(cfg.Subject, DefaultSubject)
@@ -150,10 +159,12 @@ func New(cfg Config) (http.Handler, error) {
 	requests := a2asrv.NewHandler(executor, a2asrv.WithTaskStore(newBoundedTasks(cmp.Or(cfg.MaxTasks, defaultMaxTasks))))
 	mux := http.NewServeMux()
 	if cfg.V03URL != "" {
+		// The 0.3 card is a copy that names only the 0.3 endpoint; the 1.0 card at /a2a stays as it is.
 		v03 := a2a.NewAgentInterface(cfg.V03URL, a2a.TransportProtocolJSONRPC)
 		v03.ProtocolVersion = a2av0.Version
-		card.SupportedInterfaces = append(card.SupportedInterfaces, v03)
-		mux.Handle("GET /.well-known/agent-card.json", a2asrv.NewAgentCardHandler(a2av0.NewStaticAgentCardProducer(card)))
+		v03Card := *card
+		v03Card.SupportedInterfaces = []*a2a.AgentInterface{v03}
+		mux.Handle("GET /.well-known/agent-card.json", a2asrv.NewAgentCardHandler(a2av0.NewStaticAgentCardProducer(&v03Card)))
 		mux.Handle("POST /{$}", a2av0.NewJSONRPCHandler(requests))
 	}
 	mux.Handle("/a2a/.well-known/agent-card.json", a2asrv.NewStaticAgentCardHandler(card))

@@ -74,7 +74,7 @@ func settingsFromEnv(getenv func(string) string) (settings, error) {
 		return settings{}, fmt.Errorf("PUBLIC_URL %w", err)
 	}
 	if s.v03URL != "" {
-		if _, err := urlcheck.HTTP(s.v03URL); err != nil {
+		if err := docsagent.CheckV03URL(s.v03URL); err != nil {
 			return settings{}, fmt.Errorf("A2A_V03_URL %w", err)
 		}
 	}
