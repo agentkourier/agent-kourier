@@ -150,6 +150,15 @@ which in its `connection_admission` field ([Check it](install-with-helm.md#check
     `a namespace is admitted by the connection namespace selector: its ChatConnections are served, up to the limit` with the namespace's name.
     To start admitting by label, set the selector and upgrade the release once; the chart renders it as `AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR`.
 
+    To change the selector later, mind that Helm merges a map across values files: a selector in a later `-f` file does not replace
+    one in an earlier file. `{}` there keeps the earlier selector, and another selector's `matchLabels` are added to the earlier ones, so a
+    namespace must match both (a `matchExpressions` list replaces the earlier list). Edit the one file that sets the selector, give the
+    new one with `--set-json` in its `key=value` form (`--set-json 'config.connectionNamespaceSelector={}'` replaces it; the whole-object
+    form, `--set-json '{"config":{...}}'`, merges as a file does), or set it to `null` in a file before the one with the new selector.
+    `helm upgrade --reuse-values` and `--reset-then-reuse-values` keep the release's selector and merge a new one into it, given with
+    `--set-json` or after a `null` too (with `--reset-then-reuse-values` a `null` alone clears it, which with no own connection and no list
+    is every namespace): upgrade with neither, passing all your values files.
+
 - **Both (`list+selector`).** A namespace is admitted if it is on the list or its labels match the selector, so either way above admits it.
 
 - **Its own connection alone (`own`).** The broker has a connection of its own and neither a list nor a selector: set one of them as above.

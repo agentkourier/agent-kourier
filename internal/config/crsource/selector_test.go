@@ -92,6 +92,8 @@ func logLines(logs *logSink, parts ...string) int {
 const (
 	admittedMsg    = "a namespace is admitted by the connection namespace selector"
 	notAdmittedMsg = "a namespace is no longer admitted by the connection namespace selector"
+	// namespaceInformerMsg is the warning of a failed list or watch of the namespace informer.
+	namespaceInformerMsg = "namespace informer of the connection namespace selector cannot list or watch namespaces"
 )
 
 // A namespace that gains the selector's label is admitted at the next read: its ChatConnection and the Bindings on it are in the Set,
@@ -609,7 +611,8 @@ func TestNothingIsReadBeforeTheNamespaceCacheSyncs(t *testing.T) {
 }
 
 // While the namespace informer cannot watch (a Role revoked), its cache keeps its last state and the source says it is stale, naming
-// namespaces, as it does for the three kinds: the admitted set and the fingerprint hold.
+// namespaces, as it does for the three kinds: the admitted set and the fingerprint hold. The warning names namespaces and the selector,
+// not the custom resources.
 func TestStaleWhileTheNamespaceInformerFails(t *testing.T) {
 	leakCheck(t)
 	objs := corpus(t)
@@ -625,7 +628,8 @@ func TestStaleWhileTheNamespaceInformerFails(t *testing.T) {
 		}
 		return false, nil, nil
 	})
-	src, err := crsource.New(crsource.Options{Client: c.client, ConnectionNamespaceSelector: admitSelector, Logger: slog.New(slog.DiscardHandler)})
+	logs := &logSink{}
+	src, err := crsource.New(crsource.Options{Client: c.client, ConnectionNamespaceSelector: admitSelector, Logger: slog.New(slog.NewTextHandler(logs, nil))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -643,5 +647,8 @@ func TestStaleWhileTheNamespaceInformerFails(t *testing.T) {
 	}
 	if s, got := set(t, src); !slices.Equal(connectionNames(s), []string{"team-a/slack"}) || got != fp {
 		t.Errorf("connections %v while stale, fingerprint moved %v; want team-a's kept and the fingerprint as it was", connectionNames(s), got != fp)
+	}
+	if logLines(logs, "level=WARN", namespaceInformerMsg, "RBAC revoked") == 0 || logLines(logs, "custom resource informer") != 0 {
+		t.Errorf("want the failure logged as the namespace informer's, not a custom resource informer's:\n%s", logs.String())
 	}
 }
