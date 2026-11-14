@@ -151,7 +151,7 @@ func TestDefaultsWithNoConfigServeEveryNamespace(t *testing.T) {
 
 // TestSelectorInValuesFiles: Helm merges maps across values files, so a selector in a later -f file does not replace an earlier one: {}
 // leaves it as it was, and another selector is merged into it, which ANDs the two (a list, matchExpressions, is replaced). A file that sets
-// it to null before the new one clears it, and --set-json replaces it. The values.yaml comment and the docs say so; this pins it. With nothing earlier, one file's {} is {}.
+// it to null before the new one clears it, and --set-json key=value replaces it; --set-json's whole-object form merges, as a file does. The values.yaml comment and the docs say so; this pins it. With nothing earlier, one file's {} is {}.
 func TestSelectorInValuesFiles(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
@@ -181,6 +181,7 @@ func TestSelectorInValuesFiles(t *testing.T) {
 		{"null in a file between them clears the earlier selector", []string{"-f", teamA, "-f", cleared, "-f", tierB}, `{"matchLabels":{"tier":"b"}}`},
 		{"null in a file between them, then {}", []string{"-f", teamA, "-f", cleared, "-f", everything}, `{}`},
 		{"--set-json {} replaces a file's selector", []string{"-f", teamA, "--set-json", "config.connectionNamespaceSelector={}"}, `{}`},
+		{"--set-json's whole-object form merges, as a file does", []string{"-f", teamA, "--set-json", `{"config":{"connectionNamespaceSelector":{}}}`}, `{"matchLabels":{"team":"a"}}`},
 		{"--set-json replaces a file's selector", []string{"-f", teamA, "--set-json", `config.connectionNamespaceSelector={"matchLabels":{"tier":"b"}}`}, `{"matchLabels":{"tier":"b"}}`},
 	}
 	for _, tc := range tests {

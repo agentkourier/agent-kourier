@@ -142,10 +142,12 @@ config:
   # connectionNamespaceSelector: {matchLabels: {agentkourier.dev/serve: "true"}} admits the namespaces labelled agentkourier.dev/serve=true.
   # Helm merges a map across values files, so a selector in a later -f file does not replace one in an earlier file: {} there keeps the
   # earlier selector, and another selector's matchLabels are added to the earlier ones, so a namespace must match both (a matchExpressions
-  # list replaces the earlier list). To change the selector, edit the one file that sets it, give the new one with --set-json (which
-  # replaces it), or set it to null in a file before the one with the new selector. helm upgrade --reuse-values keeps the release's
-  # selector and merges a new one into it, given with --set-json or after a null too: upgrade without --reuse-values, passing all your
-  # values files.
+  # list replaces the earlier list). To change the selector, edit the one file that sets it, give the new one with
+  # --set-json 'config.connectionNamespaceSelector=...' (which replaces it; the whole-object form, --set-json '{"config":{...}}', merges
+  # as a file does), or set it to null in a file before the one with the new selector. helm upgrade --reuse-values and
+  # --reset-then-reuse-values keep the release's selector and merge a new one into it, given with --set-json or after a null too (with
+  # --reset-then-reuse-values a null alone clears it, which with no own connection and no list is every namespace): upgrade with neither,
+  # passing all your values files.
   connectionNamespaceSelector: null
   existingConfigMap: ""
   agentBackends: {}

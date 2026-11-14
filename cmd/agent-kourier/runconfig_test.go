@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"k8s.io/apimachinery/pkg/labels"
+
+	"github.com/agentkourier/agent-kourier/internal/broker"
 )
 
 // runConfig hands what the environment says to the broker. The admission fields matter most: with no own connection, a list or a
@@ -33,11 +35,16 @@ func TestRunConfigCarriesTheEnvironment(t *testing.T) {
 		"a selector, no own":         with(selectorKey, sel),
 		"{}, no own":                 with(selectorKey, "{}"),
 		"own, a list and a selector": with("AGENTKOURIER_CHAT_CONNECTION", "platform/slack", "AGENTKOURIER_CONNECTION_NAMESPACES", "team-a", selectorKey, sel),
+		"postgres, with a selector": with("AGENTKOURIER_STORE", "postgres", "AGENTKOURIER_POSTGRES_DSN_SECRET", "agent-kourier/pg/dsn",
+			"AGENTKOURIER_LEASE_NAMESPACE", "agent-kourier", "AGENTKOURIER_LEASE_NAME", "agent-kourier-leader", "AGENTKOURIER_POD_NAME", "agent-kourier-0", selectorKey, sel),
 	} {
 		t.Run(name, func(t *testing.T) {
 			c, err := loadEnv(e.get)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if e["AGENTKOURIER_STORE"] == "postgres" && (c.store == (broker.StoreConfig{}) || c.election == (broker.ElectionConfig{})) {
+				t.Fatalf("store %+v, election %+v; want both set from the environment, or the comparisons below prove nothing", c.store, c.election)
 			}
 			got := c.runConfig()
 			if got.ConfigSource != c.configSource || got.ChatConnection != c.chatConnection {
