@@ -82,7 +82,7 @@ func (c RunConfig) newPlatform(conn Connection, log *slog.Logger, onConnection f
 	name := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
 	if conn.Platform == v1alpha1.PlatformSlack { // a second platform is one more case here, and one more entry in platformKeys
 		transport := http.DefaultTransport.(*http.Transport).Clone()
-		sc := slackConfig(conn, log)
+		sc := c.slackConfig(conn, log)
 		sc.HTTPClient = &http.Client{Transport: telemetry.Transport(transport, false), Timeout: cmp.Or(c.slackHTTPTimeout, slackAPITimeout)}
 		sc.OnConnection = onConnection
 		var api slack.API
@@ -98,13 +98,13 @@ func (c RunConfig) newPlatform(conn Connection, log *slog.Logger, onConnection f
 
 // slackConfig is the Slack client's config for conn. Its API URL comes from testhooks.SlackAPIURL and
 // from nothing else: that is "" in a production build, so the bot token can only be sent to Slack,
-// and a test image sets it to reach the fake.
-func slackConfig(conn Connection, log *slog.Logger) slack.Config {
+// and a test image sets it to reach the fake (a unit test, through c.hooks).
+func (c RunConfig) slackConfig(conn Connection, log *slog.Logger) slack.Config {
 	// AuthzTimeout is what a press is given for its membership checks, whose callers have no deadline.
 	cfg := slack.Config{BotToken: conn.Credentials["botToken"], AppToken: conn.Credentials["appToken"], Logger: log, AuthzTimeout: interact.PressAuthzTimeout,
 		// The connection label of the series the adapter records (see slack.Config.Connection).
 		Connection: v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)}
-	if url := testhooks.SlackAPIURL(); url != "" {
+	if url := testhooks.SlackAPIURL(c.hooks); url != "" {
 		cfg.APIURL = url
 	}
 	return cfg

@@ -404,6 +404,7 @@ func TestARunServesTheOlderOfTwoConnectionsOfOneSlackAppAndTellsTheOthersBinding
 	runsAlongside(&w.c)
 	cluster := newStatusClusterOn(w.dyn)
 	w.c.StatusClient = cluster.dyn
+	paceStatusQuickly(&w.c)
 	w.ids["tok-a"] = w.ids[ownToken] // team-a's bot is the own connection's app
 	w.team("team-a", "tok-a")
 	w.team("team-b", "tok-b")

@@ -45,7 +45,9 @@ func withPersonTrigger(t *testing.T, dir string) {
 // status is never set, and carries the rating buttons of an answer on a Binding with feedback.enabled and the line that a
 // follow-up needs a mention. In that thread a reply without a mention is no turn, and the next mentioned reply carries it.
 func TestRunAPersonsMessageIsTheirTurnAndItsThreadTakesOnlyMentions(t *testing.T) {
+	t.Parallel()
 	a := newAlerts(t)
+	runsAlongside(&a.cfg)
 	withPersonTrigger(t, a.cfg.ConfigDir)
 	a.run(t)
 

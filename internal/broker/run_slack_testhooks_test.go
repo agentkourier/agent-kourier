@@ -96,9 +96,9 @@ func newSlackWorld(t *testing.T, botToken string) *slackWorld {
 	stub := stubagent.New()
 	t.Cleanup(stub.Close)
 	stub.Agent("kagent", "k8s-agent").Reply(func(string) []stubagent.Step { return []stubagent.Step{stubagent.Text("the answer")} })
-	t.Setenv(testhooks.SlackAPIURLEnv, fake.URL()+"/")
 
 	c := startConfig(t)
+	c.hooks.SlackAPIURL = fake.URL() + "/" // not the environment, so that worlds can run alongside each other
 	be := filepath.Join(c.ConfigDir, "agentbackend.yaml")
 	raw, err := os.ReadFile(be)
 	if err != nil {
@@ -140,14 +140,18 @@ func (w *slackWorld) mention(t *testing.T, r *running) {
 // The real Slack client, against the fake, takes the gauge from 0 to 1 once Socket Mode is connected, which is what the
 // sandbox's up script waits for.
 func TestRunShowsTheSlackConnectionUpOnceItIsConnected(t *testing.T) {
+	t.Parallel()
 	w := newSlackWorld(t, "xoxb-fake-bot")
+	runsAlongside(&w.cfg)
 	r := start(t, w.cfg)
 
 	r.waitMetric(`agentkourier_chat_connected{connection="agent-kourier-system/slack-main"} 1`)
 }
 
 func TestRunCountsACredentialTheAgentRejected(t *testing.T) {
+	t.Parallel()
 	w := rejectedWorld(t)
+	runsAlongside(&w.cfg)
 	r := start(t, w.cfg)
 
 	w.mention(t, r)
@@ -163,7 +167,9 @@ func (failingAudit) AppendAudit(context.Context, store.AuditEntry) error {
 }
 
 func TestRunCountsAnAuditWriteThatFailed(t *testing.T) {
+	t.Parallel()
 	w := rejectedWorld(t) // a rejected credential is audited
+	runsAlongside(&w.cfg)
 	w.cfg.auditStore = func(s store.Audit) store.Audit { return failingAudit{s} }
 	r := start(t, w.cfg)
 
@@ -175,9 +181,12 @@ func TestRunCountsAnAuditWriteThatFailed(t *testing.T) {
 // The output mode of the Binding's spec is what the sink is told of a turn, from the config file to the
 // TurnRef: live Bindings stream, and final ones post once when the turn ends (live.Sink).
 func TestRunTellsTheSinkTheBindingsOutputMode(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []v1alpha1.OutputMode{v1alpha1.OutputFinal, v1alpha1.OutputLive} {
 		t.Run(string(mode), func(t *testing.T) {
+			t.Parallel()
 			w := newSlackWorld(t, "xoxb-fake-bot")
+			runsAlongside(&w.cfg)
 			file := filepath.Join(w.cfg.ConfigDir, "binding.yaml")
 			raw, err := os.ReadFile(file)
 			if err != nil {
@@ -291,7 +300,9 @@ func TestRunStopsTheTapFirstWithAPauseInFlight(t *testing.T) {
 // press of its Submit button goes through the handler, the pipeline and the worker to the decider, which
 // sends the answer on: the agent continues with it, and the decision is counted. Run builds every part.
 func TestRunTakesAPauseToAPromptAndAPressToTheAgent(t *testing.T) {
+	t.Parallel()
 	w := askWorld(t)
+	runsAlongside(&w.cfg)
 	r := start(t, w.cfg)
 	w.mention(t, r)
 
@@ -309,7 +320,9 @@ func TestRunTakesAPauseToAPromptAndAPressToTheAgent(t *testing.T) {
 // A Binding that does not allow questions has the pause refused, through the intake's session, which is
 // bound to the manager once that is built: the thread is told, and the task is cancelled.
 func TestRunRefusesAQuestionOnABindingThatAllowsNone(t *testing.T) {
+	t.Parallel()
 	w := askWorld(t)
+	runsAlongside(&w.cfg)
 	file := filepath.Join(w.cfg.ConfigDir, "binding.yaml")
 	raw, err := os.ReadFile(file)
 	if err != nil {
@@ -329,7 +342,9 @@ func TestRunRefusesAQuestionOnABindingThatAllowsNone(t *testing.T) {
 // With no sink of its own, Run renders turns itself, through the Slack client and its own outbox: the
 // agent's answer ends up in the thread.
 func TestRunPostsTheAgentsAnswerThroughItsOwnRenderer(t *testing.T) {
+	t.Parallel()
 	w := newSlackWorld(t, "xoxb-fake-bot")
+	runsAlongside(&w.cfg)
 	w.cfg.sink = nil
 	r := start(t, w.cfg)
 
@@ -368,7 +383,9 @@ func (a *mentionAudit) outcomes() []string {
 // context lines that mention the person, through Run's own renderer and outbox, and the audit log says so. The prompt told
 // the agent the name.
 func TestRunNotifiesADeclaredPersonAfterTheReply(t *testing.T) {
+	t.Parallel()
 	w := newSlackWorld(t, "xoxb-fake-bot")
+	runsAlongside(&w.cfg)
 	w.cfg.sink = nil
 	binding := filepath.Join(w.cfg.ConfigDir, "binding.yaml")
 	raw, err := os.ReadFile(binding)
@@ -418,7 +435,9 @@ func TestRunNotifiesADeclaredPersonAfterTheReply(t *testing.T) {
 // A thread that has expired is told so by the notice the intake raises, which Run connects to the same
 // sink as the turns' output: here the notice is what the test's sink is handed.
 func TestRunConnectsTheIntakesNoticesToTheSink(t *testing.T) {
+	t.Parallel()
 	w := newSlackWorld(t, "xoxb-fake-bot")
+	runsAlongside(&w.cfg)
 	r := start(t, w.cfg)
 	w.mention(t, r)
 	select {
@@ -480,7 +499,9 @@ func TestRunTakesAMentionFromSlackThroughTheSessionToTheAgent(t *testing.T) {
 // agent holds the turn, so the reaction can be read before it is taken off. The real renderer is used, because the
 // reaction is raised by the session's notices, which the recording sink of the other worlds swallows.
 func TestRunReactsToAMentionWithThePlatformsOwnReactionWhenTheBindingNamesNone(t *testing.T) {
+	t.Parallel()
 	w := newSlackWorld(t, "xoxb-fake-bot")
+	runsAlongside(&w.cfg)
 	w.cfg.sink = nil
 	hold := make(chan struct{})
 	w.stub.Agent("kagent", "k8s-agent").Reply(func(string) []stubagent.Step {
@@ -519,7 +540,9 @@ func waitConnected(t *testing.T, f *fakeslack.Server) {
 
 // A rejected token ends Run with ErrSlackAuth, which cmd/agent-kourier exits 1 on: no retry can mend it.
 func TestRunExitsWithSlackAuthWhenTheBotTokenIsRejected(t *testing.T) {
+	t.Parallel()
 	w := newSlackWorld(t, "wrong-bot-token") // the fake accepts only well-formed tokens
+	runsAlongside(&w.cfg)
 	r := start(t, w.cfg)
 
 	err := r.wait()
@@ -535,11 +558,16 @@ func TestRunExitsWithSlackAuthWhenTheBotTokenIsRejected(t *testing.T) {
 func TestSlackConfigTakesItsAPIURLFromTestHooksWhenSet(t *testing.T) {
 	conn := Connection{}
 	t.Setenv(testhooks.SlackAPIURLEnv, "http://fake-slack.test/")
-	if got := slackConfig(conn, nil).APIURL; got != "http://fake-slack.test/" {
+	if got := (RunConfig{}).slackConfig(conn, nil).APIURL; got != "http://fake-slack.test/" {
 		t.Errorf("APIURL = %q in a testhooks build with %s set, want it", got, testhooks.SlackAPIURLEnv)
 	}
+	// A unit test's override wins over the environment.
+	overridden := RunConfig{hooks: testhooks.Overrides{SlackAPIURL: "http://own-fake.test/"}}
+	if got := overridden.slackConfig(conn, nil).APIURL; got != "http://own-fake.test/" {
+		t.Errorf("APIURL = %q with an override and %s set, want the override", got, testhooks.SlackAPIURLEnv)
+	}
 	t.Setenv(testhooks.SlackAPIURLEnv, "")
-	if got := slackConfig(conn, nil).APIURL; got != "" {
+	if got := (RunConfig{}).slackConfig(conn, nil).APIURL; got != "" {
 		t.Errorf("APIURL = %q with %s empty, want Slack's own (empty)", got, testhooks.SlackAPIURLEnv)
 	}
 }
@@ -548,12 +576,14 @@ func TestSlackConfigTakesItsAPIURLFromTestHooksWhenSet(t *testing.T) {
 // as Slack is out of reach (the broker's own run found the loss: RunPlatform waits and runs the adapter again), and the gauge goes
 // back to 1 when the connection is back, which then delivers a mention to a turn as before.
 func TestRunShowsTheConnectionDownWhileASocketCannotBeReopenedAndUpAgain(t *testing.T) {
+	t.Parallel()
 	const up = `agentkourier_chat_connected{connection="agent-kourier-system/slack-main"} `
 	w := newSlackWorld(t, "xoxb-fake-bot")
+	runsAlongside(&w.cfg)
 	gate := &reconnectGate{inner: w.fake}
 	srv := httptest.NewServer(gate)
 	t.Cleanup(srv.Close)
-	t.Setenv(testhooks.SlackAPIURLEnv, srv.URL+"/")
+	w.cfg.hooks.SlackAPIURL = srv.URL + "/"
 	r := start(t, w.cfg)
 	r.waitMetric(up + "1")
 

@@ -15,16 +15,17 @@ import (
 )
 
 // TestMC_ABrokerWithNoOwnConnectionServesTheTeams is the scenario of a broker that has no ChatConnection of its own (spec D53): the Deployment has no
-// AGENTKOURIER_CHAT_CONNECTION, and the broker serves the ChatConnections of the namespaces in AGENTKOURIER_CONNECTION_NAMESPACES, each as a team's.
+// AGENTKOURIER_CHAT_CONNECTION, and the broker serves the ChatConnections of the namespaces it admits, each as a team's: those of
+// AGENTKOURIER_CONNECTION_NAMESPACES, or every namespace when neither the list nor a selector is set, or the selector is {} (spec D54).
 // hack/kind/two-apps.sh (make e2e-two-apps) runs it in three phases between Helm upgrades (the admission list and the variable are read at start, so
-// each change is an upgrade and a rollout), and it skips without one. The script checks, for each phase, that the Deployment has no own connection
+// each change is an upgrade and a rollout), and it skips without one; it runs platform-admitted again on every namespace, both ways. The script checks, for each phase, that the Deployment has no own connection
 // and what the platform's Bindings say, which the runner has no right to read.
 //
 //	no-own             config.chatConnection is empty and the list is the tier's team namespaces. The platform's ChatConnection (the broker's own until
 //	                   now) is not on the list, so it is not served: its app has no client, a mention of its bot gets no reply, and the leader has no
 //	                   connection series for it, and counts its Bindings under ConnectionNotServed. team-a's connection is served and answers through its
 //	                   app. Every replica is Ready, a standby included, and one leads although no connection of its own is up.
-//	platform-admitted  the platform's namespace is put on the list. The same connection is served as a team connection: it is up, its Binding is ready
+//	platform-admitted  the platform's namespace is put on the list, or every namespace is admitted. The same connection is served as a team connection: it is up, its Binding is ready
 //	                   and answers through the platform's app, no Binding is counted under ConnectionNotServed, and team-a's goes on answering.
 //	takeover           on two replicas, in the state of platform-admitted: the leader's container is killed and the replica that takes over serves every
 //	                   team connection, both apps with their one client, both Bindings answering, and every replica Ready.
@@ -42,11 +43,16 @@ func TestMC_ABrokerWithNoOwnConnectionServesTheTeams(t *testing.T) {
 	if err := CheckTier(env.Tier); err != nil {
 		t.Fatal(err)
 	}
-	if env.Tier != "fast" || env.ConfigSource != "crds" || !env.Admits(kube.MultiTeamNamespace) {
-		t.Fatalf("phase %s runs in the fast tier on custom resources with team-a's namespace on the admission list, brought up with E2E_TWO_APPS=1; this one is tier %s, config source %s, admitted namespaces %q", env.Phase, env.Tier, env.ConfigSource, env.ConnectionNamespaces)
+	teamA, errA := env.Admits(kube.MultiTeamNamespace)
+	platform, errP := env.Admits(kube.AgentKourierNamespace)
+	if err := errors.Join(errA, errP); err != nil {
+		t.Fatal(err)
 	}
-	if want := env.Phase != "no-own"; env.Admits(kube.AgentKourierNamespace) != want {
-		t.Fatalf("phase %s with the admission list %q: the platform's namespace %s should be on it only after phase no-own", env.Phase, env.ConnectionNamespaces, kube.AgentKourierNamespace)
+	if env.Tier != "fast" || env.ConfigSource != "crds" || env.ChatConnection != "" || !teamA {
+		t.Fatalf("phase %s runs in the fast tier on custom resources, with no own connection and team-a's namespace admitted, brought up with E2E_TWO_APPS=1; this one is tier %s, %s", env.Phase, env.Tier, env.Admission())
+	}
+	if want := env.Phase != "no-own"; platform != want {
+		t.Fatalf("phase %s with the admission %s: the platform's namespace %s should be admitted only after phase no-own", env.Phase, env.Admission(), kube.AgentKourierNamespace)
 	}
 	switch env.Phase {
 	case "no-own":

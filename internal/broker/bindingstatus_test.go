@@ -1352,6 +1352,22 @@ func TestNothingIsWrittenBeforeTheConfigHasLoaded(t *testing.T) {
 	}
 }
 
+// A writer given no timings, which is what Run gives it unless a test sets RunConfig.statusTimes, runs on its defaults
+// (statusGap and statusTick are on the limits page); one given timings keeps them.
+func TestTheStatusWriterTakesItsDefaultTimingsWhereNoneAreGiven(t *testing.T) {
+	zero := newStatusRigWith(t, newStatusCluster(t), nil, func(c *statusConfig) { c.Gap, c.Tick, c.Slow, c.Timeout = 0, 0, 0, 0 }).w.cfg
+	if zero.Gap != statusGap || zero.Tick != statusTick || zero.Slow != statusSlow || zero.Timeout != statusTimeout {
+		t.Errorf("Gap, Tick, Slow, Timeout = %s, %s, %s, %s; want the defaults %s, %s, %s, %s", zero.Gap, zero.Tick, zero.Slow, zero.Timeout,
+			statusGap, statusTick, statusSlow, statusTimeout)
+	}
+	given := newStatusRigWith(t, newStatusCluster(t), nil, func(c *statusConfig) {
+		c.Gap, c.Tick, c.Slow, c.Timeout = time.Millisecond, 2*time.Millisecond, 3*time.Millisecond, 4*time.Millisecond
+	}).w.cfg
+	if given.Gap != time.Millisecond || given.Tick != 2*time.Millisecond || given.Slow != 3*time.Millisecond || given.Timeout != 4*time.Millisecond {
+		t.Errorf("Gap, Tick, Slow, Timeout = %s, %s, %s, %s; want the ones given", given.Gap, given.Tick, given.Slow, given.Timeout)
+	}
+}
+
 // The loop reconciles when it is told and at each tick, and ends with its context, with nothing left of it.
 func TestRunWritesWhenToldAndEndsWithItsContext(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {

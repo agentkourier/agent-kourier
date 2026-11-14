@@ -1,6 +1,7 @@
 # The platform's admission list for the tier with two Slack apps (E2E_TWO_APPS=1 in up-fast.sh): an overlay on crds-values.yaml, which lib.sh's
 # deploy_agentkourier layers over it in the same upgrade. The broker serves the ChatConnections of these namespaces beside its own (slack-fast);
 # listing a namespace is the platform's consent to what is created there. team-a holds a connection from the start (hack/kind/fast/two-apps), and the
-# MC_ tests create one in team-b and one in team-c. hack/kind/two-apps.sh changes this list with Helm (--set config.connectionNamespaces).
+# MC_ tests create one in team-b and one in team-c. hack/kind/two-apps.sh changes this list with Helm (--set config.connectionNamespaces), and empties it for
+# its steps with a namespace selector and with every namespace.
 config:
   connectionNamespaces: [team-a, team-b, team-c]
