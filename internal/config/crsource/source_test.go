@@ -32,6 +32,7 @@ var (
 	bindings    = schema.GroupVersionResource{Group: v1alpha1.Group, Version: v1alpha1.Version, Resource: "bindings"}
 	backends    = schema.GroupVersionResource{Group: v1alpha1.Group, Version: v1alpha1.Version, Resource: "agentbackends"}
 	connections = schema.GroupVersionResource{Group: v1alpha1.Group, Version: v1alpha1.Version, Resource: "chatconnections"}
+	namespaces  = schema.GroupVersionResource{Version: "v1", Resource: "namespaces"}
 )
 
 var own = v1alpha1.ObjectRef{Namespace: sourcetest.ConnectionNamespace, Name: sourcetest.ConnectionName}
@@ -68,12 +69,14 @@ func gvrOf(t *testing.T, u *unstructured.Unstructured) schema.GroupVersionResour
 		return backends
 	case "ChatConnection":
 		return connections
+	case "Namespace":
+		return namespaces
 	}
 	t.Fatalf("unknown kind %q", u.GetKind())
 	return schema.GroupVersionResource{}
 }
 
-// cluster is a fake API server with the three resources.
+// cluster is a fake API server with the three resources, and namespaces.
 type cluster struct {
 	t      *testing.T
 	client *dynamicfake.FakeDynamicClient
@@ -87,7 +90,7 @@ func newCluster(t *testing.T, objs ...*unstructured.Unstructured) *cluster {
 	}
 	c := &cluster{t: t}
 	c.client = dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
-		bindings: "BindingList", backends: "AgentBackendList", connections: "ChatConnectionList",
+		bindings: "BindingList", backends: "AgentBackendList", connections: "ChatConnectionList", namespaces: "NamespaceList",
 	}, rt...)
 	return c
 }

@@ -13,15 +13,22 @@
 //
 // # What it reads
 //
-// The broker may have an own ChatConnection, named in Options, and may be admitted to the namespaces of Options.ConnectionNamespaces
-// (spec D52). The connections it serves are the own, if it has one, and every ChatConnection of an admitted namespace, up to
-// maxServedConnections (see there for the rule); the Set holds those and no others. It also holds the Bindings whose connectionRef names a served
-// connection, or names no connection that exists (so that some broker reports it). A Binding that names another existing
-// connection, one of a namespace that is not admitted among them, belongs to the broker that serves that one, and is not in the
-// Set and not reported here. So is a Binding of a connection that the cap leaves out: until a status says so, nobody reports it.
-// Without ConnectionNamespaces the served set is the own connection alone, and without both it is empty. If the own connection is
-// deleted while the broker runs, the Set keeps the last good generation of it, and says so in Set.Invalid. A connection of an
-// admitted namespace is held by nothing: it is any other object (see "The hold").
+// The broker may have an own ChatConnection, named in Options, and is admitted to namespaces by Options.ConnectionNamespaces, a fixed
+// list, and Options.ConnectionNamespaceSelector, which matches namespaces by their labels (spec D52, D54). The connections it serves are
+// the own, if it has one, and every ChatConnection of an admitted namespace, up to maxServedConnections (see there for the rule); the Set
+// holds those and no others. It also holds the Bindings whose connectionRef names a served connection, or names no connection that
+// exists (so that some broker reports it). A Binding that names another existing connection, one of a namespace that is not admitted
+// among them, belongs to the broker that serves that one, and is not in the Set and not reported here. So is a Binding of a connection
+// that the cap leaves out: until a status says so, nobody reports it. Without a list or a selector the served set is the own connection
+// alone, and without an own connection either it is every namespace's, as it is with an empty selector (the rule is on
+// Options.ConnectionNamespaceSelector). If the own connection is deleted while the broker runs, the Set keeps the last good generation of
+// it, and says so in Set.Invalid. A connection of an admitted namespace is held by nothing: it is any other object (see "The hold").
+//
+// The list is read once, by New. A selector is read live, from an informer on namespaces that keeps each one's name and labels: each
+// read admits the namespaces that match it then, so a namespace that gains a matching label is admitted at the next read, and one that
+// loses it, or is deleted, is not, its connection and the Bindings on it leaving the Set at that read as another broker's would. The
+// source says each such change once, at Info, with the namespace's name. ConnectionBindings still finds the Bindings of a connection
+// that is no longer admitted.
 //
 // # Unknown fields
 //
@@ -73,13 +80,15 @@
 //
 // Fingerprint is the sorted uid and metadata.generation of every object, never resourceVersion: a status write bumps
 // resourceVersion and not generation, and a source that moved with it would start a reload, a probe pass and a status write
-// for every status write.
+// for every status write. With a selector it is also the sorted names of the admitted namespaces, so that a label that admits a
+// namespace, or stops admitting one, starts a reload at the next poll; a write to a namespace that changes no admission (another
+// label, a new resourceVersion) does not move it.
 //
-// Set reads every object from one listing of the three caches, and returns that listing's fingerprint: the Set is the state
-// the fingerprint names, however long the decoding takes and whatever the caches do meanwhile. That is what lets a
-// config.Reloader that is PerObject publish a read without checking that the source held still while it was made: an edit that
-// landed after the listing is not in the Set, and is found at the next poll, which compares the fingerprint of the caches with
-// that of the read. A tenant that edits an object in a loop gets, at most, a reload at each poll, each one read behind.
+// Set reads every object from one listing of the three caches, and the admitted namespaces with it, and returns that listing's
+// fingerprint: the Set is the state the fingerprint names, however long the decoding takes and whatever the caches do meanwhile.
+// That is what lets a config.Reloader that is PerObject publish a read without checking that the source held still while it was
+// made: an edit that landed after the listing is not in the Set, and is found at the next poll, which compares the fingerprint of
+// the caches with that of the read. A tenant that edits an object in a loop gets, at most, a reload at each poll, each one read behind.
 // The three caches are listed one after another, Bindings first, and not at one instant, so a Set can hold objects of
 // different kinds from slightly different moments. Each object in it is a whole object of its cache, and what an edit that
 // landed between the lists changed is found at the next poll too, as it is for any edit after the listing.
@@ -99,21 +108,23 @@
 // # RBAC
 //
 // The ServiceAccount needs list and watch on bindings, agentbackends and chatconnections of agentkourier.dev, in every
-// namespace (a ClusterRole), and nothing else for this source; it never issues a get. Start lists each kind once and opens
-// and closes a watch on it before it starts the informers, so that a missing CRD or a missing right is a clear error at
-// start and not an informer that retries for ever.
+// namespace (a ClusterRole), and, with a selector that is not empty, list and watch on namespaces, and nothing else for this
+// source; it never issues a get. With no selector, or an empty one ("all"), it reads no namespace. Start lists each resource once
+// and opens and closes a watch on it before it starts the informers, so that a missing CRD or a missing right is a clear error at
+// start (ErrCRDsAbsent, ErrAccessDenied) and not an informer that retries for ever.
 //
 // # Staleness
 //
-// The caches are kept while the API server cannot be reached, which is right: an outage is not every object removed. Stale
-// says that they may lag. Two things feed it. A probe lists one object of each kind every 30 s, with a 10 s timeout, and
+// The caches are kept while the API server cannot be reached, which is right: an outage is not every object removed, and for
+// the namespace cache not every label removed, so a namespace stays admitted as it was. Stale says that they may lag. Two things
+// feed it. A probe lists one object of each kind, and one namespace with a selector, every 30 s, with a 10 s timeout, and
 // is the only thing that sees an outage: client-go's reflector retries a refused or throttled watch without telling anyone,
 // and turns a timeout or an end of stream into an empty watch, so a cut connection reaches no handler. The probe's verdict
 // is exact: it is stale from the first failed probe to the first good one. The informers' own error handler adds what does
 // reach it, a list or watch the API server answers with an error status such as forbidden after a Role is revoked, for 90 s
-// after the report. The probe is three small lists per 30 s on the source's own client, so it shares that client's rate
-// limiter with the three informers: 0.1 requests a second, against the limit of 5 that client-go gives a client that sets
-// none.
+// after the report. The probe is three small lists per 30 s (four with a selector) on the source's own client, so it shares that
+// client's rate limiter with the informers: about 0.1 requests a second, against the limit of 5 that client-go gives a client
+// that sets none.
 package crsource
 
 import (
@@ -134,6 +145,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -150,9 +162,10 @@ var (
 	// ErrCRDsAbsent is wrapped by the error of Start when the API server does not serve one of the three resources, which
 	// means the CRDs are not installed (or not at this version). It is the operator's to fix.
 	ErrCRDsAbsent = errors.New("the custom resource definitions are not installed")
-	// ErrAccessDenied is wrapped by the error of Start when the API server denies the broker the right to list one of the
-	// three resources. It is the operator's to fix: the RBAC of the ServiceAccount.
-	ErrAccessDenied = errors.New("the API server denied access to the custom resources")
+	// ErrAccessDenied is wrapped by the error of Start when the API server denies the broker the right to list or watch one of the
+	// three resources, or namespaces when a selector reads them (Options.ConnectionNamespaceSelector). It is the operator's to fix:
+	// the RBAC of the ServiceAccount.
+	ErrAccessDenied = errors.New("the API server denied access to the resources the config source reads")
 	// ErrNotSynced is returned by Set while an informer's cache has not synced, since an empty cache would read as every
 	// object removed, and by BindingStatus while the Binding informer has not.
 	ErrNotSynced = errors.New("the custom resource caches have not synced")
@@ -160,11 +173,12 @@ var (
 	ErrStopped = errors.New("the custom resource source is stopped")
 )
 
-// The three resources, by the plural names the CRDs give them.
+// The three resources, by the plural names the CRDs give them, and namespaces, which a selector reads.
 var (
 	bindingsGVR    = schema.GroupVersionResource{Group: v1alpha1.Group, Version: v1alpha1.Version, Resource: "bindings"}
 	backendsGVR    = schema.GroupVersionResource{Group: v1alpha1.Group, Version: v1alpha1.Version, Resource: "agentbackends"}
 	connectionsGVR = schema.GroupVersionResource{Group: v1alpha1.Group, Version: v1alpha1.Version, Resource: "chatconnections"}
+	namespacesGVR  = schema.GroupVersionResource{Version: "v1", Resource: "namespaces"}
 )
 
 var (
@@ -182,8 +196,22 @@ type Options struct {
 	Connection v1alpha1.ObjectRef
 	// ConnectionNamespaces is the platform's admission list (AGENTKOURIER_CONNECTION_NAMESPACES): the Source serves the
 	// ChatConnections of these namespaces besides the own, if there is one, up to maxServedConnections in all. Each is a namespace
-	// name. None, the default, serves the own connection alone; with no own connection either, the Source serves nothing.
+	// name, and an empty one is ignored. New reads it once.
 	ConnectionNamespaces []string
+	// ConnectionNamespaceSelector admits, besides the namespaces of ConnectionNamespaces, every namespace whose labels it matches
+	// (AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR). It is read live, from an informer on namespaces: a namespace that comes to match
+	// is admitted at the next read, and one that stops matching, or is deleted, is not admitted from the next read on. nil, the
+	// default, is no selector. An empty selector (labels.Everything(), or what metav1.LabelSelectorAsSelector makes of an empty
+	// LabelSelector) admits every namespace, and reads none.
+	//
+	// With Connection and ConnectionNamespaces it makes the admission rule. The namespaces whose ChatConnections are served are:
+	//   - every namespace, when there is no own connection, no list and no selector, or when the selector is empty, whatever else is set;
+	//   - the namespaces of the list and those the selector matches, when either is set;
+	//   - none, when there is an own connection and nothing else: the own connection is served alone.
+	//
+	// The own connection, when there is one, is served in every case, and takes a place before every admitted connection. Only a
+	// selector that is neither nil nor empty needs the right to list and watch namespaces (see "RBAC").
+	ConnectionNamespaceSelector labels.Selector
 	// Logger receives the failures of a list or watch. It defaults to slog.Default().
 	Logger *slog.Logger
 }
@@ -244,7 +272,8 @@ const goneGrace = time.Minute
 const settleFloor = 8 * time.Second
 
 // maxServedConnections is the most ChatConnections the broker serves, its own included. The own connection, if the broker has one, is
-// always served and counts first, and takes one of the places. The ChatConnections of the admitted namespaces are ordered by
+// always served and counts first, and takes one of the places. When every namespace is admitted the cap is cluster-wide: the
+// connections of the whole cluster compete for the places. The ChatConnections of the admitted namespaces are ordered by
 // creationTimestamp (the oldest first), then namespace, then name (creationTimestamp has a resolution of one second, so connections
 // made together tie and fall to namespace and name), and the first maxServedConnections-1 are served with an own connection, the first
 // maxServedConnections without. An invalid connection counts too, so that which
@@ -258,24 +287,27 @@ const maxServedConnections = 16
 
 // Source is a config.Source of the custom resources. Start it, and Stop it when done.
 type Source struct {
-	client   dynamic.Interface
-	own      key             // the broker's own ChatConnection, the zero key when it has none (hasOwn)
-	hasOwn   bool            // the broker has an own connection: it is served first, held when deleted, and takes one of the places
-	admitted map[string]bool // the namespaces whose ChatConnections are served besides the own (Options.ConnectionNamespaces)
-	log      *slog.Logger
-	ctx      context.Context
-	cancel   context.CancelFunc
+	client    dynamic.Interface
+	own       key       // the broker's own ChatConnection, the zero key when it has none (hasOwn)
+	hasOwn    bool      // the broker has an own connection: it is served first, held when deleted, and takes one of the places
+	admission admission // which namespaces' ChatConnections are served besides the own (Options.ConnectionNamespaces and ConnectionNamespaceSelector)
+	log       *slog.Logger
+	ctx       context.Context
+	cancel    context.CancelFunc
 
-	mu      sync.Mutex // guards the fields below
-	factory dynamicinformer.DynamicSharedInformerFactory
-	stores  [3]cache.Store // bindings, backends, connections
-	synced  [3]cache.InformerSynced
-	good    map[key]goodObject
-	decoded map[key]decodedObject    // what decoding each object that a Set read came to, see decodedObject
-	decodes int                      // how many objects have been decoded, which a test counts
-	readNo  uint64                   // the Set being read
-	warned  map[key]warnedGeneration // the generation of each object whose unknown fields the log has named
-	started bool
+	mu       sync.Mutex // guards the fields below
+	factory  dynamicinformer.DynamicSharedInformerFactory
+	stores   [3]cache.Store // bindings, backends, connections
+	synced   [3]cache.InformerSynced
+	nsStore  cache.Store // namespaces, only when admission.selector reads them
+	nsSynced cache.InformerSynced
+	selected map[string]bool // the namespaces that the last Set admitted by the selector alone, so that the log says each change once
+	good     map[key]goodObject
+	decoded  map[key]decodedObject    // what decoding each object that a Set read came to, see decodedObject
+	decodes  int                      // how many objects have been decoded, which a test counts
+	readNo   uint64                   // the Set being read
+	warned   map[key]warnedGeneration // the generation of each object whose unknown fields the log has named
+	started  bool
 
 	bindingEvents atomic.Uint64 // the events the Binding informer has delivered (BindingEvents)
 
@@ -305,16 +337,11 @@ func New(opts Options) (*Source, error) {
 	}
 	s := &Source{
 		client: opts.Client, log: cmp.Or(opts.Logger, slog.Default()), good: map[key]goodObject{}, decoded: map[key]decodedObject{}, warned: map[key]warnedGeneration{},
-		now: time.Now, probeEvery: probeEvery, probeTimeout: probeTimeout, admitted: map[string]bool{}, capped: map[key]bool{},
-		hasOwn: hasOwn,
+		now: time.Now, probeEvery: probeEvery, probeTimeout: probeTimeout, capped: map[key]bool{},
+		hasOwn: hasOwn, admission: newAdmission(hasOwn, opts.ConnectionNamespaces, opts.ConnectionNamespaceSelector),
 	}
 	if hasOwn {
 		s.own = key{config.KindChatConnection, opts.Connection.Namespace, opts.Connection.Name}
-	}
-	for _, ns := range opts.ConnectionNamespaces {
-		if ns != "" {
-			s.admitted[ns] = true
-		}
 	}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	return s, nil
@@ -323,9 +350,45 @@ func New(opts Options) (*Source, error) {
 // isOwn says whether k is the broker's own ChatConnection, which is no key at all when the broker has none.
 func (s *Source) isOwn(k key) bool { return s.hasOwn && k == s.own }
 
-// Start lists each of the three resources once, so that a missing CRD or a missing right is an error that says so, then
-// starts an informer for each and waits for its cache to sync. ctx bounds the wait only: the informers run until Stop. On
-// an error nothing is left to wait for, but Stop must still be called. Call Start once.
+// admission is the rule that admits the ChatConnections of a namespace to the served set (see Options.ConnectionNamespaceSelector):
+// every namespace, or those of list and those whose labels selector matches. New fixes it; what the selector matches is read from the
+// namespace informer at each listing.
+type admission struct {
+	all      bool
+	list     map[string]bool
+	selector labels.Selector // nil when no selector reads labels: none was given, or it was empty and all is set
+}
+
+// newAdmission makes the rule of the options. It reads no namespace.
+func newAdmission(hasOwn bool, namespaces []string, selector labels.Selector) admission {
+	a := admission{list: map[string]bool{}}
+	for _, ns := range namespaces {
+		if ns != "" {
+			a.list[ns] = true
+		}
+	}
+	switch {
+	case selector != nil && selector.Empty():
+		a.all = true
+	case selector != nil:
+		a.selector = selector
+	case !hasOwn && len(a.list) == 0:
+		a.all = true
+	}
+	return a
+}
+
+// resourceName is how errors and the log name a resource: its plural and group, or its plural alone for one of the core group.
+func resourceName(gvr schema.GroupVersionResource) string {
+	if gvr.Group == "" {
+		return gvr.Resource
+	}
+	return gvr.Resource + "." + gvr.Group
+}
+
+// Start lists each of the three resources once, and namespaces when a selector reads them, so that a missing CRD or a missing right is
+// an error that says so, then starts an informer for each and waits for its cache to sync. ctx bounds the wait only: the informers run
+// until Stop. On an error nothing is left to wait for, but Stop must still be called. Call Start once.
 func (s *Source) Start(ctx context.Context) error {
 	s.mu.Lock()
 	if s.started {
@@ -336,7 +399,11 @@ func (s *Source) Start(ctx context.Context) error {
 	s.mu.Unlock()
 
 	gvrs := [3]schema.GroupVersionResource{bindingsGVR, backendsGVR, connectionsGVR}
-	for _, gvr := range gvrs {
+	probed := gvrs[:]
+	if s.admission.selector != nil {
+		probed = append(slices.Clone(probed), namespacesGVR)
+	}
+	for _, gvr := range probed {
 		if err := s.probe(ctx, gvr); err != nil {
 			return err
 		}
@@ -348,12 +415,7 @@ func (s *Source) Start(ctx context.Context) error {
 		// The informer holds each object it lists, for as long as it runs, so what the broker never reads is dropped as it comes in.
 		_ = inf.SetTransform(slim)
 		// The handler replaces client-go's, which logs through klog. The only error is an informer that has started.
-		_ = inf.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
-			s.errMu.Lock()
-			s.lastErr, s.errAt = fmt.Errorf("%s.%s: %w", gvr.Resource, gvr.Group, err), s.now()
-			s.errMu.Unlock()
-			s.log.Warn("custom resource informer cannot list or watch", "resource", gvr.Resource, "error", err)
-		})
+		_ = inf.SetWatchErrorHandler(s.watchErrorHandler(gvr))
 		s.stores[i], s.synced[i] = inf.GetStore(), inf.HasSynced
 		if i == 0 { // the Bindings: BindingEvents tells a reader of their statuses that one moved
 			count := func(...any) { s.bindingEvents.Add(1) }
@@ -362,17 +424,36 @@ func (s *Source) Start(ctx context.Context) error {
 			})
 		}
 	}
+	waitFor := s.synced[:]
+	if s.admission.selector != nil {
+		// Beside the three, and only with a selector: "all" and a list read no namespace, and need no right to.
+		inf := factory.ForResource(namespacesGVR).Informer()
+		_ = inf.SetTransform(slimNamespace)
+		_ = inf.SetWatchErrorHandler(s.watchErrorHandler(namespacesGVR))
+		s.nsStore, s.nsSynced = inf.GetStore(), inf.HasSynced
+		waitFor = append(slices.Clone(waitFor), inf.HasSynced)
+	}
 	s.factory = factory
 	s.mu.Unlock()
 	factory.Start(s.ctx.Done())
-	s.wg.Go(func() { s.probeLoop(s.ctx, gvrs[:]) })
+	s.wg.Go(func() { s.probeLoop(s.ctx, probed) })
 	syncStop := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() { close(syncStop) })
 	defer stop()
-	if !cache.WaitForCacheSync(syncStop, s.synced[:]...) {
+	if !cache.WaitForCacheSync(syncStop, waitFor...) {
 		return fmt.Errorf("%w: %w", ErrNotSynced, cmp.Or(context.Cause(ctx), s.ctx.Err(), errors.New("stopped")))
 	}
 	return nil
+}
+
+// watchErrorHandler is the error handler of the informer of gvr: it records the failure for Stale and says it at Warn.
+func (s *Source) watchErrorHandler(gvr schema.GroupVersionResource) cache.WatchErrorHandler {
+	return func(_ *cache.Reflector, err error) {
+		s.errMu.Lock()
+		s.lastErr, s.errAt = fmt.Errorf("%s: %w", resourceName(gvr), err), s.now()
+		s.errMu.Unlock()
+		s.log.Warn("custom resource informer cannot list or watch", "resource", gvr.Resource, "error", err)
+	}
 }
 
 // probe lists one resource, a page of one, and opens a watch on it and closes it, at start, to tell the three things that go
@@ -389,12 +470,14 @@ func (s *Source) probe(ctx context.Context, gvr schema.GroupVersionResource) err
 	switch {
 	case err == nil:
 		return nil
-	case apierrors.IsNotFound(err):
-		return fmt.Errorf("%w: the API server does not serve %s.%s %s; install the CRDs of Agent Kourier first: %w", ErrCRDsAbsent, gvr.Resource, gvr.Group, gvr.Version, err)
+	case apierrors.IsNotFound(err) && gvr.Group == v1alpha1.Group:
+		return fmt.Errorf("%w: the API server does not serve %s %s; install the CRDs of Agent Kourier first: %w", ErrCRDsAbsent, resourceName(gvr), gvr.Version, err)
+	case (apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err)) && gvr == namespacesGVR:
+		return fmt.Errorf("%w: namespaces: the ServiceAccount needs list and watch on namespaces, which the connection namespace selector reads: %w", ErrAccessDenied, err)
 	case apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err):
-		return fmt.Errorf("%w: %s.%s: the ServiceAccount needs list and watch on it in every namespace: %w", ErrAccessDenied, gvr.Resource, gvr.Group, err)
+		return fmt.Errorf("%w: %s: the ServiceAccount needs list and watch on it in every namespace: %w", ErrAccessDenied, resourceName(gvr), err)
 	}
-	return fmt.Errorf("list or watch %s.%s: %w", gvr.Resource, gvr.Group, err)
+	return fmt.Errorf("list or watch %s: %w", resourceName(gvr), err)
 }
 
 // The probe's pace: a list of one object of each kind every probeEvery, each bounded by probeTimeout.
@@ -410,9 +493,9 @@ const (
 // probe sees it.
 const staleAfter = 90 * time.Second
 
-// probeLoop lists one object of each kind every probeEvery, until the source is stopped, and records whether the API server
-// answered. A list is what a refused connection, a timeout and a throttled request all fail, which the informers' own error
-// handler is never told of.
+// probeLoop lists one object of each kind every probeEvery (and one namespace, when a selector reads them), until the source is
+// stopped, and records whether the API server answered. A list is what a refused connection, a timeout and a throttled request
+// all fail, which the informers' own error handler is never told of.
 func (s *Source) probeLoop(ctx context.Context, gvrs []schema.GroupVersionResource) {
 	if s.probeExited != nil {
 		defer s.probeExited()
@@ -428,7 +511,7 @@ func (s *Source) probeLoop(ctx context.Context, gvrs []schema.GroupVersionResour
 		var failed error
 		for _, gvr := range gvrs {
 			if err := s.listOne(ctx, gvr); err != nil {
-				failed = fmt.Errorf("%s.%s: %w", gvr.Resource, gvr.Group, err)
+				failed = fmt.Errorf("%s: %w", resourceName(gvr), err)
 				break // one that fails is enough, and the others would each wait out the timeout
 			}
 		}
@@ -558,9 +641,9 @@ type ConnectionBindings struct {
 
 // ConnectionBindings reads the ChatConnection namespace/name and the Bindings that name it from the caches, whether or not the broker
 // serves it, so the connection need not be one the Set lists: it is how the broker finds the Bindings of a connection it served before
-// and does not now (a namespace taken off the admission list), which no read of the Set names. A Binding that is invalid still says
-// which connection it means, as for UnservedConnection.Bindings. It fails with ErrNotSynced until the caches have synced, and with
-// ErrStopped after Stop.
+// and does not now (a namespace taken off the admission list, or no longer matched by the selector), which no read of the Set names. A
+// Binding that is invalid still says which connection it means, as for UnservedConnection.Bindings. It fails with ErrNotSynced until
+// the caches have synced, and with ErrStopped after Stop.
 func (s *Source) ConnectionBindings(namespace, name string) (ConnectionBindings, error) {
 	l, err := s.list()
 	if err != nil {
@@ -616,6 +699,7 @@ func (s *Source) Set(context.Context) (*config.Set, string, error) {
 	set := &config.Set{}
 	live := map[key]bool{}
 	s.readNo++
+	s.noteSelected(l.selected)
 	served := s.selectServed(l)
 	set.UnservedConnections = served.left
 	s.noteCapped(served)
@@ -1015,6 +1099,25 @@ func slim(obj any) (any, error) {
 	return obj, nil
 }
 
+// slimNamespace is the namespace informer's transform. A namespace is read for its name and labels alone, which the selector
+// matches, so the cache holds those, with the uid and resourceVersion that tell one version from another, and nothing else.
+func slimNamespace(obj any) (any, error) {
+	u, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return obj, nil
+	}
+	out := &unstructured.Unstructured{Object: map[string]any{}}
+	out.SetAPIVersion(u.GetAPIVersion())
+	out.SetKind(u.GetKind())
+	out.SetName(u.GetName())
+	out.SetUID(u.GetUID())
+	out.SetResourceVersion(u.GetResourceVersion())
+	if l := u.GetLabels(); len(l) > 0 {
+		out.SetLabels(l)
+	}
+	return out, nil
+}
+
 // warnedGeneration is the object, by uid, and the generation of it whose unknown fields the log has named.
 type warnedGeneration struct {
 	uid        types.UID
@@ -1079,10 +1182,10 @@ type servedConnections struct {
 	deferred []key // the deleted connections that still took a place in the choice
 }
 
-// selectServed chooses the connections to serve: the own, if there is one, and the ChatConnections of the admitted namespaces in the
-// order of maxServedConnections, as many as there are places. A team connection that was deleted and whose deletion has not taken effect
-// still takes its place, since it is served until then (serveDeferred); the deletion that takes effect at this read frees its
-// place at the next. The caller holds s.mu.
+// selectServed chooses the connections to serve: the own, if there is one, and the ChatConnections of the namespaces that the listing
+// admits, in the order of maxServedConnections, as many as there are places. A team connection that was deleted and whose deletion has
+// not taken effect still takes its place while its namespace is admitted, since it is served until then (serveDeferred); the deletion
+// that takes effect at this read frees its place at the next. The caller holds s.mu.
 func (s *Source) selectServed(l listing) servedConnections {
 	type candidate struct {
 		k       key
@@ -1091,12 +1194,13 @@ func (s *Source) selectServed(l listing) servedConnections {
 	}
 	var cands []candidate
 	for _, u := range l.connections {
-		if k := keyOf(config.KindChatConnection, u); !s.isOwn(k) && s.admitted[k.namespace] {
+		if k := keyOf(config.KindChatConnection, u); !s.isOwn(k) && l.admits(k.namespace) {
 			cands = append(cands, candidate{k, u.GetCreationTimestamp().Time, true})
 		}
 	}
 	for k, g := range s.good {
-		if _, listed := l.keys[k]; k.kind == config.KindChatConnection && !s.isOwn(k) && !listed && g.settledAt.IsZero() {
+		// One whose namespace is no longer admitted is another broker's, gone or not: it is not served, and takes no place.
+		if _, listed := l.keys[k]; k.kind == config.KindChatConnection && !s.isOwn(k) && !listed && g.settledAt.IsZero() && l.admits(k.namespace) {
 			cands = append(cands, candidate{k, g.obj.GetCreationTimestamp().Time, false})
 		}
 	}
@@ -1191,28 +1295,73 @@ func (s *Source) noteCapped(served servedConnections) {
 	s.capped = now
 }
 
+// noteSelected says, once, at Info, that a namespace is admitted by the selector alone (it is not on the list), and, once, that one
+// that was is not any more, by name. The caller holds s.mu.
+func (s *Source) noteSelected(selected []string) {
+	if s.admission.selector == nil {
+		return
+	}
+	now := make(map[string]bool, len(selected))
+	for _, ns := range selected {
+		now[ns] = true
+		if !s.selected[ns] {
+			s.log.Info("a namespace is admitted by the connection namespace selector: its ChatConnections are served, up to the limit", "namespace", ns)
+		}
+	}
+	for _, ns := range slices.Sorted(maps.Keys(s.selected)) {
+		if !now[ns] {
+			s.log.Info("a namespace is no longer admitted by the connection namespace selector: its ChatConnections are not served", "namespace", ns)
+		}
+	}
+	s.selected = now
+}
+
 // listing is what the three caches held when they were listed, one after another (Bindings first, then AgentBackends, then
-// ChatConnections), not at one instant.
+// ChatConnections), not at one instant, and the namespaces admitted then: what the selector matched is read with the caches, so that
+// a Set and its fingerprint agree on it.
 type listing struct {
 	bindings, backends, connections []*unstructured.Unstructured
 	hasConnection                   map[key]bool
 	keys                            map[key]struct{} // every object listed, of any kind, whoever's it is
+	all                             bool             // every namespace is admitted
+	admitted                        map[string]bool  // the namespaces admitted, when not all: the list's, and those the selector matched
+	bySelector                      bool             // a selector read the namespaces, so admitted moves and the fingerprint carries it
+	selected                        []string         // the namespaces the selector admitted that are not on the list, sorted
 }
 
-// list reads the three caches, each sorted by namespace and name. It fails while one has not synced, and once stopped.
+// admits says whether the ChatConnections of the namespace ns are admitted at this listing.
+func (l listing) admits(ns string) bool { return l.all || l.admitted[ns] }
+
+// list reads the three caches, each sorted by namespace and name, and the namespaces when a selector reads them. It fails while one
+// has not synced, and once stopped.
 func (s *Source) list() (listing, error) {
 	if s.ctx.Err() != nil {
 		return listing{}, ErrStopped
 	}
 	s.mu.Lock()
-	stores, synced := s.stores, s.synced
+	stores, synced, nsStore, nsSynced := s.stores, s.synced, s.nsStore, s.nsSynced
 	s.mu.Unlock()
 	for _, has := range synced {
 		if has == nil || !has() {
 			return listing{}, ErrNotSynced
 		}
 	}
-	l := listing{hasConnection: map[key]bool{}, keys: map[key]struct{}{}}
+	if s.admission.selector != nil && (nsSynced == nil || !nsSynced()) {
+		return listing{}, ErrNotSynced
+	}
+	l := listing{hasConnection: map[key]bool{}, keys: map[key]struct{}{}, all: s.admission.all, admitted: s.admission.list}
+	if s.admission.selector != nil {
+		l.bySelector, l.admitted = true, maps.Clone(s.admission.list)
+		for _, it := range nsStore.List() {
+			u, ok := it.(*unstructured.Unstructured)
+			if !ok || !s.admission.selector.Matches(labels.Set(u.GetLabels())) || l.admitted[u.GetName()] {
+				continue
+			}
+			l.admitted[u.GetName()] = true
+			l.selected = append(l.selected, u.GetName())
+		}
+		slices.Sort(l.selected)
+	}
 	l.bindings, l.backends, l.connections = objects(stores[0]), objects(stores[1]), objects(stores[2])
 	for _, u := range l.connections {
 		l.hasConnection[keyOf(config.KindChatConnection, u)] = true
@@ -1242,8 +1391,8 @@ func objects(store cache.Store) []*unstructured.Unstructured {
 	return out
 }
 
-// fingerprint digests the kind, namespace, name, uid and generation of each object. It leaves out resourceVersion, which a
-// status write changes (see the package comment).
+// fingerprint digests the kind, namespace, name, uid and generation of each object, and the admitted namespaces when a selector read
+// them. It leaves out resourceVersion, which a status write changes, and every other field of a namespace (see the package comment).
 func (l listing) fingerprint() string {
 	h := sha256.New()
 	for _, group := range []struct {
@@ -1252,6 +1401,11 @@ func (l listing) fingerprint() string {
 	}{{config.KindAgentBackend, l.backends}, {config.KindChatConnection, l.connections}, {config.KindBinding, l.bindings}} {
 		for _, u := range group.objs {
 			_, _ = fmt.Fprintf(h, "%s %s/%s %s %d\n", group.kind, u.GetNamespace(), u.GetName(), u.GetUID(), u.GetGeneration())
+		}
+	}
+	if l.bySelector {
+		for _, ns := range slices.Sorted(maps.Keys(l.admitted)) {
+			_, _ = fmt.Fprintf(h, "admitted %s\n", ns)
 		}
 	}
 	return hex.EncodeToString(h.Sum(nil))
