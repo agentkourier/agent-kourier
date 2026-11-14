@@ -93,6 +93,9 @@ type RunConfig struct {
 	// slackHTTPTimeout is the bound of one Slack Web API call (slackAPITimeout if zero): a seam for this package's tests,
 	// which cannot wait for 30 seconds.
 	slackHTTPTimeout time.Duration
+	// renderThrottle is the live renderer's Throttle, the least time between two writes to one message (live.Config; its default of
+	// 2 seconds if zero): a seam for this package's tests, whose shutdown would otherwise wait out a turn's last throttle.
+	renderThrottle time.Duration
 	// sink replaces the renderer Run builds, for this package's tests that need to see what a turn
 	// or a notice was handed. Like newSlack it is unexported, so nothing else can swap the renderer.
 	sink renderSink

@@ -45,6 +45,9 @@ func startConfig(t *testing.T) RunConfig {
 	c.Client = cluster()
 	c.SyncTimeout = 30 * time.Second
 	c.newSlack = func(slack.Config) slackAPI { return idleSlack{} } // offline: the default build cannot reach a fake
+	// No test of this package is about the renderer's pace (internal/render/live's are, on its own clock): a turn's writes, and the
+	// shutdown that waits for its last one, need not take 2 seconds each.
+	c.renderThrottle = 100 * time.Millisecond
 	return c
 }
 
