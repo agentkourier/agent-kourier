@@ -411,7 +411,9 @@ func TestARunServesTheOlderOfTwoConnectionsOfOneSlackAppAndTellsTheOthersBinding
 	r := start(t, w.c)
 	r.until("/readyz", http.StatusOK)
 
-	w.eventually("team-b to run", func() bool { return w.up("tok-b") == 1 })
+	// The own connection's run starts in a goroutine of its own, which nothing orders before team-b's or the status write below: wait for
+	// it as for team-b, or a status written at once (the refusal is known by the first pass) finds it not yet up.
+	w.eventually("team-b and the own connection to run", func() bool { return w.up("tok-b") == 1 && w.up(ownToken) == 1 })
 	w.eventually("the Binding of the refused connection to be told", func() bool {
 		return cluster.stored(t, "team-a/on-a")["Accepted"].Reason == "ConnectionNotServed"
 	})
