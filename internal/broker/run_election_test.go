@@ -69,7 +69,7 @@ func electionConfig(t *testing.T, client *fake.Clientset, fence *fakeFence, iden
 	c.newSlack = func(slack.Config) slackAPI { rep.built.Add(1); return idleSlack{} }
 	c.wrapStore = func(s openedStore) openedStore { return fencedSQLite{openedStore: s, fence: fence} }
 	c.exit = func(code int) { rep.exits <- code }
-	c.leaveKlog = true // two Runs in one process
+	runsAlongside(&c) // two Runs in one process, and other tests' alongside
 	return c, rep
 }
 
