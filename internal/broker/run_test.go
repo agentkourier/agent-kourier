@@ -191,7 +191,7 @@ func TestRunBuildsTheSlackConfigFromTheConnectionSecret(t *testing.T) {
 	if got.AuthzTimeout != interact.PressAuthzTimeout {
 		t.Errorf("AuthzTimeout = %s, want the %s a press is given for its membership checks", got.AuthzTimeout, interact.PressAuthzTimeout)
 	}
-	if wantURL := testhooks.SlackAPIURL(); got.APIURL != wantURL {
+	if wantURL := testhooks.SlackAPIURL(c.hooks); got.APIURL != wantURL {
 		t.Errorf("APIURL = %q, want %q: the testhooks value, and nothing from the environment in any other build", got.APIURL, wantURL)
 	}
 }

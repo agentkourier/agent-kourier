@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	fmt.Printf("slack=%q\n", testhooks.SlackAPIURL())
+	fmt.Printf("slack=%q\n", testhooks.SlackAPIURL(testhooks.Overrides{}))
 	_ = testhooks.BeforeSend(context.Background(), "probe")
 	testhooks.AfterPost()
 	fmt.Println("after-post-returned")

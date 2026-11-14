@@ -47,7 +47,9 @@ func (a *alerts) topLevel() (out []fakeslack.Message) {
 // note in their own thread, and when the window ends one line in the channel says how many were not investigated, once.
 // The counters say the same. None of it names an alert.
 func TestRunStopsAStormAtItsLimitsAndPostsOneDigest(t *testing.T) {
+	t.Parallel()
 	a := newAlerts(t)
+	runsAlongside(&a.cfg)
 	a.limitedBinding(t)
 	a.run(t)
 
@@ -104,7 +106,9 @@ func TestRunStopsAStormAtItsLimitsAndPostsOneDigest(t *testing.T) {
 // The digest of a window that ended while Agent Kourier was down is posted once it is up: the windows and their counts are in
 // the database, not in memory.
 func TestRunPostsTheDigestOfAWindowThatEndedDuringARestart(t *testing.T) {
+	t.Parallel()
 	a := newAlerts(t)
+	runsAlongside(&a.cfg)
 	a.limitedBinding(t)
 	a.run(t)
 	for i := range 3 {

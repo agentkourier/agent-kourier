@@ -24,6 +24,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/retention"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testhooks"
 )
 
 // RunConfig is what Run is built from. Everything in it is injected: Run reads no environment
@@ -81,6 +82,10 @@ type RunConfig struct {
 	// The renderer and the interactions are not here: Run builds them, from its own store, outbox and
 	// Slack client, so that no config can run a broker without them.
 
+	// hooks are what this package's tests of a testhooks build set in place of the test image's environment (the fake Slack's
+	// URL), so that brokers with fakes of their own can run alongside each other. In a production build the type has no field,
+	// so there is nothing to set (testhooks.Overrides).
+	hooks testhooks.Overrides
 	// newSlack builds the Slack client from its config; nil means slack.New. It is a seam for this
 	// package's tests, which run Run offline with a client that does not call Slack. It is
 	// unexported, so no other package, and no config, can replace the client.

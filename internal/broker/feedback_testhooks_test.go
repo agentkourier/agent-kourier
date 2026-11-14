@@ -20,7 +20,9 @@ import (
 // disturbed; and the vote is in the store with the Binding, the agent, the alert and the session, and in the audit log by
 // identifiers and verdict.
 func TestRunRecordsTheVotesOnAnInvestigationsFinalMessage(t *testing.T) {
+	t.Parallel()
 	a := newAlerts(t)
+	runsAlongside(&a.cfg)
 	a.fake.AddUser(fakeslack.User{ID: "U2", Name: "grace"})
 	a.fake.AddUser(fakeslack.User{ID: "U3", Name: "outsider"})
 	a.fake.AddUser(fakeslack.User{ID: "UBOT", Name: "helper", IsBot: true})
