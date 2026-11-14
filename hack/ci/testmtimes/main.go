@@ -96,7 +96,7 @@ func report(s summary) {
 	fmt.Printf("testmtimes: set %d files, %d symbolic links and %d directories from the index; left %d paths alone\n",
 		s.files, s.symlinks, s.dirs, s.skipped)
 	if s.inexact > 0 {
-		fmt.Printf("testmtimes: the file system kept %d of the times to less than the nanosecond: those files' "+
+		fmt.Printf("testmtimes: the file system kept %d of the times to a coarser step than the nanosecond: those files' "+
 			"times carry fewer than %d bits of their hash\n", s.inexact, hashBits)
 	}
 }

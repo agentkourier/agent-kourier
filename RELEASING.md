@@ -298,11 +298,11 @@ push, those are the runs the release gate reads, and their results are the ones 
 sets `GODEBUG=gocachetest=1`, so the log says for each package whether it reused a result and, for one that ran, whether
 no result was saved for its test binary (`input list not found`: the binary changed) or one was, for other inputs
 (`test output not found`: a file or variable its tests read changed). `go test` keys results on `GODEBUG` too: removing
-it from the legs makes pull requests run every package until a push to `main` saves results without it. `test-postgres`
-and `crd-corpus` run `go test` with `-count=1`, which reuses nothing, and `docs-agent` does not run
-`hack/ci/testmtimes`: its smoke test reads `docs/`, outside its module, where `go test` checks nothing, so only the
-checkout's times make it run again on a pull request that changes the docs. `hack/ci/testshards`' test holds the legs to
-these steps and every other job to none of them. The limits of the reuse, none of which a setting changes:
+it from the legs makes pull requests run every package until a push to `main` saves results without it. `test-postgres`,
+`crd-corpus` and `docs-agent` run `go test` with `-count=1`, which reuses nothing, and do not run `hack/ci/testmtimes`.
+`docs-agent`'s must (`make docs-agent-test`): its smoke test reads `docs/`, outside its module, where `go test` checks
+nothing, so a reused result would pass a pull request that changes only the docs. `hack/ci/testshards`' test holds the
+legs to these steps and every other job to none of them. The limits of the reuse, none of which a setting changes:
 
 - A changed file that keeps its size reuses a stale result if its new blob draws the same time: the odds are 2^-58
   (about 3.5 × 10^-18) per changed file where the file system keeps times to the nanosecond, as APFS and ext4 do, and
@@ -311,10 +311,13 @@ these steps and every other job to none of them. The limits of the reuse, none o
   merge, which runs everything, runs it again. The 58 bits are `hashBits` in `hack/ci/testmtimes`: 59 would end in 2019
   and 60 in 2037, and `go test` saves no result of a test that read a file whose time is less than 2 s before the read,
   a time to come included.
-- A test that starts a program by its path, not looked up on `PATH`, or reads a file outside its module, reuses a result
-  when only what that program or file holds changed. `hack/ci/docsonly`'s test, which runs `hack/ci/docs-only.sh` by its
-  path, reads the script itself so that a change to it runs the test again; `docs-agent`'s smoke test reads `docs/`,
-  outside its module, and its job does not derive times. A new test of either kind needs the same care.
+- A program a test starts by its path, the test binary re-run as a child included (the `os.Args[0]` re-runs in
+  `internal/outbox`, `internal/broker` and `cmd/agent-kourier`), is keyed on its own file, but not on the files or
+  variables it reads. A test that depends on what such a program reads must read those inputs itself, or look the
+  program up on `PATH`. A file outside the module is never keyed, which is why `docs-agent` runs with `-count=1`.
+- `go test` keys nothing a test reads before `m.Run` starts its log (in an `init` function, a package variable or
+  `TestMain` before `m.Run`), nor the environment read through `os.Environ`. The one such read today is
+  `internal/testhooks`' `armed` variable, from a variable CI never sets in the process that runs the tests.
 - A test that is flaky, or that depends on the date, passes on a pull request when its package reuses a pass; the push
   run on `main` runs it again.
 

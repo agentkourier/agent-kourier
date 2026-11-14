@@ -158,8 +158,10 @@ ax-smoke: ## Run the real Bedrock A2A smoke using the existing sandbox credentia
 	bash examples/ax/smoke.sh
 
 .PHONY: docs-agent-test docs-agent-lint docs-agent-image docs-agent-smoke docs-agent-smoke-live
-docs-agent-test: ## Test the docs-agent recipe's separate module with the race detector
-	cd examples/recipes/docs-agent/agent && go test -race -timeout 20m ./...
+# -count=1: the smoke test reads docs/, outside the module, which go test's result cache never checks, so a reused result
+# would not see a change to the docs.
+docs-agent-test: ## Test the docs-agent recipe's separate module with the race detector, every test on every run
+	cd examples/recipes/docs-agent/agent && go test -race -count=1 -timeout 20m ./...
 	cd examples/recipes/docs-agent/agent && go vet ./...
 
 docs-agent-lint: ## Lint the docs-agent recipe's separate module with the repository's golangci-lint and config
