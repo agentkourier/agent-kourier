@@ -99,3 +99,20 @@ func (s *Source) DecodedEntriesForTest() int {
 	defer s.mu.Unlock()
 	return len(s.decoded)
 }
+
+// CachedNamespaceForTest returns the Namespace that the namespace informer's cache holds now, and nil if it holds none or the source
+// has no namespace informer. It is the cache's own object: a test reads it and changes nothing.
+func (s *Source) CachedNamespaceForTest(name string) *unstructured.Unstructured {
+	s.mu.Lock()
+	store := s.nsStore
+	s.mu.Unlock()
+	if store == nil {
+		return nil
+	}
+	item, ok, _ := store.GetByKey(name)
+	if !ok {
+		return nil
+	}
+	u, _ := item.(*unstructured.Unstructured)
+	return u
+}
