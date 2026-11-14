@@ -19,7 +19,9 @@ import (
 // probe, each warned of with its own reason. When the channel is mended the Binding is ready again. Throughout, the probes post nothing and
 // run no turn: no message lands in either channel, no turn begins, and the stub agent is sent no message.
 func TestRunTellsAnArchivedChannelAndAMissingScopeApartThroughTheFakeSlack(t *testing.T) {
+	t.Parallel()
 	w := newSlackWorld(t, "xoxb-fake-bot")
+	runsAlongside(&w.cfg)
 	logs := &logBuffer{}
 	w.cfg.Logger = slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	w.cfg.probeEvery, w.cfg.probeTick, w.cfg.probeGap = 40*time.Millisecond, 10*time.Millisecond, time.Millisecond

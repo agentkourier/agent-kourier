@@ -85,7 +85,7 @@ On custom resources (`--source crds`, the default) the broker has no Slack app o
 
 | File | Holds |
 |---|---|
-| `--out` (`my-values.yaml`) | The chart's values: `config.connectionNamespaces: [<team namespace>]`, and no `config.chatConnection`. |
+| `--out` (`my-values.yaml`) | The chart's values, as comments only and no key: the broker has no `config.chatConnection` and serves the ChatConnections of every namespace. The comments show `config.connectionNamespaces: [<team namespace>]` and `config.connectionNamespaceSelector`, commented out. |
 | `<team namespace>.yaml`, beside `--out` | In the team's namespace: the ChatConnection `<team namespace>-slack`, whose `credentialsSecretRef` names the Secret of the same name; the AgentBackend `agent`; and the Binding `my-binding`, whose `backendRef` and `connectionRef` name the two without a namespace. |
 
 `--out` may not be the team's file, whatever the case of its name. With `--source files` it writes one values file for the ConfigMap route (`config.source: files`) that holds

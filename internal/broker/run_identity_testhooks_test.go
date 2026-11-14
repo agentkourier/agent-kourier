@@ -10,7 +10,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/agentkourier/agent-kourier/internal/testhooks"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 )
 
@@ -29,10 +28,10 @@ func fakeWorld(t *testing.T) (*connWorld, *fakeslack.Server, map[string]fakeslac
 	}
 	fake := fakeslack.New(opts...)
 	t.Cleanup(fake.Close)
-	t.Setenv(testhooks.SlackAPIURLEnv, fake.URL()+"/")
 
 	w := newConnWorld(t, nil)
 	w.c.newSlack, w.c.identify = nil, nil // the real client and the real identity calls, against the fake
+	w.c.hooks.SlackAPIURL = fake.URL() + "/"
 	own := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "agent-kourier-system", Name: "slack-main"},
 		Data: map[string][]byte{"botToken": []byte(apps["own"].BotToken), "appToken": []byte(apps["own"].AppToken)}}
 	if _, err := w.kube.CoreV1().Secrets("agent-kourier-system").Update(t.Context(), own, metav1.UpdateOptions{}); err != nil {
@@ -44,7 +43,9 @@ func fakeWorld(t *testing.T) (*connWorld, *fakeslack.Server, map[string]fakeslac
 // A team connection is started on the identity Slack gives: auth.test and then bots.info, made against the fake as a broker makes them against
 // Slack. Each app runs its own Socket Mode connection, and a bots.info that fails (the fake answers missing_scope) holds the start back until it works.
 func TestATeamConnectionStartsOnTheIdentityBotsInfoGives(t *testing.T) {
+	t.Parallel()
 	w, fake, apps := fakeWorld(t)
+	runsAlongside(&w.c)
 	for _, ns := range []string{"team-a", "team-b"} {
 		w.secretOf(ns, apps[ns].BotToken, apps[ns].AppToken)
 		w.connection(ns)
@@ -73,7 +74,9 @@ func TestATeamConnectionStartsOnTheIdentityBotsInfoGives(t *testing.T) {
 
 // A team app whose token the fake refuses (revoked) is not started and is not asked about again: Slack's answer is that the token is no good.
 func TestATeamConnectionWhoseTokenSlackRefusesIsNotStartedOrAskedAgain(t *testing.T) {
+	t.Parallel()
 	w, fake, apps := fakeWorld(t)
+	runsAlongside(&w.c)
 	w.secretOf("team-a", apps["team-a"].BotToken, apps["team-a"].AppToken)
 	w.connection("team-a")
 	if err := fake.SetRevoked("AAPPA", true); err != nil {

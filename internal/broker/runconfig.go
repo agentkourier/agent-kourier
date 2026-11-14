@@ -25,6 +25,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/retention"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testhooks"
 )
 
 // RunConfig is what Run is built from. Everything in it is injected: Run reads no environment
@@ -91,6 +92,10 @@ type RunConfig struct {
 	// The renderer and the interactions are not here: Run builds them, from its own store, outbox and
 	// Slack client, so that no config can run a broker without them.
 
+	// hooks are what this package's tests of a testhooks build set in place of the test image's environment (the fake Slack's
+	// URL), so that brokers with fakes of their own can run alongside each other. In a production build the type has no field,
+	// so there is nothing to set (testhooks.Overrides).
+	hooks testhooks.Overrides
 	// newSlack builds the Slack client from its config; nil means slack.New. It is a seam for this
 	// package's tests, which run Run offline with a client that does not call Slack. It is
 	// unexported, so no other package, and no config, can replace the client.
@@ -98,6 +103,9 @@ type RunConfig struct {
 	// slackHTTPTimeout is the bound of one Slack Web API call (slackAPITimeout if zero): a seam for this package's tests,
 	// which cannot wait for 30 seconds.
 	slackHTTPTimeout time.Duration
+	// renderThrottle is the live renderer's Throttle, the least time between two writes to one message (live.Config; its default of
+	// 2 seconds if zero): a seam for this package's tests, whose shutdown would otherwise wait out a turn's last throttle.
+	renderThrottle time.Duration
 	// sink replaces the renderer Run builds, for this package's tests that need to see what a turn
 	// or a notice was handed. Like newSlack it is unexported, so nothing else can swap the renderer.
 	sink renderSink
@@ -120,6 +128,9 @@ type RunConfig struct {
 	probeEvery, probeTick time.Duration
 	// probeGap is the least time between a pass of the verification and one that a change of the config calls for (30 seconds if zero).
 	probeGap time.Duration
+	// statusTimes are the status writer's Gap, Tick and Slow (statusConfig; statusGap, statusTick and statusSlow where zero): a seam for
+	// this package's tests, which cannot wait for a gap of 10 seconds between a Binding's writes.
+	statusTimes struct{ Gap, Tick, Slow time.Duration }
 	// shutdownTrace is told as each shutdown step begins, so a test can see the order and act in between.
 	shutdownTrace func(step string)
 	// stopTrace is told the name of each stop of the interactions' step as it begins, so a test can see

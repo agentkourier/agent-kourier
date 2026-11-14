@@ -144,7 +144,9 @@ func settle() { time.Sleep(500 * time.Millisecond) }
 // exactly one investigation in the alert's own thread, whose first message is the template's output and the whole
 // alert in the hashed untrusted block; a repeat is a note in that thread and starts no turn; the resolve is a note too.
 func TestRunInvestigatesAFiringAlertOnceInItsOwnThread(t *testing.T) {
+	t.Parallel()
 	a := newAlerts(t)
+	runsAlongside(&a.cfg)
 	a.run(t)
 
 	alert := a.fire(t, post("FIRING", "KubePodCrashLooping"))
@@ -205,7 +207,9 @@ func (a *alerts) threadOf(ts string) (fakeslack.Message, bool) {
 // A person's reply in the alert's thread continues the investigation's session without a mention (spec 8.2): the agent
 // is asked again in the same conversation, which knows the first prompt, and is given what the person wrote.
 func TestRunAPersonsReplyInTheAlertThreadContinuesTheSession(t *testing.T) {
+	t.Parallel()
 	a := newAlerts(t)
+	runsAlongside(&a.cfg)
 	a.run(t)
 	alert := a.fire(t, post("FIRING", "KubePodCrashLooping"))
 	a.inThread(t, alert.TS, "the agent's answer", hasText("investigated"))
@@ -227,7 +231,9 @@ func TestRunAPersonsReplyInTheAlertThreadContinuesTheSession(t *testing.T) {
 // An investigation survives a restart of the broker: the session and the key's thread are in the database, so a person's
 // reply goes on in the same conversation, and the alert firing again is a note and not a second investigation.
 func TestRunAStartedInvestigationSurvivesARestart(t *testing.T) {
+	t.Parallel()
 	a := newAlerts(t)
+	runsAlongside(&a.cfg)
 	a.run(t)
 	alert := a.fire(t, post("FIRING", "KubePodCrashLooping"))
 	a.inThread(t, alert.TS, "the agent's answer", hasText("investigated"))
@@ -258,7 +264,9 @@ func TestRunAStartedInvestigationSurvivesARestart(t *testing.T) {
 // The .Link a template reads is the permalink Agent Kourier builds from the workspace URL auth.test returned and the alert's
 // channel and ts, and not the alert's own link.
 func TestRunBuildsThePermalinkFromTheWorkspaceURL(t *testing.T) {
+	t.Parallel()
 	a := newAlerts(t)
+	runsAlongside(&a.cfg)
 	file := filepath.Join(a.cfg.ConfigDir, "binding.yaml")
 	raw, err := os.ReadFile(file)
 	if err != nil {
@@ -290,7 +298,9 @@ func TestRunBuildsThePermalinkFromTheWorkspaceURL(t *testing.T) {
 // counter the same, and the event is acknowledged, so Slack does not send it again. None of the alert's text is in the
 // logs or the audit log.
 func TestRunRefusesAPromptWhoseValueFailsItsCheck(t *testing.T) {
+	t.Parallel()
 	a := newAlerts(t)
+	runsAlongside(&a.cfg)
 	a.run(t)
 
 	// A name with spaces and an instruction in it: the trigger's alertname takes the whole of the title after the dash.
@@ -348,7 +358,9 @@ func TestRunRefusesAPromptWhoseValueFailsItsCheck(t *testing.T) {
 // No log line of a whole alert's life holds the alert's text: its name, its pod, its reason. The audit entries of the
 // turn it started do not either.
 func TestRunLogsAndAuditsNoAlertText(t *testing.T) {
+	t.Parallel()
 	a := newAlerts(t)
+	runsAlongside(&a.cfg)
 	a.run(t)
 	alert := a.fire(t, post("FIRING", "KubePodCrashLooping"))
 	a.inThread(t, alert.TS, "the agent's answer", hasText("investigated"))
@@ -390,7 +402,9 @@ func TestRunLogsAndAuditsNoAlertText(t *testing.T) {
 // thread, and the agent is asked once. Run must connect the Intake's check of the reply queue: without it the second
 // fire takes the key over and starts a second investigation.
 func TestRunDoesNotInvestigateAnAlertTwiceWhenTheMarkOfItsThreadWasLost(t *testing.T) {
+	t.Parallel()
 	a := newAlerts(t)
+	runsAlongside(&a.cfg)
 	a.run(t)
 	alert := a.fire(t, post("FIRING", "KubePodCrashLooping"))
 	a.inThread(t, alert.TS, "the agent's answer", hasText("investigated"))

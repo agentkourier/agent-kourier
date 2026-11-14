@@ -3,8 +3,8 @@
 // API URL so Agent Kourier can talk to the fake Slack, and a before-send gate for failover tests.
 //
 // All exist only when the binary is built with the testhooks tag. In the default build, which is the
-// production build, AfterPost and BeforeSend do nothing and SlackAPIURL returns "", and the binary contains
-// neither the crash nor the names of the environment variables (buildcheck_test.go proves it). The
+// production build, AfterPost and BeforeSend do nothing, SlackAPIURL returns "" and Overrides has no field, and the binary
+// contains neither the crash nor the names of the environment variables (buildcheck_test.go proves it). The
 // override moves where the API calls go, never which token they carry.
 package testhooks
 
