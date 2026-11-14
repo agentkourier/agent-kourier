@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -31,7 +32,29 @@ import (
 	"github.com/agentkourier/agent-kourier/test/stubagent"
 )
 
-func TestMain(m *testing.M) { goleak.VerifyTestMain(m) }
+// noDNS is the error of every DNS query this package's tests make (see TestMain).
+const noDNS = "this package's tests send no DNS query"
+
+// TestMain fails every DNS query at once, before any test runs, and then checks that no test left a goroutine behind.
+// A Run probes the agents of its Bindings, and the example config's agent (api/v1alpha1/testdata) is at a host that
+// resolves nowhere. Tests that look it up at once share one lookup, which Go's resolver lets run on after a caller gives
+// up (net/lookup.go), until the DNS server answers or the resolver's own timeouts run out. On a slow DNS server that
+// outlasts the last test, and goleak fails the package. The servers of these tests listen on loopback addresses, which
+// need no lookup. internal/dialect/kagentv1's dialer, which makes the probes' lookups, uses net.DefaultResolver.
+func TestMain(m *testing.M) {
+	net.DefaultResolver = &net.Resolver{PreferGo: true, Dial: func(context.Context, string, string) (net.Conn, error) {
+		return nil, errors.New(noDNS)
+	}}
+	goleak.VerifyTestMain(m)
+}
+
+func TestTheTestsResolveNoNameThroughDNS(t *testing.T) {
+	t.Parallel()
+	_, err := net.DefaultResolver.LookupHost(t.Context(), "kagent-controller.kagent-pilot")
+	if err == nil || !strings.Contains(err.Error(), noDNS) {
+		t.Fatalf("a lookup of the example config's agent was not refused by TestMain's resolver: %v", err)
+	}
+}
 
 // jwt is an unsigned token with an email claim, which the stub reads as the owner.
 func jwt(email string) string {
