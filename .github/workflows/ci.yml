@@ -1,19 +1,22 @@
 # Pull requests and pushes to main: the checks `make` runs locally, nothing else. `make test` is
-# test-race, test-testhooks and test-scripts in turn; here they are jobs of their own, which run side by side,
-# because the two race passes alone outlast one job's budget on a runner of this size. make test-postgres, which make
-# test does not run, is a job of its own too. Nothing is retried. test-testhooks runs only the packages the testhooks
-# tag changes, as its comment explains; nothing else is skipped but on a docs-only pull request, below. The kind tiers
-# (make e2e-fast and the others) are not here; RELEASING.md says what they would need. The one job that uses kind is
-# crd-corpus, whose cluster has only the CRDs.
+# test-race, test-testhooks and test-scripts in turn; here they run side by side, because the two race passes alone
+# outlast one job's budget on a runner of this size: each pass is split over the legs of a matrix job (test-shard,
+# test-testhooks-shard), each leg running its part of the pass's packages, and test-scripts is a job of its own. The
+# jobs test and test-testhooks, the required checks, run nothing but a check that every job they need passed. make
+# test-postgres, which make test does not run, is a job of its own too. Nothing is retried. The testhooks pass runs only
+# the packages the testhooks tag changes, as its comment explains; nothing else is skipped but on a docs-only pull
+# request, below. The kind tiers (make e2e-fast and the others) are not here; RELEASING.md says what they would need.
+# The one job that uses kind is crd-corpus, whose cluster has only the CRDs.
 #
 # A docs-only pull request is one whose changed paths are all on the list in hack/ci/docs-only.sh, each as a regular
 # file or deleted: maintainer prose such as spec.md and AGENTS.md, docs/brand, docs/spikes, and the site's media under
 # docs/assets, whose content no Go test, script test, image build, scanner or CodeQL reads but for two tests that repeat
 # make docs-check, which lint runs (the script says which). A symlink or submodule anywhere on the list runs everything:
 # the docs agent's tests walk the real docs/ and refuse any symlink in it. README.md and the pages under docs/ are not
-# on it: tests read them. On one, test, test-testhooks, test-postgres, crd-corpus, docs-agent and echo-agent still
-# start, check out and run the docs-only step, then skip every other step, and each reports success under its own name,
-# as do govulncheck and trivy in security.yml and analyze in codeql.yml. They skip steps, not the job: a job-level if is
+# on it: tests read them. On one, the legs of test-shard and test-testhooks-shard, test-scripts, test-postgres,
+# crd-corpus, docs-agent and echo-agent still start, check out and run the docs-only step, then skip every other step,
+# and each reports success under its own name, as do govulncheck and trivy in security.yml and analyze in codeql.yml;
+# test and test-testhooks then pass, as their legs did. They skip steps, not the job: a job-level if is
 # evaluated before the matrix expands (it cannot read matrix), so a crd-corpus skipped there reports no check named
 # crd-corpus (1.37) or crd-corpus (1.33), and those required checks would wait forever. lint runs in full: it takes
 # about a minute and a half, and its make docs-check reads the text files under docs/assets (SVG, captions), as
@@ -74,9 +77,15 @@ jobs:
       # GitHub caps a repository's caches at 10 GB in all by default; an organization owner or repository admin can
       # raise the cap, and use past 10 GB is billed. Past the cap GitHub still saves the new entry, then deletes
       # entries, least recently accessed first, until the total is under it; it also deletes any entry not accessed
-      # for 7 days. One entry of each cache in the four workflows, with CodeQL's own, comes to about 4 GB, and a push
-      # to main holds a second entry of each it saves until its prune jobs run. The timeouts stay at the cold-cache
-      # times: a run after an eviction starts cold.
+      # for 7 days. One entry of each cache in the four workflows, with CodeQL's own, comes to about 5.4 GB, of which
+      # the four test legs' (go-test-1, go-test-2, go-test-testhooks-1 and go-test-testhooks-2) are about 2.4 GB: a
+      # leg's entry holds the module cache and the race builds of every dependency of its packages, most of which the
+      # other leg of its pass builds too. A push to main holds a second entry of each cache it saves until its prune
+      # jobs run: about 9.4 GB in all while ci's are in flight, and up to about 10.8 GB if security's and codeql's saves
+      # land before their own prunes run. Past 10 GB GitHub evicts the least recently restored entries: first those no
+      # run restores any more, then whichever were restored longest ago, which may be one the prunes would delete anyway
+      # or another workflow's (docs.yml's restore only on a docs change), whose next run then starts cold. The timeouts
+      # stay at the cold-cache times: a run after an eviction starts cold.
       - id: setup-go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -129,11 +138,25 @@ jobs:
             ~/.cache/golangci-lint
           key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
-  # Observed on a cold cache: go test -race ./... took 16 minutes, with no failure. 30 is nearly twice that. Its cache
-  # holds the race build of every package, which test-postgres restores too.
-  test:
+  # make test-race, split over the legs of a matrix: with TEST_SHARD set, the Makefile has hack/ci/test-shard.sh give
+  # each leg its part of go list -race ./..., balanced by the seconds in hack/ci/test-weights/race.txt, so that the legs
+  # together run each package once, longest first. A leg's number and the number of legs come from the strategy
+  # context, not from the matrix's values, so the split always covers every leg the matrix has; hack/ci/testshards'
+  # test holds the legs' list, cache keys and cache-prune's prefixes to each other. Two legs: in a push run on main
+  # (four packages at a time on 4 vCPUs) the packages' times sum to about 1,410 s, about 355 s of wall time, and the
+  # slowest, internal/render at about 185 s, is the floor of the leg that runs it; two legs of about 705 s each already
+  # reach that floor, so a third would end no sooner and would only cost a runner and a cache. Each leg's cache is its
+  # own (go-test-<leg>-): one cache that one leg saved would hold only that leg's packages and test results. The job
+  # test below is the required check. Observed on a cold cache: go test -race ./... took 16 minutes in one job, with no
+  # failure; 30 is nearly twice that, for a leg that builds about half of it.
+  test-shard:
+    name: test-shard (${{ matrix.leg }})
     runs-on: ubuntu-26.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [1, 2]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -169,8 +192,8 @@ jobs:
           path: |
             ${{ steps.go-env.outputs.modcache }}
             ${{ steps.go-env.outputs.gocache }}
-          key: go-test-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
-          restore-keys: go-test-${{ runner.os }}-
+          key: go-test-${{ matrix.leg }}-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: go-test-${{ matrix.leg }}-${{ runner.os }}-
       - name: Mark the restored Go caches
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         env:
@@ -178,18 +201,19 @@ jobs:
           CACHE_RESTORED_KEY: ${{ steps.go-cache.outputs.cache-matched-key }}
         run: hack/ci/actions-cache.sh mark
       # The chart tests (test/chart) render with helm and skip without it, so CI installs it and
-      # AGENTKOURIER_REQUIRE_HELM below turns a missing helm into a failure, never a pass by skipping.
+      # AGENTKOURIER_REQUIRE_HELM below turns a missing helm into a failure, never a pass by skipping. Every leg has it,
+      # whichever runs test/chart.
       - if: ${{ steps.docs-only.outputs.skip != 'true' }}
         uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
         with:
           # The version test/chart passes with; release.yml pins the same one.
           version: v4.3.2
       - if: ${{ steps.docs-only.outputs.skip != 'true' }}
-        run: make test-race
+        run: make test-race TEST_SHARD="$((LEG_INDEX + 1))/${LEG_COUNT}"
         env:
           AGENTKOURIER_REQUIRE_HELM: "1"
-      - if: ${{ steps.docs-only.outputs.skip != 'true' }}
-        run: make test-scripts
+          LEG_INDEX: ${{ strategy.job-index }}
+          LEG_COUNT: ${{ strategy.job-total }}
       - id: go-trim
         name: Trim the Go caches to what this run used
         if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -202,16 +226,75 @@ jobs:
             ${{ steps.go-env.outputs.gocache }}
           key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
-  # The ./internal/... packages whose test build the testhooks tag changes, built with the tag: those with a file the tag
-  # selects or drops, test files included, and those whose code or tests reach, in any module, a package whose
-  # importers compile other files under the tag. hack/ci/testhooks-packages.sh computes the list with go list on each
-  # run, so a package that gains such an import joins it, and fails rather than run an empty one. Every other package
-  # compiles to the same packages with the tag as without it, so the first pass has already run it.
-  # It has no chart tests, so no helm. 30 is the same budget as the first pass, whose build it repeats in part. Its
-  # cache is its own, since test's holds neither the tagged builds nor their test results.
-  test-testhooks:
+  # make test-scripts, which make test runs after the two passes: the scripts' own tests, in a job of their own so that
+  # no leg waits for them. They took about 20 s in the job they shared with the race pass. The Go they run builds only
+  # small fixture modules of their own, so the job keeps no Go cache.
+  test-scripts:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The merge commit and both its parents, for the docs-only step.
+          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
+      # On a docs-only pull request every step after this one skips; the header says why that is safe.
+      - id: docs-only
+        name: Classify the pull request's changes
+        if: ${{ github.event_name == 'pull_request' }}
+        continue-on-error: true
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          scope=$(hack/ci/docs-only.sh)
+          echo "${scope}" >>"${GITHUB_OUTPUT}"
+      - if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        run: make test-scripts
+
+  # The required check named test (the main ruleset, and CI_REQUIRED_JOBS in hack/release/check-ci.sh): it passes only
+  # when every leg of test-shard and test-scripts passed, which between them run what one job named test ran before the
+  # race pass was split. It runs however they ended (always()), since a check whose job was skipped counts as passed:
+  # a job it needs that failed, was cancelled or was skipped fails it. jq reads only the needs context, through env; the
+  # job checks nothing out, runs nothing from the pull request and has no token permission. On a docs-only pull
+  # request the legs skip their steps and pass, and so does it.
+  test:
+    needs: [test-shard, test-scripts]
+    if: ${{ always() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require every job it needs to have passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"${NEEDS}"
+          jq -e 'length > 0 and all(.[]; .result == "success")' <<<"${NEEDS}" >/dev/null
+
+  # make test-testhooks, split over the legs of a matrix as test-shard splits the race pass, with the weights in
+  # hack/ci/test-weights/testhooks.txt. The pass runs the ./internal/... packages whose test build the testhooks tag
+  # changes, built with the tag: those with a file the tag selects or drops, test files included, and those whose code
+  # or tests reach, in any module, a package whose importers compile other files under the tag.
+  # hack/ci/testhooks-packages.sh computes the list with go list on each run, so a package that gains such an import
+  # joins it, and fails rather than run an empty one; every leg computes the same list and takes its part. Every other
+  # package compiles to the same packages with the tag as without it, so the race pass has already run it. Two legs: in
+  # a push run on main the 14 packages' times sum to about 645 s, and the slowest, internal/broker at about 115 s, is
+  # the floor; two legs of about 320 s (80 s at four at a time) reach it. It has no chart tests, so no helm. 30 is the
+  # same budget as the race pass's, whose build it repeats in part. Each leg's cache is its own
+  # (go-test-testhooks-<leg>-), since the race legs' hold neither the tagged builds nor their test results.
+  test-testhooks-shard:
+    name: test-testhooks-shard (${{ matrix.leg }})
     runs-on: ubuntu-26.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [1, 2]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -247,8 +330,8 @@ jobs:
           path: |
             ${{ steps.go-env.outputs.modcache }}
             ${{ steps.go-env.outputs.gocache }}
-          key: go-test-testhooks-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
-          restore-keys: go-test-testhooks-${{ runner.os }}-
+          key: go-test-testhooks-${{ matrix.leg }}-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: go-test-testhooks-${{ matrix.leg }}-${{ runner.os }}-
       - name: Mark the restored Go caches
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         env:
@@ -256,7 +339,10 @@ jobs:
           CACHE_RESTORED_KEY: ${{ steps.go-cache.outputs.cache-matched-key }}
         run: hack/ci/actions-cache.sh mark
       - if: ${{ steps.docs-only.outputs.skip != 'true' }}
-        run: make test-testhooks
+        run: make test-testhooks TEST_SHARD="$((LEG_INDEX + 1))/${LEG_COUNT}"
+        env:
+          LEG_INDEX: ${{ strategy.job-index }}
+          LEG_COUNT: ${{ strategy.job-total }}
       - id: go-trim
         name: Trim the Go caches to what this run used
         if: ${{ !cancelled() && steps.go-cache.outcome == 'success' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -269,11 +355,29 @@ jobs:
             ${{ steps.go-env.outputs.gocache }}
           key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
+  # The required check named test-testhooks: every leg of test-testhooks-shard passed. As test does for the race pass,
+  # it runs however they ended, reads only the needs context and fails unless each passed.
+  test-testhooks:
+    needs: [test-testhooks-shard]
+    if: ${{ always() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require every job it needs to have passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"${NEEDS}"
+          jq -e 'length > 0 and all(.[]; .result == "success")' <<<"${NEEDS}" >/dev/null
+
   # The tests that need a database skip in the jobs above, which have none: without this job the store conformance
   # suite runs on SQLite only. hack/postgres/test.sh starts a throwaway Postgres container, which the runner's Docker
-  # serves, and sets the DSN those tests read, so they cannot skip here. It builds two packages that test builds, with
-  # -race as test does, and runs their tests with -count=1, which never reads a cached result, so it restores test's
-  # cache and saves none.
+  # serves, and sets the DSN those tests read, so they cannot skip here. It builds two packages the race pass builds,
+  # internal/broker and internal/store/postgres, with -race as that pass does, and runs their tests with -count=1, which
+  # never reads a cached result, so it saves no cache. It restores the first race leg's: under the weights checked in,
+  # that leg runs both packages, so its cache holds their builds; were a refresh of the weights to move one to the
+  # other leg, this job would build what it lacks, a slower run and no failure.
   test-postgres:
     runs-on: ubuntu-26.04
     timeout-minutes: 30
@@ -312,8 +416,8 @@ jobs:
           path: |
             ${{ steps.go-env.outputs.modcache }}
             ${{ steps.go-env.outputs.gocache }}
-          key: go-test-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
-          restore-keys: go-test-${{ runner.os }}-
+          key: go-test-1-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: go-test-1-${{ runner.os }}-
       - if: ${{ steps.docs-only.outputs.skip != 'true' }}
         run: make test-postgres
 
@@ -549,7 +653,7 @@ jobs:
   # Deleting an entry a pull request is downloading at that moment can fail that restore, and the job then runs cold;
   # a failed restore does not fail it.
   cache-prune:
-    needs: [lint, test, test-testhooks, crd-corpus, docs-agent, echo-agent]
+    needs: [lint, test-shard, test-testhooks-shard, crd-corpus, docs-agent, echo-agent]
     if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 5
@@ -561,7 +665,8 @@ jobs:
         with:
           persist-credentials: false
       - run: >-
-          hack/ci/actions-cache.sh prune "go-lint-${RUNNER_OS}-" "go-test-${RUNNER_OS}-" "go-test-testhooks-${RUNNER_OS}-"
-          "go-crd-corpus-${RUNNER_OS}-" "go-docs-agent-${RUNNER_OS}-" "pip-echo-agent-${RUNNER_OS}-"
+          hack/ci/actions-cache.sh prune "go-lint-${RUNNER_OS}-" "go-test-1-${RUNNER_OS}-" "go-test-2-${RUNNER_OS}-"
+          "go-test-testhooks-1-${RUNNER_OS}-" "go-test-testhooks-2-${RUNNER_OS}-" "go-crd-corpus-${RUNNER_OS}-"
+          "go-docs-agent-${RUNNER_OS}-" "pip-echo-agent-${RUNNER_OS}-"
         env:
           GH_TOKEN: ${{ github.token }}

@@ -214,11 +214,24 @@ belongs with a change to the other.
 ## CI
 
 `.github/workflows/ci.yml` runs `make fmt` (no diff), `make lint` and `make build` (the `lint` job), and what `make test`
-runs as two more jobs side by side, `make test-race` with `make test-scripts` (`test`) and `make test-testhooks`
-(`test-testhooks`), on pull requests and pushes to `main`. The `test` job has helm installed and `AGENTKOURIER_REQUIRE_HELM=1`
-so the chart tests cannot skip. The `test-postgres` job (`make test-postgres`, `hack/postgres/test.sh`) runs the Postgres
-store's tests, the store conformance suite among them, and the broker's Postgres tests against a throwaway Postgres
-container; those tests skip in `test` and `test-testhooks`, which have no database. It is not a required check. To make
+runs, on pull requests and pushes to `main`, in jobs that run side by side. Each race pass is split over the legs of a
+matrix job: `test-shard (1)` and `test-shard (2)` each run part of `make test-race`, and `test-testhooks-shard (1)` and
+`test-testhooks-shard (2)` part of `make test-testhooks`; `test-scripts` runs `make test-scripts`. A leg runs its
+target with `TEST_SHARD=<leg>/<legs>`, its number and the number of legs taken from the strategy context, and
+`hack/ci/test-shard.sh` gives it its part of the pass's packages: each package goes to exactly one leg, longest first,
+balanced by the seconds in `hack/ci/test-weights` (a package not listed there weighs 10). A leg that would get no
+package, when a pass has fewer packages than legs, fails rather than run none. There are two legs per pass because the
+slowest package is the floor of its leg's time (`internal/render`, about 185 s of a race pass whose packages sum to
+about 1,410 s at four at a time, and `internal/broker`, about 115 s of 645 s in the testhooks pass), and two legs
+already reach it: a third would end no sooner and would cost a runner and a cache. A leg is added by adding its number
+to the job's `matrix.leg` and its cache prefix to `cache-prune`; `hack/ci/testshards`' test fails until both are there.
+`hack/ci/test-shard.sh` says how to refresh the weights from a push run on `main`; stale weights only unbalance the
+legs. The required checks `test` and `test-testhooks` are jobs of their own that run however their legs ended and fail
+unless every job they need succeeded (for `test`, both `test-shard` legs and `test-scripts`); they check nothing out.
+The `test-shard` legs have helm installed and `AGENTKOURIER_REQUIRE_HELM=1` so the chart tests cannot skip. The
+`test-postgres` job (`make test-postgres`, `hack/postgres/test.sh`) runs the Postgres store's tests, the store
+conformance suite among them, and the broker's Postgres tests against a throwaway Postgres container; those tests skip
+in the race passes' legs, which have no database. It is not a required check. To make
 it one, the owner adds `test-postgres` from `ci` to the `main` ruleset, and the same change adds it to `CI_REQUIRED_JOBS` in
 `hack/release/check-ci.sh` and to the lists above. The `crd-corpus` job (`make crd-corpus`, `hack/kind/crd-corpus.sh`) brings up
 a kind cluster with only the three CRDs from `charts/agent-kourier/files/crds`, with no image and no Agent Kourier, and has
@@ -236,8 +249,9 @@ ignore comments hide only the findings the script lists. It runs with `contents:
 behaves the same on a fork's pull request. It belongs in the `main` ruleset's required checks: the owner adds
 `zizmor` from `ci` there, and the same change adds it to `CI_REQUIRED_JOBS` in `hack/release/check-ci.sh` and to
 the lists above. The Go jobs in `ci.yml`, `security.yml`, `codeql.yml` and `docs.yml` keep the module cache and the build cache
-(plus golangci-lint's cache in the jobs that lint) in Actions caches, one per job, except that `test-postgres` restores
-`test`'s and the two `crd-corpus` jobs share one, which `crd-corpus (1.37)` saves. A key is
+(plus golangci-lint's cache in the jobs that lint) in Actions caches, one per job and one per leg of `test-shard` and
+`test-testhooks-shard` (`go-test-<leg>-…`, `go-test-testhooks-<leg>-…`), except that `test-postgres` restores the first
+race leg's and the two `crd-corpus` jobs share one, which `crd-corpus (1.37)` saves. A key is
 `go-<cache>-<runner OS>-go<Go version>-<hash of the go.sum files it builds from (and, for govulncheck, its script)>-<commit>`, and a run restores the newest
 entry whose key starts with `go-<cache>-<runner OS>-`, so a pull request starts from what the latest push to `main`
 saved, test results included. Every push run on `main` saves, whether its steps passed or failed (a cancelled job saves
@@ -246,8 +260,14 @@ nothing, nor does a re-run of a job whose entry is already saved); pull requests
 empty when the restored entry is from another `go.sum` or Go version. After the saves, each of the four workflows'
 `cache-prune` job deletes all but the newest entry of every cache it saves (`codeql.yml`'s also deletes all but the
 newest of CodeQL's overlay-base databases); a listing or delete that fails is a warning, not a failure, so an API error
-there does not stop a release, and the next push's prune catches up. One entry of each cache comes to about 4 GB of the repository's
-10 GB cache limit, GitHub's default, past which GitHub evicts the least recently accessed entries. The jobs that
+there does not stop a release, and the next push's prune catches up. One entry of each cache comes to about 5.4 GB of
+the repository's 10 GB cache limit, about 2.4 GB of it the four test legs' entries (each holds the module cache and
+the race builds of its packages' dependencies, most of which the other leg of its pass holds too). A push to `main`
+holds a second entry of each cache it saves until the prune runs: about 9.4 GB while `ci`'s are in flight, up to about
+10.8 GB if `security.yml`'s and `codeql.yml`'s land before their prunes. The limit is GitHub's default; a repository
+admin or organization owner can raise it, and use past 10 GB is then billed. Past it GitHub evicts the least recently
+restored entries first, so a cache that was restored longest ago (one the prune would delete anyway, or a `docs.yml`
+cache, restored only on a docs change) can go, and the next run that wants it starts cold. The jobs that
 install Python packages, `echo-agent` in `ci.yml` and `build` in `docs.yml`, keep pip's cache under an exact key on
 the job, the runner OS, the Python version and the requirements files they install from: a push to `main` saves it
 only when those files or the Python version change, and `cache-prune` then deletes the old entry. `docs.yml` runs on a push to
@@ -262,9 +282,10 @@ deleted (maintainer prose such as `spec.md` and `AGENTS.md`, `docs/brand`, `docs
 `docs/assets`), whose content no test, image, scanner or CodeQL reads, but for two tests of the docs checks that `make
 docs-check` in `lint` repeats; `README.md` and the pages under `docs/` are not on it, since tests read them. A symlink
 or submodule on the list is not docs-only: the docs agent's tests walk the real `docs/` and refuse any symlink in it. On
-one, `test`, `test-testhooks`, `test-postgres`, both `crd-corpus` jobs, `docs-agent`, `echo-agent`, the `govulncheck`
-and `trivy` jobs and `analyze` check out, find the pull request docs-only, and skip their other steps, so each still
-reports success under its own name; `lint`, `zizmor` and `gitleaks` run in full. Anything else, including a failure to
+one, the `test-shard` and `test-testhooks-shard` legs, `test-scripts`, `test-postgres`, both `crd-corpus` jobs,
+`docs-agent`, `echo-agent`, the `govulncheck` and `trivy` jobs and `analyze` check out, find the pull request
+docs-only, and skip their other steps, so each still reports success under its own name, and `test` and
+`test-testhooks` pass as their legs did; `lint`, `zizmor` and `gitleaks` run in full. Anything else, including a failure to
 list the paths or a merge commit whose second parent is not the pull request's head, runs every step. A push to `main`
 always runs every step, so the push runs the release gate reads, and the caches they save, are as before. The header of
 `ci.yml` says why the jobs skip steps rather than the whole job, and `hack/ci/docsonly`'s test keeps the copies of the
