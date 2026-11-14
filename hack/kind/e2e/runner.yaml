@@ -217,6 +217,17 @@ spec:
           # E2E_CONFIG_SOURCE is where the tier's Agent Kourier reads its config from, files (the ConfigMap) or crds (custom resources): e2e-run.sh
           # reads it from the Deployment as it is now, so that a tier moved between the two in place is run as it is, and the CR_ tests skip on files.
           # E2E_PHASE is the part of a scenario that a script runs between its own steps (hack/kind/crs-migration.sh, hack/kind/two-apps.sh); empty in an ordinary run.
-          # E2E_CONNECTION_NAMESPACES is the broker's admission list, as its Deployment has it (e2e-run.sh reads it): the MC_ tests (not in this pattern; E2E_RUN=^TestMC_ or make e2e-two-apps) skip unless it holds team-a.
-          env: [{name: E2E_TIER, value: "@TIER@"}, {name: E2E_STUB_URL, value: "@STUB_URL@"}, {name: E2E_CONFIG_SOURCE, value: "@CONFIG_SOURCE@"}, {name: E2E_PHASE, value: "@PHASE@"}, {name: E2E_CONNECTION_NAMESPACES, value: "@CONNECTION_NAMESPACES@"}]
+          # E2E_CHAT_CONNECTION, E2E_CONNECTION_NAMESPACES and E2E_CONNECTION_NAMESPACE_SELECTOR are the broker's admission, as its Deployment has it, and
+          # E2E_NAMESPACES the labels of the namespaces the MC_ tests ask about: e2e-run.sh puts them in the ConfigMap e2e-admission (lib.sh's runner_admission),
+          # and not here, since a selector holds quotes, braces and slashes. The MC_ tests (not in this pattern; E2E_RUN=^TestMC_ or make e2e-two-apps) skip
+          # unless it admits team-a.
+          env:
+            - {name: E2E_TIER, value: "@TIER@"}
+            - {name: E2E_STUB_URL, value: "@STUB_URL@"}
+            - {name: E2E_CONFIG_SOURCE, value: "@CONFIG_SOURCE@"}
+            - {name: E2E_PHASE, value: "@PHASE@"}
+            - {name: E2E_CHAT_CONNECTION, valueFrom: {configMapKeyRef: {name: e2e-admission, key: chat-connection}}}
+            - {name: E2E_CONNECTION_NAMESPACES, valueFrom: {configMapKeyRef: {name: e2e-admission, key: connection-namespaces}}}
+            - {name: E2E_CONNECTION_NAMESPACE_SELECTOR, valueFrom: {configMapKeyRef: {name: e2e-admission, key: connection-namespace-selector}}}
+            - {name: E2E_NAMESPACES, valueFrom: {configMapKeyRef: {name: e2e-admission, key: namespaces}}}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}

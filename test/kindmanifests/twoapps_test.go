@@ -172,7 +172,8 @@ func TestTheTwoAppsManifestsBindTheChannelsOfTheTests(t *testing.T) {
 }
 
 // TestTheAdmissionListIsTheNamespacesTheRunnerPlaysIn: the list the tier is given names the three namespaces the MC_ tests use, the runner has a Role in each
-// of them (and e2e-run.sh makes them, so that the Roles apply), and the Job learns the list from the Deployment through a variable the tests read.
+// of them (and e2e-run.sh makes them, so that the Roles apply), and the Job learns the admission from the Deployment through the ConfigMap that
+// runner_admission makes, with nothing of it spliced into the Job's YAML.
 func TestTheAdmissionListIsTheNamespacesTheRunnerPlaysIn(t *testing.T) {
 	raw, err := os.ReadFile(twoAppsExtra)
 	if err != nil {
@@ -200,16 +201,101 @@ func TestTheAdmissionListIsTheNamespacesTheRunnerPlaysIn(t *testing.T) {
 			t.Errorf("e2e-run.sh does not make the namespace %s that the runner's Role is in", ns)
 		}
 	}
-	var job batchv1.Job
-	load(t, runnerFile, "Job", &job)
-	var found bool
-	for _, e := range job.Spec.Template.Spec.Containers[0].Env {
-		if e.Name == "E2E_CONNECTION_NAMESPACES" {
-			found = e.Value == "@CONNECTION_NAMESPACES@"
+	if !strings.Contains(string(run), `runner_admission "${BUILD}/admission"`) {
+		t.Error("e2e-run.sh does not hand the admission to the runner with runner_admission")
+	}
+	runner, err := os.ReadFile(runnerFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range strings.Split(string(run), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(l), "sed ") && strings.Contains(l, "CONNECTION") {
+			t.Errorf("e2e-run.sh splices an admission value into the Job's YAML: %s", l)
 		}
 	}
-	if !found || !strings.Contains(string(run), `-e "s/@CONNECTION_NAMESPACES@/${connection_namespaces}/"`) || !strings.Contains(string(run), "AGENTKOURIER_CONNECTION_NAMESPACES") {
-		t.Errorf("the Job's E2E_CONNECTION_NAMESPACES is not the Deployment's AGENTKOURIER_CONNECTION_NAMESPACES, which e2e-run.sh reads and puts in with @CONNECTION_NAMESPACES@")
+	if strings.Contains(string(runner), "@CONNECTION") || strings.Contains(string(runner), "@CHAT_CONNECTION") {
+		t.Errorf("%s has a placeholder for an admission value; the Job reads them from the ConfigMap e2e-admission", runnerFile)
+	}
+	var job batchv1.Job
+	load(t, runnerFile, "Job", &job)
+	want := map[string]string{"E2E_CHAT_CONNECTION": "chat-connection", "E2E_CONNECTION_NAMESPACES": "connection-namespaces",
+		"E2E_CONNECTION_NAMESPACE_SELECTOR": "connection-namespace-selector", "E2E_NAMESPACES": "namespaces"}
+	for _, e := range job.Spec.Template.Spec.Containers[0].Env {
+		key, ok := want[e.Name]
+		if !ok {
+			continue
+		}
+		delete(want, e.Name)
+		if e.Value != "" || e.ValueFrom == nil || e.ValueFrom.ConfigMapKeyRef == nil || e.ValueFrom.ConfigMapKeyRef.Name != "e2e-admission" || e.ValueFrom.ConfigMapKeyRef.Key != key {
+			t.Errorf("the Job's %s = %+v; want it from the key %s of the ConfigMap e2e-admission", e.Name, e, key)
+		}
+	}
+	if len(want) > 0 {
+		t.Errorf("the Job has no %v", want)
+	}
+}
+
+// TestRunnerAdmissionHandsTheDeploymentsValuesOverAsTheyAre: runner_admission writes what kubectl reads of the Deployment, a selector with quotes, braces and
+// a slash included, to files byte for byte and makes the ConfigMap from those files, and refuses a list that is not namespace names.
+func TestRunnerAdmissionHandsTheDeploymentsValuesOverAsTheyAre(t *testing.T) {
+	const selector = `{"matchLabels":{"agentkourier.dev/serve":"true"},"matchExpressions":[{"key":"a/b","operator":"In","values":["x'y"]}]}`
+	// kubectl answers each Deployment read with the variable's value from the stub's environment (STUB_<NAME>), and the namespaces read with STUB_NAMESPACES.
+	const kubectl = `#!/bin/bash
+echo "kubectl $*" >> "$STUB_LOG/calls"
+case "$*" in
+  *'@.name=="AGENTKOURIER_CHAT_CONNECTION"'*) printf '%s' "$STUB_CHAT_CONNECTION" ;;
+  *'@.name=="AGENTKOURIER_CONNECTION_NAMESPACES"'*) printf '%s' "$STUB_CONNECTION_NAMESPACES" ;;
+  *'@.name=="AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR"'*) printf '%s' "$STUB_CONNECTION_NAMESPACE_SELECTOR" ;;
+  *"get namespace agent-kourier team-a team-b team-c -o json"*) printf '%s' "$STUB_NAMESPACES" ;;
+esac
+`
+	admission := func(t *testing.T, list string) (dir, calls, out string, err error) {
+		t.Helper()
+		bin, logs := t.TempDir(), t.TempDir()
+		if err := os.WriteFile(filepath.Join(bin, "kubectl"), []byte(kubectl), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		dir = filepath.Join(t.TempDir(), "admission")
+		script := `set -eu; . "$1"; K=(kubectl --context c); runner_admission "$2"`
+		cmd := exec.CommandContext(t.Context(), "bash", "-c", script, "bash", twoAppsLib, dir)
+		cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "STUB_LOG="+logs, "STUB_CHAT_CONNECTION=agent-kourier/slack-fast",
+			"STUB_CONNECTION_NAMESPACES="+list, "STUB_CONNECTION_NAMESPACE_SELECTOR="+selector, `STUB_NAMESPACES={"items":[]}`)
+		raw, err := cmd.CombinedOutput()
+		return dir, readLog(t, logs, "calls"), string(raw), err
+	}
+
+	dir, calls, out, err := admission(t, "team-a,team-b")
+	if err != nil {
+		t.Fatalf("runner_admission = %v\n%s", err, out)
+	}
+	for key, want := range map[string]string{"chat-connection": "agent-kourier/slack-fast", "connection-namespaces": "team-a,team-b", "connection-namespace-selector": selector, "namespaces": `{"items":[]}`} {
+		got, err := os.ReadFile(filepath.Join(dir, key))
+		if err != nil || string(got) != want {
+			t.Errorf("the file %s holds %q (%v); want %q", key, got, err, want)
+		}
+	}
+	del := strings.Index(calls, "kubectl --context c -n e2e delete configmap e2e-admission --ignore-not-found")
+	create := strings.Index(calls, "kubectl --context c -n e2e create configmap e2e-admission")
+	if del < 0 || create < del {
+		t.Fatalf("kubectl was asked:\n%s\nwant the ConfigMap e2e-admission deleted, then made", calls)
+	}
+	for _, key := range []string{"chat-connection", "connection-namespaces", "connection-namespace-selector", "namespaces"} {
+		if !strings.Contains(calls[create:], "--from-file="+key+"="+filepath.Join(dir, key)) {
+			t.Errorf("the ConfigMap is not made with the key %s from its file:\n%s", key, calls[create:])
+		}
+	}
+	if strings.Contains(calls, "agentkourier.dev/serve") {
+		t.Errorf("a value of the Deployment is on a command line:\n%s", calls)
+	}
+
+	for _, list := range []string{"team-a team-b", "team-a;team-b", "Team-A", `team-a"`} {
+		_, calls, out, err := admission(t, list)
+		if err == nil || !strings.Contains(out, "want namespace names separated by commas") {
+			t.Errorf("runner_admission with the list %q = %v\n%s\nwant it refused", list, err, out)
+		}
+		if strings.Contains(calls, "create configmap") {
+			t.Errorf("runner_admission made the ConfigMap with the list %q", list)
+		}
 	}
 }
 
@@ -282,7 +368,8 @@ func TestTheAdmissionListGoesInTheRouteUpgradeOnly(t *testing.T) {
 }
 
 // TestTheTwoAppsScriptRunsEveryMCTest: the main Job's pattern leaves the MC_ tests out (TestTheRunnerJobRunsEveryE2ETest), so make e2e-two-apps is what runs them,
-// all of them in one Job pass, and then the admission test in its two phases, and the test of a broker with no connection of its own in three. A test of that family that the script's pattern did not select would run nowhere.
+// all of them in one Job pass, and then the admission test in its two phases, by the list and by a label, and the test of a broker with no connection of its own in
+// three, and on every namespace. A test of that family that the script's pattern did not select would run nowhere.
 func TestTheTwoAppsScriptRunsEveryMCTest(t *testing.T) {
 	script, err := os.ReadFile("../../hack/kind/two-apps.sh")
 	if err != nil {
@@ -310,6 +397,18 @@ func TestTheTwoAppsScriptRunsEveryMCTest(t *testing.T) {
 	for _, want := range []string{"--set config.chatConnection=", "agent-kourier,team-a,team-b,team-c", "rbac.secretNames.agent-kourier={agent-kourier-agent-token,slack-fast}"} {
 		if !strings.Contains(string(script), want) {
 			t.Errorf("two-apps.sh does not have %q, which the steps without an own connection need", want)
+		}
+	}
+	// The selector's steps: team-a labelled, unlabelled and labelled again with the same pods; then every namespace, with nothing set and with {}, and no rule on
+	// namespaces for either.
+	for _, want := range []string{
+		`SERVE_SELECTOR='{"matchLabels":{"agentkourier.dev/serve":"true"}}'`, `--set-json "config.connectionNamespaceSelector=${SERVE_SELECTOR}"`,
+		"phase restored selector-labelled", "phase removed selector-unlabelled", "phase restored selector-relabelled", `same_pods "${pods}"`,
+		"namespaces_rule present", "route_says selector", "teamonly platform-admitted all", "route_says all", "namespaces_rule absent",
+		`--set-json 'config.connectionNamespaceSelector={}'`, "teamonly platform-admitted empty-selector",
+	} {
+		if !strings.Contains(string(script), want) {
+			t.Errorf("two-apps.sh does not have %q, which the steps of the selector and of every namespace need", want)
 		}
 	}
 	if !strings.Contains(string(mk), "e2e-two-apps:") || !strings.Contains(string(mk), "hack/kind/two-apps.sh") {
