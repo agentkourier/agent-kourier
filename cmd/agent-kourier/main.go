@@ -11,13 +11,19 @@
 //	                       below, all or nothing. crds reads Binding, AgentBackend and ChatConnection from the cluster, one
 //	                       object at a time, and ignores the directory
 //	AGENTKOURIER_CONFIG_DIR     with files, the resource files (default /etc/agent-kourier)
-//	AGENTKOURIER_CHAT_CONNECTION   with crds, optional when the namespaces below are set: namespace/name of the broker's own
-//	                       ChatConnection, which it always serves. Unset, the broker has no ChatConnection of its own and serves the
-//	                       namespaces below alone. With files it is refused, since the directory must hold exactly one ChatConnection
-//	AGENTKOURIER_CONNECTION_NAMESPACES   with crds, required when the own connection above is unset: the namespaces whose ChatConnections
-//	                       this broker serves besides its own, comma-separated, each a DNS-1123 label (no wildcard); spaces around an
-//	                       item are trimmed, empty items and repeats dropped. Unset, empty or only separators is no list, which serves
-//	                       the own connection alone. With files it is refused
+//	AGENTKOURIER_CHAT_CONNECTION   with crds, optional: namespace/name of the broker's own ChatConnection, which it always serves.
+//	                       Unset, the broker has no ChatConnection of its own and serves the namespaces the two variables below
+//	                       admit, or, when neither is set, every namespace. With files it is refused, since the directory must hold
+//	                       exactly one ChatConnection
+//	AGENTKOURIER_CONNECTION_NAMESPACES   with crds, optional: namespaces whose ChatConnections this broker serves besides its own,
+//	                       comma-separated, each a DNS-1123 label (no wildcard); spaces around an item are trimmed, empty items and
+//	                       repeats dropped. Read at start. Unset or empty is no list; a value of only commas and spaces is refused.
+//	                       With files it is refused
+//	AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR   with crds, optional: a metav1.LabelSelector as JSON; the namespaces whose labels it
+//	                       matches are admitted too, read live, so a label change admits or stops admitting a namespace with no
+//	                       restart. {} admits every namespace. Unset or empty is no selector. Decoded strictly (no unknown or repeated
+//	                       field, nothing after the object) and validated as Kubernetes validates a selector. With files it is refused.
+//	                       With none of the three set the broker serves the ChatConnections of every namespace (spec D54)
 //	AGENTKOURIER_DB_PATH        the SQLite file, on the volume (default /data/agent-kourier.db)
 //	AGENTKOURIER_STORE          sqlite (the default, one replica) or postgres
 //	AGENTKOURIER_POSTGRES_DSN_SECRET   with postgres, where the DSN is: namespace/name/key of a Secret, read through the
@@ -40,8 +46,8 @@
 //
 // It exits 0 after a signal; 1 when Slack rejects the tokens of its own connection (with files, the one of its directory; with crds and
 // no own connection a rejected token stops only that connection and not the process); 2 for a wrong config or wiring (or an unreadable
-// variable; with crds, also neither of the two variables above set, CRDs that are not installed, an own ChatConnection that is missing or
-// invalid, and, with no own connection, rows that were written before connections were recorded); 3 when RBAC denies it the Secrets, or
+// variable, a namespace list that names no namespace, or a selector that is not one; with crds, also CRDs that are not installed, an own
+// ChatConnection that is missing or invalid, and, with no own connection, rows that were written before connections were recorded); 3 when RBAC denies it the Secrets, or
 // with crds the custom resources; 4 for any other failure; and 5 when it was the leader and lost the lease, met a stale epoch, or had a chat
 // write or an agent call refused because its lease was past the renew deadline (spec D37): it ends at once, and Kubernetes restarts it
 // as a standby.
@@ -51,6 +57,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -65,7 +72,10 @@ import (
 	"syscall"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/validation"
+	kjson "sigs.k8s.io/json"
 
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 
@@ -109,17 +119,18 @@ func exitCode(err error) int {
 
 // envConfig is what the environment says.
 type envConfig struct {
-	configDir, dbPath, listen string
-	configSource              broker.ConfigSource
-	chatConnection            v1alpha1.ObjectRef // with crds only: the broker's own ChatConnection, zero when it has none (spec D53)
-	connectionNamespaces      []string           // with crds only: the admission list, none when unset
-	store                     broker.StoreConfig
-	election                  broker.ElectionConfig // with postgres only; its Identity is the pod's name, made unique by run
-	syncTimeout               time.Duration
-	klogV                     int
-	logLevel                  slog.Level
-	auditRetention            time.Duration // zero keeps the audit log for ever
-	telemetry                 telemetry.Config
+	configDir, dbPath, listen   string
+	configSource                broker.ConfigSource
+	chatConnection              v1alpha1.ObjectRef // with crds only: the broker's own ChatConnection, zero when it has none (spec D53)
+	connectionNamespaces        []string           // with crds only: the admission list, none when unset
+	connectionNamespaceSelector labels.Selector    // with crds only: the admission selector, nil when unset, empty for every namespace
+	store                       broker.StoreConfig
+	election                    broker.ElectionConfig // with postgres only; its Identity is the pod's name, made unique by run
+	syncTimeout                 time.Duration
+	klogV                       int
+	logLevel                    slog.Level
+	auditRetention              time.Duration // zero keeps the audit log for ever
+	telemetry                   telemetry.Config
 }
 
 // loadEnv reads the environment through getenv. A value it cannot read is an error wrapping
@@ -142,9 +153,9 @@ func loadEnv(getenv func(string) string) (envConfig, error) {
 	if c.connectionNamespaces, err = loadConnectionNamespaces(getenv, c.configSource); err != nil {
 		return c, err
 	}
-	// With neither, the broker could serve nothing, and the list is read at start, so nothing would change until a restart.
-	if c.configSource == broker.SourceCRDs && c.chatConnection == (v1alpha1.ObjectRef{}) && len(c.connectionNamespaces) == 0 {
-		return c, fmt.Errorf("%w: with AGENTKOURIER_CONFIG_SOURCE=crds, set AGENTKOURIER_CHAT_CONNECTION to the broker's own ChatConnection, or AGENTKOURIER_CONNECTION_NAMESPACES to the namespaces whose ChatConnections it serves, or both", broker.ErrWiring)
+	// With no own connection, no list and no selector, the broker serves every namespace (spec D54): the source reads a nil selector so.
+	if c.connectionNamespaceSelector, err = loadConnectionNamespaceSelector(getenv, c.configSource); err != nil {
+		return c, err
 	}
 	if c.syncTimeout, err = time.ParseDuration(get("AGENTKOURIER_SYNC_TIMEOUT", "30s")); err != nil || c.syncTimeout <= 0 {
 		return c, bad("AGENTKOURIER_SYNC_TIMEOUT", "a positive duration such as 30s", errors.Join(err, errors.New("not positive")))
@@ -180,8 +191,8 @@ func loadEnv(getenv func(string) string) (envConfig, error) {
 
 // loadSourceEnv reads the variables that choose where the resources are read from. The source is files unless the variable says crds,
 // and any other value is refused: there is no fallback. The broker's own connection is optional with crds, where a cluster may hold the
-// connections of several brokers: unset, it is the zero reference and the admission list must name the namespaces to serve (loadEnv checks
-// that, once the list is read). It is refused with files, whose directory must hold exactly one: ignoring it would serve the one connection
+// connections of several brokers: unset, it is the zero reference, and the broker serves the namespaces the list and the selector admit, or
+// every namespace when neither is set. It is refused with files, whose directory must hold exactly one: ignoring it would serve the one connection
 // the person did not name.
 func loadSourceEnv(getenv func(string) string) (broker.ConfigSource, v1alpha1.ObjectRef, error) {
 	var conn v1alpha1.ObjectRef
@@ -212,8 +223,8 @@ func loadSourceEnv(getenv func(string) string) (broker.ConfigSource, v1alpha1.Ob
 
 // loadConnectionNamespaces reads the admission list: the namespaces whose ChatConnections the broker serves besides its own. Each
 // item is trimmed and must be a DNS-1123 label, which leaves out a wildcard, a namespace/name and anything Kubernetes cannot hold; an
-// empty item is dropped and so is a repeat. Nothing set, or nothing but separators, is no list, which serves the own connection alone
-// (and with no own connection is refused, in loadEnv).
+// empty item is dropped and so is a repeat. Nothing set is no list. A value of nothing but commas and spaces is refused: it is a slip in a
+// template, and read as no list it would serve every namespace with no own connection and no selector (spec D54).
 // It is refused with the files source, which serves the one ChatConnection of its directory: ignoring it would serve what the person
 // did not mean. An error names the position of the bad item among the comma-separated ones (counting the empty), and never a value, since
 // the variable is one a person may paste a token into.
@@ -239,7 +250,81 @@ func loadConnectionNamespaces(getenv func(string) string, source broker.ConfigSo
 			out = append(out, item)
 		}
 	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("%w: %s is set and names no namespace (only commas and spaces): unset it, or name the namespaces", broker.ErrWiring, key)
+	}
 	return out, nil
+}
+
+// loadConnectionNamespaceSelector reads the admission selector: a metav1.LabelSelector as JSON, whose matching namespaces the broker serves
+// the ChatConnections of besides the list's. Unset or empty is no selector, the nil Selector: never labels.Nothing(), which is what
+// metav1.LabelSelectorAsSelector makes of a nil LabelSelector, and which would read namespaces to match none of them. Otherwise the value
+// must be one JSON object and nothing after it, decoded as the API server decodes one (field names case-sensitive, no field a
+// LabelSelector does not have and none twice: a repeated matchLabels would otherwise keep the last, which may be {}, every namespace), and
+// pass metav1.LabelSelectorAsSelector, which validates each key, value and operator. {}, or any selector that requires nothing, is the
+// empty Selector: every namespace. It is refused with the files source, as the list is.
+//
+// An error says what is wrong and never shows the value or a piece of it, a field name or a label included: the variable is one a person
+// may paste a token into. The decoders' and Kubernetes' own errors quote what they refuse, so they are not wrapped.
+func loadConnectionNamespaceSelector(getenv func(string) string, source broker.ConfigSource) (labels.Selector, error) {
+	const key = "AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR"
+	raw := getenv(key)
+	if raw == "" {
+		return nil, nil
+	}
+	bad := func(what string) error {
+		return fmt.Errorf("%w: %s %s (its value is not shown)", broker.ErrWiring, key, what)
+	}
+	if source == broker.SourceFiles {
+		return nil, fmt.Errorf("%w: %s is set with AGENTKOURIER_CONFIG_SOURCE=files, which serves the one ChatConnection of its directory: unset it", broker.ErrWiring, key)
+	}
+	dec := json.NewDecoder(strings.NewReader(raw))
+	var obj json.RawMessage
+	if err := dec.Decode(&obj); err != nil {
+		return nil, bad("is not JSON; want a LabelSelector as a JSON object, such as {\"matchLabels\":{...}}, or {} for every namespace")
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, bad("has more after the selector; want one JSON object")
+	}
+	if len(obj) == 0 || obj[0] != '{' { // the decoder skips the space before a value; null comes here as the text null
+		return nil, bad("is not a JSON object; want a LabelSelector, or {} for every namespace (unset it for no selector)")
+	}
+	var ls metav1.LabelSelector
+	for _, check := range []struct {
+		opt  kjson.StrictOption
+		what string
+	}{
+		{kjson.DisallowUnknownFields, "has a field that a LabelSelector does not have; want matchLabels and matchExpressions, whose items have key, operator and values (names are case-sensitive)"},
+		{kjson.DisallowDuplicateFields, "has a field twice"},
+	} {
+		strict, err := kjson.UnmarshalStrict(obj, &ls, check.opt)
+		if err != nil {
+			return nil, bad("does not have the shape of a LabelSelector; want matchLabels an object of strings and matchExpressions a list of objects")
+		}
+		if len(strict) > 0 {
+			return nil, bad(check.what)
+		}
+	}
+	// Each part on its own first, so that the error can say which part Kubernetes refuses without quoting it.
+	if _, err := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: ls.MatchLabels}); err != nil {
+		return nil, bad("matchLabels holds a key or a value that is not a valid label key or value")
+	}
+	for i, req := range ls.MatchExpressions {
+		switch req.Operator {
+		case metav1.LabelSelectorOpIn, metav1.LabelSelectorOpNotIn, metav1.LabelSelectorOpExists, metav1.LabelSelectorOpDoesNotExist:
+		default:
+			return nil, bad(fmt.Sprintf("matchExpressions item %d has an operator that is not In, NotIn, Exists or DoesNotExist", i+1))
+		}
+		if _, err := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{req}}); err != nil {
+			return nil, bad(fmt.Sprintf("matchExpressions item %d is not a valid requirement: its key or a value is not a valid label key or value, "+
+				"or its values do not suit its operator (In and NotIn need at least one, Exists and DoesNotExist none)", i+1))
+		}
+	}
+	sel, err := metav1.LabelSelectorAsSelector(&ls)
+	if err != nil {
+		return nil, bad("is not a valid label selector")
+	}
+	return sel, nil
 }
 
 // loadStoreEnv reads the store's variables. The DSN is a secret and its variable holds only where it is, but a person may put the DSN
@@ -377,7 +462,7 @@ func run(args []string, ver string, stdout, stderr io.Writer, getenv func(string
 		}
 	}
 	cfg := broker.RunConfig{
-		ConfigSource: env.configSource, ChatConnection: env.chatConnection, ConnectionNamespaces: env.connectionNamespaces, ConfigDir: env.configDir, DBPath: env.dbPath, Store: env.store, Election: env.election, Listener: ln, SyncTimeout: env.syncTimeout, KlogVerbosity: env.klogV, Logger: log, Telemetry: env.telemetry, ServiceVersion: ver, AuditRetention: env.auditRetention,
+		ConfigSource: env.configSource, ChatConnection: env.chatConnection, ConnectionNamespaces: env.connectionNamespaces, ConnectionNamespaceSelector: env.connectionNamespaceSelector, ConfigDir: env.configDir, DBPath: env.dbPath, Store: env.store, Election: env.election, Listener: ln, SyncTimeout: env.syncTimeout, KlogVerbosity: env.klogV, Logger: log, Telemetry: env.telemetry, ServiceVersion: ver, AuditRetention: env.auditRetention,
 	}
 	applyTestHooks(log)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

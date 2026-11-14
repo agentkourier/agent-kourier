@@ -48,7 +48,7 @@ func (r *refusals) served(conn string) bool {
 // connectionServed returns the Served of the timeout sweep: whether this broker serves the chat connection conn ("namespace/name"). The own
 // connection is served, as it runs for as long as the process does; own is "" when the broker has none (spec D53), and then no name is the own's,
 // the empty one included. Another is served when the Snapshot of report has it and the supervisor has not
-// refused it. One the Snapshot lacks is not in the config (deleted, invalid with no good generation, outside the admission list, or past the 16) and cannot
+// refused it. One the Snapshot lacks is not in the config (deleted, invalid with no good generation, of a namespace not admitted, or past the 16) and cannot
 // run while it stays so, whichever connection the Bindings name now: a Binding can be pointed at another connection while a pause waits on a thread of the first. A connection that
 // is served and does not run for now (it has not started, or its credentials were rejected) is served, and its pauses wait for it. Before the first
 // load of the config nothing is known, and every connection is served.
