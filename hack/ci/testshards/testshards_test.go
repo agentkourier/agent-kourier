@@ -33,6 +33,8 @@ var passes = []pass{
 
 type step struct {
 	ID   string         `json:"id"`
+	Name string         `json:"name"`
+	If   string         `json:"if"`
 	Uses string         `json:"uses"`
 	Run  string         `json:"run"`
 	Env  map[string]any `json:"env"`
@@ -257,6 +259,85 @@ func TestRequiredChecksFailUnlessEveryNeedPassed(t *testing.T) {
 					t.Errorf("passed with NEEDS=%s\n%s", c.needs, out.String())
 				}
 			})
+		}
+	}
+}
+
+// The steps that key each leg's test results on what its tests read (test-shard's comment in ci.yml says why), and the
+// GODEBUG its make step sets.
+const (
+	keyResultsRun = `go run ./hack/ci/testmtimes
+echo "${RUNNER_TEMP}/path-of-run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >>"${GITHUB_PATH}"
+`
+	keyResultsIf  = "${{ steps.docs-only.outputs.skip != 'true' }}"
+	expireRun     = "go clean -testcache"
+	expireIf      = "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}"
+	testCacheDiag = "gocachetest=1"
+)
+
+// TestLegsKeyTestResultsOnWhatTheyRead: between its cache restore and its make step, each leg derives the tracked
+// files' times from their contents and puts a run-unique directory on PATH (on a pull request, unless the docs-only
+// step skips it, and on a push), and on a push to main expires the restored results; the make step sets GODEBUG as on
+// every leg, since go test keys results on it. Without the first, a leg reuses no result of a test that reads a file;
+// without the PATH entry, it would reuse those of tests whose programs read files go test cannot see; without the
+// expiry, main's push runs, which the release gate reads, would rest on reused results. No other job runs the step:
+// its comment says why each does not.
+func TestLegsKeyTestResultsOnWhatTheyRead(t *testing.T) {
+	wf := readWorkflow(t)
+	legs := map[string]bool{}
+	for _, p := range passes {
+		legs[p.legs] = true
+		t.Run(p.legs, func(t *testing.T) {
+			j, ok := wf.Jobs[p.legs]
+			if !ok {
+				t.Fatalf("ci.yml has no job %s", p.legs)
+			}
+			at := func(match func(step) bool) []int {
+				var found []int
+				for i, s := range j.Steps {
+					if match(s) {
+						found = append(found, i)
+					}
+				}
+				return found
+			}
+			restore := at(func(s step) bool { return strings.HasPrefix(s.Uses, "actions/cache/restore@") })
+			run := at(func(s step) bool { return strings.Contains(s.Run, "make "+p.target) })
+			key := at(func(s step) bool { return strings.Contains(s.Run, "hack/ci/testmtimes") })
+			expire := at(func(s step) bool { return strings.Contains(s.Run, "-testcache") })
+			if len(restore) != 1 || len(run) != 1 {
+				t.Fatalf("%d cache restores and %d make %s steps, want one each", len(restore), len(run), p.target)
+			}
+			for _, c := range []struct {
+				what, wantRun, wantIf string
+				found                 []int
+			}{
+				{"the step that runs hack/ci/testmtimes", keyResultsRun, keyResultsIf, key},
+				{"the step that expires the restored results", expireRun, expireIf, expire},
+			} {
+				if len(c.found) != 1 {
+					t.Errorf("%d of %s, want one", len(c.found), c.what)
+					continue
+				}
+				s := j.Steps[c.found[0]]
+				if s.Run != c.wantRun || s.If != c.wantIf {
+					t.Errorf("%s runs %q if %q, want %q if %q", c.what, s.Run, s.If, c.wantRun, c.wantIf)
+				}
+				if c.found[0] < restore[0] || c.found[0] > run[0] {
+					t.Errorf("%s is step %d, want it between the cache restore (%d) and make %s (%d)",
+						c.what, c.found[0], restore[0], p.target, run[0])
+				}
+			}
+			if got := j.Steps[run[0]].Env["GODEBUG"]; got != testCacheDiag {
+				t.Errorf("make %s sets GODEBUG %v, want %s", p.target, got, testCacheDiag)
+			}
+		})
+	}
+	for name, j := range wf.Jobs {
+		for _, s := range j.Steps {
+			if !legs[name] && (strings.Contains(s.Run, "hack/ci/testmtimes") || strings.Contains(s.Run, "-testcache")) {
+				t.Errorf("job %s runs %q: only the legs key their test results on what the tests read", name, s.Run)
+			}
 		}
 	}
 }
