@@ -282,8 +282,9 @@ the agent also serves A2A 0.3 JSON-RPC at `POST /` and a 0.3-shaped card at `/.w
 `A2A_V03_URL` as its endpoint. In kagent 0.9.4 (read in its source, not in this repository) the BYO readiness probe
 reads that card, and so does the calling agent before it sends the question to the card's URL. `A2A_V03_URL` must be the
 root of the agent's own Service (`http://docs-agent.kagent:8080/` here); the agent refuses to start if its path is
-anything but empty or `/`. The 1.0 card at `/a2a` still names only `PUBLIC_URL`. Without it, the root serves nothing and the agent speaks only
-A2A 1.0 at `/a2a`, as in the rest of this recipe. Both versions share the agent's conversations and tasks.
+anything but empty or `/`. Without `A2A_V03_URL`, the root serves nothing and the agent speaks only A2A 1.0 at `/a2a`,
+as in the rest of this recipe. Both versions share the agent's conversations and tasks, and the 1.0 card at `/a2a`
+names only `PUBLIC_URL` either way.
 
 In Slack, the call shows as one step card named after kagent's tool for it (`kagent__NS__docs_agent` with kagent 0.9.4,
 as seen in a Slack thread), and then the owning agent's answer.
@@ -423,7 +424,7 @@ them, for a person to read the agent's answers against.
 - **Under kagent, the answer arrives whole.** kagent calls the sub-agent with a blocking `message/send`, so nothing of the
   answer streams to Slack: the step card for the call stays open until the docs agent has finished. How long kagent
   waits is its own default: kagent 0.9.4's Agent resource has no setting for it (read in its source), and the value was
-not measured here.
+  not measured here.
 - **Two model providers, over HTTPS.** OpenRouter and OpenAI-compatible endpoints, through the Chat Completions API.
   `MODEL_BASE_URL` must be an `https` URL, so an in-cluster `http` gateway needs a TLS front.
 - **Not run in a cluster, and not against a live model, by the checks in this repository.** The live-model smoke and an

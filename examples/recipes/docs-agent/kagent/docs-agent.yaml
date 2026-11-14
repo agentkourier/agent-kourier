@@ -5,8 +5,8 @@
 # kagent 0.9 speaks A2A 0.3. A2A_V03_URL turns on the agent's 0.3 surface: JSON-RPC at POST / and a card in the 0.3
 # shape at /.well-known/agent-card.json, which is where kagent's readiness probe and the calling agent read it. Set it
 # to this Service's root, as below, if you change the name or the namespace. PUBLIC_URL is the A2A 1.0 endpoint that
-# the 1.0 card names; kagent does not use it, and networkpolicy.yaml admits only the kagent namespace, so Agent Kourier
-# cannot reach this copy: give it the one in ../agent/manifests.
+# the 1.0 card names; kagent does not use it. networkpolicy.yaml admits only the kagent namespace, so where the network
+# plugin enforces NetworkPolicy, Agent Kourier cannot reach this copy: give it the one in ../agent/manifests.
 #
 # The model Secret docs-agent-model, with the key apiKey, must be in this namespace too: make it as in step 2 of the
 # README, with -n kagent. Replace the image, and MODEL_NAME and MODEL_PROVIDER to suit your provider.

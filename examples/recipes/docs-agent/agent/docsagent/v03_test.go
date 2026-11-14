@@ -148,6 +148,9 @@ func TestV03MessageStreamAnswers(t *testing.T) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+		t.Fatalf("message/stream status %d, content type %q: %s", resp.StatusCode, resp.Header.Get("Content-Type"), body)
+	}
 	var text strings.Builder
 	var final bool
 	for line := range strings.SplitSeq(string(body), "\n") {
