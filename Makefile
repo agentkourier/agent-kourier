@@ -16,20 +16,21 @@ lint: ## Run golangci-lint (also over the e2e, image, crdcorpus and testhooks ta
 	$(LINT) run --build-tags e2e,image,crdcorpus ./...
 	$(LINT) run --build-tags testhooks ./...
 
-test: test-race test-testhooks test-scripts ## Run all the unit tests: with the race detector, the testhooks-tagged ones, the kind scripts' own (CI runs the three apart)
+test: test-race test-testhooks test-scripts ## Run all the unit tests: with the race detector, again with the testhooks tag where it changes the build, the scripts' own (CI runs the three apart)
 
 test-race: ## Run unit tests with the race detector (the chart tests need helm; AGENTKOURIER_REQUIRE_HELM=1 fails without it)
 	go test -race -timeout 20m ./...
 
-test-testhooks: ## Run the testhooks-tagged unit tests with the race detector
-	go test -race -timeout 20m -tags testhooks ./internal/...
+test-testhooks: ## Run with the race detector and the testhooks tag the internal packages whose test build the tag changes (hack/ci/testhooks-packages.sh); the others build as in test-race, which ran them
+	pkgs=$$(hack/ci/testhooks-packages.sh ./internal/...) && go test -race -timeout 20m -tags testhooks $$pkgs
 
-test-scripts: ## Run kind, security policy, release gate, PR label and CI tool installer tests (no cluster)
+test-scripts: ## Run kind, security policy, release gate, PR label, CI tool installer and testhooks package selection tests (no cluster)
 	hack/kind/netpol_test.sh
 	hack/security/test.sh
 	hack/release/test.sh
 	hack/github/test.sh
 	hack/ci/test.sh
+	hack/ci/testhooks-packages_test.sh
 
 lint-workflows: ## Lint .github/workflows with zizmor after proving its policy fails each unsafe fixture (installs the pinned zizmor unless ZIZMOR_BIN is set; needs jq)
 	hack/security/lint-workflows.sh

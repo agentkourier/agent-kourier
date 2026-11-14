@@ -126,8 +126,10 @@ jobs:
             ${{ steps.go-env.outputs.gocache }}
           key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
-  # The same packages as the first pass but under ./internal/..., built with the testhooks tag: it did not finish in the
-  # 23 minutes that were left after the lint, and one package in it (internal/chat/chattest) took 213 seconds alone.
+  # The ./internal/... packages whose test build the testhooks tag changes, built with the tag: those with a file the tag
+  # selects or drops, and those whose code or tests reach one. hack/ci/testhooks-packages.sh computes the list with go
+  # list on each run, so a package that gains such an import joins it, and fails rather than run an empty one. Every
+  # other package compiles to the same test binary with the tag as without it, so the first pass has already run it.
   # It has no chart tests, so no helm. 30 is the same budget as the first pass, whose build it repeats in part.
   test-testhooks:
     runs-on: ubuntu-26.04
