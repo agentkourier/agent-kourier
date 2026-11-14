@@ -390,7 +390,7 @@ with `files`, as step 1 of [the move](migrate-config-source.md) does; that needs
 | `config.existingConfigMap`, and no `config.source` | `config.existingConfigMap is for config.source files, and config.source is crds (the chart's default unless your values set it): Agent Kourier would read custom resources, mount no ConfigMap and ignore it. To keep reading your ConfigMap, set config.source: files ...`, and it names [the move](migrate-config-source.md#move-a-configmap-you-manage-yourself) |
 | `config.agentBackends`, `config.chatConnections` or `config.bindings`, on a cluster that does not serve the CRDs, which is every cluster that has not had them installed | `config.source crds needs the CRDs (group agentkourier.dev, version v1alpha1) to be installed before a release that renders config.agentBackends, config.chatConnections or config.bindings as custom resources, and the cluster does not serve them yet: ... To keep the ConfigMap route, set config.source: files ...` |
 | A cluster older than Kubernetes 1.33 | `config.source crds needs Kubernetes 1.33 or later (it is the chart's default unless your values set it): the API server is v1.32.9 ... To install on this cluster, set config.source: files: the ConfigMap route has no minimum.` |
-| `config.chatConnection` and `config.connectionNamespaces` both empty, and `config.chatConnections` without exactly one entry (none, or several) | `config.source crds (the chart's default unless your values set it) needs config.chatConnection: the namespace/name of the one ChatConnection this broker serves ... A broker with no connection of its own, which serves only the ChatConnections of other namespaces, leaves config.chatConnection empty and sets config.connectionNamespaces to those namespaces instead. To supply the config as a ConfigMap instead, set config.source: files ...` |
+| `config.chatConnection`, `config.connectionNamespaces` and `config.connectionNamespaceSelector` all empty, and `config.chatConnections` with several entries (the charts before [the release that admits namespaces by label](#upgrade-to-the-release-that-admits-namespaces-by-label) refused no entry too) | `config.source crds (the chart's default unless your values set it) needs config.chatConnection: the namespace/name of the one ChatConnection this broker serves as its own, and config.chatConnections has ... A broker with no connection of its own leaves config.chatConnection empty and admits the namespaces whose ChatConnections it serves: by name in config.connectionNamespaces, or by label in config.connectionNamespaceSelector; with both unset and no entry in config.chatConnections it serves the ChatConnections of every namespace. To supply the config as a ConfigMap instead, set config.source: files ...` |
 
 The messages are the chart's, run with `helm template` (the Kubernetes version of the third from `--kube-version`; a real `helm upgrade` reads the cluster's). The messages say "the chart's default unless your values set it" because the chart sees the same value whether your values file says `config.source: crds` or leaves it out, so it cannot tell which you did. The second row is the one an install of this
 kind meets when it upgrades with its inline config: setting `config.source: files` is the fix.
@@ -796,7 +796,8 @@ spec:
 A team can bring its own Slack app: the platform team lists the team's namespace in the new value `config.connectionNamespaces`, and the broker serves the team's ChatConnection beside its own
 ([Let a team bring its own Slack app](team-slack-app.md)). The broker serves nothing new until that list admits a namespace: the chart renders `AGENTKOURIER_CONNECTION_NAMESPACES` only for a
 non-empty list, and a broker without it serves its own connection alone. A broker may also have no connection of its own, with `config.chatConnection` empty and the list set
-([A broker with no connection of its own](team-slack-app.md#a-broker-with-no-connection-of-its-own)). Some changes below apply to every install, list or not.
+([A broker with no connection of its own](team-slack-app.md#a-broker-with-no-connection-of-its-own)); [a later release](#upgrade-to-the-release-that-admits-namespaces-by-label) adds a
+selector, and a broker that serves every namespace. Some changes below apply to every install, list or not.
 
 ### Before you upgrade
 
@@ -833,9 +834,9 @@ non-empty list, and a broker without it serves its own connection alone. A broke
 - **`Ready` also needs `ApproversReadable`.** A Binding with `interactions.toolApprovals: true` and `interactions.approverGroups` has a new condition, which the leader sets by reading each group with the connection's bot. A bot that cannot read a
   group (the app lacks `usergroups:read`, or the group does not exist; Slack's answer for a disabled group has not been measured) makes the Binding `READY` `False` and `agentkourier_binding_ready` 0, where 0.2.1 had it `True`. Turns still run. Read the Slack scopes in
   [Configure Slack](configure-slack.md#what-the-app-is-allowed-to-do) and the reasons in [Troubleshoot](troubleshoot.md#approversreadable) before you upgrade a broker whose alerts fire on `agentkourier_binding_ready == 0`.
-- **Changing the broker's own connection tells the old one's Bindings.** If you change `config.chatConnection` to another ChatConnection, or empty it, the broker served the old one before, and it still exists, and its namespace is not on `config.connectionNamespaces`: its Bindings say `Accepted` `False` with
+- **Changing the broker's own connection tells the old one's Bindings.** If you change `config.chatConnection` to another ChatConnection, or empty it, the broker served the old one before, and it still exists, and its namespace is not admitted (on `config.connectionNamespaces`, or, from [the release that admits namespaces by label](#upgrade-to-the-release-that-admits-namespaces-by-label), matched by the selector or every namespace): its Bindings say `Accepted` `False` with
   `ConnectionNotServed`, and the leader counts them in `agentkourier_config_binding_rejections{reason="ConnectionNotServed"}`, so `sum(agentkourier_config_binding_rejections) > 0` fires until that ChatConnection is deleted or this broker serves it again, even when another release serves it.
-  This happens with the list empty too. If the old one's namespace is on the list, it is served as a team connection and its Bindings are not told.
+  This happens with the list empty too. If the old one's namespace is admitted, it is served as a team connection and its Bindings are not told.
 
 ### Admit team namespaces in a second change
 
@@ -849,8 +850,8 @@ Before you set the list:
   [Configure Slack](configure-slack.md#what-the-app-is-allowed-to-do) has it, for the audit log's `users.info`. If the broker cannot tell whose bot its own token is, no team connection starts, and the leader logs that
   the identity of the own connection is not known yet. The own connection runs either way. A broker with no own connection has no such wait: it asks for each team connection's identity on its own.
 - **One broker for each namespace.** Two brokers that admit one namespace both open Socket Mode on its apps, and Slack hands each event to one of them
-  ([Troubleshoot](troubleshoot.md#the-status-of-a-binding-keeps-changing)).
-- **Know how to see a Binding that is not served.** A connection that is past the 16, whose namespace was taken off the list after this broker served it, that was the broker's own and is not now (and whose namespace is not on the list), or that is a second connection of a Slack app the broker already serves has Bindings that say `Accepted` `False`
+  ([Troubleshoot](troubleshoot.md#the-status-of-a-binding-keeps-changing)). A broker that serves every namespace admits them all.
+- **Know how to see a Binding that is not served.** A connection that is past the 16, whose namespace was taken off the list (or lost the labels a selector matches) after this broker served it, that was the broker's own and is not now (and whose namespace is not on the list), or that is a second connection of a Slack app the broker already serves has Bindings that say `Accepted` `False`
   with `ConnectionNotServed`. The leader counts those Bindings in `agentkourier_config_binding_rejections{reason="ConnectionNotServed"}` (a standby reads 0 for it, so sum over the replicas), which `sum(agentkourier_config_binding_rejections) > 0` includes
   ([Metrics](../reference/metrics.md)); `kubectl get akbinding -A` shows which Bindings. The Bindings of a connection in a namespace that was never on the list get no status and no count.
 - **Size for the connections.** Each further connection adds about 0.4 MiB; at 16, the most one broker serves, the container's memory charge was 29 MiB under load
@@ -885,3 +886,50 @@ Before you set the list:
 - **Remove every `personMessage` trigger from every Binding** before a rollback to 0.2.1 or earlier, as `progress` is removed [above](#roll-back). Those releases know only the trigger types `mention` and `botMessage`. On the files route one `personMessage` trigger fails the whole config: the broker exits with
   [code 2](../reference/cli.md#exit-codes) at start, and a running broker that reloads keeps its last good config. On custom resources the older broker refuses that Binding as invalid (`Accepted` `False` with `InvalidSpec`) and does not serve it.
 - **Remove `spec.agents` from every AgentBackend** before a rollback, as [that section](#upgrade-to-the-release-that-limits-the-agents-a-binding-may-name) says.
+
+## Upgrade to the release that admits namespaces by label
+
+A broker on custom resources can now admit the namespaces whose ChatConnections it serves by their labels, with the new value
+`config.connectionNamespaceSelector`, beside or instead of `config.connectionNamespaces`; and a broker with no connection of its own and
+neither of them serves the ChatConnections of every namespace ([Let a team bring its own Slack app](team-slack-app.md#3-the-platform-team-admits-the-namespace)).
+
+```yaml
+config:
+  connectionNamespaceSelector:
+    matchLabels: {agentkourier.dev/serve: "true"}   # the namespaces labelled agentkourier.dev/serve=true
+```
+
+- **Values that work now need no change, and mean what they meant.** An own connection (`config.chatConnection`, or the one
+  `config.chatConnections` entry) with no list is served alone, and a list admits its namespaces, with an own connection or without. The new
+  value defaults to `null`, which is no selector: the chart renders `AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR` only for a selector, and adds
+  `list` and `watch` on namespaces to its ClusterRole only for one that matches by label (`{}` matches every namespace and reads none).
+- **Values with nothing set now install.** With `config.chatConnection` empty, no list and no `config.chatConnections` entry, the chart refused to
+  render (`config.source crds ... needs config.chatConnection`); it now renders a broker with no connection of its own that serves every
+  namespace, which is what `agent-kourier init` writes. Two or more entries with nothing else set are still refused. A Deployment of your own
+  that sets neither `AGENTKOURIER_CHAT_CONNECTION` nor `AGENTKOURIER_CONNECTION_NAMESPACES` used to exit with [code 2](../reference/cli.md#exit-codes),
+  and now serves every namespace.
+- **A list of nothing but commas and spaces is refused.** A Deployment that sets `AGENTKOURIER_CONNECTION_NAMESPACES` to one exits with
+  [code 2](troubleshoot.md#the-pod-exits-with-code-2) (`AGENTKOURIER_CONNECTION_NAMESPACES is set and names no namespace (only commas and spaces): unset it, or name the namespaces`),
+  with an own connection or without. Before, a broker with an own connection read it as no list and served its own connection alone. The chart
+  renders no such value.
+- **Every namespace is for a cluster with one broker.** A broker on every namespace serves every ChatConnection of the cluster, another broker's
+  own connection included, so the two write the status of the same Bindings and each opens Socket Mode on the same Slack apps, which splits their
+  events ([Troubleshoot](troubleshoot.md#the-status-of-a-binding-keeps-changing)). Beside another broker, give each a list, a selector or its own
+  connection alone.
+- **A selector hands the choice to whoever sets namespaces' labels.** The broker reads the selector at start and follows the labels: a namespace
+  that gains a matching label is admitted at the next read of the config, with no restart, and one that loses it stops being served, and the
+  Bindings of its connections say `ConnectionNotServed` once. Decide who may set that label before you set the selector.
+- **The first log line says more.** On custom resources the `config route` line gains `connection_admission` (`all`, `list`, `selector`,
+  `list+selector` or `own`) and, for a selector that matches by label, `connection_namespace_selector` ([Check it](install-with-helm.md#check-it)).
+
+### Roll back from the release that admits namespaces by label
+
+- **Take `config.connectionNamespaceSelector` off the values in the same change.** The chart of an earlier release refuses a `config` key it
+  does not have.
+- **A broker with no connection of its own on every namespace, or on a selector alone, does not roll back in place.** An earlier chart refuses
+  values with no `config.chatConnection`, no list and no `config.chatConnections` entry (`config.source crds ... needs config.chatConnection`), and an earlier broker given
+  neither `AGENTKOURIER_CHAT_CONNECTION` nor `AGENTKOURIER_CONNECTION_NAMESPACES` exits with code 2 at start; it does not read
+  `AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR` (read in the source of 0.3.0 to 0.3.2, not run). In the same change, list the namespaces it serves
+  now in `config.connectionNamespaces`, or set `config.chatConnection`.
+- **A broker with a selector beside an own connection or a list rolls back to those alone.** The connections it admitted by label are no longer
+  served after the rollback, and their Bindings say `ConnectionNotServed` (read in the source of 0.3.2, not run). Put their namespaces on the list in the same change to keep serving them.

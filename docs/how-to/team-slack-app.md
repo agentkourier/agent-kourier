@@ -4,14 +4,15 @@ For a platform team that runs Agent Kourier and a team that has a Slack app of i
 answer through the team's app, served by the platform's broker, and the team's tokens stay in the team's namespace.
 
 The team owns a `ChatConnection` in its namespace, as it owns its Bindings. The platform team decides which namespaces may do
-this, with a list in the chart's values, and the broker serves the ChatConnections of the namespaces on that list besides its
-own, if it has one. A ChatConnection in any other namespace is not served: the broker does not run it and does not read its Secret.
+this, in the chart's values, and the broker serves the ChatConnections of those namespaces besides its own, if it has one: the
+namespaces on a list, the namespaces whose labels match a selector, or, for a broker with no connection of its own and neither set,
+every namespace. A ChatConnection in a namespace the broker does not admit is not served: the broker does not run it and does not read its Secret.
 A broker may have no connection of its own and serve only the teams': see
 [A broker with no connection of its own](#a-broker-with-no-connection-of-its-own).
 
 ## Before you start
 
-- The broker reads custom resources (`config.source: crds`, the chart's default). The admission list of step 3 is
+- The broker reads custom resources (`config.source: crds`, the chart's default). The list and the selector of step 3 are
   refused with `config.source: files`, which serves the one ChatConnection of its directory.
 - The team has a Slack app with its two tokens, made as in [Configure Slack](configure-slack.md): the same manifest, the same
   scopes. No other ChatConnection may use that app: see [Two connections of one Slack app](#two-connections-of-one-slack-app).
@@ -117,22 +118,54 @@ at all until step 3, because the broker reads no Binding of a ChatConnection tha
 
 ## 3. The platform team admits the namespace
 
-Add the namespace to `config.connectionNamespaces` and upgrade the release:
+What the platform team does depends on how its broker admits namespaces. The first line of the broker's log, `config route`, says
+which in its `connection_admission` field ([Check it](install-with-helm.md#check-it)):
 
-```yaml
-config:
-  source: crds
-  chatConnection: agent-kourier/slack     # the broker's own connection, as before (leave it empty for a broker with none)
-  connectionNamespaces: [team-a]
-```
+- **Every namespace (`all`): nothing to do.** The broker serves the ChatConnections of every namespace, the team's included, from its
+  first read of the config after the team creates the connection (it reads every 10 seconds). This is what the chart renders for a broker with no
+  connection of its own when the values set no list, no selector and no `config.chatConnections` entry, as in [the recorded path](#the-whole-path-recorded); a
+  `config.connectionNamespaceSelector` of `{}` admits every namespace too, with or without an own connection.
 
-The chart sets `AGENTKOURIER_CONNECTION_NAMESPACES` from the list. The broker reads it at start, so the upgrade restarts
-the pods. It adds no rule to the ClusterRole, which already lists and watches ChatConnections in every namespace.
+- **A list (`list`): add the namespace and upgrade.** Add it to `config.connectionNamespaces` and upgrade the release:
 
-The list is the platform team's consent: the broker holds a chat connection on the tokens in a namespace only if the
-namespace is on it. At most 16 connections are served in all, the broker's own included, and nothing changes that
+    ```yaml
+    config:
+      source: crds
+      chatConnection: agent-kourier/slack     # the broker's own connection, as before (leave it empty for a broker with none)
+      connectionNamespaces: [team-a]
+    ```
+
+    The chart sets `AGENTKOURIER_CONNECTION_NAMESPACES` from the list. The broker reads it at start, so the upgrade restarts the pods.
+
+- **A selector (`selector`): label the namespace.** Give the namespace the labels that `config.connectionNamespaceSelector` matches. For
+  `connectionNamespaceSelector: {matchLabels: {agentkourier.dev/serve: "true"}}`:
+
+    ```sh
+    kubectl label namespace team-a agentkourier.dev/serve=true
+    ```
+
+    No upgrade and no restart: the broker follows the namespaces' labels, admits the namespace at its next read of the config, and logs
+    `a namespace is admitted by the connection namespace selector: its ChatConnections are served, up to the limit` with the namespace's name.
+    To start admitting by label, set the selector and upgrade the release once; the chart renders it as `AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR`.
+
+- **Both (`list+selector`).** A namespace is admitted if it is on the list or its labels match the selector, so either way above admits it.
+
+- **Its own connection alone (`own`).** The broker has a connection of its own and neither a list nor a selector: set one of them as above.
+
+A list, and a selector of `{}`, add no rule to the ClusterRole, which already lists and watches ChatConnections in every namespace. A
+selector that matches by label adds `list` and `watch` on namespaces (never `get`), to read their labels; with `rbac.create: false` grant
+them yourself, or the broker exits with [code 3](troubleshoot.md#the-pod-exits-with-code-3).
+
+Admission is the platform team's consent: the broker holds a chat connection on the tokens in a namespace only if it admits the
+namespace. With a list the platform team gives that consent by name, and with a selector whoever may set the namespace's labels gives it. With
+every namespace, what lets a team attach a Slack app is the right to create a ChatConnection (step 1) and the team's own Role that grants its
+Secret (step 2). Every namespace is a setting for a cluster with one broker: it also serves a second broker's ChatConnections, that broker's own
+included, and an app with two Socket Mode connections has its events split between them ([Troubleshoot](troubleshoot.md#the-status-of-a-binding-keeps-changing)).
+
+At most 16 connections are served in all, the broker's own included, and nothing changes that
 number: see [Limits](../reference/limits.md#run-the-broker). The own connection, if the broker has one, counts first and the others oldest first, so a
 connection created after the sixteenth place is taken is left out, and its Bindings say `ConnectionNotServed`, which the leader counts in `agentkourier_config_binding_rejections{reason="ConnectionNotServed"}`.
+With every namespace the 16 places are the whole cluster's.
 
 **If the team's Role does not exist,** the platform team names the Secrets in the chart's values, and the chart renders the Role
 and RoleBinding itself in `team-a`, as `<fullname>-secrets`:
@@ -186,9 +219,9 @@ team meets, in the order of this page. [Binding status](../reference/binding-sta
 
 | What the team sees | What it means | What to do |
 |---|---|---|
-| No status, and empty `READY` and `REASON` columns | The namespace is not on the list, or the broker has not read the Binding yet (the first status comes within about 10 seconds). | Ask the platform team to admit the namespace. |
+| No status, and empty `READY` and `REASON` columns | The namespace is not admitted (it is not on the list, or its labels do not match the selector), or the broker has not read the Binding yet (the first status comes within about 10 seconds). | Ask the platform team to admit the namespace. |
 | `Accepted` `False`, `ConnectionNotFound` | The Binding was applied before its ChatConnection existed, and the namespace is still not admitted, so nothing has rewritten the status. | Ask the platform team to admit the namespace. Apply the ChatConnection before its Bindings. |
-| `Accepted` `False`, `ConnectionNotServed` | The connection exists and the broker does not serve it: the broker served it before and does not now (its namespace was taken off the list, or it was the broker's own connection and the platform changed that to another or to none, and its namespace is not on the list), it is past the 16, or it is a second connection of a Slack app that an older connection uses. `message` says which. It is written once and not put back. Only a Binding that the connection admits is told. | See below, and [the reason's row](../reference/binding-status.md#accepted). |
+| `Accepted` `False`, `ConnectionNotServed` | The connection exists and the broker does not serve it: the broker served it before and does not now (its namespace was taken off the list or lost the labels the selector matches, or it was the broker's own connection and the platform changed that to another or to none, and its namespace is not admitted), it is past the 16, or it is a second connection of a Slack app that an older connection uses. `message` says which. It is written once and not put back. Only a Binding that the connection admits is told. | See below, and [the reason's row](../reference/binding-status.md#accepted). |
 | `Accepted` `False`, `ConnectionRejected` | The ChatConnection is invalid. If it had a good generation, that one runs. | Fix the ChatConnection; `kubectl apply --dry-run=server` finds what the schema checks. |
 | `ChannelJoined` `Unknown`, `ChatUnavailable` | The connection is not running: it has not started yet, it is waiting for the platform to say whose bot it is, or its Secret cannot be read now. The probe makes no call to Slack. | Wait about two minutes: a Role applied late is noticed up to about 1 m 15 s later. If it stays, check the grant with `kubectl auth can-i` as in step 2, and ask the platform team to read the log. |
 | `BackendReachable` `False`, `CredentialsUnreadable` | The Secret named by the Binding's `tokenSecretRef`, or behind a header of its AgentBackend, cannot be read. The `message` names the Secret and says what is wrong; for a Secret the API server denied, it says the ServiceAccount needs `list` and `watch` on it. | Add the Secret to the Role of step 2. It recovers without a restart once the grant exists, at the broker's next recheck of the config, which comes about once a minute. |
@@ -290,28 +323,44 @@ observed, and it is Slack's behaviour, which this repository has not verified; t
 
 ## A broker with no connection of its own
 
-A platform that runs the broker for its teams does not need a Slack app of its own. Leave `config.chatConnection` empty and list the
-namespaces whose ChatConnections the broker serves:
+A platform that runs the broker for its teams does not need a Slack app of its own. Leave `config.chatConnection` empty. With nothing
+else set, the broker serves the ChatConnections of every namespace, as in [the recorded path](#the-whole-path-recorded). To serve fewer, list the
+namespaces, select them by label, or both (a namespace is admitted if it is on the list or its labels match):
 
 ```yaml
 config:
   source: crds
   connectionNamespaces: [team-a, team-b]
+  connectionNamespaceSelector:
+    matchLabels: {agentkourier.dev/serve: "true"}
 ```
 
-The chart then renders `AGENTKOURIER_CONNECTION_NAMESPACES` and no `AGENTKOURIER_CHAT_CONNECTION`, and every connection the broker serves is a
-team connection, as this page has described them. The chart checks the shape when it renders. It refuses `config.chatConnectionSecret` (it names
-the Secret of an own connection, and there is none), and it refuses a `config.chatConnections` entry whose namespace is not on the list, because the
-chart would render the ChatConnection and the broker would never serve it; the message names the entry. A ChatConnection that `config.chatConnections` renders has
-its Secret granted by the chart, from its `credentialsSecretRef`; the teams grant the Secrets of the ones they make, as in step 2. With
-`config.chatConnection` and `config.connectionNamespaces` both empty, the chart reads the one `config.chatConnections` entry as the own connection, as it
-always did, and with none or several it refuses and names both ways out.
+The chart then renders no `AGENTKOURIER_CHAT_CONNECTION`, and renders `AGENTKOURIER_CONNECTION_NAMESPACES` for a non-empty list and
+`AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR` for a selector. Every connection the broker serves is a team connection, as this page has described
+them. Every namespace is a setting for a cluster with one broker, as [step 3](#3-the-platform-team-admits-the-namespace) says.
+
+The chart checks the shape when it renders:
+
+- It refuses `config.chatConnectionSecret` whenever the broker has no connection of its own: the value names the Secret of an own connection, and
+  there is none.
+- With a list and no selector, it refuses a `config.chatConnections` entry whose namespace is not on the list, because the chart would render the
+  ChatConnection and the broker would never serve it; the message names the entry. With a selector it checks no entry, since it does not see a
+  namespace's labels.
+- With `config.chatConnection` empty, no list and no selector, the entries of `config.chatConnections` decide. No entry is the broker that serves
+  every namespace. One entry is the broker's own connection, as it always was, served alone. Two or more are refused, since the chart cannot tell
+  which one is the own connection, and the message names the ways out. So adding one entry to an install that serves every namespace makes that
+  entry its own connection, served alone: set a list or a selector in the same change to keep serving the teams' connections.
+
+A ChatConnection that `config.chatConnections` renders has its Secret granted by the chart, from its `credentialsSecretRef`; the teams grant the
+Secrets of the ones they make, as in step 2.
 
 What the broker does without an own connection:
 
-- **It starts with the list alone.** At least one namespace must be on the list: with neither `AGENTKOURIER_CHAT_CONNECTION` nor a list the broker could serve
-  nothing until a restart, since it reads the list at start, so it exits with [code 2](../reference/cli.md#exit-codes) and an error that names both variables. A broker
-  whose listed namespaces hold no ChatConnection yet starts, is ready, and serves nothing until one appears.
+- **It starts with nothing to serve.** A broker whose admitted namespaces hold no ChatConnection yet, or whose selector matches no namespace yet,
+  starts, is ready, and serves nothing until one appears. What stops the start is a variable the broker cannot read: an
+  `AGENTKOURIER_CONNECTION_NAMESPACES` of nothing but commas and spaces (a Deployment of your own can set one; the chart's schema refuses an
+  empty item), which read as no list would serve every namespace, an item that is not a namespace name, or a selector that is not one. Each exits
+  with [code 2](troubleshoot.md#the-pod-exits-with-code-2).
 - **A rejected token stops one connection and never the process.** Every connection is a team connection, so none of them exits the process with code 1.
   With every token rejected the pod stays up and `/readyz` still says ready, since readiness never includes Slack; each connection's `agentkourier_chat_connected`
   is 0 and its Bindings read `ChannelJoined` `False` with `ChatCredentialsRejected`. A restart would not mend a rejected token, so the broker does not exit. The pod's state does not say that it serves nobody; a WARN for each connection, the metric and the
@@ -319,7 +368,8 @@ What the broker does without an own connection:
 - **Nothing is held.** The hold that keeps an own connection's Bindings while its ChatConnection is deleted is for the own connection alone, so a deleted team
   connection is dropped at the read that settles the deletion, as under [Take it back](#take-it-back), and `agentkourier_config_held_objects` is always 0.
 - **All 16 places and every claim of a Slack app go by age.** With no own connection to take the first place, the 16 oldest connections are served
-  (`creationTimestamp`, then namespace, then name), and when two connections are of one Slack app the older is served.
+  (`creationTimestamp`, then namespace, then name), and when two connections are of one Slack app the older is served. With every namespace, the
+  connections of the whole cluster compete for the 16.
 - **Rows with no connection stop the leader.** The outbox rows and the button presses that were written before the broker recorded connections, or by an
   older image after a rollback, have an empty connection, and an own connection takes them when the leader starts. With no own connection nobody can,
   so the leader counts them before it posts anything, and if there are any it ends the process with code 2 and the error
@@ -420,8 +470,10 @@ kubectl -n team-a get akbinding
 
 ### Move a broker from its own connection to none
 
-In one upgrade, set `config.chatConnection` to empty, remove `config.chatConnectionSecret` if it is set (the chart refuses it), and put the connection's namespace
-on `config.connectionNamespaces`. If `config.chatConnections` renders the connection, keep it there: the chart then still grants its Secret. If you applied it by hand, the
+In one upgrade, set `config.chatConnection` to empty, remove `config.chatConnectionSecret` if it is set (the chart refuses it), and admit the connection's
+namespace: put it on `config.connectionNamespaces`, or give it the labels that `config.connectionNamespaceSelector` matches. With neither set the broker serves
+every namespace, the connection's included, but only if `config.chatConnections` has no entry: with one entry and nothing else set, the chart reads that entry as
+the own connection again. If `config.chatConnections` renders the connection, keep it there: the chart then still grants its Secret. If you applied it by hand, the
 chart no longer grants the Secret by name, because it granted only the own connection's: name it in `rbac.secretNames` or have its namespace grant it, as in step 2. Until
 it can be read the connection is not started, and its Bindings read `ChatUnavailable`. The upgrade restarts the pods.
 
@@ -432,7 +484,7 @@ The connection is then a team connection, so it loses what only an own connectio
 - the first of the 16 places, which it now has by age like the others;
 - the first claim of its Slack app: an older ChatConnection of the same app now wins.
 
-For one you applied yourself: if you leave its namespace off the list, the broker no longer serves it, and its Bindings are told `ConnectionNotServed` once. Rows with no connection are
+For one you applied yourself: if its namespace is not admitted, the broker no longer serves it, and its Bindings are told `ConnectionNotServed` once. Rows with no connection are
 the leader's to refuse, as above; a broker that has had an own connection has attributed its rows at each start, so you meet that only if an older image wrote more.
 To move back, set `config.chatConnection` again.
 
@@ -441,15 +493,31 @@ To move back, set `config.chatConnection` again.
 - **The team stops using its app.** It deletes the ChatConnection. The config drops it at the read that settles the
   deletion, about 10 to 20 seconds after the delete, with no hold, unlike the broker's own connection, and the connection stops at the supervisor's next look, up to 5
   seconds later. The team's Bindings then say `ConnectionNotFound`.
-- **The platform stops serving the team.** It takes the namespace off `config.connectionNamespaces`. The broker reads the
-  list at start, so the upgrade restarts it; it records the connections it serves in its store, and after the restart it
-  writes `ConnectionNotServed` once on the Bindings that the connection admits. Their sessions are kept, and the
-  posts waiting for the connection stay in the outbox. An interaction pending on one of their threads cannot be ended through the Binding, which the broker no longer has, so the sweep ends it
-  and posts nothing `5m` after the first sweep that finds it both past its timeout and orphaned ([Limits](../reference/limits.md#what-a-pause-may-ask)): the task is cleared from the session record (the restart that took the namespace off the list left no runner parked), and the interaction is audited as `orphaned`.
-  The agent's task is not cancelled: it stays input-required at the agent until the agent expires it.
+- **The platform stops serving the team.** How depends on how the broker admits the namespace:
+    - **On a list,** it takes the namespace off `config.connectionNamespaces`. The broker reads the list at start, so the upgrade restarts
+      it; it records the connections it serves in its store, and after the restart it writes `ConnectionNotServed` once on the Bindings that
+      the connection admits.
+    - **By label,** it removes the label the selector matches (`kubectl label namespace team-a agentkourier.dev/serve-` for the selector of
+      step 3). There is no restart: at its next read of the config the broker no longer admits the namespace and logs
+      `a namespace is no longer admitted by the connection namespace selector: its ChatConnections are not served`, the connection stops at the
+      next look (up to 5 seconds later), and the Bindings that the connection admits say `ConnectionNotServed` once, with the message
+      `spec.chat.connectionRef: ChatConnection team-a/team-a-slack is not served by this broker: this broker served it before and does not serve it now`.
+    - **On every namespace,** there is no namespace to take off: delete the ChatConnection, as in the bullet above, or move the broker to a
+      list or a selector that leaves the namespace out, which is an upgrade and a restart.
+
+    The Bindings' sessions are kept, and the posts waiting for the connection stay in the outbox. An interaction pending on one of their threads
+    cannot be ended through the Binding, which the broker no longer has, so the sweep ends it and posts nothing `5m` after the first sweep
+    that finds it both past its timeout and orphaned ([Limits](../reference/limits.md#what-a-pause-may-ask)): the task is cleared from the
+    session record (after the restart that took the namespace off a list, no runner is parked), and the interaction is audited as `orphaned`.
+    The agent's task is not cancelled: it stays input-required at the agent until the agent expires it.
+
 - **A broker with no connection of its own cannot be rolled back to an earlier release in place.** 0.2.0, 0.2.1 and 0.3.0-rc.1 exit with code 2 on
   `config.source: crds` without `AGENTKOURIER_CHAT_CONNECTION`: that is what their source says (`cmd/agent-kourier/main.go` at those tags, read and not run). Set
-  `config.chatConnection` first, which makes the broker one with an own connection, and then follow the next bullet.
+  `config.chatConnection` first, which makes the broker one with an own connection, and then follow the next bullet. Releases from 0.3.0 up to 0.3.2
+  exit with code 2 when there is neither `AGENTKOURIER_CHAT_CONNECTION` nor a list, which is a broker on every namespace and one that admits by
+  label alone: they do not read `AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR` (read in their source, not run). Their chart refuses both shapes too. For one
+  of those, list the namespaces or set `config.chatConnection` first, and take `config.connectionNamespaceSelector` off the values
+  ([Upgrade](upgrade.md#roll-back-from-the-release-that-admits-namespaces-by-label)).
 - **Rolling the release back.** Do not roll back to a release before 0.3.0 while any team connection has an unposted row. The outbox, the
   interactions and the button presses of 0.3.0 record the connection they belong to. 0.2.1 has one chat platform, and read from its
   code (not run) it does not filter by connection in two places that matter:
@@ -465,7 +533,7 @@ To move back, set `config.chatConnection` again.
   note that the request is gone, in the team's channel through the platform's app (`authorized`, then `finish`, then `finishWith`,
   which calls `Ephemerals.Ephemeral`). A session whose Binding 0.2.1 does not have is skipped when it takes up its sessions.
 
-  The guard is the unposted rows of every team connection, not whether one is served now. A connection that was served and is not (its namespace was taken off the list, or its ChatConnection was deleted) keeps its unposted rows, up to 7 days
+  The guard is the unposted rows of every team connection, not whether one is served now. A connection that was served and is not (its namespace is no longer admitted, or its ChatConnection was deleted) keeps its unposted rows, up to 7 days
   ([Limits](../reference/limits.md#what-the-broker-keeps-and-logs)), and 0.2.1 would post them through the platform's app. [Metrics](../reference/metrics.md#series-by-connection) says the series of such a connection stays while it has an unposted row.
 
   The order that leaves nothing behind, all while the team connections are still served:
@@ -495,7 +563,7 @@ To move back, set `config.chatConnection` again.
 
 ## Related
 
-- [Security model](../explanation/security.md#a-team-brings-its-own-chat-app): what the broker holds, and what the admission list means.
+- [Security model](../explanation/security.md#a-team-brings-its-own-chat-app): what the broker holds, and what admitting a namespace means.
 - [Limits](../reference/limits.md#run-the-broker): the 16, and how soon a change is followed.
 - [ChatConnection reference](../reference/chatconnection.md)
 - [Choose a config route](../explanation/config-routes.md#which-chatconnections-a-broker-serves)
