@@ -18,9 +18,10 @@ import (
 const workflowsDir = "../../../.github/workflows"
 
 // gated names, per workflow, the jobs that have the docs-only step. A job is added here on purpose: gitleaks, lint and
-// zizmor must always run in full.
+// zizmor must always run in full. ci.yml's test and test-testhooks are not gated: they check out nothing and only
+// require their legs, which are, to have passed.
 var gated = map[string][]string{
-	"ci.yml":       {"crd-corpus", "docs-agent", "echo-agent", "test", "test-postgres", "test-testhooks"},
+	"ci.yml":       {"crd-corpus", "docs-agent", "echo-agent", "test-postgres", "test-scripts", "test-shard", "test-testhooks-shard"},
 	"codeql.yml":   {"analyze"},
 	"security.yml": {"govulncheck", "image"},
 }
@@ -203,16 +204,19 @@ func TestWorkflowsGateAlike(t *testing.T) {
 	}
 }
 
-// testhooksStep is test-testhooks' gated make step, whose if the drift cases below replace.
-const testhooksStep = "      - if: ${{ steps.docs-only.outputs.skip != 'true' }}\n        run: make test-testhooks\n"
+// testhooksRun is the make step's command in test-testhooks-shard.
+const testhooksRun = "        run: make test-testhooks TEST_SHARD=\"$((LEG_INDEX + 1))/${LEG_COUNT}\"\n"
 
-// trimThenSave is the trim and the if of the cache save in test, the first gated job of ci.yml (lint's trim has an
-// argument, so this text is not lint's).
+// testhooksStep is test-testhooks-shard's gated make step, whose if the drift cases below replace.
+const testhooksStep = "      - if: ${{ steps.docs-only.outputs.skip != 'true' }}\n" + testhooksRun
+
+// trimThenSave is the trim and the if of the cache save in test-shard, the first gated job of ci.yml that saves a
+// cache (lint's trim has an argument, so this text is not lint's).
 const trimThenSave = "        run: hack/ci/actions-cache.sh trim\n      - if: ${{ !cancelled() && steps.go-trim.outcome == 'success' }}\n"
 
 // withTesthooksIf is testhooksStep with the if cond.
 func withTesthooksIf(cond string) string {
-	return "      - if: " + cond + "\n        run: make test-testhooks\n"
+	return "      - if: " + cond + "\n" + testhooksRun
 }
 
 // TestCheckFindsDrift: each way a copy of the gate can drift is reported.
@@ -228,7 +232,7 @@ func TestCheckFindsDrift(t *testing.T) {
 		{"a checkout of depth 1", "          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}\n", "", "the first step is not the checkout"},
 		{"a checkout with an if", "          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}\n", "          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}\n        if: false\n", "the first step is not the checkout"},
 		{"a gated job without the step", "      - id: docs-only\n", "      - id: docs-only-renamed\n", "has no docs-only step"},
-		{"a step without an if", testhooksStep, "      - run: make test-testhooks\n", ungated},
+		{"a step without an if", testhooksStep, "      - run: make test-testhooks TEST_SHARD=\"$((LEG_INDEX + 1))/${LEG_COUNT}\"\n", ungated},
 		{"a step that always runs", testhooksStep, withTesthooksIf("${{ always() }}"), ungated},
 		{"a negated gate", testhooksStep, withTesthooksIf("${{ !steps.docs-only.outputs.skip != 'true' }}"), ungated},
 		{"a gate inside a longer term", testhooksStep, withTesthooksIf("${{ steps.docs-only.outputs.skip != 'true' == false }}"), ungated},
