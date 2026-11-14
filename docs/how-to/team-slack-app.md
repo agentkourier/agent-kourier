@@ -57,7 +57,9 @@ subjects:
   - {kind: Group, name: team-a, apiGroup: rbac.authorization.k8s.io}
 ```
 
-The right does nothing until step 3: a ChatConnection in a namespace that is not on the list is not served.
+On a broker that admits namespaces by list or by label, the right does nothing until the namespace is admitted in step 3: a ChatConnection in a
+namespace the broker does not admit is not served. On a broker that serves every namespace this Role is the admission: the connection is served
+from the broker's next read of the config once it exists, and it starts once the grant of step 2 lets the broker read its Secret.
 
 ## 2. The team makes the Secret, the grant and the connection
 
@@ -113,8 +115,8 @@ The [ChatConnection reference](../reference/chatconnection.md) has every field.
 The team then writes its Bindings and AgentBackend as in [Write a Binding](write-a-binding.md), and invites the bot of its app
 to the channels they name. Create the ChatConnection before its Bindings. A Binding applied while its ChatConnection does not exist
 is owned by every broker, which writes `ConnectionNotFound` on it. Once the connection exists in a namespace that is not
-admitted, no broker serves it, and nothing rewrites that status until step 3. A Binding applied after its connection has no status
-at all until step 3, because the broker reads no Binding of a ChatConnection that it does not serve.
+admitted, no broker serves it, and nothing rewrites that status until the namespace is admitted (step 3; on every namespace it already is). A
+Binding applied after its connection has no status at all until then, because the broker reads no Binding of a ChatConnection that it does not serve.
 
 ## 3. The platform team admits the namespace
 
@@ -557,8 +559,8 @@ To move back, set `config.chatConnection` again.
   If a row stays for a connection that is not served, admit its namespace again so that the connection runs and the row posts, and if the team deleted its ChatConnection have it made again under the same name, and for the same Slack app: the rows post through whatever app the new object's tokens belong to.
   Or wait out the 7 days: the outbox abandons a row older than that, which drops its text and keeps the row.
 
-  Then take the list off the values in the same change as the rollback: the chart of 0.2.1 refuses a `config` key it does not have,
-  and this chart refuses a non-empty list with `config.source: files`. A `personMessage` trigger has to go first too: 0.2.1 knows only `mention` and `botMessage`, and refuses a Binding that has a `personMessage` trigger
+  Then take the list and the selector off the values in the same change as the rollback: the chart of 0.2.1 refuses a `config` key it does not have,
+  and this chart refuses a non-empty list, and any selector, with `config.source: files`. A `personMessage` trigger has to go first too: 0.2.1 knows only `mention` and `botMessage`, and refuses a Binding that has a `personMessage` trigger
   ([Upgrade](upgrade.md#roll-back-from-this-release)).
 
 ## Related

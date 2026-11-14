@@ -288,7 +288,7 @@ What a team that can write these objects can do with the broker's access is in [
 
 If the platform admits team namespaces by name (`config.connectionNamespaces`) or by label (`config.connectionNamespaceSelector`), take them off the values in the same
 upgrade, the list set to `[]` and the selector to `null`: the chart refuses a non-empty list, and any selector, `{}` included, with `config.source: files`. A broker that serves
-every namespace sets neither, and has nothing to take off. Either way the files route serves the one ChatConnection of its directory, so the team connections stop being served (a broker with no own connection has no ChatConnection to leave in that directory: [the chart README](https://github.com/agentkourier/agent-kourier/tree/main/charts/agent-kourier) says what it needs). The files route writes no Binding status, so the team's Bindings keep the last status written, perhaps `Ready=True`.
+every namespace because neither is set has nothing to take off. Either way the files route serves the one ChatConnection of its directory, so the team connections stop being served (a broker with no own connection has no ChatConnection to leave in that directory: [the chart README](https://github.com/agentkourier/agent-kourier/tree/main/charts/agent-kourier) says what it needs). The files route writes no Binding status, so the team's Bindings keep the last status written, perhaps `Ready=True`.
 
 Where the chart rendered the resources from your `config.*` values, set `config.source: files` and upgrade. The ConfigMap is rendered from the same values:
 

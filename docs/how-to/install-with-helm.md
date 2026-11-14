@@ -88,8 +88,8 @@ first. They are the commands of [Install on custom resources](#install-on-custom
 [Check it](#check-it).
 
 Releases before 0.1.3 do not have `init`, and releases up to 0.3.1 write only the ConfigMap route, as `--source files` does now, and have no
-`--team-namespace`. Releases up to 0.3.2 write `config.connectionNamespaces` with the team's namespace into `my-values.yaml` instead of comments
-only, so the broker they install serves that namespace alone. Run the image of the release you install, in the directory that should get the files. `-it`
+`--team-namespace`. Release 0.3.2 writes `config.connectionNamespaces` with the team's namespace into `my-values.yaml` instead of comments
+only, so the broker it installs serves that namespace alone. Run the image of the release you install, in the directory that should get the files. `-it`
 lets it ask its questions, and `--user` runs it as you, so it can write the files into your directory (the image's own user is 65532):
 
 ```sh
