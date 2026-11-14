@@ -57,8 +57,11 @@ const (
 var (
 	// outcomeOf is a condition that a step's outcome was success; if that step runs only on a push, so does this one.
 	outcomeOf = regexp.MustCompile(`^steps\.([A-Za-z0-9_-]+)\.outcome == 'success'$`)
-	// unreadable is what makes a condition more than a conjunction: an or, or a negation of a group or of an event.
-	unreadable = regexp.MustCompile(`\|\||!\s*\(|!\s*github\.event_name`)
+	// statusCall is a status check function, the one call a condition may make.
+	statusCall = regexp.MustCompile(`\b(?:always|cancelled|success|failure)\(\)`)
+	// unreadable is what makes a condition, its status calls removed, more than a conjunction: an or, a bracket (a group
+	// or a call, whose && the split would cut), or a negated event.
+	unreadable = regexp.MustCompile(`\|\||[()]|!\s*github\.event_name`)
 )
 
 type step map[string]any
@@ -70,8 +73,8 @@ type workflow struct {
 }
 
 // classify reads a step's if as a conjunction: the step is gated when one of its terms is the gate, and runs only on
-// a push when one is the push event or the success of a step in pushIDs. A condition with || or a negated group or
-// event is not read, and is a problem: a term found in it would not decide the step.
+// a push when one is the push event or the success of a step in pushIDs. A condition with ||, a bracket other than a
+// status call's, or a negated event is not read, and is a problem: a term found in it would not decide the step.
 func classify(cond string, pushIDs map[string]bool) (isGated, isPushOnly bool, problem string) {
 	cond = strings.TrimSpace(cond)
 	if inner, ok := strings.CutPrefix(cond, "${{"); ok {
@@ -79,8 +82,8 @@ func classify(cond string, pushIDs map[string]bool) (isGated, isPushOnly bool, p
 			cond = inner
 		}
 	}
-	if unreadable.MatchString(cond) {
-		return false, false, fmt.Sprintf("its if %q is not a conjunction (it has || or a negated group or event)", cond)
+	if unreadable.MatchString(statusCall.ReplaceAllString(cond, "")) {
+		return false, false, fmt.Sprintf("its if %q is not a conjunction (it has ||, a bracket or a negated event)", cond)
 	}
 	for term := range strings.SplitSeq(cond, "&&") {
 		term = strings.TrimSpace(term)
@@ -234,6 +237,9 @@ func TestCheckFindsDrift(t *testing.T) {
 		{"a negated push clause in a group", testhooksStep, withTesthooksIf("${{ !(github.event_name == 'push') }}"), notConjunction},
 		{"a negated push clause", testhooksStep, withTesthooksIf("${{ !github.event_name == 'push' }}"), notConjunction},
 		{"the gate or'd with always", testhooksStep, withTesthooksIf("${{ always() || steps.docs-only.outputs.skip != 'true' }}"), notConjunction},
+		{"a push clause in a compared group", testhooksStep, withTesthooksIf("${{ (true && github.event_name == 'push' && true) == false }}"), notConjunction},
+		{"the gate in a compared group", testhooksStep, withTesthooksIf("${{ (true && steps.docs-only.outputs.skip != 'true' && true) == false }}"), notConjunction},
+		{"the gate as a call's argument", testhooksStep, withTesthooksIf("${{ contains(format('{0}', steps.docs-only.outputs.skip != 'true' && 'x'), 'y') }}"), notConjunction},
 		{"a push-only outcome or'd with always", trimThenSave, "        run: hack/ci/actions-cache.sh trim\n      - if: ${{ steps.go-trim.outcome == 'success' || always() }}\n", notConjunction},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

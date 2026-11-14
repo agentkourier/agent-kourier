@@ -20,7 +20,7 @@
 # docs.yml's build does on a pull request that touches docs/. zizmor runs in full, and gitleaks in security.yml.
 # hack/ci/docsonly's test holds every copy of the docs-only step to one text and the checkouts before it alike, and
 # every later step to the gate unless its if holds only on a push; it reads each if as terms joined by && and refuses
-# one with || or a negated group.
+# one with ||, a negated event or a bracket (status calls such as always() aside).
 #
 # The docs-only step fails open. It runs only on a pull_request event and lists the paths with git, the merge commit
 # against its first parent (the checkout fetches both parents on a pull request), so there is no cap on how many paths
