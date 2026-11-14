@@ -18,7 +18,7 @@ set -euo pipefail
 # of that image's Kubernetes (v1.37), and HELM_VERSION on Helm 4 (require_helm4 in hack/kind/lib.sh).
 KIND_VERSION=v0.33.0
 KUBECTL_VERSION=v1.37.1
-HELM_VERSION=v4.3.1
+HELM_VERSION=v4.3.2
 JQ_VERSION=1.8.2
 
 # The staging directory of a run, inside BIN_DIR so that installing is a rename; removed on exit.
@@ -43,10 +43,10 @@ pinned_sha256() {
     kubectl/darwin-amd64) echo 6851381c486ff6edd691623e3d65c87cb9a5b02887ff8fbbb38d8a031b748387 ;;
     kubectl/darwin-arm64) echo fd65982c97ddad3106754b69ffa196d0e543aa591930ae52aed1adfb92f8c77f ;;
     # helm-<version>-<platform>.tar.gz.sha256sum, next to each archive on get.helm.sh.
-    helm/linux-amd64) echo 0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b ;;
-    helm/linux-arm64) echo 8cf8f66ecbc252ac8f7f06cca68aba88508ddfde3a6a34feb1678ad1694b4f88 ;;
-    helm/darwin-amd64) echo 34bec4eba761ba5c16d1965ee6b8f5b0abe5993974a802274e2a4f0418893d89 ;;
-    helm/darwin-arm64) echo 6b4e61c8cd27d99e5a801e63ff25dd5c70b36875c2cd659d3e9ce6b76fc23198 ;;
+    helm/linux-amd64) echo d1c0278d46beab79582d7e50f5b3dc206944ba8e577cde618513fd07daa53983 ;;
+    helm/linux-arm64) echo df31cb61680ef728f82c770e5280dd565617bee6b039d37e85c677288be4bbb0 ;;
+    helm/darwin-amd64) echo 9e0068e9ae18c441d27388190ee7f53ae65eba44bfe910b40bdac44c4b51fa71 ;;
+    helm/darwin-arm64) echo 6f3421de3a8cc2ac578c8cfb33b8edde290dde2871bc1bab12e24f2e5caeaa90 ;;
     # sha256sum.txt, an asset of the jq release.
     jq/linux-amd64) echo b1c22172dd303f3be49e935aa56aa48a8b7a46e0bc838b4997d3bb451495870f ;;
     jq/linux-arm64) echo 8b85c817833814ddca00a144c33705546355afccf0cf39b188f3cdb48b852309 ;;
