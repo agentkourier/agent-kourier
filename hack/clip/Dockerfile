@@ -16,14 +16,14 @@ RUN apt-get update \
 FROM base AS tools-amd64
 ADD --checksum=sha256:6129359f4e1f3848a5572ccb0b26cf28b8ca08cef38c95a765b2f64a2c961a2f \
     https://dl.k8s.io/release/v1.37.0/bin/linux/amd64/kubectl /usr/local/bin/kubectl
-ADD --checksum=sha256:0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b \
-    https://get.helm.sh/helm-v4.3.1-linux-amd64.tar.gz /tmp/helm.tar.gz
+ADD --checksum=sha256:d1c0278d46beab79582d7e50f5b3dc206944ba8e577cde618513fd07daa53983 \
+    https://get.helm.sh/helm-v4.3.2-linux-amd64.tar.gz /tmp/helm.tar.gz
 
 FROM base AS tools-arm64
 ADD --checksum=sha256:922df28df248cc00a9e025f947704f1d1482de64ece54cfe57e61f19eaf1eef3 \
     https://dl.k8s.io/release/v1.37.0/bin/linux/arm64/kubectl /usr/local/bin/kubectl
-ADD --checksum=sha256:8cf8f66ecbc252ac8f7f06cca68aba88508ddfde3a6a34feb1678ad1694b4f88 \
-    https://get.helm.sh/helm-v4.3.1-linux-arm64.tar.gz /tmp/helm.tar.gz
+ADD --checksum=sha256:df31cb61680ef728f82c770e5280dd565617bee6b039d37e85c677288be4bbb0 \
+    https://get.helm.sh/helm-v4.3.2-linux-arm64.tar.gz /tmp/helm.tar.gz
 
 FROM tools-${TARGETARCH}
 RUN chmod 0755 /usr/local/bin/kubectl \
