@@ -32,6 +32,8 @@ var (
 	crBindings    = schema.GroupVersionResource{Group: v1alpha1.Group, Version: v1alpha1.Version, Resource: "bindings"}
 	crBackends    = schema.GroupVersionResource{Group: v1alpha1.Group, Version: v1alpha1.Version, Resource: "agentbackends"}
 	crConnections = schema.GroupVersionResource{Group: v1alpha1.Group, Version: v1alpha1.Version, Resource: "chatconnections"}
+	// crNamespaces are what the source reads with a connection namespace selector that reads labels.
+	crNamespaces = schema.GroupVersionResource{Version: "v1", Resource: "namespaces"}
 
 	// testConnection is the ChatConnection of spec 7's examples, which the broker in these tests serves.
 	testConnection = v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"}
@@ -67,7 +69,7 @@ func crCluster(t *testing.T, edit func(objs []*unstructured.Unstructured)) *dyna
 		rt[i] = o
 	}
 	return dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
-		crBindings: "BindingList", crBackends: "AgentBackendList", crConnections: "ChatConnectionList",
+		crBindings: "BindingList", crBackends: "AgentBackendList", crConnections: "ChatConnectionList", crNamespaces: "NamespaceList",
 	}, rt...)
 }
 

@@ -20,16 +20,16 @@ func TestValidateTheConfigSource(t *testing.T) {
 		mutate func(*RunConfig)
 		want   string // "" is accepted; otherwise a piece of the wiring error
 	}{
-		"files is the default":               {func(*RunConfig) {}, ""},
-		"files, named":                       {func(c *RunConfig) { c.ConfigSource = SourceFiles }, ""},
-		"files needs its directory":          {func(c *RunConfig) { c.ConfigSource = SourceFiles; c.ConfigDir = "" }, "ConfigDir"},
-		"files refuses a ChatConnection":     {func(c *RunConfig) { c.ChatConnection = conn }, "files"},
-		"crds needs the connection":          {func(c *RunConfig) { c.ConfigSource = SourceCRDs; c.ConfigDir = "" }, "ChatConnection"},
-		"crds needs the whole connection":    {func(c *RunConfig) { c.ConfigSource = SourceCRDs; c.ChatConnection = v1alpha1.ObjectRef{Name: "x"} }, "ChatConnection"},
-		"crds with its connection":           {func(c *RunConfig) { c.ConfigSource = SourceCRDs; c.ChatConnection = conn; c.ConfigDir = "" }, ""},
-		"crds ignores a config directory":    {func(c *RunConfig) { c.ConfigSource = SourceCRDs; c.ChatConnection = conn }, ""},
-		"an unknown source is refused":       {func(c *RunConfig) { c.ConfigSource = "etcd" }, `unknown config source "etcd"`},
-		"the name is case sensitive, as env": {func(c *RunConfig) { c.ConfigSource = "CRDs"; c.ChatConnection = conn }, `unknown config source "CRDs"`},
+		"files is the default":                 {func(*RunConfig) {}, ""},
+		"files, named":                         {func(c *RunConfig) { c.ConfigSource = SourceFiles }, ""},
+		"files needs its directory":            {func(c *RunConfig) { c.ConfigSource = SourceFiles; c.ConfigDir = "" }, "ConfigDir"},
+		"files refuses a ChatConnection":       {func(c *RunConfig) { c.ChatConnection = conn }, "files"},
+		"crds with nothing is every namespace": {func(c *RunConfig) { c.ConfigSource = SourceCRDs; c.ConfigDir = "" }, ""},
+		"crds needs the whole connection":      {func(c *RunConfig) { c.ConfigSource = SourceCRDs; c.ChatConnection = v1alpha1.ObjectRef{Name: "x"} }, "ChatConnection"},
+		"crds with its connection":             {func(c *RunConfig) { c.ConfigSource = SourceCRDs; c.ChatConnection = conn; c.ConfigDir = "" }, ""},
+		"crds ignores a config directory":      {func(c *RunConfig) { c.ConfigSource = SourceCRDs; c.ChatConnection = conn }, ""},
+		"an unknown source is refused":         {func(c *RunConfig) { c.ConfigSource = "etcd" }, `unknown config source "etcd"`},
+		"the name is case sensitive, as env":   {func(c *RunConfig) { c.ConfigSource = "CRDs"; c.ChatConnection = conn }, `unknown config source "CRDs"`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := valid(t)
