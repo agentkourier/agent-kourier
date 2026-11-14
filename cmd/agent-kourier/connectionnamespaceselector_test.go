@@ -81,6 +81,8 @@ func TestEnvConfigReadsTheConnectionNamespaceSelector(t *testing.T) {
 		"an unknown expression field":  {env: crds(`{"matchExpressions":[{"key":"team","operator":"In","value":["a"]}]}`), bad: selectorKey + " has a field that a LabelSelector does not have"},
 		"a field twice":                {env: crds(`{"matchLabels":{"team":"a"},"matchLabels":{}}`), bad: selectorKey + " has a field twice"},
 		"a label twice":                {env: crds(`{"matchLabels":{"team":"a","team":"b"}}`), bad: selectorKey + " has a field twice"},
+		"matchExpressions twice":       {env: crds(`{"matchExpressions":[{"key":"team","operator":"Exists"}],"matchExpressions":[]}`), bad: selectorKey + " has a field twice"},
+		"matchLabels, then null":       {env: crds(`{"matchLabels":{"team":"a"},"matchLabels":null}`), bad: selectorKey + " has a field twice"},
 		"a field of the wrong type":    {env: crds(`{"matchLabels":["team"]}`), bad: selectorKey + " does not have the shape of a LabelSelector"},
 		"a label value not a string":   {env: crds(`{"matchLabels":{"team":1}}`), bad: selectorKey + " does not have the shape of a LabelSelector"},
 		"a bad operator":               {env: crds(`{"matchExpressions":[{"key":"team","operator":"Equals","values":["a"]}]}`), bad: "matchExpressions item 1 has an operator that is not In, NotIn, Exists or DoesNotExist"},

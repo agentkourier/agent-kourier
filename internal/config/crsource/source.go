@@ -198,7 +198,7 @@ type Options struct {
 	Connection v1alpha1.ObjectRef
 	// ConnectionNamespaces is the platform's admission list (AGENTKOURIER_CONNECTION_NAMESPACES): the Source serves the
 	// ChatConnections of these namespaces besides the own, if there is one, up to maxServedConnections in all. Each is a namespace
-	// name, and an empty one is ignored. New reads it once.
+	// name; New refuses an empty or blank one, which, dropped, could leave no list and so every namespace. New reads it once.
 	ConnectionNamespaces []string
 	// ConnectionNamespaceSelector admits, besides the namespaces of ConnectionNamespaces, every namespace whose labels it matches
 	// (AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR). It is read live, from an informer on namespaces: a namespace that comes to match
@@ -327,8 +327,9 @@ type Source struct {
 	wg                       sync.WaitGroup // the probe
 }
 
-// New returns a Source that has read nothing. It refuses Options without a Client, and a Connection that names a namespace and no name
-// or a name and no namespace; a Connection that names neither is no own connection (see Options.Connection).
+// New returns a Source that has read nothing. It refuses Options without a Client, a Connection that names a namespace and no name
+// or a name and no namespace, and an empty or blank item of ConnectionNamespaces; a Connection that names neither is no own connection
+// (see Options.Connection).
 func New(opts Options) (*Source, error) {
 	hasOwn := opts.Connection != (v1alpha1.ObjectRef{})
 	switch {
@@ -336,6 +337,11 @@ func New(opts Options) (*Source, error) {
 		return nil, errors.New("crsource: Options.Client is required")
 	case hasOwn && (opts.Connection.Name == "" || opts.Connection.Namespace == ""):
 		return nil, errors.New("crsource: Options.Connection must name a ChatConnection as namespace and name, or neither")
+	}
+	for i, ns := range opts.ConnectionNamespaces {
+		if strings.TrimSpace(ns) == "" {
+			return nil, fmt.Errorf("crsource: Options.ConnectionNamespaces item %d is empty or blank; want a namespace name", i+1)
+		}
 	}
 	s := &Source{
 		client: opts.Client, log: cmp.Or(opts.Logger, slog.Default()), good: map[key]goodObject{}, decoded: map[key]decodedObject{}, warned: map[key]warnedGeneration{},
@@ -365,9 +371,7 @@ type admission struct {
 func newAdmission(hasOwn bool, namespaces []string, selector labels.Selector) admission {
 	a := admission{list: map[string]bool{}}
 	for _, ns := range namespaces {
-		if ns != "" {
-			a.list[ns] = true
-		}
+		a.list[ns] = true
 	}
 	switch {
 	case selector != nil && selector.Empty():
@@ -454,6 +458,10 @@ func (s *Source) watchErrorHandler(gvr schema.GroupVersionResource) cache.WatchE
 		s.errMu.Lock()
 		s.lastErr, s.errAt = fmt.Errorf("%s: %w", resourceName(gvr), err), s.now()
 		s.errMu.Unlock()
+		if gvr == namespacesGVR {
+			s.log.Warn("namespace informer of the connection namespace selector cannot list or watch namespaces; the labels last read are kept", "error", err)
+			return
+		}
 		s.log.Warn("custom resource informer cannot list or watch", "resource", gvr.Resource, "error", err)
 	}
 }
