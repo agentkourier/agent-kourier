@@ -291,6 +291,25 @@ Checks that no values file can get past. Included by the Deployment, which every
 {{- if and .Values.networkPolicy.enabled (not .Values.networkPolicy.kubeApiServer.cidrs) -}}
 {{- fail "networkPolicy.enabled needs networkPolicy.kubeApiServer.cidrs: Agent Kourier reads Secrets through the API server, and a NetworkPolicy cannot select it by pod. On EKS use the control-plane subnet CIDRs (aws eks describe-cluster, then the subnets' CIDRs), not the endpoint IPs, which change on upgrades; elsewhere: kubectl get endpoints kubernetes" -}}
 {{- end -}}
+{{- /* The chat listener: a port of its own, a Service that selects the leader by a label only the leader writes, and nothing it would ignore. */ -}}
+{{- if hasKey .Values.podLabels "agentkourier.dev/role" -}}
+{{- fail "podLabels must not set agentkourier.dev/role: the leader puts that label on its own pod, and the chat Service selects the leader by it, so a pod template that carried it would put every replica, the standby included, behind the chat Service" -}}
+{{- end -}}
+{{- if .Values.chatListener.enabled -}}
+{{- if eq (int .Values.chatListener.port) (int .Values.listen.port) -}}
+{{- fail "chatListener.port must differ from listen.port: the chat listener is a port of its own, so that /metrics is never on the port a chat platform reaches" -}}
+{{- end -}}
+{{- if and .Values.networkPolicy.enabled (not .Values.networkPolicy.chatFrom) -}}
+{{- fail "networkPolicy.enabled with chatListener.enabled needs networkPolicy.chatFrom: the NetworkPolicyPeers that may reach the chat port (the ingress controller's pods, or an ipBlock). Without it nothing can reach the chat listener" -}}
+{{- end -}}
+{{- else -}}
+{{- if .Values.chatListener.ingress.enabled -}}
+{{- fail "chatListener.ingress.enabled needs chatListener.enabled: the Ingress sends to the chat Service, which the chat listener renders" -}}
+{{- end -}}
+{{- if .Values.networkPolicy.chatFrom -}}
+{{- fail "networkPolicy.chatFrom is for chatListener.enabled: without the chat listener there is no chat port to admit it to, and it would be ignored" -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

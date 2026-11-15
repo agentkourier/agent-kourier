@@ -21,12 +21,13 @@ The broker is configured by environment variables, which the Helm chart sets fro
 | `AGENTKOURIER_POSTGRES_TIMEOUTS` | `agent-kourier` | With `postgres`: `agent-kourier` sets the idle-in-transaction and statement timeouts on each connection; `role` leaves them to the database role, for a pooler that refuses startup parameters. |
 | `AGENTKOURIER_LEASE_NAMESPACE` | | With `postgres`, required: the namespace of the leader-election Lease. |
 | `AGENTKOURIER_LEASE_NAME` | | With `postgres`, required: the Lease's name, one for the Deployment. |
-| `AGENTKOURIER_POD_NAME` | | With `postgres`, required: the pod's name, which names the replica as the holder. |
+| `AGENTKOURIER_POD_NAME` | | With `postgres`, required: the pod's name, which names the replica as the holder. With `AGENTKOURIER_POD_NAMESPACE`, required with either store: the pod the leader labels. |
 | `AGENTKOURIER_LEASE_DURATION` | `15s` | With `postgres`: a standby takes over about this long after the leader's last renewal. |
 | `AGENTKOURIER_LEASE_RENEW_DEADLINE` | `10s` | With `postgres`: the leader gives up renewing, and exits, after this long. |
 | `AGENTKOURIER_LEASE_RETRY_PERIOD` | `2s` | With `postgres`: how often the leader renews and a standby tries to take the Lease. |
 | `AGENTKOURIER_LISTEN` | `:8080` | The address of `/healthz`, `/readyz` and `/metrics`. |
 | `AGENTKOURIER_CHAT_LISTEN` | | The address of the chat listener, the port a chat platform sends its requests to. It has no default: unset, the broker opens no such port. It is apart from `AGENTKOURIER_LISTEN`, so `/metrics` is never on it. |
+| `AGENTKOURIER_POD_NAMESPACE` | | With `AGENTKOURIER_CHAT_LISTEN`, optional: the namespace of the broker's pod, which with `AGENTKOURIER_POD_NAME` turns on the leader label. Every replica takes the label `agentkourier.dev/role=leader` off its own pod as it starts, the leader puts it on once it has started to lead, and takes it off at shutdown, so that a Service that selects the label (the chart's chat Service) sends the chat listener's requests to the leader alone. The writes need `patch` on the pod. A write that fails does not stop the broker leading, and is tried again ([Limits](limits.md#run-the-broker)). Set without `AGENTKOURIER_CHAT_LISTEN`, or without `AGENTKOURIER_POD_NAME`, it is refused (exit code 2). The chart sets both from the downward API when `chatListener.enabled` is true. |
 | `AGENTKOURIER_SYNC_TIMEOUT` | `30s` | How long to wait for the Secret caches before the start fails. |
 | `AGENTKOURIER_KLOG_V` | `0` | client-go's verbosity, held below 8: from 8 up, client-go logs response bodies, Secret lists included. |
 | `AGENTKOURIER_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. |

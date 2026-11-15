@@ -80,6 +80,11 @@ type RunConfig struct {
 	// apart from Listener so that /metrics is never on it. Every replica serves it, and only the leader's connections have routes on it.
 	// Nil serves none.
 	ChatListener net.Listener
+	// LeaderPod, if set, is the pod Run runs in, which the leader labels (LeaderLabel) so that a Service that selects the label sends the
+	// chat listener's requests to the leader alone: every replica takes the label off its pod as it starts, before it says it is ready,
+	// and the leader puts it on once its leader half has started and takes it off at shutdown. It needs ChatListener, and both of its
+	// fields. The zero value labels nothing.
+	LeaderPod PodRef
 	// Client is the Kubernetes client the Secret informers use. Nil means InClusterClient.
 	Client kubernetes.Interface
 	// SyncTimeout bounds the wait for the Secret caches; zero means Bootstrap's default.
@@ -285,6 +290,14 @@ func (c RunConfig) validate() error {
 	if c.Store.kind() == StorePostgres {
 		if err := c.Election.validate(); err != nil {
 			return err
+		}
+	}
+	if !c.LeaderPod.IsZero() {
+		switch {
+		case c.LeaderPod.Namespace == "" || c.LeaderPod.Name == "":
+			return fmt.Errorf("%w: LeaderPod must be set to a namespace and a name, or not at all", ErrWiring)
+		case c.ChatListener == nil:
+			return fmt.Errorf("%w: LeaderPod is set without a ChatListener: the pod is labeled only for the chat listener's Service", ErrWiring)
 		}
 	}
 	if !retention.ValidAuditRetention(c.AuditRetention) {

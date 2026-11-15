@@ -119,7 +119,10 @@ tier's, with the token-refresh CronJob).
 | CustomResourceDefinitions `agentbackends`, `bindings` and `chatconnections` of `agentkourier.dev` | `crds.install`: unset, true with `config.source: crds` and false with `files`; an explicit value wins | the generated files of `files/crds`; kept on `helm uninstall` and when `crds.install` is turned off (`helm.sh/resource-policy: keep`, which is Helm's; for Argo CD see [below](#custom-resources-instead-of-a-configmap)) |
 | ClusterRole and ClusterRoleBinding `<fullname>-<namespace>-crs` | `config.source: crds`, the default (`rbac.create`) | `list` and `watch` on the three kinds, `patch` on `bindings/status`, `get` on the three CRDs by name, and `list` and `watch` on `namespaces` with a `config.connectionNamespaceSelector` other than `{}`; see Custom resources instead of a ConfigMap |
 | PersistentVolumeClaim `<fullname>-data` | `store.type: sqlite`, unless `persistence.existingClaim` | kept on `helm uninstall` (`persistence.retainOnUninstall`); none with Postgres |
-| Service | `service.enabled` | ClusterIP on the health and metrics port, and nothing else |
+| Service | `service.enabled` | ClusterIP on the health and metrics port, and nothing else; it selects every pod, a standby's included |
+| Service `<fullname>-chat` | `chatListener.enabled` | the chat listener's port, on the pod that carries `agentkourier.dev/role: leader` (the leader labels its own); `chatListener.service.type` (default ClusterIP); see [Chat listener](#chat-listener) |
+| Ingress `<fullname>-chat` | `chatListener.ingress.enabled` (needs `chatListener.enabled`) | the path prefix `/chat/` to the chat Service, and nothing else |
+| Role and RoleBinding `<fullname>-leader-label` | `chatListener.enabled` (`rbac.create`) | `patch` on `pods` in the release namespace, for the leader label; not limited by name (see [Chat listener](#chat-listener)) |
 | ServiceMonitor | `serviceMonitor.enabled` | prometheus-operator; needs the Service |
 | NetworkPolicy | `networkPolicy.enabled` | see below |
 | PodDisruptionBudget | `podDisruptionBudget.enabled` | off; `minAvailable: 1` keeps a drain from taking both replicas at `replicaCount: 2`; the render refuses a budget that keeps every pod (`minAvailable` >= replicas, 100%, `maxUnavailable: 0`), since it would block every node drain |
@@ -146,6 +149,7 @@ NetworkPolicy in another namespace for instance, needs the real name, or you set
 - `replicaCount` (2 with Postgres for a standby) and `leaderElection.*`, the Lease's timings (see High availability).
 - `logLevel`, `syncTimeout`, `auditRetention` (empty keeps the audit log for ever; a duration of at least 24h purges older entries), `extraEnv` (OpenTelemetry settings go here), `resources`, `persistence.*` (SQLite's volume).
 - `service`, `serviceMonitor`, `networkPolicy`, `podDisruptionBudget`, `tokenRefresh`: off until you switch them on.
+- `chatListener.*` and `networkPolicy.chatFrom`: the chat listener, its Service and an optional Ingress; off until you switch it on (see Chat listener).
 
 With the files route a config change rolls the pod (a `checksum/config` annotation). Agent Kourier also reloads its files in place, and follows a Secret
 that a reload adds, in any namespace its ServiceAccount may list and watch it in. A Secret it may not read fails that reload: the last
@@ -385,6 +389,36 @@ agent send that the paused leader had already begun, which can happen once more 
 Set `affinity` (a `podAntiAffinity` on `app.kubernetes.io/name: agent-kourier`) so the two replicas do not share a node, which the chart does not
 do for you, and `podDisruptionBudget.enabled` with `minAvailable: 1` so a drain cannot take both.
 
+## Chat listener
+
+`chatListener.enabled` opens the chat listener (`AGENTKOURIER_CHAT_LISTEN`, on `chatListener.port`, 8081 by default), the port a chat
+platform sends its requests to: `POST /chat/<platform>/<namespace>/<name>`. A Slack ChatConnection with `spec.slack.mode: http` needs it.
+It is apart from the metrics port, so `/metrics` is never on it. Off, the default, the broker opens no such port.
+
+Only the leader serves the chat routes; a standby answers 503 to each. So the chat Service, `<fullname>-chat`, selects the Deployment's
+pods that carry the label `agentkourier.dev/role: leader`, and the broker keeps that label on the leader's pod alone:
+
+- Every replica takes the label off its own pod as it starts, and says it is Ready only once that write has been tried, so a pod that kept
+  the label from an earlier container (a leader that exited and was restarted in the same pod) is not selected as a standby.
+- The leader puts it on once it has started to lead, and takes it off at shutdown, just before it hands the lease over. A leader that
+  loses its lease exits at once, without that write; its pod is not Ready, so out of the Service, until its next container is, which has
+  tried to take the label off by then. With SQLite the one replica leads, and carries the label.
+- A write that fails is logged, counted on `agentkourier_leader_pod_label_writes_total{result="failed"}` and tried again (see
+  [Limits](../../docs/reference/limits.md#run-the-broker)); it never stops the broker leading.
+
+While no pod carries the label, during a takeover, the chat Service has no endpoint and the platform's requests fail; Slack sends a
+request again when it gets no answer (Slack's own behaviour, not checked here). The health and metrics Service (`service.enabled`) selects
+every pod, as before.
+
+The pod's name and namespace come from the downward API (`AGENTKOURIER_POD_NAME`, `AGENTKOURIER_POD_NAMESPACE`), and the label needs
+`patch` on `pods`. A Deployment's pods are named by its ReplicaSet, so the chart cannot name them in `resourceNames`: the Role
+`<fullname>-leader-label` grants `patch` on every pod of the release namespace. `patch` on a pod reaches more than its labels (a
+container's image, for one), so keep Agent Kourier in a namespace of its own. `podLabels` may not set `agentkourier.dev/role`.
+
+`chatListener.ingress.enabled` adds an Ingress, `<fullname>-chat`, that sends `/chat/` to the chat Service, with its `className`, `host`,
+`tls` and `annotations`. With `networkPolicy.enabled`, `networkPolicy.chatFrom` names who may reach the chat port (the ingress
+controller's pods, say), and the render requires it.
+
 ## Secrets
 
 Nothing secret is in the values. The config names Secrets (`credentialsSecretRef`, `tokenSecretRef`, `valueSecretRef`) and you
@@ -419,7 +453,8 @@ looks like a credential (key, token, secret, auth, cookie, password), which belo
 - **NetworkPolicy** (`networkPolicy.enabled`, which needs a CNI that enforces it): egress to DNS, to the API server (you give
   its addresses in `kubeApiServer.cidrs`, since a policy cannot select it), to Slack on
   443 (to anywhere outside the private, CGNAT and link-local ranges, since a policy cannot name a host) and to what `extraEgress` adds (the agent
-  backend's front door, an OTLP collector); ingress only from `metricsFrom` on the metrics port. Agent Kourier calls the verifying
+  backend's front door, an OTLP collector); ingress only from `metricsFrom` on the metrics port and, with `chatListener.enabled`, from
+  `chatFrom` on the chat port. Agent Kourier calls the verifying
   front door, never the controller on 8083; put the front door in `extraEgress`, and nothing else in that namespace.
   - On kind or kubeadm, `kubectl get endpoints kubernetes` gives the API server's addresses as /32s. On EKS those are
     control-plane ENI addresses that change when AWS upgrades the control plane: use the CIDRs of the control-plane subnets

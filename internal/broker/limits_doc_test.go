@@ -5,9 +5,11 @@ import (
 	"net/http"
 	"testing"
 
+	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/tools/leaderelection"
 
 	"github.com/agentkourier/agent-kourier/internal/limitsdoc"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // TestLimitsPage holds the page docs/reference/limits.md to the limits of the broker's wiring. Each value is the one the
@@ -62,4 +64,10 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Bytes(t, "chatBodyBudget", routes.budget.left)
 	limitsdoc.Bytes(t, "chatBodyChunk", chatBodyChunk)
 	limitsdoc.Duration(t, "chatDrain", chatDrainTimeout)
+
+	// The leader label on the pod: the bound of one write and the wait after a failed one, as the labeler Run builds is given them.
+	labeler := newPodLabeler(fake.NewClientset(), PodRef{Namespace: "ns", Name: "pod"}, testutil.DiscardLogger(), func(string) {})
+	limitsdoc.Duration(t, "podLabelTimeout", labeler.timeout)
+	limitsdoc.Duration(t, "podLabelBackoffBase", labeler.base)
+	limitsdoc.Duration(t, "podLabelBackoffCap", labeler.ceiling)
 }

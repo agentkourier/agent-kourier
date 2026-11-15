@@ -94,6 +94,17 @@ spec:
             {{- end }}
             {{- end }}
             - {name: AGENTKOURIER_LISTEN, value: {{ printf ":%d" (int .Values.listen.port) | quote }}}
+            {{- if .Values.chatListener.enabled }}
+            {{- /* The chat listener, and the pod the leader labels for the chat Service: its name (set above for the election with Postgres)
+                   and its namespace, from the downward API. */}}
+            - {name: AGENTKOURIER_CHAT_LISTEN, value: {{ printf ":%d" (int .Values.chatListener.port) | quote }}}
+            {{- if include "agentkourier.sqlite" . }}
+            - name: AGENTKOURIER_POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            {{- end }}
+            - name: AGENTKOURIER_POD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            {{- end }}
             - {name: AGENTKOURIER_LOG_LEVEL, value: {{ .Values.logLevel | quote }}}
             - {name: AGENTKOURIER_KLOG_V, value: {{ .Values.klogVerbosity | quote }}}
             {{- with .Values.syncTimeout }}
@@ -109,7 +120,11 @@ spec:
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          ports: [{name: http, containerPort: {{ int .Values.listen.port }}}]
+          ports:
+            - {name: http, containerPort: {{ int .Values.listen.port }}}
+            {{- if .Values.chatListener.enabled }}
+            - {name: chat, containerPort: {{ int .Values.chatListener.port }}}
+            {{- end }}
           # Bootstrap waits up to 30 s (AGENTKOURIER_SYNC_TIMEOUT) for the Secret caches, so startup is allowed 80 s before
           # the other probes begin. /healthz says the process is alive. /readyz says it is configured and its store and
           # Secret caches answer; it does NOT say Slack is connected, by design (agentkourier_chat_connected is the metric

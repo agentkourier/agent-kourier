@@ -1,6 +1,7 @@
 # Everything the chart can switch on at one replica (the PodDisruptionBudget cannot: see values.yaml), for the pilot's shape: the production image by digest, a connection and a backend in
 # the release namespace and a Binding in the team's own, with the alert trigger and the token-refresh CronJob, metrics
-# scraped by prometheus-operator, and a NetworkPolicy that fences egress to Slack, DNS, the API server and the front door.
+# scraped by prometheus-operator, the chat listener behind an Ingress, and a NetworkPolicy that fences egress to Slack, DNS, the API
+# server and the front door.
 fullnameOverride: agent-kourier
 
 image:
@@ -97,6 +98,17 @@ tolerations:
 service:
   enabled: true
 
+# The chat listener, its leader-only Service and an Ingress for it. The connection above is in Socket Mode, so nothing routes on it: this
+# renders what an HTTP-mode connection would be reached through.
+chatListener:
+  enabled: true
+  ingress:
+    enabled: true
+    className: nginx
+    host: agent-kourier.example.test
+    tls:
+      - {hosts: [agent-kourier.example.test], secretName: agent-kourier-chat-tls}
+
 serviceMonitor:
   enabled: true
   namespace: monitoring
@@ -109,6 +121,9 @@ networkPolicy:
   metricsFrom:
     - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: monitoring}}
       podSelector: {matchLabels: {app.kubernetes.io/name: prometheus}}
+  chatFrom:
+    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}
+      podSelector: {matchLabels: {app.kubernetes.io/name: ingress-nginx}}
   extraEgress:
     - to:
         - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kagent}}
