@@ -153,8 +153,9 @@ func TestRunEndsWithSlackAuthWhenAPostFindsTheTokenRevoked(t *testing.T) {
 
 	err := r.wait()
 
-	if !errors.Is(err, ErrChatAuth) || !strings.Contains(err.Error(), "token_revoked") {
-		t.Errorf("Run = %v, want ErrChatAuth naming token_revoked, from the post", err)
+	// The whole text, which the process exits with and the docs quote: the call that found the rejection names the connection's platform.
+	if want := "slack rejected the tokens: token_revoked (reported by a call)"; !errors.Is(err, ErrChatAuth) || err.Error() != want {
+		t.Errorf("Run = %v, want ErrChatAuth saying %q, from the post", err, want)
 	}
 }
 
@@ -168,8 +169,8 @@ func TestRunEndsWithSlackAuthWhenAReactionFindsTheTokenRevoked(t *testing.T) {
 
 	err := r.wait()
 
-	if !errors.Is(err, ErrChatAuth) || !strings.Contains(err.Error(), "token_revoked") {
-		t.Errorf("Run = %v, want ErrChatAuth naming token_revoked, from the reaction", err)
+	if want := "slack rejected the tokens: token_revoked (reported by a call)"; !errors.Is(err, ErrChatAuth) || err.Error() != want {
+		t.Errorf("Run = %v, want ErrChatAuth saying %q, from the reaction", err, want)
 	}
 }
 
