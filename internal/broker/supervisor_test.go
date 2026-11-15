@@ -177,7 +177,7 @@ func newSupWorldWith(t *testing.T, withOwn bool) *supWorld {
 			return w.ids[tok], w.idErr[tok]
 		},
 		conns: new(atomic.Pointer[[]Connection]), changes: new(atomic.Uint64),
-		intake: func(v1alpha1.ObjectRef) (chat.Sink, error) { return nil, nil },
+		intake: func(Connection) (chat.Sink, error) { return nil, nil },
 		gone:   func(conn string) { w.mu.Lock(); w.gone = append(w.gone, conn); w.mu.Unlock() },
 		removed: func(ctx context.Context, conn string) {
 			w.mu.Lock()
@@ -209,6 +209,13 @@ func team(name string, gen int64, token string, age int) TeamConnection {
 	}
 }
 
+// teamOn is team on the platform given.
+func teamOn(platform, name string, gen int64, token string, age int) TeamConnection {
+	t := team(name, gen, token, age)
+	t.Platform = platform
+	return t
+}
+
 // unready is team without credentials: its Secret cannot be read yet.
 func unready(name string, gen int64, age int) TeamConnection {
 	t := team(name, gen, "", age)
@@ -221,10 +228,10 @@ func (w *supWorld) reconcile(desired ...TeamConnection) { w.sup.reconcile(w.t.Co
 // wantBot checks the bot guard's table: the bot ID and the user of a bot belong to conn, or to none when conn is "".
 func (w *supWorld) wantBot(bot, user, conn string) {
 	w.t.Helper()
-	if got, _ := w.table.botOwner(bot); got != conn {
+	if got, _ := w.table.botOwner(v1alpha1.PlatformSlack, bot); got != conn {
 		w.t.Errorf("botOwner(%s) = %q; want %q", bot, got, conn)
 	}
-	if got, _ := w.table.botUserOwner(user); got != conn {
+	if got, _ := w.table.botUserOwner(v1alpha1.PlatformSlack, user); got != conn {
 		w.t.Errorf("botUserOwner(%s) = %q; want %q", user, got, conn)
 	}
 }
@@ -258,7 +265,7 @@ func (w *supWorld) reconcileChecked(desired ...TeamConnection) {
 			w.t.Errorf("the bot table has %+v for %s, which is refused", id, name)
 		}
 	}
-	if w.table.bots[ownName] != (appIdentity{App: "AOWN", Team: "T1", User: "UOWN", Bot: "BOWN"}) {
+	if w.table.bots[ownName] != (appIdentity{Platform: v1alpha1.PlatformSlack, App: "AOWN", Team: "T1", User: "UOWN", Bot: "BOWN"}) {
 		w.t.Errorf("the bot table has %+v for the own connection", w.table.bots[ownName])
 	}
 }
@@ -511,6 +518,53 @@ func TestSupervisorServesAnAppInstalledInTwoWorkspacesOnce(t *testing.T) {
 	}
 	if got := w.sup.refusals.names(); !slices.Equal(got, []string{"team-b/slack"}) {
 		t.Errorf("refused = %v; want the second installation", got)
+	}
+}
+
+// An app ID is the platform's: connections of two platforms whose apps have the same ID are two apps, and each is served, a twin of the own
+// connection's app on the other platform too. The bot of each is the guard's on its own platform only. Slack's rule is as it was: a second Slack
+// connection of a Slack app is refused, whatever the other platform serves under that ID.
+func TestSupervisorTellsTheAppsOfTwoPlatformsApart(t *testing.T) {
+	w := newSupWorld(t)
+	w.ids["tok-slack"] = appIdentity{App: "AAPP", Team: "T1", User: "UAPP", Bot: "BAPP"}
+	w.ids["tok-web"] = appIdentity{App: "AAPP", Team: "T1", User: "UAPP", Bot: "BAPP"}
+	w.ids["tok-web-own"] = appIdentity{App: "AOWN", Team: "T1", User: "UOWN", Bot: "BOWN"}
+	w.ids["tok-slack-twin"] = appIdentity{App: "AAPP", Team: "T2", User: "UTWIN", Bot: "BTWIN"}
+	slackTeam := team("team-a/slack", 1, "tok-slack", 1)
+	webTeam := teamOn("web", "team-b/web", 1, "tok-web", 2)
+	webOwn := teamOn("web", "team-c/web", 1, "tok-web-own", 3)
+
+	w.reconcileChecked(slackTeam, webTeam, webOwn) // oldest first, as teamConnections gives it
+	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack", "team-b/web", "team-c/web"}) {
+		t.Fatalf("running = %v; want every connection, since no two are of one platform's app", got)
+	}
+	if got := w.sup.refusals.names(); len(got) != 0 {
+		t.Errorf("refused = %v; want none", got)
+	}
+	for _, c := range []struct{ platform, bot, user, conn string }{
+		{v1alpha1.PlatformSlack, "BAPP", "UAPP", "team-a/slack"},
+		{"web", "BAPP", "UAPP", "team-b/web"},
+		{v1alpha1.PlatformSlack, "BOWN", "UOWN", ownName},
+		{"web", "BOWN", "UOWN", "team-c/web"},
+	} {
+		if got, _ := w.table.botOwner(c.platform, c.bot); got != c.conn {
+			t.Errorf("botOwner(%s, %s) = %q; want %q", c.platform, c.bot, got, c.conn)
+		}
+		if got, _ := w.table.botUserOwner(c.platform, c.user); got != c.conn {
+			t.Errorf("botUserOwner(%s, %s) = %q; want %q", c.platform, c.user, got, c.conn)
+		}
+	}
+	if _, ok := w.table.botOwner("github", "BAPP"); ok {
+		t.Error("botOwner(github, BAPP) names a connection; want no bot of a platform the broker serves nothing on")
+	}
+
+	// The younger Slack connection of the Slack app is refused, as before; the web connection of an app with the same ID is left alone.
+	w.reconcileChecked(slackTeam, webTeam, webOwn, team("team-d/slack", 1, "tok-slack-twin", 4))
+	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack", "team-b/web", "team-c/web"}) {
+		t.Errorf("running = %v; want the second Slack connection of the app not run", got)
+	}
+	if got := w.sup.refusals.names(); !slices.Equal(got, []string{"team-d/slack"}) {
+		t.Errorf("refused = %v; want the second Slack connection of the app", got)
 	}
 }
 
@@ -908,10 +962,10 @@ func TestTheBotGuardKeepsTheBotOfAConnectionThatRestarts(t *testing.T) {
 	bot := appIdentity{App: "AB", Team: "T1", User: "UB", Bot: "BB"}
 	w.ids["tok-b1"] = bot
 	w.reconcile(team("team-b/slack", 1, "tok-b1", 1))
-	if conn, ok := w.table.botOwner("BB"); !ok || conn != "team-b/slack" {
+	if conn, ok := w.table.botOwner(v1alpha1.PlatformSlack, "BB"); !ok || conn != "team-b/slack" {
 		t.Fatalf("botOwner(BB) = %q, %v; want team-b while it runs", conn, ok)
 	}
-	if conn, ok := w.table.botOwner("BOWN"); !ok || conn != ownName {
+	if conn, ok := w.table.botOwner(v1alpha1.PlatformSlack, "BOWN"); !ok || conn != ownName {
 		t.Fatalf("botOwner(BOWN) = %q, %v; want the own connection", conn, ok)
 	}
 
@@ -920,20 +974,20 @@ func TestTheBotGuardKeepsTheBotOfAConnectionThatRestarts(t *testing.T) {
 	if got := w.running(); !slices.Equal(got, []string{ownName}) {
 		t.Fatalf("running = %v; want team-b stopped for the restart", got)
 	}
-	if conn, ok := w.table.botOwner("BB"); !ok || conn != "team-b/slack" {
+	if conn, ok := w.table.botOwner(v1alpha1.PlatformSlack, "BB"); !ok || conn != "team-b/slack" {
 		t.Errorf("botOwner(BB) = %q, %v while team-b restarts; want team-b", conn, ok)
 	}
-	if conn, ok := w.table.botUserOwner("UB"); !ok || conn != "team-b/slack" {
+	if conn, ok := w.table.botUserOwner(v1alpha1.PlatformSlack, "UB"); !ok || conn != "team-b/slack" {
 		t.Errorf("botUserOwner(UB) = %q, %v while team-b restarts; want team-b", conn, ok)
 	}
 
 	delete(w.idErr, "tok-b2") // a new identity replaces the old
 	w.ids["tok-b2"] = appIdentity{App: "AB2", Team: "T1", User: "UB2", Bot: "BB2"}
 	w.reconcile(team("team-b/slack", 1, "tok-b2", 1))
-	if _, ok := w.table.botOwner("BB"); ok {
+	if _, ok := w.table.botOwner(v1alpha1.PlatformSlack, "BB"); ok {
 		t.Error("botOwner(BB) still names team-b after its tokens turned out to be another bot's")
 	}
-	if conn, ok := w.table.botOwner("BB2"); !ok || conn != "team-b/slack" {
+	if conn, ok := w.table.botOwner(v1alpha1.PlatformSlack, "BB2"); !ok || conn != "team-b/slack" {
 		t.Errorf("botOwner(BB2) = %q, %v; want team-b", conn, ok)
 	}
 }
@@ -950,18 +1004,18 @@ func TestTheBotGuardForgetsTheBotOfAConnectionThatIsNotServed(t *testing.T) {
 	w.openErr["tok-d"] = errors.New("no adapter")
 	a, b, c, d := team("team-a/slack", 1, "tok-a", 1), team("team-b/slack", 1, "tok-b", 2), team("team-c/slack", 1, "tok-c", 3), team("team-d/slack", 1, "tok-d", 4)
 	w.reconcile(a, b, c, d)
-	if _, ok := w.table.botOwner("BB2"); ok {
+	if _, ok := w.table.botOwner(v1alpha1.PlatformSlack, "BB2"); ok {
 		t.Error("botOwner(BB2) names team-b, which is refused as a second connection of team-a's app")
 	}
-	if conn, ok := w.table.botOwner("BD"); !ok || conn != "team-d/slack" {
+	if conn, ok := w.table.botOwner(v1alpha1.PlatformSlack, "BD"); !ok || conn != "team-d/slack" {
 		t.Errorf("botOwner(BD) = %q, %v; want team-d, which is served and failed to start", conn, ok)
 	}
 
 	w.reconcile(a, b, d) // team-c leaves the Snapshot
-	if _, ok := w.table.botOwner("BC"); ok {
+	if _, ok := w.table.botOwner(v1alpha1.PlatformSlack, "BC"); ok {
 		t.Error("botOwner(BC) still names team-c, which is no longer served")
 	}
-	if conn, ok := w.table.botOwner("BAPP"); !ok || conn != "team-a/slack" {
+	if conn, ok := w.table.botOwner(v1alpha1.PlatformSlack, "BAPP"); !ok || conn != "team-a/slack" {
 		t.Errorf("botOwner(BAPP) = %q, %v; want team-a", conn, ok)
 	}
 }

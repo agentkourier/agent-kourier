@@ -280,30 +280,30 @@ func (t *runtimeTable) forgetBot(conn string) {
 	delete(t.bots, conn)
 }
 
-// botOwner implements botOwners over the connections that are served.
-func (t *runtimeTable) botOwner(botID string) (string, bool) {
+// botOwner implements botOwners over the connections that are served: the bot of a connection on another platform is none, whatever its ID.
+func (t *runtimeTable) botOwner(platform, botID string) (string, bool) {
 	if botID == "" {
 		return "", false
 	}
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	for name, id := range t.bots {
-		if id.Bot == botID {
+		if id.Platform == platform && id.Bot == botID {
 			return name, true
 		}
 	}
 	return "", false
 }
 
-// botUserOwner implements botOwners for the user a bot posts as.
-func (t *runtimeTable) botUserOwner(user string) (string, bool) {
+// botUserOwner implements botOwners for the user a bot posts as, on platform as botOwner is.
+func (t *runtimeTable) botUserOwner(platform, user string) (string, bool) {
 	if user == "" {
 		return "", false
 	}
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	for name, id := range t.bots {
-		if id.User == user {
+		if id.Platform == platform && id.User == user {
 			return name, true
 		}
 	}

@@ -8,13 +8,15 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
-// botOwners tells whose bot a bot ID is among the connections the broker serves: a connection that is served and restarting keeps its bot, since
-// the turns that hold its old platform still post as it.
+// botOwners tells whose bot a bot ID is among the connections the broker serves on a platform: a connection that is served and restarting keeps
+// its bot, since the turns that hold its old platform still post as it. An ID is the platform's, so the bot of a connection on another platform
+// is never the owner, whatever its ID.
 type botOwners interface {
-	// botOwner returns the connection ("namespace/name") whose bot has the ID botID, if one of the served connections does.
-	botOwner(botID string) (conn string, ok bool)
+	// botOwner returns the connection ("namespace/name") whose bot has the ID botID on platform (a ChatConnection's spec.platform), if one of
+	// the served connections does.
+	botOwner(platform, botID string) (conn string, ok bool)
 	// botUserOwner is botOwner for the user a bot posts as (appIdentity.User).
-	botUserOwner(user string) (conn string, ok bool)
+	botUserOwner(platform, user string) (conn string, ok bool)
 }
 
 // botGuard is the Sink of a connection's platform: the Intake, except that a bot's mention by the bot of another connection that
@@ -29,8 +31,10 @@ type botOwners interface {
 type botGuard struct {
 	in   *trigger.Intake
 	self string // the connection this sink is for
-	bots botOwners
-	log  *slog.Logger
+	// platform is self's platform (its spec.platform), the one whose bots and users the messages of the sink are by.
+	platform string
+	bots     botOwners
+	log      *slog.Logger
 }
 
 var (
@@ -39,15 +43,15 @@ var (
 	_ chat.BotMentionFilter = botGuard{}
 )
 
-// other says whether botID is the bot of a served connection that is not self.
+// other says whether botID is the bot of a served connection on self's platform that is not self.
 func (g botGuard) other(botID string) bool {
-	conn, ok := g.bots.botOwner(botID)
+	conn, ok := g.bots.botOwner(g.platform, botID)
 	return ok && conn != g.self
 }
 
-// otherUser says whether user is the user of another connection's bot.
+// otherUser says whether user is the user of another connection's bot on self's platform.
 func (g botGuard) otherUser(user string) bool {
-	conn, ok := g.bots.botUserOwner(user)
+	conn, ok := g.bots.botUserOwner(g.platform, user)
 	return ok && conn != g.self
 }
 
