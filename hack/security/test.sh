@@ -139,10 +139,11 @@ fi
 
 # A line that breaks only the end anchor, then one that breaks only the start anchor: dropping either anchor of the
 # Agent Kourier capture accepts one of them.
+partial_line="${tmp}/partial-line.json"
 for body in '- Image: `ghcr.io/agentkourier/agent-kourier@sha256:4444444444444444444444444444444444444444444444444444444444444444` and more' \
   ' - Image: `ghcr.io/agentkourier/agent-kourier@sha256:4444444444444444444444444444444444444444444444444444444444444444`'; do
-  jq -n --arg body "${body}" '[{tag_name:"v2.0.0",draft:false,prerelease:false,body:$body}]' >"${title_only}"
-  if "${HERE}/select-release-images.sh" "${title_only}" "${selected}"; then
+  jq -n --arg body "${body}" '[{tag_name:"v2.0.0",draft:false,prerelease:false,body:$body}]' >"${partial_line}"
+  if "${HERE}/select-release-images.sh" "${partial_line}" "${selected}"; then
     fail "a release whose only Agent Kourier image line is not a whole line was accepted: ${body}"
   fi
 done

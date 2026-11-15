@@ -14,7 +14,7 @@
 FROM cgr.dev/chainguard/wolfi-base:latest@sha256:833c48f1faf32c90e6f9501a2410a9aa28ceb2c594102edd4470053c30efa089 AS python
 # python-3.14 (python-3.14-base too) depends on py3-pip-wheel, pip as a wheel for ensurepip. Its files are deleted in
 # the same layer, so no layer of the final image holds pip; apk still lists the package, so the SBOM and Trivy name it,
-# and an advisory against it fails the release scan until a rebuild takes Wolfi's fix.
+# and a high or critical advisory against it fails the release scan until a rebuild takes Wolfi's fix.
 RUN apk add --no-cache python-3.14 && rm -rf /usr/share/python-wheels
 
 # The virtualenv is made here without pip, and Wolfi's pip installs into it from outside, so pip never enters it.
