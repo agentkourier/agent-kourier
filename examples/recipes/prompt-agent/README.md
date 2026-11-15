@@ -90,8 +90,8 @@ Kourier's default acknowledgment, and the card its default `chat.progress`.
 - **An MCP server** that serves the tools your agent may call over Streamable HTTP or SSE at an `http(s)` URL, and a
   token for it if it needs one. The example `agent.yaml` names `http://runbooks-mcp.ops.svc.cluster.local:8080/mcp`
   with two tools, `runbook` and `recent_deploys`: that server is not part of this recipe.
-- **Docker** to build the agent's image: Agent Kourier's releases publish the broker's image and chart, not this
-  agent's. And a way to get the image to your nodes (a registry, or
+- **Docker, only to build an image of your own.** The manifests name the agent's image that each release publishes
+  ([step 1](#1-choose-the-image)). An image you build also needs a way to your nodes (a registry, or
   `kind load docker-image` on a kind cluster).
 
 ## Files
@@ -113,18 +113,25 @@ Bedrock and the MCP client, on CPython 3.14, and runs as the non-root user 65532
 
 ## Apply it
 
-### 1. Build the image
+### 1. Choose the image
 
-From the repository root:
+`agent/manifests/deployment.yaml` names the image that this release publishes,
+`ghcr.io/agentkourier/agent-kourier-prompt-agent:v0.4.0`, for `linux/amd64` and `linux/arm64`, signed as Agent Kourier's
+image is ([Verify the release](../../../docs/how-to/install-with-helm.md#verify-the-release)). It holds `agent.py`, the
+example `agent.yaml` and the pinned packages. The pod reads your `agent.yaml` from the ConfigMap (step 2), so writing
+your agent needs no build. A tag can be moved, so to pin what every node runs, set `image:` to the digest that the
+[GitHub Release](https://github.com/agentkourier/agent-kourier/releases) names
+(`ghcr.io/agentkourier/agent-kourier-prompt-agent@sha256:...`).
+
+To change what the image holds (`agent.py`, the packages), build it from the repository root:
 
 ```sh
 make prompt-agent-image
 ```
 
-This builds `agent-kourier-prompt-agent:dev`. Agent Kourier's releases do not publish an image of the prompt agent, so you build it.
-On a kind cluster, load it (`kind load docker-image agent-kourier-prompt-agent:dev`). On another cluster, push it to
-your registry and set `image:` in `agent/manifests/deployment.yaml` to it, by digest
-(`<registry>/...@sha256:...`), so that every node runs the image you built.
+This builds `agent-kourier-prompt-agent:dev`. On a kind cluster, load it (`kind load docker-image agent-kourier-prompt-agent:dev`)
+and set `image:` in `agent/manifests/deployment.yaml` to it. On another cluster, push it to your registry and set `image:` to
+it by digest (`<registry>/...@sha256:...`), so that every node runs the image you built.
 
 ### 2. Write your agent
 

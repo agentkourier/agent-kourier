@@ -101,7 +101,15 @@ EOF
   docker build -t "${ECHO_IMAGE}" "${ROOT}/examples/recipes/echo-agent/agent"
   kind load docker-image "${ECHO_IMAGE}" --name "${CLUSTER}"
   "${K[@]}" create namespace echo-agent --dry-run=client -o yaml | "${K[@]}" apply -f -
-  "${K[@]}" apply -n echo-agent -f "${ROOT}/examples/recipes/echo-agent/agent/manifests/"
+  # The Deployment names the release's published image, whose tag does not exist before the release (a take before the
+  # final tag); it runs the image built and loaded above instead.
+  local manifests=${ROOT}/examples/recipes/echo-agent/agent/manifests
+  "${K[@]}" set image --local -f "${manifests}/deployment.yaml" "echo-agent=${ECHO_IMAGE}" -o yaml |
+    "${K[@]}" apply -n echo-agent -f -
+  local f
+  for f in "${manifests}"/*.yaml; do
+    [ "${f}" = "${manifests}/deployment.yaml" ] || "${K[@]}" apply -n echo-agent -f "${f}"
+  done
   "${K[@]}" -n echo-agent rollout status deploy/echo-agent --timeout=180s
 }
 
