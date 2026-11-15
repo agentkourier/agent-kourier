@@ -372,9 +372,10 @@ and set `store.postgres.timeouts: role`.
 ## High availability
 
 With `store.type: postgres` Agent Kourier elects a leader with a Kubernetes Lease, named `<fullname>-leader` in the release namespace, which the chart
-makes; the Role above is all the access that needs. The leader runs all of Agent Kourier's work (Socket Mode, the session runners, the outbox, the
+makes; the Role above is all the access that needs. The leader runs all of Agent Kourier's work (each connection to Slack, the session runners, the outbox, the
 sweeps and digests). The other replica is **Ready and idle**: it serves `/healthz`, `/readyz` and `/metrics`, keeps its config and Secret caches
-fresh, and waits. Readiness never depends on the lease (nothing routes traffic to Agent Kourier in Socket Mode, and a standby is healthy), so
+fresh, and waits. Readiness never depends on the lease: a standby is healthy, and no Service that sends traffic needs it to lead (in Socket Mode nothing
+routes traffic to Agent Kourier; in Slack HTTP mode the chat Service selects the leader by a label, see [Chat listener](#chat-listener)). So
 find the leader with the metric `agentkourier_leader` (1 on the leader; `agentkourier_leader_takeovers_total` counts takeovers) or the
 `leadership` table's `holder`. Postgres elects at one replica too: that replica leads at once, and a rolling update starts the new pod
 as a standby beside the old one.
@@ -433,12 +434,28 @@ chat Service's requests to it. Keep Agent Kourier in a namespace of its own, whe
 `tls` and `annotations`. With `networkPolicy.enabled`, `networkPolicy.chatFrom` names who may reach the chat port (the ingress
 controller's pods, say), and the render requires it.
 
+The chat port is meant to be reachable from the internet. Before it decodes anything of a request, the Slack adapter checks the
+request's signature with the connection's signing secret and its timestamp against a 5 minute window, and the listener caps
+the body, the requests it handles at once and the body bytes it holds
+([Limits](../../docs/reference/limits.md#run-the-broker), [Security model](../../docs/explanation/security.md#the-chat-port)).
+
+With SQLite there is one replica and the strategy is `Recreate`, so each rollout leaves the chat Service without an endpoint
+until the new pod leads, and Slack's retries are all that covers the gap. Run Slack HTTP mode on Postgres with two replicas
+to keep that gap to a takeover ([High availability and failover](../../docs/explanation/high-availability.md#slack-in-http-mode)).
+
+**Order of an upgrade.** Upgrade the chart, the broker and the CRDs (`crds.install`, or the release's `files/crds`
+applied the way you installed them), before any ChatConnection sets `spec.slack.mode: http`. A broker of an earlier release
+does not know the field: on the ConfigMap route it refuses it as an unknown field and exits with code 2, and on custom resources,
+once the later release's CRDs are installed, it ignores the field and runs the connection in Socket Mode, which needs `appToken`, so
+a Secret made for HTTP mode fails the start of its own connection (exit code 2). The CRDs of the earlier release do not have the field either, so the API server refuses it there (or drops it, for a client that does not ask for strict field validation). On custom resources, `agentkourier_crd_schema_state` says `mismatch` while the CRDs
+and the broker are from different releases.
+
 ## Secrets
 
 Nothing secret is in the values. The config names Secrets (`credentialsSecretRef`, `tokenSecretRef`, `valueSecretRef`) and you
 make them (by hand, Sealed Secrets, an external operator) before Agent Kourier starts:
 
-- the ChatConnection's Secret, with `botToken` and `appToken`;
+- the ChatConnection's Secret, with `botToken` and `appToken` in Socket Mode, or `botToken` and `signingSecret` with `spec.slack.mode: http`;
 - each Binding's `tokenSecretRef` Secret, with a `token` key (or the key the reference says);
 - with Postgres, the DSN Secret (`store.postgres.dsnSecret`), in the release namespace;
 - the Dex credentials Secret for `tokenRefresh`, with `clientSecret`, `username` and `password`. The token-refresh Job reads it through its environment; Agent Kourier does not read it.

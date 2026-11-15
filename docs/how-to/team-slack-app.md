@@ -63,7 +63,8 @@ from the broker's next read of the config once it exists, and it starts once the
 
 ## 2. The team makes the Secret, the grant and the connection
 
-**The Secret.** It is in the team's namespace, with the two keys `botToken` and `appToken` (the key names are fixed) and the
+**The Secret.** It is in the team's namespace, with the two keys `botToken` and `appToken` (the key names are fixed; a connection with
+`spec.slack.mode: http` takes `botToken` and `signingSecret` instead, on a broker with the chat listener: [Configure Slack](configure-slack.md)) and the
 type `Opaque`, which `kubectl create secret generic` makes. Agent Kourier reads no other type. The tokens go in through a
 file only the team can read, as in [Configure Slack](configure-slack.md), so that they are on no command line:
 
@@ -215,7 +216,8 @@ the metric `agentkourier_chat_connected{connection="team-a/team-a-slack"}`, whic
 That line is also the sign that the lookup of whose bot the token is (the one the first section described) worked: the broker starts
 a connection only after it has the answer, and logs nothing for the answer itself. So:
 
-- `serving a ChatConnection` is logged: the lookup worked and the connection was started. The metric is 1 once Slack has opened the Socket Mode connection.
+- `serving a ChatConnection` is logged: the lookup worked and the connection was started. The metric is 1 once Slack has opened the Socket Mode connection, or,
+  in HTTP mode, once `auth.test` has passed and the connection takes Slack's requests on the chat listener.
 - Neither the line nor a series for the connection, and a WARN `the identity of the ChatConnection's bot is not known yet, so it is not started`: the lookup has
   not worked yet, and the WARN says why. A connection that has not started has no `agentkourier_chat_connected` series yet (unless its Secret could not be read, which sets 0:
   [Metrics](../reference/metrics.md#series-by-connection)), so an alert on that metric does not see it;

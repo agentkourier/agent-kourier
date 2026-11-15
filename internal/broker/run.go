@@ -273,8 +273,9 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	}
 
 	// Everything that every replica runs is up. A standby is as ready as a leader: readiness never depends on the
-	// lease, since nothing routes traffic to Agent Kourier in Socket Mode, and a standby is healthy (spec 11). A standby's chat listener,
-	// if it has one, answers 503 to every route, which a platform sends again.
+	// lease, since a standby is healthy (spec 11) and no Service that sends traffic needs it to lead. In Socket Mode nothing routes
+	// traffic to Agent Kourier; a chat listener's requests reach the leader through a Service that selects the leader label, not
+	// readiness alone, and a standby's chat listener, if one is sent a request, answers 503 to every route, which a platform sends again.
 	// With a pod to label, readiness waits for the label too: a pod that kept it from an earlier process is not ready, so in no Service, the
 	// chat Service included, until its removal has succeeded (podLabeler.check). The start waits for the first write to be tried (it is
 	// bounded by podLabelTimeout) and fails if the API server says it can never succeed: no Role to patch the pod, or no such pod.

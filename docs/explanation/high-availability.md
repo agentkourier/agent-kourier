@@ -6,7 +6,7 @@ it fails, and the duplicates a failover can still produce.
 ```mermaid
 flowchart TB
     Slack["Slack"]
-    Leader["Leader replica<br/>Socket Mode, turns,<br/>outbox, sweeps"]
+    Leader["Leader replica<br/>Slack connections, turns,<br/>outbox, sweeps"]
     Standby["Standby replica<br/>health and metrics,<br/>no work"]
     Lease["Kubernetes Lease<br/>renewed every 2 s"]
     PG[("Postgres<br/>epoch checked<br/>on every write")]
@@ -23,12 +23,13 @@ flowchart TB
 ## One leader, one standby
 
 High availability is active/passive. Two replicas of one Deployment share a Postgres database. One is the **leader**:
-it holds a Kubernetes Lease and runs all of Agent Kourier's work, which is the Socket Mode connection of each ChatConnection it serves, the session
+it holds a Kubernetes Lease and runs all of Agent Kourier's work, which is the connection to Slack of each ChatConnection it serves (its Socket Mode
+connection, or in HTTP mode its route on the chat listener), the session
 runners, the outbox, the sweeps, the digests and the verification of Bindings. The other is the **standby**: it serves health and metrics and waits
 for the Lease.
 
 Active/active, with workers on every replica, is deferred until one replica's throughput is not enough. With one
-writer there is one place where turns are ordered, one Socket Mode connection for each Slack app, and one outbox, so every recovery rule
+writer there is one place where turns are ordered, one replica that takes each Slack app's events, and one outbox, so every recovery rule
 of a single replica holds unchanged.
 
 ## SQLite or Postgres
@@ -91,10 +92,13 @@ task.
 
 ## What the standby does
 
-The standby is Ready: readiness never depends on the Lease, because nothing routes traffic to Agent Kourier in Socket
-Mode and a standby is healthy. It serves `/healthz`, `/readyz` and `/metrics`, keeps its configuration and Secret
-caches fresh, and does no work. It opens no Socket Mode connection: Slack sends each event to one of an app's open
-connections, so a second connection would send a share of them to a replica that does nothing.
+The standby is Ready: readiness never depends on the Lease, because a standby is healthy, and no Service that sends it
+traffic needs it to lead. In Socket Mode nothing routes traffic to Agent Kourier at all. In HTTP mode Slack's requests
+reach the leader alone, through a Service that selects the leader's pod by a label
+([below](#slack-in-http-mode)). The standby serves `/healthz`, `/readyz` and `/metrics`, keeps its configuration and
+Secret caches fresh, and does no work. It opens no Socket Mode connection: Slack sends each event to one of an app's
+open connections, so a second connection would send a share of them to a replica that does nothing. With a chat
+listener it answers 503 to every chat route, since it runs no connection.
 
 `agentkourier_leader` is 1 on the leader and 0 on the standby, and `agentkourier_leader_takeovers_total` counts the times
 a replica took the leadership.
@@ -121,6 +125,42 @@ before a turn is resent, and a recovered stream escapes everything.
 - **Slack events.** Agent Kourier acknowledges an event only after its turn is queued, so an event the old leader took
   and did not acknowledge is delivered again. If both replicas are briefly connected while one is paused, a message
   delivered to both is still one turn, because turns are queued by message ID.
+
+## Slack in HTTP mode
+
+A ChatConnection with `spec.slack.mode: http` takes Slack's events and presses as HTTPS requests on the chat listener, and
+Slack sends them to one URL. Only the leader runs the connection, so only the leader can answer: a standby that is sent a
+request answers 503, which Slack treats as a failure. The chart's chat Service, `<fullname>-chat`, therefore selects the
+Deployment's pods that carry the label `agentkourier.dev/role: leader`, and the broker keeps that label on the leader's pod
+alone:
+
+- Every replica takes the label off its own pod as it starts, and is not Ready until a write of the label has succeeded:
+  that removal, or the label put on if the replica leads first. A pod that kept the label from an earlier container, a
+  leader that exited and was restarted in the same pod, is so in no Service until the write.
+- The leader puts the label on once it has started to lead, and takes it off at shutdown, in the last step, just before it
+  hands the Lease over.
+- A leader that loses its Lease exits at once, with the label still on. Its pod is not Ready from the moment the container
+  exits, so the chat Service sends it nothing, and the container that replaces it takes the label off before it reports
+  Ready, and then tries for the Lease as any replica does.
+- A write that fails never stops the broker leading: it is logged at ERROR, counted on
+  `agentkourier_leader_pod_label_writes_total{result="failed"}`, and tried again after a wait that doubles from 1 second to
+  30 ([Limits](../reference/limits.md#run-the-broker)). While a new leader's label is not on, the chat Service selects no pod.
+
+**Nothing answers during a takeover.** The chat listener is the first thing a leader's ordered shutdown closes, and a leader
+that crashed answers nothing. Until the new leader has started to lead and put the label on, the chat Service has no
+endpoint and Slack's requests fail: after a crash, about a lease duration (15 s) plus the new leader's start-up; after a
+signal, the old leader's ordered shutdown (up to 25 s) plus the new leader's start-up. Slack sends an event again when it
+gets no 200 (Slack's documentation says a few times over several minutes; not checked here), and Agent Kourier answers 200
+only once the event's turn is queued, so an event the old leader did not answer is taken by the new one. A message that the
+old leader took and whose 200 never reached Slack comes again, and is one turn, because turns are queued by message ID.
+Whether Slack sends a button press again is Slack's to decide; a press it does not send again is lost, and the person
+presses again. The failover end-to-end test runs in both modes against the tests' fake Slack, whose retries copy what
+Slack's documentation says at a faster pace; Slack's own retries are not tested.
+
+**HTTP mode wants Postgres.** With SQLite there is one replica and the Deployment's strategy is `Recreate`, so every rollout,
+and every restart of the pod, leaves Slack with nothing to answer it from when the old pod stops until the new one has
+started and leads. Slack's retries may cover a short gap; nothing in Agent Kourier does. With Postgres and two replicas the
+gap is a takeover, above.
 
 ## Drains, upgrades and placement
 

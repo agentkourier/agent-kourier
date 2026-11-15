@@ -7,7 +7,9 @@ promises across a crash, and the windows it accepts.
 
 Slack expects an acknowledgement within about 3 seconds (documented for HTTP delivery and for interactions), so no agent call happens while a message is being received. The
 adapter writes the turn locally, by its message ID, and only then acknowledges. If the write fails, the event is not
-acknowledged, and Slack delivers it again. Because the write is keyed by the message, a redelivery is the same turn.
+acknowledged, and Slack delivers it again. Because the write is keyed by the message, a redelivery is the same turn. In Socket Mode
+the acknowledgement is a message on the WebSocket; in HTTP mode it is the answer 200, and an event that is not taken within 2 seconds,
+or cannot be taken, is answered 503 ([Limits](../reference/limits.md#run-the-broker)), which Slack treats as a failed delivery (Slack's documentation; not checked here).
 
 The events of one channel are handled one at a time and in the order they arrive, and different channels at the same
 time, so a Binding whose regular expressions are slow to try holds up its own channel's events first. It does not keep the

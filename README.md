@@ -20,7 +20,7 @@ breaking a Slack `Binding`. Agents speak only A2A, so a new platform needs no ch
 
 > **Status: v0.4.0.** Install the published chart and image with
 > [Install with Helm](docs/how-to/install-with-helm.md). The `v1alpha1` resource format can change before 1.0. See
-> [Status](#status).
+> [Status](#status). Slack HTTP mode needs a release later than 0.4.0, whose chart refuses its values.
 
 <p align="center">
   <img src="docs/assets/clip/team-app.gif" width="100%" alt="A terminal. The platform team creates the namespace agent-kourier and installs the agent-kourier chart with a values file of comments only, so the broker serves the ChatConnections of every namespace and starts with no Slack app of its own. The team then creates its Slack Secret in team-a from a file, a Role and RoleBinding that let the broker's ServiceAccount list and watch it, fills in the four lines marked yours in team-a.yaml (a ChatConnection, an AgentBackend and a Binding), applies it, and kubectl get akbinding shows the Binding become True OK. Then Slack: a mention of the team's bot, and the agent's answer in its thread.">
@@ -75,8 +75,8 @@ Without a broker, each of these is code in every agent that talks to chat:
   agent is suspended or scaled down, and calls the agent when the next turn arrives.
 - **Alert investigations.** A trigger reads the alerts a bot already posts to the channel
   and starts an investigation in each alert's thread, with a cooldown per alert, a rate
-  limit and a daily cap. There is no webhook, so alerts reach people whether or not Agent
-  Kourier is running.
+  limit and a daily cap. Alertmanager sends Agent Kourier nothing: it posts to Slack as before,
+  so alerts reach people whether or not Agent Kourier is running.
 - **Reports in a channel.** A `personMessage` trigger starts a turn of the person on each message they post at the
   top level of the channel, without a mention, held to the trigger's limits; replies under it need a mention. See
   [A person's message](docs/reference/chat-triggers.md#a-persons-message).
@@ -114,7 +114,7 @@ only the teams' ([Let a team bring its own Slack app](docs/how-to/team-slack-app
 ## How it works
 
 <p align="center">
-  <img src="docs/assets/diagrams/how-it-works.svg" width="100%" alt="Alertmanager posts an alert to a Slack channel and people reply in its thread. Agent Kourier receives the channel's events over Socket Mode, keeps a session per thread in SQLite or Postgres, sends each turn to an A2A agent (kagent, Google AX or any streaming A2A agent), and posts the streamed reply back in the same thread.">
+  <img src="docs/assets/diagrams/how-it-works.svg" width="100%" alt="Alertmanager posts an alert to a Slack channel and people reply in its thread. Agent Kourier receives the channel's events over Socket Mode or as signed HTTP requests, keeps a session per thread in SQLite or Postgres, sends each turn to an A2A agent (kagent, Google AX or any streaming A2A agent), and posts the streamed reply back in the same thread.">
 </p>
 
 Commit the agent's deployment and its `Binding` together, and let GitOps deploy both.
@@ -197,7 +197,7 @@ spec:
 This example assumes the agent and authenticated backend endpoint already exist.
 Replace the endpoint, agent reference, and channel ID for your deployment. The
 `slack` Secret belongs in `agent-kourier` with `botToken` and `appToken`
-keys; `payments-agent-token` belongs in `payments` with a `token` key. Each binding
+keys (`botToken` and `signingSecret` for a connection in Slack HTTP mode); `payments-agent-token` belongs in `payments` with a `token` key. Each binding
 uses a service identity for agent calls; individual Slack users do not supply the
 backend's authorization identity.
 
@@ -220,7 +220,7 @@ other bots, and the [trigger reference](docs/reference/chat-triggers.md) has the
 | Kind | Integration | Status |
 |---|---|---|
 | Chat platform | Slack over Socket Mode: mentions, thread replies, streamed output, questions | Implemented |
-| Chat platform | Slack over the Events API (HTTP) | Planned |
+| Chat platform | Slack over the Events API (HTTP mode): the same, with Slack's signed requests taken on the chat listener, behind a Service that selects the leader. Tested against the end-to-end tests' fake Slack, not yet against Slack itself. Needs a release later than 0.4.0, whose chart refuses `chatListener` and `networkPolicy.chatFrom`. See [Configure Slack](docs/how-to/configure-slack.md) | Experimental |
 | Chat platform | Slack direct messages | Planned |
 | Chat platform | Other platforms, through the `chat.Platform` interface and its conformance suite | Planned |
 | Agent backend | kagent 1.0, `kagent-v1` dialect, with structured questions and optional Slack tool approvals. Tested against 1.0.0-alpha5. Needs a cluster that serves the pod-certificate APIs, which managed EKS through 1.36 cannot; see [Connect a kagent agent](docs/how-to/connect-kagent.md) | Implemented |
