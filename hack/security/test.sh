@@ -92,7 +92,7 @@ release_fixture="${tmp}/releases.json"
 printf '%s\n' \
   '[' \
   '  {"tag_name":"v1.0.0","draft":false,"prerelease":false,"body":"Image: ghcr.io/agentkourier/agent-kourier@sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},' \
-  '  {"tag_name":"v1.1.0","draft":false,"prerelease":false,"body":"Image: ghcr.io/agentkourier/agent-kourier@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},' \
+  '  {"tag_name":"v1.1.0","draft":false,"prerelease":false,"body":"Image: ghcr.io/agentkourier/agent-kourier@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nPrompt agent image: ghcr.io/agentkourier/agent-kourier-prompt-agent@sha256:1111111111111111111111111111111111111111111111111111111111111111\nEcho agent image: ghcr.io/agentkourier/agent-kourier-echo-agent@sha256:2222222222222222222222222222222222222222222222222222222222222222"},' \
   '  {"tag_name":"v1.2.0-rc.1","draft":false,"prerelease":true,"body":"Image: ghcr.io/agentkourier/agent-kourier@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},' \
   '  {"tag_name":"v1.2.0-rc.2","draft":false,"prerelease":true,"body":"Image: ghcr.io/agentkourier/agent-kourier@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},' \
   '  {"tag_name":"v9.0.0","draft":true,"prerelease":false,"body":"Image: ghcr.io/agentkourier/agent-kourier@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}' \
@@ -104,6 +104,10 @@ grep -F 'ghcr.io/agentkourier/agent-kourier@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbb
   fail "latest stable release digest was not selected"
 grep -F 'ghcr.io/agentkourier/agent-kourier@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd' "${selected}" >/dev/null ||
   fail "latest prerelease digest was not selected"
+grep -F 'ghcr.io/agentkourier/agent-kourier-prompt-agent@sha256:1111111111111111111111111111111111111111111111111111111111111111' "${selected}" >/dev/null ||
+  fail "latest stable release's prompt agent digest was not selected"
+grep -F 'ghcr.io/agentkourier/agent-kourier-echo-agent@sha256:2222222222222222222222222222222222222222222222222222222222222222' "${selected}" >/dev/null ||
+  fail "latest stable release's echo agent digest was not selected"
 grep -F 'aaaaaaaa' "${selected}" >/dev/null && fail "older stable digest was selected"
 grep -F 'eeeeeeee' "${selected}" >/dev/null && fail "draft release digest was selected"
 
@@ -111,6 +115,12 @@ missing_digest="${tmp}/missing-digest.json"
 printf '%s\n' '[{"tag_name":"v2.0.0","draft":false,"prerelease":false,"body":"release notes without an image"}]' >"${missing_digest}"
 if "${HERE}/select-release-images.sh" "${missing_digest}" "${selected}"; then
   fail "published release without image digest was accepted"
+fi
+
+agent_only="${tmp}/agent-only.json"
+printf '%s\n' '[{"tag_name":"v2.0.0","draft":false,"prerelease":false,"body":"Prompt agent image: ghcr.io/agentkourier/agent-kourier-prompt-agent@sha256:1111111111111111111111111111111111111111111111111111111111111111"}]' >"${agent_only}"
+if "${HERE}/select-release-images.sh" "${agent_only}" "${selected}"; then
+  fail "published release with an agent image but no Agent Kourier image digest was accepted"
 fi
 
 invalid_releases="${tmp}/invalid-releases.json"
@@ -122,7 +132,7 @@ fi
 # A candidate is no longer supported once its stable release has shipped.
 sed 's/v1.2.0-rc/v1.1.0-rc/g' "${release_fixture}" >"${tmp}/superseded.json"
 "${HERE}/select-release-images.sh" "${tmp}/superseded.json" "${selected}"
-[ "$(wc -l <"${selected}" | tr -d ' ')" = 1 ] || fail "superseded prerelease was selected"
+[ "$(wc -l <"${selected}" | tr -d ' ')" = 3 ] || fail "superseded prerelease was selected"
 
 printf '%s\n' '[{"tag_name":"nightly","draft":false,"body":"invalid metadata"}]' >"${invalid_releases}"
 if "${HERE}/select-release-images.sh" "${invalid_releases}" "${selected}"; then

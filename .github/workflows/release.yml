@@ -1,8 +1,9 @@
 # A pushed tag v* first proves that the exact tagged commit passed the push-to-main CI, security and CodeQL workflows.
-# It then builds the multi-arch image, refuses it if any platform's binary carries a test hook, scans every
-# platform image before push, pushes it to GHCR with the workflow's own token, attaches SBOM and provenance
-# attestations, packages the Helm chart with that image's digest as its default image and pushes it, and then
-# signs and verifies both digests with cosign keyless. Only the verified artifacts get a GitHub Release.
+# It then builds the multi-arch image, refuses it if any platform's binary carries a test hook, builds the recipes'
+# agent images (prompt-agent, echo-agent) the same way, scans every platform image before the first push, pushes them
+# to GHCR with the workflow's own token, attaches SBOM and provenance attestations, packages the Helm chart with
+# Agent Kourier's digest as its default image and pushes it, and then signs and verifies every digest with cosign
+# keyless. Only the verified artifacts get a GitHub Release.
 # The build, the checks and the pushes are hack/release/release.sh, the script `make release-image` runs, so a
 # human builds the same artifacts. RELEASING.md describes the whole path and the repository settings that
 # decide who can start it.
@@ -64,6 +65,8 @@ jobs:
       packages: write # push to GHCR with GITHUB_TOKEN
     outputs:
       image: ${{ steps.digests.outputs.image }}
+      prompt-agent: ${{ steps.digests.outputs.prompt-agent }}
+      echo-agent: ${{ steps.digests.outputs.echo-agent }}
       chart: ${{ steps.digests.outputs.chart }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -74,8 +77,15 @@ jobs:
       # control that decides who can push a tag at all is a repository ruleset; see RELEASING.md.)
       - name: Tag is on main
         run: git merge-base --is-ancestor HEAD refs/remotes/origin/main
-      # A docker-container builder, which multi-platform builds and attestations need; no QEMU is set up
-      # because nothing is emulated: the Dockerfile cross-compiles Go on the runner's own architecture.
+      # Agent Kourier's Dockerfile cross-compiles Go on the runner's own architecture, so its build emulates nothing.
+      # The agent images' Dockerfiles run apk and pip in the target platform, so their arm64 builds run under QEMU,
+      # whose binaries come from the binfmt image pinned here by digest (and not from the Actions cache).
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          image: docker.io/tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          platforms: arm64
+          cache-image: false
+      # A docker-container builder, which multi-platform builds and attestations need.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       # The version test/chart passes with; ci.yml pins the same one.
       - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
@@ -93,7 +103,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build, check each platform, push the image and the chart
+      - name: Build, check each platform, push the images and the chart
         env:
           VERSION: ${{ github.ref_name }}
           REGISTRY: ${{ env.IMAGE }}
@@ -106,9 +116,13 @@ jobs:
           VERSION: ${{ github.ref_name }}
         run: |
           image="${IMAGE}@$(cat bin/release/digest)"
+          prompt_agent="${IMAGE}-prompt-agent@$(cat bin/release/prompt-agent-digest)"
+          echo_agent="${IMAGE}-echo-agent@$(cat bin/release/echo-agent-digest)"
           chart="${CHARTS#oci://}/agent-kourier@$(cat bin/release/chart-digest)"
           {
             echo "image=${image}"
+            echo "prompt-agent=${prompt_agent}"
+            echo "echo-agent=${echo_agent}"
             echo "chart=${chart}"
           } >>"${GITHUB_OUTPUT}"
           {
@@ -117,6 +131,10 @@ jobs:
             echo "Image: \`${image}\` (linux/amd64, linux/arm64)"
             echo
             echo "Chart: \`${chart}\` (version ${VERSION#v}; its default image is the digest above)"
+            echo
+            echo "Prompt agent image: \`${prompt_agent}\` (linux/amd64, linux/arm64)"
+            echo
+            echo "Echo agent image: \`${echo_agent}\` (linux/amd64, linux/arm64)"
             echo
             echo "Pin the digests in manifests. RELEASING.md says how to verify them."
           } >>"${GITHUB_STEP_SUMMARY}"
@@ -134,16 +152,19 @@ jobs:
       - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
         with:
           cosign-release: v3.1.4
-      - name: Sign the image and the chart by digest
+      - name: Sign the images and the chart by digest
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACTOR: ${{ github.actor }}
           IMAGE_REF: ${{ needs.build.outputs.image }}
+          PROMPT_AGENT_REF: ${{ needs.build.outputs.prompt-agent }}
+          ECHO_AGENT_REF: ${{ needs.build.outputs.echo-agent }}
           CHART_REF: ${{ needs.build.outputs.chart }}
         run: |
           printf '%s' "${GITHUB_TOKEN}" | cosign login ghcr.io --username "${ACTOR}" --password-stdin
-          cosign sign --yes "${IMAGE_REF}"
-          cosign sign --yes "${CHART_REF}"
+          for ref in "${IMAGE_REF}" "${PROMPT_AGENT_REF}" "${ECHO_AGENT_REF}" "${CHART_REF}"; do
+            cosign sign --yes "${ref}"
+          done
 
   # Verification is separate from signing so a successful sign step cannot by itself publish a release. The
   # identity is the exact tagged workflow, not a repository-wide or branch-wide identity.
@@ -162,17 +183,18 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACTOR: ${{ github.actor }}
           IMAGE_REF: ${{ needs.build.outputs.image }}
+          PROMPT_AGENT_REF: ${{ needs.build.outputs.prompt-agent }}
+          ECHO_AGENT_REF: ${{ needs.build.outputs.echo-agent }}
           CHART_REF: ${{ needs.build.outputs.chart }}
           ISSUER: https://token.actions.githubusercontent.com
           IDENTITY: https://github.com/agentkourier/agent-kourier/.github/workflows/release.yml@refs/tags/${{ github.ref_name }}
         run: |
           printf '%s' "${GITHUB_TOKEN}" | cosign login ghcr.io --username "${ACTOR}" --password-stdin
-          cosign verify "${IMAGE_REF}" \
-            --certificate-oidc-issuer "${ISSUER}" \
-            --certificate-identity "${IDENTITY}"
-          cosign verify "${CHART_REF}" \
-            --certificate-oidc-issuer "${ISSUER}" \
-            --certificate-identity "${IDENTITY}"
+          for ref in "${IMAGE_REF}" "${PROMPT_AGENT_REF}" "${ECHO_AGENT_REF}" "${CHART_REF}"; do
+            cosign verify "${ref}" \
+              --certificate-oidc-issuer "${ISSUER}" \
+              --certificate-identity "${IDENTITY}"
+          done
 
   # No checkout is intentional: this job only publishes the already verified digests and generated notes. It
   # has the only contents:write permission in the workflow; it has no registry or signing permission.
@@ -188,6 +210,8 @@ jobs:
       TAG: ${{ github.ref_name }}
       SHA: ${{ github.sha }}
       IMAGE_REF: ${{ needs.build.outputs.image }}
+      PROMPT_AGENT_REF: ${{ needs.build.outputs.prompt-agent }}
+      ECHO_AGENT_REF: ${{ needs.build.outputs.echo-agent }}
       CHART_REF: ${{ needs.build.outputs.chart }}
     steps:
       - name: Create or confirm the immutable release record
@@ -207,12 +231,15 @@ jobs:
             # The jq program intentionally uses jq variables, not shell variables.
             # shellcheck disable=SC2016
             if jq -e --arg tag "${TAG}" --arg image "${IMAGE_REF}" --arg chart "${CHART_REF}" \
+              --arg prompt_agent "${PROMPT_AGENT_REF}" --arg echo_agent "${ECHO_AGENT_REF}" \
               --argjson prerelease "${prerelease}" '
                 .tag_name == $tag
                 and (.draft // false) == false
                 and (.prerelease // false) == $prerelease
                 and ((.body // "") | contains("Image: `" + $image + "`"))
                 and ((.body // "") | contains("Chart: `" + $chart + "`"))
+                and ((.body // "") | contains("Prompt agent image: `" + $prompt_agent + "`"))
+                and ((.body // "") | contains("Echo agent image: `" + $echo_agent + "`"))
               ' "${existing}" >/dev/null; then
               echo "release ${TAG} already contains the verified image and chart digests; leaving it unchanged"
               exit 0
@@ -231,8 +258,8 @@ jobs:
           # shellcheck disable=SC2016
           body=$(jq -r '.body // empty' <<<"${generated}")
           [ -n "${body}" ] || { echo "error: GitHub generated no release notes" >&2; exit 1; }
-          body=$(printf "%s\n\n## Verified artifacts\n\n- Image: \`%s\`\n- Chart: \`%s\`\n" \
-            "${body}" "${IMAGE_REF}" "${CHART_REF}")
+          body=$(printf "%s\n\n## Verified artifacts\n\n- Image: \`%s\`\n- Chart: \`%s\`\n- Prompt agent image: \`%s\`\n- Echo agent image: \`%s\`\n" \
+            "${body}" "${IMAGE_REF}" "${CHART_REF}" "${PROMPT_AGENT_REF}" "${ECHO_AGENT_REF}")
           payload="${RUNNER_TEMP}/release-payload.json"
           # shellcheck disable=SC2016
           jq -n --arg tag "${TAG}" --arg name "${TAG}" --arg body "${body}" \

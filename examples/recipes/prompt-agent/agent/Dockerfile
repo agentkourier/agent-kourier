@@ -5,13 +5,29 @@
 # PROMPT_AGENT_SPEC at it. Build the image with `make prompt-agent-image` from the repository root, or:
 #
 #   docker build -t agent-kourier-prompt-agent:dev examples/recipes/prompt-agent/agent
-FROM python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
-ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
-WORKDIR /app
-COPY requirements.txt .
+#
+# A release builds this file for linux/amd64 and linux/arm64 and publishes it as
+# ghcr.io/agentkourier/agent-kourier-prompt-agent (hack/release/release.sh), after the same Trivy scan as Agent Kourier's
+# image: no high or critical vulnerability, fixed or not. Hence Wolfi rather than a Debian-based Python image, and no pip
+# in the final image. The base is pinned by digest; Wolfi's python-3.14 package takes its current 3.14 release when the
+# image is built.
+FROM cgr.dev/chainguard/wolfi-base:latest@sha256:833c48f1faf32c90e6f9501a2410a9aa28ceb2c594102edd4470053c30efa089 AS python
+RUN apk add --no-cache python-3.14
+
+# The virtualenv is made here, with the pip that venv installs, and pip is removed from it before it is copied.
+FROM python AS build
+COPY requirements.txt /tmp/requirements.txt
 # Wheels only: pip runs no package's build code. Every pin has a wheel for CPython 3.14 on amd64 and arm64.
-RUN pip install --require-hashes --only-binary=:all: -r requirements.txt
+RUN python3.14 -m venv /opt/venv \
+ && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check --require-hashes --only-binary=:all: \
+      -r /tmp/requirements.txt \
+ && /opt/venv/bin/pip uninstall --yes pip
+
+FROM python
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+COPY --from=build /opt/venv /opt/venv
+WORKDIR /app
 COPY agent.py agent.yaml ./
 USER 65532:65532
 EXPOSE 8080
-ENTRYPOINT ["python", "agent.py"]
+ENTRYPOINT ["/opt/venv/bin/python", "agent.py"]

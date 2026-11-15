@@ -53,6 +53,16 @@ steps, and how to roll back.
 - **`agent-kourier init` writes the platform team's values as comments only**, so the broker it installs serves every namespace; the comments show
   the list and the selector for a platform that serves fewer. A values file that an earlier `init` wrote keeps its list, and its meaning. See [Write the files with `init`](how-to/install-with-helm.md#write-the-files-with-init).
 
+### The recipes' agent images
+
+- **The release publishes the prompt agent's and the echo agent's images**, `ghcr.io/agentkourier/agent-kourier-prompt-agent` and
+  `ghcr.io/agentkourier/agent-kourier-echo-agent`, tagged with the release, for `linux/amd64` and `linux/arm64`. They are built, scanned, signed
+  and attested as Agent Kourier's image is, and the GitHub Release names their digests. The recipes' manifests name them, so a team no longer
+  builds an agent's image to try a recipe.
+- **Both images are built on Wolfi**, with CPython 3.14 and no pip, and still run as user 65532. The images that `make prompt-agent-image` and
+  `make echo-agent-image` build changed the same way: the entrypoint is `/opt/venv/bin/python agent.py`, and the prompt agent's image is about
+  258 MB, down from 332 MB.
+
 ## Version 0.3.2
 
 `agent-kourier init` writes the chart's default route, for a team that brings its own Slack app. The broker's code, the CRDs and the chart's
