@@ -949,8 +949,8 @@ open ([Configure Slack](configure-slack.md)).
   ([Security model](../explanation/security.md#the-chat-port)). Whoever runs `helm upgrade` needs the right to create both kinds.
 - **Upgrade first, then set the mode.** Upgrade the chart, with the broker and the CRDs, before any ChatConnection sets `spec.slack.mode`.
   A broker of an earlier release does not know the field: on the ConfigMap route it refuses it (`spec.slack: unknown field`, exit code 2),
-  and on custom resources it ignores it and runs the connection in Socket Mode, which needs `appToken`
-  ([Troubleshoot](troubleshoot.md#the-pod-exits-with-code-2)). CRDs of an earlier release do not have the field either.
+  and on custom resources, once the later release's CRDs are installed, it ignores it and runs the connection in Socket Mode, which needs `appToken`
+  ([Troubleshoot](troubleshoot.md#the-pod-exits-with-code-2)). CRDs of an earlier release do not have the field either, so the API server refuses it there (or drops it, for a client that does not ask for strict field validation).
 
 To move a connection that runs in Socket Mode to HTTP mode, after the upgrade:
 

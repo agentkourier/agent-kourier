@@ -127,6 +127,13 @@ Either way Agent Kourier calls Slack's Web API with the bot token to post, so it
 
 === "Events API (HTTP)"
 
+    !!! warning "Experimental"
+
+        HTTP mode has been tested end to end against the end-to-end tests' fake Slack only, not yet against Slack itself, so what
+        this tab says of Slack's requests, retries and settings pages comes from Slack's documentation. It needs a release
+        later than 0.4.0: the 0.4.0 chart's values schema refuses `chatListener` and `networkPolicy.chatFrom`, and its broker does not
+        know `spec.slack.mode`.
+
     In HTTP mode Slack sends the app's events and button presses to Agent Kourier as HTTPS requests, and Agent Kourier
     answers them on its chat listener. The app has no app-level token; its signing secret proves that a request is Slack's.
     How Slack sends, retries and gives up is Slack's own behaviour, described here from Slack's documentation and not checked

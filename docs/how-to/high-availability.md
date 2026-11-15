@@ -182,7 +182,7 @@ Do this on a test install, with a bound channel you can use.
 
 4. Watch the thread. The new leader recovers the turn: the half-written message is replaced with the whole answer, and
    the answer appears once. Reply in the thread: the same session continues. With the chat listener, the label
-   `agentkourier.dev/role=leader` is on the new leader's pod (step 4's command), and the leader's
+   `agentkourier.dev/role=leader` is on the new leader's pod (`kubectl -n agent-kourier get pods -l agentkourier.dev/role=leader`), and the leader's
    `agentkourier_slack_http_retries_total` counts the requests that Slack sent again and that reached it.
 
 5. Check the new leader counted its takeover. The earlier port-forward may point at the deleted pod, so

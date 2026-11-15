@@ -197,8 +197,11 @@ it cannot use. A restart fails the same way. The text after `the broker cannot b
   (its removal, as the replica starts) was refused as forbidden, or for a pod the API server does not have, which no retry mends. The ERROR line
   `writing the leader label of the pod failed; trying again` just before has the API server's answer in full. Forbidden is the Role
   `<fullname>-leader-label` missing (`rbac.create: false`, or a Role of your own without `patch` on `pods`), or the chart's admission policy
-  refusing the write: its message says which rule, such as the pod not being the one the broker's token is bound to. A pod not found is
-  `AGENTKOURIER_POD_NAME` or `AGENTKOURIER_POD_NAMESPACE` set by hand to another pod; the chart sets both from the downward API.
+  refusing the write: its message says which rule, such as the pod not being the one the broker's token is bound to, which is what
+  `AGENTKOURIER_POD_NAME` or `AGENTKOURIER_POD_NAMESPACE` set by hand to another existing pod meets. A pod not found is a name or
+  namespace of a pod that does not exist. The chart sets both from the downward API. Without the chart's policy (`rbac.create: false`,
+  with a Role of your own), a name set to another existing pod is not refused: that pod is labeled, and the chat Service sends it Slack's
+  requests.
 - `ChatConnection agent-kourier/slack: read botToken of Secret agent-kourier/slack:` (or `appToken`, or `signingSecret` in HTTP mode): the
   key is in the Secret but its value is empty. `kubectl create secret --from-literal=botToken="$SLACK_BOT_TOKEN"` stores an
   empty value when the variable is not set in that shell. Check that both variables are set, and replace the Secret as
@@ -271,9 +274,9 @@ resource's kind and name. The usual problems:
   connection's mode. They are case sensitive.
 - `spec.slack: unknown field` on a ChatConnection: the broker is from a release before Slack HTTP mode, and the values are of a later one.
   Upgrade the chart, and the broker with it, before a ChatConnection sets `spec.slack.mode`
-  ([Upgrade](upgrade.md#upgrade-to-the-release-that-serves-slack-over-http)). On custom resources such a broker ignores the field instead,
-  runs the connection in Socket Mode, and for its own connection exits with ``read appToken of Secret ...`` (code 2, above) when the Secret holds
-  the keys of HTTP mode.
+  ([Upgrade](upgrade.md#upgrade-to-the-release-that-serves-slack-over-http)). On custom resources, once the later release's CRDs are
+  installed, such a broker ignores the field instead, runs the connection in Socket Mode, and for its own connection exits with
+  ``read appToken of Secret ...`` (code 2, above) when the Secret holds the keys of HTTP mode. The CRDs of the earlier release do not have the field either, so the API server refuses it there (or drops it, for a client that does not ask for strict field validation).
 
 The line is cut after 300 bytes, so with several problems you may see only the first. For the problems in the files
 themselves, run `agent-kourier dry-run` against the rendered values, as in
@@ -467,9 +470,9 @@ A 503 tells Slack to send the request again. Which part answered it says why:
 - **`agentkourier_slack_http_requests_total`**, from the Slack adapter of the connection:
     - `not_running`: the connection's run is not taking requests, as between two attempts to start it (its `auth.test` failed: the log
       has `slack connection ended; connecting again`).
-    - `shed`: the channel's lane was full (`agentkourier_slack_events_shed_total` says which bound).
-    - `withheld`: the broker did not take the event (a WARN `slack: message not taken; left unacknowledged for Slack to send again` says
-      why), or `timeout`: it had not taken it within 2 seconds.
+    - `shed`: the adapter's lanes were full (`agentkourier_slack_events_shed_total` says which bound).
+    - `withheld`: the broker did not take the event or the press (a WARN `slack: message not taken; left unacknowledged for Slack to send again`,
+      or `slack: interaction not taken; left unacknowledged`, says why), or `timeout`: it had not taken it within 2 seconds.
 
 ## `/readyz` fails on `leader-label`
 

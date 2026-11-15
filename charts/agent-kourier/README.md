@@ -445,9 +445,9 @@ to keep that gap to a takeover ([High availability and failover](../../docs/expl
 
 **Order of an upgrade.** Upgrade the chart, the broker and the CRDs (`crds.install`, or the release's `files/crds`
 applied the way you installed them), before any ChatConnection sets `spec.slack.mode: http`. A broker of an earlier release
-does not know the field: on the ConfigMap route it refuses it as an unknown field and exits with code 2, and on custom resources
-it ignores the field and runs the connection in Socket Mode, which needs `appToken`, so a Secret made for HTTP mode fails the
-start of its own connection (exit code 2). On custom resources, `agentkourier_crd_schema_state` says `mismatch` while the CRDs
+does not know the field: on the ConfigMap route it refuses it as an unknown field and exits with code 2, and on custom resources,
+once the later release's CRDs are installed, it ignores the field and runs the connection in Socket Mode, which needs `appToken`, so
+a Secret made for HTTP mode fails the start of its own connection (exit code 2). The CRDs of the earlier release do not have the field either, so the API server refuses it there (or drops it, for a client that does not ask for strict field validation). On custom resources, `agentkourier_crd_schema_state` says `mismatch` while the CRDs
 and the broker are from different releases.
 
 ## Secrets

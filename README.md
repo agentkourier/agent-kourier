@@ -20,7 +20,7 @@ breaking a Slack `Binding`. Agents speak only A2A, so a new platform needs no ch
 
 > **Status: v0.4.0.** Install the published chart and image with
 > [Install with Helm](docs/how-to/install-with-helm.md). The `v1alpha1` resource format can change before 1.0. See
-> [Status](#status).
+> [Status](#status). Slack HTTP mode needs a release later than 0.4.0, whose chart refuses its values.
 
 <p align="center">
   <img src="docs/assets/clip/team-app.gif" width="100%" alt="A terminal. The platform team creates the namespace agent-kourier and installs the agent-kourier chart with a values file of comments only, so the broker serves the ChatConnections of every namespace and starts with no Slack app of its own. The team then creates its Slack Secret in team-a from a file, a Role and RoleBinding that let the broker's ServiceAccount list and watch it, fills in the four lines marked yours in team-a.yaml (a ChatConnection, an AgentBackend and a Binding), applies it, and kubectl get akbinding shows the Binding become True OK. Then Slack: a mention of the team's bot, and the agent's answer in its thread.">
@@ -220,7 +220,7 @@ other bots, and the [trigger reference](docs/reference/chat-triggers.md) has the
 | Kind | Integration | Status |
 |---|---|---|
 | Chat platform | Slack over Socket Mode: mentions, thread replies, streamed output, questions | Implemented |
-| Chat platform | Slack over the Events API (HTTP mode): the same, with Slack's signed requests taken on the chat listener, behind a Service that selects the leader. Tested against the end-to-end tests' fake Slack, not yet against Slack itself. See [Configure Slack](docs/how-to/configure-slack.md) | Experimental |
+| Chat platform | Slack over the Events API (HTTP mode): the same, with Slack's signed requests taken on the chat listener, behind a Service that selects the leader. Tested against the end-to-end tests' fake Slack, not yet against Slack itself. Needs a release later than 0.4.0, whose chart refuses `chatListener` and `networkPolicy.chatFrom`. See [Configure Slack](docs/how-to/configure-slack.md) | Experimental |
 | Chat platform | Slack direct messages | Planned |
 | Chat platform | Other platforms, through the `chat.Platform` interface and its conformance suite | Planned |
 | Agent backend | kagent 1.0, `kagent-v1` dialect, with structured questions and optional Slack tool approvals. Tested against 1.0.0-alpha5. Needs a cluster that serves the pod-certificate APIs, which managed EKS through 1.36 cannot; see [Connect a kagent agent](docs/how-to/connect-kagent.md) | Implemented |
