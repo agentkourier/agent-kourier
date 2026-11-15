@@ -58,8 +58,8 @@ steps, and how to roll back.
 
 - **The release publishes the prompt agent's and the echo agent's images**, `ghcr.io/agentkourier/agent-kourier-prompt-agent` and
   `ghcr.io/agentkourier/agent-kourier-echo-agent`, tagged with the release, for `linux/amd64` and `linux/arm64`. They are built, scanned, signed
-  and attested as Agent Kourier's image is, and the GitHub Release names their digests. The recipes' manifests name them, so a team no longer
-  builds an agent's image to try a recipe.
+  and attested as Agent Kourier's image is, and the GitHub Release names their digests. The two recipes' manifests name them, so a team no longer
+  builds an image to try either of them.
 - **Both images are built on Wolfi**, with CPython 3.14 and no pip, and still run as user 65532. The images that `make prompt-agent-image` and
   `make echo-agent-image` build changed the same way: the entrypoint is `/opt/venv/bin/python agent.py`.
 
@@ -81,7 +81,7 @@ steps, and how to roll back.
 - **On SQLite, a broker logs a warning when its database is newer than it is**, as one on Postgres already did: at start, when the database
   records a migration this build does not have, as after a rollback from a later release, it logs at WARN
   `the database schema is newer than this build of Agent Kourier`, with `newest_known_migration` and `newest_in_database`, and starts. This
-  release adds no migration.
+  release adds no migration, and changes no CRD.
 - **Redaction skips the patterns that cannot match.** Before each costly pattern, the redactor checks that the text holds what any match of it
   needs (a word such as `bearer` or `token`, or a character the patterns allow between letters), and skips it where it does not. What is
   redacted is unchanged.

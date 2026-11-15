@@ -106,7 +106,10 @@ EOF
   local manifests=${ROOT}/examples/recipes/echo-agent/agent/manifests
   "${K[@]}" set image --local -f "${manifests}/deployment.yaml" "echo-agent=${ECHO_IMAGE}" -o yaml |
     "${K[@]}" apply -n echo-agent -f -
-  "${K[@]}" apply -n echo-agent -f "${manifests}/service.yaml" -f "${manifests}/networkpolicy.yaml"
+  local f
+  for f in "${manifests}"/*.yaml; do
+    [ "${f}" = "${manifests}/deployment.yaml" ] || "${K[@]}" apply -n echo-agent -f "${f}"
+  done
   "${K[@]}" -n echo-agent rollout status deploy/echo-agent --timeout=180s
 }
 
