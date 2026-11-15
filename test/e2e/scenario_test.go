@@ -84,8 +84,9 @@ func (s *scenario) replicated(ctx context.Context) (bool, error) {
 
 // connected waits for Agent Kourier to be ready and to hold a Socket Mode connection to the fake, which a mention
 // needs (the fake answers 409 with no client), or, with E2E_SLACK_MODE=http, to answer the fake's url_verification on
-// its chat listener, which the fake counts as its connection. Call it again after anything that restarts Agent Kourier. With two replicas it
-// waits for exactly one of them to lead and be connected too: ready is true of a standby, and the connection the fake
+// its chat listener, which the fake counts as its connection. Call it again after anything that restarts Agent Kourier. It waits for the
+// broker's own word that its chat connection is up too (agentkourier_chat_connected), which in HTTP mode the fake cannot see. With two
+// replicas it waits for exactly one of them to lead and be connected: ready is true of a standby, and the connection the fake
 // counts may be the one of a leader that is on its way out.
 func (s *scenario) connected() {
 	s.t.Helper()
@@ -96,6 +97,20 @@ func (s *scenario) connected() {
 		s.t.Fatal(err)
 	} else if many {
 		if _, err := s.reps.WaitLeader(s.ctx, 2*time.Minute); err != nil {
+			s.t.Fatal(err)
+		}
+	} else {
+		// The one replica's chat connection is up (agentkourier_chat_connected, as WaitLeader asks of a leader): in HTTP mode the chat
+		// route answers url_verification before the connection's Run takes events, so the fake's count below does not show it, and an
+		// event sent in that gap waits for the fake's next retry.
+		err := Wait(s.ctx, 2*time.Minute, "Agent Kourier's chat connection to come up", func(ctx context.Context) (bool, error) {
+			up, err := s.agentKourier.Counter(ctx, "agentkourier_chat_connected", map[string]string{"connection": ConnPlatform})
+			if errors.Is(err, ErrNoSample) {
+				return false, nil
+			}
+			return up == 1, err
+		})
+		if err != nil {
 			s.t.Fatal(err)
 		}
 	}
