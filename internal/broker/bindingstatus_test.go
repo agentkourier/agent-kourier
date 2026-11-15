@@ -1248,8 +1248,10 @@ func TestOnlyTheOwnedTypesAreWrittenAndTheyAreUnderTheSchemasCap(t *testing.T) {
 	r.set(sreAlerts, conds...)
 	r.reconcile()
 	got := c.last(t).conds()
-	if len(got) != len(statusTypes)-1 { // ApproversReadable is not written: the Binding names no approver groups
-		t.Errorf("conditions written = %d, want %d", len(got), len(statusTypes)-1)
+	// ApproversReadable and AcknowledgmentShown are not written: the Binding names no approver groups, and the Prober holds no
+	// AcknowledgmentShown for it.
+	if len(got) != len(statusTypes)-2 {
+		t.Errorf("conditions written = %d, want %d", len(got), len(statusTypes)-2)
 	}
 	for typ := range got {
 		if strings.HasPrefix(typ, "Extra") {
@@ -2161,5 +2163,25 @@ func TestAReporterWritesAgainWhenTheStatusHoldsNoneOfItsTypes(t *testing.T) {
 	}
 	if c.count() != 2 {
 		t.Errorf("applies = %d, want 2", c.count())
+	}
+}
+
+// An AcknowledgmentShown that the Prober holds for a Binding is written as it is, and Ready with it: the writer does not know which
+// Bindings have the condition, and copies it once the Prober has it.
+func TestAnAcknowledgmentShownTheProberHoldsIsWritten(t *testing.T) {
+	c := newStatusCluster(t, storedBinding(sreAlerts, 1))
+	r := newStatusRig(t, c, map[string]int64{sreAlerts: 1})
+	conds := probe(1)
+	conds[len(conds)-1].Status, conds[len(conds)-1].Reason = bindingcheck.False, "AcknowledgmentShown:NoReactions"
+	conds = append(conds, bindingcheck.Condition{Type: bindingcheck.AcknowledgmentShown, Status: bindingcheck.False, Reason: bindingcheck.ReasonNoReactions,
+		Message: "the platform has no reactions", ObservedGeneration: 1, LastTransitionTime: statusT0.Add(time.Minute)})
+	r.set(sreAlerts, conds...)
+	r.reconcile()
+	got := c.stored(t, sreAlerts)
+	if a := got["AcknowledgmentShown"]; a.Status != metav1.ConditionFalse || a.Reason != "NoReactions" || a.ObservedGeneration != 1 {
+		t.Errorf("AcknowledgmentShown = %+v; want False/NoReactions at generation 1", a)
+	}
+	if ready := got["Ready"]; ready.Status != metav1.ConditionFalse || ready.Reason != "AcknowledgmentShown:NoReactions" {
+		t.Errorf("Ready = %+v; want False/AcknowledgmentShown:NoReactions", ready)
 	}
 }
