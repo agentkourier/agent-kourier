@@ -272,7 +272,8 @@ func (p *pressCase) decidedOnce(next kube.Replica, pressed map[string]chat.Actio
 
 // s16KillWithPressInFlight (case 5): the leader posted an approval prompt and is killed, and the approver presses at once, while nobody
 // leads. In HTTP mode that request finds no leader behind the chat Service, and the fake Slack sends it again until the process that
-// takes over answers it; in Socket Mode the fake has no connection to send it on, and the approver presses again. The new leader
+// takes over answers it; in Socket Mode the fake has no connection to send it on, or sends it on the dead one, and the approver
+// presses again. The new leader
 // decides the press once, from the prompt the dead leader posted, the agent is sent the answer once and goes on, and nothing in the
 // thread is lost or twice.
 func s16KillWithPressInFlight(t *testing.T) {
@@ -298,8 +299,9 @@ func s16KillWithPressInFlight(t *testing.T) {
 // the one pod the chat Service selects, which does not answer, so the fake Slack sends it again. Once another process leads, the second
 // denies. Then the old leader is resumed with whatever it was sent while frozen: it must end, as a deposed leader does (exit 5), and
 // decide nothing. Whichever press the new leader records first wins (in Socket Mode the second, since the first never reaches it; in
-// HTTP mode either, by the timing of the retries, and the second may press a prompt that the first's retry has decided already): one decision, the winner's, in the prompt, the audit and the agent's one answer, and
-// the other press, if it is decided at all, is superseded. In HTTP mode the first press is acked in the end too, by the new leader:
+// HTTP mode either, by the timing of the retries, and the second may press a prompt that the first's retry has decided already): one
+// decision, the winner's, in the prompt, the audit and the agent's one answer, and the other press, if it is decided at all, is
+// superseded. In HTTP mode the first press is acked in the end too, by the new leader:
 // the fake's retries do not lose it.
 func s16StallWithRacingPresses(t *testing.T) {
 	f := newFailover(t)
