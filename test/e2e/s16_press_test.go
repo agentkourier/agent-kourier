@@ -149,7 +149,7 @@ func (p *pressCase) delivered(id, user string, action chat.Action) {
 	if err != nil {
 		p.f.t.Fatal(err)
 	}
-	p.f.t.Logf("%s pressed %d times before a press was acked", user, presses)
+	p.f.t.Logf("a press of %s's was acked, after %d presses in all", user, presses)
 }
 
 // decidedOnce checks that the prompt was decided once, by one of the people who pressed (pressed, with the action each pressed), on
