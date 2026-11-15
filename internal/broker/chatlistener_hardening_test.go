@@ -29,22 +29,43 @@ type answer struct {
 // answer and how long it took to come. A server that read the body first would answer only once its read timeout had passed.
 func (r *chatRig) rawAnswer(head string) (answer, time.Duration) {
 	r.t.Helper()
+	conn := r.send(head + "part of the body")
+	begin := time.Now()
+	return r.answerOn(conn, head), time.Since(begin)
+}
+
+// send opens a connection of its own, closed when the test ends, and writes text on it.
+func (r *chatRig) send(text string) net.Conn {
+	r.t.Helper()
 	conn, err := (&net.Dialer{}).DialContext(r.t.Context(), "tcp", r.srv.Listener.Addr().String())
 	if err != nil {
 		r.t.Fatal(err)
 	}
 	r.t.Cleanup(func() { _ = conn.Close() })
-	begin := time.Now()
-	if _, err := io.WriteString(conn, head+"part of the body"); err != nil {
+	if _, err := io.WriteString(conn, text); err != nil {
 		r.t.Fatal(err)
 	}
+	return conn
+}
+
+// answerOn reads the answer to the request sent on conn, what.
+func (r *chatRig) answerOn(conn net.Conn, what string) answer {
+	r.t.Helper()
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
 	if err != nil {
-		r.t.Fatalf("no answer to %q: %v", head, err)
+		r.t.Fatalf("no answer to %q: %v", what, err)
 	}
 	_ = resp.Body.Close()
-	return answer{code: resp.StatusCode, retryAfter: resp.Header.Get("Retry-After"), closes: resp.Close}, time.Since(begin)
+	return answer{code: resp.StatusCode, retryAfter: resp.Header.Get("Retry-After"), closes: resp.Close}
+}
+
+// bodyHeld is the part of the body budget that requests being read or handled hold.
+func (r *chatRig) bodyHeld() int {
+	b := &r.routes.budget
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return chatBodyBudget - b.left
 }
 
 // An answer that does not read the body (404, 405, 503 for no route, and 413 for a declared length past the cap) comes at once and closes
@@ -82,8 +103,8 @@ func (b *holding) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// At most chatMaxInFlight routed requests are read or handled at once. The next is answered 503 with Retry-After at once, before any of
-// its body is read, and counted as busy; once one ends, a request is served again.
+// At most chatMaxInFlight routed requests are handled at once. While they are, the next is answered 503 with Retry-After at once, before
+// any of its body is read, and counted as busy; once one ends, a request is served again.
 func TestChatRoutesCapTheRequestsInHand(t *testing.T) {
 	r := newChatRig(t)
 	b := &holding{release: make(chan struct{})}
@@ -107,6 +128,82 @@ func TestChatRoutesCapTheRequestsInHand(t *testing.T) {
 	wg.Wait()
 	if code, _, _, _ := r.do(http.MethodPost, "/chat/slack/ns/a", strings.NewReader("x")); code != http.StatusOK {
 		t.Errorf("once the held requests ended, a request = %d, want 200", code)
+	}
+}
+
+// A client that sends its body slowly holds one chunk of the body budget while it is read, and no place among the handlers: with twice
+// as many slow senders mid-body as there are places, a request sent whole is still served, and its chunk is given back once it is.
+func TestChatRoutesServeWhileSlowSendersHoldTheirBodies(t *testing.T) {
+	r := newChatRig(t)
+	h := &heard{}
+	r.routes.register(v1alpha1.PlatformSlack, "ns/a", h)
+	slow := 2 * chatMaxInFlight
+	for range slow {
+		r.send("POST /chat/slack/ns/a HTTP/1.1\r\nHost: x\r\nContent-Length: 1000\r\n\r\npart of the body")
+	}
+	testutil.Eventually(t, "the slow senders were never all being read", func() bool { return r.bodyHeld() == slow*chatBodyChunk },
+		testutil.Within(5*time.Second), testutil.Every(5*time.Millisecond))
+
+	if code, _, _, text := r.do(http.MethodPost, "/chat/slack/ns/a", strings.NewReader("payload=1")); code != http.StatusOK || text != "heard" {
+		t.Errorf("a whole request while %d slow senders were mid-body = %d %q, want its handler's 200", slow, code, text)
+	}
+	if held := r.bodyHeld(); held != slow*chatBodyChunk {
+		t.Errorf("after the request was served the budget held %d bytes, want the slow senders' %d", held, slow*chatBodyChunk)
+	}
+	if got := r.counted(chatBusy); got != 0 {
+		t.Errorf("busy counted %d, want 0: slow senders take no place", got)
+	}
+}
+
+// A request whose next chunk does not fit in what is left of the body budget is answered 503 with Retry-After, its connection closed, and
+// counted as busy; its handler is not called and its chunks are given back, so a request that fits is served after it.
+func TestChatRoutesAnswerBusyPastTheBodyBudget(t *testing.T) {
+	r := newChatRig(t)
+	h := &heard{}
+	r.routes.register(v1alpha1.PlatformSlack, "ns/a", h)
+	r.routes.budget.left = 2 * chatBodyChunk // no request has been sent: the server reads it only after the first is
+
+	code, retry, _, _ := r.do(http.MethodPost, "/chat/slack/ns/a", strings.NewReader(strings.Repeat("a", 2*chatBodyChunk+1)))
+	if code != http.StatusServiceUnavailable || retry != "5" {
+		t.Errorf("a body of three chunks with two left = %d with Retry-After %q, want 503 with 5", code, retry)
+	}
+	if h.calls() != 0 || r.counted(chatBusy) != 1 {
+		t.Errorf("the handler was called %d times and busy counted %d, want none and 1", h.calls(), r.counted(chatBusy))
+	}
+	if held := r.bodyHeld(); held != chatBodyBudget-2*chatBodyChunk {
+		t.Errorf("after the refusal the requests held %d bytes of the budget, want none", held-(chatBodyBudget-2*chatBodyChunk))
+	}
+	if code, _, _, text := r.do(http.MethodPost, "/chat/slack/ns/a", strings.NewReader("payload=1")); code != http.StatusOK || text != "heard" {
+		t.Errorf("a body of one chunk after the refusal = %d %q, want its handler's 200", code, text)
+	}
+}
+
+// A request takes its place among the handlers only once its body is read: one whose body was read while the last places were taken is
+// answered 503 with Retry-After then, and counted as busy.
+func TestChatRoutesAnswerBusyWhenTheHandlersFillDuringTheRead(t *testing.T) {
+	r := newChatRig(t)
+	b := &holding{release: make(chan struct{})}
+	r.routes.register(v1alpha1.PlatformSlack, "ns/a", b)
+	head := "POST /chat/slack/ns/a HTTP/1.1\r\nHost: x\r\nContent-Length: 10\r\n\r\n"
+	late := r.send(head + "part")
+	testutil.Eventually(t, "the late request was never being read", func() bool { return r.bodyHeld() == chatBodyChunk },
+		testutil.Within(5*time.Second), testutil.Every(5*time.Millisecond))
+	var wg sync.WaitGroup
+	defer func() { close(b.release); wg.Wait() }()
+	for range chatMaxInFlight {
+		wg.Go(func() { r.do(http.MethodPost, "/chat/slack/ns/a", strings.NewReader("x")) })
+	}
+	testutil.Eventually(t, "the handler never held the cap's worth of requests", func() bool { return b.held.Load() == chatMaxInFlight },
+		testutil.Within(5*time.Second), testutil.Every(5*time.Millisecond))
+
+	if _, err := io.WriteString(late, "123456"); err != nil {
+		t.Fatal(err)
+	}
+	if resp := r.answerOn(late, head); resp.code != http.StatusServiceUnavailable || resp.retryAfter != "5" {
+		t.Errorf("a request whose body was read while the handlers filled: %d with Retry-After %q, want 503 with 5", resp.code, resp.retryAfter)
+	}
+	if got := r.counted(chatBusy); got != 1 {
+		t.Errorf("busy counted %d, want 1", got)
 	}
 }
 

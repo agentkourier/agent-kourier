@@ -43,11 +43,24 @@ const (
 	// chatRetryAfter is the Retry-After of a 503 for a connection that does not run here, or for a listener that is full: a takeover or
 	// a restart of the connection takes seconds, not minutes.
 	chatRetryAfter = 5 * time.Second
-	// chatMaxInFlight caps the requests that have a route and are being read or handled at once, across every connection. Each holds
-	// its body in memory, up to chatMaxBody, until its handler returns, so the cap bounds that memory at 32 MiB: an eighth of the chart's
-	// default memory limit of 256 MiB. A handler acknowledges in milliseconds (it hands the event on and answers), so 32 at once is room
-	// for hundreds of requests a second; a request past the cap is answered 503 with Retry-After before any of its body is read.
+	// chatMaxInFlight caps the requests whose handlers run at once, across every connection. A request takes its place only once its
+	// body has been read whole, so a client that sends its body slowly holds no place, only a chunk of chatBodyBudget. Each platform's
+	// handler must acknowledge in milliseconds, handing the request on and answering before the work it asks for is done: that is a
+	// requirement on the handlers, which a handler that waits on the work would break. At that pace 32 at once is room for hundreds of
+	// requests a second. While every place is taken a request is answered 503 with Retry-After before any of its body is read, and one
+	// whose body was read while the last places were taken is answered so once it has been read.
 	chatMaxInFlight = 32
+	// chatBodyChunk is the size of the buffers a body is read into, one after another, each charged to chatBodyBudget before it is
+	// allocated. It is one of Go's allocation size classes, so what is charged is what is allocated. A request being read holds at most
+	// one chunk more than it has received: a client that trickles its body holds 4 KiB until chatReadTimeout cuts it.
+	chatBodyChunk = 4 << 10
+	// chatBodyBudget caps the body buffers that the requests being read or handled hold at once, across every connection, from the
+	// first chunk until the handler returns. The buffers are allocated only once they are charged, so the listener's bodies take at most
+	// 32 MiB, an eighth of the chart's default memory limit of 256 MiB, and the list of each body's chunks and their readers about 3% more;
+	// a handler that copies a body holds its copy outside the budget. A request whose next chunk does not fit is answered 503 with
+	// Retry-After and the rest of its body is not read. A client spends the budget only with bytes it sends, so holding it takes 32 MiB
+	// sent within chatReadTimeout, not a count of slow connections.
+	chatBodyBudget = 32 << 20
 	// chatDrainTimeout bounds the wait, at shutdown, for the requests in flight; past it they are cut, unanswered, and the platform sends
 	// them again. It is the first part of the intake step, whose bound is 4 s, and is kept to half of it, so that the intakes, which stop
 	// after it in the same step, always keep at least 2 s.
@@ -65,7 +78,7 @@ const (
 	chatNoRoute    = "no_route"   // 503: the connection does not run here (another replica leads, or it is down or not served)
 	chatTooLarge   = "too_large"  // 413: the body is past chatMaxBody
 	chatUnreadable = "unreadable" // 400: the body could not be read whole (the client went away, or chatReadTimeout passed)
-	chatBusy       = "busy"       // 503: chatMaxInFlight requests were already being read or handled
+	chatBusy       = "busy"       // 503: chatMaxInFlight handlers were already running, or the body did not fit in chatBodyBudget
 )
 
 // chatOutcomes are the outcomes, in the order docs/reference/metrics.md lists them.
@@ -84,8 +97,34 @@ type chatRoutes struct {
 	// count is told the outcome of each request (Metrics.ChatListenerRequest).
 	count func(outcome string)
 	log   *slog.Logger
-	// slots holds one token for each routed request being read or handled, chatMaxInFlight at most.
+	// slots holds one token for each request whose handler runs, chatMaxInFlight at most.
 	slots chan struct{}
+	// budget is what is left of chatBodyBudget.
+	budget chatBudget
+}
+
+// chatBudget is the bytes of body buffer the chat listener may still allocate. It is safe for concurrent use.
+type chatBudget struct {
+	mu   sync.Mutex
+	left int
+}
+
+// take charges n bytes to the budget and reports whether they fitted; nothing is charged when they did not.
+func (b *chatBudget) take(n int) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if n > b.left {
+		return false
+	}
+	b.left -= n
+	return true
+}
+
+// give returns n bytes that take charged.
+func (b *chatBudget) give(n int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.left += n
 }
 
 // chatRoute is one registration: dropping it removes the route only if it is still this registration, so that a runtime that restarts and
@@ -97,7 +136,8 @@ type chatRoute struct {
 }
 
 func newChatRoutes(count func(outcome string), log *slog.Logger) *chatRoutes {
-	return &chatRoutes{routes: map[string]*chatRoute{}, count: count, log: log, slots: make(chan struct{}, chatMaxInFlight)}
+	return &chatRoutes{routes: map[string]*chatRoute{}, count: count, log: log, slots: make(chan struct{}, chatMaxInFlight),
+		budget: chatBudget{left: chatBodyBudget}}
 }
 
 // chatRouteKey is the key, and the path after chatPathPrefix, of the connection conn ("namespace/name") of platform.
@@ -148,11 +188,13 @@ func (t *chatRoutes) lookup(key string) http.Handler {
 
 // ServeHTTP answers a request to the chat listener. Its checks come in order, and each costs less than the one after it: a path that is
 // no route's shape is 404, a method other than POST 405, a connection with no route here 503 with Retry-After, a declared body past
-// chatMaxBody 413, and a listener that already has chatMaxInFlight requests in hand 503 with Retry-After. None of those reads the body:
-// each answer says Connection: close, so that net/http closes the connection after it instead of first reading and discarding what the
-// client still sends (up to 256 KiB, for as long as the client takes). Then the body is read: past chatMaxBody it is 413, and one that
-// cannot be read whole is 400. Only then is the route's handler called, with the body in memory and a context that ends
-// chatHandlerTimeout later.
+// chatMaxBody 413, and a listener whose chatMaxInFlight handlers all run 503 with Retry-After. None of those reads the body: each answer
+// says Connection: close, so that net/http closes the connection after it instead of first reading and discarding what the client still
+// sends (up to 256 KiB, for as long as the client takes). Then the body is read, in chunks charged to chatBodyBudget: a chunk that does not
+// fit is 503 with Retry-After and Connection: close, a body past chatMaxBody 413, and one that cannot be read whole 400. Only then does the
+// request take a place among the handlers, and it is 503 with Retry-After when the last were taken while it was read: a client slow to
+// send its body holds no place. The route's handler is called with the body in memory and a context that ends chatHandlerTimeout later,
+// and the body's chunks are given back to the budget when it returns.
 func (t *chatRoutes) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	key, ok := chatKeyOf(req.URL.Path)
 	if !ok {
@@ -178,36 +220,95 @@ func (t *chatRoutes) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		refuse(w, http.StatusRequestEntityTooLarge, "the body is too large")
 		return
 	}
-	select {
-	case t.slots <- struct{}{}:
-		defer func() { <-t.slots }()
-	default:
-		t.count(chatBusy)
-		w.Header().Set("Retry-After", strconv.Itoa(int(chatRetryAfter/time.Second)))
-		refuse(w, http.StatusServiceUnavailable, "the chat listener is busy")
+	if len(t.slots) == cap(t.slots) { // spares the read of a body that would be refused; the place itself is taken after the read
+		t.busy(w, false)
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, req.Body, chatMaxBody))
+	chunks, size, charged, err := t.readBody(http.MaxBytesReader(w, req.Body, chatMaxBody))
+	defer t.budget.give(charged)
 	if err != nil {
 		if tooLarge := (*http.MaxBytesError)(nil); errors.As(err, &tooLarge) {
 			t.count(chatTooLarge)
 			http.Error(w, "the body is too large", http.StatusRequestEntityTooLarge)
 			return
 		}
+		if errors.Is(err, errChatBudget) {
+			t.busy(w, false)
+			return
+		}
 		t.count(chatUnreadable)
 		http.Error(w, "the body could not be read", http.StatusBadRequest)
+		return
+	}
+	select {
+	case t.slots <- struct{}{}:
+		defer func() { <-t.slots }()
+	default:
+		t.busy(w, true)
 		return
 	}
 	ctx, cancel := context.WithTimeout(req.Context(), chatHandlerTimeout)
 	defer cancel()
 	in := req.WithContext(ctx)
-	in.Body, in.ContentLength = io.NopCloser(bytes.NewReader(body)), int64(len(body))
-	in.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
+	in.Body, in.ContentLength = chunkBody(chunks), size
+	in.GetBody = func() (io.ReadCloser, error) { return chunkBody(chunks), nil }
 	t.count(chatServed)
 	h.ServeHTTP(w, in)
 }
 
-// refuse answers code with text and Connection: close, for a request whose body is not read.
+// busy answers 503 with Retry-After, counted as busy. A request whose body was not read whole (bodyRead false) is refused, so that its
+// connection is closed rather than read to its end.
+func (t *chatRoutes) busy(w http.ResponseWriter, bodyRead bool) {
+	t.count(chatBusy)
+	w.Header().Set("Retry-After", strconv.Itoa(int(chatRetryAfter/time.Second)))
+	if bodyRead {
+		http.Error(w, "the chat listener is busy", http.StatusServiceUnavailable)
+		return
+	}
+	refuse(w, http.StatusServiceUnavailable, "the chat listener is busy")
+}
+
+// errChatBudget is readBody's error for a chunk that did not fit in chatBodyBudget.
+var errChatBudget = errors.New("the body does not fit in the chat listener's budget")
+
+// readBody reads r to its end into chunks of chatBodyChunk, each charged to the budget before it is allocated, and returns them, the
+// body's size, and the bytes charged, which the caller gives back whatever the error. Each chunk is filled before the next is charged,
+// so a client that sends a byte at a time holds one chunk, not one for each read.
+func (t *chatRoutes) readBody(r io.Reader) (chunks [][]byte, size int64, charged int, err error) {
+	for {
+		if !t.budget.take(chatBodyChunk) {
+			return nil, 0, charged, errChatBudget
+		}
+		charged += chatBodyChunk
+		c := make([]byte, chatBodyChunk)
+		n := 0
+		for n < len(c) && err == nil {
+			var m int
+			m, err = r.Read(c[n:])
+			n += m
+		}
+		if n > 0 {
+			chunks, size = append(chunks, c[:n]), size+int64(n)
+		}
+		switch {
+		case errors.Is(err, io.EOF):
+			return chunks, size, charged, nil
+		case err != nil:
+			return nil, 0, charged, err
+		}
+	}
+}
+
+// chunkBody is a request body that reads chunks in order.
+func chunkBody(chunks [][]byte) io.ReadCloser {
+	readers := make([]io.Reader, len(chunks))
+	for i, c := range chunks {
+		readers[i] = bytes.NewReader(c)
+	}
+	return io.NopCloser(io.MultiReader(readers...))
+}
+
+// refuse answers code with text and Connection: close, for a request whose body is not read whole.
 func refuse(w http.ResponseWriter, code int, text string) {
 	w.Header().Set("Connection", "close")
 	http.Error(w, text, code)
