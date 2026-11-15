@@ -49,7 +49,8 @@ type Metrics struct {
 	bindingRej    *prometheus.GaugeVec
 	heldObjects   *prometheus.GaugeVec
 	statusWrites  *prometheus.CounterVec
-	crdSchema     *prometheus.GaugeVec // series only once set, which only a broker on the custom resources does (crdschema.go)
+	crdSchema     *prometheus.GaugeVec   // series only once set, which only a broker on the custom resources does (crdschema.go)
+	chatRequests  *prometheus.CounterVec // series only once a request comes, which only a broker with a chat listener takes
 }
 
 // The kinds and reasons that the config gauges carry, a closed set each.
@@ -104,6 +105,8 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 			Help: "Writes of a Binding's status by the leader, by result: written, put_back (written again to the words it already had, because the status had been changed: a person's edit, or another writer), or failed (the API server refused or could not be reached; it is tried again). The series exist only once the leader of a broker that reads the custom resources has tried a write."}, []string{"result"}),
 		crdSchema: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_crd_schema_state",
 			Help: "1 for what the broker found when it compared each CRD's schema hash with the one it was built with, at start and every minute, and 0 for the other states, by CRD and state (match, mismatch, unannotated or unknown). Only a broker that reads custom resources has these series; with files there are none."}, []string{"crd", "state"}),
+		chatRequests: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_chat_listener_requests_total",
+			Help: "Requests to the chat listener, by outcome: served (a connection's handler was called), not_found (the path is no route), method (not POST), no_route (the connection does not run on this replica: answered 503), too_large (the body is past the cap) or unreadable (the body could not be read whole). Only a broker with a chat listener has these series."}, []string{"outcome"}),
 	}
 	m.ConfigReport(config.Report{})
 	m.UnservedBindings(0)
@@ -115,7 +118,7 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		return 0
 	})
 	var err error
-	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, m.approvals, m.timeouts, m.removed, m.decisions, m.chatUp, m.turns, m.leader, m.takeovers, m.bindingCond, m.bindingReady, m.probeDuration, m.invalid, m.bindingRej, m.heldObjects, m.crdSchema, m.statusWrites, staleGauge} {
+	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, m.approvals, m.timeouts, m.removed, m.decisions, m.chatUp, m.turns, m.leader, m.takeovers, m.bindingCond, m.bindingReady, m.probeDuration, m.invalid, m.bindingRej, m.heldObjects, m.crdSchema, m.statusWrites, m.chatRequests, staleGauge} {
 		err = errors.Join(err, m.reg.Register(c))
 	}
 	if err != nil {
@@ -281,6 +284,15 @@ func (m *Metrics) Leader(leading bool) {
 
 // Takeover counts a leadership taken: the lease won and the epoch bumped.
 func (m *Metrics) Takeover() { m.takeovers.Inc() }
+
+// ChatListenerRequest counts a request to the chat listener by its outcome (chatOutcomes), and one outside them as "other", so that no
+// value can grow the series. The path is not a label: it is the sender's to choose.
+func (m *Metrics) ChatListenerRequest(outcome string) {
+	if !slices.Contains(chatOutcomes, outcome) {
+		outcome = otherLabel
+	}
+	m.chatRequests.WithLabelValues(outcome).Inc()
+}
 
 // BindingCondition records a condition of a Binding that changed: bindingcheck.Options.OnTransition. The condition's series
 // say its new status (1 for it, 0 for the other two), and a change of Ready also sets agentkourier_binding_ready, which is 1

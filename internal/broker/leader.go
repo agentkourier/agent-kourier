@@ -43,6 +43,9 @@ type leaderHalf struct {
 	status *statusSink
 	// connsServed is the connections served, as the supervisor publishes them: Run made it, and its metrics read it (see Run).
 	connsServed *atomic.Pointer[[]Connection]
+	// routes is the chat listener's route table, which the runtimes put their routes on while they run: Run made it, and it is nil when
+	// the broker has no chat listener.
+	routes *chatRoutes
 }
 
 // openPlatform builds the chat platform of conn, and with an election fences it: every write to the chat that the leader half
@@ -54,6 +57,9 @@ func (h *leaderHalf) openPlatform(conn Connection, onConnection func(connected b
 	p, err := h.cfg.newPlatform(conn, log, onConnection)
 	if err != nil {
 		return builtPlatform{}, err
+	}
+	if h.cfg.wrapPlatform != nil {
+		p.Platform = h.cfg.wrapPlatform(p.Platform)
 	}
 	if h.leaseFence != nil {
 		p.Platform = fenceChat(p.Platform, h.leaseFence)
@@ -91,7 +97,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	// The parts that every connection shares look the platform up by the connection their row, turn or press names, in the table of the
 	// connections that run, which the supervisor adds the team connections' to and takes them from.
 	table := newRuntimeTable()
-	host := &runtimeHost{cfg: cfg, log: log, metrics: metrics, table: table, open: h.openPlatform, parent: runCtx}
+	host := &runtimeHost{cfg: cfg, log: log, metrics: metrics, table: table, open: h.openPlatform, parent: runCtx, routes: h.routes}
 	var ownRT *connRuntime
 	if own != nil {
 		if ownRT, err = host.build(*own); err != nil {

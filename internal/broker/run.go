@@ -27,7 +27,7 @@ import (
 // maps them to exit codes.
 //
 // The order is klog (before anything uses client-go, so even its first line is capped and routed),
-// the Kubernetes client, the health server (so that /healthz answers from here on), Bootstrap (the
+// the Kubernetes client, the health server (so that /healthz answers from here on), the chat listener if there is one, Bootstrap (the
 // config, from files or, with cfg.ConfigSource crds, from the custom resources of the cluster, and the Secret caches), the broker's own ChatConnection if it has one (spec D53), the store (SQLite, or Postgres with its DSN read from
 // a Secret: cfg.Store), and then readiness: /readyz says 503 "starting" until the last of those is done. The
 // own connection comes before the store, so a config that v1 cannot serve leaves no database behind. That is what every
@@ -175,6 +175,23 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		close(servedDone)
 	}()
 	sd.add(stepHealth, func(c context.Context) { stopServing(); waitFor(c, servedDone) })
+	// The chat listener, if there is one: every replica serves it from here, and only the leader half's runtimes put routes on it, so a
+	// standby answers 503 to every route. It stops taking requests first of all, before the intakes that its requests feed stop: its
+	// stop is the intake step's, added here before the leader half can add its own.
+	var routes *chatRoutes
+	var chatServed chan error // nil, and never ready, without a chat listener
+	if cfg.ChatListener != nil {
+		routes = newChatRoutes(metrics.ChatListenerRequest, log)
+		chatServed = make(chan error, 1)
+		chatDone := make(chan struct{})
+		chatCtx, stopChat := context.WithCancel(context.WithoutCancel(ctx))
+		go func() {
+			chatServed <- serveServer(chatCtx, cfg.ChatListener, newChatServer(routes), chatWriteTimeout)
+			close(chatDone)
+		}()
+		sd.add(stepIntake, func(c context.Context) { stopChat(); waitFor(c, chatDone) })
+		log.InfoContext(ctx, "chat listener", "address", cfg.ChatListener.Addr().String())
+	}
 
 	var extraSecrets []config.SecretName // the Postgres DSN's Secret is Agent Kourier's own, so no resource of the config names it
 	if cfg.Store.kind() == StorePostgres {
@@ -210,6 +227,9 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	// A write that finds another replica has led since ends the process (spec D37): the error alone would be handled
 	// by whichever part made the write, and the part could carry on. SQLite never calls it.
 	fail := &failStop{log: log, exit: cfg.exitFunc()}
+	if routes != nil {
+		fail.before = routes.close // a replica that no longer leads takes no request, from the moment it knows
+	}
 	st, err := openStore(runCtx, cfg.Store, cfg.DBPath, boot.Secrets, log,
 		postgres.WithOnDeposed(func() { fail.now("a write found its epoch stale: another replica has led since") }))
 	if err != nil {
@@ -239,7 +259,8 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	}
 
 	// Everything that every replica runs is up. A standby is as ready as a leader: readiness never depends on the
-	// lease, since nothing routes traffic to Agent Kourier in Socket Mode, and a standby is healthy (spec 11).
+	// lease, since nothing routes traffic to Agent Kourier in Socket Mode, and a standby is healthy (spec 11). A standby's chat listener,
+	// if it has one, answers 503 to every route, which a platform sends again.
 	ready.Set(append(boot.Checks(), StoreOpen(st))...)
 	log.InfoContext(ctx, "ready")
 
@@ -253,7 +274,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		lease = newLeaseClock(cfg.leaseNow)
 		guard = newLeaseFence(cfg.Election, lease, fail.now)
 	}
-	leader := &leaderHalf{cfg: cfg, log: log, sd: sd, metrics: metrics, boot: boot, st: st, leaseFence: guard, status: status, connsServed: &connsServed}
+	leader := &leaderHalf{cfg: cfg, log: log, sd: sd, metrics: metrics, boot: boot, st: st, leaseFence: guard, status: status, connsServed: &connsServed, routes: routes}
 	leaderDone := make(chan error, 1)
 	runLeader := func() {
 		leave, ok := gate.enter()
@@ -320,6 +341,8 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	case err := <-served:
 		served <- err // for the cleanup, which waits for it too
 		return fmt.Errorf("the health server stopped before the broker did: %w", err)
+	case err := <-chatServed:
+		return fmt.Errorf("the chat listener stopped before the broker did: %w", err)
 	}
 }
 

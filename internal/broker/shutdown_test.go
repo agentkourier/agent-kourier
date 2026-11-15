@@ -114,6 +114,53 @@ func TestStopListRunsEveryStopLastAddedFirst(t *testing.T) {
 	}
 }
 
+// A step that two parts add to keeps both: the second add runs after the first, within the one step, and drops nothing. The chat
+// listener's stop and the intakes' share the intake step so, the listener's first. The step is told once.
+func TestShutdownKeepsEveryPartAddedToAStepInTheOrderAdded(t *testing.T) {
+	var r, told recorder
+	s := newTestShutdown(&logBuffer{}, 10*time.Second, time.Second)
+	s.trace = func(step string) { told.step(step)(context.Background()) }
+	s.add(stepIntake, r.step("chat-listener"))
+	s.add(stepHealth, r.step("health"))
+	s.add(stepIntake, r.step("intakes"))
+	s.add(stepIntake, r.step("third"))
+
+	s.run(t.Context())
+
+	if want := "chat-listener,intakes,third,health"; r.got() != want {
+		t.Errorf("shutdown ran %s, want %s", r.got(), want)
+	}
+	if want := "intake,health"; told.got() != want {
+		t.Errorf("the steps were told as %s, want %s", told.got(), want)
+	}
+}
+
+// The parts of one step share its bound: once it is cut, the parts after the one that held it still run, with the step's ended context,
+// so that one that only needs to be told (a halt) is told.
+func TestShutdownPartsOfACutStepStillRun(t *testing.T) {
+	var r recorder
+	s := newTestShutdown(&logBuffer{}, 10*time.Second, time.Second)
+	s.bounds[stepIntake] = 50 * time.Millisecond
+	ran := make(chan error, 1)
+	s.add(stepIntake, func(ctx context.Context) { <-ctx.Done() })
+	s.add(stepIntake, func(ctx context.Context) { ran <- ctx.Err() })
+	s.add(stepStore, r.step("store"))
+
+	runWithin(t, s, 2*time.Second)
+
+	select {
+	case err := <-ran:
+		if err == nil {
+			t.Error("the second part ran with a live context, want the step's ended one")
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("the second part of the cut step never ran")
+	}
+	if r.got() != "store" {
+		t.Errorf("the step after the cut one ran as %q, want store", r.got())
+	}
+}
+
 func TestShutdownRunsOnlyWhatWasStartedAndOnlyOnce(t *testing.T) {
 	var r recorder
 	s := newTestShutdown(&logBuffer{}, 10*time.Second, time.Second)

@@ -38,6 +38,9 @@
 //	                       timings (defaults 15s, 10s and 2s). A standby takes over about a lease duration after the leader's
 //	                       last renewal; the leader gives up renewing after the renew deadline
 //	AGENTKOURIER_LISTEN         the address of /healthz, /readyz and /metrics (default :8080)
+//	AGENTKOURIER_CHAT_LISTEN    the address of the chat listener, which a chat platform sends its requests to (POST
+//	                       /chat/<platform>/<namespace>/<name>); unset, the broker opens no such port. It is apart from
+//	                       AGENTKOURIER_LISTEN so that /metrics is never on the port a platform reaches
 //	AGENTKOURIER_SYNC_TIMEOUT   how long to wait for the Secret caches (default 30s)
 //	AGENTKOURIER_KLOG_V         client-go's verbosity, held below 8 (default 0)
 //	AGENTKOURIER_LOG_LEVEL      debug, info, warn or error (default info)
@@ -120,6 +123,7 @@ func exitCode(err error) int {
 // envConfig is what the environment says.
 type envConfig struct {
 	configDir, dbPath, listen   string
+	chatListen                  string // the chat listener's address, "" for none
 	configSource                broker.ConfigSource
 	chatConnection              v1alpha1.ObjectRef // with crds only: the broker's own ChatConnection, zero when it has none (spec D53)
 	connectionNamespaces        []string           // with crds only: the admission list, none when unset
@@ -151,7 +155,8 @@ func loadEnv(getenv func(string) string) (envConfig, error) {
 		}
 		return def
 	}
-	c := envConfig{configDir: get("AGENTKOURIER_CONFIG_DIR", "/etc/agent-kourier"), dbPath: get("AGENTKOURIER_DB_PATH", "/data/agent-kourier.db"), listen: get("AGENTKOURIER_LISTEN", ":8080")}
+	c := envConfig{configDir: get("AGENTKOURIER_CONFIG_DIR", "/etc/agent-kourier"), dbPath: get("AGENTKOURIER_DB_PATH", "/data/agent-kourier.db"), listen: get("AGENTKOURIER_LISTEN", ":8080"),
+		chatListen: getenv("AGENTKOURIER_CHAT_LISTEN")}
 	bad := func(key string, want string, err error) error {
 		return fmt.Errorf("%w: %s is %q, want %s: %w", broker.ErrWiring, key, getenv(key), want, err)
 	}
@@ -469,6 +474,13 @@ func run(args []string, ver string, stdout, stderr io.Writer, getenv func(string
 		return fail(stderr, fmt.Errorf("listen on %s: %w", env.listen, err))
 	}
 	defer func() { _ = ln.Close() }()
+	var chatLn net.Listener
+	if env.chatListen != "" {
+		if chatLn, err = (&net.ListenConfig{}).Listen(context.Background(), "tcp", env.chatListen); err != nil {
+			return fail(stderr, fmt.Errorf("listen on %s: %w", env.chatListen, err))
+		}
+		defer func() { _ = chatLn.Close() }()
+	}
 
 	if env.store.Kind == broker.StorePostgres {
 		if env.election.Identity, err = uniqueIdentity(env.election.Identity); err != nil {
@@ -476,7 +488,7 @@ func run(args []string, ver string, stdout, stderr io.Writer, getenv func(string
 		}
 	}
 	cfg := env.runConfig()
-	cfg.Listener, cfg.Logger, cfg.ServiceVersion = ln, log, ver
+	cfg.Listener, cfg.ChatListener, cfg.Logger, cfg.ServiceVersion = ln, chatLn, log, ver // chatLn is nil when unset: no chat listener
 	applyTestHooks(log)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

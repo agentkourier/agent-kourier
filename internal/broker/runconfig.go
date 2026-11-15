@@ -21,6 +21,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/retention"
@@ -75,6 +76,10 @@ type RunConfig struct {
 	Election ElectionConfig
 	// Listener serves /healthz, /readyz and /metrics, from the start of Run to its end.
 	Listener net.Listener
+	// ChatListener, if set, is the chat listener: the port a chat platform sends its requests to (POST /chat/<platform>/<namespace>/<name>),
+	// apart from Listener so that /metrics is never on it. Every replica serves it, and only the leader's connections have routes on it.
+	// Nil serves none.
+	ChatListener net.Listener
 	// Client is the Kubernetes client the Secret informers use. Nil means InClusterClient.
 	Client kubernetes.Interface
 	// SyncTimeout bounds the wait for the Secret caches; zero means Bootstrap's default.
@@ -100,6 +105,9 @@ type RunConfig struct {
 	// package's tests, which run Run offline with a client that does not call Slack. It is
 	// unexported, so no other package, and no config, can replace the client.
 	newSlack func(slack.Config) slackAPI
+	// wrapPlatform replaces a connection's chat platform, as newPlatform built it, with one that wraps it, before the lease fence does: a
+	// seam for this package's tests, which give a platform a way to take requests over HTTP (chat.HTTPReceiver) that no adapter has yet.
+	wrapPlatform func(chat.Platform) chat.Platform
 	// slackHTTPTimeout is the bound of one Slack Web API call (slackAPITimeout if zero): a seam for this package's tests,
 	// which cannot wait for 30 seconds.
 	slackHTTPTimeout time.Duration

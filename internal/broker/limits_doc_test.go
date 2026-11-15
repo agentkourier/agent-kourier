@@ -2,6 +2,7 @@ package broker
 
 import (
 	"fmt"
+	"net/http"
 	"testing"
 
 	"k8s.io/client-go/tools/leaderelection"
@@ -46,4 +47,14 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Duration(t, "reconnectReset", defaultRunResetAfter)
 	limitsdoc.Duration(t, "retryAfterMax", retryAfterMax)
 	limitsdoc.Duration(t, "slackAPITimeout", slackAPITimeout)
+
+	// The chat listener's: the server's bounds as the server Run serves is built with them, and the two the route table holds itself.
+	chat := newChatServer(http.NotFoundHandler())
+	limitsdoc.Bytes(t, "chatHeaders", chat.MaxHeaderBytes)
+	limitsdoc.Duration(t, "chatReadHeader", chat.ReadHeaderTimeout)
+	limitsdoc.Duration(t, "chatRead", chat.ReadTimeout)
+	limitsdoc.Duration(t, "chatWrite", chat.WriteTimeout)
+	limitsdoc.Duration(t, "chatIdle", chat.IdleTimeout)
+	limitsdoc.Bytes(t, "chatBody", chatMaxBody)
+	limitsdoc.Duration(t, "chatHandler", chatHandlerTimeout)
 }

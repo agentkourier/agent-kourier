@@ -103,12 +103,18 @@ func (c ElectionConfig) validate() error {
 type failStop struct {
 	log  *slog.Logger
 	exit func(code int)
-	once sync.Once
+	// before, if set, runs just before exit: the chat listener drops its routes (chatRoutes.close), so that no request is taken by a
+	// replica that knows it no longer leads, even for the moment the exit takes.
+	before func()
+	once   sync.Once
 }
 
 func (f *failStop) now(reason string) {
 	f.once.Do(func() {
 		f.log.Error("leadership lost: stopping at once, without a drain", "reason", reason)
+		if f.before != nil {
+			f.before()
+		}
 		f.exit(ExitLeadershipLost)
 	})
 }

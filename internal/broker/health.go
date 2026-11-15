@@ -130,7 +130,12 @@ func Serve(ctx context.Context, ln net.Listener, h http.Handler) error {
 
 // serve is Serve with the time it waits for requests in flight, which a test shortens.
 func serve(ctx context.Context, ln net.Listener, h http.Handler, wait time.Duration) error {
-	srv := newHTTPServer(h)
+	return serveServer(ctx, ln, newHTTPServer(h), wait)
+}
+
+// serveServer serves srv on ln until ctx ends, then shuts it down, waiting up to wait for the requests in flight and cutting
+// them after it. It returns nil after a shutdown that finished, and the error of a listener that failed before it.
+func serveServer(ctx context.Context, ln net.Listener, srv *http.Server, wait time.Duration) error {
 	failed := make(chan error, 1)
 	go func() { failed <- srv.Serve(ln) }()
 	select {
