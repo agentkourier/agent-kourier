@@ -153,10 +153,16 @@ func (p *pressCase) delivered(id, user string, action chat.Action) {
 }
 
 // decidedOnce checks that the prompt was decided once, by one of the people who pressed (pressed, with the action each pressed), on
-// the process next, which leads now: the prompt shows that person and their verdict and no controls; the thread holds the bot's
-// messages of the paused turn, each finished and none of them an answer, and after them spike-approve's one continuation for that
-// verdict, and no other message of the bot; the audit has one answered decision of the interaction, by that person, and any other decision of it is a loser's, superseded; the agent was sent the answer once; next counted
-// one approval outcome; and in HTTP mode next answered a retry, so the press it decided was one the fake sent again. It returns who won.
+// the process next, which leads now:
+//   - the prompt shows that person and their verdict, and no controls;
+//   - the thread holds the bot's messages of the paused turn, each finished and none of them an answer, and after them
+//     spike-approve's one continuation for that verdict, and no other message of the bot;
+//   - the audit has one answered decision of the interaction, by that person, and any other decision of it by those who pressed is
+//     a loser's, superseded (decisions by anyone else, such as the timeout of a prompt an earlier run left, are not this case's);
+//   - the agent was sent the answer once, and next counted one approval outcome;
+//   - in HTTP mode next answered a retry, so the press it decided was one the fake sent again.
+//
+// It returns who won.
 func (p *pressCase) decidedOnce(next kube.Replica, pressed map[string]chat.Action) string {
 	f := p.f
 	f.t.Helper()
@@ -217,8 +223,13 @@ func (p *pressCase) decidedOnce(next kube.Replica, pressed map[string]chat.Actio
 		f.t.Fatalf("%v: %s\nthe thread: %s", err, why, describe(th))
 	}
 
-	// The audit: the decisions of this Binding since the prompt are all of the one interaction, one of them answered.
-	rows := approvalAuditAfter(f.auditEntries(f.ctx), p.audit, pressBinding)
+	// The audit: the decisions of this Binding by those who pressed, since the prompt, are all of the one interaction, one of them answered.
+	var rows []store.AuditEntry
+	for _, r := range approvalAuditAfter(f.auditEntries(f.ctx), p.audit, pressBinding) {
+		if _, ok := pressed[r.User]; ok {
+			rows = append(rows, r)
+		}
+	}
 	var interaction string
 	answered := 0
 	for _, r := range rows {
@@ -273,9 +284,8 @@ func (p *pressCase) decidedOnce(next kube.Replica, pressed map[string]chat.Actio
 // s16KillWithPressInFlight (case 5): the leader posted an approval prompt and is killed, and the approver presses at once, while nobody
 // leads. In HTTP mode that request finds no leader behind the chat Service, and the fake Slack sends it again until the process that
 // takes over answers it; in Socket Mode the fake has no connection to send it on, or sends it on the dead one, and the approver
-// presses again. The new leader
-// decides the press once, from the prompt the dead leader posted, the agent is sent the answer once and goes on, and nothing in the
-// thread is lost or twice.
+// presses again. The new leader decides the press once, from the prompt the dead leader posted, the agent is sent the answer once
+// and goes on, and nothing in the thread is lost or twice.
 func s16KillWithPressInFlight(t *testing.T) {
 	f := newFailover(t)
 	const approver = "US16E"
@@ -301,8 +311,13 @@ func s16KillWithPressInFlight(t *testing.T) {
 // decide nothing. Whichever press the new leader records first wins (in Socket Mode the second, since the first never reaches it; in
 // HTTP mode either, by the timing of the retries, and the second may press a prompt that the first's retry has decided already): one
 // decision, the winner's, in the prompt, the audit and the agent's one answer, and the other press, if it is decided at all, is
-// superseded. In HTTP mode the first press is acked in the end too, by the new leader:
-// the fake's retries do not lose it.
+// superseded.
+//
+// In HTTP mode both presses reach the new leader, the first by the fake's retries, which do not lose it: both are acked, and the
+// loser is told who decided first, in an ephemeral notice in the thread. That notice is what shows the loser's press was taken and
+// processed, since a press on a prompt already decided is told and not audited. In Socket Mode the first press went to the frozen
+// leader's connection, the fake never sends an envelope again (UNCONFIRMED(WP-04) in fakeslack), and the resumed leader is fenced
+// before it can record it: nobody is told, and no notice is expected.
 func s16StallWithRacingPresses(t *testing.T) {
 	f := newFailover(t)
 	const first, second = "US16F1", "US16F2"
@@ -328,7 +343,8 @@ func s16StallWithRacingPresses(t *testing.T) {
 	// Resumed once the new leader has decided, and before the kubelet's liveness restart of the frozen container (50 to 60 s).
 	f.thread(pressChannel, p.mention.TS, "the prompt decided by the new leader while the old one is frozen", func(th []fakeslack.MessageView) bool {
 		pr, ok := p.promptOf(th)
-		return ok && pr.Edited != nil
+		return ok && pr.Edited != nil && pr.Text == "Answered" &&
+			!HasButton(pr.Blocks, chat.ActionApproveAll.String()) && !HasButton(pr.Blocks, chat.ActionDenyAll.String())
 	})
 	asleep := time.Since(frozen)
 	if err := f.sig.Cont(f.ctx, old.ContainerID); err != nil {
@@ -359,5 +375,36 @@ func s16StallWithRacingPresses(t *testing.T) {
 	t.Logf("%s's press won (%s); pressed: %s approve, to the frozen leader, then %s deny, after the takeover", winner, f.env.SlackMode, first, second)
 	if f.env.SlackMode == SlackModeSocket && winner != second {
 		t.Errorf("in Socket Mode %s's press won; want %s's: the first press went to the frozen leader's connection and only the resumed old leader could read it", winner, second)
+	}
+	if f.env.SlackMode == SlackModeHTTP {
+		loser := first
+		if winner == first {
+			loser = second
+		}
+		p.toldLost(loser, winner)
+	}
+}
+
+// toldLost waits for the ephemeral notice that tells loser, in the case's thread, that winner decided first, and checks that there
+// is one. Press intake records each request it acknowledges (store.Presses has no key that a retry repeats), so a retry of a press
+// whose 200 was lost on the way would be recorded and told twice: the fake sees the request unanswered and the broker saw it
+// twice. That is not a duplicated decision, so more than one notice is logged rather than failed.
+func (p *pressCase) toldLost(loser, winner string) {
+	f := p.f
+	f.t.Helper()
+	const lost = "decided this request first."
+	waitFullEphemeralWithWinner(f.t, f.scenario, pressChannel, p.mention.TS, loser, winner, lost)
+	notices, err := f.slack.Ephemerals(f.ctx, pressChannel)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	n := 0
+	for _, e := range notices {
+		if e.Recipient == loser && e.ThreadTS == p.mention.TS && strings.Contains(e.Text, lost) && HasBlockText(e.Blocks, "<@"+winner+">") {
+			n++
+		}
+	}
+	if n > 1 {
+		f.t.Logf("%s was told %d times that %s decided first: a press of theirs was delivered more than once", loser, n, winner)
 	}
 }
