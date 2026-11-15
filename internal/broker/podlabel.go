@@ -142,8 +142,9 @@ func (l *podLabeler) startError() error {
 }
 
 // check is the readiness check of the label: it fails until a write has succeeded. A pod whose removal at start has not succeeded may
-// still carry the label from an earlier process, and is kept out of every Service, the chat Service included, until the removal does;
-// a standby that cannot reach the API server so drops out of the health Service too.
+// still carry the label from an earlier process, and is kept out of every Service, the chat Service included, until a write does (the
+// removal, or the label put on if the replica leads first); a replica whose patches keep failing while its reads work so drops out of
+// the health Service too.
 func (l *podLabeler) check() Check {
 	return Check{Name: "leader-label", Fn: func(context.Context) error {
 		select {

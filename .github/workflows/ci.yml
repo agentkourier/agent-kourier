@@ -504,7 +504,9 @@ jobs:
   # Agent Kourier, to which test/crdcorpus sends each entry of its corpus, and the thousands of variations that it
   # generates, as server-side dry-run creates (make crd-corpus, hack/kind/crd-corpus.sh). It is the only job that compiles the
   # schemas' CEL rules on an apiserver, so a rule that does not compile, or one that refuses every valid object, passes
-  # everything else. It runs on two Kubernetes versions: the one the kind tiers pin (1.37, NODE_IMAGE in hack/kind/lib.sh) and
+  # everything else. On the same cluster it runs test/chart's TestLeaderLabelPolicyOnAnAPIServer, the one test of the chart's
+  # ValidatingAdmissionPolicy for the leader label on an apiserver (it renders the chart with helm), whose failurePolicy is
+  # Fail. It runs on two Kubernetes versions: the one the kind tiers pin (1.37, NODE_IMAGE in hack/kind/lib.sh) and
   # the oldest the chart admits (1.33, NODE_IMAGE_MIN, the check in charts/agent-kourier/templates/_helpers.tpl), each node
   # image by digest. kind and kubectl are the pinned, checksummed binaries of hack/ci/install-kind-tools.sh (which installs
   # helm and jq with them). The runner's Docker runs kind. The jobs' names, crd-corpus (1.37) and crd-corpus (1.33), are

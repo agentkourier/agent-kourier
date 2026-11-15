@@ -23,7 +23,8 @@ import (
 )
 
 // admissionKubeconfigEnv names the kubeconfig of a throwaway cluster on this machine that TestLeaderLabelPolicyOnAnAPIServer installs
-// the leader label's admission policy in: a kind cluster on the chart's minimum Kubernetes, say. Unset, the test skips.
+// the leader label's admission policy in. `make crd-corpus` (hack/kind/crd-corpus.sh) sets it to its kind cluster, which CI's crd-corpus
+// jobs run on the pinned Kubernetes and on the chart's minimum. Unset, the test skips.
 const admissionKubeconfigEnv = "CHART_ADMISSION_KUBECONFIG"
 
 // leaderLabelPolicy is the leader label's policy and its binding as the chart renders them for the release agent-kourier in namespace,

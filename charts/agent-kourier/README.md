@@ -399,11 +399,13 @@ It is apart from the metrics port, so `/metrics` is never on it. Off, the defaul
 Only the leader serves the chat routes; a standby answers 503 to each. So the chat Service, `<fullname>-chat`, selects the Deployment's
 pods that carry the label `agentkourier.dev/role: leader`, and the broker keeps that label on the leader's pod alone:
 
-- Every replica takes the label off its own pod as it starts, and is not Ready until that write has succeeded (the `leader-label` check of
-  `/readyz`), so a pod that kept the label from an earlier container (a leader that exited and was restarted in the same pod) is not
-  selected as a standby. A replica that starts while it cannot reach the API server stays not Ready, and so out of the health and
-  metrics Service too, until it can; with Postgres, a rolling update waits for it before it stops an old pod. Once a write has
-  succeeded, the check holds.
+- Every replica takes the label off its own pod as it starts, and is not Ready until a write of the label has succeeded (the
+  `leader-label` check of `/readyz`): that removal, or, on a replica that leads before it succeeds, the label put on. So a pod that
+  kept the label from an earlier container (a leader that exited and was restarted in the same pod) is not selected as a standby. A
+  replica whose patches of its pod keep failing while the rest of its start succeeded (the API server answers its reads, but the patch
+  times out or gets a 5xx, say) stays not Ready, and so out of the health and metrics Service too, until one succeeds; with Postgres,
+  a rolling update waits for it before it stops an old pod. A replica that cannot reach the API server at all fails its start sooner,
+  when it reads its config and Secrets. Once a write has succeeded, the check holds.
 - The leader puts it on once it has started to lead, and takes it off at shutdown, before it hands the lease over. A leader that loses
   its lease exits at once, with the label still on: the pod is not Ready, so out of the chat Service, from the moment its container
   exits until the next container has taken the label off. With SQLite the one replica leads, and carries the label.

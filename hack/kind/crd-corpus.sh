@@ -5,6 +5,12 @@
 # the schema refuses, the broker refuses too, and every valid object passes both. Nothing is stored but the Namespaces
 # the entries need, so the cluster is thrown away after.
 #
+# The same cluster then runs test/chart's TestLeaderLabelPolicyOnAnAPIServer (CHART_ADMISSION_KUBECONFIG): the chart's
+# ValidatingAdmissionPolicy for the leader label, rendered with helm and installed with its Role in a namespace of its own,
+# must let the broker's ServiceAccount label the pod its token is bound to and deny everything else. Its failurePolicy is
+# Fail and a denial fails the broker's start, so a policy that misbehaves on a Kubernetes version would break every
+# install with the chat listener; this is where both versions run it. The test deletes what it made.
+#
 # Without arguments the script makes a cluster named agent-kourier-crds (CRD_CORPUS_CLUSTER overrides it) from lib.sh's
 # pinned node image (NODE_IMAGE), applies charts/agent-kourier/files/crds to it, runs the test, and deletes the cluster. It is
 # not one of the E2E tiers, so `make e2e-down` does not touch it, and it keeps its kubeconfig in a temporary file, so the
@@ -18,7 +24,8 @@
 # one version's cluster for the other. It has no effect with CRD_CORPUS_KUBECONFIG, whose cluster is its own.
 #
 # CRD_CORPUS_KUBECONFIG=<file> runs against the cluster that kubeconfig's current context names instead: it is not
-# created and not deleted, and the script and the test both refuse an API server that is not on this machine. The CRDs are applied to it.
+# created and not deleted, and the script and the tests all refuse an API server that is not on this machine. The CRDs are applied to it,
+# and the policy test makes and deletes its namespace and its cluster-wide policy and binding there.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -40,7 +47,7 @@ case "${CRD_CORPUS_NODE:-default}" in
 esac
 CORPUS_OWNER=agentkourier.agent-kourier.dev/owner=crd-corpus
 
-for tool in kubectl go; do
+for tool in kubectl helm go; do
   command -v "${tool}" >/dev/null || die "${tool} is required"
 done
 [ -d "${CRDS}" ] || die "${CRDS} does not exist: run make crds"
@@ -111,3 +118,11 @@ cd "${ROOT}"
 # sent nothing. The package has the cluster test and the unit tests, which need no cluster.
 CRD_CORPUS_KUBECONFIG=${KUBECONFIG_FILE} go test -tags crdcorpus -count=1 -timeout 10m -v ./test/crdcorpus/ |
   awk '!/^ *--- PASS|^=== (RUN|PAUSE|CONT)/'
+
+echo "==> leader label admission policy test"
+# -run names one test, and a name that matches nothing makes go test exit 0, as does a skip: the PASS line is required.
+# AGENTKOURIER_REQUIRE_HELM=1 makes a missing helm a failure, not a skip.
+CHART_ADMISSION_KUBECONFIG=${KUBECONFIG_FILE} AGENTKOURIER_REQUIRE_HELM=1 \
+  go test -count=1 -timeout 5m -v -run '^TestLeaderLabelPolicyOnAnAPIServer$' ./test/chart/ | tee "${TMP}/admission.out"
+grep -q '^--- PASS: TestLeaderLabelPolicyOnAnAPIServer ' "${TMP}/admission.out" ||
+  die "TestLeaderLabelPolicyOnAnAPIServer did not run and pass (renamed, or skipped?)"

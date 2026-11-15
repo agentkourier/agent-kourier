@@ -23,7 +23,10 @@
 #               copies only the files its .dockerignore lets in by name, none of them Markdown.
 #   crd-corpus  both crd-corpus jobs: also Markdown outside every Go package's tree. The job builds and runs
 #               test/crdcorpus, applies charts/agent-kourier/files/crds, and the corpus walk reads only .yaml and .yml
-#               files under its roots (test/crdcorpus/corpus.go).
+#               files under its roots (test/crdcorpus/corpus.go). It then runs test/chart's
+#               TestLeaderLabelPolicyOnAnAPIServer, which renders the chart with helm template: helm loads the chart's
+#               README.md, but the templates read no file but files/crds/*.yaml (.Files in templates/crds.yaml), so
+#               no Markdown changes what it renders.
 #   docs-agent  docs-agent: also Markdown outside docs/, examples/recipes/docs-agent/ and every Go package's tree. Its
 #               tests load the real docs/ as the corpus and read the recipe's evals; its lint reads Go only.
 #   echo-agent  echo-agent: also Markdown outside examples/recipes/echo-agent/agent/ and every Go package's tree. pytest,

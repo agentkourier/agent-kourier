@@ -1,6 +1,6 @@
 {{- if .Values.chatListener.enabled }}
 # The chat listener's port, on the leader: the leader labels its own pod agentkourier.dev/role=leader once it leads, and every replica
-# takes the label off its pod as it starts, and is not Ready until that has succeeded, and off at shutdown. A leader that loses its lease
+# takes the label off its pod as it starts, and is not Ready until a write of the label has succeeded, and off at shutdown. A leader that loses its lease
 # exits with the label on, and its pod is not Ready, so not behind this Service, until its next container has taken it off. While no
 # replica leads (a takeover) it has no endpoint. The health and metrics port is on the other Service, which selects every Ready pod.
 apiVersion: v1
