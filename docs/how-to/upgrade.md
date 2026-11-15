@@ -951,6 +951,10 @@ open ([Configure Slack](configure-slack.md)).
   A broker of an earlier release does not know the field: on the ConfigMap route it refuses it (`spec.slack: unknown field`, exit code 2),
   and on custom resources, once the later release's CRDs are installed, it ignores it and runs the connection in Socket Mode, which needs `appToken`
   ([Troubleshoot](troubleshoot.md#the-pod-exits-with-code-2)). CRDs of an earlier release do not have the field either, so the API server refuses it there (or drops it, for a client that does not ask for strict field validation).
+- **A database migration, 0030, runs at the first start.** On SQLite and on Postgres it adds the table `press_deliveries`, which keeps
+  a key of each button press for an hour, so that a press Slack sends again is recorded once, in Socket Mode as in HTTP mode
+  ([Stored data](../reference/stored-data.md)). It only adds a table. A broker of an earlier release, after a rollback, does not read it and
+  records each delivery of a press, as it did.
 
 To move a connection that runs in Socket Mode to HTTP mode, after the upgrade:
 

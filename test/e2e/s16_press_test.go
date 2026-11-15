@@ -386,9 +386,9 @@ func s16StallWithRacingPresses(t *testing.T) {
 }
 
 // toldLost waits for the ephemeral notice that tells loser, in the case's thread, that winner decided first, and checks that there
-// is one. Press intake records each request it acknowledges (store.Presses has no key that a retry repeats), so a retry of a press
-// whose 200 was lost on the way would be recorded and told twice: the fake sees the request unanswered and the broker saw it
-// twice. That is not a duplicated decision, so more than one notice is logged rather than failed.
+// is exactly one. Press intake records a press once by its delivery key, which the Slack adapter makes from the payload's action_ts
+// among others, and the fake's retries repeat the payload: a retry of a press whose 200 was lost on the way, which the broker sees
+// twice, is still told once.
 func (p *pressCase) toldLost(loser, winner string) {
 	f := p.f
 	f.t.Helper()
@@ -404,7 +404,7 @@ func (p *pressCase) toldLost(loser, winner string) {
 			n++
 		}
 	}
-	if n > 1 {
-		f.t.Logf("%s was told %d times that %s decided first: a press of theirs was delivered more than once", loser, n, winner)
+	if n != 1 {
+		f.t.Errorf("%s was told %d times that %s decided first; want once, however many times the press was delivered", loser, n, winner)
 	}
 }
