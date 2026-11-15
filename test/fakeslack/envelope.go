@@ -122,12 +122,9 @@ func (sk *sockets) ack(msg []byte) {
 }
 
 // settle records the ack of the envelope id with payload, unless the envelope is one the fake never sent, or
-// is acked already: the first ack stands. An app in HTTP mode acks with its answer's 200, whose body is the
-// payload if it is JSON, and nil if it is empty or not JSON.
+// is acked already: the first ack stands. An app in HTTP mode acks with its answer's 200, and with no payload:
+// the fake reads none from the answer's body.
 func (sk *sockets) settle(id string, payload json.RawMessage) {
-	if len(payload) == 0 || !json.Valid(payload) {
-		payload = nil
-	}
 	sk.mu.Lock()
 	defer sk.mu.Unlock()
 	env := sk.pending[id]

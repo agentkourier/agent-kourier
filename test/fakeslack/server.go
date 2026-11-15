@@ -31,7 +31,8 @@
 //     their base string; an event's JSON body and a press's form with the field
 //     payload; one URL for events and presses; the url_verification body; the
 //     retry headers and their reasons (http_error, http_timeout,
-//     connection_failed); and an ack being any 200, its body the ack's payload.
+//     connection_failed); and an ack being any 200, whose body the fake does
+//     not read (Ack's payload is nil).
 //     Deliberate departures: a short retry schedule (WithHTTPRetries), no retry
 //     of a 4xx, and the requests of one channel sent in order.
 //   - Several apps (apps.go, WithApp): a registered app's events being the channels whose members
@@ -269,7 +270,8 @@ func NewHandler(opts ...Option) *Server {
 		o(s)
 	}
 	s.finishApps()
-	s.web.onAck = func(id string, answer []byte) { s.sock.settle(id, answer) }
+	s.web.onAck = func(id string) { s.sock.settle(id, nil) }
+	s.web.revoked = s.isRevoked
 	s.web.start()
 	s.control = s.newControlRoutes()
 	return s

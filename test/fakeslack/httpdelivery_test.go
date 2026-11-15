@@ -142,7 +142,8 @@ func callback(t *testing.T, r received) slackevents.EventsAPIEvent {
 }
 
 func TestHTTPDeliverySignsEventsAsSlackDoesAndReadsTheAckFromThe200(t *testing.T) {
-	rc := newReceiver(t, nil)
+	// The 200 carries a JSON body, which the fake does not take as the ack's payload.
+	rc := newReceiver(t, func(_ int, _ received, w http.ResponseWriter) { _, _ = io.WriteString(w, `{"ok":true}`) })
 	fake := httpFake(t, rc.URL)
 
 	m, err := fake.Mention("C1", "U1", "<@UFAKEBOT> hello")
@@ -162,7 +163,7 @@ func TestHTTPDeliverySignsEventsAsSlackDoesAndReadsTheAckFromThe200(t *testing.T
 		}
 	}
 	if payload, acked := fake.Ack(m.Envelopes[0]); !acked || payload != nil {
-		t.Errorf("Ack = %s, %v; want acked with no payload for a 200 with no body", payload, acked)
+		t.Errorf("Ack = %s, %v; want acked with no payload, whatever the 200's body", payload, acked)
 	}
 }
 
@@ -298,7 +299,8 @@ func TestHTTPDeliveryKeepsTheOrderOfAChannelAndHoldsUpNoOther(t *testing.T) {
 			}
 		}
 	})
-	fake := httpFake(t, rc.URL, fakeslack.WithHTTPRetries(20*time.Millisecond, 20*time.Millisecond, 20*time.Millisecond, 20*time.Millisecond, 20*time.Millisecond))
+	// The last wait is long, so that a slow machine that spends the short ones before the release still delivers first.
+	fake := httpFake(t, rc.URL, fakeslack.WithHTTPRetries(20*time.Millisecond, 20*time.Millisecond, 20*time.Millisecond, 20*time.Millisecond, 3*time.Second))
 
 	first, err := fake.Say("C1", "U1", "first")
 	if err != nil {
@@ -317,7 +319,9 @@ func TestHTTPDeliveryKeepsTheOrderOfAChannelAndHoldsUpNoOther(t *testing.T) {
 		t.Fatal("the second message of C1 was acked while the first was still being retried")
 	}
 	close(release)
-	waitAcked(t, fake, first.Envelopes[0], second.Envelopes[0])
+	if err := fake.WaitAck(waitCtx(t), first.Envelopes[0], second.Envelopes[0]); err != nil {
+		t.Fatal(err)
+	}
 	var order []string
 	for _, r := range rc.wait(t, rc.count()) {
 		inner := callback(t, r).InnerEvent.Data.(*slackevents.MessageEvent)
@@ -342,6 +346,26 @@ func TestHTTPDeliveryIsNotSentForARevokedApp(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	if n := rc.count(); n != 0 {
 		t.Errorf("the receiver got %d requests for a revoked app; want none", n)
+	}
+}
+
+func TestHTTPDeliveryStopsRetryingWhenTheAppIsRevoked(t *testing.T) {
+	rc := newReceiver(t, func(_ int, _ received, w http.ResponseWriter) { w.WriteHeader(http.StatusServiceUnavailable) })
+	fake := httpFake(t, rc.URL, fakeslack.WithHTTPRetries(200*time.Millisecond, 200*time.Millisecond))
+	m, err := fake.Say("C1", "U1", "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc.wait(t, 1) // the first attempt, answered 503: the retry waits
+	if err := fake.SetRevoked("AFAKEAPP", true); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(600 * time.Millisecond)
+	if n := rc.count(); n != 1 {
+		t.Errorf("the receiver got %d requests; want the first alone, its retries dropped once the app was revoked", n)
+	}
+	if _, acked := fake.Ack(m.Envelopes[0]); acked {
+		t.Error("a request dropped at the revocation is acked")
 	}
 }
 
@@ -415,10 +439,41 @@ func TestVerifyURLSendsAURLVerificationAndChecksTheChallenge(t *testing.T) {
 			if s := control(t, fake, http.MethodGet, "/_control/connections?app=AFAKEAPP", nil, &conns); s != http.StatusOK {
 				t.Fatalf("GET /_control/connections = %d", s)
 			}
-			if want := map[bool]int{true: 1, false: 0}[tc.ok]; conns.Connections != want {
+			want := map[bool]int{true: 1, false: 0}[tc.ok]
+			if conns.Connections != want {
 				t.Errorf("connections of an app in HTTP mode = %d; want %d, whether its URL answers a url_verification", conns.Connections, want)
 			}
+			// The count of every app, and the apps' view, count it alike.
+			if s := control(t, fake, http.MethodGet, "/_control/connections", nil, &conns); s != http.StatusOK || conns.Connections != want {
+				t.Errorf("GET /_control/connections = %d, connections %d; want %d", s, conns.Connections, want)
+			}
+			var apps []struct {
+				Connections int `json:"connections"`
+			}
+			if s := control(t, fake, http.MethodGet, "/_control/apps", nil, &apps); s != http.StatusOK || len(apps) != 1 || apps[0].Connections != want {
+				t.Errorf("GET /_control/apps = %d, %+v; want the app with %d connections", s, apps, want)
+			}
 		})
+	}
+}
+
+func TestARevokedAppInHTTPModeHasNoConnection(t *testing.T) {
+	rc := newReceiver(t, func(_ int, r received, w http.ResponseWriter) {
+		var v struct{ Challenge string }
+		_ = json.Unmarshal(r.body, &v)
+		_ = json.NewEncoder(w).Encode(map[string]string{"challenge": v.Challenge})
+	})
+	fake := httpFake(t, rc.URL)
+	if err := fake.SetRevoked("AFAKEAPP", true); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/_control/connections?app=AFAKEAPP", "/_control/connections"} {
+		var conns struct {
+			Connections int `json:"connections"`
+		}
+		if s := control(t, fake, http.MethodGet, path, nil, &conns); s != http.StatusOK || conns.Connections != 0 {
+			t.Errorf("GET %s for a revoked app = %d, connections %d; want 0, whatever its URL answers", path, s, conns.Connections)
+		}
 	}
 }
 

@@ -63,11 +63,17 @@ func parseApp(v string) (fakeslack.App, error) {
 	return app, app.Validate()
 }
 
-// retryWaits is the value of -http-retries: comma-separated durations, none negative, one for each retry. Nil is the
-// flag not given, and empty the flag given empty, which is no retry.
+// retryWaits is the value of -http-retries: comma-separated durations, none negative, one for each retry. Empty is no
+// retry.
 type retryWaits []time.Duration
 
-func (r *retryWaits) String() string { return fmt.Sprint([]time.Duration(*r)) }
+func (r *retryWaits) String() string {
+	parts := make([]string, len(*r))
+	for i, d := range *r {
+		parts[i] = d.String()
+	}
+	return strings.Join(parts, ",")
+}
 
 func (r *retryWaits) Set(v string) error {
 	*r = retryWaits{}
@@ -99,9 +105,9 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	spread := fs.Bool("socket-spread", false, "send each event to one of an app's connections in turn, not to its newest")
 	requestURL := fs.String("request-url", "", "put the default app in HTTP mode: the URL its events and presses are sent to (needs -signing-secret)")
 	signingSecret := fs.String("signing-secret", "", "the default app's signing secret in HTTP mode (needs -request-url)")
-	var retries retryWaits
-	fs.Var(&retries, "http-retries", "the waits before each retry of a request an app in HTTP mode did not answer 200, comma-separated (default 1s,5s,30s)")
-	timeout := fs.Duration("http-timeout", 3*time.Second, "how long an app in HTTP mode has to answer a request")
+	retries := retryWaits(fakeslack.DefaultHTTPRetries())
+	fs.Var(&retries, "http-retries", "the waits before each retry of a request an app in HTTP mode did not answer 200, comma-separated; empty is no retry")
+	timeout := fs.Duration("http-timeout", fakeslack.DefaultHTTPTimeout, "how long an app in HTTP mode has to answer a request")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("flags: %w", err)
 	}
@@ -111,12 +117,9 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	if *timeout <= 0 {
 		return errors.New("-http-timeout must be more than zero")
 	}
-	opts := []fakeslack.Option{fakeslack.WithHTTPTimeout(*timeout)}
+	opts := []fakeslack.Option{fakeslack.WithHTTPTimeout(*timeout), fakeslack.WithHTTPRetries(retries...)}
 	if *requestURL != "" {
 		opts = append(opts, fakeslack.WithRequestURL(*requestURL, *signingSecret))
-	}
-	if retries != nil {
-		opts = append(opts, fakeslack.WithHTTPRetries(retries...))
 	}
 	for i, raw := range apps {
 		app, err := parseApp(raw)

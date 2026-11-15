@@ -225,34 +225,31 @@ func (s *Server) newControlRoutes() controlRoutes {
 		s.SetArchived(q.Channel, q.Archived)
 		return struct{}{}, nil
 	}))
-	mux.HandleFunc("GET /_control/apps", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /_control/apps", func(w http.ResponseWriter, r *http.Request) {
 		type appView struct {
 			App
 			Connections int `json:"connections"`
 		}
 		out := []appView{}
 		for _, a := range s.apps {
-			out = append(out, appView{a, s.AppConnections(a.AppID)})
+			out = append(out, appView{a, s.connectionsOf(r.Context(), a)})
 		}
 		writeControl(w, http.StatusOK, out)
 	})
-	// connections counts the Socket Mode clients of every app, or of the one named by the app parameter. An app in HTTP mode has
-	// none, and is counted as one when its URL answers a url_verification (VerifyURL), sent for this request: how a test waits for
-	// the broker to serve it, in either mode. Its opened is 0.
+	// connections counts the connections of every app, or of the one named by the app parameter (connectionsOf), so that a test
+	// waits for the broker the same way in either mode. An app in HTTP mode has an opened of 0.
 	mux.HandleFunc("GET /_control/connections", func(w http.ResponseWriter, r *http.Request) {
-		n := s.Connections()
+		n := 0
 		if id := r.URL.Query().Get("app"); id != "" {
 			app, err := s.appNamed(id)
 			if err != nil {
 				writeControlError(w, err, nil)
 				return
 			}
-			n = s.AppConnections(id)
-			if app.overHTTP() {
-				n = 0
-				if s.VerifyURL(r.Context(), id) == nil {
-					n = 1
-				}
+			n = s.connectionsOf(r.Context(), app)
+		} else {
+			for _, a := range s.apps {
+				n += s.connectionsOf(r.Context(), a)
 			}
 		}
 		out := map[string]int{"connections": n}
@@ -312,6 +309,19 @@ func (s *Server) newControlRoutes() controlRoutes {
 	mux.HandleFunc("GET /_control/reactions", s.controlReactions)
 	mux.HandleFunc("GET /_control/acks/{id}", s.controlAck)
 	return controlRoutes{mux}
+}
+
+// connectionsOf is what the control surface counts as the connections of app: its Socket Mode clients, or, for an app in HTTP mode,
+// which has none, one when it is not revoked and its URL answers a url_verification sent for this count (VerifyURL), and none
+// otherwise.
+func (s *Server) connectionsOf(ctx context.Context, app App) int {
+	if !app.overHTTP() {
+		return s.AppConnections(app.AppID)
+	}
+	if s.isRevoked(app.AppID) || s.VerifyURL(ctx, app.AppID) != nil {
+		return 0
+	}
+	return 1
 }
 
 // controlReactions answers with the reactions on a message: none is an empty list, and a message

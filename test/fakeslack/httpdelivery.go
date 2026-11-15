@@ -24,9 +24,10 @@ import (
 // holds its JSON; a request that is not answered 200 within about 3 seconds is sent again a few times, with X-Slack-Retry-Num (1, 2,
 // ...) and X-Slack-Retry-Reason, at Slack's own pace (immediately, a minute and five minutes later, as its docs say).
 const (
-	// defaultHTTPTimeout is how long the fake waits for an app's answer before it counts the request as failed: Slack's 3 seconds.
-	defaultHTTPTimeout = 3 * time.Second
-	// maxAnswerBody is how much of an answer's body the fake reads: an ack's payload, or a url_verification's challenge.
+	// DefaultHTTPTimeout is how long the fake waits for an app's answer before it counts the request as failed, unless
+	// WithHTTPTimeout says otherwise: Slack's 3 seconds.
+	DefaultHTTPTimeout = 3 * time.Second
+	// maxAnswerBody is how much of an answer's body the fake reads: a url_verification's challenge. An ack's body is not read.
 	maxAnswerBody = 64 << 10
 
 	retryHTTPError        = "http_error"        // the app answered with a server error (5xx)
@@ -44,6 +45,13 @@ func WithRequestURL(requestURL, signingSecret string) Option {
 		}
 		s.apps[0].RequestURL, s.apps[0].SigningSecret = requestURL, signingSecret
 	}
+}
+
+// DefaultHTTPRetries is the fake's retry schedule unless WithHTTPRetries says otherwise: three retries, as Slack makes, at a pace a
+// test can wait for (1, 5 and 30 seconds), which spans a takeover of the broker's leadership (about 15 seconds and the new leader's
+// start). Each call returns a new slice.
+func DefaultHTTPRetries() []time.Duration {
+	return []time.Duration{time.Second, 5 * time.Second, 30 * time.Second}
 }
 
 // WithHTTPRetries sets how long the fake waits before each retry of a request an app in HTTP mode did not answer 200: one wait for
@@ -67,8 +75,10 @@ func WithHTTPTimeout(d time.Duration) Option { return func(s *Server) { s.web.ti
 type webDeliveries struct {
 	retries []time.Duration // set by WithHTTPRetries, read-only after construction
 	timeout time.Duration   // set by WithHTTPTimeout, read-only after construction
-	// onAck is told of each request an app answered 200, with the body of the answer: the Server records the ack (sockets.settle).
-	onAck func(id string, answer []byte)
+	// onAck is told of each request an app answered 200: the Server records the ack, with no payload (sockets.settle).
+	onAck func(id string)
+	// revoked says whether an app is revoked (Server.isRevoked): a request of a revoked app is not sent, or sent again.
+	revoked func(appID string) bool
 
 	client *http.Client
 	ctx    context.Context // ends at Close, which ends every delivery
@@ -83,6 +93,7 @@ type webDeliveries struct {
 // webRequest is one event or press, sent to an app's request URL until it is answered 200 or the retries run out.
 type webRequest struct {
 	id          string // the envelope ID the fake gave it, which its ack is recorded under
+	app         string // the AppID of the app it is sent to
 	url, secret string
 	contentType string
 	body        []byte
@@ -91,12 +102,10 @@ type webRequest struct {
 // start makes the HTTP client and the context of the deliveries, once the options have run.
 func (d *webDeliveries) start() {
 	if d.retries == nil {
-		// Three retries, as Slack makes, at a pace a test can wait for: they span a takeover of the broker's leadership (about 15
-		// seconds and the new leader's start).
-		d.retries = []time.Duration{time.Second, 5 * time.Second, 30 * time.Second}
+		d.retries = DefaultHTTPRetries()
 	}
 	if d.timeout <= 0 {
-		d.timeout = defaultHTTPTimeout
+		d.timeout = DefaultHTTPTimeout
 	}
 	// A transport of its own, whose idle connections Close closes, so that a test's leak check does not find them.
 	d.client = &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone()}
@@ -145,7 +154,8 @@ func (d *webDeliveries) drain(key string) {
 }
 
 // deliver sends r, and again after each wait of the retry schedule while it is not answered 200 and the failure is one Slack retries
-// (retryReason), and then records the ack, if it got one, with onAck. Close ends it, at once.
+// (retryReason), and then records the ack, if it got one, with onAck. Close ends it, at once, and so does a revocation of its app,
+// before the next attempt.
 func (d *webDeliveries) deliver(r *webRequest) {
 	reason := ""
 	for attempt := 0; ; attempt++ {
@@ -158,12 +168,12 @@ func (d *webDeliveries) deliver(r *webRequest) {
 				return
 			}
 		}
-		if d.ctx.Err() != nil {
+		if d.ctx.Err() != nil || d.revoked(r.app) {
 			return
 		}
-		code, answer, err := d.post(d.ctx, r.url, r.secret, r.contentType, r.body, attempt, reason)
+		code, _, err := d.post(d.ctx, r.url, r.secret, r.contentType, r.body, attempt, reason)
 		if err == nil && code == http.StatusOK {
-			d.onAck(r.id, answer)
+			d.onAck(r.id)
 			return
 		}
 		reason = retryReason(code, err)
@@ -202,7 +212,6 @@ func (d *webDeliveries) post(ctx context.Context, rawURL, secret, contentType st
 	}
 	ts := time.Now().Unix()
 	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("User-Agent", "Slackbot 1.0 (+https://api.slack.com/robots)")
 	req.Header.Set("X-Slack-Request-Timestamp", strconv.FormatInt(ts, 10))
 	req.Header.Set("X-Slack-Signature", sign(secret, ts, body))
 	if attempt > 0 {
@@ -234,7 +243,8 @@ func sign(secret string, ts int64, body []byte) string {
 // JSON, an interactive one as a form whose field payload holds it. It records the envelope and returns its ID at once; the request
 // goes out on the queue of the app and lane (webDeliveries), and the ack is recorded when it is answered 200. Any other envelope type
 // is ErrInvalid: the fake sends no slash command over HTTP. A revoked app is sent nothing, as a revoked app in Socket Mode has no
-// connection, and that, like a Server that is closing, is ErrNoConnection.
+// connection, and that, like a Server that is closing, is ErrNoConnection; a request queued or waiting to be retried when its app is
+// revoked is not sent again (deliver).
 func (s *Server) sendHTTP(app App, lane, typ string, payload any) (string, error) {
 	if s.isRevoked(app.AppID) {
 		return "", fmt.Errorf("fakeslack: app %s is revoked: %w", app.AppID, ErrNoConnection)
@@ -243,7 +253,7 @@ func (s *Server) sendHTTP(app App, lane, typ string, payload any) (string, error
 	if err != nil {
 		return "", fmt.Errorf("fakeslack: encoding a payload: %w", err)
 	}
-	r := &webRequest{url: app.RequestURL, secret: app.SigningSecret}
+	r := &webRequest{app: app.AppID, url: app.RequestURL, secret: app.SigningSecret}
 	switch typ {
 	case "events_api":
 		r.contentType, r.body = "application/json", raw
