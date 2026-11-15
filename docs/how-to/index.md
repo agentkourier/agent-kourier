@@ -9,7 +9,7 @@ The guides assume you know Kubernetes and Helm, and link to [explanation](../exp
 - [Configure Slack](configure-slack.md): the Slack app, its tokens and the ChatConnection.
 - [Create the Binding identity](create-binding-identity.md): choose a user ID or issue and store a bearer token.
 - [Write a Binding](write-a-binding.md): your agent in your channel.
-- [Let a team bring its own Slack app](team-slack-app.md): the team's ChatConnection and Secret, and the platform's list that admits the namespace.
+- [Let a team bring its own Slack app](team-slack-app.md): the team's ChatConnection and Secret, and how the platform admits the namespace: by name, by label, or every namespace.
 - [Move the config between a ConfigMap and custom resources](migrate-config-source.md): the two upgrades, what to check,
   a team's own Secret grant, and the way back.
 

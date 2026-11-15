@@ -53,12 +53,17 @@ helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --ver
 For the default route, give the chart no resources and apply them yourself once the CRDs are in (they come with the release). The chart refuses to
 render `config.chatConnections`, `config.agentBackends` or `config.bindings` as custom resources in the release that installs their CRDs, since Helm
 cannot map a kind in the same first apply (see below). The install that [Install on custom resources](https://agentkourier.dev/how-to/install-with-helm/#install-on-custom-resources)
-leads with is a broker with no Slack app of its own: its values admit the namespaces whose ChatConnections it serves, and each team brings its own
-app and keeps all of it in its namespace (`team-a` here, which must exist):
+leads with is a broker with no Slack app of its own, and each team brings its own app and keeps all of it in its namespace (`team-a` here,
+which must exist). Its values set nothing, so the broker serves the ChatConnections of every namespace, which is a setting for a cluster with
+one broker. To serve fewer, uncomment `config:` and the list, the selector, or both; a namespace is admitted if either admits it:
 
 ```yaml
-config:
-  connectionNamespaces: [team-a]
+# Nothing is set: the broker serves the ChatConnections of every namespace.
+# To serve fewer, uncomment "config:" and one or both controls under it.
+# config:
+#   connectionNamespaces: [team-a]
+#   connectionNamespaceSelector:
+#     matchLabels: {agentkourier.dev/serve: "true"}
 ```
 
 ```sh
@@ -287,7 +292,7 @@ The Secret Roles change too: with `crds` each names the Secrets the chart can se
 see, such as a Binding's token in the release namespace. That works because Agent Kourier's informers ask for each Secret by name (a `metadata.name`
 field selector), and Kubernetes authorizes `list` and `watch` by `resourceNames` for such a request: a list without the selector, a Secret the Role
 does not name, and a `get` are forbidden (measured on kind, Kubernetes 1.30.13 and 1.37.0). A namespace in `rbac.secretNamespaces` is still granted whole.
-A team that makes its own Bindings grants its own Secrets the same way (and the Secret of its own ChatConnection, in a namespace on `config.connectionNamespaces`), with a Role in its namespace and a RoleBinding to this ServiceAccount
+A team that makes its own Bindings grants its own Secrets the same way (and the Secret of its own ChatConnection, in a namespace the broker admits), with a Role in its namespace and a RoleBinding to this ServiceAccount
 (here `agent-kourier` in namespace `agent-kourier`; without the binding the Role grants nothing, and `kubectl auth can-i` says no). Give the Role a name the chart would not (`<fullname>-secrets` is the chart's own, which is `agent-kourier-secrets` here), so that the two never meet (a chart that renders its own Role of that name in the team's namespace, as `rbac.secretNamespaces` does, fails with `invalid ownership metadata` over a Role it did not make):
 
 ```yaml

@@ -1,0 +1,47 @@
+# prompt-agent: a mention of the Agent Kourier bot in the channel starts a thread and a session with the prompt agent, which
+# answers from its prompt, its model and the MCP tools its agent.yaml lists. Replace CREPLACEPROMPT with the channel's ID
+# (C..., or G... for an older private channel), not its name. It is not the placeholder of the other recipes: each recipe
+# has a channel of its own, so that no two Bindings share one.
+#
+# triggers is the whole list: only a mention starts a session. A reply in the thread that the mention started
+# continues the session (chat.threadReplies defaults to all).
+#
+# interactions.askUser lets the agent ask the thread a question and wait for the answer: the agent has an ask_user tool
+# of its own. There are no tool approvals: the agent's tools are the MCP tools agent.yaml lists, and it never asks to
+# approve a call.
+#
+# identity.tokenSecretRef names the Secret prompt-agent-bearer, key token (the default key), in this Binding's namespace,
+# agent-kourier: Agent Kourier sends its value as Authorization: Bearer on every call to the agent, the card's included.
+# The agent checks it against its own copy, so the same value goes in two Secrets: this one, which Agent Kourier reads,
+# and prompt-agent-bearer in namespace prompt-agent, which the agent mounts (agent/manifests/deployment.yaml). Make the
+# value once, in a shell variable, and both Secrets from it, without printing it:
+#
+#   token="$(openssl rand -hex 32)"
+#   kubectl create secret generic prompt-agent-bearer -n agent-kourier --from-literal=token="$token"
+#   kubectl create secret generic prompt-agent-bearer -n prompt-agent --from-literal=token="$token"
+#   unset token
+#
+# --from-literal adds no trailing newline. Agent Kourier refuses a value with a control character, such as the newline
+# that --from-file keeps from a file. With the chart's custom resources, grant Agent Kourier this one:
+# rbac.secretNames: {agent-kourier: [prompt-agent-bearer]}.
+#
+# When the two values differ the agent answers 401. A new turn then fails without a retry (the thread is told the
+# request failed and will not be tried again), an answer to a question leaves the question open, Agent Kourier reads its
+# Secret again for the next call, and agentkourier_credential_rejections_total counts the rejection. The Binding's
+# BackendReachable condition says CredentialsRejected once its check fetches the agent card and gets the 401.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: prompt-chat, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {name: prompt-agents}
+    name: prompt-agent         # on the a2a dialect the backend url alone selects the agent and these are labels;
+    namespace: prompt-agent    # the Binding needs them either way
+  identity:
+    tokenSecretRef: {name: prompt-agent-bearer}
+  chat:
+    connectionRef: {name: slack}
+    channel: CREPLACEPROMPT
+    triggers:
+      - type: mention
+  interactions: {askUser: true}

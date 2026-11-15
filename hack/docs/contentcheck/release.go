@@ -27,10 +27,13 @@ const publishedChart = "oci://ghcr.io/agentkourier/charts/agent-kourier"
 // semverPattern matches a semantic version with an optional prerelease suffix, captured without a leading v.
 const semverPattern = `(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)`
 
-// releasePrefixes are the artifact references a version follows directly: the image tag, the chart's tag, and the
-// release workflow's signing identity. They are found as plain text, and only the version after them is a pattern.
+// releasePrefixes are the artifact references a version follows directly: the image tags (Agent Kourier's and the
+// recipes' agents', which a release publishes with the same tag), the chart's tag, and the release workflow's signing
+// identity. They are found as plain text, and only the version after them is a pattern.
 var releasePrefixes = []string{
 	"ghcr.io/agentkourier/agent-kourier:v",
+	"ghcr.io/agentkourier/agent-kourier-prompt-agent:v",
+	"ghcr.io/agentkourier/agent-kourier-echo-agent:v",
 	"ghcr.io/agentkourier/charts/agent-kourier:",
 	"agentkourier/agent-kourier/.github/workflows/release.yml@refs/tags/v",
 }

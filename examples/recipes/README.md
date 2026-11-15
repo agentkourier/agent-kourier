@@ -1,23 +1,26 @@
 # Recipes
 
 A recipe is a worked example of one use case: the Agent Kourier resources that connect a Slack channel to an agent, the
-agent they talk to (for two of the three), and checks that show the mapping does what the recipe says.
+agent they talk to (for three of the four), and checks that show the mapping does what the recipe says.
 
 **A new team should start with [`docs-agent`](docs-agent/README.md).** It needs a model key and any cluster, and it
-shows the whole path: a mention in a channel, an agent, an answer in the thread.
+shows the whole path: a mention in a channel, an agent, an answer in the thread. **A team that wants its own agent
+from a prompt, a model and a few MCP tools, without writing one, should start with
+[`prompt-agent`](prompt-agent/README.md).**
 
 ## Pick a recipe
 
 | Recipe | Starts from | You need | Runs on |
 |---|---|---|---|
 | [`docs-agent`](docs-agent/README.md) | An `@mention` in a help channel. A mention trigger, thread replies and feedback buttons. | A model provider's key, Docker to build the image, and Slack. The agent is an ADK (Agent Development Kit) program that speaks plain A2A (the Agent2Agent protocol) and searches a Markdown corpus through an MCP tool, citing the pages it used. | Any Kubernetes cluster that can reach the model provider. |
+| [`prompt-agent`](prompt-agent/README.md) | An `@mention` in a channel. A mention trigger, thread replies and the agent's questions. | A model provider's key, an MCP server with the tools the agent may call, Docker to build the image, and Slack. The agent is defined in one YAML file in Pydantic AI's agent spec format (a prompt, a model, the MCP tools it may call), behind a small Python A2A server that refuses anything else; switching provider is a change to the `model:` line. | Any Kubernetes cluster that can reach the model provider and the MCP server. |
 | [`custom-bot-trigger`](custom-bot-trigger/README.md) | Another bot's post, such as a failed CI run. A hand-written `botMessage` trigger: `match`, `exclude`, `extract`, `thread` with a cooldown and `closeWhen`, `limits` and `promptTemplate`. | Your own A2A agent, and Slack. The recipe ships Agent Kourier resources only. Its `identity.userId` works only if your agent trusts the `X-User-Id` header. | Wherever your agent is. |
 | [`sre-triage`](sre-triage/README.md) | An Alertmanager alert posted to Slack. A `botMessage` trigger written in full for Alertmanager's posts, one thread per alert group, and a read-only kagent agent that reads the cluster and can ask a question. | For the agent half: kagent 1.0.0-alpha5, Agent Substrate, a verifying front door and an OIDC token. Plus an Alertmanager Slack receiver, a model, and Slack. | The agent half runs only on this repository's kind full tier (a local cluster; `make e2e-full-up`). The Agent Kourier resources work with any agent. |
 
 The [glossary](../../docs/reference/glossary.md) defines kind full tier, Agent Substrate, front door, dialect and A2A.
 Each recipe's README defines them again where it first uses them.
 
-All three also need a Slack app with a bot token and an app-level token, and the bot invited to the channel:
+All four also need a Slack app with a bot token and an app-level token, and the bot invited to the channel:
 [Configure Slack](../../docs/how-to/configure-slack.md). The recipes call the Slack Secret `slack`, as that guide and
 [Install with Helm](../../docs/how-to/install-with-helm.md) do; each recipe's
 Secret step says so.
@@ -40,12 +43,12 @@ resource's validation. Replace each one before you apply the recipe:
 
 | Placeholder | Where | Replace it with |
 |---|---|---|
-| `CREPLACESRE`, `CREPLACECI`, `CREPLACEDOCS` | the channel in each recipe's `kourier/binding.yaml` | The channel's ID (a channel ID must match `^[CG][A-Z0-9]+$`, so the placeholder starts with `CREPLACE` and ends with the recipe). Each recipe has its own, so that recipes applied together never put two Bindings on one channel. |
+| `CREPLACESRE`, `CREPLACECI`, `CREPLACEDOCS`, `CREPLACEPROMPT` | the channel in each recipe's `kourier/binding.yaml` | The channel's ID (a channel ID must match `^[CG][A-Z0-9]+$`, so the placeholder starts with `CREPLACE` and ends with the recipe). Each recipe has its own, so that recipes applied together never put two Bindings on one channel. |
 | `B0REPLACEME` | `sre-triage` and `custom-bot-trigger`: `from.id` in the Binding, and the `bot` of the cases in `evals/triggers.yaml` | The `bot_id` of the bot whose posts the trigger reads. The dry run in the recipe's README prints it. |
 | `REPLACE-ME` | `custom-bot-trigger`: the host in the AgentBackend's `url` (`http://REPLACE-ME.agents.svc.cluster.local:8080`) | Your A2A agent's URL. |
 
 Other values are meant to be changed too (the receiver in `sre-triage`, the regexes in `custom-bot-trigger`, the model
-name in `docs-agent`); each recipe's "What to change" lists them.
+name in `docs-agent`, the whole `agent.yaml` in `prompt-agent`); each recipe's "What to change" lists them.
 
 ## Applying several recipes
 
@@ -61,7 +64,7 @@ A broker serves exactly one ChatConnection, the one `config.chatConnection` name
   its own, and invite the bot to each channel.
 - **The other objects are named apart.** No two recipes use the same kind, namespace and name.
 - **Grant every Secret.** The chart grants `slack` itself, from `config.chatConnection`: it is the Secret that has the connection's name. Nothing derives
-  the others, so `rbac.secretNames` lists the Secrets that the recipes you apply name besides it: `sre-triage-token` for `sre-triage`.
+  the others, so `rbac.secretNames` lists the Secrets that the recipes you apply name besides it: `sre-triage-token` for `sre-triage` and `prompt-agent-bearer` for `prompt-agent`.
 
 A Binding that is not served stops only itself; the others stay served, and its status says why. If you want a
 ChatConnection of another name, change it in every recipe you apply, and in `config.chatConnection`. If its Secret has another name than the

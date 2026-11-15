@@ -54,6 +54,25 @@ func TestNewTakesNoOwnConnectionAndRefusesHalfOfOne(t *testing.T) {
 	}
 }
 
+// An empty or blank item on the admission list is refused, not dropped: dropped, a list of nothing but such items would be no list, and
+// with no own connection and no selector, no list is every namespace.
+func TestNewRefusesABlankNamespaceOnTheList(t *testing.T) {
+	c := newCluster(t)
+	for name, opts := range map[string]crsource.Options{
+		"an empty item, no own connection":   {Client: c.client, ConnectionNamespaces: []string{""}},
+		"a blank item, no own connection":    {Client: c.client, ConnectionNamespaces: []string{" "}},
+		"an empty item beside a namespace":   {Client: c.client, ConnectionNamespaces: []string{"team-a", ""}},
+		"an empty item, with own connection": {Client: c.client, Connection: own, ConnectionNamespaces: []string{""}},
+	} {
+		if src, err := crsource.New(opts); err == nil {
+			src.Stop()
+			t.Errorf("%s: New accepted the options", name)
+		} else if !strings.Contains(err.Error(), "ConnectionNamespaces") {
+			t.Errorf("%s: New error %q; want it to name ConnectionNamespaces", name, err)
+		}
+	}
+}
+
 // The conformance suite, over a source that has no own connection and serves the corpus' connection as it serves a team's: the
 // objects it reads, the fingerprint, the Sets, the invalid objects and the rules across objects are the files' all the same.
 func TestConformanceWithoutAnOwnConnection(t *testing.T) {

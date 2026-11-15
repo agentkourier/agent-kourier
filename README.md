@@ -95,14 +95,15 @@ Without a broker, each of these is code in every agent that talks to chat:
 The platform team installs Agent Kourier and owns the shared resources: the agent backends
 (`AgentBackend`), the broker's own chat app (a `ChatConnection`), and the namespaces allowed
 to use each. Application teams connect their own agents to their own channels with a
-namespaced `Binding`, committed next to the agent's manifests. With custom resources the
-platform can also admit a team's namespace, and that team then brings its own chat app as a
-`ChatConnection` there; a broker can even have no app of its own and serve only the teams'
-([Let a team bring its own Slack app](docs/how-to/team-slack-app.md)).
+namespaced `Binding`, committed next to the agent's manifests. With custom resources a team
+can also bring its own chat app as a `ChatConnection` in a namespace the broker admits: every
+namespace when the platform sets nothing (for a cluster with one broker), or the namespaces on
+a list or whose labels match a selector. A broker can even have no app of its own and serve
+only the teams' ([Let a team bring its own Slack app](docs/how-to/team-slack-app.md)).
 
 - **Chat credentials you choose.** When every Binding names the broker's own
   `ChatConnection`, there is one set of chat credentials (on Slack, one app's tokens) to
-  review and rotate, not one per agent. The ChatConnections of each namespace the platform
+  review and rotate, not one per agent. The ChatConnections of each namespace the broker
   admits are served too, and no others: at most 16 in all, the broker's own included, and
   no setting raises that.
 - **One audit log.** It records each agent call and approval decision with the Slack user,

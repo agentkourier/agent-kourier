@@ -394,7 +394,7 @@ func TestTheTwoAppsScriptRunsEveryMCTest(t *testing.T) {
 	}
 	// The steps without an own connection empty config.chatConnection and, once the platform's namespace is admitted, grant its Secret by name: the chart grants
 	// an own connection's alone, and a team grants its own.
-	for _, want := range []string{"--set config.chatConnection=", "agent-kourier,team-a,team-b,team-c", "rbac.secretNames.agent-kourier={agent-kourier-agent-token,slack-fast}"} {
+	for _, want := range []string{"--set config.chatConnection=", "agent-kourier,team-a,team-b,team-c", "rbac.secretNames.agent-kourier={agent-kourier-agent-token,prompt-agent-bearer,slack-fast}"} {
 		if !strings.Contains(string(script), want) {
 			t.Errorf("two-apps.sh does not have %q, which the steps without an own connection need", want)
 		}

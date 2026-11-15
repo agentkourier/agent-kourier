@@ -18,24 +18,43 @@ lint: ## Run golangci-lint (also over the e2e, image, crdcorpus and testhooks ta
 
 test: test-race test-testhooks test-scripts ## Run all the unit tests: with the race detector, again with the testhooks tag where it changes the build, the scripts' own (CI runs the three apart)
 
-test-race: ## Run unit tests with the race detector (the chart tests need helm; AGENTKOURIER_REQUIRE_HELM=1 fails without it)
+# TEST_SHARD=I/N runs only leg I of N of a pass, test-race or test-testhooks: hack/ci/test-shard.sh splits the pass's
+# packages over N legs by the seconds in hack/ci/test-weights, so that the N legs together run each package once. CI's
+# matrix legs set it. Unset, as make test leaves it, a pass runs all its packages.
+TEST_SHARD ?=
+
+test-race: ## Run unit tests with the race detector (the chart tests need helm; AGENTKOURIER_REQUIRE_HELM=1 fails without it); TEST_SHARD=I/N runs one leg
+ifeq ($(TEST_SHARD),)
 	go test -race -timeout 20m ./...
+else
+	pkgs=$$(go list -race ./...) && \
+		pkgs=$$(hack/ci/test-shard.sh pick hack/ci/test-weights/race.txt '$(TEST_SHARD)' $$pkgs) && \
+		go test -race -timeout 20m $$pkgs
+endif
 
 # The testhooks pass's build flags besides -tags. The selector lists packages under the same ones: they select files too.
 TESTHOOKS_BUILD_FLAGS := -race
 
-test-testhooks: ## Run with the race detector and the testhooks tag the internal packages whose test build the tag changes (hack/ci/testhooks-packages.sh); the others compile as in test-race, which ran them
+test-testhooks: ## Run with the race detector and the testhooks tag the internal packages whose test build the tag changes (hack/ci/testhooks-packages.sh); the others compile as in test-race, which ran them; TEST_SHARD=I/N runs one leg
+ifeq ($(TEST_SHARD),)
 	pkgs=$$(TESTHOOKS_BUILD_FLAGS='$(TESTHOOKS_BUILD_FLAGS)' hack/ci/testhooks-packages.sh ./internal/...) && \
 		go test $(TESTHOOKS_BUILD_FLAGS) -timeout 20m -tags testhooks $$pkgs
+else
+	pkgs=$$(TESTHOOKS_BUILD_FLAGS='$(TESTHOOKS_BUILD_FLAGS)' hack/ci/testhooks-packages.sh ./internal/...) && \
+		pkgs=$$(hack/ci/test-shard.sh pick hack/ci/test-weights/testhooks.txt '$(TEST_SHARD)' $$pkgs) && \
+		go test $(TESTHOOKS_BUILD_FLAGS) -timeout 20m -tags testhooks $$pkgs
+endif
 
-test-scripts: ## Run kind, security policy, release gate, PR label, CI tool installer, testhooks package selection and Actions cache upkeep tests (no cluster)
+test-scripts: ## Run kind, security policy, release gate, PR label, CI tool installer, testhooks package selection, test leg split, Actions cache upkeep and docs-only classification tests (no cluster)
 	hack/kind/netpol_test.sh
 	hack/security/test.sh
 	hack/release/test.sh
 	hack/github/test.sh
 	hack/ci/test.sh
 	hack/ci/testhooks-packages_test.sh
+	hack/ci/test-shard_test.sh
 	hack/ci/actions-cache_test.sh
+	hack/ci/docs-only_test.sh
 
 lint-workflows: ## Lint .github/workflows with zizmor after proving its policy fails each unsafe fixture (installs the pinned zizmor unless ZIZMOR_BIN is set; needs jq)
 	hack/security/lint-workflows.sh
@@ -82,7 +101,7 @@ image-testhooks: ## Build the test image, agent-kourier-e2e/agent-kourier-testho
 image-check: image image-testhooks ## Prove the production image's binary lacks the test hooks, and the test image's has them
 	go test -tags image -count=1 -run TestImageHasNeitherHook ./internal/testhooks
 
-release-image: ## Build the multi-arch release image to bin/release (VERSION=vX.Y.Z); PUSH=1 REGISTRY=<repo> CHART_REGISTRY=oci://<repo> also pushes; see RELEASING.md
+release-image: ## Build the multi-arch release images (Agent Kourier, the prompt and echo agents) and the chart to bin/release (VERSION=vX.Y.Z); PUSH=1 REGISTRY=<repo> CHART_REGISTRY=oci://<repo> also pushes; see RELEASING.md
 	VERSION="$(VERSION)" REGISTRY="$(REGISTRY)" CHART_REGISTRY="$(CHART_REGISTRY)" PUSH="$(PUSH)" hack/release/release.sh
 
 e2e-fast-up: ## Bring up the fast E2E tier (kind, Alertmanager, fake Slack, stub agent, sink); E2E_STORE=postgres runs Agent Kourier on Postgres, with E2E_REPLICAS=2 on two replicas (S16, failover); E2E_CONFIG_SOURCE=crds reads the config from custom resources, not the ConfigMap, and with E2E_TWO_APPS=1 serves a team's Slack app beside the platform's (make e2e-two-apps runs the MC_ tests)
@@ -139,8 +158,10 @@ ax-smoke: ## Run the real Bedrock A2A smoke using the existing sandbox credentia
 	bash examples/ax/smoke.sh
 
 .PHONY: docs-agent-test docs-agent-lint docs-agent-image docs-agent-smoke docs-agent-smoke-live
-docs-agent-test: ## Test the docs-agent recipe's separate module with the race detector
-	cd examples/recipes/docs-agent/agent && go test -race -timeout 20m ./...
+# -count=1: the smoke test reads docs/, outside the module, which go test's result cache never checks, so a reused result
+# would not see a change to the docs.
+docs-agent-test: ## Test the docs-agent recipe's separate module with the race detector, every test on every run
+	cd examples/recipes/docs-agent/agent && go test -race -count=1 -timeout 20m ./...
 	cd examples/recipes/docs-agent/agent && go vet ./...
 
 docs-agent-lint: ## Lint the docs-agent recipe's separate module with the repository's golangci-lint and config
@@ -176,6 +197,28 @@ echo-agent-lint: $(ECHO_VENV)/.installed ## Lint the echo-agent recipe with ruff
 
 echo-agent-image: ## Build the echo agent image, agent-kourier-echo-agent:dev (Docker)
 	docker build -t agent-kourier-echo-agent:dev $(ECHO_AGENT)
+
+# The prompt-agent recipe (examples/recipes/prompt-agent/agent) is Python too, set up like the echo agent's. Its image
+# build proves the Dockerfile and requirements.txt (about 90 hashed packages, for all three provider families) install together.
+.PHONY: prompt-agent-test prompt-agent-lint prompt-agent-image
+PROMPT_AGENT  := examples/recipes/prompt-agent/agent
+PROMPT_PYTHON ?= python3.14
+PROMPT_VENV   := bin/prompt-agent-venv
+
+$(PROMPT_VENV)/.installed: $(PROMPT_AGENT)/requirements-dev.txt
+	$(PROMPT_PYTHON) -m venv --clear $(PROMPT_VENV)
+	$(PROMPT_VENV)/bin/pip install --quiet --disable-pip-version-check --require-hashes -r $(PROMPT_AGENT)/requirements-dev.txt
+	touch $@
+
+prompt-agent-test: $(PROMPT_VENV)/.installed ## Test the prompt-agent recipe's Python agent with pytest (python3.14; PROMPT_PYTHON overrides)
+	cd $(PROMPT_AGENT) && $(CURDIR)/$(PROMPT_VENV)/bin/python -m pytest -q
+
+prompt-agent-lint: $(PROMPT_VENV)/.installed ## Lint the prompt-agent recipe with ruff (check and format check) and audit its pinned runtime packages with pip-audit (needs network)
+	cd $(PROMPT_AGENT) && $(CURDIR)/$(PROMPT_VENV)/bin/ruff check . && $(CURDIR)/$(PROMPT_VENV)/bin/ruff format --check .
+	$(PROMPT_VENV)/bin/pip-audit --disable-pip --require-hashes -r $(PROMPT_AGENT)/requirements.txt
+
+prompt-agent-image: ## Build the prompt agent image, agent-kourier-prompt-agent:dev (Docker)
+	docker build -t agent-kourier-prompt-agent:dev $(PROMPT_AGENT)
 
 .PHONY: e2e-ax-up e2e-ax e2e-ax-down
 e2e-ax-up: ## Bring up AX/Substrate with deterministic ADK scenarios and fake Slack

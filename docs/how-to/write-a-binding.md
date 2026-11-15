@@ -99,7 +99,8 @@ It needs up to two things. The first is always yours; the second is whoever owns
    has the same objects as YAML, and how to check them with `kubectl auth can-i`.
 2. **Whoever owns the ChatConnection and the AgentBackend lists your namespace** in their `allowedNamespaces`, for each that is in another
    namespace: the platform team for its own, your team for a connection of its own elsewhere. A connection in your own namespace needs no list,
-   but the platform team must have admitted that namespace ([Let a team bring its own Slack app](team-slack-app.md#3-the-platform-team-admits-the-namespace)).
+   but the platform team must have admitted that namespace: on its list, or with the labels its selector matches, unless its broker admits every namespace
+   ([Let a team bring its own Slack app](team-slack-app.md#3-the-platform-team-admits-the-namespace)).
 
 Until they exist the status says `CredentialsUnreadable` (the Role) or `NamespaceNotAllowed` (the list). With a connection of your own, a namespace not yet admitted leaves the Binding with no status, and a connection Secret not yet granted shows `ChannelJoined` `Unknown` with `ChatUnavailable`: see [What the team sees in its Binding's status](team-slack-app.md#what-the-team-sees-in-its-bindings-status). The `CredentialsUnreadable` message names your Secret and says that
 Agent Kourier's ServiceAccount needs `list` and `watch` on it, when the API server denied the read:

@@ -73,8 +73,9 @@ platform's internal API changes. Backend-specific behaviour lives in a dialect.
 
 A team commits a namespaced `Binding` next to its agent's manifests, and GitOps deploys both. The platform team owns
 the shared `AgentBackend` and the broker's own `ChatConnection`, if it has one, and with custom resources decides which
-namespaces may bring a `ChatConnection` of their own. An application team wires its own channel to its own agent, through
-the broker's app or, once its namespace is admitted, its own, without touching platform configuration. Cross-namespace
+namespaces may bring a `ChatConnection` of their own: every namespace (the default when nothing is set, for a cluster with one
+broker), a list of namespaces, or the namespaces whose labels match a selector. An application team wires its own channel to
+its own agent, through the broker's app or, in a namespace the broker admits, its own, without touching platform configuration. Cross-namespace
 references work only where the owning resource allows the referring namespace.
 
 ## What it gives up

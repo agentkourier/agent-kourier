@@ -47,7 +47,8 @@ func New(responseTimeout time.Duration) *Dialect {
 	base := &http.Transport{
 		// No Proxy, on purpose: a nil Proxy dials the front door directly. Honoring
 		// HTTP_PROXY would let an injected environment variable receive the Binding's bearer
-		// token in cleartext.
+		// token in cleartext. The dialer resolves names through net.DefaultResolver (its Resolver
+		// is nil), which internal/broker's tests replace so that they send no DNS query.
 		DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ResponseHeaderTimeout: responseTimeout,

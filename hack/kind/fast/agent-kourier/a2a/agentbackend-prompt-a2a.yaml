@@ -1,0 +1,9 @@
+# The recipe's prompt agent (examples/recipes/prompt-agent), as the fast tier runs it (hack/kind/fast/prompt-agent): a2a-sdk serves
+# JSON-RPC at the root of its Service, so the url has no path, as in the recipe's own AgentBackend. The fast tier only: lib.sh's
+# deploy_prompt_agent brings the agent up, and up-full.sh does not.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: prompt-a2a, namespace: agent-kourier}
+spec:
+  dialect: a2a
+  url: http://prompt-agent.e2e.svc.cluster.local:8080

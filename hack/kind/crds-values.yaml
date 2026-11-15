@@ -18,4 +18,4 @@ crds:
 rbac:
   secretNamespaces: []
   secretNames:
-    agent-kourier: [agent-kourier-agent-token]
+    agent-kourier: [agent-kourier-agent-token, prompt-agent-bearer]
