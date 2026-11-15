@@ -288,25 +288,33 @@ func TestHTTPDeliveryDoesNotRetryAClientError(t *testing.T) {
 	}
 }
 
-func TestHTTPDeliveryKeepsTheOrderOfAChannelAndHoldsUpNoOther(t *testing.T) {
+// texts are the texts of the message events among rs that are in channel, in the order they came.
+func texts(t *testing.T, rs []received, channel string) []string {
+	t.Helper()
+	var out []string
+	for _, r := range rs {
+		if inner, ok := callback(t, r).InnerEvent.Data.(*slackevents.MessageEvent); ok && inner.Channel == channel {
+			out = append(out, inner.Text)
+		}
+	}
+	return out
+}
+
+func TestHTTPDeliverySendsAChannelInOrderAndHoldsUpNoOther(t *testing.T) {
 	release := make(chan struct{})
-	rc := newReceiver(t, func(_ int, r received, w http.ResponseWriter) {
-		if strings.Contains(string(r.body), `"text":"first"`) {
-			select {
-			case <-release:
-			default:
-				w.WriteHeader(http.StatusServiceUnavailable) // retried until the test lets it through
-			}
+	rc := newReceiver(t, func(_ int, r received, _ http.ResponseWriter) {
+		if strings.Contains(string(r.body), `"text":"slow"`) {
+			<-release // answered 200 once the test lets it, within the fake's timeout
 		}
 	})
-	// The last wait is long, so that a slow machine that spends the short ones before the release still delivers first.
-	fake := httpFake(t, rc.URL, fakeslack.WithHTTPRetries(20*time.Millisecond, 20*time.Millisecond, 20*time.Millisecond, 20*time.Millisecond, 3*time.Second))
+	fake := httpFake(t, rc.URL)
 
-	first, err := fake.Say("C1", "U1", "first")
+	slow, err := fake.Say("C1", "U1", "slow")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := fake.Say("C1", "U1", "second")
+	rc.wait(t, 1)
+	next, err := fake.Say("C1", "U1", "next")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,22 +323,52 @@ func TestHTTPDeliveryKeepsTheOrderOfAChannelAndHoldsUpNoOther(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitAcked(t, fake, other.Envelopes...)
-	if _, acked := fake.Ack(second.Envelopes[0]); acked {
-		t.Fatal("the second message of C1 was acked while the first was still being retried")
+	if got := texts(t, rc.wait(t, rc.count()), "C1"); len(got) != 1 {
+		t.Fatalf("C1's requests while its first was unanswered: %v; want that one alone, as the requests of a channel go one after the other", got)
 	}
 	close(release)
-	if err := fake.WaitAck(waitCtx(t), first.Envelopes[0], second.Envelopes[0]); err != nil {
+	if err := fake.WaitAck(waitCtx(t), slow.Envelopes[0], next.Envelopes[0]); err != nil {
 		t.Fatal(err)
 	}
-	var order []string
-	for _, r := range rc.wait(t, rc.count()) {
-		inner := callback(t, r).InnerEvent.Data.(*slackevents.MessageEvent)
-		if inner.Channel == "C1" {
-			order = append(order, inner.Text)
-		}
+	if got := texts(t, rc.wait(t, rc.count()), "C1"); strings.Join(got, ",") != "slow,next" {
+		t.Errorf("C1's requests came as %v; want slow, then next", got)
 	}
-	if last := order[len(order)-1]; last != "second" || strings.Count(strings.Join(order, ","), "second") != 1 {
-		t.Errorf("C1's requests came as %v; want every attempt of first before second, sent once", order)
+}
+
+// A request that waits to be retried holds up nothing: Slack sends the retry when its wait is over, and the requests after it go
+// out meanwhile. In S5 the event of the bot's own post goes to a broker that crashes as it posts, and the next message of the channel
+// must not wait out that event's retries.
+func TestHTTPDeliveryDoesNotHoldAChannelForARetry(t *testing.T) {
+	rc := newReceiver(t, func(_ int, r received, w http.ResponseWriter) {
+		if strings.Contains(string(r.body), `"text":"first"`) && r.header.Get("X-Slack-Retry-Num") == "" {
+			w.WriteHeader(http.StatusServiceUnavailable) // the first attempt fails, and its retry is answered 200
+		}
+	})
+	// A wait the test can see the later request go out in.
+	fake := httpFake(t, rc.URL, fakeslack.WithHTTPRetries(time.Second))
+
+	first, err := fake.Say("C1", "U1", "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc.wait(t, 1)
+	second, err := fake.Say("C1", "U1", "second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitAcked(t, fake, second.Envelopes...)
+	if _, acked := fake.Ack(first.Envelopes[0]); acked {
+		t.Fatal("the first message was acked before its retry was due")
+	}
+	if err := fake.WaitAck(waitCtx(t), first.Envelopes[0]); err != nil {
+		t.Fatal(err)
+	}
+	all := rc.wait(t, 3)
+	if got := texts(t, all, "C1"); strings.Join(got, ",") != "first,second,first" {
+		t.Errorf("C1's requests came as %v; want first, second, then the retry of first", got)
+	}
+	if n := all[2].header.Get("X-Slack-Retry-Num"); n != "1" {
+		t.Errorf("the last request has X-Slack-Retry-Num %q; want 1, the retry of first", n)
 	}
 }
 

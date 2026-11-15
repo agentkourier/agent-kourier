@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -164,8 +165,9 @@ func TestRunDeliversOverHTTPToTheAppsGivenARequestURL(t *testing.T) {
 		t.Fatalf("mention = %v", m)
 	}
 	// The default app is sent the app_mention and the message event, and team-a, whose bot the text does not mention, the message
-	// event alone: each request twice, its first attempt answered 503.
-	want := map[string][]string{"/chat/slack/agent-kourier/slack-fast": {"", "1", "", "1"}, "/chat/slack/team-a/team-a": {"", "1"}}
+	// event alone: each request twice, its first attempt answered 503. A retry does not hold up the next request of its channel, so the
+	// order of the two at the default app's URL is not fixed; the headers are compared sorted.
+	want := map[string][]string{"/chat/slack/agent-kourier/slack-fast": {"", "", "1", "1"}, "/chat/slack/team-a/team-a": {"", "1"}}
 	paths := map[string][]string{}
 	for range 6 {
 		select {
@@ -177,6 +179,9 @@ func TestRunDeliversOverHTTPToTheAppsGivenARequestURL(t *testing.T) {
 		case <-time.After(10 * time.Second):
 			t.Fatalf("the broker got %q; want %q", paths, want)
 		}
+	}
+	for _, retries := range paths {
+		slices.Sort(retries)
 	}
 	if !reflect.DeepEqual(paths, want) {
 		t.Errorf("the requests at each URL carried X-Slack-Retry-Num %q; want %q", paths, want)

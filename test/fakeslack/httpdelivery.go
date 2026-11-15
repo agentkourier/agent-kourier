@@ -66,12 +66,14 @@ func WithHTTPRetries(waits ...time.Duration) Option {
 // it (with the reason http_timeout). The default is Slack's 3 seconds.
 func WithHTTPTimeout(d time.Duration) Option { return func(s *Server) { s.web.timeout = d } }
 
-// webDeliveries is the fake's delivery to the apps in HTTP mode. Each request waits its turn in a queue of its app and channel, so
-// that the requests of a channel reach the app in the order they were sent, as the envelopes of a Socket Mode connection do, and
-// one that is being retried holds up its channel and no other.
+// webDeliveries is the fake's delivery to the apps in HTTP mode. The first attempt of each request waits its turn in a queue of its
+// app and channel, so that the requests of a channel reach the app in the order they were sent, as the envelopes of a Socket Mode
+// connection do, and one that is unanswered holds up its channel and no other. A request that is to be retried leaves the queue: its
+// retries go out when their waits are over, and the requests after it are sent meanwhile, as Slack sends a retry. A retry can so reach
+// the app after a later request of its channel.
 //
-// DELIBERATE DEPARTURE from Slack, which sends its requests at once, in no promised order (upstream, unverified): the fake keeps a
-// channel's order so that a test sees the same order in either mode.
+// DELIBERATE DEPARTURE from Slack, which sends its requests at once, in no promised order (upstream, unverified): the fake sends the
+// first attempts of a channel in order so that a test sees the same order in either mode while nothing fails.
 type webDeliveries struct {
 	retries []time.Duration // set by WithHTTPRetries, read-only after construction
 	timeout time.Duration   // set by WithHTTPTimeout, read-only after construction
@@ -83,7 +85,7 @@ type webDeliveries struct {
 	client *http.Client
 	ctx    context.Context // ends at Close, which ends every delivery
 	cancel context.CancelFunc
-	wg     sync.WaitGroup // the goroutine of each queue
+	wg     sync.WaitGroup // the goroutine of each queue, and of each request that is being retried
 
 	mu      sync.Mutex
 	queues  map[string][]*webRequest // by app and channel, the request being sent first; guarded by mu
@@ -138,14 +140,17 @@ func (d *webDeliveries) enqueue(key string, r *webRequest) bool {
 	return true
 }
 
-// drain sends the requests of the queue of key, one after the other, until it is empty. The request being sent stays at the head of
-// the queue, so that enqueue starts no second goroutine for it.
+// drain sends the first attempt of each request of the queue of key, one after the other, until it is empty, and hands a request
+// that is to be retried to a goroutine of its own (retry). The request being sent stays at the head of the queue, so that enqueue
+// starts no second goroutine for it.
 func (d *webDeliveries) drain(key string) {
 	d.mu.Lock()
 	for len(d.queues[key]) > 0 {
 		r := d.queues[key][0]
 		d.mu.Unlock()
-		d.deliver(r)
+		if reason := d.attempt(r, 0, ""); reason != "" && len(d.retries) > 0 {
+			d.wg.Go(func() { d.retry(r, reason) }) // this goroutine is counted in wg, so the count is not 0 here
+		}
 		d.mu.Lock()
 		d.queues[key] = d.queues[key][1:]
 	}
@@ -153,34 +158,40 @@ func (d *webDeliveries) drain(key string) {
 	d.mu.Unlock()
 }
 
-// deliver sends r, and again after each wait of the retry schedule while it is not answered 200 and the failure is one Slack retries
-// (retryReason), and then records the ack, if it got one, with onAck. Close ends it, at once, and so does a revocation of its app,
-// before the next attempt.
-func (d *webDeliveries) deliver(r *webRequest) {
-	reason := ""
-	for attempt := 0; ; attempt++ {
-		if attempt > 0 {
-			t := time.NewTimer(d.retries[attempt-1])
-			select {
-			case <-t.C:
-			case <-d.ctx.Done():
-				t.Stop()
-				return
-			}
-		}
-		if d.ctx.Err() != nil || d.revoked(r.app) {
+// retry sends r again after each wait of the retry schedule while it is not answered 200 and the failure is one Slack retries
+// (retryReason). reason is why the first attempt failed. Close ends it, at once, and so does a revocation of its app, before the next
+// attempt.
+func (d *webDeliveries) retry(r *webRequest, reason string) {
+	for n, wait := range d.retries {
+		t := time.NewTimer(wait)
+		select {
+		case <-t.C:
+		case <-d.ctx.Done():
+			t.Stop()
 			return
 		}
-		code, _, err := d.post(d.ctx, r.url, r.secret, r.contentType, r.body, attempt, reason)
-		if err == nil && code == http.StatusOK {
-			d.onAck(r.id)
-			return
-		}
-		reason = retryReason(code, err)
-		if reason == "" || attempt == len(d.retries) || d.ctx.Err() != nil {
+		if reason = d.attempt(r, n+1, reason); reason == "" {
 			return
 		}
 	}
+}
+
+// attempt sends r once, as attempt number n (0 for the first; the retry headers carry n and reason after it), records the ack with
+// onAck if it is answered 200, and returns why it failed if Slack would send it again (retryReason), or "" when there is nothing to
+// retry: it was acked, Slack would not retry the failure, the Server is closing or the app is revoked.
+func (d *webDeliveries) attempt(r *webRequest, n int, reason string) string {
+	if d.ctx.Err() != nil || d.revoked(r.app) {
+		return ""
+	}
+	code, _, err := d.post(d.ctx, r.url, r.secret, r.contentType, r.body, n, reason)
+	if err == nil && code == http.StatusOK {
+		d.onAck(r.id)
+		return ""
+	}
+	if d.ctx.Err() != nil {
+		return ""
+	}
+	return retryReason(code, err)
 }
 
 // retryReason is the X-Slack-Retry-Reason of the retry of a request that failed so, or "" for a failure Slack would not cure by sending
