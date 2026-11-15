@@ -27,9 +27,10 @@ import (
 // JSON, a press sent form-encoded with its JSON in the field payload, and a retry of a request that was not answered 200 within about
 // 3 seconds.
 const (
-	// httpAckWait is how long the handler waits for the sink to take an event or a press, from when it was given the request, before it
-	// answers 503 for Slack to send it again. Slack waits about 3 seconds for the answer, counted from when it sent the request, and the
-	// chat listener has spent some of them reading it: the rest is for the network.
+	// httpAckWait is how long the handler waits for the sink to take an event or a press before it answers 503 for Slack to send it
+	// again. It counts from when the handler is called, and does not include the chat listener's read of the body before that (up to the
+	// listener's read bound, chatReadTimeout in internal/broker). Slack waits about 3 seconds for the answer, counted from when it sent the
+	// request: the read, this wait and the network share them.
 	httpAckWait = 2 * time.Second
 	// signatureMaxAge is how far the timestamp of a request may be from the Client's clock, either way, for the request to be taken:
 	// Slack's advice. A signed request that is replayed later than that is refused. slack-go's verifier, which checks the signature after
@@ -69,6 +70,8 @@ type httpRun struct {
 func (r *httpRun) submit(channel string, fn func()) (reason string, open bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	// Not redundant with the lanes' own state: lanes.submit must not run while lanes.wait waits (lanes.go), and Run waits on the lanes
+	// once serveHTTP has set closed under the write lock, so a handler still in flight after Run ended is refused here instead.
 	if r.closed {
 		return "", false
 	}
@@ -106,7 +109,7 @@ func (c *Client) HTTPHandler() (http.Handler, bool) {
 
 var _ chat.HTTPReceiver = (*Client)(nil)
 
-// serveRequest answers one request from Slack. It reads nothing of the body before the signature is checked (verify), and answers 401 if
+// serveRequest answers one request from Slack. It decodes nothing of the body before the signature is checked (verify), and answers 401 if
 // the request is not Slack's. A url_verification is answered with its challenge, whether or not a Run is live. An event or a press is
 // handed to the lanes of the live Run, as an envelope is in Socket Mode, and the answer waits for the sink: 200 once it took it (or there
 // was nothing to hand on), and 503 when no Run is live, the lanes are full, the sink did not take it, or it has not answered within
@@ -212,7 +215,7 @@ func (c *Client) serveRequest(w http.ResponseWriter, req *http.Request) {
 	answer(outcome, code)
 }
 
-// verify checks that a request is Slack's for the connection's app, before anything of its body is read: its timestamp is within
+// verify checks that a request is Slack's for the connection's app, before anything of its body is decoded: its timestamp is within
 // signatureMaxAge of the clock, and its signature is the one the signing secret makes of the timestamp and the body, compared in
 // constant time (slack-go's SecretsVerifier). It returns "" for a request that passes, and the outcome it is refused with otherwise.
 func (c *Client) verify(h http.Header, body []byte) string {

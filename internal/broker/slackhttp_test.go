@@ -11,6 +11,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,6 +21,7 @@ import (
 	"time"
 
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
+	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
@@ -63,6 +66,50 @@ func TestNewPlatformInHTTPModeNeedsTheChatListener(t *testing.T) {
 	if saw.BotToken.Reveal() != "xoxb-fake" || saw.SigningSecret.Reveal() != fakeSigning || !saw.AppToken.IsEmpty() {
 		t.Errorf("the client was configured with bot %t, signing secret %t, app token %t; want the bot token and the signing secret alone",
 			!saw.BotToken.IsEmpty(), !saw.SigningSecret.IsEmpty(), !saw.AppToken.IsEmpty())
+	}
+}
+
+// A broker whose own connection is in Slack HTTP mode and that has no chat listener refuses to start, with a wiring error, before it opens
+// the store or seeks to lead: a standby would otherwise start and say Ready, and fail only when it took over. With a chat listener, it
+// starts.
+func TestRunRefusesAnOwnConnectionInHTTPModeWithNoChatListener(t *testing.T) {
+	inHTTP := func(t *testing.T) RunConfig {
+		t.Helper()
+		c := startConfig(t)
+		conn := `apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: { name: slack-main, namespace: agent-kourier-system }
+spec:
+  platform: slack
+  credentialsSecretRef: { name: slack-main }
+  allowedNamespaces: ["sre", "payments"]
+  slack: { mode: http }
+`
+		if err := os.WriteFile(filepath.Join(c.ConfigDir, "chatconnection.yaml"), []byte(conn), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		c.Client = fake.NewClientset(secretOf("agent-kourier-system", "slack-main", v1alpha1.SlackBotTokenKey, v1alpha1.SlackSigningSecretKey),
+			secretOf("sre", "agent-kourier-sre-alerts-oidc", "token"))
+		return c
+	}
+
+	c := inHTTP(t)
+	c.DBPath = unmade(t)
+	r := start(t, c)
+	if err := r.wait(); !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), "AGENTKOURIER_CHAT_LISTEN") {
+		t.Errorf("Run with no chat listener = %v; want ErrWiring naming AGENTKOURIER_CHAT_LISTEN", err)
+	}
+	if _, err := os.Stat(c.DBPath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the database exists after the refusal (%v): the check must come before the store", err)
+	}
+
+	c = inHTTP(t)
+	c.ChatListener = someListener(t)
+	r = start(t, c)
+	r.until("/readyz", http.StatusOK)
+	r.cancel()
+	if err := r.wait(); err != nil {
+		t.Errorf("Run with a chat listener = %v after its context ended; want nil", err)
 	}
 }
 

@@ -160,7 +160,7 @@ func post(t *testing.T, h http.Handler, contentType, body string) *httptest.Resp
 
 // A request that the app did not sign, with the signing secret over its timestamp and its body, is refused 401 before anything of it is
 // decoded or handed on, and so is one whose timestamp is more than five minutes from the clock, either way, which a replay is. A body
-// that is no JSON is refused as unsigned, not as malformed: it was never read.
+// that is no JSON is refused as unsigned, not as malformed: it was never decoded.
 func TestHTTPModeRefusesARequestTheAppDidNotSign(t *testing.T) {
 	h := telemetrytest.New(t)
 	stub := newStubSlack(t)
@@ -413,6 +413,51 @@ func TestHTTPModeAnswers503WhenTheSinkIsLate(t *testing.T) {
 	}
 	if got := h.Counter(t, "agentkourier_slack_http_requests_total", map[string]string{"outcome": "timeout", "connection": intakeConn}); got != 2 {
 		t.Errorf("requests timeout = %v; want 2", got)
+	}
+}
+
+// An event still waiting on its lane when its answer went (503, past the handler's bound) is not given to the sink once the lane reaches it:
+// Slack sends it again. The handler is served by a real HTTP server, which ends the request's context when the handler returns, as the chat
+// listener's does.
+func TestHTTPModeDoesNotHandOnAnEventWhoseAnswerHasGone(t *testing.T) {
+	h := telemetrytest.New(t)
+	stub := newStubSlack(t)
+	c, handler, conn := httpClient(t, stub)
+	c.SetHTTPAckWait(50 * time.Millisecond)
+	release := make(chan struct{})
+	open := sync.OnceFunc(func() { close(release) })
+	sk := &sink{fn: func(slack.Message) error { <-release; return nil }}
+	runHTTP(h.Ctx, t, c, conn, sk)
+	t.Cleanup(open)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(func() { srv.Client().CloseIdleConnections(); srv.Close() })
+	send := func(ts string) int {
+		body := eventBody(message(map[string]any{"ts": ts, "event_ts": ts}))
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header = signed(body, time.Now(), signingSecret)
+		req.Header.Set("Content-Type", jsonType)
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	// The first holds the sink of C1, and is answered 503 past the bound; the second waits behind it, and is answered 503 too.
+	if code := send("1.1"); code != http.StatusServiceUnavailable {
+		t.Errorf("the event that holds the sink: answered %d; want 503", code)
+	}
+	testutil.Eventually(t, "the sink to be given the first event", func() bool { return len(sk.messages()) == 1 }, testutil.Within(5*time.Second))
+	if code := send("2.1"); code != http.StatusServiceUnavailable {
+		t.Errorf("the event behind it: answered %d; want 503", code)
+	}
+	open()
+	testutil.Eventually(t, "the lane of C1 to empty", func() bool { return c.PendingOn("C1") == 0 }, testutil.Within(5*time.Second))
+	if got := sk.messages(); len(got) != 1 || got[0].TS != "1.1" {
+		t.Errorf("the sink was given %+v; want the first event alone", got)
 	}
 }
 

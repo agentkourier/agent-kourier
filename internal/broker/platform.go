@@ -83,16 +83,14 @@ type builtPlatform struct {
 // slack exists; any other platform is a wiring error, which no retry mends. The Slack client gets a transport of its
 // own, so that its idle connections can be closed at shutdown. onConnection, if set, is told whether the platform's
 // connection is up: it is Config.OnConnection of the Slack adapter, and another platform would report through the same func.
-//
-// A Slack connection in HTTP mode takes Slack's requests on the chat listener, so a broker that has none (AGENTKOURIER_CHAT_LISTEN unset)
-// refuses to build it, with a wiring error: Slack could not reach it, and it would show as connected while nothing came in.
+// It refuses a connection that needs the chat listener on a broker that has none (needsChatListener).
 func (c RunConfig) newPlatform(conn Connection, log *slog.Logger, onConnection func(connected bool)) (builtPlatform, error) {
 	name := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
+	if err := c.needsChatListener(conn); err != nil {
+		return builtPlatform{}, err
+	}
 	if conn.Platform == v1alpha1.PlatformSlack { // a second platform is one more case here, and one in platformFor
 		sc := c.slackConfig(conn, log)
-		if !sc.SigningSecret.IsEmpty() && c.ChatListener == nil {
-			return builtPlatform{}, fmt.Errorf("%w: ChatConnection %s is in Slack HTTP mode, and the broker has no chat listener for Slack to send to: set AGENTKOURIER_CHAT_LISTEN", ErrWiring, name)
-		}
 		transport := http.DefaultTransport.(*http.Transport).Clone()
 		sc.HTTPClient = &http.Client{Transport: telemetry.Transport(transport, false), Timeout: cmp.Or(c.slackHTTPTimeout, slackAPITimeout)}
 		sc.OnConnection = onConnection
@@ -105,6 +103,19 @@ func (c RunConfig) newPlatform(conn Connection, log *slog.Logger, onConnection f
 		return builtPlatform{Platform: slack.NewPlatform(api, name).WithLogger(log), closeIdle: transport.CloseIdleConnections}, nil
 	}
 	return builtPlatform{}, fmt.Errorf("%w: ChatConnection %s: the platform %q has no adapter", ErrWiring, name, conn.Platform)
+}
+
+// needsChatListener refuses, with a wiring error, a connection that takes its platform's requests on the chat listener when the broker has
+// none (AGENTKOURIER_CHAT_LISTEN unset): a Slack connection in HTTP mode, whose credentials are read with the signing secret
+// (v1alpha1.CredentialKeys). Slack could not reach it, and it would show as connected while nothing came in. Run checks its own
+// connection with it at start, on every replica, so that a standby refuses the config as the leader does; newPlatform checks each
+// connection it builds.
+func (c RunConfig) needsChatListener(conn Connection) error {
+	if conn.Platform != v1alpha1.PlatformSlack || conn.Credentials[v1alpha1.SlackSigningSecretKey].IsEmpty() || c.ChatListener != nil {
+		return nil
+	}
+	return fmt.Errorf("%w: ChatConnection %s is in Slack HTTP mode, and the broker has no chat listener for Slack to send to: set AGENTKOURIER_CHAT_LISTEN",
+		ErrWiring, v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name))
 }
 
 // slackConfig is the Slack client's config for conn. Its API URL comes from testhooks.SlackAPIURL and
