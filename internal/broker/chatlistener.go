@@ -54,12 +54,15 @@ const (
 	// allocated. It is one of Go's allocation size classes, so what is charged is what is allocated. A request being read holds at most
 	// one chunk more than it has received: a client that trickles its body holds 4 KiB until chatReadTimeout cuts it.
 	chatBodyChunk = 4 << 10
-	// chatBodyBudget caps the body buffers that the requests being read or handled hold at once, across every connection, from the
-	// first chunk until the handler returns. The buffers are allocated only once they are charged, so the listener's bodies take at most
-	// 32 MiB, an eighth of the chart's default memory limit of 256 MiB, and the list of each body's chunks and their readers about 3% more;
-	// a handler that copies a body holds its copy outside the budget. A request whose next chunk does not fit is answered 503 with
-	// Retry-After and the rest of its body is not read. A client spends the budget only with bytes it sends, so holding it takes 32 MiB
-	// sent within chatReadTimeout, not a count of slow connections.
+	// chatBodyBudget caps the live body buffers of the requests being read or handled, across every connection, from the first chunk
+	// until the handler returns. The buffers are allocated only once they are charged, so the listener's live bodies take at most 32 MiB,
+	// an eighth of the chart's default memory limit of 256 MiB, and the list of each body's chunks and their readers about 3% more;
+	// buffers given back stay on the heap until the garbage collector frees them. The charge is given back when the handler returns, so a
+	// handler must not keep the request's body or its readers after it returns: it copies what it hands on, and that copy is outside the
+	// budget. A request whose next chunk does not fit is answered 503 with Retry-After and the rest of its body is not read. A routed
+	// request is charged its first chunk as soon as its headers are read, whatever it has sent of its body, so the budget is held by 8192
+	// connections that are mid-body, for as long as chatReadTimeout lets them, or by 32 MiB actually sent: starving the listener takes
+	// 8192 concurrent connections, not 32. The number of connections, and what net/http holds for each, is outside the budget.
 	chatBodyBudget = 32 << 20
 	// chatDrainTimeout bounds the wait, at shutdown, for the requests in flight; past it they are cut, unanswered, and the platform sends
 	// them again. It is the first part of the intake step, whose bound is 4 s, and is kept to half of it, so that the intakes, which stop

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -163,9 +164,11 @@ func TestChatRoutesAnswerBusyPastTheBodyBudget(t *testing.T) {
 	r.routes.register(v1alpha1.PlatformSlack, "ns/a", h)
 	r.routes.budget.left = 2 * chatBodyChunk // no request has been sent: the server reads it only after the first is
 
-	code, retry, _, _ := r.do(http.MethodPost, "/chat/slack/ns/a", strings.NewReader(strings.Repeat("a", 2*chatBodyChunk+1)))
-	if code != http.StatusServiceUnavailable || retry != "5" {
-		t.Errorf("a body of three chunks with two left = %d with Retry-After %q, want 503 with 5", code, retry)
+	head := "POST /chat/slack/ns/a HTTP/1.1\r\nHost: x\r\nContent-Length: " + strconv.Itoa(2*chatBodyChunk+1) + "\r\n\r\n"
+	resp := r.answerOn(r.send(head+strings.Repeat("a", 2*chatBodyChunk+1)), head)
+	if resp.code != http.StatusServiceUnavailable || resp.retryAfter != "5" || !resp.closes {
+		t.Errorf("a body of three chunks with two left: %d with Retry-After %q, closing the connection: %v; want 503 with 5, closing it",
+			resp.code, resp.retryAfter, resp.closes)
 	}
 	if h.calls() != 0 || r.counted(chatBusy) != 1 {
 		t.Errorf("the handler was called %d times and busy counted %d, want none and 1", h.calls(), r.counted(chatBusy))
