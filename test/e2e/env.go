@@ -42,6 +42,9 @@ type Env struct {
 	// Phase is the part of a scenario that a script runs between helm upgrades, from E2E_PHASE: empty in an ordinary run, in which such a
 	// scenario skips (hack/kind/crs-migration.sh sets it).
 	Phase string
+	// SlackMode is how the fake Slack sends the tier's Agent Kourier its events and presses, from E2E_SLACK_MODE: "socket" (the default), over
+	// Socket Mode, or "http", as signed requests to the broker's chat listener, its ChatConnection in HTTP mode. CheckSlackMode validates it.
+	SlackMode string
 	// The broker's admission (spec D54), as its Deployment has it when the run starts: hack/kind/e2e-run.sh reads the variables of the Deployment and
 	// hands them to the Job through the ConfigMap e2e-admission (lib.sh's runner_admission), never through the Job's YAML, since a selector holds
 	// quotes, braces and slashes. Admits reads them; the scenarios of several Slack apps skip unless it admits team-a.
@@ -149,7 +152,7 @@ func (e Env) labelsOf(namespace string) (labels.Set, error) {
 }
 
 // NewEnv reads E2E_SLACK_URL, E2E_SINK_URL, E2E_STUB_URL, E2E_ALERTMANAGER_URL and
-// E2E_AGENTKOURIER_URL, E2E_SIGNALER_URL, E2E_TIER, E2E_CONFIG_SOURCE, E2E_PHASE, E2E_CHAT_CONNECTION, E2E_CONNECTION_NAMESPACES,
+// E2E_AGENTKOURIER_URL, E2E_SIGNALER_URL, E2E_TIER, E2E_CONFIG_SOURCE, E2E_PHASE, E2E_SLACK_MODE, E2E_CHAT_CONNECTION, E2E_CONNECTION_NAMESPACES,
 // E2E_CONNECTION_NAMESPACE_SELECTOR and E2E_NAMESPACES through getenv (os.Getenv in a runner); an unset or empty variable takes its
 // default.
 func NewEnv(getenv func(string) string) Env {
@@ -170,6 +173,7 @@ func NewEnv(getenv func(string) string) Env {
 		Tier:                        getenv("E2E_TIER"),
 		ConfigSource:                get("E2E_CONFIG_SOURCE", "files"),
 		Phase:                       getenv("E2E_PHASE"),
+		SlackMode:                   get("E2E_SLACK_MODE", SlackModeSocket),
 		ChatConnection:              getenv("E2E_CHAT_CONNECTION"),
 		ConnectionNamespaces:        getenv("E2E_CONNECTION_NAMESPACES"),
 		ConnectionNamespaceSelector: getenv("E2E_CONNECTION_NAMESPACE_SELECTOR"),

@@ -114,7 +114,7 @@ func (s *Server) blockActions(user, channel string, m Message, btn element, bloc
 		"text": btn.element["text"], "value": btn.element["value"],
 		"action_ts": fmt.Sprintf("%d.%06d", now.Unix(), now.Nanosecond()/1000),
 	}
-	return s.sendEnvelope(app.AppID, "interactive", map[string]any{
+	return s.sendEnvelope(app.AppID, channel, "interactive", map[string]any{
 		"type": "block_actions", "api_app_id": app.AppID, "team": map[string]any{"id": app.TeamID},
 		"user":    map[string]any{"id": user, "name": name, "team_id": app.TeamID},
 		"channel": map[string]any{"id": channel}, "container": container, "message": m,

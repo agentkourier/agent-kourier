@@ -13,7 +13,7 @@
 #     is published nowhere either;
 #  3. one probe pod in the cluster: fake Slack auth.test and /_control/connections of the default app (AFAKEAPP: with a team's app in the tier, a
 #     socket of that app must not stand for the platform's own), which shows Agent Kourier
-#     connected over Socket Mode (at least one connection, waited for); the stub
+#     connected (at least one connection, waited for: a Socket Mode client, or in HTTP mode a chat route that answers the fake's signed url_verification); the stub
 #     agent's card with an unsigned JWT (200) and without one (401) and its release endpoint
 #     (204, with no token, as the fake Slack's); Alertmanager's API; the
 #     sink taking a POST and reading it back; and an alert posted to Alertmanager reaching the sink.
@@ -111,7 +111,7 @@ for _ in $(seq 30); do
   [ "${conns:-0}" -ge 1 ] && break
   sleep 1
 done
-assert "Agent Kourier is connected to the fake Slack over Socket Mode, as the default app that its own ChatConnection is (connections: ${conns:-none})" test "${conns:-0}" -ge 1
+assert "Agent Kourier is connected to the fake Slack (over Socket Mode, or its chat route in HTTP mode), as the default app that its own ChatConnection is (connections: ${conns:-none})" test "${conns:-0}" -ge 1
 
 jwt="$(b64 '{"alg":"none"}').$(b64 '{"email":"verify@example.test"}')."
 card=$(curl -s -m 10 -H "Authorization: Bearer $jwt" "$AGENT/.well-known/agent-card.json")

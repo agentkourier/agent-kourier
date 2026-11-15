@@ -3,6 +3,7 @@ package fakeslack
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 )
@@ -30,10 +31,37 @@ type App struct {
 	// connections. Either may be empty, and neither is ever returned by the control surface.
 	BotToken string `json:"-"`
 	AppToken string `json:"-"`
+	// RequestURL, if set, puts the app in HTTP mode: the fake sends its events and its presses to this URL as requests signed
+	// with SigningSecret (Slack's Event Subscriptions and Interactivity Request URLs, one URL here), and not over Socket Mode
+	// (httpdelivery.go). Both are set or neither is. The signing secret is never returned by the control surface.
+	RequestURL    string `json:"request_url,omitempty"`
+	SigningSecret string `json:"-"`
 }
 
-// Validate reports why a is not an App WithApp can register: a missing AppID, BotUser or BotID, or a token with
-// the wrong prefix, which the Web API and apps.connections.open would refuse before they looked it up.
+// overHTTP says whether the app is in HTTP mode.
+func (a App) overHTTP() bool { return a.RequestURL != "" }
+
+// CheckRequestURL reports why requestURL and signingSecret cannot put an app in HTTP mode: one is set without the other, or the URL
+// is not an absolute http or https URL. Both empty is Socket Mode, which is fine. The error repeats neither value.
+func CheckRequestURL(requestURL, signingSecret string) error {
+	switch {
+	case requestURL == "" && signingSecret == "":
+		return nil
+	case requestURL == "":
+		return errors.New("fakeslack: a signing secret needs a request URL")
+	case signingSecret == "":
+		return errors.New("fakeslack: a request URL needs a signing secret")
+	}
+	u, err := url.Parse(requestURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return errors.New("fakeslack: a request URL must be an absolute http or https URL")
+	}
+	return nil
+}
+
+// Validate reports why a is not an App WithApp can register: a missing AppID, BotUser or BotID, a token with the
+// wrong prefix, which the Web API and apps.connections.open would refuse before they looked it up, or a request URL
+// and signing secret that CheckRequestURL refuses.
 func (a App) Validate() error {
 	var errs []error
 	for _, f := range []struct{ name, v string }{{"AppID", a.AppID}, {"BotUser", a.BotUser}, {"BotID", a.BotID}} {
@@ -46,6 +74,9 @@ func (a App) Validate() error {
 	}
 	if a.AppToken != "" && !strings.HasPrefix(a.AppToken, "xapp-") {
 		errs = append(errs, errors.New("fakeslack: an App's AppToken must start with xapp-"))
+	}
+	if err := CheckRequestURL(a.RequestURL, a.SigningSecret); err != nil {
+		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
 }

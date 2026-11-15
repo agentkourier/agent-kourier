@@ -8,7 +8,8 @@ import (
 )
 
 // ErrNoConnection is returned when an envelope is sent while no Socket Mode
-// client is connected.
+// client is connected; for an app in HTTP mode, when the app is revoked or the
+// Server is closing, since it has no connection to lack.
 var ErrNoConnection = errors.New("fakeslack: no Socket Mode client is connected")
 
 // envelope is the fake's record of one envelope it sent.
@@ -38,8 +39,13 @@ func AcceptsResponsePayload() EnvelopeOption {
 // UNCONFIRMED(WP-04): that envelopes go to the newest connection only, where
 // Slack spreads them over up to 10 (see WithSocketSpread); and that the fake never redelivers an
 // envelope that is not acked, where Slack retries with retry_attempt set.
+//
+// An app in HTTP mode (App.RequestURL) is sent the payload as a request to its URL instead (sendHTTP): an
+// "events_api" payload as JSON, an "interactive" one as a form, and any other type is ErrInvalid. The ID is
+// the fake's own name for that request and its retries, which Ack and WaitAck take as they take an
+// envelope's, and the options do not apply.
 func (s *Server) SendEnvelope(typ string, payload any, opts ...EnvelopeOption) (string, error) {
-	return s.sendEnvelope(s.defaultApp().AppID, typ, payload, opts...)
+	return s.sendEnvelope(s.defaultApp().AppID, "", typ, payload, opts...)
 }
 
 // SendEnvelopeTo is SendEnvelope for the app appID. It fails with ErrNotFound for
@@ -48,10 +54,15 @@ func (s *Server) SendEnvelopeTo(appID, typ string, payload any, opts ...Envelope
 	if _, ok := s.appByID(appID); !ok {
 		return "", fmt.Errorf("fakeslack: no app %q: %w", appID, ErrNotFound)
 	}
-	return s.sendEnvelope(appID, typ, payload, opts...)
+	return s.sendEnvelope(appID, "", typ, payload, opts...)
 }
 
-func (s *Server) sendEnvelope(appID, typ string, payload any, opts ...EnvelopeOption) (string, error) {
+// sendEnvelope sends payload to the app appID: over its Socket Mode connection, or to its request URL in HTTP
+// mode, where lane (the channel the payload is about) names the queue whose order it keeps (webDeliveries).
+func (s *Server) sendEnvelope(appID, lane, typ string, payload any, opts ...EnvelopeOption) (string, error) {
+	if app, _ := s.appByID(appID); app.overHTTP() {
+		return s.sendHTTP(app, lane, typ, payload)
+	}
 	sk := &s.sock
 	sk.mu.Lock()
 	c := sk.pickLocked(appID, s.spread)
@@ -59,9 +70,7 @@ func (s *Server) sendEnvelope(appID, typ string, payload any, opts ...EnvelopeOp
 		sk.mu.Unlock()
 		return "", ErrNoConnection
 	}
-	sk.issued++
-	id := fmt.Sprintf("env-%06d", sk.issued)
-	sk.pending[id] = &envelope{acked: make(chan struct{})}
+	id := sk.issueLocked()
 	sk.mu.Unlock()
 
 	env := map[string]any{"envelope_id": id, "type": typ, "accepts_response_payload": false, "payload": payload}
@@ -109,18 +118,40 @@ func (sk *sockets) ack(msg []byte) {
 	if json.Unmarshal(msg, &res) != nil {
 		return
 	}
+	sk.settle(res.EnvelopeID, res.Payload)
+}
+
+// settle records the ack of the envelope id with payload, unless the envelope is one the fake never sent, or
+// is acked already: the first ack stands. An app in HTTP mode acks with its answer's 200, and with no payload:
+// the fake reads none from the answer's body.
+func (sk *sockets) settle(id string, payload json.RawMessage) {
 	sk.mu.Lock()
 	defer sk.mu.Unlock()
-	env := sk.pending[res.EnvelopeID]
+	env := sk.pending[id]
 	if env == nil {
 		return
 	}
 	select {
 	case <-env.acked:
 	default:
-		env.payload = res.Payload
+		env.payload = payload
 		close(env.acked)
 	}
+}
+
+// issue records a new envelope, not yet acked, and returns its ID.
+func (sk *sockets) issue() string {
+	sk.mu.Lock()
+	defer sk.mu.Unlock()
+	return sk.issueLocked()
+}
+
+// issueLocked is issue for a caller that holds mu.
+func (sk *sockets) issueLocked() string {
+	sk.issued++
+	id := fmt.Sprintf("env-%06d", sk.issued)
+	sk.pending[id] = &envelope{acked: make(chan struct{})}
+	return id
 }
 
 // envelope returns the record of an envelope the fake sent, or nil.
