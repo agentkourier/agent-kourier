@@ -1,7 +1,10 @@
 package redact
 
 import (
+	"fmt"
 	"regexp"
+	"regexp/syntax"
+	"slices"
 	"strings"
 	"testing"
 	"unicode"
@@ -10,9 +13,35 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/redact/redacttest"
 )
 
-// gated is a pattern that runs behind a gate: the gate as a function of the text the pattern reads, whether the pattern
-// matches the text, texts it matches, which TestGatesTakeEveryCharacterCutIntoTheirWords cuts characters into, and whether
-// it is a pattern of the token layer.
+// fakeRun is a run of the URL alphabet for the sk- keys, and fakeKey a run of the length of an AWS secret access key. Both are
+// fake.
+const (
+	fakeRun = "Fake1234567890abcdefXYZ"
+	fakeKey = "FAKEfakeFAKEfakeFAKEfake/+FAKEfake0123=="
+)
+
+// gateSeeds are texts that each gated pattern matches, by pattern: TestGatesTakeEveryCharacterCutIntoTheirWords cuts characters
+// into them. A pattern has a seed for each word its gate looks for, and one for each way of writing it that the gate reads
+// apart (glued to the scheme, at a word boundary); the cut-in test runs under -race, where each seed costs a tenth of a
+// second or more. TestEveryGatedStepHasSeeds holds this map to rawSteps and freeSteps.
+var gateSeeds = map[*regexp.Regexp][]string{
+	secretPattern:     {"xoxb-1-fake", "xapp-1-fake", "Bearer fakecred", "auth: bearerFAKE1234 ok", "eyJhbGci.eyJzdWIi.sig"},
+	skProject:         {"key sk-ant-" + fakeRun},
+	skBare:            {"sk-" + fakeRun},
+	oauthPattern:      {"access_token=fake", "idToken: fake", `{"client_secret":"fake"}`},
+	basicPattern:      {"Basic dXNlcjpwYXNz"},
+	gluedBasicPattern: {"BasicdXNlcjpwYXNzd29yZA"},
+	urlUserinfo:       {"https://user:fake@host"},
+	urlSpaced:         {"https://user:fa ke@host"},
+	plainUserinfo:     {"user:fake@host"},
+	envPair:           {"- name: DB_PASSWORD\n  value: fake"},
+	secretFlag:        {"--token fake", "cmd -p fake"},
+	userFlag:          {"-u admin:fake", "curl --user admin:fake", "x --proxy-user=admin:fake"},
+	bareRun:           {fakeKey},
+}
+
+// gated is a step that runs behind a gate, as the tests read it: the gate as a function of the text the step reads, whether
+// its pattern matches the text, its seeds, and whether it is a step of the token layer.
 type gated struct {
 	name  string
 	gate  func(string) bool
@@ -21,49 +50,63 @@ type gated struct {
 	token bool
 }
 
-// tokenGated is a pattern of the token layer and its gate, which reads what holdsGap says of the text as well.
-func tokenGated(name string, re *regexp.Regexp, gate func(string, bool) bool, seeds ...string) gated {
-	return gated{name, func(s string) bool { return gate(s, holdsGap(s)) }, re.MatchString, seeds, true}
+// gatedPatterns are the steps of rawSteps and freeSteps that have a gate, every one of them.
+var gatedPatterns = gatedSteps()
+
+func gatedSteps() []gated {
+	var out []gated
+	for i, st := range rawSteps {
+		out = append(out, gated{fmt.Sprintf("rawSteps[%d] %.30s", i, st.re), func(s string) bool { return st.gate(s, holdsGap(s)) },
+			stepMatch(st.re), gateSeeds[st.re], true})
+	}
+	for i, st := range freeSteps {
+		if st.gate != nil {
+			out = append(out, gated{fmt.Sprintf("freeSteps[%d] %.30s", i, st.re), st.gate, stepMatch(st.re), gateSeeds[st.re], false})
+		}
+	}
+	return out
 }
 
-// freeGated is a pattern of matchFree and its gate.
-func freeGated(name string, re *regexp.Regexp, gate func(string) bool, seeds ...string) gated {
-	return gated{name, gate, re.MatchString, seeds, false}
-}
-
-// fakeRun is a run of the URL alphabet for the sk- keys, and fakeKey a run of the length of an AWS secret access key. Both are
-// fake.
-const (
-	fakeRun = "Fake1234567890abcdefXYZ"
-	fakeKey = "FAKEfakeFAKEfakeFAKEfake/+FAKEfake0123=="
-)
-
-// gatedPatterns are the patterns that run behind a gate, every one of them. A pattern has a seed for each word its gate looks
-// for, and one for each way of writing it that the gate reads apart (glued to the scheme, at a word boundary); the cut-in test
-// runs under -race, where each seed costs a tenth of a second or more.
-var gatedPatterns = []gated{
-	tokenGated("secretPattern", secretPattern, secretGate,
-		"xoxb-1-fake", "xapp-1-fake", "Bearer fakecred", "auth: bearerFAKE1234 ok", "eyJhbGci.eyJzdWIi.sig"),
-	tokenGated("skProject", skProject, skGate, "key sk-ant-"+fakeRun),
-	tokenGated("skBare", skBare, skGate, "sk-"+fakeRun),
-	tokenGated("oauthPattern", oauthPattern, oauthGate,
-		"access_token=fake", "idToken: fake", `{"client_secret":"fake"}`),
-	tokenGated("basicPattern", basicPattern, basicGate, "Basic dXNlcjpwYXNz"),
-	tokenGated("gluedBasicPattern", gluedBasicPattern, basicGate, "BasicdXNlcjpwYXNzd29yZA"),
-	freeGated("urlUserinfo", urlUserinfo, urlGate, "https://user:fake@host"),
-	freeGated("urlSpaced", urlSpaced, urlGate, "https://user:fa ke@host"),
-	freeGated("plainUserinfo", plainUserinfo, userinfoGate, "user:fake@host"),
-	freeGated("envPair", envPair, envGate, "- name: DB_PASSWORD\n  value: fake"),
-	freeGated("secretFlag", secretFlag, flagGate, "--token fake", "cmd -p fake"),
-	freeGated("userFlag", userFlag, userFlagGate, "-u admin:fake", "curl --user admin:fake", "x --proxy-user=admin:fake"),
-	{"bareRun", keyRunGate, func(s string) bool {
-		for _, m := range bareRun.FindAllString(s, -1) {
+// stepMatch reports whether a step's pattern matches a text in a way that its replacement takes: for bareRun, a run of
+// exactly keyLen; for every other pattern, any match.
+func stepMatch(re *regexp.Regexp) func(string) bool {
+	if re != bareRun {
+		return re.MatchString
+	}
+	return func(s string) bool {
+		for _, m := range re.FindAllString(s, -1) {
 			if len(m) == keyLen {
 				return true
 			}
 		}
 		return false
-	}, []string{fakeKey}, false},
+	}
+}
+
+// Every gated step has a pattern and seeds, and every pattern with seeds has a gated step: a step added behind a gate gets
+// the tests of this file, and a seed of a step that is gone does not linger.
+func TestEveryGatedStepHasSeeds(t *testing.T) {
+	gatedRes := map[*regexp.Regexp]bool{}
+	for i, st := range rawSteps {
+		if st.re == nil || st.gate == nil || len(gateSeeds[st.re]) == 0 {
+			t.Errorf("rawSteps[%d] has no pattern, gate or seeds", i)
+		}
+		gatedRes[st.re] = true
+	}
+	for i, st := range freeSteps {
+		if st.gate == nil {
+			continue
+		}
+		if st.re == nil || len(gateSeeds[st.re]) == 0 {
+			t.Errorf("freeSteps[%d] has a gate and no pattern or seeds", i)
+		}
+		gatedRes[st.re] = true
+	}
+	for re := range gateSeeds {
+		if !gatedRes[re] {
+			t.Errorf("%.40s has seeds and no gated step", re)
+		}
+	}
 }
 
 // checkGates fails t for each gate that is false where its pattern matches s: the gates of the token layer, and matchFree's
@@ -119,14 +162,14 @@ func TestGateSeedsMatch(t *testing.T) {
 // ungatedRaw and ungatedFree are rawSecrets and matchFree with every gate open: each step runs.
 func ungatedRaw(s string) string {
 	for _, st := range rawSteps {
-		s = st.replace(s)
+		s = st.replace(st.re, s)
 	}
 	return s
 }
 
 func ungatedFree(s string) string {
 	for _, st := range freeSteps {
-		s = st.replace(s)
+		s = st.replace(st.re, s)
 	}
 	return s
 }
@@ -190,7 +233,8 @@ func cutIns() []string {
 	}
 	out = append(out, "\u3164", "\ufe00", "\ufe0f", "\ufeff", "\ufff0", "\ufff8", "\ufffd", "\ue000", "\uf8ff", "\U000e0000",
 		"\U000e0001", "\U000e0fff", "\U000f0000", "\U0010fffd", "\u212a", "\u017f", "\xff", "\x80", "\xed\xa0\x80")
-	for _, e := range []string{"a", "b", "f", "n", "r", "t", "v", "0", "x00", "x7f", "u200b", "u00a0", "U000e0001"} {
+	for _, e := range []string{"a", "b", "f", "n", "r", "t", "v", "0", "x00", "x7f", "u200b", "u00a0", "U000e0001",
+		"A", "B", "F", "N", "R", "T", "V", "X00", "X7F", "U200B"} { // the capitals are escapes to a case-insensitive pattern
 		out = append(out, `\`+e)
 	}
 	return out
@@ -238,23 +282,40 @@ func TestGatesTakeEveryCharacterCutIntoTheirWords(t *testing.T) {
 // invalid UTF-8 and every form of esc, alone and between the letters of a word, and a character that folds into ASCII. And
 // plain text holds no gap, or no gate would save anything.
 func TestHoldsGapTakesEveryGapAndFold(t *testing.T) {
-	gapRe := regexp.MustCompile(`^(?:[` + deletable + `]|` + esc + `)$`)
 	for _, s := range []string{"\xff", "\x80", "\xc0\xaf", "\xed\xa0\x80", "ok\xe2\x80"} {
 		if !holdsGap(s) {
 			t.Errorf("holdsGap(%q) is false, and a pattern reads invalid UTF-8 as U+FFFD, a gap", s)
 		}
 	}
-	escs := []string{`\x00`, `\x7F`, `\u200b`, `\u00a0`, `\U000e0001`}
-	for _, c := range "abfnrtv0" {
-		escs = append(escs, `\`+string(c))
-	}
-	for _, s := range escs {
-		if !gapRe.MatchString(s) {
-			t.Fatalf("%q is no esc", s)
+	// Every esc, as a case-insensitive pattern reads it too: spell and pair put gap between the letters of the words in
+	// (?i:...), where "\T" and "\X0A" are escapes. A backslash and any character, then enough hex digits for the longest form.
+	foldedEsc := regexp.MustCompile(`^(?i:` + esc + `)`)
+	escs := 0
+	for _, c := range append([]rune{'\u212a', '\u017f'}, []rune(asciiChars())...) {
+		s := `\` + string(c) + "00000000"
+		if !foldedEsc.MatchString(s) {
+			continue
 		}
+		escs++
 		if !holdsGap(s) || !holdsGap("bear"+s+"er") {
-			t.Errorf("holdsGap(%q) is false, and it is an esc", s)
+			t.Errorf("holdsGap(%q) is false, and a case-insensitive pattern reads it as an esc", s)
 		}
+	}
+	if escs != 2*len("abfnrtvxu")+1 {
+		t.Errorf("%d characters start a case-insensitive esc, want the 19 of abfnrtvxu in both cases and 0", escs)
+	}
+	// The patterns read deletable inside (?i:...) too, and folded it is the same class, so the sweep of
+	// TestDeletableIsTheDeletionSet holds for what they read there.
+	plain, err := syntax.Parse(`[`+deletable+`]`, syntax.Perl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	folded, err := syntax.Parse(`[`+deletable+`]`, syntax.Perl|syntax.FoldCase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.Op != syntax.OpCharClass || folded.Op != syntax.OpCharClass || !slices.Equal(plain.Rune, folded.Rune) {
+		t.Errorf("deletable folded is another class: %v, not %v", folded, plain)
 	}
 	// Every character outside ASCII that a case-insensitive pattern reads as an ASCII letter (U+212A and U+017F, as
 	// unicode.SimpleFold has it, on which Go's regexp folds) holds one too. Folding is an orbit, so these are the orbits of
@@ -274,6 +335,24 @@ func TestHoldsGapTakesEveryGapAndFold(t *testing.T) {
 	}
 }
 
+// An escape that only a case-insensitive pattern reads ("\T", "\X0A" between the letters of a word in (?i:...)) does not shut a
+// gate: the five texts leaked through the gates when holdsGap took only the escapes in lower case.
+func TestGatesTakeFoldedEscapes(t *testing.T) {
+	for _, c := range []struct{ text, secret string }{
+		{`access_tok\Ten=fakevalue123`, "fakevalue123"},
+		{`{"client_sec\Rret":"fakevalue123"}`, "fakevalue123"},
+		{`refresh_to\Xffken=fakevalue123`, "fakevalue123"},
+		{`Authorization: Bea\Trer fakecredential123`, "fakecredential123"},
+		{`Authorization: Ba\Nsic dXNlcjpwYXNzd29yZA`, "dXNlcjpwYXNzd29yZA"},
+	} {
+		for name, entry := range map[string]func(string) string{"FreeText": FreeText, "FreeTextLine": FreeTextLine, "IdentifierText": IdentifierText} {
+			if got := entry(c.text); strings.Contains(got, c.secret) {
+				t.Errorf("%s(%q) = %q, which shows the secret", name, c.text, got)
+			}
+		}
+	}
+}
+
 // FuzzGatesAreNecessary holds every gate to its pattern over whatever the fuzzer builds: no gate is false where its pattern
 // matches. The seeds, which run in the normal suite, are the gates' own with a gap, a fold and an escape cut into their words,
 // and a sample of the corpus. Run it with "go test -run '^$' -fuzz FuzzGatesAreNecessary ./internal/redact".
@@ -281,7 +360,7 @@ func FuzzGatesAreNecessary(f *testing.F) {
 	for _, g := range gatedPatterns {
 		for _, s := range g.seeds {
 			f.Add(s)
-			for _, in := range []string{"\u200b", "\u212a", "\u017f", `\u200b`, "\x00", "\xff", "\U000e0001", "\u00a0"} {
+			for _, in := range []string{"\u200b", "\u212a", "\u017f", `\u200b`, `\T`, "\x00", "\xff", "\U000e0001", "\u00a0"} {
 				f.Add(s[:2] + in + s[2:])
 			}
 		}
@@ -299,4 +378,13 @@ func FuzzGatesAreNecessary(f *testing.F) {
 			checkGates(t, joinLines(s), true)
 		}
 	})
+}
+
+// asciiChars returns every ASCII character, in order.
+func asciiChars() string {
+	b := make([]byte, utf8.RuneSelf)
+	for i := range b {
+		b[i] = byte(i)
+	}
+	return string(b)
 }

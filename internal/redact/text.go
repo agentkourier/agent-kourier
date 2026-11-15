@@ -332,33 +332,35 @@ func joinLines(s string) string { return strings.Join(strings.Fields(s), " ") }
 func matchFree(s string) string {
 	for _, st := range freeSteps {
 		if st.gate == nil || st.gate(s) {
-			s = st.replace(s)
+			s = st.replace(st.re, s)
 		}
 	}
 	return s
 }
 
-// freeStep is a pattern of matchFree: the replacement it makes, and its gate (see gate.go), false only where the pattern
-// cannot match, so that the replacement would change nothing. A step with no gate always runs.
+// freeStep is a pattern of matchFree: the pattern, its gate (see gate.go), false only where the pattern cannot match, so
+// that the replacement would change nothing, and the replacement it makes with the pattern. A step with no gate always
+// runs; the token layer's step has no pattern of its own (secrets runs rawSteps and its own).
 type freeStep struct {
+	re      *regexp.Regexp
 	gate    func(s string) bool
-	replace func(s string) string
+	replace func(re *regexp.Regexp, s string) string
 }
 
 // freeSteps are the patterns of matchFree, in the order it runs them. The token layer, the private key, whose literal
 // prefix the regexp package finds fast, and namedPair, which nearly every text can match, have no gate.
 var freeSteps = []freeStep{
-	{urlGate, func(s string) string { return urlUserinfo.ReplaceAllString(s, "${1}"+redacted+"@") }},
-	{urlGate, func(s string) string { return urlSpaced.ReplaceAllString(s, "${1}"+redacted+"@") }},
-	{userinfoGate, func(s string) string { return plainUserinfo.ReplaceAllString(s, redacted+"@") }},
-	{nil, secrets},
-	{nil, func(s string) string { return pemKey.ReplaceAllString(s, redacted) }},
-	{nil, func(s string) string { return redactNamed(s, namedPair, pairValue) }},
-	{envGate, func(s string) string { return redactNamed(s, envPair, entryValue) }},
-	{flagGate, func(s string) string { return redactNamed(s, secretFlag, flagValue) }},
-	{userFlagGate, func(s string) string { return userFlag.ReplaceAllString(s, "${1}"+redacted) }},
-	{keyRunGate, func(s string) string {
-		return bareRun.ReplaceAllStringFunc(s, func(run string) string {
+	{urlUserinfo, urlGate, func(re *regexp.Regexp, s string) string { return re.ReplaceAllString(s, "${1}"+redacted+"@") }},
+	{urlSpaced, urlGate, func(re *regexp.Regexp, s string) string { return re.ReplaceAllString(s, "${1}"+redacted+"@") }},
+	{plainUserinfo, userinfoGate, func(re *regexp.Regexp, s string) string { return re.ReplaceAllString(s, redacted+"@") }},
+	{nil, nil, func(_ *regexp.Regexp, s string) string { return secrets(s) }},
+	{pemKey, nil, func(re *regexp.Regexp, s string) string { return re.ReplaceAllString(s, redacted) }},
+	{namedPair, nil, func(re *regexp.Regexp, s string) string { return redactNamed(s, re, pairValue) }},
+	{envPair, envGate, func(re *regexp.Regexp, s string) string { return redactNamed(s, re, entryValue) }},
+	{secretFlag, flagGate, func(re *regexp.Regexp, s string) string { return redactNamed(s, re, flagValue) }},
+	{userFlag, userFlagGate, func(re *regexp.Regexp, s string) string { return re.ReplaceAllString(s, "${1}"+redacted) }},
+	{bareRun, keyRunGate, func(re *regexp.Regexp, s string) string {
+		return re.ReplaceAllStringFunc(s, func(run string) string {
 			if len(run) == keyLen && strings.Trim(run, "0123456789abcdefABCDEF") != "" { // not a SHA-1
 				return redacted
 			}

@@ -250,43 +250,45 @@ func rawSecrets(s string) string {
 	gap := holdsGap(s)
 	for _, st := range rawSteps {
 		if st.gate(s, gap) {
-			s, gap = regap(s, st.replace(s), gap)
+			s, gap = regap(s, st.replace(st.re, s), gap)
 		}
 	}
 	return s
 }
 
-// rawStep is a pattern of rawSecrets: the replacement it makes, and its gate (see gate.go), which reads the text and what
-// holdsGap says of it and is false only where the pattern cannot match, so that the replacement would change nothing.
+// rawStep is a pattern of rawSecrets: the pattern, its gate (see gate.go), which reads the text and what holdsGap says of
+// it and is false only where the pattern cannot match, so that the replacement would change nothing, and the replacement
+// it makes with the pattern.
 type rawStep struct {
+	re      *regexp.Regexp
 	gate    func(s string, gap bool) bool
-	replace func(s string) string
+	replace func(re *regexp.Regexp, s string) string
 }
 
 // rawSteps are the patterns of rawSecrets, in the order it runs them.
 var rawSteps = []rawStep{
-	{secretGate, func(s string) string {
-		return secretPattern.ReplaceAllStringFunc(s, func(m string) string {
+	{secretPattern, secretGate, func(re *regexp.Regexp, s string) string {
+		return re.ReplaceAllStringFunc(s, func(m string) string {
 			if isBearerKey(m) {
 				return m
 			}
 			return redacted
 		})
 	}},
-	{skGate, func(s string) string { return replaceSK(s, skProject, false) }},
-	{skGate, func(s string) string { return replaceSK(s, skBare, true) }},
-	{oauthGate, func(s string) string { return oauthPattern.ReplaceAllString(s, "${1}"+redacted) }},
-	{basicGate, func(s string) string {
-		return basicPattern.ReplaceAllStringFunc(s, func(m string) string {
-			if plainWord.MatchString(Normalize(basicPattern.FindStringSubmatch(m)[1])) {
+	{skProject, skGate, func(re *regexp.Regexp, s string) string { return replaceSK(s, re, false) }},
+	{skBare, skGate, func(re *regexp.Regexp, s string) string { return replaceSK(s, re, true) }},
+	{oauthPattern, oauthGate, func(re *regexp.Regexp, s string) string { return re.ReplaceAllString(s, "${1}"+redacted) }},
+	{basicPattern, basicGate, func(re *regexp.Regexp, s string) string {
+		return re.ReplaceAllStringFunc(s, func(m string) string {
+			if plainWord.MatchString(Normalize(re.FindStringSubmatch(m)[1])) {
 				return m
 			}
 			return redacted
 		})
 	}},
-	{basicGate, func(s string) string {
-		return gluedBasicPattern.ReplaceAllStringFunc(s, func(m string) string {
-			if userPassword(Normalize(gluedBasicPattern.FindStringSubmatch(m)[1])) {
+	{gluedBasicPattern, basicGate, func(re *regexp.Regexp, s string) string {
+		return re.ReplaceAllStringFunc(s, func(m string) string {
+			if userPassword(Normalize(re.FindStringSubmatch(m)[1])) {
 				return redacted
 			}
 			return m

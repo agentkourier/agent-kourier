@@ -13,20 +13,23 @@ import (
 // the order they run, to the same steps with every gate open).
 //
 // The patterns of the token layer spell their words with a gap between any two letters (see spell and pair), and some are
-// case-insensitive, under which Go's regexp matches U+212A KELVIN SIGN as "k" and U+017F LATIN SMALL LETTER LONG S as "s".
-// Their gates are true for a text that holds either (see holdsGap); in any other text the words are written in ASCII
-// letters, whole, and the gate looks for them in any ASCII case.
+// case-insensitive, under which Go's regexp matches U+212A KELVIN SIGN as "k" and U+017F LATIN SMALL LETTER LONG S as "s",
+// and folds the gap's escapes too, so that "\T" and "\X0A" are escapes between the letters of such a word. Their gates are
+// true for a text that holds a gap in either case, or U+212A or U+017F (see holdsGap); in any other text the words are
+// written in ASCII letters, whole, and the gate looks for them in any ASCII case.
 
-// escStarts are the characters that follow the backslash of an esc.
-const escStarts = "abfnrtv0xuU"
+// escStarts are the characters that follow the backslash of an esc, in lower case: a case-insensitive pattern reads an esc
+// in either case ("\t" and "\T", "\x0a" and "\X0A"), and the form with a capital U is the long one.
+const escStarts = "abfnrtv0xu"
 
 // holdsGap reports whether s holds anything that can stand between the letters of a word of the token layer, or for one of
 // them: a character of deletable, invalid UTF-8 (which a pattern reads as U+FFFD, which deletable holds), a backslash and a
-// character that can start an esc ("\t", "\x00", "\u200b", "\U000e0001"), or U+212A or U+017F, which are "k" and "s" to a
+// character that can start an esc, in either case ("\t", "\T", "\x00", "\u200b", "\U000e0001"; inside (?i:...) the escapes
+// fold, TestHoldsGapTakesEveryGapAndFold generates them all), or U+212A or U+017F, which are "k" and "s" to a
 // case-insensitive pattern and the only characters outside ASCII that are an ASCII letter to one (TestDeletableIsTheDeletionSet
-// holds holdsGap to deletable and to unicode.SimpleFold over every code point). It takes a backslash and one of those
-// characters, a gap only when an esc follows, as one all the same: what it holds more than the patterns do makes a gate true
-// more often, never false where a pattern matches.
+// holds holdsGap to deletable over every code point, and TestHoldsGapTakesEveryGapAndFold to unicode.SimpleFold). It takes a
+// backslash and one of those characters, a gap only when an esc follows, as one all the same: what it holds more than the
+// patterns do makes a gate true more often, never false where a pattern matches.
 func holdsGap(s string) bool {
 	for i := 0; i < len(s); {
 		c := s[i]
@@ -34,7 +37,7 @@ func holdsGap(s string) bool {
 			switch {
 			case c < ' ' && c != '\t' && c != '\n' && c != '\r', c == 0x7f:
 				return true
-			case c == '\\' && i+1 < len(s) && strings.IndexByte(escStarts, s[i+1]) >= 0:
+			case c == '\\' && i+1 < len(s) && strings.IndexByte(escStarts, lowerASCII(s[i+1])) >= 0:
 				return true
 			}
 			i++
