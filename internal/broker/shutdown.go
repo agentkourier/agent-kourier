@@ -17,7 +17,7 @@ const (
 	stepPool                         // the agent clients close
 	stepResolver                     // the Reloader stops, then the Secret informers
 	stepStore                        // the store closes, after everything that writes to it
-	stepHealth                       // the health server goes last, so /healthz answers to the end
+	stepHealth                       // the leader label comes off the pod, just before the lease is handed over, then the health server goes last, so /healthz answers to the end
 )
 
 func (n stepName) String() string {
