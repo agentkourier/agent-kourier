@@ -92,7 +92,7 @@ release_fixture="${tmp}/releases.json"
 printf '%s\n' \
   '[' \
   '  {"tag_name":"v1.0.0","draft":false,"prerelease":false,"body":"- Image: `ghcr.io/agentkourier/agent-kourier@sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`"},' \
-  '  {"tag_name":"v1.1.0","draft":false,"prerelease":false,"body":"- Image: `ghcr.io/agentkourier/agent-kourier@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`\n- Prompt agent image: `ghcr.io/agentkourier/agent-kourier-prompt-agent@sha256:1111111111111111111111111111111111111111111111111111111111111111`\n- Echo agent image: `ghcr.io/agentkourier/agent-kourier-echo-agent@sha256:2222222222222222222222222222222222222222222222222222222222222222`\n* chore: ghcr.io/agentkourier/agent-kourier-echo-agent@sha256:3333333333333333333333333333333333333333333333333333333333333333 by someone\n* - Echo agent image: `ghcr.io/agentkourier/agent-kourier-echo-agent@sha256:5555555555555555555555555555555555555555555555555555555555555555` by @x in https://github.com/x/y/pull/1\n* - Prompt agent image: `ghcr.io/agentkourier/agent-kourier-prompt-agent@sha256:7777777777777777777777777777777777777777777777777777777777777777` by @x in https://github.com/x/y/pull/3\n- Echo agent image: `ghcr.io/agentkourier/agent-kourier-echo-agent@sha256:6666666666666666666666666666666666666666666666666666666666666666` and more\n - Prompt agent image: `ghcr.io/agentkourier/agent-kourier-prompt-agent@sha256:8888888888888888888888888888888888888888888888888888888888888888`"},' \
+  '  {"tag_name":"v1.1.0","draft":false,"prerelease":false,"body":"- Image: `ghcr.io/agentkourier/agent-kourier@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`\n- Prompt agent image: `ghcr.io/agentkourier/agent-kourier-prompt-agent@sha256:1111111111111111111111111111111111111111111111111111111111111111`\n- Echo agent image: `ghcr.io/agentkourier/agent-kourier-echo-agent@sha256:2222222222222222222222222222222222222222222222222222222222222222`\n* chore: ghcr.io/agentkourier/agent-kourier-echo-agent@sha256:3333333333333333333333333333333333333333333333333333333333333333 by someone\n* - Echo agent image: `ghcr.io/agentkourier/agent-kourier-echo-agent@sha256:5555555555555555555555555555555555555555555555555555555555555555` by @x in https://github.com/x/y/pull/1\n- Prompt agent image: `ghcr.io/agentkourier/agent-kourier-prompt-agent@sha256:9999999999999999999999999999999999999999999999999999999999999999` and more\n - Echo agent image: `ghcr.io/agentkourier/agent-kourier-echo-agent@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff`\n* - Prompt agent image: `ghcr.io/agentkourier/agent-kourier-prompt-agent@sha256:7777777777777777777777777777777777777777777777777777777777777777` by @x in https://github.com/x/y/pull/3\n- Echo agent image: `ghcr.io/agentkourier/agent-kourier-echo-agent@sha256:6666666666666666666666666666666666666666666666666666666666666666` and more\n - Prompt agent image: `ghcr.io/agentkourier/agent-kourier-prompt-agent@sha256:8888888888888888888888888888888888888888888888888888888888888888`"},' \
   '  {"tag_name":"v1.2.0-rc.1","draft":false,"prerelease":true,"body":"- Image: `ghcr.io/agentkourier/agent-kourier@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc`"},' \
   '  {"tag_name":"v1.2.0-rc.2","draft":false,"prerelease":true,"body":"- Image: `ghcr.io/agentkourier/agent-kourier@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd`"},' \
   '  {"tag_name":"v9.0.0","draft":true,"prerelease":false,"body":"- Image: `ghcr.io/agentkourier/agent-kourier@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee`"}' \
@@ -111,8 +111,11 @@ grep -F 'ghcr.io/agentkourier/agent-kourier-echo-agent@sha256:222222222222222222
 grep -F '33333333' "${selected}" >/dev/null && fail "a digest outside the verified artifacts lines was selected"
 grep -F '55555555' "${selected}" >/dev/null && fail "a pull request title shaped like a verified artifacts line was selected"
 grep -F '77777777' "${selected}" >/dev/null && fail "a pull request title shaped like a prompt agent line was selected"
-grep -F '66666666' "${selected}" >/dev/null && fail "an agent line with text after the reference was selected"
-grep -F '88888888' "${selected}" >/dev/null && fail "an agent line that does not start the line was selected"
+# Each of these lines breaks one anchor only, so dropping any one anchor of an agent capture selects one of them.
+grep -F '99999999' "${selected}" >/dev/null && fail "a prompt agent line with text after the reference was selected"
+grep -F '88888888' "${selected}" >/dev/null && fail "a prompt agent line that does not start the line was selected"
+grep -F '66666666' "${selected}" >/dev/null && fail "an echo agent line with text after the reference was selected"
+grep -F 'ffffffff' "${selected}" >/dev/null && fail "an echo agent line that does not start the line was selected"
 grep -F 'aaaaaaaa' "${selected}" >/dev/null && fail "older stable digest was selected"
 grep -F 'eeeeeeee' "${selected}" >/dev/null && fail "draft release digest was selected"
 
@@ -133,6 +136,16 @@ printf '%s\n' '[{"tag_name":"v2.0.0","draft":false,"prerelease":false,"body":"* 
 if "${HERE}/select-release-images.sh" "${title_only}" "${selected}"; then
   fail "a release whose only Agent Kourier digest is in a pull request title was accepted"
 fi
+
+# A line that breaks only the end anchor, then one that breaks only the start anchor: dropping either anchor of the
+# Agent Kourier capture accepts one of them.
+for body in '- Image: `ghcr.io/agentkourier/agent-kourier@sha256:4444444444444444444444444444444444444444444444444444444444444444` and more' \
+  ' - Image: `ghcr.io/agentkourier/agent-kourier@sha256:4444444444444444444444444444444444444444444444444444444444444444`'; do
+  jq -n --arg body "${body}" '[{tag_name:"v2.0.0",draft:false,prerelease:false,body:$body}]' >"${title_only}"
+  if "${HERE}/select-release-images.sh" "${title_only}" "${selected}"; then
+    fail "a release whose only Agent Kourier image line is not a whole line was accepted: ${body}"
+  fi
+done
 
 invalid_releases="${tmp}/invalid-releases.json"
 printf '%s\n' '{' >"${invalid_releases}"
