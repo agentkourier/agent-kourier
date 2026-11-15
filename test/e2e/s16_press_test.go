@@ -341,7 +341,7 @@ func s16StallWithRacingPresses(t *testing.T) {
 	if exit.ExitCode != exitLeadershipLost {
 		t.Fatalf("the old leader ended with exit code %d (%s) after %s frozen; want %d, a lost leadership", exit.ExitCode, exit.Reason, asleep.Round(time.Second), exitLeadershipLost)
 	}
-	if logs, err := f.pods.Logs(f.ctx, kube.AgentKourierNamespace, old.Name, agentKourierContainer, exit.Previous, 400); err == nil {
+	if logs, err := f.pods.RunLogs(f.ctx, kube.AgentKourierNamespace, old.Name, agentKourierContainer, old.ContainerID, 400); err == nil {
 		t.Logf("the old leader was frozen for %s, resumed, and ended with exit code %d; its log says: %q", asleep.Round(time.Second), exit.ExitCode, ExitReasons(logs))
 	}
 	if f.env.SlackMode == SlackModeHTTP {

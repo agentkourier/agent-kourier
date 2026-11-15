@@ -98,7 +98,7 @@ func TestS16_ResumedLeaderCannotSendQueuedReply(t *testing.T) {
 	if state.Sends[held.MessageID] != 1 {
 		t.Fatalf("deposed leader reached A2A: sends=%d for %s; want 1", state.Sends[held.MessageID], held.MessageID)
 	}
-	logs, err := f.pods.Logs(f.ctx, kube.AgentKourierNamespace, old.Name, agentKourierContainer, exit.Previous, 400)
+	logs, err := f.pods.RunLogs(f.ctx, kube.AgentKourierNamespace, old.Name, agentKourierContainer, old.ContainerID, 400)
 	if err != nil {
 		t.Fatal(err)
 	}

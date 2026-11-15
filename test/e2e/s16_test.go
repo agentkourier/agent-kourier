@@ -540,7 +540,7 @@ func s16StalledLeader(t *testing.T) {
 	// Exit 5 is also what a lost lease gives, which refuses no write: so the reason it gave is read, and it must be a fence's. The resumed
 	// process meets its renewal deadline and its first store write together, and either may end it first, so a run whose lease loss came
 	// first fails here with that reason; with the lease at nine seconds the write has won every time it was run.
-	logs, err := f.pods.Logs(f.ctx, kube.AgentKourierNamespace, old.Name, agentKourierContainer, exit.Previous, 400)
+	logs, err := f.pods.RunLogs(f.ctx, kube.AgentKourierNamespace, old.Name, agentKourierContainer, old.ContainerID, 400)
 	if err != nil {
 		t.Fatalf("the old leader's log is not readable, so why it stopped is not known: %v", err)
 	}
