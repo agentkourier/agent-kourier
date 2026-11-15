@@ -68,6 +68,17 @@ func connWithBotToken(tok string) Connection {
 		Credentials: map[string]secret.Value{"botToken": secret.New(tok), "appToken": secret.New("xapp-fake")}}
 }
 
+// A platform with no identity call gives the zero identity, which takes part in no comparison, and no error: the connection is not sent to Slack
+// for it (the build with test hooks shows that no call is made, TestTheIdentityOfAConnectionIsAskedOfItsOwnPlatform; here a call to Slack with
+// no token would be an error).
+func TestAPlatformWithNoIdentityCallGivesTheZeroIdentity(t *testing.T) {
+	t.Parallel()
+	id, err := RunConfig{}.identityOf(t.Context(), Connection{Ref: v1alpha1.ObjectRef{Namespace: "team-a", Name: "web"}, Platform: "web"})
+	if err != nil || id.known() || id != (appIdentity{}) {
+		t.Errorf("identityOf(a web connection) = %+v, %v; want the zero identity and no error", id, err)
+	}
+}
+
 // One app installed in two workspaces has two bot users and two bot IDs, and one app ID: the identity says the app, so the two connections
 // are one app. Two different apps in one workspace are two.
 func TestTheIdentityOfAConnectionIsTheAppItsBotBelongsTo(t *testing.T) {

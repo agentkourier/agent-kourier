@@ -304,7 +304,8 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	}
 	// Each connection has an intake of its own (its table of triggers, the messages it has seen) over the parts that every connection
 	// shares, behind a guard that drops a mention by the bot of another connection this broker runs (botGuard).
-	newIntake := func(ref v1alpha1.ObjectRef) (chat.Sink, error) {
+	newIntake := func(conn Connection) (chat.Sink, error) {
+		ref := conn.Ref
 		intakeCfg, err := newIntakeConfig(intakeParts{
 			conn: ref, snapshot: boot.Reloader.Current, submitter: mgr, interactions: interactions, log: log,
 			notice: sink.QueueNotice, starter: starter, threads: st, runs: st, replies: st,
@@ -312,11 +313,11 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 		if err != nil {
 			return nil, err
 		}
-		return botGuard{in: trigger.NewIntake(intakeCfg), self: v1alpha1.NamespacedName(ref.Namespace, ref.Name), bots: table, log: log}, nil
+		return botGuard{in: trigger.NewIntake(intakeCfg), self: v1alpha1.NamespacedName(ref.Namespace, ref.Name), platform: conn.Platform, bots: table, log: log}, nil
 	}
 	chatDone := make(chan error, 1)
 	if own != nil {
-		ownSink, err := newIntake(own.Ref)
+		ownSink, err := newIntake(*own)
 		if err != nil {
 			return nil, err
 		}

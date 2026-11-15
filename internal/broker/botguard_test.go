@@ -21,6 +21,7 @@ import (
 // bot BOWN is the own connection's and BTEAMB is team-b's.
 type guardRig struct {
 	guard botGuard
+	table *runtimeTable
 	mu    sync.Mutex
 	start []string // the bots whose posts started something, by the Binding's OnStart
 }
@@ -73,10 +74,11 @@ func newGuardRig(t *testing.T, triggers ...v1alpha1.Trigger) *guardRig {
 		},
 	})
 	table := newRuntimeTable()
-	table.identify("platform/slack", appIdentity{Bot: "BOWN", User: "UOWN"})
-	table.identify("team-a/slack", appIdentity{Bot: "BTEAMA", User: "UTEAMA"})
-	table.identify("team-b/slack", appIdentity{Bot: "BTEAMB", User: "UTEAMB"})
-	g.guard = botGuard{in: in, self: "team-a/slack", bots: table, log: testutil.DiscardLogger()}
+	table.identify("platform/slack", appIdentity{Platform: v1alpha1.PlatformSlack, Bot: "BOWN", User: "UOWN"})
+	table.identify("team-a/slack", appIdentity{Platform: v1alpha1.PlatformSlack, Bot: "BTEAMA", User: "UTEAMA"})
+	table.identify("team-b/slack", appIdentity{Platform: v1alpha1.PlatformSlack, Bot: "BTEAMB", User: "UTEAMB"})
+	g.table = table
+	g.guard = botGuard{in: in, self: "team-a/slack", platform: v1alpha1.PlatformSlack, bots: table, log: testutil.DiscardLogger()}
 	return g
 }
 
@@ -175,5 +177,45 @@ func TestAPersonMessageTriggerIsNotFedByAnotherConnectionsBot(t *testing.T) {
 	}
 	if err := g.guard.Message(t.Context(), post("UTEAMA", "102.1")); err != nil { // the connection's own bot is the adapter's to refuse, not the guard's
 		t.Fatal(err)
+	}
+}
+
+// A bot ID and a bot's user are the platform's: the bot of a connection on another platform is not this broker's bot on this one, whatever its
+// IDs. A mention by a bot of this platform with the ID of another platform's bot, and a post with no bot ID by a user with the ID of that bot's user,
+// are the Intake's, as any bot's and person's are; the guard of the other platform's connection does not read the bots of this one as its own either.
+func TestTheGuardReadsOnlyTheBotsOfItsOwnPlatform(t *testing.T) {
+	trigger := v1alpha1.Trigger{Type: v1alpha1.TriggerPersonMessage, PromptTemplate: "A person wrote in {{ .Channel }}.",
+		Limits: v1alpha1.TriggerLimits{
+			RateLimit:     &v1alpha1.RateLimit{MaxRuns: 1000, Per: metav1.Duration{Duration: time.Hour}, MaxConcurrent: 1000},
+			MaxRunsPerDay: new(int32(0)),
+		}}
+	g := newGuardRig(t, v1alpha1.Trigger{Type: v1alpha1.TriggerMention}, trigger)
+	g.table.identify("team-c/web", appIdentity{Platform: "web", Bot: "BWEB", User: "UWEB"})
+
+	if !g.guard.AcceptsBotMention("C1", "BWEB") {
+		t.Error("AcceptsBotMention(BWEB) = false; want the ID of a bot of another platform to be the Intake's here")
+	}
+	if err := g.guard.Message(t.Context(), mention("BWEB", "100.1")); err != nil {
+		t.Fatal(err)
+	}
+	post := chat.Inbound{At: chat.Ref{Platform: "slack", Conn: "team-a/slack", Channel: "C1", ID: "101.1"}, User: "UWEB", Text: "checkout is down"}
+	if err := g.guard.Message(t.Context(), post); err != nil {
+		t.Fatal(err)
+	}
+	if got := g.started(); len(got) != 2 || got[0] != "BWEB" || got[1] != "UWEB" {
+		t.Errorf("started by %v; want the mention by BWEB and the post by UWEB, which are no bots of this broker on Slack", got)
+	}
+
+	web := botGuard{self: "team-c/web", platform: "web", bots: g.table}
+	for _, bot := range []string{"BOWN", "BTEAMA", "BTEAMB"} {
+		if web.other(bot) {
+			t.Errorf("the guard of the web connection reads the Slack bot %s as another connection's of this broker", bot)
+		}
+	}
+	if web.otherUser("UOWN") {
+		t.Error("the guard of the web connection reads the user of the own Slack bot as another connection's bot")
+	}
+	if !g.guard.other("BTEAMB") || !g.guard.otherUser("UTEAMB") {
+		t.Error("the guard of team-a no longer reads team-b's Slack bot as another connection's; want Slack's guard unchanged")
 	}
 }
