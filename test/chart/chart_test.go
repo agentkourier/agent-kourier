@@ -828,8 +828,8 @@ func TestNetworkPolicyFencesEgress(t *testing.T) {
 	if !slices.Equal(np.Spec.PolicyTypes, []string{"Ingress", "Egress"}) {
 		t.Errorf("policy types %v; want both, so that what is not listed is denied", np.Spec.PolicyTypes)
 	}
-	if len(np.Spec.Ingress) != 1 || len(np.Spec.Ingress[0].Ports) != 1 || np.Spec.Ingress[0].Ports[0].Port != 8080 {
-		t.Errorf("ingress %+v; want the metrics port from the scrapers and nothing else", np.Spec.Ingress)
+	if len(np.Spec.Ingress) != 2 || len(np.Spec.Ingress[0].Ports) != 1 || np.Spec.Ingress[0].Ports[0].Port != 8080 || len(np.Spec.Ingress[1].Ports) != 1 || np.Spec.Ingress[1].Ports[0].Port != 8081 {
+		t.Errorf("ingress %+v; want the metrics port from the scrapers, the chat port from the ingress controller, and nothing else", np.Spec.Ingress)
 	}
 	var ports []int
 	for _, e := range np.Spec.Egress {

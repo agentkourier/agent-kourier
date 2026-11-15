@@ -1,0 +1,34 @@
+{{- if and .Values.chatListener.enabled .Values.chatListener.ingress.enabled }}
+# The chat Service from outside the cluster: the path prefix /chat/ (POST /chat/<platform>/<namespace>/<name>) and nothing else.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "agentkourier.fullname" . }}-chat
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentkourier.labels" . | nindent 4 }}
+  {{- with .Values.chatListener.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.chatListener.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.chatListener.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - {{- with .Values.chatListener.ingress.host }}
+      host: {{ . | quote }}
+      {{- end }}
+      http:
+        paths:
+          - path: /chat/
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "agentkourier.fullname" . }}-chat
+                port: {name: chat}
+{{- end }}

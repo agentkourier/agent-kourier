@@ -1,0 +1,23 @@
+{{- if .Values.chatListener.enabled }}
+# The chat listener's port, on the leader alone: the leader labels its own pod agentkourier.dev/role=leader once it leads, and every
+# replica takes the label off its pod as it starts and at shutdown, so a standby, which would answer 503, is never behind it. While no
+# replica leads (a takeover) it has no endpoint. The health and metrics port is on the other Service, which selects every pod.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentkourier.fullname" . }}-chat
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentkourier.labels" . | nindent 4 }}
+  {{- with .Values.chatListener.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.chatListener.service.type }}
+  selector:
+    {{- include "agentkourier.selectorLabels" . | nindent 4 }}
+    agentkourier.dev/role: leader
+  ports:
+    - {name: chat, port: {{ int .Values.chatListener.service.port }}, targetPort: chat}
+{{- end }}

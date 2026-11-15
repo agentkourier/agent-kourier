@@ -233,6 +233,16 @@ spec:
           value: /data/agent-kourier.db
         - name: AGENTKOURIER_LISTEN
           value: :8080
+        - name: AGENTKOURIER_CHAT_LISTEN
+          value: :8081
+        - name: AGENTKOURIER_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: AGENTKOURIER_POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
         - name: AGENTKOURIER_LOG_LEVEL
           value: debug
         - name: AGENTKOURIER_KLOG_V
@@ -264,6 +274,8 @@ spec:
         ports:
         - containerPort: 8080
           name: http
+        - containerPort: 8081
+          name: chat
         readinessProbe:
           httpGet:
             path: /readyz
@@ -323,6 +335,35 @@ spec:
           claimName: agent-kourier-data
       - emptyDir: {}
         name: tmp
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  labels:
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.4.0
+  name: agent-kourier-chat
+  namespace: agent-kourier-system
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: agent-kourier.example.test
+    http:
+      paths:
+      - backend:
+          service:
+            name: agent-kourier-chat
+            port:
+              name: chat
+        path: /chat/
+        pathType: Prefix
+  tls:
+  - hosts:
+    - agent-kourier.example.test
+    secretName: agent-kourier-chat-tls
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -392,6 +433,16 @@ spec:
     ports:
     - port: 8080
       protocol: TCP
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: ingress-nginx
+    ports:
+    - port: 8081
+      protocol: TCP
   podSelector:
     matchLabels:
       app.kubernetes.io/instance: agent-kourier
@@ -420,6 +471,25 @@ spec:
     requests:
       storage: 5Gi
   storageClassName: gp3
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.4.0
+  name: agent-kourier-leader-label
+  namespace: agent-kourier-system
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - patch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -481,6 +551,26 @@ rules:
   - secrets
   verbs:
   - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.4.0
+  name: agent-kourier-leader-label
+  namespace: agent-kourier-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: agent-kourier-leader-label
+subjects:
+- kind: ServiceAccount
+  name: agent-kourier
+  namespace: agent-kourier-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -559,6 +649,28 @@ spec:
     port: 8080
     targetPort: http
   selector:
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/name: agent-kourier
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.4.0
+  name: agent-kourier-chat
+  namespace: agent-kourier-system
+spec:
+  ports:
+  - name: chat
+    port: 8081
+    targetPort: chat
+  selector:
+    agentkourier.dev/role: leader
     app.kubernetes.io/instance: agent-kourier
     app.kubernetes.io/name: agent-kourier
   type: ClusterIP
