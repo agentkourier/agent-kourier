@@ -277,7 +277,7 @@ asks the thread a question. The tool list is enforced; what the model says it di
 
 - A Slack app with the bot invited to the channel: [Configure Slack](configure-slack.md). You need the channel's ID.
 - A model provider's key, a model that supports tool calls, and an MCP server with the tools the agent may call.
-- Docker, to build the agent's image: Agent Kourier's releases publish the broker's image and chart, not this agent's.
+- Docker, only to build an image of your own: the manifests name the agent's image that each release publishes.
 
 ### Agent Kourier's resources
 
@@ -303,7 +303,7 @@ mention is held only to the broker's fixed limits. Bound the key at the provider
 The agent refuses to start without the token's file, unless it is told to accept every caller, so the same value goes
 in a Secret in the agent's namespace too. The recipe's
 [README](https://github.com/agentkourier/agent-kourier/blob/main/examples/recipes/prompt-agent/README.md) has the steps
-in order (build the image, write `agent.yaml`, make the Secrets, apply the agent and Agent Kourier's resources), each
+in order (choose the image, write `agent.yaml`, make the Secrets, apply the agent and Agent Kourier's resources), each
 field of `agent.yaml`, the providers that have been run, everything the agent refuses and why, and its limits.
 
 ### Check it

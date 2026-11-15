@@ -3,12 +3,13 @@
 What changed in each release, newest first, and what you must do about it. The steps for an upgrade are in
 [Upgrade](how-to/upgrade.md), which has a section for each change that needs one; this page says what changed and points to it.
 
-## Version 0.4.0 (unreleased)
+## Version 0.4.0
 
 On custom resources a broker can admit namespaces by their labels, and a broker that names nothing it serves serves the ChatConnections of every
-namespace. Every values file and environment that worked with 0.3.2 keeps its meaning, but for one value of
-`AGENTKOURIER_CONNECTION_NAMESPACES` that the chart never renders (below): with nothing set, 0.3.2 refused to render the chart and the broker
-refused to start. [Which ChatConnections a broker serves](explanation/config-routes.md#which-chatconnections-a-broker-serves) has the rule, and
+namespace, where 0.3.2 refused to render the chart and its broker refused to start. A values file or an environment that worked with 0.3.2 keeps
+its meaning, except for one value of `AGENTKOURIER_CONNECTION_NAMESPACES` that the chart never renders (below). The release also publishes the
+images of two recipes' agents, and adds the `prompt-agent` recipe. The image is built with Go 1.27.4, as 0.3.2's was.
+[Which ChatConnections a broker serves](explanation/config-routes.md#which-chatconnections-a-broker-serves) has the rule, and
 [A team brings its own chat app](explanation/security.md#a-team-brings-its-own-chat-app) what each way of admitting means for who consents.
 [Upgrade to the release that admits namespaces by label](how-to/upgrade.md#upgrade-to-the-release-that-admits-namespaces-by-label) has the
 steps, and how to roll back.
@@ -61,6 +62,38 @@ steps, and how to roll back.
   builds an agent's image to try a recipe.
 - **Both images are built on Wolfi**, with CPython 3.14 and no pip, and still run as user 65532. The images that `make prompt-agent-image` and
   `make echo-agent-image` build changed the same way: the entrypoint is `/opt/venv/bin/python agent.py`.
+
+### Recipes
+
+- **New recipe, [`prompt-agent`](https://github.com/agentkourier/agent-kourier/blob/main/examples/recipes/prompt-agent/README.md)**: an agent
+  that a team writes as one `agent.yaml` in Pydantic AI's agent spec format (a prompt, a model, and the MCP tools it may call), served over A2A by
+  a small Python server and reached through the `a2a` dialect. The server refuses to start on anything in the file that could give the agent a
+  tool the file does not list, and, unless it is told to accept every caller, answers 401 to a caller without its bearer token.
+  [Recipes](how-to/recipes.md#define-an-agent-from-a-prompt) has it.
+- **The `docs-agent` recipe runs under a kagent agent that owns the channel**, in one of two ways, with the files in its `kagent/` directory:
+  as a sub-agent that the owning agent calls as a tool, or as the tools `search_docs` and `read_page`, served by `/docs-mcp`, which the image
+  now also holds. For the sub-agent, `A2A_V03_URL` makes the docs agent also serve A2A 0.3 at its root, as kagent 0.9 calls it; the agent
+  refuses to start when that URL's path is anything but empty or `/`. Without it nothing changes. The recipe's README has the steps.
+- **The `docs-agent` recipe's prompt tells the model to open with the answer**, not a preamble about what it found.
+
+### Other changes
+
+- **On SQLite, a broker logs a warning when its database is newer than it is**, as one on Postgres already did: at start, when the database
+  records a migration this build does not have, as after a rollback from a later release, it logs at WARN
+  `the database schema is newer than this build of Agent Kourier`, with `newest_known_migration` and `newest_in_database`, and starts. This
+  release adds no migration.
+- **Redaction skips the patterns that cannot match.** Before each costly pattern, the redactor checks that the text holds what any match of it
+  needs (a word such as `bearer` or `token`, or a character the patterns allow between letters), and skips it where it does not. What is
+  redacted is unchanged.
+
+### Dependencies
+
+- **Go modules:** `github.com/jackc/pgx/v5` from v5.12.0 to v5.13.0, `github.com/slack-go/slack` from v0.35.0 to v0.36.0,
+  `golang.org/x/sys` from v0.49.0 to v0.50.0 and `go.yaml.in/yaml/v3` from v3.0.5 to v3.0.6.
+- **The Go builder image `golang:1.27.4` is pinned to a new digest**; the tag, and so Go 1.27.4, is unchanged, and so is the runtime base.
+- **The recipes' and the AX example's dependencies:** the echo agent's `opentelemetry-api` moves from 1.45.1 to 1.45.2 (CVE-2026-126360), the
+  new prompt agent holds `fastmcp-slim` at 4.1.2 or later (GHSA-7xgj-8392-5q4r, GHSA-vqqp-x5qm-5qp4), and
+  `go.opentelemetry.io/otel/trace` in the `docs-agent` recipe and in `examples/ax` moves from v1.46.0 to v1.47.0 (GHSA-q7gw-24fr-5p69).
 
 ## Version 0.3.2
 

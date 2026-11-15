@@ -41,9 +41,9 @@ and recovery after a restart or failover. Slack is supported today, and other ch
 </div>
 </div>
 
-!!! note "Status: v0.3.2"
-    The current release is `0.3.2`: install the published chart and image with [Install with Helm](how-to/install-with-helm.md).
-    The `v1alpha1` resource format can change before 1.0. The [release notes](release-notes.md) say what changed in 0.3.0, which lets a team bring its own Slack app to a shared broker.
+!!! note "Status: v0.4.0"
+    The current release is `0.4.0`: install the published chart and image with [Install with Helm](how-to/install-with-helm.md).
+    The `v1alpha1` resource format can change before 1.0. The [release notes](release-notes.md) say what changed in 0.4.0, which lets a broker on custom resources admit the namespaces of the teams that bring their own Slack apps by label, or serve every namespace.
 
 ## What Agent Kourier handles
 
