@@ -54,7 +54,16 @@ done
 
 TMP=$(mktemp -d)
 CREATED=
+# The label TestLeaderLabelPolicyOnAnAPIServer puts on its namespace, policy and binding (policyTestLabel in test/chart).
+POLICY_TEST_LABEL=agentkourier.dev/test=leader-label-policy
 cleanup() {
+  # A cluster that is not this script's outlives it: what a policy test cut short (an interrupt, or go test's -timeout panic, which
+  # skips the test's own cleanup) left there is deleted by its label.
+  if [ -n "${CRD_CORPUS_KUBECONFIG:-}" ]; then
+    kubectl --kubeconfig "${CRD_CORPUS_KUBECONFIG}" --request-timeout=60s delete \
+      validatingadmissionpolicies,validatingadmissionpolicybindings,namespaces -l "${POLICY_TEST_LABEL}" --ignore-not-found --wait=false >/dev/null 2>&1 ||
+      echo "warning: could not delete the objects labeled ${POLICY_TEST_LABEL}" >&2
+  fi
   if [ -n "${CREATED}" ] && [ "${CRD_CORPUS_KEEP:-}" != 1 ]; then
     kind delete cluster --name "${CORPUS_CLUSTER}" --kubeconfig "${TMP}/kubeconfig" >/dev/null 2>&1 || echo "warning: could not delete kind cluster ${CORPUS_CLUSTER}" >&2
   fi

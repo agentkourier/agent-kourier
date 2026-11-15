@@ -311,9 +311,10 @@ service:
 # Switched on, the chart passes the pod's name and namespace from the downward API (AGENTKOURIER_POD_NAME, AGENTKOURIER_POD_NAMESPACE).
 # Every replica takes the label agentkourier.dev/role=leader off its own pod as it starts, and is not Ready until a write of the label has
 # succeeded, that removal or the label put on (so a replica whose patches of its pod keep failing, while the API server answers its reads,
-# is out of every Service until one succeeds); the leader puts it on once it leads, and takes it off at shutdown. With SQLite the one replica leads, and carries it. podLabels may not set it. The chat Service,
-# <fullname>-chat, selects the Deployment's pods that carry the label, so it sends requests to the leader alone; while no replica leads
-# (a takeover) it has no endpoint, and the platform's requests fail until one does.
+# is out of every Service until one succeeds); the leader puts it on once it leads, and takes it off at shutdown. With SQLite the one
+# replica leads, and carries it. podLabels may not set it. The chat Service, <fullname>-chat, selects the Deployment's pods that carry
+# the label, so it sends requests to the leader alone; while no replica leads (a takeover) it has no endpoint, and the platform's
+# requests fail until one does.
 #
 # With rbac.create the chart grants the label with a Role in the release namespace: patch on pods. A Deployment's pods are named by its
 # ReplicaSet, so the chart cannot name the pod in resourceNames, and the Role covers every pod of the release namespace. With it the chart

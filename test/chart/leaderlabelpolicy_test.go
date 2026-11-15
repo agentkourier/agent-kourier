@@ -27,6 +27,11 @@ import (
 // jobs run on the pinned Kubernetes and on the chart's minimum. Unset, the test skips.
 const admissionKubeconfigEnv = "CHART_ADMISSION_KUBECONFIG"
 
+// policyTestLabel, with policyTestLabelValue, marks every object TestLeaderLabelPolicyOnAnAPIServer creates outside its namespace, and the
+// namespace: a run cut short (an interrupt, or the -timeout panic, which skips t.Cleanup) leaves nothing that the next run's
+// deleteLeftovers, or hack/kind/crd-corpus.sh's cleanup with CRD_CORPUS_KUBECONFIG, cannot find by it.
+const policyTestLabel, policyTestLabelValue = "agentkourier.dev/test", "leader-label-policy"
+
 // leaderLabelPolicy is the leader label's policy and its binding as the chart renders them for the release agent-kourier in namespace,
 // with the chat listener on.
 func leaderLabelPolicy(t *testing.T, objs []object, namespace string) (admissionregistrationv1.ValidatingAdmissionPolicy, admissionregistrationv1.ValidatingAdmissionPolicyBinding) {
@@ -131,7 +136,15 @@ func TestLeaderLabelPolicyOnAnAPIServer(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	must(admin.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}, metav1.CreateOptions{}))
+	deleteLeftovers(ctx, t, admin)
+	marked := map[string]string{policyTestLabel: policyTestLabelValue}
+	for _, meta := range []*metav1.ObjectMeta{&policy.ObjectMeta, &binding.ObjectMeta} {
+		if meta.Labels == nil {
+			meta.Labels = map[string]string{}
+		}
+		meta.Labels[policyTestLabel] = policyTestLabelValue
+	}
+	must(admin.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns, Labels: marked}}, metav1.CreateOptions{}))
 	t.Cleanup(func() { _ = admin.CoreV1().Namespaces().Delete(cleanup, ns, metav1.DeleteOptions{}) })
 	must(admin.AdmissionregistrationV1().ValidatingAdmissionPolicies().Create(ctx, &policy, metav1.CreateOptions{}))
 	t.Cleanup(func() {
@@ -229,5 +242,34 @@ func TestLeaderLabelPolicyOnAnAPIServer(t *testing.T) {
 		case !tc.allow && !denied(err):
 			t.Errorf("%s = %v; want the policy to deny it", tc.name, err)
 		}
+	}
+}
+
+// deleteLeftovers deletes the bindings, policies and namespaces that carry policyTestLabel: what an earlier run that was cut short left
+// behind. Each run's names are its own, so this is housekeeping, not a precondition.
+func deleteLeftovers(ctx context.Context, t *testing.T, admin kubernetes.Interface) {
+	t.Helper()
+	sel := metav1.ListOptions{LabelSelector: policyTestLabel + "=" + policyTestLabelValue}
+	gone := func(err error) {
+		t.Helper()
+		if err != nil && !apierrors.IsNotFound(err) {
+			t.Fatalf("delete a leftover of an earlier run: %v", err)
+		}
+	}
+	ar := admin.AdmissionregistrationV1()
+	bindings, err := ar.ValidatingAdmissionPolicyBindings().List(ctx, sel)
+	gone(err)
+	for _, b := range bindings.Items {
+		gone(ar.ValidatingAdmissionPolicyBindings().Delete(ctx, b.Name, metav1.DeleteOptions{}))
+	}
+	policies, err := ar.ValidatingAdmissionPolicies().List(ctx, sel)
+	gone(err)
+	for _, p := range policies.Items {
+		gone(ar.ValidatingAdmissionPolicies().Delete(ctx, p.Name, metav1.DeleteOptions{}))
+	}
+	namespaces, err := admin.CoreV1().Namespaces().List(ctx, sel)
+	gone(err)
+	for _, n := range namespaces.Items {
+		gone(admin.CoreV1().Namespaces().Delete(ctx, n.Name, metav1.DeleteOptions{}))
 	}
 }
