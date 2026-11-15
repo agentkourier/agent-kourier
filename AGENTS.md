@@ -73,6 +73,9 @@ golangci-lint runs as `go tool golangci-lint`, never a global install.
   as a server-side dry-run create. A new API field or validation rule gets a marker where the schema can copy it and an entry in
   `test/crdcorpus/testdata/invalid` with its `# schema: refuses` or `# schema: accepts` flag. The CI job `crd-corpus` runs it on the pinned node and on the chart's minimum Kubernetes (`CRD_CORPUS_NODE=min`, `NODE_IMAGE_MIN` in `hack/kind/lib.sh`). A bound in the
   schema is a cap in `Validate` too (`maxTriggers`, `maxExtract`, `maxHeaders`, `maxHeaderNameLen`), so lowering one can refuse a config that loads today.
+  On the same cluster it then runs `test/chart`'s `TestLeaderLabelPolicyOnAnAPIServer` with `CHART_ADMISSION_KUBECONFIG` set to it (it needs helm): the
+  chart's ValidatingAdmissionPolicy for the leader label, installed with its Role, must allow the broker's label on its own pod and deny the rest. Unset,
+  that test skips; set by hand, it must name a cluster on this machine, where it makes and deletes a namespace and a cluster-wide policy and binding.
 - `make e2e-fast-up` / `e2e-full-up` / `e2e-ax-up` bring up the kind tiers (`hack/kind/`); `e2e-fast-down`,
   `e2e-full-down`, `e2e-ax-down` and `e2e-down` (all) tear them down. `e2e-fast` / `e2e-full` / `e2e-ax` run the E2E tests in that tier
   as an in-cluster Job (`hack/kind/e2e-run.sh`).
