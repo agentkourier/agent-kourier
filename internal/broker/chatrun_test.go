@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 	"slices"
 	"strings"
@@ -85,7 +86,7 @@ func TestRunPlatformBacksOffFromOneSecondToAMinute(t *testing.T) {
 
 	err := RunPlatform(ctx, &runner{steps: steps}, nil, policy(c))
 
-	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrSlackAuth) {
+	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrChatAuth) {
 		t.Errorf("RunPlatform = %v, want the context's end", err)
 	}
 	if want := secs(1, 2, 4, 8, 16, 32, 60, 60, 60); !slices.Equal(c.waits, want) {
@@ -105,11 +106,52 @@ func TestRunPlatformStopsAtOnceOnAFatalAuthError(t *testing.T) {
 		err := RunPlatform(ctx, r, nil, policy(c))
 		cancel()
 
-		if !errors.Is(err, ErrSlackAuth) || !strings.Contains(err.Error(), code) {
-			t.Errorf("%s: RunPlatform = %v, want ErrSlackAuth naming the code", code, err)
+		if !errors.Is(err, ErrChatAuth) || !strings.Contains(err.Error(), code) {
+			t.Errorf("%s: RunPlatform = %v, want ErrChatAuth naming the code", code, err)
 		}
 		if r.calls != 1 || len(c.waits) != 0 {
 			t.Errorf("%s: %d runs and %d waits, want one run and no retry", code, r.calls, len(c.waits))
+		}
+	}
+}
+
+// The rejection names the connection's platform as spec.platform spells it, so that a Slack connection's says what it always has
+// (docs/how-to/troubleshoot.md quotes it), and a policy that names none says the chat platform.
+func TestRunPlatformNamesThePlatformThatRejectedTheTokens(t *testing.T) {
+	for _, tc := range []struct{ platform, want string }{
+		{v1alpha1.PlatformSlack, "slack rejected the tokens: invalid_auth"},
+		{"web", "web rejected the tokens: invalid_auth"},
+		{"", "the chat platform rejected the tokens: invalid_auth"},
+	} {
+		c := &clock{}
+		p := policy(c)
+		p.Platform = tc.platform
+		r := &runner{steps: []func(int) error{fails(fmt.Errorf("slack auth.test call: %w", slackgo.SlackErrorResponse{Err: "invalid_auth"}))}}
+
+		err := RunPlatform(t.Context(), r, nil, p)
+
+		if !errors.Is(err, ErrChatAuth) || err.Error() != tc.want {
+			t.Errorf("platform %q: RunPlatform = %v, want ErrChatAuth saying %q", tc.platform, err, tc.want)
+		}
+	}
+}
+
+// The warning of a connection that ended names its platform, and a Slack connection's is the line the docs and log alerts match.
+func TestRunPlatformLogsThePlatformWhoseConnectionEnded(t *testing.T) {
+	for _, tc := range []struct{ platform, want string }{
+		{v1alpha1.PlatformSlack, `msg="slack connection ended; connecting again"`},
+		{"web", `msg="web connection ended; connecting again"`},
+		{"", `msg="chat connection ended; connecting again"`},
+	} {
+		ctx, cancel := context.WithCancel(t.Context())
+		var logs strings.Builder
+		p := policy(&clock{})
+		p.Platform, p.Logger = tc.platform, slog.New(slog.NewTextHandler(&logs, nil))
+
+		_ = RunPlatform(ctx, &runner{steps: failsThenStops(1, cancel)}, nil, p)
+
+		if !strings.Contains(logs.String(), tc.want) {
+			t.Errorf("platform %q: logs = %q, want %s", tc.platform, logs.String(), tc.want)
 		}
 	}
 }
@@ -124,7 +166,7 @@ func TestRunPlatformRetriesWhatIsNotFatal(t *testing.T) {
 		stopAfter(cancel),
 	}}
 
-	if err := RunPlatform(ctx, r, nil, policy(c)); errors.Is(err, ErrSlackAuth) || r.calls != 4 {
+	if err := RunPlatform(ctx, r, nil, policy(c)); errors.Is(err, ErrChatAuth) || r.calls != 4 {
 		t.Errorf("RunPlatform = %v after %d runs, want a retry of each of the first three", err, r.calls)
 	}
 }

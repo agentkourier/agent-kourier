@@ -97,7 +97,8 @@ before retrying the denial. A denial that the agent does not take causes the tas
 If a person's recorded decision wins a race with the sweep after its timeout audit, the sweep appends a `superseded`
 audit for that timeout. A failure to write the compensation is logged.
 
-A permanently abandoned or oversized approval prompt is refused as unusable. Agent Kourier queues the fixed refusal
+A permanently abandoned approval prompt is refused as unusable, and so is any prompt the chat platform cannot show: one
+too large for one message, or one the platform cannot display at all. Agent Kourier queues the fixed refusal
 notice and closes the interaction before cancelling the task, so a restart can retry the cancellation without reporting
 another timeout. A transient posting failure remains retryable.
 

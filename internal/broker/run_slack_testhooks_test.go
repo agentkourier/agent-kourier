@@ -538,7 +538,7 @@ func waitConnected(t *testing.T, f *fakeslack.Server) {
 		testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 }
 
-// A rejected token ends Run with ErrSlackAuth, which cmd/agent-kourier exits 1 on: no retry can mend it.
+// A rejected token ends Run with ErrChatAuth, which cmd/agent-kourier exits 1 on: no retry can mend it.
 func TestRunExitsWithSlackAuthWhenTheBotTokenIsRejected(t *testing.T) {
 	t.Parallel()
 	w := newSlackWorld(t, "wrong-bot-token") // the fake accepts only well-formed tokens
@@ -547,8 +547,10 @@ func TestRunExitsWithSlackAuthWhenTheBotTokenIsRejected(t *testing.T) {
 
 	err := r.wait()
 
-	if !errors.Is(err, ErrSlackAuth) || !strings.Contains(err.Error(), "invalid_auth") {
-		t.Errorf("Run = %v, want ErrSlackAuth naming invalid_auth", err)
+	// The whole text, which the process exits with and docs/how-to/troubleshoot.md quotes, naming the connection's platform. The run or a
+	// call through the platform made beside it may be the first to find the token rejected, and a call says so.
+	if want := []string{"slack rejected the tokens: invalid_auth", "slack rejected the tokens: invalid_auth (reported by a call)"}; !errors.Is(err, ErrChatAuth) || !slices.Contains(want, err.Error()) {
+		t.Errorf("Run = %v, want ErrChatAuth saying one of %q", err, want)
 	}
 	if strings.Contains(err.Error(), "wrong-bot-token") {
 		t.Errorf("the error holds the token: %v", err)

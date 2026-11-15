@@ -25,7 +25,7 @@ type connRuntime struct {
 	// watched is the platform as every shared part gets it (runtimeTable.Platform): watched for a rejected credential (WatchAuth), so that a
 	// call of any of them that finds the tokens rejected ends the run.
 	watched chat.Platform
-	// report is WatchAuth's: a call that finds the tokens rejected ends ctx with an authRejected, which is ErrSlackAuth, as the cause.
+	// report is WatchAuth's: a call that finds the tokens rejected ends ctx with an authRejected, which is ErrChatAuth, as the cause.
 	report func(code string)
 	// gauge is what agentkourier_chat_connected of the connection is set through.
 	gauge *connGauge
@@ -280,30 +280,30 @@ func (t *runtimeTable) forgetBot(conn string) {
 	delete(t.bots, conn)
 }
 
-// botOwner implements botOwners over the connections that are served.
-func (t *runtimeTable) botOwner(botID string) (string, bool) {
+// botOwner implements botOwners over the connections that are served: the bot of a connection on another platform is none, whatever its ID.
+func (t *runtimeTable) botOwner(platform, botID string) (string, bool) {
 	if botID == "" {
 		return "", false
 	}
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	for name, id := range t.bots {
-		if id.Bot == botID {
+		if id.Platform == platform && id.Bot == botID {
 			return name, true
 		}
 	}
 	return "", false
 }
 
-// botUserOwner implements botOwners for the user a bot posts as.
-func (t *runtimeTable) botUserOwner(user string) (string, bool) {
+// botUserOwner implements botOwners for the user a bot posts as, on platform as botOwner is.
+func (t *runtimeTable) botUserOwner(platform, user string) (string, bool) {
 	if user == "" {
 		return "", false
 	}
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	for name, id := range t.bots {
-		if id.User == user {
+		if id.Platform == platform && id.User == user {
 			return name, true
 		}
 	}
@@ -343,7 +343,7 @@ func (h *runtimeHost) build(conn Connection) (*connRuntime, error) {
 	if err != nil {
 		return nil, err
 	}
-	ctx, report, stop := WithAuthFailure(h.parent)
+	ctx, report, stop := WithAuthFailure(h.parent, conn.Platform)
 	rt := &connRuntime{name: name, conn: conn, platform: p, report: report, gauge: gauge, ctx: ctx, stop: stop, done: make(chan struct{})}
 	rt.watched = watchRuntime(p.Platform, report, rt.stopped)
 	if !h.table.add(rt) {
@@ -360,7 +360,7 @@ func (h *runtimeHost) build(conn Connection) (*connRuntime, error) {
 func (h *runtimeHost) run(rt *connRuntime, sink chat.Sink, onEnd func(rt *connRuntime, err error)) {
 	rt.ran.Store(true)
 	go func() {
-		err := RunPlatform(rt.ctx, rt.platform, sink, RunPolicy{Logger: h.log.With("connection", rt.name)})
+		err := RunPlatform(rt.ctx, rt.platform, sink, RunPolicy{Logger: h.log.With("connection", rt.name), Platform: rt.conn.Platform})
 		if !rt.halted.Load() {
 			h.table.fail(rt, err)
 			h.closeTransport(rt) // nothing posts through it from here: the connection is down

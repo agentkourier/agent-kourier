@@ -17,15 +17,25 @@ import (
 // identifyTimeout bounds the two calls, auth.test and bots.info, that tell whose bot a connection's token is: each is given this long.
 const identifyTimeout = 10 * time.Second
 
-// appIdentity is who a ChatConnection's bot is on its platform: the app the bot belongs to, as bots.info gives it for the bot that auth.test
-// names, and the workspace, the bot's user and its bot ID. Two connections with the same App are one Slack app, whether in one workspace or in
-// two (an app installed in two workspaces has one app-level token's sockets and one stream of events), and the broker serves the older of them
-// (spec D52), because Slack hands each event of an app to one of the app's Socket Mode connections (docs/spikes/slack-mention-probe.md). The bot
-// ID is what the posts of the bot carry (bot_id), which is how another connection's bot is told from a person.
-type appIdentity struct{ App, Team, User, Bot string }
+// appIdentity is who a ChatConnection's bot is on its platform: the app the bot belongs to, and the workspace, the bot's user and its bot ID, as
+// the platform's identity call gives them (platformSpec.Identify; on Slack the app is what bots.info gives for the bot that auth.test names).
+// Platform is the connection's spec.platform, which the supervisor sets on what the call gave (supervisor.identityOf): every ID is the platform's,
+// so an app, a bot or a user of one platform is never one of another's. Two connections with the same Platform and App are one app, whether in one
+// workspace or in two (a Slack app installed in two workspaces has one app-level token's sockets and one stream of events), and the broker serves
+// the older of them (spec D52), because Slack hands each event of an app to one of the app's Socket Mode connections
+// (docs/spikes/slack-mention-probe.md). The bot ID is what the posts of the bot carry (bot_id), which is how another connection's bot is told from
+// a person.
+type appIdentity struct{ Platform, App, Team, User, Bot string }
 
-// known says the identity is a bot's: one with no app is what a test double, which asks no platform, gives, and takes part in no comparison.
+// known says the identity is a bot's: one with no app is what a platform with no identity call, or a test double that asks no platform, gives,
+// and takes part in no comparison.
 func (a appIdentity) known() bool { return a.App != "" }
+
+// appKey is an app as the supervisor tells the connections of one app apart from the others: its platform and its app ID on that platform.
+type appKey struct{ platform, app string }
+
+// key is the app of the identity.
+func (a appIdentity) key() appKey { return appKey{platform: a.Platform, app: a.App} }
 
 // errCredentialsRejected is wrapped by the error of an identity call that Slack refused because the token is not valid (invalid_auth,
 // token_revoked, account_inactive and the like): no retry mends it until the token changes, so the supervisor does not ask again for the same
@@ -50,14 +60,24 @@ func (e mayPassError) Unwrap() error { return e.error }
 // again (errIdentityMayPass). Their meanings are taken from Slack's API documentation and were not checked against Slack here.
 var transientCodes = []string{"ratelimited", "internal_error", "service_unavailable", "request_timeout", "fatal_error"}
 
-// identityOf asks the platform whose bot conn's token is, each call within identifyTimeout. RunConfig.identify replaces the call (a seam for this
-// package's tests); when a test has replaced the Slack client (newSlack) and gives no identify, the identity is not asked, since the
-// client reaches no Slack, and the zero identity comes back, which takes part in no comparison.
+// identityOf asks conn's platform whose bot conn's credentials are, with the platform's own identity call (platformSpec.Identify). A platform
+// with none, or one that platformFor does not know, gives the zero identity and no error, and nothing is asked of any platform: the zero identity
+// takes part in no comparison. RunConfig.identify replaces the call (a seam for this package's tests).
 func (c RunConfig) identityOf(ctx context.Context, conn Connection) (appIdentity, error) {
-	switch {
-	case c.identify != nil:
+	if c.identify != nil {
 		return c.identify(ctx, conn)
-	case c.newSlack != nil:
+	}
+	spec, ok := platformFor(conn.Platform)
+	if !ok || spec.Identify == nil {
+		return appIdentity{}, nil
+	}
+	return spec.Identify(ctx, c, conn)
+}
+
+// slackIdentityOf is Slack's identity call (platformSpec.Identify): slackIdentity at the API URL of testhooks.SlackAPIURL. When a test has
+// replaced the Slack client (newSlack), the identity is not asked, since the client reaches no Slack, and the zero identity comes back.
+func slackIdentityOf(ctx context.Context, c RunConfig, conn Connection) (appIdentity, error) {
+	if c.newSlack != nil {
 		return appIdentity{}, nil
 	}
 	return slackIdentity(ctx, conn, testhooks.SlackAPIURL(c.hooks))

@@ -38,20 +38,25 @@ type Connection struct {
 	Credentials map[string]secret.Value
 }
 
-// platformSpec is what the broker knows of a platform: the keys of its credentials Secret that it reads, and the name
-// it is called in the text an agent reads ("Slack"). Its adapter is built by RunConfig.newPlatform, which
-// leaderHalf.openPlatform calls.
+// platformSpec is what the broker knows of a platform: the keys of its credentials Secret that it reads, the name
+// it is called in the text an agent reads ("Slack"), and the call that tells whose bot a connection's credentials are. Its adapter is built
+// by RunConfig.newPlatform, which leaderHalf.openPlatform calls.
 type platformSpec struct {
 	Keys []string
 	Name string
+	// Identify asks the platform which app, workspace, bot and bot user conn's credentials are (appIdentity, whose Platform it leaves
+	// unset), each call within identifyTimeout. Nil is a platform with no such call: its connections have the zero identity, which takes part in
+	// no comparison, and nothing is asked (RunConfig.identityOf). An error that the platform refused the credentials wraps
+	// errCredentialsRejected, and one that may pass when it is asked again wraps errIdentityMayPass.
+	Identify func(ctx context.Context, c RunConfig, conn Connection) (appIdentity, error)
 }
 
-// platformFor is the one place that names a platform: a second platform is one more case here, with its keys,
-// and one more in newPlatform for its adapter. One that is not here has no adapter, and a ChatConnection of it is a wiring error. It is a func and
-// not a table, so that there is no state to change.
+// platformFor is the one place that names a platform: a second platform is one more case here, with its identity call, one more in
+// newPlatform for its adapter, and its keys in v1alpha1.CredentialKeys. One that is not here has no adapter, and a ChatConnection of it is a wiring
+// error. It is a func and not a table, so that there is no state to change.
 func platformFor(name string) (platformSpec, bool) {
 	if name == v1alpha1.PlatformSlack {
-		return platformSpec{Keys: []string{"botToken", "appToken"}, Name: "Slack"}, true
+		return platformSpec{Keys: v1alpha1.CredentialKeys(name), Name: "Slack", Identify: slackIdentityOf}, true
 	}
 	return platformSpec{}, false
 }
@@ -80,7 +85,7 @@ type builtPlatform struct {
 // connection is up: it is Config.OnConnection of the Slack adapter, and another platform would report through the same func.
 func (c RunConfig) newPlatform(conn Connection, log *slog.Logger, onConnection func(connected bool)) (builtPlatform, error) {
 	name := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
-	if conn.Platform == v1alpha1.PlatformSlack { // a second platform is one more case here, and one more entry in platformKeys
+	if conn.Platform == v1alpha1.PlatformSlack { // a second platform is one more case here, and one in platformFor
 		transport := http.DefaultTransport.(*http.Transport).Clone()
 		sc := c.slackConfig(conn, log)
 		sc.HTTPClient = &http.Client{Transport: telemetry.Transport(transport, false), Timeout: cmp.Or(c.slackHTTPTimeout, slackAPITimeout)}

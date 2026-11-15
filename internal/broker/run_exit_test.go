@@ -74,7 +74,7 @@ func TestRunKeepsSlackAuthWhenASignalFollowsIt(t *testing.T) {
 	run = start(t, c)
 	close(assigned)
 
-	if err := run.wait(); !errors.Is(err, ErrSlackAuth) {
-		t.Errorf("Run = %v, want ErrSlackAuth: a signal after the failure must not turn it into a clean stop", err)
+	if err := run.wait(); !errors.Is(err, ErrChatAuth) {
+		t.Errorf("Run = %v, want ErrChatAuth: a signal after the failure must not turn it into a clean stop", err)
 	}
 }

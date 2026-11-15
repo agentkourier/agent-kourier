@@ -81,7 +81,7 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		decisions: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_interaction_decisions_total",
 			Help: "Presses decided on an interaction, by result."}, []string{"result"}),
 		chatUp: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_chat_connected",
-			Help: "1 while the chat connection (Slack Socket Mode) is up, else 0, by ChatConnection."}, []string{"connection"}),
+			Help: "1 while the connection to the chat platform (for Slack, Socket Mode) is up, else 0, by ChatConnection."}, []string{"connection"}),
 		turns: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_turn_outcomes_total",
 			Help: "Turns that ended, by Binding and how: the terminal state of the task, or the class of what stopped it."}, []string{"binding", "outcome"}),
 		leader: prometheus.NewGauge(prometheus.GaugeOpts{Name: "agentkourier_leader",

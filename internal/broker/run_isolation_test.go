@@ -191,15 +191,15 @@ func TestATeamConnectionWhosePostSlackRejectsStopsThatConnectionAlone(t *testing
 	requireTold(t, w, cluster, r)
 }
 
-// The own connection's rejection is still the broker's: Run returns ErrSlackAuth, which cmd/agent-kourier exits 1 on, whatever the team
+// The own connection's rejection is still the broker's: Run returns ErrChatAuth, which cmd/agent-kourier exits 1 on, whatever the team
 // connections are doing.
 func TestTheOwnConnectionsRejectionStillEndsTheBrokerWithTeamConnections(t *testing.T) {
 	t.Parallel()
 	w, _, r := isolationWorld(t)
 	w.killRun(ownToken, slackErr("invalid_auth"))
 	err := r.waitWithin(30 * time.Second)
-	if !isSlackAuth(err) || !strings.Contains(err.Error(), "invalid_auth") {
-		t.Errorf("Run = %v; want ErrSlackAuth naming invalid_auth", err)
+	if !isChatAuth(err) || !strings.Contains(err.Error(), "invalid_auth") {
+		t.Errorf("Run = %v; want ErrChatAuth naming invalid_auth", err)
 	}
 }
 
@@ -249,4 +249,4 @@ func TestTheTurnsOfATeamConnectionAreTakenUpWhenItRuns(t *testing.T) {
 	w.eventually("the agent to be asked about the recorded task", func() bool { return log.saw("GetTask") })
 }
 
-func isSlackAuth(err error) bool { return errors.Is(err, ErrSlackAuth) }
+func isChatAuth(err error) bool { return errors.Is(err, ErrChatAuth) }
