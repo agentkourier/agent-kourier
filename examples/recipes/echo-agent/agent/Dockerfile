@@ -7,11 +7,12 @@
 # A release builds this file for linux/amd64 and linux/arm64 and publishes it as
 # ghcr.io/agentkourier/agent-kourier-echo-agent (hack/release/release.sh), after the same Trivy scan as Agent Kourier's
 # image: no high or critical vulnerability, fixed or not. Hence Wolfi rather than a Debian-based Python image, and no pip
-# in the final image. The base is pinned by digest; Wolfi's python-3.14 package takes its current 3.14 release when the
-# image is built.
+# in the final image. The base is pinned by digest; Wolfi's python-3.14 and py3.14-pip packages take their current
+# releases when the image is built.
 FROM cgr.dev/chainguard/wolfi-base:latest@sha256:833c48f1faf32c90e6f9501a2410a9aa28ceb2c594102edd4470053c30efa089 AS python
-# python-3.14 brings py3-pip-wheel, pip as a wheel for ensurepip; it is deleted in the same layer, so no layer of the
-# final image holds pip.
+# python-3.14 (python-3.14-base too) depends on py3-pip-wheel, pip as a wheel for ensurepip. Its files are deleted in
+# the same layer, so no layer of the final image holds pip; apk still lists the package, so the SBOM and Trivy name it,
+# and an advisory against it fails the release scan until a rebuild takes Wolfi's fix.
 RUN apk add --no-cache python-3.14 && rm -rf /usr/share/python-wheels
 
 # The virtualenv is made here without pip, and Wolfi's pip installs into it from outside, so pip never enters it.
