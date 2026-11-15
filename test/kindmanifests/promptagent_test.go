@@ -255,8 +255,8 @@ func TestTheTiersAgentDeploymentKeepsTheRecipesShape(t *testing.T) {
 }
 
 // TestTheFakeModelAndMCPImagesShareTheRecipesPythonImage: the tier's Dockerfile builds every target FROM the build argument PYTHON_IMAGE, with
-// no default, and deploy_prompt_agent passes the one image of the recipe's Dockerfile, so that the digest is pinned in one place, which
-// Renovate bumps.
+// no default, and deploy_prompt_agent builds the python stage of the recipe's Dockerfile and passes that image, so that the base's digest is
+// pinned in one place, which Renovate bumps.
 func TestTheFakeModelAndMCPImagesShareTheRecipesPythonImage(t *testing.T) {
 	raw, err := os.ReadFile(promptAgentDockerfile)
 	if err != nil {
@@ -300,12 +300,16 @@ func TestTheFakeModelAndMCPImagesShareTheRecipesPythonImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := len(regexp.MustCompile(`(?m)^FROM `).FindAll(recipe, -1)); n != 1 {
-		t.Errorf("the recipe's Dockerfile has %d FROM lines; deploy_prompt_agent reads the image of the one", n)
+	if !regexp.MustCompile(`(?m)^FROM \S+ AS python$`).Match(recipe) {
+		t.Error("the recipe's Dockerfile has no stage named python; deploy_prompt_agent builds that stage as the doubles' base")
 	}
-	// A build that forgets the argument fails at once (ARG with no default), so this needs only that each target gets one.
-	if n := strings.Count(readHackKind(t, "lib.sh"), `--build-arg "PYTHON_IMAGE=`); n != 2 {
-		t.Errorf("lib.sh passes PYTHON_IMAGE to %d builds; want the two targets of the tier's Dockerfile", n)
+	lib := readHackKind(t, "lib.sh")
+	if !strings.Contains(lib, `docker build -q --target python -t "${PROMPT_PYTHON_IMAGE}" "${recipe}"`) {
+		t.Error("lib.sh does not build the recipe's python stage as PROMPT_PYTHON_IMAGE")
+	}
+	// A build that forgets the argument fails at once (ARG with no default), so this needs only that each target gets the python stage.
+	if n := strings.Count(lib, `--build-arg "PYTHON_IMAGE=${PROMPT_PYTHON_IMAGE}"`); n != 2 {
+		t.Errorf("lib.sh passes the python stage as PYTHON_IMAGE to %d builds; want the two targets of the tier's Dockerfile", n)
 	}
 }
 
