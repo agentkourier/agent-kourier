@@ -275,12 +275,19 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	// Everything that every replica runs is up. A standby is as ready as a leader: readiness never depends on the
 	// lease, since nothing routes traffic to Agent Kourier in Socket Mode, and a standby is healthy (spec 11). A standby's chat listener,
 	// if it has one, answers 503 to every route, which a platform sends again.
-	// A replica whose pod kept the leader label says it is ready only once the label's first write (its removal) has been tried, so that the
-	// chat Service does not select it as a standby; the write is bounded (podLabelTimeout), and one that failed is tried again behind.
+	// With a pod to label, readiness waits for the label too: a pod that kept it from an earlier process is not ready, so in no Service, the
+	// chat Service included, until its removal has succeeded (podLabeler.check). The start waits for the first write to be tried (it is
+	// bounded by podLabelTimeout) and fails if the API server says it can never succeed: no Role to patch the pod, or no such pod.
+	checks := boot.Checks()
+	checks = append(checks, StoreOpen(st))
 	if labeler != nil {
 		waitFor(runCtx, labeler.settled())
+		if err := labeler.startError(); err != nil {
+			return err
+		}
+		checks = append(checks, labeler.check())
 	}
-	ready.Set(append(boot.Checks(), StoreOpen(st))...)
+	ready.Set(checks...)
 	log.InfoContext(ctx, "ready")
 
 	// The leader half starts here with SQLite, and with a fencing store when the lease is won and the store has its
@@ -321,7 +328,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		metrics.Leader(true)
 		chatDone, err := leader.start(ctx, runCtx, current)
 		if err == nil && labeler != nil {
-			labeler.lead() // inside the gate: a shutdown that waits for this start sees the label wanted, and takes it off
+			labeler.lead() // inside the gate, so lead happens before stop or never
 		}
 		leave()
 		if err != nil {

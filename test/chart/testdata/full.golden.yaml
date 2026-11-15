@@ -728,3 +728,79 @@ spec:
     matchLabels:
       app.kubernetes.io/instance: agent-kourier
       app.kubernetes.io/name: agent-kourier
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  labels:
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.4.0
+  name: agent-kourier-agent-kourier-system-leader-label
+spec:
+  failurePolicy: Fail
+  matchConditions:
+  - expression: request.userInfo.username == 'system:serviceaccount:agent-kourier-system:agent-kourier'
+    name: the-brokers-service-account
+  matchConstraints:
+    resourceRules:
+    - apiGroups:
+      - ""
+      apiVersions:
+      - v1
+      operations:
+      - UPDATE
+      resources:
+      - pods
+  validations:
+  - expression: '''authentication.kubernetes.io/pod-name'' in request.userInfo.extra
+      && request.userInfo.extra[''authentication.kubernetes.io/pod-name''] == [object.metadata.name]'
+    message: the broker may change only its own pod, the one its token is bound to
+    reason: Forbidden
+  - expression: variables.newLabels.all(k, k == variables.role || (k in variables.oldLabels
+      && variables.oldLabels[k] == variables.newLabels[k])) && variables.oldLabels.all(k,
+      k == variables.role || k in variables.newLabels)
+    message: the broker may change only the label agentkourier.dev/role of its pod
+    reason: Forbidden
+  - expression: '!(variables.role in variables.newLabels) || variables.newLabels[variables.role]
+      == ''leader'''
+    message: the label agentkourier.dev/role may only be leader
+    reason: Forbidden
+  - expression: 'object.spec == oldObject.spec && (has(object.metadata.annotations)
+      ? object.metadata.annotations : {}) == (has(oldObject.metadata.annotations)
+      ? oldObject.metadata.annotations : {}) && (has(object.metadata.finalizers) ?
+      object.metadata.finalizers : []) == (has(oldObject.metadata.finalizers) ? oldObject.metadata.finalizers
+      : []) && (has(object.metadata.ownerReferences) ? object.metadata.ownerReferences
+      : []) == (has(oldObject.metadata.ownerReferences) ? oldObject.metadata.ownerReferences
+      : [])'
+    message: the broker may change only the labels of its pod, not its spec, annotations,
+      finalizers or owners
+    reason: Forbidden
+  variables:
+  - expression: '''agentkourier.dev/role'''
+    name: role
+  - expression: 'has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}'
+    name: oldLabels
+  - expression: 'has(object.metadata.labels) ? object.metadata.labels : {}'
+    name: newLabels
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  labels:
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.4.0
+  name: agent-kourier-agent-kourier-system-leader-label
+spec:
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: agent-kourier-system
+  policyName: agent-kourier-agent-kourier-system-leader-label
+  validationActions:
+  - Deny

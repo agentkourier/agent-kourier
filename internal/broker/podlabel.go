@@ -3,11 +3,13 @@ package broker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
@@ -26,7 +28,7 @@ const (
 
 // The pod label's timings. A write is one merge patch of the pod's labels.
 const (
-	// podLabelTimeout bounds one write of the label: the first, which Run waits for before the replica says it is ready, and the last, at
+	// podLabelTimeout bounds one write of the label: the first, which Run waits for to know whether it can start at all, and the last, at
 	// shutdown, in the health step, which is 2 s, so the health server's own stop keeps at least half of it.
 	podLabelTimeout = time.Second
 	// podLabelBackoffBase is the wait after a failed write, which doubles with each failure in a row up to podLabelBackoffCap. Until a write
@@ -50,7 +52,7 @@ type PodRef struct {
 // IsZero says the reference names no pod.
 func (p PodRef) IsZero() bool { return p == PodRef{} }
 
-// labelState is what the labeler last wrote of the label: unknown until a write succeeds.
+// labelState is what the labeler last wrote of the label: unknown until a write succeeds, and again after one fails.
 type labelState int
 
 const (
@@ -63,32 +65,35 @@ const (
 // label off at start (a container that exited as the leader and was restarted in the same pod kept it), puts it on once lead is called,
 // and tries a failed write again after a doubling wait, for as long as it runs; a failed write never stops the broker leading. stop ends
 // the goroutine and takes the label off. Leadership is never handed back while the process runs: a leader that loses the lease exits at
-// once (failStop), and its pod is not ready, so out of every Service, until the container that replaces it has taken the label off.
+// once (failStop) with the label on, and its pod is not ready, so out of every Service, until the container that replaces it has taken
+// the label off (check).
 type podLabeler struct {
 	pods    corev1client.PodInterface
-	name    string
+	pod     PodRef
 	log     *slog.Logger
 	onWrite func(result string)
 	// base and ceiling are the doubling wait after a failure, and timeout the bound of one write; after is time.After, which a test replaces.
 	base, ceiling, timeout time.Duration
 	after                  func(time.Duration) <-chan time.Time
 
-	mu      sync.Mutex
-	leading bool
-	stopped bool
-	cancel  context.CancelFunc // ends the goroutine; nil before start
-	wake    chan struct{}      // told when leading changes
-	done    chan struct{}      // closed when the goroutine has ended
-	first   chan struct{}      // closed after the first write, whatever its result
-	state   labelState         // the goroutine's own while it runs, stop's after
+	mu       sync.Mutex
+	leading  bool
+	stopped  bool
+	cancel   context.CancelFunc // ends the goroutine; nil before start
+	wake     chan struct{}      // told when leading changes
+	done     chan struct{}      // closed when the goroutine has ended
+	first    chan struct{}      // closed after the first write, whatever its result
+	firstErr error              // the first write's error, set before first is closed
+	written  chan struct{}      // closed after the first write that succeeded
+	state    labelState         // the goroutine's own while it runs, stop's after
 }
 
 // newPodLabeler returns the labeler of pod, which writes through client and reports each write's result to onWrite.
 func newPodLabeler(client kubernetes.Interface, pod PodRef, log *slog.Logger, onWrite func(result string)) *podLabeler {
 	return &podLabeler{
-		pods: client.CoreV1().Pods(pod.Namespace), name: pod.Name, log: log.With("pod", pod.Namespace+"/"+pod.Name), onWrite: onWrite,
+		pods: client.CoreV1().Pods(pod.Namespace), pod: pod, log: log.With("pod", pod.Namespace+"/"+pod.Name), onWrite: onWrite,
 		base: podLabelBackoffBase, ceiling: podLabelBackoffCap, timeout: podLabelTimeout, after: time.After,
-		wake: make(chan struct{}, 1), done: make(chan struct{}), first: make(chan struct{}),
+		wake: make(chan struct{}, 1), done: make(chan struct{}), first: make(chan struct{}), written: make(chan struct{}),
 	}
 }
 
@@ -115,9 +120,40 @@ func (l *podLabeler) lead() {
 	}
 }
 
-// settled is closed once the first write has been tried, whether or not it succeeded: Run waits for it before the replica says it is
-// ready, so that a pod that kept the label from an earlier process does not join the chat Service as a standby.
+// settled is closed once the first write has been tried, whether or not it succeeded: Run waits for it, and fails the start if
+// startError says the write can never succeed.
 func (l *podLabeler) settled() <-chan struct{} { return l.first }
+
+// startError is the first write's error, wrapping ErrWiring, when the API server said the write can never succeed as the broker is
+// deployed: the broker may not patch the pod (no Role), or there is no such pod (a wrong AGENTKOURIER_POD_NAME or
+// AGENTKOURIER_POD_NAMESPACE). It is nil before the first write has been tried, after one that succeeded, and after any other failure,
+// which is tried again.
+func (l *podLabeler) startError() error {
+	select {
+	case <-l.first:
+	default:
+		return nil
+	}
+	if apierrors.IsForbidden(l.firstErr) || apierrors.IsNotFound(l.firstErr) {
+		return fmt.Errorf("%w: the leader label cannot be written on the pod %s/%s: the broker needs patch on pods in its namespace, and "+
+			"AGENTKOURIER_POD_NAMESPACE and AGENTKOURIER_POD_NAME must name its own pod: %w", ErrWiring, l.pod.Namespace, l.pod.Name, l.firstErr)
+	}
+	return nil
+}
+
+// check is the readiness check of the label: it fails until a write has succeeded. A pod whose removal at start has not succeeded may
+// still carry the label from an earlier process, and is kept out of every Service, the chat Service included, until the removal does;
+// a standby that cannot reach the API server so drops out of the health Service too.
+func (l *podLabeler) check() Check {
+	return Check{Name: "leader-label", Fn: func(context.Context) error {
+		select {
+		case <-l.written:
+			return nil
+		default:
+			return errors.New("the leader label of the pod has not been written yet; it may still be on from an earlier process")
+		}
+	}}
+}
 
 // run writes the label until ctx ends: whenever what is wanted differs from what was last written, and again after a failure.
 func (l *podLabeler) run(ctx context.Context) {
@@ -128,18 +164,20 @@ func (l *podLabeler) run(ctx context.Context) {
 		l.mu.Unlock()
 		var wait <-chan time.Time // nil, and never ready, while the label is as wanted
 		if l.state != stateOf(want) {
-			if err := l.write(ctx, want); err != nil {
-				if ctx.Err() != nil {
-					return
-				}
+			err := l.write(ctx, want)
+			if err != nil && ctx.Err() != nil {
+				return
+			}
+			l.settle(err)
+			if err != nil {
 				failures++
 				delay := backoff.Doubling(l.base, l.ceiling, failures)
-				l.log.WarnContext(ctx, "writing the leader label of the pod failed; trying again", "leader", want, "attempt", failures, "retry_in", delay, "error", err)
+				l.log.ErrorContext(ctx, "writing the leader label of the pod failed; trying again", "leader", want, "attempt", failures, "retry_in", delay, "error", err)
 				wait = l.after(delay)
 			} else {
 				failures = 0
+				l.markWritten()
 			}
-			l.settle()
 		}
 		select {
 		case <-ctx.Done():
@@ -150,12 +188,22 @@ func (l *podLabeler) run(ctx context.Context) {
 	}
 }
 
-// settle closes first, once.
-func (l *podLabeler) settle() {
+// settle records err as the first write's and closes first, once.
+func (l *podLabeler) settle(err error) {
 	select {
 	case <-l.first:
 	default:
+		l.firstErr = err
 		close(l.first)
+	}
+}
+
+// markWritten closes written, once.
+func (l *podLabeler) markWritten() {
+	select {
+	case <-l.written:
+	default:
+		close(l.written)
 	}
 }
 
@@ -167,7 +215,8 @@ func stateOf(leading bool) labelState {
 }
 
 // write puts the label on, or takes it off, with a merge patch of the pod's labels that leaves the others alone, within the timeout, and
-// records the result. Taking off a label the pod does not carry succeeds.
+// records the result. Taking off a label the pod does not carry succeeds. A write that fails may still have been applied (the API server
+// wrote it, and its answer was cut or came after the timeout), so after one the label is unknown, and stop takes it off.
 func (l *podLabeler) write(ctx context.Context, on bool) error {
 	var value any // null removes the key
 	result := labelWriteUnlabeled
@@ -180,7 +229,8 @@ func (l *podLabeler) write(ctx context.Context, on bool) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, l.timeout)
 	defer cancel()
-	if _, err := l.pods.Patch(ctx, l.name, types.MergePatchType, patch, metav1.PatchOptions{FieldManager: "agent-kourier"}); err != nil {
+	if _, err := l.pods.Patch(ctx, l.pod.Name, types.MergePatchType, patch, metav1.PatchOptions{FieldManager: "agent-kourier"}); err != nil {
+		l.state = labelUnknown
 		l.onWrite(labelWriteFailed)
 		return fmt.Errorf("patch the pod's labels: %w", err)
 	}

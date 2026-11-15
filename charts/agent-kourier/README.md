@@ -123,6 +123,7 @@ tier's, with the token-refresh CronJob).
 | Service `<fullname>-chat` | `chatListener.enabled` | the chat listener's port, on the pod that carries `agentkourier.dev/role: leader` (the leader labels its own); `chatListener.service.type` (default ClusterIP); see [Chat listener](#chat-listener) |
 | Ingress `<fullname>-chat` | `chatListener.ingress.enabled` (needs `chatListener.enabled`) | the path prefix `/chat/` to the chat Service, and nothing else |
 | Role and RoleBinding `<fullname>-leader-label` | `chatListener.enabled` (`rbac.create`) | `patch` on `pods` in the release namespace, for the leader label; not limited by name (see [Chat listener](#chat-listener)) |
+| ValidatingAdmissionPolicy and its binding `<fullname>-<namespace>-leader-label` | `chatListener.enabled` (`rbac.create`) | cluster-scoped; holds that `patch` to the leader label of the broker's own pod (see [Chat listener](#chat-listener)) |
 | ServiceMonitor | `serviceMonitor.enabled` | prometheus-operator; needs the Service |
 | NetworkPolicy | `networkPolicy.enabled` | see below |
 | PodDisruptionBudget | `podDisruptionBudget.enabled` | off; `minAvailable: 1` keeps a drain from taking both replicas at `replicaCount: 2`; the render refuses a budget that keeps every pod (`minAvailable` >= replicas, 100%, `maxUnavailable: 0`), since it would block every node drain |
@@ -398,22 +399,33 @@ It is apart from the metrics port, so `/metrics` is never on it. Off, the defaul
 Only the leader serves the chat routes; a standby answers 503 to each. So the chat Service, `<fullname>-chat`, selects the Deployment's
 pods that carry the label `agentkourier.dev/role: leader`, and the broker keeps that label on the leader's pod alone:
 
-- Every replica takes the label off its own pod as it starts, and says it is Ready only once that write has been tried, so a pod that kept
-  the label from an earlier container (a leader that exited and was restarted in the same pod) is not selected as a standby.
-- The leader puts it on once it has started to lead, and takes it off at shutdown, just before it hands the lease over. A leader that
-  loses its lease exits at once, without that write; its pod is not Ready, so out of the Service, until its next container is, which has
-  tried to take the label off by then. With SQLite the one replica leads, and carries the label.
-- A write that fails is logged, counted on `agentkourier_leader_pod_label_writes_total{result="failed"}` and tried again (see
-  [Limits](../../docs/reference/limits.md#run-the-broker)); it never stops the broker leading.
+- Every replica takes the label off its own pod as it starts, and is not Ready until that write has succeeded (the `leader-label` check of
+  `/readyz`), so a pod that kept the label from an earlier container (a leader that exited and was restarted in the same pod) is not
+  selected as a standby. A replica that starts while it cannot reach the API server stays not Ready, and so out of the health and
+  metrics Service too, until it can; with Postgres, a rolling update waits for it before it stops an old pod. Once a write has
+  succeeded, the check holds.
+- The leader puts it on once it has started to lead, and takes it off at shutdown, before it hands the lease over. A leader that loses
+  its lease exits at once, with the label still on: the pod is not Ready, so out of the chat Service, from the moment its container
+  exits until the next container has taken the label off. With SQLite the one replica leads, and carries the label.
+- A write that fails is logged as an error, counted on `agentkourier_leader_pod_label_writes_total{result="failed"}` and tried again (see
+  [Limits](../../docs/reference/limits.md#run-the-broker), and an alert in [Metrics](../../docs/reference/metrics.md)); it never stops the
+  broker leading. A first write that the API server refuses as forbidden, or for a pod it does not have, fails the start (exit code 2):
+  that is missing RBAC, a policy that denies it, or a wrong pod name or namespace, none of which a retry mends.
 
 While no pod carries the label, during a takeover, the chat Service has no endpoint and the platform's requests fail; Slack sends a
 request again when it gets no answer (Slack's own behaviour, not checked here). The health and metrics Service (`service.enabled`) selects
-every pod, as before.
+every Ready pod, a standby's included.
 
 The pod's name and namespace come from the downward API (`AGENTKOURIER_POD_NAME`, `AGENTKOURIER_POD_NAMESPACE`), and the label needs
 `patch` on `pods`. A Deployment's pods are named by its ReplicaSet, so the chart cannot name them in `resourceNames`: the Role
 `<fullname>-leader-label` grants `patch` on every pod of the release namespace. `patch` on a pod reaches more than its labels (a
-container's image, for one), so keep Agent Kourier in a namespace of its own. `podLabels` may not set `agentkourier.dev/role`.
+container's image, for one), so with the Role the chart installs a ValidatingAdmissionPolicy and its binding,
+`<fullname>-<namespace>-leader-label` (cluster-scoped, so installing them needs the right to create those), that let Agent Kourier's
+ServiceAccount change only the label `agentkourier.dev/role` (to `leader`, or away) and only on the pod its token is bound to, which the
+API server reads from the token (the user's extra `authentication.kubernetes.io/pod-name`, which the kubelet's tokens carry). What it
+still allows: whoever holds a token of that pod, or can run a pod as that ServiceAccount, can put the label on that pod and so draw the
+chat Service's requests to it. Keep Agent Kourier in a namespace of its own, where no one else can create pods. `podLabels` may not set
+`agentkourier.dev/role`.
 
 `chatListener.ingress.enabled` adds an Ingress, `<fullname>-chat`, that sends `/chat/` to the chat Service, with its `className`, `host`,
 `tls` and `annotations`. With `networkPolicy.enabled`, `networkPolicy.chatFrom` names who may reach the chat port (the ingress
