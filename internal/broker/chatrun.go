@@ -156,8 +156,13 @@ func ChooseConnection(ctx context.Context, snap *config.Snapshot, own v1alpha1.O
 	return connectionOf(ctx, conns[0], secrets)
 }
 
+// errModeNotServed is the refusal of a ChatConnection whose platform this version serves in another mode only (a Slack connection in HTTP
+// mode). Unlike a Secret that cannot be read just now, it lasts until the ChatConnection changes: the supervisor stops a team connection that
+// runs when its ChatConnection moves to such a mode, rather than keep it running on what it was started with.
+var errModeNotServed = errors.New("which this version does not serve yet")
+
 // connectionOf is the Connection of c with its credentials read through secrets. A platform with no adapter is an error wrapping
-// ErrWiring, and so is a Slack connection in HTTP mode, which this version does not serve (its Secret is not read), and a Secret, key or
+// ErrWiring, and so is a Slack connection in HTTP mode, which this version does not serve (errModeNotServed; its Secret is not read), and a Secret, key or
 // value that is missing; a Secret that cannot be read just now is not.
 func connectionOf(ctx context.Context, c *v1alpha1.ChatConnection, secrets identity.SecretReader) (Connection, error) {
 	name := v1alpha1.NamespacedName(c.Namespace, c.Name)
@@ -165,7 +170,7 @@ func connectionOf(ctx context.Context, c *v1alpha1.ChatConnection, secrets ident
 		return Connection{}, fmt.Errorf("%w: ChatConnection %s is %q, a platform this broker has no adapter for", ErrWiring, name, c.Spec.Platform)
 	}
 	if c.Spec.Platform == v1alpha1.PlatformSlack && c.Spec.SlackMode() == v1alpha1.SlackModeHTTP {
-		return Connection{}, fmt.Errorf("%w: ChatConnection %s is in Slack HTTP mode, which this version does not serve yet: set spec.slack.mode to socket, or leave it unset", ErrWiring, name)
+		return Connection{}, fmt.Errorf("%w: ChatConnection %s is in Slack HTTP mode, %w: set spec.slack.mode to socket, or leave it unset", ErrWiring, name, errModeNotServed)
 	}
 	read := func(key string) (secret.Value, error) {
 		v, err := secrets.Value(ctx, c.Namespace, c.Spec.CredentialsSecretRef.Name, key)
