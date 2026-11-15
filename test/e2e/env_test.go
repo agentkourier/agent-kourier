@@ -6,7 +6,7 @@ import (
 )
 
 func TestNewEnv(t *testing.T) {
-	vars := map[string]string{"E2E_SLACK_URL": "http://s", "E2E_SINK_URL": "http://k", "E2E_STUB_URL": "http://u", "E2E_ALERTMANAGER_URL": "http://a", "E2E_SCENARIO_MCP_URL": "http://m", "E2E_AGENTKOURIER_URL": "http://c", "E2E_SIGNALER_URL": "http://g", "E2E_TIER": "full", "E2E_CONFIG_SOURCE": "crds", "E2E_PHASE": "open",
+	vars := map[string]string{"E2E_SLACK_URL": "http://s", "E2E_SINK_URL": "http://k", "E2E_STUB_URL": "http://u", "E2E_ALERTMANAGER_URL": "http://a", "E2E_SCENARIO_MCP_URL": "http://m", "E2E_AGENTKOURIER_URL": "http://c", "E2E_SIGNALER_URL": "http://g", "E2E_TIER": "full", "E2E_CONFIG_SOURCE": "crds", "E2E_PHASE": "open", "E2E_SLACK_MODE": "http",
 		"E2E_CHAT_CONNECTION": "agent-kourier/slack-fast", "E2E_CONNECTION_NAMESPACES": "team-a,team-b", "E2E_CONNECTION_NAMESPACE_SELECTOR": `{"matchLabels":{"agentkourier.dev/serve":"true"}}`, "E2E_NAMESPACES": `{"items":[]}`}
 	for _, tc := range []struct {
 		name string
@@ -22,8 +22,9 @@ func TestNewEnv(t *testing.T) {
 			AgentKourierURL: "http://agent-kourier.agent-kourier.svc.cluster.local:8080",
 			SignalerURL:     "http://signaler.e2e.svc.cluster.local:8080",
 			ConfigSource:    "files",
+			SlackMode:       "socket",
 		}},
-		{"every variable overrides", vars, Env{SlackURL: "http://s", SinkURL: "http://k", StubURL: "http://u", AlertmanagerURL: "http://a", ScenarioMCPURL: "http://m", AgentKourierURL: "http://c", SignalerURL: "http://g", Tier: "full", ConfigSource: "crds", Phase: "open",
+		{"every variable overrides", vars, Env{SlackURL: "http://s", SinkURL: "http://k", StubURL: "http://u", AlertmanagerURL: "http://a", ScenarioMCPURL: "http://m", AgentKourierURL: "http://c", SignalerURL: "http://g", Tier: "full", ConfigSource: "crds", Phase: "open", SlackMode: "http",
 			ChatConnection: "agent-kourier/slack-fast", ConnectionNamespaces: "team-a,team-b", ConnectionNamespaceSelector: `{"matchLabels":{"agentkourier.dev/serve":"true"}}`, Namespaces: `{"items":[]}`}},
 	} {
 		if got := NewEnv(func(k string) string { return tc.env[k] }); got != tc.want {

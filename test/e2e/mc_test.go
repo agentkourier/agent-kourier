@@ -63,6 +63,14 @@ func requireTwoApps(t *testing.T) Env {
 	if env.Tier != "fast" {
 		t.Skipf("the scenarios of several Slack apps reach the stub agent and the fake Slack's apps, which the %s tier does not run", env.Tier)
 	}
+	if err := CheckSlackMode(env.SlackMode); err != nil {
+		t.Fatal(err)
+	}
+	if env.SlackMode != SlackModeSocket {
+		// They hold Socket Mode's own behaviour: an app's connections counted, opened again after a rotation of tokens and closed by a
+		// revocation, and the ChatConnections a case makes, with an appToken and no mode.
+		t.Skipf("the scenarios of several Slack apps run in Socket Mode only; E2E_SLACK_MODE is %s", env.SlackMode)
+	}
 	admitted, err := env.Admits(kube.MultiTeamNamespace)
 	if err != nil {
 		t.Fatal(err)

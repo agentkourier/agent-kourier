@@ -26,8 +26,9 @@ type Slack struct {
 func NewSlack(baseURL string) *Slack { return &Slack{c: newClient(baseURL), known: map[string]bool{}} }
 
 // Mention posts text as user in channel. It must mention the bot, and a client must be connected
-// over Socket Mode (else 409), because the fake delivers the events. The UserMessage lists the
-// envelope of each event delivered; pass them to AckWait.
+// over Socket Mode (else 409), because the fake delivers the events; an app in HTTP mode is sent them
+// whether its URL answers or not, and retried. The UserMessage lists the envelope of each event
+// delivered (in HTTP mode, the fake's ID of each request); pass them to AckWait.
 func (s *Slack) Mention(ctx context.Context, channel, user, text string) (fakeslack.UserMessage, error) {
 	return s.say(ctx, "mention", map[string]string{"channel": channel, "user": user, "text": text})
 }
@@ -182,7 +183,8 @@ func (s *Slack) Connections(ctx context.Context) (int, error) {
 	return out.Connections, err
 }
 
-// AppConnections returns how many Socket Mode clients of the app appID are connected.
+// AppConnections returns how many Socket Mode clients of the app appID are connected. For an app in HTTP mode it is 1 when the app's
+// request URL answers the url_verification the fake sends for this call, and 0 otherwise: the broker serves the app's connection.
 func (s *Slack) AppConnections(ctx context.Context, appID string) (int, error) {
 	var out struct {
 		Connections int `json:"connections"`

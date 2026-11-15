@@ -45,7 +45,7 @@ type scenario struct {
 func newScenario(t *testing.T) *scenario {
 	t.Helper()
 	env := NewEnv(os.Getenv)
-	if err := CheckTier(env.Tier); err != nil {
+	if err := errors.Join(CheckTier(env.Tier), CheckSlackMode(env.SlackMode)); err != nil {
 		t.Fatal(err)
 	}
 	pods, err := kube.NewInCluster()
@@ -83,7 +83,8 @@ func (s *scenario) replicated(ctx context.Context) (bool, error) {
 }
 
 // connected waits for Agent Kourier to be ready and to hold a Socket Mode connection to the fake, which a mention
-// needs (the fake answers 409 with no client). Call it again after anything that restarts Agent Kourier. With two replicas it
+// needs (the fake answers 409 with no client), or, with E2E_SLACK_MODE=http, to answer the fake's url_verification on
+// its chat listener, which the fake counts as its connection. Call it again after anything that restarts Agent Kourier. With two replicas it
 // waits for exactly one of them to lead and be connected too: ready is true of a standby, and the connection the fake
 // counts may be the one of a leader that is on its way out.
 func (s *scenario) connected() {
