@@ -91,7 +91,7 @@ func NewFake() *FakePlatform {
 	return &FakePlatform{
 		MaxQuestions: 20, MaxTools: 20, Now: time.Now,
 		caps: chat.Caps{
-			Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, Busy: true, MaxText: 4000, AckReaction: "hourglass",
+			Streams: true, Steps: true, Ephemeral: true, Busy: true, MaxText: 4000, AckReaction: "hourglass",
 			Limits: map[chat.Where]int{chat.WhereHeader: 150, chat.WhereButton: 75, chat.WhereChoice: 75, chat.WhereHint: 150, chat.WhereBody: 12000, chat.WhereStream: 12000},
 		},
 		byRef: map[chat.Ref]*Message{}, members: map[string][]string{}, groups: map[string][]string{}, access: map[string]chat.Access{}, users: map[string]chat.User{}, bots: map[string]bool{}, failures: map[string][]error{}, busy: map[[2]string]bool{}, ready: make(chan struct{}),
@@ -425,10 +425,14 @@ func (f *FakePlatform) RefAt(channel, thread, id string) chat.Ref {
 	return chat.Ref{Platform: "fake", Channel: channel, Thread: thread, ID: id}
 }
 
-// React implements chat.Platform. A reaction that is there already is success.
+// React implements chat.Platform. A reaction that is there already is success. A fake whose caps name no reaction has none, and
+// says chat.ErrNoReactions.
 func (f *FakePlatform) React(_ context.Context, r chat.Ref, name string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.caps.AckReaction == "" {
+		return chat.ErrNoReactions
+	}
 	if err := f.fail("React"); err != nil {
 		return err
 	}
@@ -442,10 +446,14 @@ func (f *FakePlatform) React(_ context.Context, r chat.Ref, name string) error {
 	return nil
 }
 
-// Unreact implements chat.Platform. A reaction that is not there is success.
+// Unreact implements chat.Platform. A reaction that is not there is success. A fake whose caps name no reaction says
+// chat.ErrNoReactions.
 func (f *FakePlatform) Unreact(_ context.Context, r chat.Ref, name string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.caps.AckReaction == "" {
+		return chat.ErrNoReactions
+	}
 	if err := f.fail("Unreact"); err != nil {
 		return err
 	}
@@ -698,6 +706,9 @@ func (f *FakePlatform) Classify(op chat.Op, err error) chat.Verdict {
 	var fe *FakeError
 	if errors.As(err, &fe) {
 		return fe.Verdict
+	}
+	if errors.Is(err, chat.ErrNoReactions) {
+		return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonOther, Code: "no_reactions"}
 	}
 	if op == chat.OpOther {
 		switch {

@@ -56,7 +56,11 @@ type leaks struct {
 	busyNoThread                                bool // a mark of a target with no thread is taken
 	busyUnsaid                                  bool // Busy is false and a mark is taken, with no ErrNoBusy
 	busyShowsText                               bool // a mark shows a message of its own
-	noAckReaction                               bool // says no reaction of its own, so a Binding that names none shows nothing
+	noReactions                                 bool // has no reactions (an empty AckReaction), and says ErrNoReactions as it should
+	reactsAnyway                                bool // has no reactions, and React and Unreact take one with no error
+	noReactionsRetried                          bool // has no reactions, and Classify calls ErrNoReactions Transient
+	noReactionsShows                            bool // has no reactions, says ErrNoReactions, and shows a text in place of the reaction
+	colonReaction                               bool // names its own reaction with the colons around it
 
 	// Escaping that does not work for the platform's dialect, the way the suite once passed them.
 	backslashAll      bool // a backslash before every ASCII punctuation: Slack honours none, and the "<" is a token
@@ -98,7 +102,7 @@ func newMarkup(d dialectKind, l leaks) *markupPlatform {
 	f := NewFake()
 	// Small limits, so that the oversize checks send a few hundred characters and not twelve thousand.
 	f.SetCaps(chat.Caps{
-		Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, Busy: true, MaxText: 300, AckReaction: "hourglass",
+		Streams: true, Steps: true, Ephemeral: true, Busy: true, MaxText: 300, AckReaction: "hourglass",
 		Limits: map[chat.Where]int{chat.WhereHeader: 100, chat.WhereButton: 60, chat.WhereChoice: 80, chat.WhereHint: 100, chat.WhereBody: 600, chat.WhereStream: 600},
 	})
 	return &markupPlatform{FakePlatform: f, dialect: d, leaks: l}
@@ -255,6 +259,32 @@ func (m *markupPlatform) Post(ctx context.Context, t chat.Target, o chat.Outgoin
 	return ref, err
 }
 
+// React and Unreact are the fake's, but for the leaks of a platform with no reactions that takes one, or shows a text instead.
+func (m *markupPlatform) React(ctx context.Context, r chat.Ref, name string) error {
+	switch {
+	case m.leaks.reactsAnyway:
+		return nil
+	case m.leaks.noReactionsShows:
+		m.sent = append(m.sent, m.read(":"+name+":"))
+	}
+	return m.FakePlatform.React(ctx, r, name)
+}
+
+func (m *markupPlatform) Unreact(ctx context.Context, r chat.Ref, name string) error {
+	if m.leaks.reactsAnyway {
+		return nil
+	}
+	return m.FakePlatform.Unreact(ctx, r, name)
+}
+
+// Classify is the fake's, but for the leak that would have the outbox retry a reaction that can never be made.
+func (m *markupPlatform) Classify(op chat.Op, err error) chat.Verdict {
+	if m.leaks.noReactionsRetried && errors.Is(err, chat.ErrNoReactions) {
+		return chat.Verdict{Class: chat.Transient}
+	}
+	return m.FakePlatform.Classify(op, err)
+}
+
 // MarkBusy is the fake's, but for the leaks of the busy mark.
 func (m *markupPlatform) MarkBusy(ctx context.Context, t chat.Target, busy bool) error {
 	switch {
@@ -378,19 +408,24 @@ func (m *markupPlatform) subject() Subject {
 		s.AllowAutolink = true // Slack makes a bare URL a link that shows itself, and no escape stops it
 	}
 	if m.leaks.noStreamError {
-		m.SetCaps(chat.Caps{MaxText: 4000, Ephemeral: true, Edits: true, AckReaction: "hourglass"})
+		m.SetCaps(chat.Caps{MaxText: 4000, Ephemeral: true, AckReaction: "hourglass"})
 	}
 	if m.leaks.noStepError {
-		m.SetCaps(chat.Caps{Streams: true, MaxText: 4000, Ephemeral: true, Edits: true, AckReaction: "hourglass"})
+		m.SetCaps(chat.Caps{Streams: true, MaxText: 4000, Ephemeral: true, AckReaction: "hourglass"})
 	}
 	if m.leaks.busyUnsaid {
 		c := m.Capabilities()
 		c.Busy = false
 		m.SetCaps(c)
 	}
-	if m.leaks.noAckReaction {
+	if m.leaks.noReactions || m.leaks.reactsAnyway || m.leaks.noReactionsRetried || m.leaks.noReactionsShows {
 		c := m.Capabilities()
 		c.AckReaction = ""
+		m.SetCaps(c)
+	}
+	if m.leaks.colonReaction {
+		c := m.Capabilities()
+		c.AckReaction = ":hourglass:"
 		m.SetCaps(c)
 	}
 	return s
@@ -400,6 +435,7 @@ func TestAnEscapingMarkupAdapterPassesInBothDialects(t *testing.T) {
 	for name, d := range map[string]dialectKind{"slack plain_text": slackPlainText, "commonmark": commonMark} {
 		t.Run(name, func(t *testing.T) { t.Parallel(); Conformance(t, newMarkup(d, leaks{}).subject()) })
 		t.Run(name+" with mentions", func(t *testing.T) { t.Parallel(); Conformance(t, newMarkup(d, leaks{mentions: true}).subject()) })
+		t.Run(name+" with no reactions", func(t *testing.T) { t.Parallel(); Conformance(t, newMarkup(d, leaks{noReactions: true}).subject()) })
 	}
 }
 
@@ -428,7 +464,10 @@ func TestEveryWayAnAdapterCanBeUnsafeIsCaught(t *testing.T) {
 		{"no error from a platform with no streams", slackPlainText, leaks{noStreamError: true}, RuleContract, ""},
 		{"a stop with nothing to add that shows the streamed text again", slackPlainText, leaks{stopRepeats: true}, RuleContract, ""},
 		{"a platform with no steps that shows one when asked", slackPlainText, leaks{noStepError: true}, RuleContract, ""},
-		{"a platform that names no reaction of its own", slackPlainText, leaks{noAckReaction: true}, RuleContract, ""},
+		{"a platform with no reactions that takes one", slackPlainText, leaks{reactsAnyway: true}, RuleContract, ""},
+		{"a platform with no reactions that calls ErrNoReactions transient", slackPlainText, leaks{noReactionsRetried: true}, RuleContract, ""},
+		{"a platform with no reactions that shows a text instead", slackPlainText, leaks{noReactionsShows: true}, RuleContract, ""},
+		{"a platform that names its reaction with colons", slackPlainText, leaks{colonReaction: true}, RuleContract, ""},
 		{"a busy mark that is refused", slackPlainText, leaks{busyRefused: true}, RuleContract, ""},
 		{"a busy mark of a target with no thread that is taken", slackPlainText, leaks{busyNoThread: true}, RuleContract, ""},
 		{"a platform with no busy mark that takes one", slackPlainText, leaks{busyUnsaid: true}, RuleContract, ""},

@@ -23,7 +23,7 @@ object's age. A Binding that has no status yet shows empty `READY` and `REASON`.
 
 ## The conditions
 
-A Binding that the broker serves has four conditions, or five if it asks for tool approvals from user groups (`interactions.toolApprovals: true` and a non-empty `interactions.approverGroups`), each with `type`, `status` (`True`, `False` or `Unknown`), `reason`,
+A Binding that the broker serves has four conditions, or five if it asks for tool approvals from user groups (`interactions.toolApprovals: true` and a non-empty `interactions.approverGroups`), and one more, `AcknowledgmentShown`, only while `chat.acknowledgment` is enabled and names an `emoji` that the platform of its ChatConnection cannot show because it has no reactions. Slack has reactions, so a Binding on Slack never has `AcknowledgmentShown`. Each has `type`, `status` (`True`, `False` or `Unknown`), `reason`,
 `message`, `lastTransitionTime` and `observedGeneration`. A Binding that the broker does not serve has `Accepted` and `Ready`
 only. No other type is written.
 
@@ -33,6 +33,7 @@ only. No other type is written.
 | `BackendReachable` | A fresh fetch of the agent's card worked and the card is one Agent Kourier can use. | The leader's probe of the agent. |
 | `ChannelJoined` | The bot is in the Binding's channel, which exists and is not archived. | The leader's read of the channel. |
 | `ApproversReadable` | The bot can read every user group in `interactions.approverGroups`. A Binding that asks for no approvals, or for approvals from anyone, has no such condition. | The leader's read of the groups. |
+| `AcknowledgmentShown` | Never `True`: `False` when `chat.acknowledgment.emoji` names a reaction and the platform of the Binding's ChatConnection has no reactions, so no message shows it, and `Unknown` with `Pending` after an edit until the next pass. Any other Binding has no such condition. | What the leader knows of the platform; nothing is read. |
 | `Ready` | Every other condition is `True`. | Derived. |
 
 - `message` is one line of at most 1024 bytes, redacted, with `…` where it was cut. It is empty when the condition is `True`.
@@ -84,6 +85,17 @@ and a probe that ran past the prober's own 10 seconds (`ProbeTimeout`). A backen
 than 1 MiB is `False` with `InvalidAgentCard`, and the probe stops reading at that size.
 
 A Binding on a team ChatConnection (one that is not the broker's own; a broker with no own connection has only these) is read as that connection's bot, and when the connection does not run the read is not made. If Slack rejected the connection's token, `ChannelJoined` is `False` with `ChatCredentialsRejected`, and so is `ApproversReadable` on a Binding that asks for approver groups, and the connection starts again by itself when its credentials Secret or the ChatConnection changes. If its Secret is gone, empty or of a type that is never read, they are `Unknown` with `ChatCredentialsUnusable` until the Secret can be used. Otherwise a connection that is not running (it has not started yet, it is waiting to learn whose bot its token is, or it stopped) is `Unknown` with `ChatUnavailable`, with the message that the bot was not asked, and no call is made to Slack. The same reason is also what a rate limit, a deadline or a failed read of Slack gives, so `ChatUnavailable` alone does not say that a connection is down; the `cause` in the leader's log does. For `ChatCredentialsChanged`, the broker's own connection takes the new tokens at a restart of Agent Kourier, and a team connection restarts by itself, within about 5 seconds of Agent Kourier seeing the change. The reasons are listed in [A Binding is not ready](../how-to/troubleshoot.md#a-binding-is-not-ready).
+
+### `AcknowledgmentShown`
+
+A message on a platform with no reactions shows no acknowledgment: the platform's own reaction is none, and a reaction the Binding names is not
+put on either, since the platform would refuse it. This condition says so for a Binding that names one, instead of saying nothing. It is
+`False` with the reason `NoReactions`, and `Ready` is `False`, with the reason `AcknowledgmentShown:NoReactions` unless an earlier condition
+(`BackendReachable`, `ChannelJoined` or `ApproversReadable`) is `False` too. An edit that names the reaction makes it `Unknown` with
+`Pending` until the next pass. An edit that takes `emoji` away or sets `enabled: false` removes it at the next write, and until the leader
+has seen the edit a `Ready` that cited it reads `Unknown` with `Pending`. The
+leader knows what a platform has only while its connection runs, so while the connection is not running the condition is removed, and it
+comes back when the connection runs again. Slack has reactions, so a Binding on Slack never has it.
 
 How a probe is made, and how often, is under [Binding verification](metrics.md#binding-verification): when the leader starts, when the config or a
 Secret the Binding refers to changes (at most once every 30 seconds), and every 5 minutes.

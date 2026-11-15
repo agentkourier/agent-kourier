@@ -108,7 +108,7 @@ func TestStuckNoticesSayWhatTheTurnWaitsFor(t *testing.T) {
 }
 
 // TestDequeuedNoticeEnqueuesAnUnreactionOfTheQueuedReaction: the notice has the queued notice's ID, so its row is
-// the removal of that reaction, with the same emoji, which the sink names in one place; asked twice, it is one row;
+// the removal of that reaction, with the same emoji, the platform's own (Slack's here); asked twice, it is one row;
 // and no call is made to Slack.
 func TestDequeuedNoticeEnqueuesAnUnreactionOfTheQueuedReaction(t *testing.T) {
 	e := setup(t)
@@ -119,7 +119,7 @@ func TestDequeuedNoticeEnqueuesAnUnreactionOfTheQueuedReaction(t *testing.T) {
 	}
 	row, err := e.store.GetOutbox(t.Context(), outbox.UnreactionID(n.ID))
 	if err != nil || row.Role != store.OutboxReaction || row.Channel != "C1" || row.MessageRef != "" || !strings.Contains(row.Payload, `"ts":"1.5"`) ||
-		!strings.Contains(row.Payload, `"name":"`+live.DefaultReactions().Queued+`"`) || !strings.Contains(row.Payload, `"remove":true`) {
+		!strings.Contains(row.Payload, `"name":"`+slackQueued+`"`) || !strings.Contains(row.Payload, `"remove":true`) {
 		t.Fatalf("row %+v, %v; want an unmade removal of the queued reaction on 1.5 in C1", row, err)
 	}
 	if rows, _ := e.store.ListUnposted(t.Context()); len(rows) != 1 {
@@ -184,7 +184,7 @@ func TestQueuedReactionIsTakenOffTheMessage(t *testing.T) {
 					if err := e.ob.Reconcile(t.Context()); err != nil {
 						t.Fatalf("Reconcile = %v", err)
 					}
-					if got := e.fake.Reactions("C1", e.root); len(got) != 1 || got[0].Name != live.DefaultReactions().Queued {
+					if got := e.fake.Reactions("C1", e.root); len(got) != 1 || got[0].Name != slackQueued {
 						t.Fatalf("Reactions while the reply waits = %+v; want the hourglass", got)
 					}
 				}
@@ -211,11 +211,62 @@ func TestQueuedNoticeEnqueuesAReactionAndSendsNothing(t *testing.T) {
 	}
 	id := n.ID + "/reaction"
 	row, err := e.store.GetOutbox(t.Context(), id)
-	if err != nil || row.Role != store.OutboxReaction || row.Channel != "C1" || row.MessageRef != "" || !strings.Contains(row.Payload, `"ts":"1.5"`) || !strings.Contains(row.Payload, `"name":"hourglass_flowing_sand"`) {
+	if err != nil || row.Role != store.OutboxReaction || row.Channel != "C1" || row.MessageRef != "" || !strings.Contains(row.Payload, `"ts":"1.5"`) || !strings.Contains(row.Payload, `"name":"`+slackQueued+`"`) {
 		t.Fatalf("row %+v, %v; want an unmade reaction on 1.5 in C1", row, err)
 	}
 	if rows, _ := e.store.ListUnposted(t.Context()); len(rows) != 1 {
 		t.Fatalf("%d rows for one notice raised twice; want 1", len(rows))
+	}
+}
+
+// slackQueued is the reaction that marks a reply that waits on Slack: Slack's own (chat.Caps.AckReaction), as before it came from the
+// platform.
+const slackQueued = "hourglass_flowing_sand"
+
+// TestQueuedReactionIsThePlatformsOwn: the reaction of a reply that waits is the platform's own (chat.Caps.AckReaction) of the notice's
+// connection. A platform with no reactions gets no row for the queued or the dequeued notice, and no log line, since there is nothing to
+// show; a connection that no platform runs gets no row either, and the dropped notice is logged.
+func TestQueuedReactionIsThePlatformsOwn(t *testing.T) {
+	e := setup(t)
+	none := chattest.NewFake()
+	c := none.Capabilities()
+	c.AckReaction = ""
+	none.SetCaps(c)
+	for name, tc := range map[string]struct {
+		platforms chat.Resolver[chat.Platform]
+		reaction  string // the name on the reaction row, or empty for no rows
+		logged    bool
+	}{
+		"a platform with reactions":    {chattest.Same[chat.Platform](chattest.NewFake()), "hourglass", false},
+		"a platform with no reactions": {chattest.Same[chat.Platform](none), "", false},
+		"a connection not running":     {chat.PlatformSet[chat.Platform]{}, "", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			st := e.store
+			ob := newOutbox(t, outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](noCalls{t})})
+			r, err := live.New(live.Config{Sender: ob, Platforms: tc.platforms, Store: e.rf})
+			if err != nil {
+				t.Fatal(err)
+			}
+			logs := &strings.Builder{}
+			sink := live.NewSink(r, ob, slog.New(slog.NewTextHandler(logs, nil)))
+			id := "m/" + strings.ReplaceAll(name, " ", "-") + "/queued"
+			for _, kind := range []session.NoticeKind{session.NoticeQueued, session.NoticeDequeued} {
+				sink.Notice(t.Context(), thread, session.Notice{ID: id, Kind: kind, MessageRef: "1.5"})
+			}
+			for _, rid := range []string{outbox.ID(id, store.OutboxReaction), outbox.UnreactionID(id)} {
+				row, err := st.GetOutbox(t.Context(), rid)
+				switch {
+				case tc.reaction == "" && err == nil:
+					t.Errorf("row %s = %+v; want none", rid, row)
+				case tc.reaction != "" && (err != nil || !strings.Contains(row.Payload, `"name":"`+tc.reaction+`"`)):
+					t.Errorf("row %s = %+v, %v; want the reaction %q", rid, row, err, tc.reaction)
+				}
+			}
+			if got := strings.Contains(logs.String(), "queued reaction"); got != tc.logged {
+				t.Errorf("log %q; want the dropped notice logged %t", logs.String(), tc.logged)
+			}
+		})
 	}
 }
 
@@ -230,7 +281,7 @@ func TestQueuedReactionIsMadeOnTheMessage(t *testing.T) {
 	if err := e.ob.Reconcile(t.Context()); err != nil {
 		t.Fatalf("Reconcile = %v", err)
 	}
-	if got := e.fake.Reactions("C1", e.root); len(got) != 1 || got[0].Name != "hourglass_flowing_sand" {
+	if got := e.fake.Reactions("C1", e.root); len(got) != 1 || got[0].Name != slackQueued {
 		t.Fatalf("Reactions = %+v; want the hourglass on the message", got)
 	}
 }
@@ -613,5 +664,36 @@ func TestTurnRefDecidesTheFooter(t *testing.T) {
 				t.Fatalf("blocks %s; want both buttons, valued %q and its not_useful twin, and the question once", blocks, want)
 			}
 		})
+	}
+}
+
+// The removal of a queued reaction names the reaction that was put on, which the sink remembers from the queued notice: a connection
+// whose platform stopped in between still gets its removal row, so the pair holds within the process. A removal with nothing remembered and
+// no platform to ask is dropped quietly, since nothing this process put on is left behind.
+func TestTheRemovalOfAQueuedReactionNamesTheOnePutOn(t *testing.T) {
+	e := setup(t)
+	st := e.store
+	ob := newOutbox(t, outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](noCalls{t})})
+	platforms := chat.PlatformSet[chat.Platform]{thread.Connection: chattest.NewFake()}
+	r, err := live.New(live.Config{Sender: ob, Platforms: platforms, Store: e.rf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs := &strings.Builder{}
+	sink := live.NewSink(r, ob, slog.New(slog.NewTextHandler(logs, nil)))
+	sink.Notice(t.Context(), thread, session.Notice{ID: "m/on/queued", Kind: session.NoticeQueued, MessageRef: "1.5"})
+	delete(platforms, thread.Connection) // the connection stops
+	sink.Notice(t.Context(), thread, session.Notice{ID: "m/on/queued", Kind: session.NoticeDequeued, MessageRef: "1.5"})
+	row, err := st.GetOutbox(t.Context(), outbox.UnreactionID("m/on/queued"))
+	if err != nil || !strings.Contains(row.Payload, `"name":"hourglass"`) || !strings.Contains(row.Payload, `"remove":true`) {
+		t.Errorf("removal row = %+v, %v; want the removal of the hourglass that was put on", row, err)
+	}
+
+	sink.Notice(t.Context(), thread, session.Notice{ID: "m/never/queued", Kind: session.NoticeDequeued, MessageRef: "1.6"})
+	if _, err := st.GetOutbox(t.Context(), outbox.UnreactionID("m/never/queued")); err == nil {
+		t.Error("a removal row was written with no reaction to name")
+	}
+	if strings.Contains(logs.String(), "level=WARN") {
+		t.Errorf("log %q; want no warning for a removal that has nothing to take off", logs.String())
 	}
 }

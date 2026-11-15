@@ -3,7 +3,8 @@
 // groups can be read.
 //
 // The package does no I/O of its own and knows neither the agent client nor a chat platform. A Prober calls the
-// AgentChecker, ChannelChecker and GroupChecker it is given, and records what they report in a State. The conditions are shaped
+// AgentChecker, ChannelChecker and GroupChecker it is given, and records what they report in a State, with what its Targets say of
+// their acknowledgment reaction (AcknowledgmentShown). The conditions are shaped
 // like metav1.Condition so that they can be copied into a status: with the custom resource config source, the elected
 // leader's status writer (internal/broker) does, keeping each condition's own observedGeneration and leaving out
 // LastProbeTime and Cause.
@@ -24,6 +25,11 @@ const (
 	// that asks for tool approvals from groups: the Prober makes it Pending when a Binding's Target gains groups and removes
 	// it when the Target loses them, so a State holds it only for those.
 	ApproversReadable ConditionType = "ApproversReadable"
+	// AcknowledgmentShown is False when the Binding's acknowledgment names a reaction and the platform of its connection has no
+	// reactions, so no message shows it. It applies only to such a Binding (Target.AcknowledgmentUnshown): the Prober makes it Pending
+	// when a Target says so, sets it at the next pass with no probe of its own, and removes it when the Target stops saying so. A
+	// Binding whose platform shows reactions, or that names none, has no such condition, so it is never True.
+	AcknowledgmentShown ConditionType = "AcknowledgmentShown"
 	// Ready is True when every other condition the Binding has is True.
 	Ready ConditionType = "Ready"
 )
@@ -130,11 +136,15 @@ const (
 	// workspace's plan has no user groups, the token is of a type the read does not take, or it lacks the permission or
 	// is not allowed on this workspace. No retry mends it until an operator changes the workspace or the app.
 	ReasonGroupsUnreadable Reason = "GroupsUnreadable"
+
+	// ReasonNoReactions is the AcknowledgmentShown reason: the platform of the Binding's connection has no reactions, so the reaction
+	// the Binding's acknowledgment names is never shown. It is the Prober's own, set from the Target, and no checker reports it.
+	ReasonNoReactions Reason = "NoReactions"
 )
 
 // reportable reports whether a checker may report r with the status s. OK goes only with True. A reason whose comment
 // fixes its status goes only with that status, and any other failure reason with False or Unknown, as the checker can
-// tell. Pending, ProbeFailed and ProbeTimeout are the Prober's own, and a reason outside the set is nobody's. It does not
+// tell. Pending, ProbeFailed, ProbeTimeout and NoReactions are the Prober's own, and a reason outside the set is nobody's. It does not
 // tie a reason to a condition.
 func (r Reason) reportable(s Status) bool {
 	switch r {

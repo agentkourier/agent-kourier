@@ -46,8 +46,9 @@ type Options struct {
 	OnRejected func(binding string)
 	// Platforms gives the platform that runs a connection, by "namespace/name", for its own acknowledgment reaction
 	// (chat.Caps.AckReaction), which a Binding that names none gets: the reaction of the platform that runs the Binding's own
-	// connection. A connection no platform runs (an error from Platforms, such as one wrapping chat.ErrConnectionDown) has no
-	// reaction to give, as a platform with none, and nil Platforms gives none at all.
+	// connection. A platform whose AckReaction is empty has no reactions, and a Binding on it shows none, even one it names. A
+	// connection no platform runs (an error from Platforms, such as one wrapping chat.ErrConnectionDown) has no default to give,
+	// and is not taken to have no reactions, so a reaction its Binding names is kept; nil Platforms gives no default at all.
 	Platforms chat.Resolver[platformCaps]
 	// fence, when set, refuses the calls that change what the agent holds (a send, an answer, a cancel) of a leader whose
 	// lease is past its renew deadline (fenceAgent). Nil with SQLite, which has no lease. Set only by the leader half, which is
@@ -152,7 +153,7 @@ func (b *Bindings) Backend(name string) (session.Backend, error) {
 	if err != nil {
 		return session.Backend{}, fmt.Errorf("broker: Binding %s: %w", name, err)
 	}
-	ackEnabled, ackEmoji := acknowledgment(rb.Binding.Spec.Chat.Acknowledgment, b.ackReaction(rb.Connection))
+	ackEnabled, ackEmoji := acknowledgment(rb.Binding.Spec.Chat.Acknowledgment, b.reactionsOf(rb.Connection))
 	var ag session.AgentAPI = k.pool.Agent(src.Target())
 	if b.opts.fence != nil {
 		ag = fenceAgent(ag, b.opts.fence)
@@ -200,30 +201,57 @@ func (b *Bindings) CheckAgent(ctx context.Context, name string) error {
 	return k.pool.Check(ctx, src.Target())
 }
 
-// ackReaction is the acknowledgment reaction of the platform that runs conn, the ChatConnection of a Binding, and empty when none runs
-// it or Bindings was given no platforms.
-func (b *Bindings) ackReaction(conn *v1alpha1.ChatConnection) string {
-	if b.opts.Platforms == nil {
-		return ""
-	}
-	p, err := b.opts.Platforms.Platform(v1alpha1.NamespacedName(conn.Namespace, conn.Name))
-	if err != nil {
-		return ""
-	}
-	return p.Capabilities().AckReaction
+// platformReactions is what Bindings knows of the reactions of the platform that runs a connection.
+type platformReactions struct {
+	// own is the platform's own acknowledgment reaction (chat.Caps.AckReaction), empty when it has none or no platform is known.
+	own string
+	// none says that the platform runs and has no reactions at all (its AckReaction is empty). A connection that no platform runs
+	// now is not known to have none.
+	none bool
 }
 
-// acknowledgment is whether a Binding reacts to an accepted message, and with which reaction: the one the Binding names, else
-// platformDefault, which is the platform's own (chat.Caps.AckReaction). The API fills in neither, so an acknowledgment that
-// is not written is enabled, and a platform with no default of its own (an empty platformDefault) shows nothing until a
-// Binding names a reaction.
-func acknowledgment(ack *v1alpha1.ChatAcknowledgment, platformDefault string) (enabled bool, reaction string) {
-	enabled, reaction = true, platformDefault
+// reactionsOf is what the platform that runs conn, the ChatConnection of a Binding, has of reactions: nothing is known when none
+// runs it or Bindings was given no platforms.
+func (b *Bindings) reactionsOf(conn *v1alpha1.ChatConnection) platformReactions {
+	return reactionsOf(b.opts.Platforms, v1alpha1.NamespacedName(conn.Namespace, conn.Name))
+}
+
+// reactionsOf is what the platform that platforms gives for conn ("namespace/name") has of reactions: nothing is known when platforms
+// is nil or has no platform for conn.
+func reactionsOf(platforms chat.Resolver[platformCaps], conn string) platformReactions {
+	if platforms == nil {
+		return platformReactions{}
+	}
+	p, err := platforms.Platform(conn)
+	if err != nil {
+		return platformReactions{}
+	}
+	own := p.Capabilities().AckReaction
+	return platformReactions{own: own, none: own == ""}
+}
+
+// ackUnshown reports whether the acknowledgment ack names a reaction that no message shows: it names one (namesReaction), and the
+// platform is known to have no reactions. Such a Binding has an AcknowledgmentShown condition, False.
+func ackUnshown(ack *v1alpha1.ChatAcknowledgment, platform platformReactions) bool {
+	return platform.none && namesReaction(ack)
+}
+
+// namesReaction reports whether the acknowledgment ack is enabled and names a reaction: the half of ackUnshown that the spec says.
+func namesReaction(ack *v1alpha1.ChatAcknowledgment) bool {
+	return ack != nil && ack.Emoji != "" && (ack.Enabled == nil || *ack.Enabled)
+}
+
+// acknowledgment is whether a Binding reacts to an accepted message, and with which reaction: the one the Binding names, else the
+// platform's own (chat.Caps.AckReaction). The API fills in neither, so an acknowledgment that is not written is enabled, and with no
+// platform default known it shows nothing until a Binding names a reaction. A platform that has no reactions shows none, whatever the
+// Binding names: each would be refused, and the Binding's AcknowledgmentShown condition says so instead (ackUnshown).
+func acknowledgment(ack *v1alpha1.ChatAcknowledgment, platform platformReactions) (enabled bool, reaction string) {
+	enabled, reaction = true, platform.own
 	if ack != nil {
 		if ack.Enabled != nil {
 			enabled = *ack.Enabled
 		}
-		if ack.Emoji != "" {
+		if ack.Emoji != "" && !platform.none {
 			reaction = ack.Emoji
 		}
 	}

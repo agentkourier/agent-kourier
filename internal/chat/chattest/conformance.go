@@ -317,8 +317,11 @@ func (c *checker) contract() {
 	if c.caps.MaxText <= len(chat.Truncated) {
 		c.add(RuleContract, 0, "Capabilities", "limits", "MaxText is %d, which cannot hold even the truncation marker", c.caps.MaxText)
 	}
-	if c.caps.AckReaction == "" || strings.ContainsAny(c.caps.AckReaction, ": \t\n") {
+	if strings.ContainsAny(c.caps.AckReaction, ": \t\n") {
 		c.add(RuleContract, 0, "Capabilities", "acknowledgment", "AckReaction is %q, want the platform's own reaction name, without colons: a Binding that names no reaction gets it, and React takes it", c.caps.AckReaction)
+	}
+	if c.caps.AckReaction == "" {
+		c.noReactions()
 	}
 	for w, n := range c.caps.Limits {
 		if n <= len(chat.Truncated) {
@@ -552,6 +555,29 @@ func (c *checker) busyContract() {
 		}
 	}
 	c.s.Sent()
+	_ = c.s.Inert()
+}
+
+// noReactions checks a platform with no reactions (an empty AckReaction): React and Unreact say chat.ErrNoReactions, which
+// Classify(OpReact) calls Permanent so that the outbox does not retry it, and nothing is shown. Without it an adapter could
+// leave AckReaction empty and still take reactions, or have a reaction that can never be made retried for ever.
+func (c *checker) noReactions() {
+	p := c.s.Platform
+	c.s.Sent()
+	ref := p.RefAt(c.target.Channel, c.target.Thread, c.target.Thread)
+	for method, call := range map[string]func(context.Context, chat.Ref, string) error{"React": p.React, "Unreact": p.Unreact} {
+		err := call(c.ctx, ref, "eyes")
+		if !errors.Is(err, chat.ErrNoReactions) {
+			c.add(RuleContract, 0, method, "no reactions", "a platform with no AckReaction gave %v, want chat.ErrNoReactions: it has no reactions", err)
+			continue
+		}
+		if v := p.Classify(chat.OpReact, err); v.Class != chat.Permanent {
+			c.add(RuleContract, 0, "Classify", "no reactions", "chat.ErrNoReactions of %s is %+v, want Permanent: no retry makes a reaction the platform has none of", method, v)
+		}
+	}
+	if shown := c.s.Sent(); len(shown) > 0 {
+		c.add(RuleContract, 0, "React", "no reactions", "a platform with no reactions showed %d texts, want none", len(shown))
+	}
 	_ = c.s.Inert()
 }
 

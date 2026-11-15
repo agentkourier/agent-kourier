@@ -24,7 +24,7 @@ func TestNewPlatformIsChosenByThePlatformOfTheConnection(t *testing.T) {
 	if err != nil || built.Platform == nil || built.closeIdle == nil {
 		t.Fatalf("newPlatform(slack) = %+v, %v; want the Slack adapter, and a way to close its connections", built, err)
 	}
-	if got := built.Capabilities(); !got.Streams || !got.Edits {
+	if got := built.Capabilities(); !got.Streams || got.AckReaction == "" {
 		t.Errorf("the adapter's capabilities are %+v; want Slack's", got)
 	}
 	for _, name := range []string{"teams", "", "Slack"} {

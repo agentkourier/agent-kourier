@@ -55,7 +55,7 @@ func TestReadyHasTheCommonUIDOfItsConditionsOrNone(t *testing.T) {
 // status takes.
 func TestTypesAreWhatAStateCanHold(t *testing.T) {
 	got := Types()
-	want := []ConditionType{BackendReachable, ChannelJoined, ApproversReadable, Ready}
+	want := []ConditionType{BackendReachable, ChannelJoined, ApproversReadable, AcknowledgmentShown, Ready}
 	if !slices.Equal(got, want) {
 		t.Errorf("Types() = %v, want %v", got, want)
 	}

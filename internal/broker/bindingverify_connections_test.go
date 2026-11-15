@@ -353,7 +353,7 @@ func (f failingResolver) Platform(string) (platformReader, error) { return nil, 
 // served is left out (the files route can hold such a Binding), as is every Binding before the first load.
 func TestBindingTargetsCoverEveryServedConnection(t *testing.T) {
 	snap := twoConnections(t)
-	got := bindingTargets(snap, []v1alpha1.ObjectRef{refA, refB})
+	got := bindingTargets(snap, []v1alpha1.ObjectRef{refA, refB}, nil)
 	want := []bindingcheck.Target{
 		{Binding: "ops/also-other", Connection: connB, Channel: "C3"}, {Binding: "ops/oncall", Connection: connA, Channel: "C2"},
 		{Binding: "sre/oncall", Connection: connA, Channel: "C1"}, {Binding: "sre/other-bot", Connection: connB, Channel: "C1"},
@@ -363,10 +363,10 @@ func TestBindingTargetsCoverEveryServedConnection(t *testing.T) {
 	}) {
 		t.Errorf("targets of both connections = %v; want %v", got, want)
 	}
-	if got := bindingTargets(snap, []v1alpha1.ObjectRef{refB}); len(got) != 2 || got[0].Connection != connB || got[1].Connection != connB {
+	if got := bindingTargets(snap, []v1alpha1.ObjectRef{refB}, nil); len(got) != 2 || got[0].Connection != connB || got[1].Connection != connB {
 		t.Errorf("targets of slack-b alone = %v; want its two Bindings", got)
 	}
-	if got := bindingTargets(snap, nil); len(got) != 0 {
+	if got := bindingTargets(snap, nil, nil); len(got) != 0 {
 		t.Errorf("targets of no connection = %v; want none", got)
 	}
 }
