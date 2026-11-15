@@ -26,6 +26,11 @@ CHECKOUT_KEY=agentkourier.agent-kourier.dev/checkout
 # do: every release of the chart in the namespace carries it (the sandbox's and any other), since the front door's NetworkPolicy trusts it.
 # test/e2e's agentKourierPods is the same selector.
 TIER_AGENTKOURIER_PODS=app.kubernetes.io/name=agent-kourier,app.kubernetes.io/instance=agent-kourier
+# E2E_SLACK_MODE=http (the fast and full tiers): the fake Slack sends its default app's events and presses as signed requests to this URL, the
+# chat Service of the tier's release (hack/kind/http-values.yaml), which selects the leader, at the route of the tier's ChatConnection
+# agent-kourier/slack-fast; and signs them with this secret, which Agent Kourier reads from the Secret slack-fast. A fake constant.
+FAKE_SLACK_REQUEST_URL=http://agent-kourier-chat.agent-kourier.svc.cluster.local:8081/chat/slack/agent-kourier/slack-fast
+FAKE_SLACK_SIGNING_SECRET=fake-slack-signing-secret
 
 die() {
   echo "error: $*" >&2
@@ -151,9 +156,11 @@ build_doubles_image() {
 
 # apply_doubles: the fake Slack, stub agent and sink in namespace e2e, and Alertmanager (with its
 # route to the sink) in monitoring; needs install_operator first. None is published: the fake
-# Slack's /_control/ has no authentication.
+# Slack's /_control/ has no authentication. E2E_SLACK_MODE says how the fake Slack sends its default app's events and presses (fake_slack_mode_patch).
 apply_doubles() {
+  require_slack_mode
   "${K[@]}" apply -f "${HERE}/fast/doubles.yaml" >/dev/null
+  "${K[@]}" -n e2e patch deploy/fakeslack --type=strategic -p "$(fake_slack_mode_patch)" >/dev/null
   # Restart so a rebuilt image (same tag) is picked up.
   "${K[@]}" -n e2e rollout restart deploy/fakeslack deploy/stubagent deploy/hitlagent deploy/sink >/dev/null
   "${K[@]}" -n e2e rollout status deploy/fakeslack deploy/stubagent deploy/hitlagent deploy/sink --timeout=180s
@@ -360,6 +367,37 @@ require_config_source() {
   esac
 }
 
+# require_slack_mode: die unless E2E_SLACK_MODE is socket (the default: the fake Slack and the tier's ChatConnection over Socket Mode) or http (signed
+# requests to the broker's chat listener). Call it in a script's preflight, before anything is changed.
+require_slack_mode() {
+  case "${E2E_SLACK_MODE:-socket}" in
+    socket | http) ;;
+    *) die "E2E_SLACK_MODE must be socket or http" ;;
+  esac
+}
+
+# fake_slack_mode_patch: the strategic merge patch of the Deployment fakeslack for E2E_SLACK_MODE. In http mode the container's args (which follow
+# its command, in fast/doubles.yaml) give the default app FAKE_SLACK_REQUEST_URL and FAKE_SLACK_SIGNING_SECRET, and the fake retries on its default
+# schedule; in socket mode the patch takes the args away. doubles.yaml sets no args, so kubectl apply never touches them and the patch alone decides
+# them, in either direction. The team apps (-app) stay on Socket Mode: the MC_ tests, which use them, run in socket mode only.
+fake_slack_mode_patch() {
+  local args=null
+  if [ "${E2E_SLACK_MODE:-socket}" = http ]; then
+    args="[\"-request-url\",\"${FAKE_SLACK_REQUEST_URL}\",\"-signing-secret\",\"${FAKE_SLACK_SIGNING_SECRET}\"]"
+  fi
+  printf '{"spec":{"template":{"spec":{"containers":[{"name":"fakeslack","args":%s}]}}}}' "${args}"
+}
+
+# slack_mode_config DIR: in http mode, put the tier's ChatConnection (DIR/chatconnection.yaml, a copy of fast/agent-kourier/config's) in HTTP mode;
+# in socket mode leave it as it is, which is Socket Mode. The same file is the ConfigMap's and the custom resource's, so both routes read the mode.
+slack_mode_config() {
+  [ "${E2E_SLACK_MODE:-socket}" = http ] || return 0
+  # The line goes at the end of the file, so the last top-level key must be spec.
+  awk '/^[^ #]/ { last = $0 } END { exit last != "spec:" }' "$1/chatconnection.yaml" ||
+    die "the ChatConnection's last top-level key is not spec:, so slack.mode cannot be appended to it"
+  printf '  slack: {mode: http}\n' >>"$1/chatconnection.yaml"
+}
+
 # crds_held_by_release: succeed when the CRDs in the cluster were installed by the release agent-kourier (crds.install), so that a tier that goes back to
 # the ConfigMap route keeps crds.install on, as the chart README says to: a release without it no longer holds them. Needs K.
 crds_held_by_release() {
@@ -379,10 +417,16 @@ crds_held_by_release() {
 # to the ConfigMap route, and the custom resources stay in the cluster, unread, as the chart README says. Either way the config is the same files.
 # The array AGENTKOURIER_CRDS_ARGS, if the caller set it, holds more helm arguments for the route upgrade of crds only (the platform's admission list of
 # the tier with two Slack apps: a value the ConfigMap route refuses). The Secrets are fake constants made here and never committed, and the agent
-# token (Secret agent-kourier-agent-token) is the caller's to make: it differs by tier. Needs HERE, ROOT, K, H.
+# token (Secret agent-kourier-agent-token) is the caller's to make: it differs by tier.
+# E2E_SLACK_MODE=http puts the ChatConnection in HTTP mode (slack_mode_config, on either route) and adds hack/kind/http-values.yaml, the chat listener
+# and its Service, to every helm call; socket, the default, leaves both out, so that running this again in socket mode moves the tier back. The Secret
+# slack-fast holds the keys of both modes, and the broker reads those of its mode. Needs HERE, ROOT, K, H.
 deploy_agentkourier() {
   local config dir source=${E2E_CONFIG_SOURCE:-files} values=${AGENTKOURIER_VALUES:-${ROOT}/charts/agent-kourier/ci/fast-values.yaml}
+  local mode_args=()
   require_config_source
+  require_slack_mode
+  [ "${E2E_SLACK_MODE:-socket}" = socket ] || mode_args=(-f "${HERE}/http-values.yaml")
   refuse_while_sandbox_up
   config=$(mktemp -d)
   trap 'rm -rf "${config}"; trap - RETURN' RETURN # the scratch directory goes however this ends
@@ -392,17 +436,19 @@ deploy_agentkourier() {
   for dir in "$@"; do
     cp "${dir}"/*.yaml "${config}"
   done
+  slack_mode_config "${config}"
   "${K[@]}" create namespace agent-kourier --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
   "${K[@]}" -n agent-kourier create secret generic slack-fast --from-literal=botToken=xoxb-fake-test-token \
-    --from-literal=appToken=xapp-fake-test-token --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+    --from-literal=appToken=xapp-fake-test-token --from-literal=signingSecret="${FAKE_SLACK_SIGNING_SECRET}" \
+    --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
   "${K[@]}" -n agent-kourier create configmap agent-kourier-config --from-file="${config}" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
   case "${source}" in
     files)
       # A tier that was on crds holds the CRDs under the release: keep them there. (An empty array is unset to bash 3.2.)
       if crds_held_by_release; then
-        install_agentkourier "${values}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"} --set crds.install=true
+        install_agentkourier "${values}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"} ${mode_args[@]+"${mode_args[@]}"} --set crds.install=true
       else
-        install_agentkourier "${values}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"}
+        install_agentkourier "${values}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"} ${mode_args[@]+"${mode_args[@]}"}
       fi
       ;;
     crds)
@@ -411,14 +457,14 @@ deploy_agentkourier() {
       if ! crds_held_by_release; then
         replace_unowned_deployment agent-kourier
         adopt_into_release agent-kourier serviceaccount/agent-kourier role/agent-kourier-secrets rolebinding/agent-kourier-secrets service/agent-kourier pvc/agent-kourier-data
-        helm_install_agentkourier agent-kourier "${values}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"} --set crds.install=true
+        helm_install_agentkourier agent-kourier "${values}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"} ${mode_args[@]+"${mode_args[@]}"} --set crds.install=true
       fi
       "${K[@]}" wait --for=condition=Established --timeout=60s crd/bindings.agentkourier.dev crd/agentbackends.agentkourier.dev crd/chatconnections.agentkourier.dev >/dev/null
       # 2. The config as custom resources (the files are manifests of the three kinds already), then the route. A server-side dry run first, so that a
       # file the CRDs refuse stops here with the apiserver's words.
       "${K[@]}" apply --dry-run=server -f "${config}" >/dev/null
       "${K[@]}" apply -f "${config}" >/dev/null
-      install_agentkourier "${values}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"} -f "${HERE}/crds-values.yaml" ${AGENTKOURIER_CRDS_ARGS[@]+"${AGENTKOURIER_CRDS_ARGS[@]}"}
+      install_agentkourier "${values}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"} ${mode_args[@]+"${mode_args[@]}"} -f "${HERE}/crds-values.yaml" ${AGENTKOURIER_CRDS_ARGS[@]+"${AGENTKOURIER_CRDS_ARGS[@]}"}
       ;;
   esac
 }

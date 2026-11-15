@@ -299,7 +299,7 @@ for _ in $(seq 60); do
   [ "${conns:-0}" -ge 1 ] && break
   sleep 1
 done
-assert "Agent Kourier is connected to the fake Slack over Socket Mode (connections: ${conns:-none})" test "${conns:-0}" -ge 1
+assert "Agent Kourier is connected to the fake Slack, over Socket Mode or its chat route in HTTP mode (connections: ${conns:-none})" test "${conns:-0}" -ge 1
 mark=verify-$(date +%s)
 sent=$(curl -s -m 20 -X POST -H 'Content-Type: application/json' -d '{"channel":"C1","user":"UVERIFY","text":"<@UFAKEBOT> What is 2+2? '"$mark"'"}' "$FS/_control/mention")
 ts=$(printf %s "$sent" | sed -n 's/.*"ts":"\([^"]*\)".*/\1/p')

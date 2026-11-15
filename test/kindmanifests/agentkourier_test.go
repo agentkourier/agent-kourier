@@ -77,7 +77,7 @@ func fastConfig(t *testing.T) string {
 }
 
 var upFastSecrets = secrets{
-	"agent-kourier/slack-fast": {"botToken", "appToken"}, "agent-kourier/agent-kourier-agent-token": {"token"},
+	"agent-kourier/slack-fast": {"botToken", "appToken", "signingSecret"}, "agent-kourier/agent-kourier-agent-token": {"token"},
 	"agent-kourier/prompt-agent-bearer": {"token"}, // lib.sh's deploy_prompt_agent
 }
 

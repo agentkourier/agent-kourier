@@ -34,7 +34,12 @@
 # either, and the scenarios that are about the custom resources (the CR_ tests) skip on the ConfigMap route. Re-running with the other value moves
 # the tier over in place, and back: the custom resources stay in the cluster, unread, when the tier goes back to files.
 #
-# E2E_TWO_APPS=1 (with E2E_CONFIG_SOURCE=crds) runs a broker that serves two Slack apps (spec D52; the MC_ tests of test/e2e, which make e2e-two-apps runs, and make e2e-fast does not): the platform's
+# E2E_SLACK_MODE=http runs the tier's ChatConnection in HTTP mode: the fake Slack sends the default app's events and presses as signed requests to
+# Agent Kourier's chat listener, through the chat Service that selects the leader (hack/kind/http-values.yaml; lib.sh's apply_doubles and
+# deploy_agentkourier). The default, socket, is Socket Mode. The E2E suite is the same in either, but for the MC_ tests, which run in socket mode only.
+# Re-running with the other value moves the tier over in place.
+#
+# E2E_TWO_APPS=1 (with E2E_CONFIG_SOURCE=crds and E2E_SLACK_MODE socket) runs a broker that serves two Slack apps (spec D52; the MC_ tests of test/e2e, which make e2e-two-apps runs, and make e2e-fast does not): the platform's
 # ChatConnection (slack-fast, the fake Slack's default app) and a team's, team-a, which brings its own Slack app and its own Secret, granted by a Role of
 # its own. The platform admits the namespaces team-a, team-b and team-c (hack/kind/two-apps-values.yaml), and each connection has a Binding
 # (hack/kind/fast/two-apps). The fake Slack hosts the second app and a third (team-b's) in every tier (fast/doubles.yaml). On E2E_STORE=postgres with
@@ -61,10 +66,15 @@ case "${E2E_REPLICAS}" in
 esac
 E2E_CONFIG_SOURCE=${E2E_CONFIG_SOURCE:-files}
 require_config_source
+E2E_SLACK_MODE=${E2E_SLACK_MODE:-socket}
+require_slack_mode
 E2E_TWO_APPS=${E2E_TWO_APPS:-0}
 case "${E2E_TWO_APPS}" in
   0) ;;
-  1) [ "${E2E_CONFIG_SOURCE}" = crds ] || die "E2E_TWO_APPS=1 needs E2E_CONFIG_SOURCE=crds: a team's ChatConnection is a custom resource" ;;
+  1)
+    [ "${E2E_CONFIG_SOURCE}" = crds ] || die "E2E_TWO_APPS=1 needs E2E_CONFIG_SOURCE=crds: a team's ChatConnection is a custom resource"
+    [ "${E2E_SLACK_MODE}" = socket ] || die "E2E_TWO_APPS=1 needs E2E_SLACK_MODE=socket: the MC_ tests run in Socket Mode only"
+    ;;
   *) die "E2E_TWO_APPS must be 0 or 1" ;;
 esac
 CTX=kind-${CLUSTER}
@@ -157,4 +167,4 @@ fi
 
 step "verify"
 "${FAST}/verify.sh"
-echo "fast tier up in ${SECONDS}s (context ${CTX}, store ${E2E_STORE}, ${E2E_REPLICAS} Agent Kourier replica(s), config source ${E2E_CONFIG_SOURCE}, two apps ${E2E_TWO_APPS})"
+echo "fast tier up in ${SECONDS}s (context ${CTX}, store ${E2E_STORE}, ${E2E_REPLICAS} Agent Kourier replica(s), config source ${E2E_CONFIG_SOURCE}, Slack mode ${E2E_SLACK_MODE}, two apps ${E2E_TWO_APPS})"

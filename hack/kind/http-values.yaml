@@ -1,0 +1,13 @@
+# The overlay of a tier in HTTP mode (E2E_SLACK_MODE=http; lib.sh's deploy_agentkourier adds it to every helm call): the chat listener on port 8081,
+# and its Service agent-kourier-chat (port 8081), which selects the pod that carries the leader label, so that the fake Slack's requests reach the
+# leader alone. The fake Slack sends them to lib.sh's FAKE_SLACK_REQUEST_URL, the route of the ChatConnection agent-kourier/slack-fast. With
+# rbac.create (the tiers' values leave it on) the chart grants the label's patch with a Role. chatFrom admits the fake Slack's pods to the chat port
+# when the chart's NetworkPolicy is on; the tiers' values leave it off, and the chart takes chatFrom then too.
+chatListener:
+  enabled: true
+  port: 8081
+  service: {port: 8081}
+networkPolicy:
+  chatFrom:
+    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: e2e}}
+      podSelector: {matchLabels: {app: fakeslack}}
