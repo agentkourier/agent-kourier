@@ -108,10 +108,12 @@ func (p *pressCase) counts(r kube.Replica) (approvals, retries float64) {
 }
 
 // press presses the prompt's control for action as user, once, and returns the envelope (in HTTP mode, the fake's ID of the request
-// and its retries), or "" when the fake Slack had no connection of the app to send it on, as in Socket Mode while nobody leads.
+// and its retries), or "" when the fake Slack had no connection of the app to send it on, as in Socket Mode while nobody leads. It
+// presses the prompt as it was posted (PressStaleApproval): an earlier press, retried, may have decided it and taken its controls off
+// by now, which a person's open Slack has not shown yet.
 func (p *pressCase) press(user string, action chat.Action) string {
 	p.f.t.Helper()
-	id, err := p.f.slack.PressApproval(p.f.ctx, user, p.prompt, action)
+	id, err := p.f.slack.PressStaleApproval(p.f.ctx, user, p.prompt, action)
 	if se := (*StatusError)(nil); errors.As(err, &se) && se.Status == http.StatusConflict && p.f.env.SlackMode == SlackModeSocket {
 		return ""
 	}
@@ -296,7 +298,7 @@ func s16KillWithPressInFlight(t *testing.T) {
 // the one pod the chat Service selects, which does not answer, so the fake Slack sends it again. Once another process leads, the second
 // denies. Then the old leader is resumed with whatever it was sent while frozen: it must end, as a deposed leader does (exit 5), and
 // decide nothing. Whichever press the new leader records first wins (in Socket Mode the second, since the first never reaches it; in
-// HTTP mode either, by the timing of the retries): one decision, the winner's, in the prompt, the audit and the agent's one answer, and
+// HTTP mode either, by the timing of the retries, and the second may press a prompt that the first's retry has decided already): one decision, the winner's, in the prompt, the audit and the agent's one answer, and
 // the other press, if it is decided at all, is superseded. In HTTP mode the first press is acked in the end too, by the new leader:
 // the fake's retries do not lose it.
 func s16StallWithRacingPresses(t *testing.T) {
