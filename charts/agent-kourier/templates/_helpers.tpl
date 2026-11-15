@@ -115,6 +115,12 @@ with two or more entries there is no guess to make, and the render fails. Empty 
 {{- printf "%s-%s-crs" (include "agentkourier.fullname" .) .Release.Namespace | trunc 253 | trimSuffix "-" -}}
 {{- end -}}
 
+{{/* The ValidatingAdmissionPolicy that holds the leader label's patch to the broker's own pod, and its binding: cluster-scoped, so the
+     release namespace is in the name. */}}
+{{- define "agentkourier.leaderLabelPolicyName" -}}
+{{- printf "%s-%s-leader-label" (include "agentkourier.fullname" .) .Release.Namespace | trunc 253 | trimSuffix "-" -}}
+{{- end -}}
+
 {{/* True (non-empty) when Agent Kourier keeps its state in SQLite on a volume. */}}
 {{- define "agentkourier.sqlite" -}}
 {{- if ne .Values.store.type "postgres" -}}true{{- end -}}
