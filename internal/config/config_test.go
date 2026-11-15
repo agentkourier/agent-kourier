@@ -404,9 +404,20 @@ func TestLoadRejects(t *testing.T) {
 			want: []string{`c.yaml#1 ChatConnection agent-kourier-system/slack-main: spec.directMessages: unknown field`},
 		},
 		{
-			name:  "removed mode field",
+			// The mode is in the platform's block, spec.slack.mode (spec D42), and not at spec.mode, where it was once planned.
+			name:  "mode outside the slack block",
 			files: map[string]string{"c.yaml": strings.Replace(connectionDoc, "platform: slack,", "platform: slack, mode: socket,", 1)},
 			want:  []string{`c.yaml#1 ChatConnection agent-kourier-system/slack-main: spec.mode: unknown field`},
+		},
+		{
+			name:  "unknown field in the slack block",
+			files: map[string]string{"c.yaml": strings.Replace(connectionDoc, "platform: slack,", "platform: slack, slack: { mode: socket, signingSecret: x },", 1)},
+			want:  []string{`c.yaml#1 ChatConnection agent-kourier-system/slack-main: spec.slack.signingSecret: unknown field`},
+		},
+		{
+			name:  "unknown Slack mode",
+			files: map[string]string{"c.yaml": strings.Replace(connectionDoc, "platform: slack,", "platform: slack, slack: { mode: events },", 1)},
+			want:  []string{`c.yaml#1 ChatConnection agent-kourier-system/slack-main: spec.slack.mode: unsupported value "events", must be one of socket, http`},
 		},
 		{
 			name:  "malformed YAML",

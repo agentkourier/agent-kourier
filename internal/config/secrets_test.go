@@ -29,6 +29,20 @@ func TestResolveSecrets(t *testing.T) {
 			[]string{creds + `Secret agent-kourier-system/slack-main has no key "appToken"`}},
 		{"botToken is needed", func(_ *Set, f fakeSecrets) { f["agent-kourier-system/slack-main"] = []string{"appToken"} },
 			[]string{creds + `Secret agent-kourier-system/slack-main has no key "botToken"`}},
+		{"Socket Mode, named, needs appToken", func(s *Set, f fakeSecrets) {
+			s.ChatConnections[0].Spec.Slack = &v1alpha1.SlackConnectionSpec{Mode: v1alpha1.SlackModeSocket}
+			f["agent-kourier-system/slack-main"] = []string{"botToken", "signingSecret"}
+		},
+			[]string{creds + `Secret agent-kourier-system/slack-main has no key "appToken"`}},
+		{"HTTP mode needs signingSecret", func(s *Set, _ fakeSecrets) {
+			s.ChatConnections[0].Spec.Slack = &v1alpha1.SlackConnectionSpec{Mode: v1alpha1.SlackModeHTTP}
+		},
+			[]string{creds + `Secret agent-kourier-system/slack-main has no key "signingSecret"`}},
+		{"HTTP mode needs botToken", func(s *Set, f fakeSecrets) {
+			s.ChatConnections[0].Spec.Slack = &v1alpha1.SlackConnectionSpec{Mode: v1alpha1.SlackModeHTTP}
+			f["agent-kourier-system/slack-main"] = []string{"appToken", "signingSecret"}
+		},
+			[]string{creds + `Secret agent-kourier-system/slack-main has no key "botToken"`}},
 		{"identity key is the ref's key", func(s *Set, _ fakeSecrets) { sreAlerts(s).Spec.Identity.TokenSecretRef.Key = "jwt" },
 			[]string{oidc + `Secret sre/agent-kourier-sre-alerts-oidc has no key "jwt"`}},
 		{"Secrets are read in the Binding's namespace", func(_ *Set, f fakeSecrets) {
@@ -48,11 +62,24 @@ func TestResolveSecrets(t *testing.T) {
 		})
 	}
 
-	// signingSecret was the key of the HTTP mode that was never served. It is not a known key now, and a Secret
-	// that still carries it, as one made for that mode would, is not a problem: only the keys that are needed are checked.
-	t.Run("an unknown key in the Secret is ignored", func(t *testing.T) {
+	// Only the keys of the connection's mode are checked: a Secret that holds the keys of both modes, as one kept while an app
+	// moves between them would, serves either, and a key no mode reads is ignored.
+	t.Run("keys beyond the mode's are ignored", func(t *testing.T) {
+		for _, mode := range []v1alpha1.SlackMode{"", v1alpha1.SlackModeSocket, v1alpha1.SlackModeHTTP} {
+			set, secrets := specSet(t), specSecrets()
+			set.ChatConnections[0].Spec.Slack = &v1alpha1.SlackConnectionSpec{Mode: mode}
+			secrets["agent-kourier-system/slack-main"] = []string{"botToken", "appToken", "signingSecret", "clientSecret"}
+			if _, err := Resolve(context.Background(), set, secrets); err != nil {
+				t.Errorf("mode %q: %v", mode, err)
+			}
+		}
+	})
+
+	// A Secret for HTTP mode holds no appToken, and a connection in HTTP mode does not need one.
+	t.Run("HTTP mode needs no appToken", func(t *testing.T) {
 		set, secrets := specSet(t), specSecrets()
-		secrets["agent-kourier-system/slack-main"] = []string{"botToken", "appToken", "signingSecret"}
+		set.ChatConnections[0].Spec.Slack = &v1alpha1.SlackConnectionSpec{Mode: v1alpha1.SlackModeHTTP}
+		secrets["agent-kourier-system/slack-main"] = []string{"botToken", "signingSecret"}
 		if _, err := Resolve(context.Background(), set, secrets); err != nil {
 			t.Error(err)
 		}

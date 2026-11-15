@@ -26,6 +26,8 @@ type (
 	ThreadReplies string
 	// BotMentions selects whether another bot's mention of Agent Kourier starts a turn (spec 8.2).
 	BotMentions string
+	// SlackMode selects how a Slack connection receives its events and button presses (spec D16).
+	SlackMode string
 )
 
 // Values of the enumerations, plus the only platform and alert source type in v1.
@@ -45,6 +47,9 @@ const (
 
 	BotMentionsAny  BotMentions = "any"
 	BotMentionsNone BotMentions = "none"
+
+	SlackModeSocket SlackMode = "socket"
+	SlackModeHTTP   SlackMode = "http"
 
 	PlatformSlack = "slack"
 )
@@ -254,10 +259,13 @@ type ChatConnectionList struct {
 }
 
 // ChatConnectionSpec is the desired state of a ChatConnection.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.slack) || self.platform == 'slack'",message="is set, but only a slack connection has one",fieldPath=".slack"
 type ChatConnectionSpec struct {
 	// +kubebuilder:validation:Enum=slack
 	Platform string `json:"platform"`
-	// CredentialsSecretRef names one Secret with the fixed keys botToken and appToken (Socket Mode).
+	// CredentialsSecretRef names one Secret whose keys are fixed by the platform and its mode. A Slack connection in Socket Mode needs
+	// botToken and appToken; one in HTTP mode needs botToken and signingSecret.
 	CredentialsSecretRef SecretRef `json:"credentialsSecretRef"`
 	// AllowedNamespaces lists the other namespaces whose Bindings may reference this connection. Each is a DNS-1123 label.
 	// An empty list permits references only from the connection's own namespace. At most 256.
@@ -266,6 +274,31 @@ type ChatConnectionSpec struct {
 	// +kubebuilder:validation:items:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	// +doc:default=Empty list
 	AllowedNamespaces []string `json:"allowedNamespaces,omitempty"`
+	// Slack holds the settings of a Slack connection. Only a connection whose platform is slack may set it. Omitted, the connection
+	// uses Socket Mode.
+	// +optional
+	Slack *SlackConnectionSpec `json:"slack,omitempty"`
+}
+
+// SlackMode returns the mode of a Slack connection: spec.slack.mode, or socket when it is unset. The API fills in no default (spec
+// D42), so a stored ChatConnection does not carry one; the mode is read here.
+func (s ChatConnectionSpec) SlackMode() SlackMode {
+	if s.Slack == nil || s.Slack.Mode == "" {
+		return SlackModeSocket
+	}
+	return s.Slack.Mode
+}
+
+// SlackConnectionSpec is the settings of a Slack connection.
+type SlackConnectionSpec struct {
+	// Mode selects how Slack delivers the app's events and button presses: socket, over a Socket Mode WebSocket that Agent Kourier
+	// opens, or http, as Events API and interactivity requests that Slack sends to Agent Kourier, signed with the app's signing
+	// secret. The mode sets the keys of the credentials Secret (credentialsSecretRef). This version does not serve http: the broker
+	// refuses to start for its own connection in HTTP mode, and does not start a team connection in HTTP mode.
+	// +kubebuilder:validation:Enum=socket;http;""
+	// +doc:default=socket
+	// +optional
+	Mode SlackMode `json:"mode,omitempty"`
 }
 
 // Binding connects one agent to one chat channel.

@@ -1427,3 +1427,44 @@ spec:
       - t253
       - t254
       - t255
+---
+# A ChatConnection in each Slack mode, and with an empty slack block and an empty mode, which the broker reads as Socket Mode.
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: edges-slack-socket
+  namespace: sre
+spec:
+  platform: slack
+  credentialsSecretRef: {name: slack-main}
+  slack: {mode: socket}
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: edges-slack-http
+  namespace: sre
+spec:
+  platform: slack
+  credentialsSecretRef: {name: slack-main}
+  slack: {mode: http}
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: edges-slack-empty-mode
+  namespace: sre
+spec:
+  platform: slack
+  credentialsSecretRef: {name: slack-main}
+  slack: {mode: ""}
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: edges-slack-empty
+  namespace: sre
+spec:
+  platform: slack
+  credentialsSecretRef: {name: slack-main}
+  slack: {}
