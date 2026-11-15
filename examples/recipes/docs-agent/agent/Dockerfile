@@ -27,7 +27,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 go build -trimpath -o /out/docs-agent ./cmd/docs-agent
+RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 go build -trimpath -o /out/ ./cmd/docs-agent ./cmd/docs-mcp
 
 FROM build AS corpus
 ARG CORPUS_REMOVE=""
@@ -40,6 +40,7 @@ RUN set -eu; cd /corpus; \
 
 FROM gcr.io/distroless/static-debian12@sha256:d75cdd72874d4790092fcb1b058493ecf6bb5bf2b2b897045b00ff01d91843f2
 COPY --from=build /out/docs-agent /docs-agent
+COPY --from=build /out/docs-mcp /docs-mcp
 COPY --from=corpus /corpus /corpus
 USER 65532:65532
 EXPOSE 8080
