@@ -26,7 +26,9 @@
 # E2E_REPLICAS=2 (with E2E_STORE=postgres) runs two Agent Kourier replicas, a leader and a standby (spec 11, D37), with the election timings of
 # charts/agent-kourier/ci/fast-postgres-ha-values.yaml, and brings up the container signaler (fast/signaler.yaml) that the failover scenario S16
 # uses to freeze or kill the leader's process. The rest of the suite runs on two replicas too. Without it, or with 1, there is one replica and
-# no signaler, and S16 skips. Re-running with another E2E_REPLICAS changes the replicas in place.
+# no signaler, and S16 skips. Re-running with another E2E_REPLICAS changes the replicas in place. S16 passes in either Slack mode (E2E_SLACK_MODE,
+# below), and is run in both: E2E_STORE=postgres E2E_REPLICAS=2 E2E_CONFIG_SOURCE=crds E2E_SLACK_MODE=http make e2e-fast-up, then
+# E2E_RUN='^TestS16_' make e2e-fast, and the same again with E2E_SLACK_MODE=socket.
 #
 # E2E_CONFIG_SOURCE=crds runs Agent Kourier on custom resources instead of the ConfigMap (the tier default, files, which the tiers' values name with config.source files: the chart's own default is crds): the CRDs are installed first, with
 # the release still on the ConfigMap route, then the same config is applied as Binding, AgentBackend and ChatConnection resources and the release is

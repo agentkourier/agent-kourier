@@ -17,14 +17,23 @@ import (
 )
 
 // TestS16_FailoverLosesNoEventAndDuplicatesNone is the Phase 4 exit test (spec 12): two replicas on Postgres, a leader and a standby,
-// pass a failover test with no lost or duplicated events. Its cases, one after another, each leaving the tier healthy for the next: the
-// leader is killed mid-turn, mid-post and mid-storm, and frozen past its lease and then resumed. In each another process takes the
-// leadership, which Agent Kourier counts, and the fake Slack's record shows every reply once. (After a kill the standby and the killed leader's
+// pass a failover test with no lost or duplicated events or presses. Its cases, one after another, each leaving the tier healthy for the
+// next: the leader is killed mid-turn, mid-post and mid-storm, and frozen past its lease and then resumed; and an approval is pressed while
+// the leader is dead, and by two people across a freeze (s16_press_test.go). In each another process takes the leadership, which Agent Kourier
+// counts, and the fake Slack's record shows every reply once, and every prompt decided once. (After a kill the standby and the killed leader's
 // own container, which the kubelet restarts within seconds, race for the lease, and either may win it: both are a failover. Only a freeze
 // leaves the standby alone to take over.)
 //
-// The fast tier only, brought up on Postgres with two replicas (E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up); anywhere else it
-// skips and says why.
+// The fast tier only, brought up on Postgres with two replicas; anywhere else it skips and says why. It passes in either Slack mode, and
+// is run in both, one after the other, on the same tier (bringing it up again moves it between the modes in place):
+//
+//	E2E_STORE=postgres E2E_REPLICAS=2 E2E_CONFIG_SOURCE=crds E2E_SLACK_MODE=http make e2e-fast-up
+//	E2E_RUN='^TestS16_' make e2e-fast
+//	E2E_STORE=postgres E2E_REPLICAS=2 E2E_CONFIG_SOURCE=crds E2E_SLACK_MODE=socket make e2e-fast-up
+//	E2E_RUN='^TestS16_' make e2e-fast
+//
+// E2E_CONFIG_SOURCE=files runs it on the ConfigMap route instead. In HTTP mode an event or press sent while nobody leads finds no pod behind
+// the chat Service, and the fake Slack sends it again (1, 5 and 30 seconds after a failed attempt), which the press cases count on.
 func TestS16_FailoverLosesNoEventAndDuplicatesNone(t *testing.T) {
 	requireReplicas(t)
 	for _, tc := range []struct {
@@ -35,6 +44,8 @@ func TestS16_FailoverLosesNoEventAndDuplicatesNone(t *testing.T) {
 		{"kill the leader mid-post", s16KillMidPost},
 		{"kill the leader mid-storm", s16KillMidStorm},
 		{"stall the leader past its lease, then resume it", s16StalledLeader},
+		{"kill the leader with a press in flight", s16KillWithPressInFlight},
+		{"stall the leader while two people press", s16StallWithRacingPresses},
 	} {
 		t.Run(tc.name, tc.run)
 	}
