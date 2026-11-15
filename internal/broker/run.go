@@ -167,6 +167,16 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	}
 	runCtx = telemetry.WithObserver(runCtx, obs)
 	ready := &Readiness{}
+	// The leader label on this replica's pod, if Run was told its pod: off from the start (the pod may have kept it from a container that
+	// exited as the leader), on once the leader half has started. It comes off in the health step, the last, just before the lease is handed
+	// over: no other replica leads before then, so there is no other pod for the chat Service to select, and the chat listener, closed in
+	// the intake step, already refuses the connections that reach this one. Its stop is added before the health server's, so it runs first.
+	var labeler *podLabeler
+	if !cfg.LeaderPod.IsZero() {
+		labeler = newPodLabeler(client, cfg.LeaderPod, log, metrics.PodLabelWrite)
+		labeler.start(runCtx)
+		sd.add(stepHealth, labeler.stop)
+	}
 	auditEndpoint := testhooks.NewAuditEndpoint()
 	served, servedDone := make(chan error, 1), make(chan struct{})
 	serveCtx, stopServing := context.WithCancel(context.WithoutCancel(ctx))
@@ -265,6 +275,11 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	// Everything that every replica runs is up. A standby is as ready as a leader: readiness never depends on the
 	// lease, since nothing routes traffic to Agent Kourier in Socket Mode, and a standby is healthy (spec 11). A standby's chat listener,
 	// if it has one, answers 503 to every route, which a platform sends again.
+	// A replica whose pod kept the leader label says it is ready only once the label's first write (its removal) has been tried, so that the
+	// chat Service does not select it as a standby; the write is bounded (podLabelTimeout), and one that failed is tried again behind.
+	if labeler != nil {
+		waitFor(runCtx, labeler.settled())
+	}
 	ready.Set(append(boot.Checks(), StoreOpen(st))...)
 	log.InfoContext(ctx, "ready")
 
@@ -305,6 +320,9 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		}
 		metrics.Leader(true)
 		chatDone, err := leader.start(ctx, runCtx, current)
+		if err == nil && labeler != nil {
+			labeler.lead() // inside the gate: a shutdown that waits for this start sees the label wanted, and takes it off
+		}
 		leave()
 		if err != nil {
 			leaderDone <- err

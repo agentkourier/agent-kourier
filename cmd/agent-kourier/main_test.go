@@ -96,6 +96,41 @@ func TestEnvConfigChatListen(t *testing.T) {
 	}
 }
 
+// AGENTKOURIER_POD_NAMESPACE, with AGENTKOURIER_POD_NAME, names the pod the leader labels for the chat Service. It is refused without a
+// chat listener (the label is for the listener's Service alone) and without the pod's name. The name is the pod's own, not the election's
+// identity, which run makes unique to the process.
+func TestEnvConfigLeaderPod(t *testing.T) {
+	const listen, ns, pod = ":8081", "agent-kourier", "agent-kourier-7d9f8-abcde"
+	for name, tc := range map[string]struct {
+		env  env
+		want broker.PodRef
+		err  string // "" is accepted
+	}{
+		"unset":                         {env{}, broker.PodRef{}, ""},
+		"a listener alone":              {env{"AGENTKOURIER_CHAT_LISTEN": listen}, broker.PodRef{}, ""},
+		"a pod's name alone (postgres)": {env{"AGENTKOURIER_CHAT_LISTEN": listen, "AGENTKOURIER_POD_NAME": pod}, broker.PodRef{}, ""},
+		"the pod and a listener":        {env{"AGENTKOURIER_CHAT_LISTEN": listen, "AGENTKOURIER_POD_NAMESPACE": ns, "AGENTKOURIER_POD_NAME": pod}, broker.PodRef{Namespace: ns, Name: pod}, ""},
+		"the pod without a listener":    {env{"AGENTKOURIER_POD_NAMESPACE": ns, "AGENTKOURIER_POD_NAME": pod}, broker.PodRef{}, "AGENTKOURIER_POD_NAMESPACE is set without AGENTKOURIER_CHAT_LISTEN"},
+		"a namespace without a name":    {env{"AGENTKOURIER_CHAT_LISTEN": listen, "AGENTKOURIER_POD_NAMESPACE": ns}, broker.PodRef{}, "AGENTKOURIER_POD_NAME is required with AGENTKOURIER_POD_NAMESPACE"},
+		"postgres keeps the pod's name": {env{"AGENTKOURIER_CHAT_LISTEN": listen, "AGENTKOURIER_POD_NAMESPACE": ns, "AGENTKOURIER_POD_NAME": pod, "AGENTKOURIER_STORE": "postgres", "AGENTKOURIER_POSTGRES_DSN_SECRET": "agent-kourier/pg/dsn", "AGENTKOURIER_LEASE_NAMESPACE": ns, "AGENTKOURIER_LEASE_NAME": "agent-kourier-leader"}, broker.PodRef{Namespace: ns, Name: pod}, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, err := loadEnv(tc.env.get)
+			switch {
+			case tc.err == "" && err != nil:
+				t.Fatalf("loadEnv = %v; want nil", err)
+			case tc.err != "" && (!errors.Is(err, broker.ErrWiring) || !strings.Contains(err.Error(), tc.err)):
+				t.Fatalf("loadEnv = %v; want an ErrWiring saying %q", err, tc.err)
+			case tc.err != "":
+				return
+			}
+			if got := c.runConfig().LeaderPod; got != tc.want {
+				t.Errorf("LeaderPod = %+v; want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
 // With AGENTKOURIER_CHAT_LISTEN set, run listens on it before the broker starts, and an address it cannot listen on fails the start and
 // is named. An address it can listen on lets the start go on, to where it stops here: the cluster, which a test has none of. (That
 // unset reads as no chat listener is TestEnvConfigChatListen's.)

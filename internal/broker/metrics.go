@@ -51,6 +51,7 @@ type Metrics struct {
 	statusWrites  *prometheus.CounterVec
 	crdSchema     *prometheus.GaugeVec   // series only once set, which only a broker on the custom resources does (crdschema.go)
 	chatRequests  *prometheus.CounterVec // series only once a request comes, which only a broker with a chat listener takes
+	labelWrites   *prometheus.CounterVec // series only once a write is tried, which only a broker told its pod makes (podlabel.go)
 }
 
 // The kinds and reasons that the config gauges carry, a closed set each.
@@ -107,6 +108,8 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 			Help: "1 for what the broker found when it compared each CRD's schema hash with the one it was built with, at start and every minute, and 0 for the other states, by CRD and state (match, mismatch, unannotated or unknown). Only a broker that reads custom resources has these series; with files there are none."}, []string{"crd", "state"}),
 		chatRequests: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_chat_listener_requests_total",
 			Help: "Requests to the chat listener, by outcome: served (a connection's handler was called), not_found (the path is no route), method (not POST), no_route (the connection does not run on this replica: answered 503), too_large (the body is past the cap), unreadable (the body could not be read whole) or busy (the listener already held as many requests as it may: answered 503). Only a broker with a chat listener has these series."}, []string{"outcome"}),
+		labelWrites: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_leader_pod_label_writes_total",
+			Help: "Writes of the leader label (agentkourier.dev/role=leader) on this replica's own pod, by result: labeled (put on, as the replica began to lead), unlabeled (taken off, as the replica started or stopped) or failed (the API server refused or could not be reached; it is tried again). Only a broker with a chat listener that is told its pod has these series."}, []string{"result"}),
 	}
 	m.ConfigReport(config.Report{})
 	m.UnservedBindings(0)
@@ -118,7 +121,7 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		return 0
 	})
 	var err error
-	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, m.approvals, m.timeouts, m.removed, m.decisions, m.chatUp, m.turns, m.leader, m.takeovers, m.bindingCond, m.bindingReady, m.probeDuration, m.invalid, m.bindingRej, m.heldObjects, m.crdSchema, m.statusWrites, m.chatRequests, staleGauge} {
+	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, m.approvals, m.timeouts, m.removed, m.decisions, m.chatUp, m.turns, m.leader, m.takeovers, m.bindingCond, m.bindingReady, m.probeDuration, m.invalid, m.bindingRej, m.heldObjects, m.crdSchema, m.statusWrites, m.chatRequests, m.labelWrites, staleGauge} {
 		err = errors.Join(err, m.reg.Register(c))
 	}
 	if err != nil {
@@ -293,6 +296,9 @@ func (m *Metrics) ChatListenerRequest(outcome string) {
 	}
 	m.chatRequests.WithLabelValues(outcome).Inc()
 }
+
+// PodLabelWrite counts a write of the leader label on the replica's own pod by its result: labeled, unlabeled or failed (podlabel.go).
+func (m *Metrics) PodLabelWrite(result string) { m.labelWrites.WithLabelValues(result).Inc() }
 
 // BindingCondition records a condition of a Binding that changed: bindingcheck.Options.OnTransition. The condition's series
 // say its new status (1 for it, 0 for the other two), and a change of Ready also sets agentkourier_binding_ready, which is 1
