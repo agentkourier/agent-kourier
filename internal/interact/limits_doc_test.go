@@ -35,6 +35,8 @@ func TestLimitsPage(t *testing.T) {
 		t.Fatalf("NewRetention: %v", err)
 	}
 	limitsdoc.Duration(t, "clearGrace", r.cfg.ClearGrace)
+	// The key of a press is purged with the presses, by the grace that the broker leaves at its default.
+	limitsdoc.Duration(t, "pressDeliveryKey", r.cfg.Grace)
 	limitsdoc.Duration(t, "undeliveredGrace", r.cfg.UndeliveredGrace)
 
 	// The broker builds the press worker with only its processor and logger, and the Slack client with PressAuthzTimeout.

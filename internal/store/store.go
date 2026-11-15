@@ -42,6 +42,9 @@ var (
 	ErrConflict = errors.New("store: conflict")
 	// ErrLimit is returned when a bound on what the store holds would be passed.
 	ErrLimit = errors.New("store: limit reached")
+	// ErrDuplicate is returned when a write repeats one the store has recorded already, under a key the caller
+	// gave it: a button press delivered again (Press.Delivery). Nothing is written, and the caller has nothing to do.
+	ErrDuplicate = errors.New("store: already recorded")
 	// ErrDeposed is returned by a write of a fenced store (Fenced) that is not the leader: it has been given
 	// no epoch yet (a standby), or its epoch is stale because another replica has led since. The write changed
 	// nothing. A caller does not retry it: a deposed leader's process ends (spec D37).

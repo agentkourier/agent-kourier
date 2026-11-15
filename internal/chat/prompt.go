@@ -188,6 +188,11 @@ type Interaction struct {
 	// ToolApproveValue and ToolDenyValue (see Answer.ToolVerdict); a tool left undecided has none. It is
 	// empty for ActionApproveAll and ActionDenyAll, which ignore it.
 	Answers []Answer
+	// Delivery is an opaque key of this press that the platform sends again with the press when it delivers it again (a
+	// retry of a request whose answer was lost, say), and that another press, by the same person on the same button
+	// included, does not carry. It is for recording a press once, and nothing reads what it holds. Empty: the platform
+	// gave nothing to key the press by.
+	Delivery string
 }
 
 // Answer is the answer to question Question (an index into Prompt.Questions).

@@ -9,14 +9,24 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
-// RecordPress implements store.Presses. The counts, of the presses of p's connection, and the insert are one transaction on the
-// single write connection, so the limits hold under concurrent presses.
+// RecordPress implements store.Presses. The look-up of p's delivery key, the counts, of the presses of p's connection, and the
+// inserts are one transaction on the single write connection, so the limits hold under concurrent presses, and of two deliveries of
+// one press that come together one is recorded.
 func (s *adapter) RecordPress(ctx context.Context, p store.Press, limits store.PressLimits) (int64, error) {
 	if p.Inputs == nil {
 		p.Inputs = []byte{} // a nil slice would bind as NULL
 	}
 	var seq int64
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		if p.Delivery != "" {
+			var seen bool
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM press_deliveries WHERE connection = ? AND delivery_key = ?)`, p.Connection, p.Delivery).Scan(&seen); err != nil {
+				return fmt.Errorf("look up the delivery: %w", err)
+			}
+			if seen {
+				return store.ErrDuplicate
+			}
+		}
 		var total, user int
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(user_id = ?), 0) FROM interaction_presses WHERE connection = ?`, p.User, p.Connection).Scan(&total, &user); err != nil {
 			return fmt.Errorf("count presses: %w", err)
@@ -29,7 +39,13 @@ func (s *adapter) RecordPress(ctx context.Context, p store.Press, limits store.P
 		if err != nil {
 			return err
 		}
-		seq, err = res.LastInsertId()
+		if seq, err = res.LastInsertId(); err != nil {
+			return err
+		}
+		if p.Delivery == "" {
+			return nil
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO press_deliveries (connection, delivery_key, pressed_at) VALUES (?, ?, ?)`, p.Connection, p.Delivery, ts(p.PressedAt))
 		return err
 	})
 	if err != nil {
@@ -70,11 +86,19 @@ func (s *adapter) DeletePress(ctx context.Context, seq int64) error {
 	return nil
 }
 
-// PurgePresses implements store.Presses.
+// PurgePresses implements store.Presses. The presses and the delivery keys are deleted in one transaction.
 func (s *adapter) PurgePresses(ctx context.Context, now time.Time, grace time.Duration) (int, error) {
-	n, err := s.exec(ctx, `DELETE FROM interaction_presses WHERE seq IN (
-		SELECT p.seq FROM interaction_presses p LEFT JOIN interactions i ON i.id = p.interaction_id
-		WHERE COALESCE(i.deadline, p.pressed_at) + ? <= ?)`, grace.Nanoseconds(), ts(now))
+	var n int64
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		if n, err = execRows(ctx, tx, `DELETE FROM interaction_presses WHERE seq IN (
+			SELECT p.seq FROM interaction_presses p LEFT JOIN interactions i ON i.id = p.interaction_id
+			WHERE COALESCE(i.deadline, p.pressed_at) + ? <= ?)`, grace.Nanoseconds(), ts(now)); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `DELETE FROM press_deliveries WHERE pressed_at <= ?`, ts(now.Add(-grace)))
+		return err
+	})
 	if err != nil {
 		return 0, fmt.Errorf("purge presses: %w", err)
 	}

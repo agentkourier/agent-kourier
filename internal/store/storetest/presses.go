@@ -81,6 +81,99 @@ func (su suite) presses(t *testing.T) {
 		}
 	})
 
+	// A chat platform may send a press again (a retry of a request whose answer was lost): its delivery key says so, and
+	// the store records it once, before and after the first is processed, while another key, or the same key of another
+	// connection, is another press. A press with no key is recorded each time.
+	su.runReopen(t, "a press delivered again is recorded once, before and after it is processed", func(t *testing.T, s store.Store, reopen func() store.Store) {
+		ctx := t.Context()
+		delivered := func(conn, key string) store.Press {
+			p := pressOn(conn, "ix", "U1", t0)
+			p.Delivery = key
+			return p
+		}
+		seq, err := s.RecordPress(ctx, delivered("ns/a", "k1"), roomy)
+		noErr(t, err, "the first delivery")
+		_, err = s.RecordPress(ctx, delivered("ns/a", "k1"), roomy)
+		isErr(t, err, store.ErrDuplicate, "the second delivery, with the press waiting")
+		if got, _ := s.ListPresses(ctx); len(got) != 1 || got[0].Seq != seq {
+			t.Fatalf("presses = %+v; want only the first delivery's", got)
+		}
+		noErr(t, s.DeletePress(ctx, seq), "DeletePress")
+		_, err = s.RecordPress(ctx, delivered("ns/a", "k1"), roomy)
+		isErr(t, err, store.ErrDuplicate, "a delivery after the press was processed")
+		s = reopen()
+		_, err = s.RecordPress(ctx, delivered("ns/a", "k1"), roomy)
+		isErr(t, err, store.ErrDuplicate, "a delivery after a restart")
+		for _, p := range []store.Press{delivered("ns/b", "k1"), delivered("ns/a", "k2"), delivered("ns/a", ""), delivered("ns/a", "")} {
+			_, err := s.RecordPress(ctx, p, roomy)
+			noErr(t, err, fmt.Sprintf("a press on %q with key %q", p.Connection, p.Delivery))
+		}
+		if got, _ := s.ListPresses(ctx); len(got) != 4 {
+			t.Errorf("%d presses waiting; want 4: another connection's key, another key, and two presses with none", len(got))
+		}
+	})
+
+	// A press sent again is reported as recorded even when the limits are full, so that its acknowledgement is not refused; and a
+	// press the limits refuse leaves no key, so that its next delivery, once there is room, is recorded.
+	su.run(t, "a press delivered again is reported as recorded with the limits full, and a refused press keeps no key", func(t *testing.T, s store.Store) {
+		ctx := t.Context()
+		limits := store.PressLimits{Total: 1, PerUser: 1}
+		first, second := press("ix", "U1", t0), press("ix", "U1", t0)
+		first.Delivery, second.Delivery = "k1", "k2"
+		seq, err := s.RecordPress(ctx, first, limits)
+		noErr(t, err, "the first press")
+		_, err = s.RecordPress(ctx, first, limits)
+		isErr(t, err, store.ErrDuplicate, "the first press again, with the limits full")
+		_, err = s.RecordPress(ctx, second, limits)
+		isErr(t, err, store.ErrLimit, "a second press, with the limits full")
+		noErr(t, s.DeletePress(ctx, seq), "DeletePress")
+		_, err = s.RecordPress(ctx, second, limits)
+		noErr(t, err, "the second press delivered again, with room")
+	})
+
+	su.run(t, "of the deliveries of one press that come together, one is recorded", func(t *testing.T, s store.Store) {
+		var ok, dup atomic.Int32
+		parallel(20, func(int) {
+			p := press("ix", "U1", t0)
+			p.Delivery = "k1"
+			switch _, err := s.RecordPress(t.Context(), p, roomy); {
+			case err == nil:
+				ok.Add(1)
+			case errors.Is(err, store.ErrDuplicate):
+				dup.Add(1)
+			default:
+				t.Errorf("RecordPress: %v", err)
+			}
+		})
+		if got, _ := s.ListPresses(t.Context()); ok.Load() != 1 || dup.Load() != 19 || len(got) != 1 {
+			t.Errorf("%d recorded, %d duplicates, %d stored; want 1, 19 and 1", ok.Load(), dup.Load(), len(got))
+		}
+	})
+
+	// A delivery key is kept for the grace after its press was made, whether or not the press is processed or purged before.
+	su.run(t, "PurgePresses forgets a delivery key once the grace has passed since its press", func(t *testing.T, s store.Store) {
+		ctx := t.Context()
+		p := press("ix-unknown", "U1", t0)
+		p.Delivery = "k1"
+		seq, err := s.RecordPress(ctx, p, roomy)
+		noErr(t, err, "RecordPress")
+		noErr(t, s.DeletePress(ctx, seq), "DeletePress")
+		grace := time.Hour
+		n, err := s.PurgePresses(ctx, t0.Add(grace-time.Microsecond), grace)
+		noErr(t, err, "PurgePresses a microsecond early")
+		_, err = s.RecordPress(ctx, p, roomy)
+		isErr(t, err, store.ErrDuplicate, "a delivery a microsecond before the key is due")
+		if n != 0 {
+			t.Errorf("the purge counted %d; want 0: keys are not presses", n)
+		}
+		if n, err = s.PurgePresses(ctx, t0.Add(grace), grace); err != nil || n != 0 {
+			t.Fatalf("PurgePresses = %d, %v; want 0 presses, and the key gone", n, err)
+		}
+		if _, err := s.RecordPress(ctx, p, roomy); err != nil {
+			t.Errorf("a delivery once the key is gone: %v; want it recorded as a new press", err)
+		}
+	})
+
 	su.run(t, "a press with no inputs is recorded and comes back with none", func(t *testing.T, s store.Store) {
 		p := press("ix", "U1", t0)
 		p.Inputs = nil

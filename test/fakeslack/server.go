@@ -178,6 +178,7 @@ type Server struct {
 
 	mu       sync.Mutex
 	last     int64                 // microseconds of the last ts issued, guarded by mu
+	lastAct  int64                 // microseconds of the last action_ts issued, guarded by mu
 	events   int                   // Events API events issued, guarded by mu
 	channels map[string][]*Message // messages per channel in ts order, guarded by mu
 	users    map[string]User       // guarded by mu

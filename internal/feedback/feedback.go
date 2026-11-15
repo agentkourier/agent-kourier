@@ -212,7 +212,7 @@ func laneOf(turn string) string { return lanePrefix + turn }
 
 // Press records a press of a feedback button and returns, at Agent Kourier's own clock. It returns ErrNotFeedback for a button that
 // is not one, and store.ErrLimit when too many presses wait. A press that names no person or message is acknowledged and
-// dropped.
+// dropped, and so is a press that the platform delivers again (the same i.Delivery) after it was recorded.
 func (h *Handler) Press(ctx context.Context, i chat.Interaction) error {
 	v, ok := ParseValue(i.PromptID)
 	if !ok {
@@ -226,8 +226,14 @@ func (h *Handler) Press(ctx context.Context, i chat.Interaction) error {
 	if err != nil {
 		return fmt.Errorf("feedback: encode a press: %w", err)
 	}
-	press := store.Press{InteractionID: laneOf(v.Turn), User: i.User, Connection: i.At.Conn, Channel: i.At.Channel, MessageRef: i.At.ID, Inputs: inputs, PressedAt: h.cfg.Now()}
-	if press.Seq, err = h.cfg.Store.RecordPress(ctx, press, h.cfg.Limits); err != nil {
+	press := store.Press{InteractionID: laneOf(v.Turn), User: i.User, Connection: i.At.Conn, Channel: i.At.Channel, MessageRef: i.At.ID, Inputs: inputs, PressedAt: h.cfg.Now(), Delivery: i.Delivery}
+	switch press.Seq, err = h.cfg.Store.RecordPress(ctx, press, h.cfg.Limits); {
+	case errors.Is(err, store.ErrDuplicate):
+		// Delivered again by the platform: the first delivery is the vote, and recording this one after a later vote would put
+		// back the verdict the person replaced.
+		h.cfg.Logger.InfoContext(ctx, "feedback: a vote delivered again was recorded before; it is acknowledged and not recorded again", "turn", v.Turn)
+		return nil
+	case err != nil:
 		return fmt.Errorf("feedback: record a press on %s: %w", v.Turn, err)
 	}
 	h.cfg.Notify(press)

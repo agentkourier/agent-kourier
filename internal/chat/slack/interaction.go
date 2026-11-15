@@ -2,6 +2,9 @@ package slack
 
 import (
 	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"regexp"
 	"slices"
 	"strconv"
@@ -25,6 +28,9 @@ type Interaction struct {
 	ActionID, BlockID, Value string
 	// Inputs is the state of the message's input elements: block_id, then action_id.
 	Inputs map[string]map[string]Input
+	// Delivery is the press's key, which a second delivery of its payload repeats and another press does not (deliveryKey);
+	// empty when the action has no action_ts.
+	Delivery string
 }
 
 // Input is one input element's answer.
@@ -56,6 +62,7 @@ func decodeInteraction(botUser string, cb slackgo.InteractionCallback) (Interact
 	if i.User == "" || i.User == botUser || i.Channel == "" || i.MessageTS == "" {
 		return Interaction{}, false
 	}
+	i.Delivery = deliveryKey(i, act.ActionTs)
 	if cb.BlockActionState != nil {
 		i.Inputs = map[string]map[string]Input{}
 		for block, actions := range cb.BlockActionState.Values {
@@ -66,6 +73,25 @@ func decodeInteraction(botUser string, cb slackgo.InteractionCallback) (Interact
 		}
 	}
 	return i, true
+}
+
+// deliveryKey is the key of a press, by which the broker records it once (chat.Interaction.Delivery): who pressed, the message,
+// the button, and actionTS, the action_ts that Slack gives the pressed action, each prefixed by its length, hashed with SHA-256
+// and written in hex, so that the key has one length whatever the IDs are. A second delivery of a press (an HTTP request Slack
+// got no 200 for, or a Socket Mode envelope that was not acknowledged) is the same payload, so it has the same action_ts and
+// the same key; a second click by the same person is a new action, with an action_ts of its own. Both are Slack's behaviour,
+// assumed here and not checked against Slack (the tests' fake Slack does both). The payload's trigger_id is not used: it is
+// Slack's grant to open a modal (also not checked here), which the broker has no use for and does not keep.
+// Empty when actionTS is: the press is then recorded each time it comes.
+func deliveryKey(i Interaction, actionTS string) string {
+	if actionTS == "" {
+		return ""
+	}
+	h := sha256.New()
+	for _, part := range []string{i.User, i.Channel, i.MessageTS, i.BlockID, i.ActionID, actionTS} {
+		_, _ = fmt.Fprintf(h, "%d:%s", len(part), part)
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // inputValues returns the non-empty answers of an input's state, from the one field its type
@@ -113,7 +139,7 @@ func optionValues(opts []slackgo.OptionBlockObject) []string {
 // button, even when its action ID is one of the prompt's: its value is its own and is passed on for its handler to read
 // (a feedback button is routed by it).
 func (p *Platform) interaction(i Interaction) chat.Interaction {
-	out := chat.Interaction{User: i.User, At: p.ref(i.Channel, i.ThreadTS, i.MessageTS), PromptID: i.Value}
+	out := chat.Interaction{User: i.User, At: p.ref(i.Channel, i.ThreadTS, i.MessageTS), PromptID: i.Value, Delivery: i.Delivery}
 	if i.BlockID != submitBlockID && i.BlockID != decideBlockID {
 		return out
 	}

@@ -10,9 +10,10 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
-// RecordPress implements store.Presses. The counts, over the presses of p's connection, and the insert are one transaction
-// under an advisory lock that every RecordPress takes, so the limits hold under concurrent presses: READ COMMITTED would let
-// two callers count the same free place. The lock also makes the order of Seq the order of commits.
+// RecordPress implements store.Presses. The look-up of p's delivery key, the counts, over the presses of p's connection, and the
+// inserts are one transaction under an advisory lock that every RecordPress takes, so the limits hold under concurrent presses:
+// READ COMMITTED would let two callers count the same free place, and two deliveries of one press that come together could both
+// find the key missing. The lock also makes the order of Seq the order of commits.
 func (s *adapter) RecordPress(ctx context.Context, p store.Press, limits store.PressLimits) (int64, error) {
 	var seq int64
 	if p.Inputs == nil {
@@ -22,6 +23,15 @@ func (s *adapter) RecordPress(ctx context.Context, p store.Press, limits store.P
 		if err := lock(ctx, tx, lockPresses, ""); err != nil {
 			return err
 		}
+		if p.Delivery != "" {
+			var seen bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM press_deliveries WHERE connection = $1 AND delivery_key = $2)`, p.Connection, p.Delivery).Scan(&seen); err != nil {
+				return fmt.Errorf("look up the delivery: %w", err)
+			}
+			if seen {
+				return store.ErrDuplicate
+			}
+		}
 		var total, user int
 		if err := tx.QueryRow(ctx, `SELECT COUNT(*), COUNT(*) FILTER (WHERE user_id = $1) FROM interaction_presses WHERE connection = $2`, p.User, p.Connection).Scan(&total, &user); err != nil {
 			return fmt.Errorf("count presses: %w", err)
@@ -29,9 +39,16 @@ func (s *adapter) RecordPress(ctx context.Context, p store.Press, limits store.P
 		if total >= limits.Total || user >= limits.PerUser {
 			return fmt.Errorf("%d presses wait, %d from %s: %w", total, user, p.User, store.ErrLimit)
 		}
-		return tx.QueryRow(ctx, `INSERT INTO interaction_presses (interaction_id, user_id, connection, channel, message_ts, inputs, pressed_at, trace_parent, trace_state)
+		if err := tx.QueryRow(ctx, `INSERT INTO interaction_presses (interaction_id, user_id, connection, channel, message_ts, inputs, pressed_at, trace_parent, trace_state)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING seq`,
-			p.InteractionID, p.User, p.Connection, p.Channel, p.MessageRef, p.Inputs, p.PressedAt, p.TraceParent, p.TraceState).Scan(&seq)
+			p.InteractionID, p.User, p.Connection, p.Channel, p.MessageRef, p.Inputs, p.PressedAt, p.TraceParent, p.TraceState).Scan(&seq); err != nil {
+			return err
+		}
+		if p.Delivery == "" {
+			return nil
+		}
+		_, err := tx.Exec(ctx, `INSERT INTO press_deliveries (connection, delivery_key, pressed_at) VALUES ($1, $2, $3)`, p.Connection, p.Delivery, p.PressedAt)
+		return err
 	})
 	if err != nil {
 		return 0, fmt.Errorf("record press of %s: %w", p.InteractionID, err)
@@ -72,11 +89,20 @@ func (s *adapter) DeletePress(ctx context.Context, seq int64) error {
 	return nil
 }
 
-// PurgePresses implements store.Presses.
+// PurgePresses implements store.Presses. The presses and the delivery keys are deleted in one transaction.
 func (s *adapter) PurgePresses(ctx context.Context, now time.Time, grace time.Duration) (int, error) {
-	n, err := s.exec(ctx, `DELETE FROM interaction_presses WHERE seq IN (
-		SELECT p.seq FROM interaction_presses p LEFT JOIN interactions i ON i.id = p.interaction_id
-		WHERE COALESCE(i.deadline, p.pressed_at) + $1::bigint * interval '1 microsecond' <= $2)`, grace.Microseconds(), now)
+	var n int64
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `DELETE FROM interaction_presses WHERE seq IN (
+			SELECT p.seq FROM interaction_presses p LEFT JOIN interactions i ON i.id = p.interaction_id
+			WHERE COALESCE(i.deadline, p.pressed_at) + $1::bigint * interval '1 microsecond' <= $2)`, grace.Microseconds(), now)
+		if err != nil {
+			return err
+		}
+		n = tag.RowsAffected()
+		_, err = tx.Exec(ctx, `DELETE FROM press_deliveries WHERE pressed_at <= $1`, now.Add(-grace))
+		return err
+	})
 	if err != nil {
 		return 0, fmt.Errorf("purge presses: %w", err)
 	}

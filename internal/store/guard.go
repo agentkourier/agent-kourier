@@ -103,6 +103,8 @@ func (g *Guarded) finish(op *telemetry.Operation, err error) {
 		op.FinishOutcome(nil, "expired")
 	case errors.Is(err, ErrLimit):
 		op.FinishOutcome(nil, "limited")
+	case errors.Is(err, ErrDuplicate):
+		op.FinishOutcome(nil, "duplicate")
 	case errors.Is(err, ErrInvalid):
 		op.FinishOutcome(nil, "invalid")
 	default:
