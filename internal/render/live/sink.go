@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
@@ -42,6 +43,11 @@ type Sink struct {
 	runs  *Renderer
 	queue Enqueuer
 	log   *slog.Logger
+	// queued is the name of each queued reaction this Sink put on, by the notice's ID, until the notice that takes it off: the removal
+	// names the reaction that went on whether or not the connection's platform still runs. The session pairs each queued notice with a
+	// dequeued one in the same process (its marked set is in memory too), which deletes the entry. Guarded by mu.
+	mu     sync.Mutex
+	queued map[string]string
 }
 
 // NewSink returns a Sink that renders turns with runs and queues notices on queue. The reaction that marks a reply that waits is
@@ -51,7 +57,7 @@ func NewSink(runs *Renderer, queue Enqueuer, log *slog.Logger) *Sink {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Sink{runs: runs, queue: queue, log: log}
+	return &Sink{runs: runs, queue: queue, log: log, queued: map[string]string{}}
 }
 
 // queuedReaction is the reaction that marks a reply that waits in a thread of conn: the platform's own (chat.Caps.AckReaction).
@@ -121,7 +127,9 @@ func (s *Sink) Notice(ctx context.Context, key session.Key, n session.Notice) {
 // two notices share an ID, and the outbox pairs their rows by it, whichever comes first.
 //
 // The queued reaction is the platform's own (chat.Caps.AckReaction) of the notice's connection: a platform with no reactions gets
-// no row, and a connection that no platform runs now is logged and gets none, since the name of the reaction is not known.
+// no row, and a connection that no platform runs now is logged and gets none, since the name of the reaction is not known. Its removal
+// names the reaction the queued notice put on, remembered by the notice's ID, so it does not need the platform; with none remembered it
+// asks the platform, and with no platform either it is dropped quietly, as nothing this Sink put on is left.
 //
 // What no retry can mend is logged and is not an error: a kind nobody wrote wording for, and a
 // notice that is no valid row (a reaction on no message).
@@ -131,12 +139,28 @@ func (s *Sink) QueueNotice(ctx context.Context, key session.Key, n session.Notic
 	remove, ok := queuedKind(n.Kind)
 	if ok {
 		var known bool
-		switch name, known = s.queuedReaction(key.Connection); {
+		if remove {
+			s.mu.Lock()
+			name, known = s.queued[n.ID]
+			delete(s.queued, n.ID)
+			s.mu.Unlock()
+		}
+		if !known {
+			name, known = s.queuedReaction(key.Connection)
+		}
+		switch {
+		case !known && remove: // nothing this Sink put on is left: the platform stopped before the reaction was asked for, or never ran
+			s.log.DebugContext(ctx, "live: a removal of the queued reaction was dropped: no platform runs its connection, and no reaction was put on", "connection", key.Connection, "channel", key.Channel)
+			return nil
 		case !known:
 			s.log.WarnContext(ctx, "live: a notice of the queued reaction was dropped: no platform runs its connection now, so the reaction it names is not known", "kind", n.Kind, "connection", key.Connection, "channel", key.Channel)
 			return nil
 		case name == "": // the platform has no reactions: there is nothing to put on or take off
 			return nil
+		case !remove:
+			s.mu.Lock()
+			s.queued[n.ID] = name
+			s.mu.Unlock()
 		}
 	}
 	if n.Kind == session.NoticeAcknowledged || n.Kind == session.NoticeUnacknowledged {

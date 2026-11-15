@@ -59,6 +59,7 @@ type leaks struct {
 	noReactions                                 bool // has no reactions (an empty AckReaction), and says ErrNoReactions as it should
 	reactsAnyway                                bool // has no reactions, and React and Unreact take one with no error
 	noReactionsRetried                          bool // has no reactions, and Classify calls ErrNoReactions Transient
+	noReactionsShows                            bool // has no reactions, says ErrNoReactions, and shows a text in place of the reaction
 	colonReaction                               bool // names its own reaction with the colons around it
 
 	// Escaping that does not work for the platform's dialect, the way the suite once passed them.
@@ -258,10 +259,13 @@ func (m *markupPlatform) Post(ctx context.Context, t chat.Target, o chat.Outgoin
 	return ref, err
 }
 
-// React and Unreact are the fake's, but for the leak of a platform with no reactions that takes one.
+// React and Unreact are the fake's, but for the leaks of a platform with no reactions that takes one, or shows a text instead.
 func (m *markupPlatform) React(ctx context.Context, r chat.Ref, name string) error {
-	if m.leaks.reactsAnyway {
+	switch {
+	case m.leaks.reactsAnyway:
 		return nil
+	case m.leaks.noReactionsShows:
+		m.sent = append(m.sent, m.read(":"+name+":"))
 	}
 	return m.FakePlatform.React(ctx, r, name)
 }
@@ -414,7 +418,7 @@ func (m *markupPlatform) subject() Subject {
 		c.Busy = false
 		m.SetCaps(c)
 	}
-	if m.leaks.noReactions || m.leaks.reactsAnyway || m.leaks.noReactionsRetried {
+	if m.leaks.noReactions || m.leaks.reactsAnyway || m.leaks.noReactionsRetried || m.leaks.noReactionsShows {
 		c := m.Capabilities()
 		c.AckReaction = ""
 		m.SetCaps(c)
@@ -462,6 +466,7 @@ func TestEveryWayAnAdapterCanBeUnsafeIsCaught(t *testing.T) {
 		{"a platform with no steps that shows one when asked", slackPlainText, leaks{noStepError: true}, RuleContract, ""},
 		{"a platform with no reactions that takes one", slackPlainText, leaks{reactsAnyway: true}, RuleContract, ""},
 		{"a platform with no reactions that calls ErrNoReactions transient", slackPlainText, leaks{noReactionsRetried: true}, RuleContract, ""},
+		{"a platform with no reactions that shows a text instead", slackPlainText, leaks{noReactionsShows: true}, RuleContract, ""},
 		{"a platform that names its reaction with colons", slackPlainText, leaks{colonReaction: true}, RuleContract, ""},
 		{"a busy mark that is refused", slackPlainText, leaks{busyRefused: true}, RuleContract, ""},
 		{"a busy mark of a target with no thread that is taken", slackPlainText, leaks{busyNoThread: true}, RuleContract, ""},

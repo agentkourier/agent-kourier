@@ -533,7 +533,7 @@ ends with a fixed message and decides nothing, unless they are in a group earlie
 ### `AcknowledgmentShown`
 
 Only a Binding whose `chat.acknowledgment` is enabled and names an `emoji`, on a ChatConnection whose platform has no reactions, has this
-condition, and only as `False`. A Binding on Slack never has it.
+condition. It is never `True`: it is `False`, or `Unknown` with `Pending` after an edit until the next pass. A Binding on Slack never has it.
 
 | `reason` | Status | What happened | What to do |
 |---|---|---|---|

@@ -694,7 +694,11 @@ func (l bindingLog) pruned(names []string) {
 // dropped is bindingcheck.Options.OnDrop: the line for a condition the Prober stops verifying because it no longer applies to the Binding
 // (an edit took its approver groups away, or its acknowledgment is shown now). Its series go with it, so an alert on them would resolve without a word; this line is the word.
 func (l bindingLog) dropped(binding string, cond bindingcheck.ConditionType) {
-	l.log.Info("binding verification: stopped verifying a condition of a Binding: it no longer applies to the Binding", "binding", binding, "condition", string(cond))
+	why := "the Binding no longer asks for it"
+	if cond == bindingcheck.AcknowledgmentShown {
+		why = "the Binding names no reaction now, or its connection's platform is not known to lack reactions"
+	}
+	l.log.Info("binding verification: stopped verifying a condition of a Binding: "+why, "binding", binding, "condition", string(cond))
 }
 
 // verification is what the verification of Bindings is built from.

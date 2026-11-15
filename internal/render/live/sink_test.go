@@ -666,3 +666,34 @@ func TestTurnRefDecidesTheFooter(t *testing.T) {
 		})
 	}
 }
+
+// The removal of a queued reaction names the reaction that was put on, which the sink remembers from the queued notice: a connection
+// whose platform stopped in between still gets its removal row, so the pair holds within the process. A removal with nothing remembered and
+// no platform to ask is dropped quietly, since nothing this process put on is left behind.
+func TestTheRemovalOfAQueuedReactionNamesTheOnePutOn(t *testing.T) {
+	e := setup(t)
+	st := e.store
+	ob := newOutbox(t, outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](noCalls{t})})
+	platforms := chat.PlatformSet[chat.Platform]{thread.Connection: chattest.NewFake()}
+	r, err := live.New(live.Config{Sender: ob, Platforms: platforms, Store: e.rf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs := &strings.Builder{}
+	sink := live.NewSink(r, ob, slog.New(slog.NewTextHandler(logs, nil)))
+	sink.Notice(t.Context(), thread, session.Notice{ID: "m/on/queued", Kind: session.NoticeQueued, MessageRef: "1.5"})
+	delete(platforms, thread.Connection) // the connection stops
+	sink.Notice(t.Context(), thread, session.Notice{ID: "m/on/queued", Kind: session.NoticeDequeued, MessageRef: "1.5"})
+	row, err := st.GetOutbox(t.Context(), outbox.UnreactionID("m/on/queued"))
+	if err != nil || !strings.Contains(row.Payload, `"name":"hourglass"`) || !strings.Contains(row.Payload, `"remove":true`) {
+		t.Errorf("removal row = %+v, %v; want the removal of the hourglass that was put on", row, err)
+	}
+
+	sink.Notice(t.Context(), thread, session.Notice{ID: "m/never/queued", Kind: session.NoticeDequeued, MessageRef: "1.6"})
+	if _, err := st.GetOutbox(t.Context(), outbox.UnreactionID("m/never/queued")); err == nil {
+		t.Error("a removal row was written with no reaction to name")
+	}
+	if strings.Contains(logs.String(), "level=WARN") {
+		t.Errorf("log %q; want no warning for a removal that has nothing to take off", logs.String())
+	}
+}

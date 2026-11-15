@@ -230,10 +230,15 @@ func reactionsOf(platforms chat.Resolver[platformCaps], conn string) platformRea
 	return platformReactions{own: own, none: own == ""}
 }
 
-// ackUnshown reports whether the acknowledgment ack names a reaction that no message shows: it is enabled, it names one, and the
+// ackUnshown reports whether the acknowledgment ack names a reaction that no message shows: it names one (namesReaction), and the
 // platform is known to have no reactions. Such a Binding has an AcknowledgmentShown condition, False.
 func ackUnshown(ack *v1alpha1.ChatAcknowledgment, platform platformReactions) bool {
-	return platform.none && ack != nil && ack.Emoji != "" && (ack.Enabled == nil || *ack.Enabled)
+	return platform.none && namesReaction(ack)
+}
+
+// namesReaction reports whether the acknowledgment ack is enabled and names a reaction: the half of ackUnshown that the spec says.
+func namesReaction(ack *v1alpha1.ChatAcknowledgment) bool {
+	return ack != nil && ack.Emoji != "" && (ack.Enabled == nil || *ack.Enabled)
 }
 
 // acknowledgment is whether a Binding reacts to an accepted message, and with which reaction: the one the Binding names, else the

@@ -33,7 +33,7 @@ only. No other type is written.
 | `BackendReachable` | A fresh fetch of the agent's card worked and the card is one Agent Kourier can use. | The leader's probe of the agent. |
 | `ChannelJoined` | The bot is in the Binding's channel, which exists and is not archived. | The leader's read of the channel. |
 | `ApproversReadable` | The bot can read every user group in `interactions.approverGroups`. A Binding that asks for no approvals, or for approvals from anyone, has no such condition. | The leader's read of the groups. |
-| `AcknowledgmentShown` | Only ever `False`: `chat.acknowledgment.emoji` names a reaction, and the platform of the Binding's ChatConnection has no reactions, so no message shows it. Any other Binding has no such condition. | What the leader knows of the platform; nothing is read. |
+| `AcknowledgmentShown` | Never `True`: `False` when `chat.acknowledgment.emoji` names a reaction and the platform of the Binding's ChatConnection has no reactions, so no message shows it, and `Unknown` with `Pending` after an edit until the next pass. Any other Binding has no such condition. | What the leader knows of the platform; nothing is read. |
 | `Ready` | Every other condition is `True`. | Derived. |
 
 - `message` is one line of at most 1024 bytes, redacted, with `…` where it was cut. It is empty when the condition is `True`.
@@ -90,8 +90,10 @@ A Binding on a team ChatConnection (one that is not the broker's own; a broker w
 
 A message on a platform with no reactions shows no acknowledgment: the platform's own reaction is none, and a reaction the Binding names is not
 put on either, since the platform would refuse it. This condition says so for a Binding that names one, instead of saying nothing. It is
-`False` with the reason `NoReactions`, and `Ready` is `False` with `AcknowledgmentShown:NoReactions`. An edit that names the reaction makes it
-`Unknown` with `Pending` until the next pass, and an edit that takes `emoji` away or sets `enabled: false` removes it at the next write. The
+`False` with the reason `NoReactions`, and `Ready` is `False`, with the reason `AcknowledgmentShown:NoReactions` unless an earlier condition
+(`BackendReachable`, `ChannelJoined` or `ApproversReadable`) is `False` too. An edit that names the reaction makes it `Unknown` with
+`Pending` until the next pass. An edit that takes `emoji` away or sets `enabled: false` removes it at the next write, and until the leader
+has seen the edit a `Ready` that cited it reads `Unknown` with `Pending`. The
 leader knows what a platform has only while its connection runs, so while the connection is not running the condition is removed, and it
 comes back when the connection runs again. Slack has reactions, so a Binding on Slack never has it.
 

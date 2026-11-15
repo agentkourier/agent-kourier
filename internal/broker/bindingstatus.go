@@ -82,8 +82,9 @@ var statusTypes = append(bindingcheck.Types(), conditionAccepted)
 // probedTypes are the conditions that every Binding the source serves has once the Prober has seen it: a writer that looks before
 // the Prober's first Tick finds none of them, and says they are Pending, not that they are gone. (ApproversReadable is left out,
 // because it applies only to a Binding that asks for approvals from groups (asksForApprovers); the writer adds it for one that does.
-// AcknowledgmentShown is left out too: it applies only to a Binding whose acknowledgment its platform cannot show (ackUnshown), which
-// the writer does not know, so it writes the condition once the Prober has it.)
+// AcknowledgmentShown is left out too: it applies only to a Binding whose acknowledgment its platform cannot show (ackUnshown), and the
+// writer knows the spec's half of that (namesReaction) and not the platform's, so it writes the condition once the Prober has it, and
+// only for a Binding that names a reaction.)
 var probedTypes = []bindingcheck.ConditionType{bindingcheck.BackendReachable, bindingcheck.ChannelJoined}
 
 // acceptedReasonOrder is the order in which the reasons of the Rejections of one Binding give way to one: the first of them that
@@ -197,7 +198,7 @@ type statusConfig struct {
 // Accepted is composed here from the Rejections of the report: True when there are none, else False with one reason chosen by
 // acceptedReasonOrder and every message of the Binding. BackendReachable and ChannelJoined are the Prober's, and so is ApproversReadable
 // for a Binding that asks for tool approvals from groups (asksForApprovers) and for none other, and AcknowledgmentShown for one whose
-// acknowledgment is not shown (ackUnshown) once the Prober has it, for a Binding the source serves, copied
+// acknowledgment is not shown (ackUnshown) once the Prober has it and only while the Binding names a reaction (namesReaction), for a Binding the source serves, copied
 // as they are, except that a message that the Prober keeps for the log never reaches
 // them (Condition.Cause). A Binding that has just gained groups and that the Prober has not yet seen so has ApproversReadable Pending,
 // and so is not Ready on the word of probes that did not ask about them; one that has just lost them says nothing of the condition. Ready
@@ -595,6 +596,7 @@ func (w *statusWriter) desire(keys map[string]bool, rejections map[string][]conf
 		var ready *bindingcheck.Condition
 		if isServed { // a Binding that is not served has no Target, and what the Prober knew of it is gone or going
 			groups := asksForApprovers(binding.Spec)
+			names := namesReaction(binding.Spec.Chat.Acknowledgment)
 			expected := probedTypes
 			if groups {
 				expected = append(slices.Clone(probedTypes), bindingcheck.ApproversReadable)
@@ -606,6 +608,8 @@ func (w *statusWriter) desire(keys map[string]bool, rejections map[string][]conf
 					ready = &c
 				case c.Type == bindingcheck.ApproversReadable && !groups:
 					// The Binding no longer asks for it, and the Prober has not yet seen the edit that took the groups away.
+				case c.Type == bindingcheck.AcknowledgmentShown && !names:
+					// The Binding names no reaction now, and the Prober has not yet seen the edit that took it away.
 				case slices.Contains(statusTypes, c.Type):
 					seen[c.Type] = true
 					conds = append(conds, probedCondition(c, generation, uid, old))
@@ -620,7 +624,10 @@ func (w *statusWriter) desire(keys map[string]bool, rejections map[string][]conf
 				ready = pendingOnGroups(ready, generation, uid)
 			}
 			if !groups {
-				ready = unlessCitesGroups(ready, generation, uid)
+				ready = unlessCites(ready, bindingcheck.ApproversReadable, generation, uid)
+			}
+			if !names {
+				ready = unlessCites(ready, bindingcheck.AcknowledgmentShown, generation, uid)
 			}
 		}
 		conds = append(conds, readyCondition(accepted, ready, generation, uid, old))
@@ -662,12 +669,13 @@ func pendingOnGroups(ready *bindingcheck.Condition, generation int64, uid string
 	}
 }
 
-// unlessCitesGroups is the Ready of a Binding that asks for no approver groups, where ready is the Prober's: if the Prober has not yet seen
-// the edit that took the groups away, its Ready may still be held back by ApproversReadable (its reason starts with "ApproversReadable:"),
-// with a message about a group the Binding no longer has, and that is not copied to a status that has no such condition. It is not known
-// until the Prober has seen the edit, so it is Unknown and Pending at the generation served. Any other Ready is the Prober's.
-func unlessCitesGroups(ready *bindingcheck.Condition, generation int64, uid string) *bindingcheck.Condition {
-	if ready == nil || !strings.HasPrefix(string(ready.Reason), string(bindingcheck.ApproversReadable)+":") {
+// unlessCites is the Ready of a Binding that cond (ApproversReadable or AcknowledgmentShown) does not apply to, from its spec: it asks for
+// no approver groups, or names no acknowledgment reaction. ready is the Prober's: if the Prober has not yet seen the edit that made cond
+// stop applying, its Ready may still be held back by cond (its reason starts with "<cond>:"), with a message about something the Binding
+// no longer names, and that is not copied to a status that has no such condition. It is not known until the Prober has seen the edit, so
+// it is Unknown and Pending at the generation served. Any other Ready is the Prober's.
+func unlessCites(ready *bindingcheck.Condition, cond bindingcheck.ConditionType, generation int64, uid string) *bindingcheck.Condition {
+	if ready == nil || !strings.HasPrefix(string(ready.Reason), string(cond)+":") {
 		return ready
 	}
 	return &bindingcheck.Condition{Type: bindingcheck.Ready, Status: bindingcheck.Unknown, Reason: bindingcheck.ReasonPending, ObservedGeneration: generation, UID: uid}
