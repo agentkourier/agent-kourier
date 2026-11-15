@@ -1,5 +1,6 @@
 // Command fakeslack serves the fake Slack of package fakeslack (Web API, Socket Mode, and the
-// /_control/ surface) on one port, as the fast E2E tier's container. The control surface has
+// /_control/ surface) on one port, as the fast E2E tier's container, and sends the events of an
+// app in HTTP mode to its request URL. The control surface has
 // no authentication: run it only behind a ClusterIP Service, and never publish its port. The
 // server stops on SIGINT or SIGTERM.
 package main
@@ -14,6 +15,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
 	"github.com/agentkourier/agent-kourier/test/httpserve"
@@ -38,12 +40,14 @@ func (a *appFlags) String() string { return fmt.Sprintf("%d apps", len(*a)) }
 func (a *appFlags) Set(v string) error { *a = append(*a, v); return nil }
 
 // parseApp parses one -app value: comma-separated key=value pairs with the keys app_id, bot_user, bot_id, team_id,
-// team_name, bot_token and app_token. The error names a key and never repeats a value.
+// team_name, bot_token, app_token, and request_url and signing_secret for an app in HTTP mode. The error names a key and
+// never repeats a value.
 func parseApp(v string) (fakeslack.App, error) {
 	var app fakeslack.App
 	fields := map[string]*string{
 		"app_id": &app.AppID, "bot_user": &app.BotUser, "bot_id": &app.BotID, "team_id": &app.TeamID,
 		"team_name": &app.TeamName, "bot_token": &app.BotToken, "app_token": &app.AppToken,
+		"request_url": &app.RequestURL, "signing_secret": &app.SigningSecret,
 	}
 	for _, pair := range strings.Split(v, ",") {
 		key, val, ok := strings.Cut(pair, "=")
@@ -59,21 +63,61 @@ func parseApp(v string) (fakeslack.App, error) {
 	return app, app.Validate()
 }
 
+// retryWaits is the value of -http-retries: comma-separated durations, none negative, one for each retry. Nil is the
+// flag not given, and empty the flag given empty, which is no retry.
+type retryWaits []time.Duration
+
+func (r *retryWaits) String() string { return fmt.Sprint([]time.Duration(*r)) }
+
+func (r *retryWaits) Set(v string) error {
+	*r = retryWaits{}
+	if v == "" {
+		return nil
+	}
+	for _, part := range strings.Split(v, ",") {
+		d, err := time.ParseDuration(part)
+		if err != nil || d < 0 {
+			return errors.New("each retry wait must be a duration of zero or more, such as 1s")
+		}
+		*r = append(*r, d)
+	}
+	return nil
+}
+
 // run parses args and serves until ctx ends. The default address is loopback; the container
 // passes -addr 0.0.0.0:8080. Each -app adds a Slack app beside the default one, which keeps
-// answering every token no -app owns.
+// answering every token no -app owns. -request-url and -signing-secret put the default app in HTTP
+// mode, and an -app's request_url and signing_secret that app: its events and presses are sent to
+// the URL as signed requests, not over Socket Mode.
 func run(ctx context.Context, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("fakeslack", flag.ContinueOnError)
 	addr := fs.String("addr", "127.0.0.1:8080", "address to listen on")
 	var apps appFlags
-	fs.Var(&apps, "app", "another Slack app to host: app_id=..,bot_user=..,bot_id=..[,team_id=..,team_name=..,bot_token=xoxb-..,app_token=xapp-..]; repeatable")
+	fs.Var(&apps, "app", "another Slack app to host: app_id=..,bot_user=..,bot_id=..[,team_id=..,team_name=..,bot_token=xoxb-..,app_token=xapp-..,request_url=..,signing_secret=..]; repeatable")
 	strict := fs.Bool("strict-membership", false, "deliver the default app's events only for channels whose members include its bot")
 	strictTokens := fs.Bool("strict-tokens", false, "answer invalid_auth to a token no -app owns, once an -app has a token")
 	spread := fs.Bool("socket-spread", false, "send each event to one of an app's connections in turn, not to its newest")
+	requestURL := fs.String("request-url", "", "put the default app in HTTP mode: the URL its events and presses are sent to (needs -signing-secret)")
+	signingSecret := fs.String("signing-secret", "", "the default app's signing secret in HTTP mode (needs -request-url)")
+	var retries retryWaits
+	fs.Var(&retries, "http-retries", "the waits before each retry of a request an app in HTTP mode did not answer 200, comma-separated (default 1s,5s,30s)")
+	timeout := fs.Duration("http-timeout", 3*time.Second, "how long an app in HTTP mode has to answer a request")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("flags: %w", err)
 	}
-	var opts []fakeslack.Option
+	if err := fakeslack.CheckRequestURL(*requestURL, *signingSecret); err != nil {
+		return fmt.Errorf("-request-url and -signing-secret: %w", err)
+	}
+	if *timeout <= 0 {
+		return errors.New("-http-timeout must be more than zero")
+	}
+	opts := []fakeslack.Option{fakeslack.WithHTTPTimeout(*timeout)}
+	if *requestURL != "" {
+		opts = append(opts, fakeslack.WithRequestURL(*requestURL, *signingSecret))
+	}
+	if retries != nil {
+		opts = append(opts, fakeslack.WithHTTPRetries(retries...))
+	}
 	for i, raw := range apps {
 		app, err := parseApp(raw)
 		if err != nil {

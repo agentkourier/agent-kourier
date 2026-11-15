@@ -236,15 +236,24 @@ func (s *Server) newControlRoutes() controlRoutes {
 		}
 		writeControl(w, http.StatusOK, out)
 	})
-	// connections counts the clients of every app, or of the one named by the app parameter.
+	// connections counts the Socket Mode clients of every app, or of the one named by the app parameter. An app in HTTP mode has
+	// none, and is counted as one when its URL answers a url_verification (VerifyURL), sent for this request: how a test waits for
+	// the broker to serve it, in either mode. Its opened is 0.
 	mux.HandleFunc("GET /_control/connections", func(w http.ResponseWriter, r *http.Request) {
 		n := s.Connections()
 		if id := r.URL.Query().Get("app"); id != "" {
-			if _, err := s.appNamed(id); err != nil {
+			app, err := s.appNamed(id)
+			if err != nil {
 				writeControlError(w, err, nil)
 				return
 			}
 			n = s.AppConnections(id)
+			if app.overHTTP() {
+				n = 0
+				if s.VerifyURL(r.Context(), id) == nil {
+					n = 1
+				}
+			}
 		}
 		out := map[string]int{"connections": n}
 		if id := r.URL.Query().Get("app"); id != "" {
