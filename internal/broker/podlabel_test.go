@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
@@ -115,7 +118,8 @@ func TestPodLabelerTakesAStaleLabelOffAtStart(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the labeler did not settle its first write")
 	}
-	if got := podLabels(t, client, testPod); got[LeaderLabel] != "" || got["app.kubernetes.io/name"] != "agent-kourier" {
+	got := podLabels(t, client, testPod)
+	if _, ok := got[LeaderLabel]; ok || got["app.kubernetes.io/name"] != "agent-kourier" {
 		t.Errorf("labels %v after the start; want the leader label gone and the others kept", got)
 	}
 	if got := w.list(); !slices.Equal(got, []string{labelWriteUnlabeled}) {
@@ -241,6 +245,122 @@ func TestPodLabelerStopWritesOnlyWhenTheLabelMayBeOn(t *testing.T) {
 			t.Error("the stop left the label on a pod whose removal had failed")
 		}
 	})
+}
+
+// A write that reported an error may still have been applied (the API server wrote it, and the answer was cut), so after one the label
+// may be on whatever was written before: the stop takes it off.
+func TestPodLabelerStopTakesOffALabelWhoseWriteReportedAnError(t *testing.T) {
+	t.Parallel()
+	client := fake.NewClientset(podOf(testPod, nil))
+	var n atomic.Int32
+	apply := k8stesting.ObjectReaction(client.Tracker())
+	client.PrependReactor("patch", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if n.Add(1) != 2 { // the removal at start goes through; the label is written, and its answer lost
+			return false, nil, nil
+		}
+		if _, _, err := apply(a); err != nil {
+			return true, nil, err
+		}
+		return true, nil, errors.New("the connection was reset")
+	})
+	l, w := newTestLabeler(t, client)
+	l.base, l.ceiling = time.Hour, time.Hour // no retry before the stop
+	l.start(t.Context())
+	<-l.settled()
+	l.lead()
+	testutil.Eventually(t, "the label's write was not tried", func() bool {
+		return slices.Equal(w.list(), []string{labelWriteUnlabeled, labelWriteFailed})
+	})
+	if !isLeaderPod(t, client, testPod) {
+		t.Fatal("the reactor did not apply the write it failed")
+	}
+
+	stopLabeler(t, l)
+	if isLeaderPod(t, client, testPod) {
+		t.Error("the stop left on a label whose write reported an error but was applied")
+	}
+}
+
+// The labeler's readiness check fails until a write has succeeded: a pod whose removal at start failed may still carry the label from an
+// earlier process, and must not be ready, so in the chat Service, as a standby. Once a write has succeeded the check holds, whatever
+// fails after.
+func TestPodLabelerIsNotReadyUntilAWriteHasSucceeded(t *testing.T) {
+	t.Parallel()
+	client := fake.NewClientset(podOf(testPod, map[string]string{LeaderLabel: LeaderLabelValue}))
+	failPodPatches(client, 1)
+	l, _ := newTestLabeler(t, client)
+	release := make(chan time.Time)
+	l.after = func(time.Duration) <-chan time.Time { return release }
+	check := l.check()
+	if check.Name != "leader-label" {
+		t.Errorf("check named %q; want leader-label", check.Name)
+	}
+	if err := check.Fn(t.Context()); err == nil {
+		t.Error("the check holds before the labeler has started")
+	}
+	l.start(t.Context())
+	defer stopLabeler(t, l)
+	<-l.settled()
+	if err := check.Fn(t.Context()); err == nil {
+		t.Error("the check holds after the removal failed; want it to fail while the label may be on")
+	}
+	close(release) // the removal is tried again, and succeeds
+	testutil.Eventually(t, "the check did not hold after the removal succeeded", func() bool { return check.Fn(t.Context()) == nil })
+	if isLeaderPod(t, client, testPod) {
+		t.Error("the check holds with the label still on")
+	}
+}
+
+// A first write that the API server refuses because the broker may not patch the pod, or because there is no such pod, can never succeed
+// as the broker is deployed (no RBAC, or a wrong pod name or namespace): it is a wiring error, which fails the start. Any other failure
+// is tried again, and a success is no error.
+func TestPodLabelerStartErrorIsAWiringErrorForAMissingPodOrRBAC(t *testing.T) {
+	t.Parallel()
+	podsResource := corev1.Resource("pods")
+	for name, tc := range map[string]struct {
+		pod    bool
+		refuse error // the first patch's answer; nil applies it
+		wiring bool
+	}{
+		"applied":             {pod: true},
+		"forbidden":           {pod: true, refuse: apierrors.NewForbidden(podsResource, testPod.Name, errors.New("no RBAC")), wiring: true},
+		"no such pod":         {pod: false, wiring: true},
+		"unreachable":         {pod: true, refuse: errors.New("the API server cannot be reached")},
+		"refused for a while": {pod: true, refuse: apierrors.NewServiceUnavailable("the API server is starting")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			client := fake.NewClientset()
+			if tc.pod {
+				if err := client.Tracker().Add(podOf(testPod, nil)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.refuse != nil {
+				var once sync.Once
+				client.PrependReactor("patch", "pods", func(k8stesting.Action) (handled bool, _ runtime.Object, err error) {
+					once.Do(func() { handled, err = true, tc.refuse })
+					return handled, nil, err
+				})
+			}
+			l, _ := newTestLabeler(t, client)
+			if err := l.startError(); err != nil {
+				t.Errorf("startError = %v before the first write; want nil", err)
+			}
+			l.start(t.Context())
+			defer stopLabeler(t, l)
+			<-l.settled()
+			err := l.startError()
+			switch {
+			case tc.wiring && !errors.Is(err, ErrWiring):
+				t.Errorf("startError = %v; want an ErrWiring", err)
+			case tc.wiring && !strings.Contains(err.Error(), testPod.Namespace+"/"+testPod.Name):
+				t.Errorf("startError = %v; want it to name the pod", err)
+			case !tc.wiring && err != nil:
+				t.Errorf("startError = %v; want nil", err)
+			}
+		})
+	}
 }
 
 // The stop is safe without a start (a Run that failed before the labeler started) and when called twice.

@@ -95,6 +95,70 @@ metadata:
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "agentkourier.fullname" . }}-leader-label}
 subjects:
   - {kind: ServiceAccount, name: {{ include "agentkourier.serviceAccountName" . }}, namespace: {{ .Release.Namespace }}}
+{{- /* What the Role cannot say, the API server checks: the broker's ServiceAccount may change the label agentkourier.dev/role, to leader or
+       away, on its own pod and on nothing else. The pod is the one its token is bound to: the kubelet's projected token carries the pod's
+       name in the user's extra authentication.kubernetes.io/pod-name. Without this, patch on pods would let the broker change any pod of
+       the namespace, its image say, the token-refresh CronJob's included, whose ServiceAccount may patch a Binding's token Secret. */}}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "agentkourier.leaderLabelPolicyName" . }}
+  labels:
+    {{- include "agentkourier.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [UPDATE]
+        resources: [pods]
+  matchConditions:
+    - name: the-brokers-service-account
+      expression: request.userInfo.username == {{ printf "system:serviceaccount:%s:%s" .Release.Namespace (include "agentkourier.serviceAccountName" .) | squote }}
+  variables:
+    - name: role
+      expression: "'agentkourier.dev/role'"
+    - name: oldLabels
+      expression: "has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}"
+    - name: newLabels
+      expression: "has(object.metadata.labels) ? object.metadata.labels : {}"
+  validations:
+    - expression: >-
+        'authentication.kubernetes.io/pod-name' in request.userInfo.extra &&
+        request.userInfo.extra['authentication.kubernetes.io/pod-name'] == [object.metadata.name]
+      message: the broker may change only its own pod, the one its token is bound to
+      reason: Forbidden
+    - expression: >-
+        variables.newLabels.all(k, k == variables.role || (k in variables.oldLabels && variables.oldLabels[k] == variables.newLabels[k])) &&
+        variables.oldLabels.all(k, k == variables.role || k in variables.newLabels)
+      message: the broker may change only the label agentkourier.dev/role of its pod
+      reason: Forbidden
+    - expression: "!(variables.role in variables.newLabels) || variables.newLabels[variables.role] == 'leader'"
+      message: the label agentkourier.dev/role may only be leader
+      reason: Forbidden
+    - expression: >-
+        object.spec == oldObject.spec &&
+        (has(object.metadata.annotations) ? object.metadata.annotations : {}) == (has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}) &&
+        (has(object.metadata.finalizers) ? object.metadata.finalizers : []) == (has(oldObject.metadata.finalizers) ? oldObject.metadata.finalizers : []) &&
+        (has(object.metadata.ownerReferences) ? object.metadata.ownerReferences : []) == (has(oldObject.metadata.ownerReferences) ? oldObject.metadata.ownerReferences : [])
+      message: the broker may change only the labels of its pod, not its spec, annotations, finalizers or owners
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "agentkourier.leaderLabelPolicyName" . }}
+  labels:
+    {{- include "agentkourier.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "agentkourier.leaderLabelPolicyName" . }}
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Release.Namespace }}
 {{- end }}
 {{- /* With config.source crds, what the broker does to the custom resources, and no more. Every replica reads the three kinds with informers
        (list and watch, never get: internal/config/crsource), in every namespace, which is why this is a ClusterRole; the leader writes
