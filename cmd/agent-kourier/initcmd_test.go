@@ -481,9 +481,9 @@ func TestInitReportsWhatSlackRefuses(t *testing.T) {
 		{"the channel is not found", &initSlack{historyErr: "channel_not_found"}, "C0123456789", "channel_not_found", exitFailure},
 		{"the bot cannot read history", &initSlack{historyErr: "missing_scope"}, "C0123456789", "channels:history", exitFailure},
 		{"the bot cannot list channels", &initSlack{listErr: "missing_scope"}, "alerts", "channels:read", exitFailure},
-		{"the token is revoked", &initSlack{authErr: "token_revoked"}, "C0123456789", "token_revoked", exitSlackAuth},
-		{"the token is rejected when it looks a channel up", &initSlack{listErr: "invalid_auth for " + canaryToken}, "alerts", "invalid_auth", exitSlackAuth},
-		{"the token is rejected, and Slack quotes it", &initSlack{authErr: "invalid_auth for " + canaryToken}, "C0123456789", "invalid_auth", exitSlackAuth},
+		{"the token is revoked", &initSlack{authErr: "token_revoked"}, "C0123456789", "token_revoked", exitChatAuth},
+		{"the token is rejected when it looks a channel up", &initSlack{listErr: "invalid_auth for " + canaryToken}, "alerts", "invalid_auth", exitChatAuth},
+		{"the token is rejected, and Slack quotes it", &initSlack{authErr: "invalid_auth for " + canaryToken}, "C0123456789", "invalid_auth", exitChatAuth},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out := outFile(t)

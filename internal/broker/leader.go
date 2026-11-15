@@ -85,7 +85,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 		return nil, err
 	}
 	// The chat platform of the own connection, built for its ChatConnection.platform: it posts for the outbox, and a token revoked
-	// mid-run, which a call through the platform sees, ends the run with ErrSlackAuth (WatchAuth, WithAuthFailure): the process exits for the own
+	// mid-run, which a call through the platform sees, ends the run with ErrChatAuth (WatchAuth, WithAuthFailure): the process exits for the own
 	// connection, and only that connection stops for a team's.
 	// agentkourier_chat_connected says 0 from here, and 1 while the connection is up. /readyz does not hold it: see NewHandler.
 	// The parts that every connection shares look the platform up by the connection their row, turn or press names, in the table of the

@@ -51,12 +51,12 @@ type platformSpec struct {
 	Identify func(ctx context.Context, c RunConfig, conn Connection) (appIdentity, error)
 }
 
-// platformFor is the one place that names a platform: a second platform is one more case here, with its keys and its identity call,
-// and one more in newPlatform for its adapter. One that is not here has no adapter, and a ChatConnection of it is a wiring error. It is a func and
-// not a table, so that there is no state to change.
+// platformFor is the one place that names a platform: a second platform is one more case here, with its identity call, one more in
+// newPlatform for its adapter, and its keys in v1alpha1.CredentialKeys. One that is not here has no adapter, and a ChatConnection of it is a wiring
+// error. It is a func and not a table, so that there is no state to change.
 func platformFor(name string) (platformSpec, bool) {
 	if name == v1alpha1.PlatformSlack {
-		return platformSpec{Keys: []string{"botToken", "appToken"}, Name: "Slack", Identify: slackIdentityOf}, true
+		return platformSpec{Keys: v1alpha1.CredentialKeys(name), Name: "Slack", Identify: slackIdentityOf}, true
 	}
 	return platformSpec{}, false
 }
@@ -85,7 +85,7 @@ type builtPlatform struct {
 // connection is up: it is Config.OnConnection of the Slack adapter, and another platform would report through the same func.
 func (c RunConfig) newPlatform(conn Connection, log *slog.Logger, onConnection func(connected bool)) (builtPlatform, error) {
 	name := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
-	if conn.Platform == v1alpha1.PlatformSlack { // a second platform is one more case here, and one more entry in platformKeys
+	if conn.Platform == v1alpha1.PlatformSlack { // a second platform is one more case here, and one in platformFor
 		transport := http.DefaultTransport.(*http.Transport).Clone()
 		sc := c.slackConfig(conn, log)
 		sc.HTTPClient = &http.Client{Transport: telemetry.Transport(transport, false), Timeout: cmp.Or(c.slackHTTPTimeout, slackAPITimeout)}

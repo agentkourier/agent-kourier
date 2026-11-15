@@ -91,7 +91,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	}
 	defer func() { // a signal during startup makes some step fail with the context's error: a clean stop
 		// A rejected token that was reported first stays a failure whatever signal follows it.
-		if err != nil && ctx.Err() != nil && !errors.Is(err, ErrSlackAuth) {
+		if err != nil && ctx.Err() != nil && !errors.Is(err, ErrChatAuth) {
 			err = nil
 		}
 	}()
@@ -313,7 +313,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	case <-ctx.Done():
 		return nil
 	case err := <-leaderDone:
-		if ctx.Err() != nil && !errors.Is(err, ErrSlackAuth) { // stopped by the signal, not by Slack
+		if ctx.Err() != nil && !errors.Is(err, ErrChatAuth) { // stopped by the signal, not by the platform
 			return nil
 		}
 		return err

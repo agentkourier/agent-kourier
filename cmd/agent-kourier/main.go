@@ -91,11 +91,11 @@ var version = "dev"
 
 // The exit codes.
 const (
-	exitOK        = 0
-	exitSlackAuth = 1 // Slack rejected the tokens of the broker's own connection: a restart would be rejected again
-	exitUsage     = 2 // the config, the wiring or an environment variable is wrong
-	exitRBAC      = 3 // the API server denied access to Secrets or, with crds, to the custom resources
-	exitFailure   = 4 // anything else: a dependency failed
+	exitOK       = 0
+	exitChatAuth = 1 // the chat platform rejected the credentials of the broker's own connection: a restart would be rejected again
+	exitUsage    = 2 // the config, the wiring or an environment variable is wrong
+	exitRBAC     = 3 // the API server denied access to Secrets or, with crds, to the custom resources
+	exitFailure  = 4 // anything else: a dependency failed
 )
 
 func main() {
@@ -107,8 +107,8 @@ func exitCode(err error) int {
 	switch {
 	case err == nil:
 		return exitOK
-	case errors.Is(err, broker.ErrSlackAuth):
-		return exitSlackAuth
+	case errors.Is(err, broker.ErrChatAuth):
+		return exitChatAuth
 	case errors.Is(err, k8ssecrets.ErrAccessDenied), errors.Is(err, crsource.ErrAccessDenied):
 		return exitRBAC
 	case errors.Is(err, broker.ErrWiring):

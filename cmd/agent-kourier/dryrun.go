@@ -154,7 +154,7 @@ func dryRunExitCode(err error) int {
 	case errors.As(err, &usageError{}):
 		return exitUsage
 	case errors.As(err, &slackErr) && slack.TokenRejected(firstWord(slackErr.Err)):
-		return exitSlackAuth
+		return exitChatAuth
 	}
 	return exitFailure
 }
