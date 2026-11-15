@@ -19,7 +19,8 @@ type Termination struct {
 	Restarts int32
 	// Previous is set by [Pods.WaitExit] when the run was read from the container's last state, which the kubelet shows once it has
 	// restarted the container: its log is then the previous container's. Otherwise the run is the container's current state, and its log is
-	// the current one's.
+	// the current one's. It says where the run was when it was seen to end: a restart after that moves it, so read the run's log with
+	// [Pods.RunLogs], which looks again.
 	Previous bool
 }
 
