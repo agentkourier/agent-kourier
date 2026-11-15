@@ -5,3 +5,6 @@ uvicorn==0.54.0  # the ASGI server; a2a-sdk[http-server] brings Starlette but no
 # One extra per model provider family: openai (openai:, openai-chat:, openrouter:, ollama:), anthropic and bedrock.
 # spec reads agent.yaml; mcp is the MCP client.
 pydantic-ai-slim[spec,mcp,openai,anthropic,bedrock]==2.57.0
+# A floor, not a pin: pydantic-ai-slim[mcp] brings fastmcp-slim, and 4.1.2 fixes
+# GHSA-7xgj-8392-5q4r and GHSA-vqqp-x5qm-5qp4.
+fastmcp-slim>=4.1.2
