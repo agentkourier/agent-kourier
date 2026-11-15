@@ -92,7 +92,7 @@ release_fixture="${tmp}/releases.json"
 printf '%s\n' \
   '[' \
   '  {"tag_name":"v1.0.0","draft":false,"prerelease":false,"body":"- Image: `ghcr.io/agentkourier/agent-kourier@sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`"},' \
-  '  {"tag_name":"v1.1.0","draft":false,"prerelease":false,"body":"- Image: `ghcr.io/agentkourier/agent-kourier@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`\n- Prompt agent image: `ghcr.io/agentkourier/agent-kourier-prompt-agent@sha256:1111111111111111111111111111111111111111111111111111111111111111`\n- Echo agent image: `ghcr.io/agentkourier/agent-kourier-echo-agent@sha256:2222222222222222222222222222222222222222222222222222222222222222`\n* chore: ghcr.io/agentkourier/agent-kourier-echo-agent@sha256:3333333333333333333333333333333333333333333333333333333333333333 by someone"},' \
+  '  {"tag_name":"v1.1.0","draft":false,"prerelease":false,"body":"- Image: `ghcr.io/agentkourier/agent-kourier@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`\n- Prompt agent image: `ghcr.io/agentkourier/agent-kourier-prompt-agent@sha256:1111111111111111111111111111111111111111111111111111111111111111`\n- Echo agent image: `ghcr.io/agentkourier/agent-kourier-echo-agent@sha256:2222222222222222222222222222222222222222222222222222222222222222`\n* chore: ghcr.io/agentkourier/agent-kourier-echo-agent@sha256:3333333333333333333333333333333333333333333333333333333333333333 by someone\n* - Echo agent image: `ghcr.io/agentkourier/agent-kourier-echo-agent@sha256:5555555555555555555555555555555555555555555555555555555555555555` by @x in https://github.com/x/y/pull/1"},' \
   '  {"tag_name":"v1.2.0-rc.1","draft":false,"prerelease":true,"body":"- Image: `ghcr.io/agentkourier/agent-kourier@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc`"},' \
   '  {"tag_name":"v1.2.0-rc.2","draft":false,"prerelease":true,"body":"- Image: `ghcr.io/agentkourier/agent-kourier@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd`"},' \
   '  {"tag_name":"v9.0.0","draft":true,"prerelease":false,"body":"- Image: `ghcr.io/agentkourier/agent-kourier@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee`"}' \
@@ -109,6 +109,7 @@ grep -F 'ghcr.io/agentkourier/agent-kourier-prompt-agent@sha256:1111111111111111
 grep -F 'ghcr.io/agentkourier/agent-kourier-echo-agent@sha256:2222222222222222222222222222222222222222222222222222222222222222' "${selected}" >/dev/null ||
   fail "latest stable release's echo agent digest was not selected"
 grep -F '33333333' "${selected}" >/dev/null && fail "a digest outside the verified artifacts lines was selected"
+grep -F '55555555' "${selected}" >/dev/null && fail "a pull request title shaped like a verified artifacts line was selected"
 grep -F 'aaaaaaaa' "${selected}" >/dev/null && fail "older stable digest was selected"
 grep -F 'eeeeeeee' "${selected}" >/dev/null && fail "draft release digest was selected"
 
@@ -125,7 +126,7 @@ if "${HERE}/select-release-images.sh" "${agent_only}" "${selected}"; then
 fi
 
 title_only="${tmp}/title-only.json"
-printf '%s\n' '[{"tag_name":"v2.0.0","draft":false,"prerelease":false,"body":"* fix: ghcr.io/agentkourier/agent-kourier@sha256:4444444444444444444444444444444444444444444444444444444444444444 by someone"}]' >"${title_only}"
+printf '%s\n' '[{"tag_name":"v2.0.0","draft":false,"prerelease":false,"body":"* - Image: `ghcr.io/agentkourier/agent-kourier@sha256:4444444444444444444444444444444444444444444444444444444444444444` by @x in https://github.com/x/y/pull/2"}]' >"${title_only}"
 if "${HERE}/select-release-images.sh" "${title_only}" "${selected}"; then
   fail "a release whose only Agent Kourier digest is in a pull request title was accepted"
 fi

@@ -267,6 +267,7 @@ contains "pushed-other-platform: says the layers differ" "is not the image that 
 run_pushed_case pushed-extra-layer 1 "${index}" '["sha256:b1"]'
 run_pushed_case pushed-missing-platform 1 '{"linux/amd64":{"rootfs":{"diff_ids":["sha256:a1"]}}}' '["sha256:a1"]'
 contains "pushed-missing-platform: names the platform" "has no linux/arm64 image" "${TMP}/pushed-missing-platform.out"
-run_pushed_case pushed-single 0 '{"rootfs":{"diff_ids":["sha256:b1","sha256:b2"]}}' '["sha256:b1","sha256:b2"]'
+run_pushed_case pushed-single 0 '{"os":"linux","architecture":"arm64","rootfs":{"diff_ids":["sha256:b1","sha256:b2"]}}' '["sha256:b1","sha256:b2"]'
+run_pushed_case pushed-single-other-platform 1 '{"os":"linux","architecture":"amd64","rootfs":{"diff_ids":["sha256:b1","sha256:b2"]}}' '["sha256:b1","sha256:b2"]'
 
 echo "all passed"

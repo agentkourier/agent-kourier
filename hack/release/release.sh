@@ -139,11 +139,18 @@ check_platform() {
   echo "    ok: no hooks, no label, non-root, ${platform}, version ${VERSION}"
 }
 
+# agent_check_ref AGENT PLATFORM: print the local reference of the image check_agent_platform builds and checks for that
+# agent and platform; check-pushed.sh compares the pushed image with it.
+agent_check_ref() {
+  echo "agent-kourier-release-check:${1}-${2//\//-}"
+}
+
 # check_agent_platform AGENT PLATFORM: build that agent's image for that platform alone into the local image store,
 # check it as check_platform does (the agent's Dockerfile has no verify stage: its image holds no Go binary), and scan
 # it when check_platform would.
 check_agent_platform() {
-  local agent=$1 platform=$2 ref="agent-kourier-release-check:${1}-${2//\//-}"
+  local agent=$1 platform=$2 ref
+  ref=$(agent_check_ref "$1" "$2")
   CHECKS+=("${ref}")
   echo "==> ${agent} ${platform}: build and check"
   "${BUILDX[@]}" --platform "${platform}" --load -t "${ref}" "${ROOT}/examples/recipes/${agent}/agent"
@@ -196,7 +203,7 @@ for a in "${AGENTS[@]}"; do
     "${agent_build[@]}" --push "${ROOT}/examples/recipes/${a}/agent"
     for p in "${PLATFORM_LIST[@]}"; do
       "${HERE}/check-pushed.sh" "${REPOSITORY}-${a}@$(image_digest "${OUT}/${a}-metadata.json")" "${p}" \
-        "agent-kourier-release-check:${a}-${p//\//-}"
+        "$(agent_check_ref "${a}" "${p}")"
     done
   else
     archive="${OUT}/agent-kourier-${a}-${VERSION}.oci.tar"

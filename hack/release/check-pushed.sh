@@ -14,9 +14,12 @@ die() {
 [ $# -eq 3 ] || die "usage: check-pushed.sh PUSHED_REF PLATFORM LOCAL_IMAGE"
 PUSHED_REF=$1 PLATFORM=$2 LOCAL_IMAGE=$3
 
-# For a multi-platform reference, .Image is a map from platform to image config; for one platform, the config itself.
+# For a multi-platform reference, .Image is a map from platform to image config; for one platform, the config itself,
+# which must then be PLATFORM's.
 pushed=$(docker buildx imagetools inspect "${PUSHED_REF}" --format '{{json .Image}}' |
-  jq -c --arg p "${PLATFORM}" 'if has("rootfs") then .rootfs.diff_ids else .[$p].rootfs.diff_ids end // empty') ||
+  jq -c --arg p "${PLATFORM}" '
+    if has("rootfs") then (if (.os + "/" + .architecture) == $p then .rootfs.diff_ids else null end)
+    else .[$p].rootfs.diff_ids end // empty') ||
   die "could not read the layers of ${PUSHED_REF}"
 [ -n "${pushed}" ] && [ "${pushed}" != null ] || die "${PUSHED_REF} has no ${PLATFORM} image"
 checked=$(docker image inspect --format '{{json .RootFS.Layers}}' "${LOCAL_IMAGE}" | jq -c .) ||

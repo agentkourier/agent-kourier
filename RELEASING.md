@@ -145,9 +145,8 @@ images with attestations, which Docker's default `docker` driver without the con
     BUILDER=agent-kourier-release make release-image VERSION=v0.0.0-rc.1
 
 The agent images' arm64 build runs `apk` and `pip` under emulation. Docker Desktop has it; on a Linux host without
-binfmt handlers, register arm64 first with the image the workflow pins (`docker run --privileged --rm
-docker.io/tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
---install arm64`), or the build fails at the first `RUN`.
+binfmt handlers, register arm64 first with the binfmt image that `.github/workflows/release.yml` pins (`docker run
+--privileged --rm <that image> --install arm64`), or the build fails at the first `RUN`.
 
 Set `SCAN_IMAGES=1` to run the same per-platform Trivy policy for a local build. `PUSH=1` always enables these
 scans and requires the pinned scanner from `hack/security/install-trivy.sh` (or an executable `TRIVY_BIN`).
@@ -195,7 +194,8 @@ digest); the digests of past releases are in their workflow job summaries. A rel
 so `--set image.tag=...` alone changes nothing: set `image.digest` to the other release's digest (or `image.digest=""`
 with the tag).
 
-If a release fails after its image is pushed (the chart packaging, signing or verification failed), the image tag is
+If a release fails after its image is pushed (an agent image's pushed layers differ from the checked ones, or the chart
+packaging, signing or verification failed), the image tag is
 in GHCR without a verified GitHub Release. An unsigned digest is not a release: deploy only digests that `cosign verify`
 accepts, and re-run or cut a new tag.
 A bad release is not deleted or retagged: cut a new tag with the fix.
