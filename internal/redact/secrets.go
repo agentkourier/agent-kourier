@@ -243,29 +243,57 @@ func secrets(s string) string {
 }
 
 // rawSecrets is secrets without the patterns that are for normalized text only (prefixPatterns, sasPattern): the
-// token layer for text as it came, whose patterns tolerate the gaps that Normalize deletes.
+// token layer for text as it came, whose patterns tolerate the gaps that Normalize deletes. It runs rawSteps in order, each
+// only where its gate says the text can hold a match; gap is what holdsGap says of the text, read again when a step
+// changed it (see regap).
 func rawSecrets(s string) string {
-	s = secretPattern.ReplaceAllStringFunc(s, func(m string) string {
-		if isBearerKey(m) {
-			return m
+	gap := holdsGap(s)
+	for _, st := range rawSteps {
+		if st.gate(s, gap) {
+			s, gap = regap(s, st.replace(st.re, s), gap)
 		}
-		return redacted
-	})
-	s = replaceSK(s, skProject, false)
-	s = replaceSK(s, skBare, true)
-	s = oauthPattern.ReplaceAllString(s, "${1}"+redacted)
-	s = basicPattern.ReplaceAllStringFunc(s, func(m string) string {
-		if plainWord.MatchString(Normalize(basicPattern.FindStringSubmatch(m)[1])) {
-			return m
-		}
-		return redacted
-	})
-	return gluedBasicPattern.ReplaceAllStringFunc(s, func(m string) string {
-		if userPassword(Normalize(gluedBasicPattern.FindStringSubmatch(m)[1])) {
+	}
+	return s
+}
+
+// rawStep is a pattern of rawSecrets: the pattern, its gate (see gate.go), which reads the text and what holdsGap says of
+// it and is false only where the pattern cannot match, so that the replacement would change nothing, and the replacement
+// it makes with the pattern.
+type rawStep struct {
+	re      *regexp.Regexp
+	gate    func(s string, gap bool) bool
+	replace func(re *regexp.Regexp, s string) string
+}
+
+// rawSteps are the patterns of rawSecrets, in the order it runs them.
+var rawSteps = []rawStep{
+	{secretPattern, secretGate, func(re *regexp.Regexp, s string) string {
+		return re.ReplaceAllStringFunc(s, func(m string) string {
+			if isBearerKey(m) {
+				return m
+			}
 			return redacted
-		}
-		return m
-	})
+		})
+	}},
+	{skProject, skGate, func(re *regexp.Regexp, s string) string { return replaceSK(s, re, false) }},
+	{skBare, skGate, func(re *regexp.Regexp, s string) string { return replaceSK(s, re, true) }},
+	{oauthPattern, oauthGate, func(re *regexp.Regexp, s string) string { return re.ReplaceAllString(s, "${1}"+redacted) }},
+	{basicPattern, basicGate, func(re *regexp.Regexp, s string) string {
+		return re.ReplaceAllStringFunc(s, func(m string) string {
+			if plainWord.MatchString(Normalize(re.FindStringSubmatch(m)[1])) {
+				return m
+			}
+			return redacted
+		})
+	}},
+	{gluedBasicPattern, basicGate, func(re *regexp.Regexp, s string) string {
+		return re.ReplaceAllStringFunc(s, func(m string) string {
+			if userPassword(Normalize(re.FindStringSubmatch(m)[1])) {
+				return redacted
+			}
+			return m
+		})
+	}},
 }
 
 // isBearerKey reports whether m, a match of secretPattern, is the word Bearer and a key whose name is a SecretName and

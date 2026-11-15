@@ -115,13 +115,24 @@ func TestNormalizeIsIdempotent(t *testing.T) {
 // The token patterns' class of deleted characters (deletable) is the deletion set: a character that Normalize deletes
 // is transparent in a pattern, and one that it keeps is not. Two characters differ on purpose: CR, which Normalize
 // reads as a line break before it asks, and U+FFFD, which stands for invalid UTF-8 in a pattern and is kept as text.
+//
+// The same sweep holds the gates of the token layer to it (see holdsGap): every character deletable holds makes holdsGap
+// true, so that a class added to deletable cannot keep a gate shut that should open. A single character is never an esc;
+// TestHoldsGapTakesEveryGapAndFold takes those, invalid UTF-8 and the characters that fold into ASCII.
 func TestDeletableIsTheDeletionSet(t *testing.T) {
 	class := regexp.MustCompile(`^[` + deletable + `]$`)
 	for r := rune(0); r <= unicode.MaxRune; r++ {
-		if (r >= 0xD800 && r <= 0xDFFF) || r == '\r' || r == 0xFFFD {
+		if r >= 0xD800 && r <= 0xDFFF {
 			continue
 		}
-		if got, want := class.MatchString(string(r)), deleted(r); got != want {
+		got := class.MatchString(string(r))
+		if got && !holdsGap(string(r)) {
+			t.Fatalf("holdsGap(%q) is false, and a pattern of the token layer reads U+%04X as a gap", string(r), r)
+		}
+		if r == '\r' || r == 0xFFFD {
+			continue
+		}
+		if want := deleted(r); got != want {
 			t.Fatalf("deletable holds U+%04X: %t, Normalize deletes it: %t", r, got, want)
 		}
 	}
