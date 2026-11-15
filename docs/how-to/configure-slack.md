@@ -117,7 +117,7 @@ needs, its tokens are in a Kubernetes Secret, and a ChatConnection points at it.
 
     !!! note "Not served yet"
 
-        The broker serves Slack over Socket Mode only, and a ChatConnection has no setting for another mode. Use Socket Mode.
+        The broker serves Slack over Socket Mode only. Use Socket Mode.
 
 ## What the app is allowed to do
 

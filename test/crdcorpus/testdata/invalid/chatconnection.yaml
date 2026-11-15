@@ -376,3 +376,33 @@ spec:
     - t254
     - t255
     - t256
+---
+# rule: chatconnection/spec.slack.mode: unsupported
+# want: spec.slack.mode: unsupported value "websocket"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: slack
+  namespace: sre
+spec:
+  platform: slack
+  credentialsSecretRef:
+    name: slack
+  slack:
+    mode: websocket
+---
+# rule: chatconnection/spec.slack.mode: wrong case
+# want: spec.slack.mode: unsupported value "HTTP"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: slack
+  namespace: sre
+spec:
+  platform: slack
+  credentialsSecretRef:
+    name: slack
+  slack:
+    mode: HTTP

@@ -266,6 +266,12 @@ func TestSchemaEnumsListTheEmptyValueExactlyWhereTheBrokerAcceptsIt(t *testing.T
 			o.Default()
 			return o.Validate()
 		}},
+		{conns.at(t, "spec.slack.mode"), "slack mode", func(t *testing.T) error {
+			o := load[ChatConnection](t, "chatconnection.yaml")
+			o.Spec.Slack = &SlackConnectionSpec{Mode: ""}
+			o.Default()
+			return o.Validate()
+		}},
 		{bindings.at(t, trigger+".type"), "trigger type", binding(func(o *Binding) { bot(o).Type = "" })},
 		{bindings.at(t, trigger+".extract.{}.field"), "extract field", binding(func(o *Binding) {
 			e := bot(o).Extract["state"]

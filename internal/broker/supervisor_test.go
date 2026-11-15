@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"go.uber.org/goleak"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
@@ -398,6 +399,71 @@ func TestSupervisorLeavesTheOtherConnectionsWhenATeamConnectionIsRejected(t *tes
 	}
 	w.reconcile(team("team-a/slack", 1, "tok-a2", 1), b)
 	w.eventually("team-a to run again", func() bool { return slices.Contains(w.running(), "team-a/slack") })
+}
+
+// inHTTPMode is the team connection name as teamConnections gives it once its ChatConnection, at generation gen, is in Slack HTTP mode: with
+// the refusal of connectionOf as its Err, and no credentials.
+func inHTTPMode(t *testing.T, name string, gen int64, age int) TeamConnection {
+	t.Helper()
+	ns, n, _ := strings.Cut(name, "/")
+	c := &v1alpha1.ChatConnection{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: n}, Spec: v1alpha1.ChatConnectionSpec{
+		Platform: v1alpha1.PlatformSlack, CredentialsSecretRef: v1alpha1.SecretRef{Name: "creds"}, Slack: &v1alpha1.SlackConnectionSpec{Mode: v1alpha1.SlackModeHTTP}}}
+	_, err := connectionOf(t.Context(), c, &reader{vals: map[string]string{}})
+	if !errors.Is(err, errModeNotServed) {
+		t.Fatalf("connectionOf in HTTP mode = %v; want errModeNotServed", err)
+	}
+	tc := team(name, gen, "", age)
+	tc.Credentials, tc.Err = nil, err
+	return tc
+}
+
+// A team connection that runs in Socket Mode and whose ChatConnection is switched to HTTP mode, which this version does not serve, is stopped
+// and says why, once: unlike a Secret that cannot be read for a moment, no wait mends it. It holds no app while it is refused, so a younger
+// connection of its app is served, and it runs again, as the older of its app, once its ChatConnection is back in Socket Mode.
+func TestSupervisorStopsATeamConnectionSwitchedToAModeItDoesNotServe(t *testing.T) {
+	w := newSupWorld(t)
+	w.ids["tok-a"], w.ids["tok-a2"], w.ids["tok-y"] = appIdentity{App: "AA", Team: "T1", User: "UA", Bot: "BA"}, appIdentity{App: "AA", Team: "T1", User: "UA", Bot: "BA"}, appIdentity{App: "AA", Team: "T1", User: "UA", Bot: "BA"}
+	younger := team("team-y/slack", 1, "tok-y", 9)
+
+	w.reconcile(team("team-a/slack", 1, "tok-a", 1), younger)
+	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack"}) {
+		t.Fatalf("running = %v; want team-a, the older of the app, and not team-y", got)
+	}
+
+	w.reconcile(inHTTPMode(t, "team-a/slack", 2, 1), younger)
+	if got := w.running(); !slices.Equal(got, []string{ownName, "team-y/slack"}) {
+		t.Errorf("running = %v after team-a moved to HTTP mode; want team-a stopped, and team-y serving the app it no longer holds", got)
+	}
+	if _, err := w.table.Platform("team-a/slack"); !errors.Is(err, chat.ErrConnectionDown) {
+		t.Errorf("Platform(team-a) = %v; want ErrConnectionDown", err)
+	}
+	w.table.mu.RLock()
+	_, botKept := w.table.bots["team-a/slack"]
+	w.table.mu.RUnlock()
+	if botKept {
+		t.Error("the bot table keeps team-a's bot; want it forgotten, as team-a is not served")
+	}
+	w.mu.Lock()
+	gone := slices.Clone(w.gone)
+	w.mu.Unlock()
+	if !slices.Contains(gone, "team-a/slack") {
+		t.Errorf("gone = %v; want team-a told, as its runtime was taken away", gone)
+	}
+	w.reconcile(inHTTPMode(t, "team-a/slack", 2, 1), younger) // the same look again says nothing new
+	logs := w.logs.String()
+	for _, want := range []string{"chat connection stopped", "a mode this version does not serve", "is in Slack HTTP mode, which this version does not serve yet"} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("the log does not say %q:\n%s", want, logs)
+		}
+	}
+	if n := strings.Count(logs, "the ChatConnection is not started: it asks for a mode this version does not serve"); n != 1 {
+		t.Errorf("the refusal was logged %d times over two looks; want once", n)
+	}
+
+	w.reconcile(team("team-a/slack", 3, "tok-a2", 1), younger) // back in Socket Mode
+	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack"}) {
+		t.Errorf("running = %v once team-a is back in Socket Mode; want it serving its app again, and team-y stopped", got)
+	}
 }
 
 // Two connections of one Slack app are not both served: the older is, the own connection first. The younger says so to its Bindings (the

@@ -276,6 +276,18 @@ func TestCELLiteralsEqualTheBrokersConstants(t *testing.T) {
 		ruleWith(t, backends.at(t, "spec.agents"), "self.sameNamespace", "size(self.namespaces) > 0")
 	})
 
+	t.Run("slack block", func(t *testing.T) {
+		// The rule copies Validate's: the slack block is allowed on the slack platform only, so a platform added later is refused a
+		// slack block until it says otherwise.
+		if PlatformSlack != "slack" {
+			t.Fatal("the platform that the slack rule writes out as a literal has changed: update the rule")
+		}
+		rule := ruleWith(t, crdSchema(t, "chatconnections").at(t, "spec"), "has(self.slack)")
+		if !strings.Contains(rule, "self.platform == 'slack'") {
+			t.Errorf("the rule does not allow the slack block on the slack platform only: %s", rule)
+		}
+	})
+
 	t.Run("duration ranges", func(t *testing.T) {
 		thread := bindings.at(t, trigger+".thread")
 		for _, tc := range []struct {

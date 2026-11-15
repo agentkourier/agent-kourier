@@ -22,8 +22,9 @@ ChatConnectionSpec is the desired state of a ChatConnection.
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `platform` | string | Yes | None | One of `slack`. |
-| `credentialsSecretRef` | [SecretRef](#secretref) | Yes | None | CredentialsSecretRef names one Secret with the fixed keys botToken and appToken (Socket Mode). |
+| `credentialsSecretRef` | [SecretRef](#secretref) | Yes | None | CredentialsSecretRef names one Secret whose keys are fixed by the platform and its mode. A Slack connection in Socket Mode needs botToken and appToken; one in HTTP mode needs botToken and signingSecret. |
 | `allowedNamespaces` | []string | No | Empty list | AllowedNamespaces lists the other namespaces whose Bindings may reference this connection. Each is a DNS-1123 label. An empty list permits references only from the connection's own namespace. At most 256. |
+| `slack` | [SlackConnectionSpec](#slackconnectionspec) | No | None | Slack holds the settings of a Slack connection. Only a connection whose platform is slack may set it. Omitted, the connection uses Socket Mode. |
 
 ## SecretRef
 
@@ -32,6 +33,14 @@ SecretRef names a Secret in the referring object's namespace whose keys are fixe
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `name` | string | Yes | None | Name is a DNS-1123 subdomain: at most 253 lowercase letters, digits, '-' or '.', starting and ending with a letter or digit. Pattern `^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`. At most 253 characters. |
+
+## SlackConnectionSpec
+
+SlackConnectionSpec is the settings of a Slack connection.
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `mode` | string | No | socket | Mode selects how Slack delivers the app's events and button presses: socket, over a Socket Mode WebSocket that Agent Kourier opens, or http, as Events API and interactivity requests that Slack sends to Agent Kourier, signed with the app's signing secret. The mode sets the keys of the credentials Secret (credentialsSecretRef). This version does not serve http: the broker refuses to start for its own connection in HTTP mode, and does not start a team connection in HTTP mode. One of `socket`, `http`. |
 
 ---
 

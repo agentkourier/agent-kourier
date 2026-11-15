@@ -31,8 +31,8 @@ type secretRef struct {
 // secretRefs lists every Secret that set refers to: each ChatConnection's credentials, an
 // AgentBackend's header Secrets, and a Binding's token. Resolve checks them, and
 // SecretNames lists the Secrets off them, so the two cannot drift apart. An empty key
-// means the default, for a Set that has not been through Default. A ChatConnection's keys are its platform's
-// (v1alpha1.CredentialKeys), which are never empty for a platform that Validate accepts, and a Set holds only validated objects.
+// means the default, for a Set that has not been through Default. A ChatConnection's keys are its platform's and its mode's
+// (v1alpha1.CredentialKeys), which are never empty for a platform and mode that Validate accepts, and a Set holds only validated objects.
 func (s *Set) secretRefs() []secretRef {
 	var refs []secretRef
 	keyRef := func(from identity, path string, ref *v1alpha1.SecretKeyRef) {
@@ -48,7 +48,7 @@ func (s *Set) secretRefs() []secretRef {
 	}
 	for i := range s.ChatConnections {
 		c := &s.ChatConnections[i]
-		refs = append(refs, secretRef{identity{"ChatConnection", c.Namespace, c.Name}, "spec.credentialsSecretRef", c.Spec.CredentialsSecretRef.Name, v1alpha1.CredentialKeys(c.Spec.Platform)})
+		refs = append(refs, secretRef{identity{"ChatConnection", c.Namespace, c.Name}, "spec.credentialsSecretRef", c.Spec.CredentialsSecretRef.Name, v1alpha1.CredentialKeys(c.Spec)})
 	}
 	for i := range s.Bindings {
 		b := &s.Bindings[i]

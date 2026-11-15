@@ -246,7 +246,26 @@ func TestChatConnectionValidate(t *testing.T) {
 		{"the most allowed namespaces ok", func(o *ChatConnection) { o.Spec.AllowedNamespaces = namespaces(maxAllowedNamespaces) }, ""},
 		{"too many allowed namespaces", func(o *ChatConnection) { o.Spec.AllowedNamespaces = namespaces(maxAllowedNamespaces + 1) },
 			fmt.Sprintf("spec.allowedNamespaces: has %d items, maximum is %d", maxAllowedNamespaces+1, maxAllowedNamespaces)},
+		{"an empty slack block ok", func(o *ChatConnection) { o.Spec.Slack = &SlackConnectionSpec{} }, ""},
+		{"socket mode ok", func(o *ChatConnection) { o.Spec.Slack = &SlackConnectionSpec{Mode: SlackModeSocket} }, ""},
+		{"http mode ok", func(o *ChatConnection) { o.Spec.Slack = &SlackConnectionSpec{Mode: SlackModeHTTP} }, ""},
+		{"unknown mode", func(o *ChatConnection) { o.Spec.Slack = &SlackConnectionSpec{Mode: "websocket"} },
+			`spec.slack.mode: unsupported value "websocket", must be one of socket, http`},
+		{"mode in the wrong case", func(o *ChatConnection) { o.Spec.Slack = &SlackConnectionSpec{Mode: "HTTP"} },
+			`spec.slack.mode: unsupported value "HTTP", must be one of socket, http`},
 	})
+}
+
+// A slack block on a connection of another platform is refused, besides the platform: while slack is the only platform the two always
+// come together, and the day a second one is added, its connections cannot carry Slack's settings.
+func TestChatConnectionRefusesASlackBlockOnAnotherPlatform(t *testing.T) {
+	c := load[ChatConnection](t, "chatconnection.yaml")
+	c.Spec.Platform = "teams"
+	c.Spec.Slack = &SlackConnectionSpec{Mode: SlackModeSocket}
+	want := []string{`spec.platform: unsupported value "teams", must be one of slack`, "spec.slack: is set, but only a slack connection has one"}
+	if got := problemsOf(c.Validate()); !slices.Equal(got, want) {
+		t.Errorf("Validate() problems = %q, want %q", got, want)
+	}
 }
 
 func TestBindingValidate(t *testing.T) {

@@ -321,6 +321,14 @@ func (c *ChatConnection) Validate() error {
 	p.oneOf("spec.platform", s.Platform, PlatformSlack)
 	p.name("spec.credentialsSecretRef.name", s.CredentialsSecretRef.Name)
 	p.namespaces("spec.allowedNamespaces", s.AllowedNamespaces)
+	if s.Slack != nil {
+		if s.Platform != PlatformSlack {
+			p.add("spec.slack", "is set, but only a slack connection has one")
+		}
+		if s.Slack.Mode != "" { // unset is Socket Mode (SlackMode)
+			p.oneOf("spec.slack.mode", string(s.Slack.Mode), string(SlackModeSocket), string(SlackModeHTTP))
+		}
+	}
 	return errors.Join(p...)
 }
 
