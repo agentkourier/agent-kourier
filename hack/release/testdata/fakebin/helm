@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# helm for the release.sh tests in hack/release/test.sh: package keeps the chart's values.yaml and its versions beside
+# an empty package, so that show values and show chart read back what package-chart.sh stamped.
+set -euo pipefail
+
+case "${1:-}" in
+  package)
+    dir=$2 version='' app='' dest=''
+    shift 2
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --version) version=$2; shift 2 ;;
+        --app-version) app=$2; shift 2 ;;
+        --destination) dest=$2; shift 2 ;;
+        *) echo "fake helm: unexpected package argument $1" >&2; exit 2 ;;
+      esac
+    done
+    pkg="${dest}/agent-kourier-${version}.tgz"
+    : >"${pkg}"
+    cp "${dir}/values.yaml" "${pkg}.values"
+    printf 'version: %s\nappVersion: %s\n' "${version}" "${app}" >"${pkg}.chart"
+    ;;
+  show)
+    case "$2" in
+      values) cat "$3.values" ;;
+      chart) cat "$3.chart" ;;
+      *) echo "fake helm: unexpected show $2" >&2; exit 2 ;;
+    esac
+    ;;
+  *) echo "fake helm: unexpected command: $*" >&2; exit 2 ;;
+esac

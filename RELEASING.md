@@ -2,7 +2,9 @@
 
 A release is a pushed tag `vX.Y.Z` (or `vX.Y.Z-rc.1`). It publishes the image `ghcr.io/agentkourier/agent-kourier`
 (linux/amd64 and linux/arm64) and the Helm chart `oci://ghcr.io/agentkourier/charts/agent-kourier`, whose default image
-is that image by digest. Nothing is released by hand.
+is that image by digest. It also publishes the images of two recipes' agents, `ghcr.io/agentkourier/agent-kourier-prompt-agent`
+and `ghcr.io/agentkourier/agent-kourier-echo-agent` (linux/amd64 and linux/arm64), built from
+`examples/recipes/<agent>/agent/Dockerfile`. Nothing is released by hand.
 
 ## Cut a release
 
@@ -12,7 +14,12 @@ is that image by digest. Nothing is released by hand.
    (`release-version`), so the pull request cannot go green with a page left behind. The chart's golden files carry
    the version in a label: refresh them with `go test ./test/chart -update` (with `helm` installed). For a new minor
    version (`X.Y.0`), also add `"X.Y"` at the top of `hack/docs/versions.yaml`, so the documentation site publishes
-   the new release line's tags; until its first tag exists the site skips it. Merge it. Skip this for a prerelease tag
+   the new release line's tags; until its first tag exists the site skips it. The first release that publishes the
+   agents' images (the first after 0.3.2) also points `image:` in `examples/recipes/prompt-agent/agent/manifests/deployment.yaml`
+   and `examples/recipes/echo-agent/agent/manifests/deployment.yaml` at `ghcr.io/agentkourier/agent-kourier-<agent>:vX.Y.Z`,
+   with `imagePullPolicy` and the comments to match, and rewords the sentences that say releases do not publish the
+   prompt agent's image (in `examples/recipes/prompt-agent/README.md` and `docs/how-to/recipes.md`); from then on
+   `release-version` holds those tags to the chart's version. Merge it. Skip this for a prerelease tag
    (`vX.Y.Z-rc.1`): while one is tried, the chart and the docs keep naming the last release.
 3. Before tagging, confirm that `ci.yml`, `security.yml` and `codeql.yml` have completed successfully for that
    exact commit from a push to `main`. The release gate checks the same commit and the latest attempt again; a
@@ -90,26 +97,33 @@ line's newest and perhaps as latest.
   release attempt; a published or draft Release, an authorization failure or any other API error stops the workflow.
 - Refuses a tag that is not on `main`.
 - Builds each platform with the Dockerfile, which cross-compiles Go on the runner (no emulation) and sets
-  `main.version` from the tag.
+  `main.version` from the tag. Then builds each platform of each agent image from its own Dockerfile, which runs `apk`
+  and `pip` in the target platform: the arm64 build runs under QEMU, from the binfmt image the workflow pins by digest.
 - Refuses to release a platform whose binary carries a test hook. The Dockerfile's `verify` stage runs
   `internal/testhooks` (the traces `make image-check` looks for, with a testhooks build of the same
   platform as the control) and checks the binary is an ELF of that architecture with the tag as its
   version; the image is not assembled if it fails. The script then checks each platform's image has no
-  `dev.agent-kourier.testhooks` label, runs as 65532:65532, and is that platform.
+  `dev.agent-kourier.testhooks` label, runs as 65532:65532, and is that platform. It checks each agent image's
+  platforms the same way.
+- Builds, checks and scans every platform of every image before the first push, so an agent image that fails leaves
+  nothing pushed.
 - Pushes one multi-platform image tagged `vX.Y.Z` with the workflow's `GITHUB_TOKEN` (`packages: write`),
   with an SBOM and a max-mode provenance attestation attached, and the OCI labels source, revision, version
-  and created (the commit's time).
+  and created (the commit's time). Pushes each agent image the same way, tagged `vX.Y.Z`, to Agent Kourier's repository
+  with `-<agent>` appended, then refuses it unless each platform's layers are those of the image it checked and scanned
+  (`hack/release/check-pushed.sh`): an agent's Dockerfile resolves Wolfi's packages when it runs, so a push that missed
+  the checks' cache would have resolved them again.
 - The Buildx action is pinned by commit, while its BuildKit image and Docker's SBOM generator follow the action's
   defaults. Pin those tool references before claiming byte-for-byte build-tool reproducibility.
 - Installs the pinned Trivy release from `hack/security/install-trivy.sh` and scans each local platform image before
   the multi-platform push. High and critical vulnerabilities, including unfixed findings, fail the release and the
   SARIF reports remain in the release output.
 - Packages `charts/agent-kourier` (`hack/release/package-chart.sh`) with version `X.Y.Z`, appVersion `vX.Y.Z`, and
-  `image.repository` and `image.digest` stamped with the pushed image, reads the package back to check them,
+  `image.repository` and `image.digest` stamped with Agent Kourier's pushed image, reads the package back to check them,
   and pushes it to `oci://ghcr.io/agentkourier/charts`.
-- In a second job that runs no repository code (the only one with `id-token: write`), signs the image digest
-  and the chart digest with cosign v3.0.6 keyless (GitHub's OIDC identity; no key, no secret).
-- In a separate read-only verification job, verifies both signatures with the OIDC issuer and the exact identity
+- In a second job that runs no repository code (the only one with `id-token: write`), signs the image digests
+  and the chart digest with cosign v3.1.4 keyless (GitHub's OIDC identity; no key, no secret).
+- In a separate read-only verification job, verifies every signature with the OIDC issuer and the exact identity
   `https://github.com/agentkourier/agent-kourier/.github/workflows/release.yml@refs/tags/<tag>`.
 - In a final job with `contents: write` and no checkout, creates the GitHub Release with generated notes and the
   verified digests. `.github/release.yml` groups the notes by the labels `pr-labels.yml` sets from each pull
@@ -119,16 +133,20 @@ line's newest and perhaps as latest.
   rebuilds the documentation site with the new tag as a version of its own, its line's newest and, for the newest line,
   latest. A prerelease is not published there.
 
-The job summary lists both digests. The chart's `tag` stays empty: the digest wins.
+The job summary and the GitHub Release list every digest. The chart's `tag` stays empty: the digest wins.
 
 ## Build it locally
 
-`make release-image VERSION=v0.0.0-rc.1` builds both platforms, runs the same checks, and writes an OCI
-archive and the chart package to `bin/release/`. It pushes nothing, and needs helm and jq. It needs a buildx builder that can make multi-platform
+`make release-image VERSION=v0.0.0-rc.1` builds both platforms of each image, runs the same checks, and writes an OCI
+archive of each image and the chart package to `bin/release/`. It pushes nothing, and needs helm and jq. It needs a buildx builder that can make multi-platform
 images with attestations, which Docker's default `docker` driver without the containerd image store cannot:
 
     docker buildx create --name agent-kourier-release --driver docker-container
     BUILDER=agent-kourier-release make release-image VERSION=v0.0.0-rc.1
+
+The agent images' arm64 build runs `apk` and `pip` under emulation. Docker Desktop has it; on a Linux host without
+binfmt handlers, register arm64 first with the binfmt image that `.github/workflows/release.yml` pins (`docker run
+--privileged --rm <that image> --install arm64`), or the build fails at the first `RUN`.
 
 Set `SCAN_IMAGES=1` to run the same per-platform Trivy policy for a local build. `PUSH=1` always enables these
 scans and requires the pinned scanner from `hack/security/install-trivy.sh` (or an executable `TRIVY_BIN`).
@@ -162,6 +180,10 @@ signed by the same identity, and its default image is the image:
       --certificate-identity "$IDENTITY"
     helm show values oci://$CHART --version X.Y.Z | grep -A8 '^image:'   # repository and digest stamped
 
+The agents' images are signed by the same identity and carry the same attestations and labels. Verify each as the
+image above, with `IMAGE=ghcr.io/agentkourier/agent-kourier-prompt-agent` or
+`IMAGE=ghcr.io/agentkourier/agent-kourier-echo-agent` and its digest from the GitHub Release.
+
 Each release's GitHub Release body names the verified image and chart digests.
 
 ## Roll back
@@ -172,7 +194,8 @@ digest); the digests of past releases are in their workflow job summaries. A rel
 so `--set image.tag=...` alone changes nothing: set `image.digest` to the other release's digest (or `image.digest=""`
 with the tag).
 
-If a release fails after its image is pushed (the chart packaging, signing or verification failed), the image tag is
+If a release fails after its image is pushed (an agent image's pushed layers differ from the checked ones, or the chart
+packaging, signing or verification failed), the image tag is
 in GHCR without a verified GitHub Release. An unsigned digest is not a release: deploy only digests that `cosign verify`
 accepts, and re-run or cut a new tag.
 A bad release is not deleted or retagged: cut a new tag with the fix.
@@ -201,7 +224,8 @@ are applied now:
    Optionally add a `release` environment with required reviewers and move the `build` job into it, which
    puts a human approval between a tag and a push.
 4. After the first release: Packages, `agent-kourier` and `charts/agent-kourier`, link them to this repository and set
-   visibility (public if the cluster pulls without a pull secret).
+   visibility (public if the cluster pulls without a pull secret). After the first release that publishes the agents'
+   images, the same for `agent-kourier-prompt-agent` and `agent-kourier-echo-agent`.
 
 The release workflow refuses a tag that is not on `main`, so what ships has passed the `main` ruleset. Cut a
 release tag only from a commit that GitHub signed when it squash-merged a pull request (the commit shows as
@@ -330,9 +354,10 @@ scanner or CodeQL reads, but for two tests of the docs checks that `make docs-ch
 
 - `tests` (the `test-shard` and `test-testhooks-shard` legs, `test-scripts`, `test-postgres`): nothing more. Tests read
   `README.md` and pages under `docs/` and elsewhere when they run, which only running them shows.
-- `scan` (the three `govulncheck` jobs, both `trivy` jobs, `analyze`) and `crd-corpus` (both jobs): any Markdown
+- `scan` (the three `govulncheck` jobs, the `trivy` jobs, `analyze`) and `crd-corpus` (both jobs): any Markdown
   (`*.md`, in lower case) outside every Go package's tree, such as `README.md`, the pages under `docs/` and the chart's
-  README. govulncheck reads Go packages and the files they embed; the image holds only the binary; CodeQL's Go autobuild
+  README. govulncheck reads Go packages and the files they embed; Agent Kourier's image holds only the binary, and an
+  agent's image only the files its `.dockerignore` lets in, none of them Markdown; CodeQL's Go autobuild
   extracts `.go` files; `crd-corpus` builds and runs `test/crdcorpus` and reads only YAML from its corpus.
 - `docs-agent`: the same Markdown except under `docs/`, its corpus, and `examples/recipes/docs-agent/`.
 - `echo-agent`: the same Markdown except under `examples/recipes/echo-agent/agent/`, the one directory it reads.

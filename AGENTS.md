@@ -108,7 +108,7 @@ golangci-lint runs as `go tool golangci-lint`, never a global install.
   pattern in `CONTENTCHECK_WORKSPACE`, which CI sets from a secret; unset, that rule does not run and the check says so), and relative links or
   anchors in the two READMEs and the recipe READMEs that do not resolve (`hack/docs/contentcheck`; a deliberate exception goes in its `allowlist.txt`
   with a reason, and a stale entry fails too).
-- `make release-image VERSION=vX.Y.Z` builds the release image and chart locally; see `RELEASING.md`.
+- `make release-image VERSION=vX.Y.Z` builds the release images (Agent Kourier and the recipes' prompt and echo agents) and the chart locally; see `RELEASING.md`.
 - Add tools with `go get -tool <module>/cmd/<tool>@<version>`.
 
 ## Work-package workflow

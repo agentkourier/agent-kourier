@@ -13,13 +13,14 @@
 #               README.md and pages under docs/ and elsewhere at run time (internal/store/storetest reads
 #               docs/reference/stored-data.md, cmd/agent-kourier's tests read pages under docs/how-to), which nothing but
 #               running them shows, so no Markdown is added for them.
-#   scan        govulncheck (all three modules), trivy (both platforms) and CodeQL's analyze: also Markdown outside every
+#   scan        govulncheck (all three modules), trivy (each image and platform) and CodeQL's analyze: also Markdown outside every
 #               Go package's tree. govulncheck reads a module's Go packages (their files, and the files they embed).
 #               CodeQL's Go autobuild runs make (whose default goal is help), checks that go list ./... loads, and
 #               extracts the .go files, by GitHub's documentation of its build options and the Go extractor's
 #               codeql-extractor.yml, whose only file type is .go. The image is the binary of ./cmd/agent-kourier on the
 #               runtime image: .dockerignore drops docs/, the build stage reads only Go inputs, and its verify stage runs
-#               two tests of internal/testhooks that read the binaries.
+#               two tests of internal/testhooks that read the binaries. An agent's image (examples/recipes/<agent>/agent)
+#               copies only the files its .dockerignore lets in by name, none of them Markdown.
 #   crd-corpus  both crd-corpus jobs: also Markdown outside every Go package's tree. The job builds and runs
 #               test/crdcorpus, applies charts/agent-kourier/files/crds, and the corpus walk reads only .yaml and .yml
 #               files under its roots (test/crdcorpus/corpus.go).

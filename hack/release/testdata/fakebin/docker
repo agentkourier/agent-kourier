@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# docker for the release.sh tests in hack/release/test.sh. It builds nothing: it appends each build to FAKE_LOG as
+# "build <load|push|output> <platforms> <tag> <context relative to FAKE_ROOT>", writes a digest to a build's metadata
+# file, and answers image inspect for what it "built": no labels, the build's platform, and user 65532:65532, or 0:0 for
+# an image whose reference ends with FAKE_ROOT_IMAGE. For check-pushed.sh it prints FAKE_PUSHED_IMAGE as a pushed
+# reference's .Image and FAKE_LAYERS as a local image's layers.
+set -euo pipefail
+
+case "${1:-} ${2:-}" in
+  "buildx imagetools")
+    printf '%s\n' "${FAKE_PUSHED_IMAGE:?}"
+    ;;
+  "buildx build")
+    : "${FAKE_LOG:?}" "${FAKE_STATE:?}" "${FAKE_ROOT:?}"
+    shift 2
+    platform='' tag='' mode='' meta='' context=''
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --platform) platform=$2; shift 2 ;;
+        -t) tag=$2; shift 2 ;;
+        --metadata-file) meta=$2; shift 2 ;;
+        --load) mode=load; shift ;;
+        --push) mode=push; shift ;;
+        --output) mode=output; shift 2 ;;
+        -f | --build-arg | --label | --annotation | --builder) shift 2 ;;
+        --provenance=* | --sbom=*) shift ;;
+        -*) echo "fake docker: unexpected build flag $1" >&2; exit 2 ;;
+        *) context=$1; shift ;;
+      esac
+    done
+    [ "${context}" = "${FAKE_ROOT}" ] && context=. || context=${context#"${FAKE_ROOT}"/}
+    echo "build ${mode} ${platform} ${tag} ${context}" >>"${FAKE_LOG}"
+    echo "${tag} ${platform}" >>"${FAKE_STATE}"
+    if [ -n "${meta}" ]; then
+      printf '{"containerimage.digest":"sha256:%064x"}\n' "$(printf '%s' "${tag}" | cksum | cut -d' ' -f1)" >"${meta}"
+    fi
+    ;;
+  "image inspect")
+    format=$4 ref=$5
+    case "${format}" in
+      *Labels*) echo ;;
+      *User*)
+        if [ -n "${FAKE_ROOT_IMAGE:-}" ] && [[ "${ref}" == *"${FAKE_ROOT_IMAGE}" ]]; then echo 0:0; else echo 65532:65532; fi
+        ;;
+      *RootFS*) printf '%s\n' "${FAKE_LAYERS:?}" ;;
+      *Os*) awk -v ref="${ref}" '$1 == ref { platform = $2 } END { print platform }' "${FAKE_STATE}" ;;
+      *) echo "fake docker: unexpected inspect format ${format}" >&2; exit 2 ;;
+    esac
+    ;;
+  "rmi -f") ;;
+  *) echo "fake docker: unexpected command: $*" >&2; exit 2 ;;
+esac

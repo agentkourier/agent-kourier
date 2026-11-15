@@ -4,7 +4,9 @@
 # prompt-agent, then kubectl apply -n prompt-agent -f manifests/). The files name no namespace, so the Service lands next
 # to it. Build the image with make prompt-agent-image. The tag :dev is a local one, for a kind cluster that the image is
 # loaded into; on a real cluster push the image to your registry and name it by digest (image: <registry>/...@sha256:...),
-# so that every node runs the image you built.
+# so that every node runs the image you built. From release 0.4.0 on, each release also publishes this image, signed, for
+# linux/amd64 and linux/arm64: ghcr.io/agentkourier/agent-kourier-prompt-agent, tagged with the release (vX.Y.Z). Each
+# release's notes give its digest; name the image by that digest.
 #
 # Three Secrets are referenced here and not created here; make them before the pod can start (a missing one leaves the
 # pod in CreateContainerConfigError, or ContainerCreating for the mounted one):
