@@ -62,6 +62,23 @@ func chatPost(t *testing.T, method, addr, path string) int {
 	return resp.StatusCode
 }
 
+// untilRefused polls addr until a dial to it is refused, which is the listener's port closed, and says whether that came before ctx ended.
+func untilRefused(ctx context.Context, addr string) bool {
+	for ; ctx.Err() == nil; time.Sleep(5 * time.Millisecond) {
+		dial, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+		conn, err := (&net.Dialer{}).DialContext(dial, "tcp", addr)
+		cancel()
+		if ctx.Err() != nil {
+			return false
+		}
+		if err != nil {
+			return true
+		}
+		_ = conn.Close()
+	}
+	return false
+}
+
 // The leader's own connection has its route on the chat listener while it runs: a POST to it reaches the platform's handler, a connection
 // that does not run here is 503, a GET is 405, and the health server's paths are not on the chat port. /metrics, on the health port,
 // counts each request by outcome.
@@ -104,11 +121,14 @@ func TestRunStopsTheChatListenerBeforeTheIntakes(t *testing.T) {
 	var runCtx atomic.Pointer[context.Context]
 	inFlight, release := make(chan struct{}), make(chan struct{})
 	var liveAtAnswer atomic.Bool
-	h := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var listening atomic.Value // the chat listener's address
+	h := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		close(inFlight)
 		<-release
-		time.Sleep(200 * time.Millisecond) // a halt of the run that came early would be seen within this
-		liveAtAnswer.Store((*runCtx.Load()).Err() == nil)
+		// The listener closes its port as its stop begins. The run's halt is synchronous, so had the intakes stopped first the run's
+		// context would have ended before the port closed, and is seen so here.
+		closed := untilRefused(req.Context(), listening.Load().(string)) // in the handler's goroutine, so it reports and does not fail
+		liveAtAnswer.Store(closed && (*runCtx.Load()).Err() == nil)
 		w.WriteHeader(http.StatusOK)
 	})
 	slk := &ctxSlack{got: make(chan context.Context, 1)}
@@ -121,6 +141,7 @@ func TestRunStopsTheChatListenerBeforeTheIntakes(t *testing.T) {
 	c.newSlack = func(slack.Config) slackAPI { return slk }
 	c.shutdownTrace = trace.record
 	addr, _ := chatListen(t, &c, h)
+	listening.Store(addr)
 	started := leaderUp(t, &c)
 	r := start(t, c)
 	r.until("/readyz", http.StatusOK)

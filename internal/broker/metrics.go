@@ -106,7 +106,7 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		crdSchema: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_crd_schema_state",
 			Help: "1 for what the broker found when it compared each CRD's schema hash with the one it was built with, at start and every minute, and 0 for the other states, by CRD and state (match, mismatch, unannotated or unknown). Only a broker that reads custom resources has these series; with files there are none."}, []string{"crd", "state"}),
 		chatRequests: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_chat_listener_requests_total",
-			Help: "Requests to the chat listener, by outcome: served (a connection's handler was called), not_found (the path is no route), method (not POST), no_route (the connection does not run on this replica: answered 503), too_large (the body is past the cap) or unreadable (the body could not be read whole). Only a broker with a chat listener has these series."}, []string{"outcome"}),
+			Help: "Requests to the chat listener, by outcome: served (a connection's handler was called), not_found (the path is no route), method (not POST), no_route (the connection does not run on this replica: answered 503), too_large (the body is past the cap), unreadable (the body could not be read whole) or busy (the listener already held as many requests as it may: answered 503). Only a broker with a chat listener has these series."}, []string{"outcome"}),
 	}
 	m.ConfigReport(config.Report{})
 	m.UnservedBindings(0)

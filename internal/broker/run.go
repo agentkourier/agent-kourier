@@ -186,7 +186,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		chatDone := make(chan struct{})
 		chatCtx, stopChat := context.WithCancel(context.WithoutCancel(ctx))
 		go func() {
-			chatServed <- serveServer(chatCtx, cfg.ChatListener, newChatServer(routes), chatWriteTimeout)
+			chatServed <- serveServer(chatCtx, cfg.ChatListener, newChatServer(routes), chatDrainTimeout)
 			close(chatDone)
 		}()
 		sd.add(stepIntake, func(c context.Context) { stopChat(); waitFor(c, chatDone) })

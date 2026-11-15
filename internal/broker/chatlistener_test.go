@@ -437,7 +437,7 @@ func TestChatListenerOutcomesAreBounded(t *testing.T) {
 			t.Errorf("outcome %s has no series of its own: %v", o, got)
 		}
 	}
-	if want := []string{"served", "not_found", "method", "no_route", "too_large", "unreadable"}; !slices.Equal(chatOutcomes, want) {
+	if want := []string{"served", "not_found", "method", "no_route", "too_large", "unreadable", "busy"}; !slices.Equal(chatOutcomes, want) {
 		t.Errorf("the outcomes are %q, want %q as docs/reference/metrics.md lists them", chatOutcomes, want)
 	}
 }

@@ -40,9 +40,18 @@ const (
 	chatWriteTimeout = chatReadTimeout + chatHandlerTimeout + time.Second
 	// chatIdleTimeout is how long a kept-alive connection may wait for its next request before it is closed.
 	chatIdleTimeout = 30 * time.Second
-	// chatRetryAfter is the Retry-After of a 503 for a connection that does not run here: a takeover or a restart of the connection
-	// takes seconds, not minutes.
+	// chatRetryAfter is the Retry-After of a 503 for a connection that does not run here, or for a listener that is full: a takeover or
+	// a restart of the connection takes seconds, not minutes.
 	chatRetryAfter = 5 * time.Second
+	// chatMaxInFlight caps the requests that have a route and are being read or handled at once, across every connection. Each holds
+	// its body in memory, up to chatMaxBody, until its handler returns, so the cap bounds that memory at 32 MiB: an eighth of the chart's
+	// default memory limit of 256 MiB. A handler acknowledges in milliseconds (it hands the event on and answers), so 32 at once is room
+	// for hundreds of requests a second; a request past the cap is answered 503 with Retry-After before any of its body is read.
+	chatMaxInFlight = 32
+	// chatDrainTimeout bounds the wait, at shutdown, for the requests in flight; past it they are cut, unanswered, and the platform sends
+	// them again. It is the first part of the intake step, whose bound is 4 s, and is kept to half of it, so that the intakes, which stop
+	// after it in the same step, always keep at least 2 s.
+	chatDrainTimeout = 2 * time.Second
 )
 
 // chatPathPrefix begins every route of the chat listener: /chat/<platform>/<namespace>/<name>.
@@ -56,10 +65,11 @@ const (
 	chatNoRoute    = "no_route"   // 503: the connection does not run here (another replica leads, or it is down or not served)
 	chatTooLarge   = "too_large"  // 413: the body is past chatMaxBody
 	chatUnreadable = "unreadable" // 400: the body could not be read whole (the client went away, or chatReadTimeout passed)
+	chatBusy       = "busy"       // 503: chatMaxInFlight requests were already being read or handled
 )
 
 // chatOutcomes are the outcomes, in the order docs/reference/metrics.md lists them.
-var chatOutcomes = []string{chatServed, chatNotFound, chatMethod, chatNoRoute, chatTooLarge, chatUnreadable}
+var chatOutcomes = []string{chatServed, chatNotFound, chatMethod, chatNoRoute, chatTooLarge, chatUnreadable, chatBusy}
 
 // chatRoutes is the chat listener's route table: the handler of each connection that runs on this replica and takes requests over HTTP
 // (chat.HTTPReceiver), by "<platform>/<namespace>/<name>". It belongs to the broker and not to an adapter, so that the routes of every
@@ -74,6 +84,8 @@ type chatRoutes struct {
 	// count is told the outcome of each request (Metrics.ChatListenerRequest).
 	count func(outcome string)
 	log   *slog.Logger
+	// slots holds one token for each routed request being read or handled, chatMaxInFlight at most.
+	slots chan struct{}
 }
 
 // chatRoute is one registration: dropping it removes the route only if it is still this registration, so that a runtime that restarts and
@@ -85,7 +97,7 @@ type chatRoute struct {
 }
 
 func newChatRoutes(count func(outcome string), log *slog.Logger) *chatRoutes {
-	return &chatRoutes{routes: map[string]*chatRoute{}, count: count, log: log}
+	return &chatRoutes{routes: map[string]*chatRoute{}, count: count, log: log, slots: make(chan struct{}, chatMaxInFlight)}
 }
 
 // chatRouteKey is the key, and the path after chatPathPrefix, of the connection conn ("namespace/name") of platform.
@@ -135,32 +147,44 @@ func (t *chatRoutes) lookup(key string) http.Handler {
 }
 
 // ServeHTTP answers a request to the chat listener. Its checks come in order, and each costs less than the one after it: a path that is
-// no route's shape is 404, a method other than POST 405, a connection with no route here 503 with Retry-After (nothing of the body is
-// read), a body past chatMaxBody 413, and a body that cannot be read whole 400. Only then is the route's handler called, with the body
-// in memory and a context that ends chatHandlerTimeout later.
+// no route's shape is 404, a method other than POST 405, a connection with no route here 503 with Retry-After, a declared body past
+// chatMaxBody 413, and a listener that already has chatMaxInFlight requests in hand 503 with Retry-After. None of those reads the body:
+// each answer says Connection: close, so that net/http closes the connection after it instead of first reading and discarding what the
+// client still sends (up to 256 KiB, for as long as the client takes). Then the body is read: past chatMaxBody it is 413, and one that
+// cannot be read whole is 400. Only then is the route's handler called, with the body in memory and a context that ends
+// chatHandlerTimeout later.
 func (t *chatRoutes) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	key, ok := chatKeyOf(req.URL.Path)
 	if !ok {
 		t.count(chatNotFound)
-		http.NotFound(w, req)
+		refuse(w, http.StatusNotFound, "404 page not found")
 		return
 	}
 	if req.Method != http.MethodPost {
 		t.count(chatMethod)
 		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, "only POST is served here", http.StatusMethodNotAllowed)
+		refuse(w, http.StatusMethodNotAllowed, "only POST is served here")
 		return
 	}
 	h := t.lookup(key)
 	if h == nil {
 		t.count(chatNoRoute)
 		w.Header().Set("Retry-After", strconv.Itoa(int(chatRetryAfter/time.Second)))
-		http.Error(w, "the connection does not run on this replica", http.StatusServiceUnavailable)
+		refuse(w, http.StatusServiceUnavailable, "the connection does not run on this replica")
 		return
 	}
 	if req.ContentLength > chatMaxBody {
 		t.count(chatTooLarge)
-		http.Error(w, "the body is too large", http.StatusRequestEntityTooLarge)
+		refuse(w, http.StatusRequestEntityTooLarge, "the body is too large")
+		return
+	}
+	select {
+	case t.slots <- struct{}{}:
+		defer func() { <-t.slots }()
+	default:
+		t.count(chatBusy)
+		w.Header().Set("Retry-After", strconv.Itoa(int(chatRetryAfter/time.Second)))
+		refuse(w, http.StatusServiceUnavailable, "the chat listener is busy")
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, req.Body, chatMaxBody))
@@ -181,6 +205,12 @@ func (t *chatRoutes) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	in.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
 	t.count(chatServed)
 	h.ServeHTTP(w, in)
+}
+
+// refuse answers code with text and Connection: close, for a request whose body is not read.
+func refuse(w http.ResponseWriter, code int, text string) {
+	w.Header().Set("Connection", "close")
+	http.Error(w, text, code)
 }
 
 // chatKeyOf is the route key of path, /chat/<platform>/<namespace>/<name> with no segment empty and nothing after it, and false for any

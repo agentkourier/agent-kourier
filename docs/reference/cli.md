@@ -26,6 +26,7 @@ The broker is configured by environment variables, which the Helm chart sets fro
 | `AGENTKOURIER_LEASE_RENEW_DEADLINE` | `10s` | With `postgres`: the leader gives up renewing, and exits, after this long. |
 | `AGENTKOURIER_LEASE_RETRY_PERIOD` | `2s` | With `postgres`: how often the leader renews and a standby tries to take the Lease. |
 | `AGENTKOURIER_LISTEN` | `:8080` | The address of `/healthz`, `/readyz` and `/metrics`. |
+| `AGENTKOURIER_CHAT_LISTEN` | | The address of the chat listener, the port a chat platform sends its requests to. It has no default: unset, the broker opens no such port. It is apart from `AGENTKOURIER_LISTEN`, so `/metrics` is never on it. |
 | `AGENTKOURIER_SYNC_TIMEOUT` | `30s` | How long to wait for the Secret caches before the start fails. |
 | `AGENTKOURIER_KLOG_V` | `0` | client-go's verbosity, held below 8: from 8 up, client-go logs response bodies, Secret lists included. |
 | `AGENTKOURIER_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. |
