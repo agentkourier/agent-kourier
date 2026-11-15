@@ -12,7 +12,7 @@ func SchemaSHA256(crdName string) (string, bool) {
 	case "bindings.agentkourier.dev":
 		return "474c6b70686538358e9ba7449a7a47ea40d1120faf15e540fff0b0ec904d5e99", true
 	case "chatconnections.agentkourier.dev":
-		return "6ed5a52c43b4f8001c9c3e488d7125ed376e5f846bd8348bd1ff2011c67439e2", true
+		return "e38e38b7f21cceb7aeb6676396260195f86018cd17f02900defbc2b4b2c0b670", true
 	}
 	return "", false
 }

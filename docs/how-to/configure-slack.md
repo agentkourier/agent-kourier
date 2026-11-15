@@ -115,9 +115,10 @@ needs, its tokens are in a Kubernetes Secret, and a ChatConnection points at it.
 
 === "Events API (HTTP)"
 
-    !!! note "Not served yet"
+    !!! note "Not in the chart yet"
 
-        The broker serves Slack over Socket Mode only. Use Socket Mode.
+        The broker takes a connection's Events API and interactivity requests on its chat listener, and the chart does not
+        expose that listener: it has no port or Service for it. Use Socket Mode.
 
 ## What the app is allowed to do
 

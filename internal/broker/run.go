@@ -220,6 +220,10 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		if err != nil {
 			return err
 		}
+		// Here, and not only when the leader builds the platform: a standby that could not serve the connection must not start and say Ready.
+		if err := cfg.needsChatListener(conn); err != nil {
+			return err
+		}
 		log.InfoContext(ctx, "serving a ChatConnection", "connection", v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name))
 		connsServed.Store(&[]Connection{conn})
 	}

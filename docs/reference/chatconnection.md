@@ -40,7 +40,7 @@ SlackConnectionSpec is the settings of a Slack connection.
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `mode` | string | No | socket | Mode selects how Slack delivers the app's events and button presses: socket, over a Socket Mode WebSocket that Agent Kourier opens, or http, as Events API and interactivity requests that Slack sends to Agent Kourier, signed with the app's signing secret. The mode sets the keys of the credentials Secret (credentialsSecretRef). This version does not serve http: the broker refuses to start for its own connection in HTTP mode, and does not start a team connection in HTTP mode. One of `socket`, `http`. |
+| `mode` | string | No | socket | Mode selects how Slack delivers the app's events and button presses: socket, over a Socket Mode WebSocket that Agent Kourier opens, or http, as Events API and interactivity requests that Slack sends to Agent Kourier, signed with the app's signing secret, which the broker takes on its chat listener (AGENTKOURIER_CHAT_LISTEN) at POST /chat/slack/&lt;namespace&gt;/&lt;name&gt;. The mode sets the keys of the credentials Secret (credentialsSecretRef). A broker with no chat listener does not run a connection in HTTP mode: its own fails the start, and a team connection is not started. One of `socket`, `http`. |
 
 ---
 

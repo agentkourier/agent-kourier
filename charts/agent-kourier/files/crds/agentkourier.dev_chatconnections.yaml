@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    agentkourier.dev/schema-sha256: 6ed5a52c43b4f8001c9c3e488d7125ed376e5f846bd8348bd1ff2011c67439e2
+    agentkourier.dev/schema-sha256: e38e38b7f21cceb7aeb6676396260195f86018cd17f02900defbc2b4b2c0b670
     controller-gen.kubebuilder.io/version: v0.23.0
   name: chatconnections.agentkourier.dev
 spec:
@@ -83,8 +83,9 @@ spec:
                     description: |-
                       Mode selects how Slack delivers the app's events and button presses: socket, over a Socket Mode WebSocket that Agent Kourier
                       opens, or http, as Events API and interactivity requests that Slack sends to Agent Kourier, signed with the app's signing
-                      secret. The mode sets the keys of the credentials Secret (credentialsSecretRef). This version does not serve http: the broker
-                      refuses to start for its own connection in HTTP mode, and does not start a team connection in HTTP mode.
+                      secret, which the broker takes on its chat listener (AGENTKOURIER_CHAT_LISTEN) at POST /chat/slack/<namespace>/<name>. The mode
+                      sets the keys of the credentials Secret (credentialsSecretRef). A broker with no chat listener does not run a connection in HTTP
+                      mode: its own fails the start, and a team connection is not started.
                     enum:
                     - socket
                     - http
