@@ -1,0 +1,45 @@
+# Neither server checks a caller: these policies let only pods in the kagent namespace reach them. The docs agent may
+# reach DNS and HTTPS (its model provider); docs-mcp needs no network at all. They take effect only if the cluster's
+# network plugin enforces NetworkPolicy. If kagent runs in another namespace, change the namespace names below.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: docs-agent
+  namespace: kagent
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: docs-agent, app.kubernetes.io/managed-by: kagent}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kagent}
+      ports:
+        - {protocol: TCP, port: 8080}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - ipBlock: {cidr: 0.0.0.0/0}
+      ports:
+        - {protocol: TCP, port: 443}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: docs-mcp
+  namespace: kagent
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: docs-mcp}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kagent}
+      ports:
+        - {protocol: TCP, port: 8090}

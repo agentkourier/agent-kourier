@@ -7,6 +7,7 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 CHECK=${HERE}/check-ci.sh
 CHECK_RELEASE=${HERE}/check-release.sh
 CHECK_VERSION=${HERE}/check-version.sh
+CHECK_PUSHED=${HERE}/check-pushed.sh
 FAKE_GH=${HERE}/testdata/fake-gh
 FIXTURES=${HERE}/testdata
 SHA=0123456789abcdef0123456789abcdef01234567
@@ -95,6 +96,14 @@ echo "== a missing corpus run fails closed"
 run_case corpus-min-missing 1 corpus-min-missing
 contains "corpus-min-missing: names the missing required job" "required job 'crd-corpus (1.33)' is missing" "${TMP}/corpus-min-missing.out"
 
+echo "== a missing recipe agent job fails closed"
+run_case recipe-agent-missing 1 recipe-agent-missing
+contains "recipe-agent-missing: names the missing required job" "required job 'prompt-agent' is missing" "${TMP}/recipe-agent-missing.out"
+
+echo "== a missing scan of an agent image fails closed"
+run_case agent-scan-missing 1 agent-scan-missing
+contains "agent-scan-missing: names the missing required job" "required job 'trivy (echo-agent-linux-arm64)' is missing" "${TMP}/agent-scan-missing.out"
+
 echo "== a skipped required job fails closed"
 run_case skipped-required 1 skipped-required
 contains "skipped-required: names the skipped required job" "required job 'test-testhooks' is skipped" "${TMP}/skipped-required.out"
@@ -174,5 +183,99 @@ set +e
 status=$?
 set -e
 check "version-repo: the chart's own version and the repository's versions.yaml pass" 0 "${status}"
+
+# run_release_build NAME [VAR=VALUE ...]: run release.sh for v1.2.3 with the fake docker, helm and scanner, the extra
+# variables set; its output, build log and scan log go to TMP/NAME.out, NAME.builds and NAME.scans, its files to TMP/NAME.
+run_release_build() {
+  local name=$1 status
+  shift
+  : >"${TMP}/${name}.builds"
+  : >"${TMP}/${name}.state"
+  : >"${TMP}/${name}.scans"
+  set +e
+  env PATH="${FIXTURES}/fakebin:${PATH}" FAKE_ROOT="${ROOT}" FAKE_LOG="${TMP}/${name}.builds" FAKE_STATE="${TMP}/${name}.state" \
+    FAKE_SCAN_LOG="${TMP}/${name}.scans" SCAN_IMAGE_SCRIPT="${FIXTURES}/fake-scan-image.sh" SCAN_IMAGES=1 \
+    VERSION=v1.2.3 REGISTRY=ghcr.io/example/agent-kourier OUT="${TMP}/${name}" "$@" \
+    "${HERE}/release.sh" >"${TMP}/${name}.out" 2>&1
+  status=$?
+  set -e
+  return "${status}"
+}
+
+echo "== release.sh builds, checks and scans every platform of every image before it builds one to keep"
+ROOT=$(cd "${HERE}/../.." && pwd)
+if run_release_build build; then
+  echo "ok: build: exit status"
+else
+  cat "${TMP}/build.out" >&2
+  echo "FAIL: build: release.sh failed" >&2
+  exit 1
+fi
+for want in \
+  "build load linux/amd64 agent-kourier-release-check:linux-amd64 ." \
+  "build load linux/arm64 agent-kourier-release-check:linux-arm64 ." \
+  "build load linux/amd64 agent-kourier-release-check:prompt-agent-linux-amd64 examples/recipes/prompt-agent/agent" \
+  "build load linux/arm64 agent-kourier-release-check:prompt-agent-linux-arm64 examples/recipes/prompt-agent/agent" \
+  "build load linux/amd64 agent-kourier-release-check:echo-agent-linux-amd64 examples/recipes/echo-agent/agent" \
+  "build load linux/arm64 agent-kourier-release-check:echo-agent-linux-arm64 examples/recipes/echo-agent/agent" \
+  "build output linux/amd64,linux/arm64 ghcr.io/example/agent-kourier:v1.2.3 ." \
+  "build output linux/amd64,linux/arm64 ghcr.io/example/agent-kourier-prompt-agent:v1.2.3 examples/recipes/prompt-agent/agent" \
+  "build output linux/amd64,linux/arm64 ghcr.io/example/agent-kourier-echo-agent:v1.2.3 examples/recipes/echo-agent/agent"; do
+  check "build: ${want}" 1 "$(grep -c -x -F -- "${want}" "${TMP}/build.builds")"
+done
+check "build: nine builds in all" 9 "$(wc -l <"${TMP}/build.builds" | tr -d ' ')"
+last_check=$(grep -n '^build load ' "${TMP}/build.builds" | tail -n 1 | cut -d: -f1)
+first_kept=$(grep -n -v '^build load ' "${TMP}/build.builds" | head -n 1 | cut -d: -f1)
+check "build: every check precedes the first image kept" 1 "$([ "${last_check}" -lt "${first_kept}" ] && echo 1 || echo 0)"
+check "build: six platform images scanned" 6 "$(wc -l <"${TMP}/build.scans" | tr -d ' ')"
+for f in trivy-linux-arm64.sarif trivy-prompt-agent-linux-amd64.sarif trivy-echo-agent-linux-arm64.sarif; do
+  check "build: wrote ${f}" 1 "$([ -s "${TMP}/build/${f}" ] && echo 1 || echo 0)"
+done
+for f in digest prompt-agent-digest echo-agent-digest; do
+  check "build: ${f} is a digest" 1 "$(grep -c -x -E 'sha256:[0-9a-f]{64}' "${TMP}/build/${f}")"
+done
+check "build: three distinct image digests" 3 "$(cat "${TMP}/build/digest" "${TMP}/build/prompt-agent-digest" "${TMP}/build/echo-agent-digest" | sort -u | wc -l | tr -d ' ')"
+contains "build: the chart's default image is Agent Kourier's" "digest: $(cat "${TMP}/build/digest")" "${TMP}/build/agent-kourier-1.2.3.tgz.values"
+contains "build: the chart's default repository is Agent Kourier's" "repository: ghcr.io/example/agent-kourier" "${TMP}/build/agent-kourier-1.2.3.tgz.values"
+
+echo "== a finding in an agent image's last platform leaves no image built to keep"
+if run_release_build scan-fails FAKE_SCAN_FAIL=echo-agent-linux-arm64; then
+  echo "FAIL: scan-fails: release.sh succeeded" >&2
+  exit 1
+fi
+echo "ok: scan-fails: exit status"
+check "scan-fails: no image built to keep" 0 "$(grep -c -v '^build load ' "${TMP}/scan-fails.builds" || true)"
+check "scan-fails: no digest written" 0 "$(find "${TMP}/scan-fails" -name '*digest' | wc -l | tr -d ' ')"
+
+echo "== an agent image that runs as root is refused before any image is kept"
+if run_release_build root-user FAKE_ROOT_IMAGE=prompt-agent-linux-amd64; then
+  echo "FAIL: root-user: release.sh succeeded" >&2
+  exit 1
+fi
+contains "root-user: says which image and why" "prompt-agent linux/amd64: the image does not run as 65532:65532" "${TMP}/root-user.out"
+check "root-user: no image built to keep" 0 "$(grep -c -v '^build load ' "${TMP}/root-user.builds" || true)"
+
+# run_pushed_case NAME WANT_STATUS PUSHED_IMAGE LAYERS: check-pushed.sh for linux/arm64 of a pushed reference whose .Image
+# is PUSHED_IMAGE, against a local image whose layers are LAYERS.
+run_pushed_case() {
+  local name=$1 want=$2 status
+  set +e
+  env PATH="${FIXTURES}/fakebin:${PATH}" FAKE_PUSHED_IMAGE="$3" FAKE_LAYERS="$4" \
+    "${CHECK_PUSHED}" ghcr.io/example/agent-kourier-echo-agent@sha256:1 linux/arm64 check:echo-agent-linux-arm64 >"${TMP}/${name}.out" 2>&1
+  status=$?
+  set -e
+  check "${name}: exit status" "${want}" "${status}"
+}
+
+echo "== a pushed agent image must have the layers of the image that was checked and scanned"
+index='{"linux/amd64":{"rootfs":{"type":"layers","diff_ids":["sha256:a1","sha256:a2"]}},"linux/arm64":{"rootfs":{"type":"layers","diff_ids":["sha256:b1","sha256:b2"]}}}'
+run_pushed_case pushed-same 0 "${index}" '["sha256:b1","sha256:b2"]'
+run_pushed_case pushed-other-platform 1 "${index}" '["sha256:a1","sha256:a2"]'
+contains "pushed-other-platform: says the layers differ" "is not the image that was checked and scanned" "${TMP}/pushed-other-platform.out"
+run_pushed_case pushed-extra-layer 1 "${index}" '["sha256:b1"]'
+run_pushed_case pushed-missing-platform 1 '{"linux/amd64":{"rootfs":{"diff_ids":["sha256:a1"]}}}' '["sha256:a1"]'
+contains "pushed-missing-platform: names the platform" "has no linux/arm64 image" "${TMP}/pushed-missing-platform.out"
+run_pushed_case pushed-single 0 '{"os":"linux","architecture":"arm64","rootfs":{"diff_ids":["sha256:b1","sha256:b2"]}}' '["sha256:b1","sha256:b2"]'
+run_pushed_case pushed-single-other-platform 1 '{"os":"linux","architecture":"amd64","rootfs":{"diff_ids":["sha256:b1","sha256:b2"]}}' '["sha256:b1","sha256:b2"]'
 
 echo "all passed"

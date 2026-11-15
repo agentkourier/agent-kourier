@@ -36,9 +36,11 @@
       "enabled": false
     },
     {
-      "description": "Agent Kourier's own image: the digests in hack/security/test.sh are fake fixtures, and a release stamps the real one",
+      "description": "Agent Kourier's own images: the digests in hack/security/test.sh are fake fixtures, and a release stamps the real one",
       "matchDepNames": [
-        "ghcr.io/agentkourier/agent-kourier"
+        "ghcr.io/agentkourier/agent-kourier",
+        "ghcr.io/agentkourier/agent-kourier-prompt-agent",
+        "ghcr.io/agentkourier/agent-kourier-echo-agent"
       ],
       "enabled": false
     },
@@ -131,7 +133,8 @@
       "customType": "regex",
       "managerFilePatterns": [
         "/^hack\\/.*\\.sh$/",
-        "/^hack\\/.*\\.ya?ml$/"
+        "/^hack\\/.*\\.ya?ml$/",
+        "/^\\.github\\/workflows\\/.*\\.ya?ml$/"
       ],
       "matchStrings": [
         "(?:^|[=\\s\"'])(?<depName>[a-z0-9][a-z0-9./_-]*):(?<currentValue>[a-zA-Z0-9][a-zA-Z0-9._-]*)@(?<currentDigest>sha256:[a-f0-9]{64})",

@@ -42,6 +42,10 @@ Each release publishes a Helm chart and a container image for `linux/amd64` and 
 The chart pins the image by digest, so you set no image values to install it. The
 [GitHub Release](https://github.com/agentkourier/agent-kourier/releases) of each version names both digests.
 
+From release 0.4.0 on, each release also publishes the images of two recipes' agents, tagged with the release:
+`ghcr.io/agentkourier/agent-kourier-prompt-agent` and `ghcr.io/agentkourier/agent-kourier-echo-agent`. The GitHub
+Release names their digests too.
+
 ### Verify the release
 
 The release workflow signs the image and the chart with cosign, keyless, as itself. To check a signature, take the
@@ -53,7 +57,8 @@ cosign verify ghcr.io/agentkourier/agent-kourier@sha256:<image digest> \
   --certificate-identity https://github.com/agentkourier/agent-kourier/.github/workflows/release.yml@refs/tags/v0.3.2
 ```
 
-The chart is `ghcr.io/agentkourier/charts/agent-kourier@sha256:<chart digest>`, checked the same way.
+The chart is `ghcr.io/agentkourier/charts/agent-kourier@sha256:<chart digest>`, checked the same way, and so are the
+agent images.
 
 ## Write the files with `init`
 
@@ -585,8 +590,8 @@ helm install agent-kourier ./charts/agent-kourier -n agent-kourier -f my-values.
 To pin the image, pass `--set image.digest=sha256:<digest>` in place of the tag; a digest wins over a tag. To run the
 dry run from the checkout without an image, use `go run ./cmd/agent-kourier dry-run --config rendered ...`.
 
-`make release-image` builds what the release workflow publishes, an image for both platforms with provenance and SBOM
-attestations and the chart stamped with its digest, and checks them, without pushing anything. The repository's
+`make release-image` builds what the release workflow publishes, the images for both platforms with provenance and SBOM
+attestations and the chart stamped with Agent Kourier's digest, and checks them, without pushing anything. The repository's
 `RELEASING.md` covers it and how a release is cut.
 
 ## Related
