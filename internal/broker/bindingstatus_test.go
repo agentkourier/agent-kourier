@@ -1493,7 +1493,7 @@ func TestTheBrokersProberTellsTheStatusWriterAtTheEndOfEachPass(t *testing.T) {
 
 // The Prober is given each Binding's generation, so that what it stamps is the generation the Binding had when the pass began.
 func TestBindingTargetsCarryTheGeneration(t *testing.T) {
-	got := bindingTargets(snapshotWithUIDs(t, map[string]int64{sreAlerts: 7}, map[string]string{sreAlerts: "uid-7"}), []v1alpha1.ObjectRef{sreSlack})
+	got := bindingTargets(snapshotWithUIDs(t, map[string]int64{sreAlerts: 7}, map[string]string{sreAlerts: "uid-7"}), []v1alpha1.ObjectRef{sreSlack}, nil)
 	if want := []bindingcheck.Target{{Binding: sreAlerts, Connection: "sre/slack", Channel: "C-alerts", Generation: 7, UID: "uid-7"}}; !reflect.DeepEqual(got, want) {
 		t.Errorf("targets = %v, want %v", got, want)
 	}

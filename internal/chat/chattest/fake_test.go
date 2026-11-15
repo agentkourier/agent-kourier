@@ -191,6 +191,28 @@ func TestReactionsAreIdempotentAndNeedAMessage(t *testing.T) {
 	}
 }
 
+// A fake whose caps name no reaction has none: React and Unreact say chat.ErrNoReactions, which Classify calls Permanent, and
+// the message shows nothing.
+func TestAFakeWithNoReactionsSaysSoAndShowsNone(t *testing.T) {
+	f := NewFake()
+	c := f.Capabilities()
+	c.AckReaction = ""
+	f.SetCaps(c)
+	ref, _ := f.Post(ctx, tgt, say("x"), "t")
+	for name, call := range map[string]func(context.Context, chat.Ref, string) error{"React": f.React, "Unreact": f.Unreact} {
+		err := call(ctx, ref, "eyes")
+		if !errors.Is(err, chat.ErrNoReactions) {
+			t.Errorf("%s = %v, want chat.ErrNoReactions", name, err)
+		}
+		if v := f.Classify(chat.OpReact, err); v.Class != chat.Permanent {
+			t.Errorf("Classify of %s's error = %+v, want Permanent: no retry makes a reaction a platform has none of", name, v)
+		}
+	}
+	if got := f.Messages()[0].Reactions; len(got) != 0 {
+		t.Errorf("reactions = %v, want none", got)
+	}
+}
+
 func TestUnreactTakesAReactionOffAndIsSuccessWhenItIsNotThere(t *testing.T) {
 	f := NewFake()
 	ref, _ := f.Post(ctx, tgt, say("x"), "t")

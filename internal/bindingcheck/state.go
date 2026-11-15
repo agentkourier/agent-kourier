@@ -9,7 +9,7 @@ import (
 
 // probed lists the condition types a caller can set, in the order State reports them and picks the first failing
 // one for Ready. Ready follows them in a Snapshot.
-var probed = []ConditionType{BackendReachable, ChannelJoined, ApproversReadable}
+var probed = []ConditionType{BackendReachable, ChannelJoined, ApproversReadable, AcknowledgmentShown}
 
 // Types returns the condition types a State can hold, the probed ones in the order Snapshot gives them and then Ready: the
 // ones a consumer that copies conditions elsewhere can be given, and so the most it can hold for one Binding. The caller owns the
@@ -40,7 +40,7 @@ func NewState() *State {
 // Set records conds for binding (its namespace/name key), probed at at, and recomputes the Binding's Ready condition. A condition's
 // LastProbeTime becomes at (the zero time for a Pending one, since no probe ran), and its LastTransitionTime becomes
 // at only when its Status differs from the one it replaces (or it is new). Times in conds are ignored, and so is any
-// condition whose Type is Ready or not one of the three probed types. A Status that is not True, False or Unknown is stored as Unknown.
+// condition whose Type is Ready or not one of the probed types. A Status that is not True, False or Unknown is stored as Unknown.
 //
 // It returns the transitions: one for each condition, Ready included, whose status or reason changed. A change of
 // Message alone is stored and is not a transition.
@@ -174,7 +174,7 @@ func (c Condition) Pending() bool {
 }
 
 // Snapshot returns a copy of every Binding's conditions: the probed ones in a fixed order (BackendReachable,
-// ChannelJoined, ApproversReadable), then Ready. The caller owns the copy; changing it does not change the State.
+// ChannelJoined, ApproversReadable, AcknowledgmentShown), then Ready. The caller owns the copy; changing it does not change the State.
 func (s *State) Snapshot() map[string][]Condition {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

@@ -167,6 +167,9 @@ type Stream interface {
 var (
 	// ErrNoStreams is returned by Stream on a platform without streams (Caps.Streams false).
 	ErrNoStreams = errors.New("chat: the platform has no streaming messages")
+	// ErrNoReactions is returned by React and Unreact on a platform without reactions (an empty Caps.AckReaction). No retry
+	// mends it, so Classify(OpReact) of it is Permanent.
+	ErrNoReactions = errors.New("chat: the platform has no reactions")
 	// ErrNotStreaming is wrapped by the error of an Append or a Stop of a message that is not streaming: it ended,
 	// or it never was a stream. The caller that is finishing a stream it did not start tolerates it.
 	ErrNotStreaming = errors.New("chat: the message is not streaming")
@@ -267,10 +270,11 @@ type Platform interface {
 	StreamAt(r Ref) Stream
 	// Ephemeral shows m to user alone, in t. Nothing keeps it.
 	Ephemeral(ctx context.Context, t Target, user string, m Message) error
-	// React puts the reaction name on the message at r. A reaction that is there already is success.
+	// React puts the reaction name on the message at r. A reaction that is there already is success. A platform with no
+	// reactions (an empty Caps.AckReaction) says ErrNoReactions and shows nothing.
 	React(ctx context.Context, r Ref, name string) error
 	// Unreact takes the reaction name that React put on the message at r off it. A reaction that is not there is
-	// success.
+	// success. A platform with no reactions says ErrNoReactions.
 	Unreact(ctx context.Context, r Ref, name string) error
 
 	// IsMember says whether user is in the conversation channel. It fails closed: an error is never

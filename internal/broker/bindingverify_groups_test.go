@@ -338,7 +338,7 @@ func TestTheBrokersProberProbesApproverGroupsAndTimesThem(t *testing.T) {
 func TestBindingTargetsCarryTheApproverGroupsOfABindingThatAsksForThem(t *testing.T) {
 	groups := map[string][]string{"sre/two": {"S0AAAAAAAAA", "S0BBBBBBBBB"}}
 	snap := snapshotWith(t, map[string]int64{"sre/two": 1, "sre/none": 1}, nil, groups)
-	got := bindingTargets(snap, []v1alpha1.ObjectRef{sreSlack})
+	got := bindingTargets(snap, []v1alpha1.ObjectRef{sreSlack}, nil)
 	if len(got) != 2 {
 		t.Fatalf("targets = %+v", got)
 	}

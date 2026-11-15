@@ -209,22 +209,25 @@ func TestNoSnapshotYetIsNotAnUnknownBinding(t *testing.T) {
 // platformAck stands for the platform's own acknowledgment reaction (chat.Caps.AckReaction).
 const platformAck = "platform-default"
 
-// The reaction is the Binding's, else the platform's; the API supplies neither.
+// The reaction is the Binding's, else the platform's; the API supplies neither. A platform known to have no reactions shows none,
+// whatever the Binding names; one that is not known (no platform runs the connection) is not taken to have none.
 func TestAcknowledgmentIsTheBindingsReactionElseThePlatforms(t *testing.T) {
 	on, off := true, false
 	for _, tc := range []struct {
 		name     string
 		ack      *v1alpha1.ChatAcknowledgment
-		platform string
+		platform platformReactions
 		enabled  bool
 		reaction string
 	}{
-		{"not written", nil, platformAck, true, platformAck},
-		{"written without an emoji", &v1alpha1.ChatAcknowledgment{Enabled: &on}, platformAck, true, platformAck},
-		{"the Binding's emoji wins", &v1alpha1.ChatAcknowledgment{Emoji: "eyes"}, platformAck, true, "eyes"},
-		{"disabled", &v1alpha1.ChatAcknowledgment{Enabled: &off}, platformAck, false, platformAck},
-		{"a platform with none shows nothing", nil, "", true, ""},
-		{"a platform with none, and the Binding names one", &v1alpha1.ChatAcknowledgment{Emoji: "eyes"}, "", true, "eyes"},
+		{"not written", nil, platformReactions{own: platformAck}, true, platformAck},
+		{"written without an emoji", &v1alpha1.ChatAcknowledgment{Enabled: &on}, platformReactions{own: platformAck}, true, platformAck},
+		{"the Binding's emoji wins", &v1alpha1.ChatAcknowledgment{Emoji: "eyes"}, platformReactions{own: platformAck}, true, "eyes"},
+		{"disabled", &v1alpha1.ChatAcknowledgment{Enabled: &off}, platformReactions{own: platformAck}, false, platformAck},
+		{"no platform known: no default", nil, platformReactions{}, true, ""},
+		{"no platform known, and the Binding names one", &v1alpha1.ChatAcknowledgment{Emoji: "eyes"}, platformReactions{}, true, "eyes"},
+		{"a platform with no reactions shows nothing", nil, platformReactions{none: true}, true, ""},
+		{"a platform with no reactions, and the Binding names one", &v1alpha1.ChatAcknowledgment{Emoji: "eyes"}, platformReactions{none: true}, true, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if enabled, reaction := acknowledgment(tc.ack, tc.platform); enabled != tc.enabled || reaction != tc.reaction {

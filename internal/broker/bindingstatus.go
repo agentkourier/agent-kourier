@@ -81,7 +81,9 @@ var statusTypes = append(bindingcheck.Types(), conditionAccepted)
 
 // probedTypes are the conditions that every Binding the source serves has once the Prober has seen it: a writer that looks before
 // the Prober's first Tick finds none of them, and says they are Pending, not that they are gone. (ApproversReadable is left out,
-// because it applies only to a Binding that asks for approvals from groups (asksForApprovers); the writer adds it for one that does.)
+// because it applies only to a Binding that asks for approvals from groups (asksForApprovers); the writer adds it for one that does.
+// AcknowledgmentShown is left out too: it applies only to a Binding whose acknowledgment its platform cannot show (ackUnshown), which
+// the writer does not know, so it writes the condition once the Prober has it.)
 var probedTypes = []bindingcheck.ConditionType{bindingcheck.BackendReachable, bindingcheck.ChannelJoined}
 
 // acceptedReasonOrder is the order in which the reasons of the Rejections of one Binding give way to one: the first of them that
@@ -194,7 +196,8 @@ type statusConfig struct {
 //
 // Accepted is composed here from the Rejections of the report: True when there are none, else False with one reason chosen by
 // acceptedReasonOrder and every message of the Binding. BackendReachable and ChannelJoined are the Prober's, and so is ApproversReadable
-// for a Binding that asks for tool approvals from groups (asksForApprovers) and for none other, for a Binding the source serves, copied
+// for a Binding that asks for tool approvals from groups (asksForApprovers) and for none other, and AcknowledgmentShown for one whose
+// acknowledgment is not shown (ackUnshown) once the Prober has it, for a Binding the source serves, copied
 // as they are, except that a message that the Prober keeps for the log never reaches
 // them (Condition.Cause). A Binding that has just gained groups and that the Prober has not yet seen so has ApproversReadable Pending,
 // and so is not Ready on the word of probes that did not ask about them; one that has just lost them says nothing of the condition. Ready

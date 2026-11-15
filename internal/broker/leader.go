@@ -269,7 +269,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 		}
 	}
 	verify := verification{
-		Bindings: bindings, Platforms: chat.Narrow[platformReader](platforms), Conns: func() []Connection { return *connsServed.Load() },
+		Bindings: bindings, Platforms: chat.Narrow[platformReader](platforms), Reactions: chat.Narrow[platformCaps](platforms), Conns: func() []Connection { return *connsServed.Load() },
 		Snaps: boot.Reloader, Revision: func(ctx context.Context) string {
 			return boot.Reloader.Revision(ctx) + "/" + strconv.FormatUint(connsChanged.Load(), 10)
 		}, Secrets: boot.Secrets, Metrics: metrics, Log: log, Interval: cfg.probeEvery, Tick: cfg.probeTick, MinRevisionGap: cfg.probeGap,
