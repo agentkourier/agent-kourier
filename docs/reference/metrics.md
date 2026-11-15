@@ -46,7 +46,7 @@ What the broker does to the series:
 A broker with an own connection ends the process, with exit code 1, when Slack rejects its token. A broker with none does not: every connection it serves is a team
 connection, which a rejected token stops alone. With every token rejected the pod stays up and `/readyz` says ready, and `agentkourier_chat_connected` is 0 for each
 connection while its Bindings read `ChatCredentialsRejected`. Two rules on the metric catch it. Both use `for: 10m`, longer than a reconnect, which sets the
-gauge to 0 until Slack's hello ([Limits](limits.md#run-the-broker)).
+gauge to 0 until Slack's hello, or in HTTP mode until the connection's `auth.test` passes again ([Limits](limits.md#run-the-broker)).
 
 ```yaml
 - alert: AgentKourierNoChatConnectionUp

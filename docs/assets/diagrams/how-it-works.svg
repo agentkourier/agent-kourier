@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1300 452" width="1300" height="452" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
   <title id="t">How Agent Kourier works</title>
-  <desc id="d">Alertmanager posts an alert to a Slack channel and people reply in its thread. Agent Kourier receives the channel's events over Socket Mode, keeps a session per thread in SQLite or Postgres, sends each turn to an A2A agent (kagent, Google AX or any streaming A2A agent), and posts the streamed reply back in the same thread.</desc>
+  <desc id="d">Alertmanager posts an alert to a Slack channel and people reply in its thread. Agent Kourier receives the channel's events over Socket Mode or as signed HTTP requests, keeps a session per thread in SQLite or Postgres, sends each turn to an A2A agent (kagent, Google AX or any streaming A2A agent), and posts the streamed reply back in the same thread.</desc>
   <defs>
     <marker id="head" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#8EA0C8"/></marker>
     <marker id="tail" viewBox="0 0 10 10" refX="2" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#8EA0C8"/></marker>
@@ -66,7 +66,7 @@
   <path d="M226 323 L284 323" stroke="#8EA0C8" stroke-width="2" fill="none" marker-end="url(#head)"/>
   <path d="M584 160 L702 160" stroke="#8EA0C8" stroke-width="2" fill="none" marker-end="url(#head)"/>
   <text x="645" y="140" font-size="13" font-weight="600" fill="#E6EDF3" text-anchor="middle">events</text>
-  <text x="645" y="156" font-size="12" font-weight="400" fill="#A9B8D8" text-anchor="middle">Socket Mode</text>
+  <text x="645" y="156" font-size="12" font-weight="400" fill="#A9B8D8" text-anchor="middle">Socket Mode or HTTP</text>
   <path d="M706 222 L588 222" stroke="#8EA0C8" stroke-width="2" fill="none" marker-end="url(#head)"/>
   <text x="645" y="244" font-size="13" font-weight="600" fill="#E6EDF3" text-anchor="middle">answers</text>
   <text x="645" y="260" font-size="12" font-weight="400" fill="#A9B8D8" text-anchor="middle">in the thread</text>

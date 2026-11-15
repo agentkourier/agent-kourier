@@ -934,3 +934,41 @@ config:
   now in `config.connectionNamespaces`, or set `config.chatConnection`.
 - **A broker with a selector beside an own connection or a list rolls back to those alone.** The connections it admitted by label are no longer
   served after the rollback, and their Bindings say `ConnectionNotServed` (read in the source of 0.3.2, not run). Put their namespaces on the list in the same change to keep serving them.
+
+## Upgrade to the release that serves Slack over HTTP
+
+A Slack ChatConnection can now take its events and button presses over HTTP, as Events API and interactivity requests that Slack signs with
+the app's signing secret, instead of over Socket Mode: `spec.slack.mode: http`, with the chat listener that the chart's `chatListener` values
+open ([Configure Slack](configure-slack.md)).
+
+- **Nothing changes for Socket Mode.** A ChatConnection that does not set `spec.slack.mode` is in Socket Mode, as before, and its Secret
+  keeps `botToken` and `appToken`. `chatListener.enabled` is false by default, so the upgrade adds no port, Service, Role or admission
+  policy.
+- **The chat listener needs cluster-scoped objects.** With `chatListener.enabled` and `rbac.create` the chart installs a
+  ValidatingAdmissionPolicy and its binding, `<fullname>-<namespace>-leader-label`, beside a Role that may patch the release namespace's pods
+  ([Security model](../explanation/security.md#the-chat-port)). Whoever runs `helm upgrade` needs the right to create both kinds.
+- **Upgrade first, then set the mode.** Upgrade the chart, with the broker and the CRDs, before any ChatConnection sets `spec.slack.mode`.
+  A broker of an earlier release does not know the field: on the ConfigMap route it refuses it (`spec.slack: unknown field`, exit code 2),
+  and on custom resources it ignores it and runs the connection in Socket Mode, which needs `appToken`
+  ([Troubleshoot](troubleshoot.md#the-pod-exits-with-code-2)). CRDs of an earlier release do not have the field either.
+
+To move a connection that runs in Socket Mode to HTTP mode, after the upgrade:
+
+1. Add `signingSecret` to its Secret, and keep `appToken` there until the move is done, so that you can go back by removing the mode.
+2. In one `helm upgrade`, set `chatListener` (and its Ingress, and `networkPolicy.chatFrom` if the policy is on) and the connection's
+   `spec.slack.mode: http`. A team's ChatConnection is the team's to change, on a broker whose chart has the chat listener on.
+3. In the app's settings, turn Socket Mode off, and set the Events and Interactivity request URLs, which Slack checks against the broker
+   that now serves them ([Configure Slack](configure-slack.md), steps 2 and 7).
+
+Between steps 2 and 3 the broker takes nothing over Socket Mode, and Slack does not yet send over HTTP; what Slack does with the events of
+that time is Slack's, and not checked here. Make the two changes close together, at a quiet time. Run HTTP mode on Postgres with two
+replicas: with SQLite every rollout leaves Slack nothing to answer it until the new pod leads
+([High availability](../explanation/high-availability.md#slack-in-http-mode)).
+
+### Roll back from the release that serves Slack over HTTP
+
+- **Put every connection back in Socket Mode first**: remove `spec.slack` from its ChatConnection, with `appToken` in its Secret, and turn
+  Socket Mode back on in the app. A broker of an earlier release cannot run a connection in HTTP mode, and on the ConfigMap route refuses
+  `spec.slack` whatever it holds (above).
+- **Take `chatListener` and `networkPolicy.chatFrom` off the values in the same change.** The chart of an earlier release refuses keys it does
+  not have (its values schema, read in the chart of 0.4.0, not run).
