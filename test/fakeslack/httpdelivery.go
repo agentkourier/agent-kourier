@@ -255,7 +255,7 @@ func sign(secret string, ts int64, body []byte) string {
 // goes out on the queue of the app and lane (webDeliveries), and the ack is recorded when it is answered 200. Any other envelope type
 // is ErrInvalid: the fake sends no slash command over HTTP. A revoked app is sent nothing, as a revoked app in Socket Mode has no
 // connection, and that, like a Server that is closing, is ErrNoConnection; a request queued or waiting to be retried when its app is
-// revoked is not sent again (deliver).
+// revoked is not sent again (attempt).
 func (s *Server) sendHTTP(app App, lane, typ string, payload any) (string, error) {
 	if s.isRevoked(app.AppID) {
 		return "", fmt.Errorf("fakeslack: app %s is revoked: %w", app.AppID, ErrNoConnection)

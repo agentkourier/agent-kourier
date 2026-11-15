@@ -57,6 +57,13 @@ dep() { "${K[@]}" -n agent-kourier get deploy/agent-kourier -o "jsonpath=$1"; }
 [ "$(dep '{.spec.template.spec.containers[0].env[?(@.name=="AGENTKOURIER_STORE")].value}')" = postgres ] || die "the tier must run on Postgres: E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up"
 [ -z "$(dep '{.spec.template.spec.containers[0].env[?(@.name=="AGENTKOURIER_CONFIG_SOURCE")].value}')" ] ||
   die "the tier must start on the ConfigMap route: E2E_CONFIG_SOURCE=files make e2e-fast-up"
+# The upgrades below leave out hack/kind/http-values.yaml, so the broker would lose its chat listener under a fake Slack in HTTP mode: the fake's
+# args say which mode it is in (lib.sh's fake_slack_mode_patch), as e2e-run.sh reads them.
+fake_slack_args=$("${K[@]}" -n e2e get deploy/fakeslack -o 'jsonpath={.spec.template.spec.containers[0].args}' --ignore-not-found) ||
+  die "could not read the Deployment fakeslack to see how it sends the broker its events"
+case "${fake_slack_args}" in
+  *-request-url*) die "the tier must run in Socket Mode: E2E_SLACK_MODE=socket E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up" ;;
+esac
 "${K[@]}" get crd bindings.agentkourier.dev >/dev/null 2>&1 &&
   die "the cluster holds the CRDs already; the scenario installs them as step 2 of the move. Bring the tier up fresh: hack/kind/down.sh fast, then E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up"
 

@@ -1,7 +1,10 @@
 package kindmanifests_test
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -13,7 +16,9 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/yaml"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/config"
@@ -79,30 +84,20 @@ func TestTheFakeSlackSendsHTTPModeToTheTiersChatRoute(t *testing.T) {
 	}
 	requestURL, secret := (*args)[1], (*args)[3]
 
-	// The URL: the chat Service of release agent-kourier in namespace agent-kourier, on its port, at the route of the tier's own ChatConnection.
-	var values struct {
-		ChatListener struct {
-			Enabled bool `json:"enabled"`
-			Port    int  `json:"port"`
-			Service struct {
-				Port int `json:"port"`
-			} `json:"service"`
-		} `json:"chatListener"`
-	}
-	loadValues(t, &values)
+	// The URL: the chat Service that the chart renders for the tier's release (agent-kourier, in namespace agent-kourier, with the tier's values
+	// and http-values.yaml), on its port, at the route of the tier's own ChatConnection.
+	svc := renderedChatService(t)
 	var conn v1alpha1.ChatConnection
 	load(t, agentKourierDir+"config/chatconnection.yaml", "ChatConnection", &conn)
 	u, err := url.Parse(requestURL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "/chat/slack/" + conn.Namespace + "/" + conn.Name; u.Scheme != "http" || u.Hostname() != "agent-kourier-chat.agent-kourier.svc.cluster.local" ||
-		u.Port() != strconv.Itoa(values.ChatListener.Service.Port) || u.Path != want {
-		t.Errorf("the fake Slack sends to %s; want http://agent-kourier-chat.agent-kourier.svc.cluster.local:%d%s, the chat Service of http-values.yaml and the tier's ChatConnection",
-			requestURL, values.ChatListener.Service.Port, want)
-	}
-	if !values.ChatListener.Enabled || values.ChatListener.Port != 8081 || values.ChatListener.Service.Port != 8081 {
-		t.Errorf("http-values.yaml's chatListener is %+v; want it enabled on 8081, with its Service on 8081", values.ChatListener)
+	host := svc.Name + "." + svc.Namespace + ".svc.cluster.local"
+	if want := "/chat/slack/" + conn.Namespace + "/" + conn.Name; u.Scheme != "http" || u.Hostname() != host ||
+		u.Port() != strconv.Itoa(int(svc.Spec.Ports[0].Port)) || u.Path != want {
+		t.Errorf("the fake Slack sends to %s; want http://%s:%d%s, the chat Service the chart renders and the tier's ChatConnection",
+			requestURL, host, svc.Spec.Ports[0].Port, want)
 	}
 	// The secret is the one deploy_agentkourier puts in the Secret slack-fast.
 	if got := libVar(t, `printf %s "${FAKE_SLACK_SIGNING_SECRET}"`); got != secret {
@@ -118,6 +113,129 @@ func TestTheFakeSlackSendsHTTPModeToTheTiersChatRoute(t *testing.T) {
 
 	if c := fakeSlackDeployment(t).Spec.Template.Spec.Containers; len(c) != 1 || c[0].Args != nil {
 		t.Errorf("doubles.yaml's fakeslack sets args %v; want none, so that the patch alone decides them", c)
+	}
+}
+
+// renderedChatService is the Service that `helm template` of the chart renders for the tier's release in HTTP mode (release agent-kourier in
+// namespace agent-kourier, ci/fast-values.yaml and hack/kind/http-values.yaml, as deploy_agentkourier installs it) whose selector takes the
+// leader label alone: the chat Service, with its one port. The test skips without helm, as the chart's own tests do, unless
+// AGENTKOURIER_REQUIRE_HELM=1 makes that a failure.
+func renderedChatService(t *testing.T) corev1.Service {
+	t.Helper()
+	helm, err := exec.LookPath("helm")
+	if err != nil {
+		if os.Getenv("AGENTKOURIER_REQUIRE_HELM") == "1" {
+			t.Fatal("helm is not on PATH, and AGENTKOURIER_REQUIRE_HELM=1 says the tests that render the chart must run")
+		}
+		t.Skip("helm is not on PATH: the chat Service is read from `helm template` of charts/agent-kourier")
+	}
+	cmd := exec.CommandContext(t.Context(), helm, "template", "agent-kourier", "../../charts/agent-kourier", "--namespace", "agent-kourier",
+		"-f", "../../charts/agent-kourier/ci/fast-values.yaml", "-f", "../../hack/kind/http-values.yaml")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("helm template with http-values.yaml: %v\n%s", err, stderr.String())
+	}
+	var found []corev1.Service
+	dec := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(out), 4096)
+	for {
+		var doc map[string]any
+		if err := dec.Decode(&doc); errors.Is(err, io.EOF) {
+			break
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		if doc["kind"] != "Service" {
+			continue
+		}
+		b, _ := json.Marshal(doc)
+		var svc corev1.Service
+		if err := json.Unmarshal(b, &svc); err != nil {
+			t.Fatal(err)
+		}
+		if svc.Spec.Selector["agentkourier.dev/role"] == "leader" {
+			found = append(found, svc)
+		}
+	}
+	if len(found) != 1 || len(found[0].Spec.Ports) != 1 {
+		t.Fatalf("the chart renders %d Services that select the leader, %+v; want one, with one port", len(found), found)
+	}
+	return found[0]
+}
+
+// TestApplyDoublesPatchesTheFakeSlacksMode: apply_doubles applies the patch of the mode to the Deployment fakeslack after doubles.yaml and before
+// the restart that rolls it out, in either mode.
+func TestApplyDoublesPatchesTheFakeSlacksMode(t *testing.T) {
+	for _, mode := range []string{"socket", "http"} {
+		bin, logs := t.TempDir(), t.TempDir()
+		if err := os.WriteFile(filepath.Join(bin, "kubectl"), []byte(toolStub), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		want := libVar(t, "fake_slack_mode_patch", "E2E_SLACK_MODE="+mode)
+		libVar(t, `K=(kubectl --context c); apply_doubles`, "E2E_SLACK_MODE="+mode, "STUB_LOG="+logs, "HERE="+hackDir(t),
+			"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+		calls := strings.Split(strings.TrimSpace(readLog(t, logs, "calls")), "\n")
+		apply := index(calls, "kubectl ", "apply -f ", "fast/doubles.yaml")
+		patch := index(calls, "kubectl ", "-n e2e patch deploy/fakeslack --type=strategic -p "+want)
+		restart := index(calls, "kubectl ", "-n e2e rollout restart deploy/fakeslack")
+		if apply < 0 || patch <= apply || restart <= patch {
+			t.Errorf("%s: apply %d, patch %d, restart %d; want the patch %s between the apply of doubles.yaml and the restart:\n%s",
+				mode, apply, patch, restart, want, strings.Join(calls, "\n"))
+		}
+	}
+}
+
+// migrationStub stands in for every tool crs-migration.sh runs before its first change, and answers its preflight as a fresh fast tier on Postgres
+// with two replicas on the ConfigMap route does: the fake Slack's args are FAKE_ARGS, and the CRDs are in the cluster when HAS_CRDS is 1, which
+// is a refusal of its own, after the mode's. Every call is logged.
+const migrationStub = `#!/bin/sh
+echo "$(basename "$0") $*" >> "$STUB_LOG/calls"
+case "$(basename "$0") $*" in
+  "kind get clusters"*) echo agent-kourier-fast ;;
+  "kind get kubeconfig"*) echo "apiVersion: v1" ;;
+  "helm version"*) printf v4.0.0 ;;
+  *"contexts[0].name"*) printf kind-agent-kourier-fast ;;
+  *"cluster.server"*) printf https://127.0.0.1:6443 ;;
+  *"get nodes"*) echo node/agent-kourier-fast-control-plane ;;
+  *"{.spec.replicas}"*) printf 2 ;;
+  *AGENTKOURIER_STORE*) printf postgres ;;
+  *AGENTKOURIER_CONFIG_SOURCE*) ;;
+  *"deploy/fakeslack"*) printf %s "$FAKE_ARGS" ;;
+  *"get crd"*) [ "$HAS_CRDS" = 1 ] ;;
+esac
+`
+
+// TestTheCRMigrationRefusesATierInHTTPMode: crs-migration.sh's Helm upgrades leave out http-values.yaml, so it refuses a tier whose fake Slack is
+// in HTTP mode, read from the fake's args as e2e-run.sh reads them, before it changes anything; a tier in Socket Mode goes on past that check.
+func TestTheCRMigrationRefusesATierInHTTPMode(t *testing.T) {
+	for _, tc := range []struct {
+		name, args, want string
+	}{
+		{"http", `["-request-url","http://agent-kourier-chat.agent-kourier.svc.cluster.local:8081/chat/slack/agent-kourier/slack-fast","-signing-secret","x"]`, "the tier must run in Socket Mode"},
+		// The CRDs are there, so the script stops at its next check, which shows it went past the mode's.
+		{"socket", "", "the cluster holds the CRDs already"},
+	} {
+		bin, logs := t.TempDir(), t.TempDir()
+		for _, tool := range []string{"docker", "kind", "kubectl", "helm"} {
+			if err := os.WriteFile(filepath.Join(bin, tool), []byte(migrationStub), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cmd := exec.CommandContext(t.Context(), "bash", "../../hack/kind/crs-migration.sh")
+		cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "STUB_LOG="+logs, "FAKE_ARGS="+tc.args,
+			"HAS_CRDS=1", "CRS_MIGRATION_OUT="+t.TempDir())
+		raw, err := cmd.CombinedOutput()
+		if err == nil || !strings.Contains(string(raw), tc.want) {
+			t.Errorf("%s: crs-migration.sh = %v\n%s\nwant it to stop with %q", tc.name, err, raw, tc.want)
+		}
+		calls := readLog(t, logs, "calls")
+		if !strings.Contains(calls, "get deploy/fakeslack") {
+			t.Errorf("%s: crs-migration.sh never read the fake Slack's Deployment:\n%s", tc.name, calls)
+		}
+		if strings.Contains(calls, "helm upgrade") || strings.Contains(calls, " apply ") {
+			t.Errorf("%s: crs-migration.sh changed the cluster before it refused:\n%s", tc.name, calls)
+		}
 	}
 }
 

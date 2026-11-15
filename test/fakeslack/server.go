@@ -34,7 +34,7 @@
 //     connection_failed); and an ack being any 200, whose body the fake does
 //     not read (Ack's payload is nil).
 //     Deliberate departures: a short retry schedule (WithHTTPRetries), no retry
-//     of a 4xx, and the requests of one channel sent in order.
+//     of a 4xx, and the first attempts of one channel sent in order.
 //   - Several apps (apps.go, WithApp): a registered app's events being the channels whose members
 //     include its bot, and the default app's being every channel's; the app parameter that
 //     tells a websocket whose connection it is; another app's posts reaching an app as message
