@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -95,11 +96,24 @@ func (p *Platform) ref(channel, thread, ts string) chat.Ref {
 // RefAt implements chat.Platform: the Ref of the message with the ts id in a channel and thread.
 func (p *Platform) RefAt(channel, thread, id string) chat.Ref { return p.ref(channel, thread, id) }
 
-// Run connects over Socket Mode and gives sink what people write and press, until ctx ends or the connection
-// fails for good (Client.Run).
+// Run takes what Slack delivers over the connection's transport, Socket Mode or HTTP, and gives sink what people write and press, until
+// ctx ends or the transport fails for good (Client.Run).
 func (p *Platform) Run(ctx context.Context, sink chat.Sink) error {
 	return p.c.Run(ctx, inbound{p: p, sink: sink})
 }
+
+// HTTPHandler implements chat.HTTPReceiver: the client's handler of the requests Slack sends to a connection in HTTP mode
+// (Client.HTTPHandler), and false in Socket Mode, or for a client double that takes no requests. The handler hands what it decodes to the
+// sink of the client's live Run, which is the one Platform.Run wrapped.
+func (p *Platform) HTTPHandler() (http.Handler, bool) {
+	r, ok := p.c.(chat.HTTPReceiver)
+	if !ok {
+		return nil, false
+	}
+	return r.HTTPHandler()
+}
+
+var _ chat.HTTPReceiver = (*Platform)(nil)
 
 // inbound is the Sink of the Client, which hands the neutral sink what it decodes.
 type inbound struct {

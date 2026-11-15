@@ -106,7 +106,7 @@ type RunConfig struct {
 	// unexported, so no other package, and no config, can replace the client.
 	newSlack func(slack.Config) slackAPI
 	// wrapPlatform replaces a connection's chat platform, as newPlatform built it, with one that wraps it, before the lease fence does: a
-	// seam for this package's tests, which give a platform a way to take requests over HTTP (chat.HTTPReceiver) that no adapter has yet.
+	// seam for this package's tests, which give a platform a way to take requests over HTTP (chat.HTTPReceiver) of their own.
 	wrapPlatform func(chat.Platform) chat.Platform
 	// slackHTTPTimeout is the bound of one Slack Web API call (slackAPITimeout if zero): a seam for this package's tests,
 	// which cannot wait for 30 seconds.

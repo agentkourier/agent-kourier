@@ -1,10 +1,19 @@
 package slack
 
+import "time"
+
 // MaxChannelBacklog is the events a channel's lane holds, for the external tests that fill one.
 const MaxChannelBacklog = maxChannelBacklog
 
 // MaxPendingEvents is the events all lanes hold.
 const MaxPendingEvents = maxPendingEvents
+
+// HTTPAckWait is how long the handler of a request in HTTP mode waits for the sink by default.
+const HTTPAckWait = httpAckWait
+
+// SetHTTPAckWait sets how long the handler of a request in HTTP mode waits for the sink, for a test that cannot wait for the default.
+// It is set before the handler is first called.
+func (c *Client) SetHTTPAckWait(d time.Duration) { c.ackWait = d }
 
 // PendingEvents is the events the lanes of the Run that is going hold: the one being handled and those waiting. It is zero
 // before Run has begun.

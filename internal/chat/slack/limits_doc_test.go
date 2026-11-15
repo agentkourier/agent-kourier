@@ -20,4 +20,6 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Count(t, "approvalArgs", maxApprovalArgs)
 	limitsdoc.Count(t, "approvalTotal", maxApprovalTotal)
 	limitsdoc.Count(t, "approvalBlocks", maxApprovalBlocks)
+	limitsdoc.Duration(t, "slackSignatureAge", signatureMaxAge)
+	limitsdoc.Duration(t, "slackHTTPAckWait", httpAckWait)
 }

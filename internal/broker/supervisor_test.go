@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -41,6 +42,7 @@ var errRejected = errors.New("fake: token rejected")
 type fakeConn struct {
 	chat.Platform
 	token  string
+	keys   []string // the keys of the credentials it was built with, sorted
 	live   *atomic.Int32
 	reject chan struct{} // closed: Run returns the rejection
 	// onConn is the adapter's OnConnection, which Run calls when its connection is up.
@@ -145,7 +147,7 @@ func newSupWorldWith(t *testing.T, withOwn bool) *supWorld {
 		cfg: RunConfig{transportClosed: func(conn string) { w.mu.Lock(); w.closed = append(w.closed, conn); w.mu.Unlock() }},
 		log: log, metrics: newTestMetrics(t), table: w.table, parent: t.Context(),
 		open: func(c Connection, onConn func(bool)) (builtPlatform, error) {
-			f := &fakeConn{token: c.Credentials["botToken"].Reveal(), live: &w.live, reject: make(chan struct{}), onConn: onConn, errs: map[string]error{}, calls: map[string]int{}}
+			f := &fakeConn{token: c.Credentials["botToken"].Reveal(), keys: slices.Sorted(maps.Keys(c.Credentials)), live: &w.live, reject: make(chan struct{}), onConn: onConn, errs: map[string]error{}, calls: map[string]int{}}
 			w.mu.Lock()
 			defer w.mu.Unlock()
 			if err := w.openErr[f.token]; err != nil {
@@ -401,68 +403,72 @@ func TestSupervisorLeavesTheOtherConnectionsWhenATeamConnectionIsRejected(t *tes
 	w.eventually("team-a to run again", func() bool { return slices.Contains(w.running(), "team-a/slack") })
 }
 
-// inHTTPMode is the team connection name as teamConnections gives it once its ChatConnection, at generation gen, is in Slack HTTP mode: with
-// the refusal of connectionOf as its Err, and no credentials.
-func inHTTPMode(t *testing.T, name string, gen int64, age int) TeamConnection {
+// inHTTPMode is the team connection name as teamConnections gives it once its ChatConnection, at generation gen, is in Slack HTTP mode: the
+// keys of that mode, the bot token token and a signing secret, read from its Secret by connectionOf.
+func inHTTPMode(t *testing.T, name string, gen int64, token string, age int) TeamConnection {
 	t.Helper()
 	ns, n, _ := strings.Cut(name, "/")
 	c := &v1alpha1.ChatConnection{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: n}, Spec: v1alpha1.ChatConnectionSpec{
 		Platform: v1alpha1.PlatformSlack, CredentialsSecretRef: v1alpha1.SecretRef{Name: "creds"}, Slack: &v1alpha1.SlackConnectionSpec{Mode: v1alpha1.SlackModeHTTP}}}
-	_, err := connectionOf(t.Context(), c, &reader{vals: map[string]string{}})
-	if !errors.Is(err, errModeNotServed) {
-		t.Fatalf("connectionOf in HTTP mode = %v; want errModeNotServed", err)
+	conn, err := connectionOf(t.Context(), c, &reader{vals: map[string]string{ns + "/creds/botToken": token, ns + "/creds/signingSecret": "fake-signing-" + token}})
+	if err != nil {
+		t.Fatalf("connectionOf in HTTP mode = %v; want its keys read", err)
 	}
-	tc := team(name, gen, "", age)
-	tc.Credentials, tc.Err = nil, err
+	tc := team(name, gen, token, age)
+	tc.Credentials = conn.Credentials
 	return tc
 }
 
-// A team connection that runs in Socket Mode and whose ChatConnection is switched to HTTP mode, which this version does not serve, is stopped
-// and says why, once: unlike a Secret that cannot be read for a moment, no wait mends it. It holds no app while it is refused, so a younger
-// connection of its app is served, and it runs again, as the older of its app, once its ChatConnection is back in Socket Mode.
-func TestSupervisorStopsATeamConnectionSwitchedToAModeItDoesNotServe(t *testing.T) {
-	w := newSupWorld(t)
-	w.ids["tok-a"], w.ids["tok-a2"], w.ids["tok-y"] = appIdentity{App: "AA", Team: "T1", User: "UA", Bot: "BA"}, appIdentity{App: "AA", Team: "T1", User: "UA", Bot: "BA"}, appIdentity{App: "AA", Team: "T1", User: "UA", Bot: "BA"}
-	younger := team("team-y/slack", 1, "tok-y", 9)
-
-	w.reconcile(team("team-a/slack", 1, "tok-a", 1), younger)
-	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack"}) {
-		t.Fatalf("running = %v; want team-a, the older of the app, and not team-y", got)
-	}
-
-	w.reconcile(inHTTPMode(t, "team-a/slack", 2, 1), younger)
-	if got := w.running(); !slices.Equal(got, []string{ownName, "team-y/slack"}) {
-		t.Errorf("running = %v after team-a moved to HTTP mode; want team-a stopped, and team-y serving the app it no longer holds", got)
-	}
-	if _, err := w.table.Platform("team-a/slack"); !errors.Is(err, chat.ErrConnectionDown) {
-		t.Errorf("Platform(team-a) = %v; want ErrConnectionDown", err)
-	}
-	w.table.mu.RLock()
-	_, botKept := w.table.bots["team-a/slack"]
-	w.table.mu.RUnlock()
-	if botKept {
-		t.Error("the bot table keeps team-a's bot; want it forgotten, as team-a is not served")
-	}
+// lastKeys is the keys of the credentials that the latest platform built with the bot token token was given.
+func (w *supWorld) lastKeys(token string) []string {
 	w.mu.Lock()
-	gone := slices.Clone(w.gone)
-	w.mu.Unlock()
-	if !slices.Contains(gone, "team-a/slack") {
-		t.Errorf("gone = %v; want team-a told, as its runtime was taken away", gone)
-	}
-	w.reconcile(inHTTPMode(t, "team-a/slack", 2, 1), younger) // the same look again says nothing new
-	logs := w.logs.String()
-	for _, want := range []string{"chat connection stopped", "a mode this version does not serve", "is in Slack HTTP mode, which this version does not serve yet"} {
-		if !strings.Contains(logs, want) {
-			t.Errorf("the log does not say %q:\n%s", want, logs)
+	defer w.mu.Unlock()
+	for _, f := range slices.Backward(w.opened) {
+		if f.token == token {
+			return f.keys
 		}
 	}
-	if n := strings.Count(logs, "the ChatConnection is not started: it asks for a mode this version does not serve"); n != 1 {
-		t.Errorf("the refusal was logged %d times over two looks; want once", n)
+	return nil
+}
+
+// A team connection whose ChatConnection is switched between Socket Mode and HTTP mode is restarted in the new mode: its generation and its
+// credentials (the keys of the mode) changed, so the runtime of the old mode is stopped and one is started on the keys of the new. It holds its
+// app across the switch, so a younger connection of the app stays unserved. A switch whose Secret does not hold the keys of the new mode yet
+// leaves the runtime of the old mode running, as a Secret that cannot be used does for any change, until the Secret has them.
+func TestSupervisorRestartsATeamConnectionSwitchedToAnotherMode(t *testing.T) {
+	w := newSupWorld(t)
+	id := appIdentity{App: "AA", Team: "T1", User: "UA", Bot: "BA"}
+	w.ids["tok-a"], w.ids["tok-y"] = id, id
+	younger := team("team-y/slack", 1, "tok-y", 9)
+	socketKeys, httpKeys := []string{"appToken", "botToken"}, []string{"botToken", "signingSecret"}
+
+	w.reconcile(team("team-a/slack", 1, "tok-a", 1), younger)
+	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack"}) || !slices.Equal(w.lastKeys("tok-a"), socketKeys) {
+		t.Fatalf("running = %v on %v; want team-a in Socket Mode, the older of the app, and not team-y", got, w.lastKeys("tok-a"))
 	}
 
-	w.reconcile(team("team-a/slack", 3, "tok-a2", 1), younger) // back in Socket Mode
-	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack"}) {
-		t.Errorf("running = %v once team-a is back in Socket Mode; want it serving its app again, and team-y stopped", got)
+	w.reconcile(inHTTPMode(t, "team-a/slack", 2, "tok-a", 1), younger)
+	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack"}) || !slices.Equal(w.lastKeys("tok-a"), httpKeys) {
+		t.Errorf("running = %v on %v after team-a moved to HTTP mode; want team-a restarted on the keys of HTTP mode, and team-y still not served", got, w.lastKeys("tok-a"))
+	}
+	if got := w.tokens(); !slices.Equal(got, []string{"own-token", "tok-a", "tok-a"}) {
+		t.Errorf("platforms built = %v; want team-a's built again, once, for the new mode", got)
+	}
+	w.mu.Lock()
+	closed := slices.Clone(w.closed)
+	w.mu.Unlock()
+	if !slices.Equal(closed, []string{"team-a/slack"}) {
+		t.Errorf("transports closed = %v; want the one of team-a's Socket Mode runtime", closed)
+	}
+
+	w.reconcile(team("team-a/slack", 3, "tok-a", 1), younger) // back in Socket Mode
+	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack"}) || !slices.Equal(w.lastKeys("tok-a"), socketKeys) {
+		t.Errorf("running = %v on %v once team-a is back in Socket Mode; want it restarted on the keys of Socket Mode", got, w.lastKeys("tok-a"))
+	}
+
+	w.reconcile(unready("team-a/slack", 4, 1), younger) // moved to HTTP mode again, and its Secret has no signingSecret yet
+	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack"}) || len(w.tokens()) != 4 {
+		t.Errorf("running = %v, platforms built = %v, when the new mode's keys cannot be read; want team-a left running in Socket Mode", got, w.tokens())
 	}
 }
 

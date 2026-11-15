@@ -202,25 +202,9 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 	for _, t := range desired {
 		name := t.Name()
 		st := s.teams[name]
-		if errors.Is(t.Err, errModeNotServed) {
-			// Its ChatConnection asks for a mode this version does not serve. No wait mends that, so a runtime that runs (started before the
-			// ChatConnection changed) is stopped, and the entry goes: it holds no app, so a younger connection of the app may be served. It is
-			// started again, as a new entry, when its ChatConnection is in a mode that is served.
-			if st != nil {
-				s.retire(name)
-				s.stop(ctx, name, st, "its ChatConnection asks for a mode this version does not serve")
-				delete(s.teams, name)
-			}
-			s.say(ctx, name, "the ChatConnection is not started: it asks for a mode this version does not serve", t.Err)
-			s.host.metrics.ChatConnected(name, false)
-			s.host.table.forgetBot(name) // not served, so its bot is no longer one of the broker's
-			s.host.table.clearDown(name) // what kept the ChatConnection it replaces down (a rejection of its tokens) is not why it is down now
-			continue
-		}
 		if t.Err != nil {
-			// Its Secret is not readable now, or its platform has no adapter (a mode that is not served is handled above, since it lasts). What
-			// runs keeps running on the tokens it was started with: a cache that is relisting is no reason to drop a connection. Otherwise it
-			// starts once it can.
+			// Its Secret is not readable now, or its platform has no adapter. What runs keeps running on the tokens it was started with: a
+			// cache that is relisting is no reason to drop a connection. Otherwise it starts once it can.
 			if st != nil && st.held() {
 				// It holds its app unless an older connection claimed it in this pass (desired is oldest first): then it is the second
 				// connection of the app and is refused, as it would be if its Secret could be read, and not left running beside the older.
