@@ -48,7 +48,7 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Duration(t, "retryAfterMax", retryAfterMax)
 	limitsdoc.Duration(t, "slackAPITimeout", slackAPITimeout)
 
-	// The chat listener's: the server's bounds as the server Run serves is built with them, and the two the route table holds itself.
+	// The chat listener's: the server's bounds as the server Run serves is built with them, and those the route table holds itself.
 	chat := newChatServer(http.NotFoundHandler())
 	limitsdoc.Bytes(t, "chatHeaders", chat.MaxHeaderBytes)
 	limitsdoc.Duration(t, "chatReadHeader", chat.ReadHeaderTimeout)
@@ -57,6 +57,9 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Duration(t, "chatIdle", chat.IdleTimeout)
 	limitsdoc.Bytes(t, "chatBody", chatMaxBody)
 	limitsdoc.Duration(t, "chatHandler", chatHandlerTimeout)
-	limitsdoc.Count(t, "chatInFlight", cap(newChatRoutes(nil, nil).slots))
+	routes := newChatRoutes(nil, nil)
+	limitsdoc.Count(t, "chatInFlight", cap(routes.slots))
+	limitsdoc.Bytes(t, "chatBodyBudget", routes.budget.left)
+	limitsdoc.Bytes(t, "chatBodyChunk", chatBodyChunk)
 	limitsdoc.Duration(t, "chatDrain", chatDrainTimeout)
 }
