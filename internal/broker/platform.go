@@ -30,7 +30,7 @@ import (
 const slackAPITimeout = 30 * time.Second
 
 // Connection is the one ChatConnection v1 serves, with its credentials as read at startup: the Secret keys that
-// its platform needs (platformFor), as secret.Values, which print as redacted.
+// its platform and mode need (v1alpha1.CredentialKeys), as secret.Values, which print as redacted.
 type Connection struct {
 	Ref v1alpha1.ObjectRef
 	// Platform is ChatConnection.spec.platform, which chooses the adapter (newPlatform).
@@ -38,11 +38,11 @@ type Connection struct {
 	Credentials map[string]secret.Value
 }
 
-// platformSpec is what the broker knows of a platform: the keys of its credentials Secret that it reads, the name
-// it is called in the text an agent reads ("Slack"), and the call that tells whose bot a connection's credentials are. Its adapter is built
-// by RunConfig.newPlatform, which leaderHalf.openPlatform calls.
+// platformSpec is what the broker knows of a platform: the name it is called in the text an agent reads ("Slack"), and the call that tells
+// whose bot a connection's credentials are. The keys of its credentials Secret depend on the connection's mode as well, so they are not
+// here: v1alpha1.CredentialKeys gives them for a connection's spec. Its adapter is built by RunConfig.newPlatform, which
+// leaderHalf.openPlatform calls.
 type platformSpec struct {
-	Keys []string
 	Name string
 	// Identify asks the platform which app, workspace, bot and bot user conn's credentials are (appIdentity, whose Platform it leaves
 	// unset), each call within identifyTimeout. Nil is a platform with no such call: its connections have the zero identity, which takes part in
@@ -56,7 +56,7 @@ type platformSpec struct {
 // error. It is a func and not a table, so that there is no state to change.
 func platformFor(name string) (platformSpec, bool) {
 	if name == v1alpha1.PlatformSlack {
-		return platformSpec{Keys: v1alpha1.CredentialKeys(name), Name: "Slack", Identify: slackIdentityOf}, true
+		return platformSpec{Name: "Slack", Identify: slackIdentityOf}, true
 	}
 	return platformSpec{}, false
 }

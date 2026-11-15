@@ -181,7 +181,7 @@ func bootstrapCRDs(ctx context.Context, client kubernetes.Interface, opts Bootst
 			failed()
 			return nil, err
 		}
-		keys := v1alpha1.CredentialKeys(conn.Spec.Platform)
+		keys := v1alpha1.CredentialKeys(conn.Spec)
 		slices.Sort(keys) // a SecretRead's keys are sorted, as the Reloader's are
 		own := config.SecretRead{SecretName: config.SecretName{Namespace: conn.Namespace, Name: conn.Spec.CredentialsSecretRef.Name}, Keys: keys}
 		if err := secrets.WatchKeys(syncCtx, []config.SecretRead{own}); err != nil {
