@@ -44,12 +44,24 @@ type connRuntime struct {
 	// retired the platform of the runtime fails fast (stopped). A runtime that is replaced by a restart is in the same span: its turns go on with
 	// the platform they hold, which is the connection's still. Nil for the own connection, if the broker has one, which is always served.
 	life atomic.Pointer[connLife]
+	// route is the runtime's route on the chat listener while it runs (runtimeHost.route): set only when the broker has a chat listener and
+	// the platform takes requests over HTTP, and taken away when the run ends or the runtime is halted.
+	route atomic.Pointer[chatRoute]
 }
 
-// halt ends the run of the runtime on purpose and does not wait for it (wait does).
+// halt ends the run of the runtime on purpose and does not wait for it (wait does). Its route on the chat listener goes at once, so that a
+// request that comes while the run is stopping is answered 503 and sent again.
 func (rt *connRuntime) halt() {
 	rt.halted.Store(true)
+	rt.unroute()
 	rt.stop()
+}
+
+// unroute drops the runtime's route on the chat listener, if it has one.
+func (rt *connRuntime) unroute() {
+	if r := rt.route.Swap(nil); r != nil {
+		r.drop()
+	}
 }
 
 // rejection says whether the platform rejected the credentials of the runtime, and the code it did so with: a call or the run saw it, and ended ctx
@@ -331,6 +343,8 @@ type runtimeHost struct {
 	open func(conn Connection, onConnection func(connected bool)) (builtPlatform, error)
 	// parent is the context the runs hang from: the broker's own, which only the shutdown ends.
 	parent context.Context
+	// routes is the chat listener's route table, nil when the broker has no chat listener.
+	routes *chatRoutes
 }
 
 // build makes the runtime of conn and puts it in the table: from here the shared parts reach its platform. agentkourier_chat_connected says 0 for
@@ -357,10 +371,14 @@ func (h *runtimeHost) build(conn Connection) (*connRuntime, error) {
 // runtime was not halted the run ended by itself, which for RunPlatform is a rejected credential, whether the run or a call through the platform
 // found it out: the runtime leaves the table then, so the connection is down, with the rejection as the reason (runtimeTable.fail), and its
 // transport closes. A halted one stays until its owner takes it out, because the final drain of a shutdown still posts through it.
+//
+// While it runs, a runtime whose platform takes requests over HTTP has its route on the chat listener (route), which goes when the run ends.
 func (h *runtimeHost) run(rt *connRuntime, sink chat.Sink, onEnd func(rt *connRuntime, err error)) {
 	rt.ran.Store(true)
+	h.route(rt)
 	go func() {
 		err := RunPlatform(rt.ctx, rt.platform, sink, RunPolicy{Logger: h.log.With("connection", rt.name), Platform: rt.conn.Platform})
+		rt.unroute()
 		if !rt.halted.Load() {
 			h.table.fail(rt, err)
 			h.closeTransport(rt) // nothing posts through it from here: the connection is down
@@ -370,6 +388,26 @@ func (h *runtimeHost) run(rt *connRuntime, sink chat.Sink, onEnd func(rt *connRu
 			onEnd(rt, err)
 		}
 	}()
+}
+
+// route puts rt's route on the chat listener, if the broker has one and rt's platform offers a handler (chat.HTTPReceiver). A runtime that
+// was halted while its route was being put is unrouted at once: halt may have looked for the route before it was there.
+func (h *runtimeHost) route(rt *connRuntime) {
+	if h.routes == nil {
+		return
+	}
+	handler, ok := receiverOf(rt.platform.Platform)
+	if !ok {
+		return
+	}
+	r := h.routes.register(rt.conn.Platform, rt.name, handler)
+	if r == nil {
+		return // the replica no longer leads
+	}
+	rt.route.Store(r)
+	if rt.halted.Load() {
+		rt.unroute()
+	}
 }
 
 // closeTransport closes the idle connections of rt's Slack transport, once, and tells the seam. It is for after the last call through the

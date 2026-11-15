@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -81,6 +82,42 @@ func TestEnvConfigDefaultsAndOverrides(t *testing.T) {
 	}
 	if o.configDir != "/c" || o.dbPath != "/d/x.db" || o.listen != "127.0.0.1:9" || o.syncTimeout != 5*time.Second || o.klogV != 3 || o.logLevel != slog.LevelDebug {
 		t.Errorf("overrides = %+v", o)
+	}
+}
+
+// AGENTKOURIER_CHAT_LISTEN is the chat listener's address, and unset is no chat listener: it has no default, so a broker that is not
+// given one opens no second port.
+func TestEnvConfigChatListen(t *testing.T) {
+	if c, err := loadEnv(env{}.get); err != nil || c.chatListen != "" {
+		t.Errorf("unset: chat listener %q, %v; want none", c.chatListen, err)
+	}
+	if c, err := loadEnv(env{"AGENTKOURIER_CHAT_LISTEN": ":8081"}.get); err != nil || c.chatListen != ":8081" {
+		t.Errorf("set to :8081: chat listener %q, %v; want :8081", c.chatListen, err)
+	}
+}
+
+// With AGENTKOURIER_CHAT_LISTEN set, run listens on it before the broker starts, and an address it cannot listen on fails the start and
+// is named. Unset, the start is as it was (here it stops at the cluster, which a test has none of).
+func TestRunListensOnTheChatAddressOnlyWhenSet(t *testing.T) {
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+	t.Setenv("KUBERNETES_SERVICE_PORT", "")
+	t.Cleanup(restoreDefaultLogger())
+	taken, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = taken.Close() }()
+
+	var stdout, stderr bytes.Buffer
+	code := run(nil, "dev", &stdout, &stderr, env{"AGENTKOURIER_LISTEN": "127.0.0.1:0", "AGENTKOURIER_CHAT_LISTEN": taken.Addr().String()}.get)
+	if code != exitFailure || !strings.Contains(stderr.String(), "listen on "+taken.Addr().String()) {
+		t.Errorf("a chat address in use: exit %d, stderr %q; want %d naming the address", code, stderr.String(), exitFailure)
+	}
+
+	stderr.Reset()
+	code = run(nil, "dev", &stdout, &stderr, env{"AGENTKOURIER_LISTEN": "127.0.0.1:0", "AGENTKOURIER_CHAT_LISTEN": "127.0.0.1:0"}.get)
+	if code != exitUsage || !strings.Contains(stderr.String(), "only in a cluster") {
+		t.Errorf("a free chat address: exit %d, stderr %q; want the start to go on to the cluster", code, stderr.String())
 	}
 }
 
