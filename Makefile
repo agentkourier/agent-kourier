@@ -89,7 +89,7 @@ crds: ## Generate the CRDs from api/v1alpha1 into charts/agent-kourier/files/crd
 	go tool controller-gen crd paths=./api/v1alpha1 output:crd:dir=charts/agent-kourier/files/crds
 	go run ./hack/crdhashes
 
-crd-corpus: ## Hold the CRD schemas to the broker's validation on a throwaway kind cluster that has only the CRDs (hack/kind/crd-corpus.sh; kind, kubectl and Docker; CRD_CORPUS_KUBECONFIG uses a local cluster you made instead)
+crd-corpus: ## Hold the CRD schemas to the broker's validation, and the leader label's admission policy to its rules, on a throwaway kind cluster (hack/kind/crd-corpus.sh; kind, kubectl, helm and Docker; CRD_CORPUS_KUBECONFIG uses a local cluster you made instead)
 	hack/kind/crd-corpus.sh
 
 image: ## Build the production Agent Kourier image, agent-kourier:dev (hack/kind/build-agent-kourier.sh; Docker)
