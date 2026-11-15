@@ -20,7 +20,7 @@
 #               codeql-extractor.yml, whose only file type is .go. The image is the binary of ./cmd/agent-kourier on the
 #               runtime image: .dockerignore drops docs/, the build stage reads only Go inputs, and its verify stage runs
 #               two tests of internal/testhooks that read the binaries. An agent's image (examples/recipes/<agent>/agent)
-#               copies the files its .dockerignore lets in by name, requirements.txt and Python files, and no Markdown.
+#               copies only the files its .dockerignore lets in by name, none of them Markdown.
 #   crd-corpus  both crd-corpus jobs: also Markdown outside every Go package's tree. The job builds and runs
 #               test/crdcorpus, applies charts/agent-kourier/files/crds, and the corpus walk reads only .yaml and .yml
 #               files under its roots (test/crdcorpus/corpus.go).

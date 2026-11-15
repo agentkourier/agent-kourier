@@ -110,7 +110,9 @@ line's newest and perhaps as latest.
 - Pushes one multi-platform image tagged `vX.Y.Z` with the workflow's `GITHUB_TOKEN` (`packages: write`),
   with an SBOM and a max-mode provenance attestation attached, and the OCI labels source, revision, version
   and created (the commit's time). Pushes each agent image the same way, tagged `vX.Y.Z`, to Agent Kourier's repository
-  with `-<agent>` appended.
+  with `-<agent>` appended, then refuses it unless each platform's layers are those of the image it checked and scanned
+  (`hack/release/check-pushed.sh`): an agent's Dockerfile resolves Wolfi's packages when it runs, so a push that missed
+  the checks' cache would have resolved them again.
 - The Buildx action is pinned by commit, while its BuildKit image and Docker's SBOM generator follow the action's
   defaults. Pin those tool references before claiming byte-for-byte build-tool reproducibility.
 - Installs the pinned Trivy release from `hack/security/install-trivy.sh` and scans each local platform image before
@@ -141,6 +143,11 @@ images with attestations, which Docker's default `docker` driver without the con
 
     docker buildx create --name agent-kourier-release --driver docker-container
     BUILDER=agent-kourier-release make release-image VERSION=v0.0.0-rc.1
+
+The agent images' arm64 build runs `apk` and `pip` under emulation. Docker Desktop has it; on a Linux host without
+binfmt handlers, register arm64 first with the image the workflow pins (`docker run --privileged --rm
+docker.io/tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+--install arm64`), or the build fails at the first `RUN`.
 
 Set `SCAN_IMAGES=1` to run the same per-platform Trivy policy for a local build. `PUSH=1` always enables these
 scans and requires the pinned scanner from `hack/security/install-trivy.sh` (or an executable `TRIVY_BIN`).
@@ -350,7 +357,7 @@ scanner or CodeQL reads, but for two tests of the docs checks that `make docs-ch
 - `scan` (the three `govulncheck` jobs, the `trivy` jobs, `analyze`) and `crd-corpus` (both jobs): any Markdown
   (`*.md`, in lower case) outside every Go package's tree, such as `README.md`, the pages under `docs/` and the chart's
   README. govulncheck reads Go packages and the files they embed; Agent Kourier's image holds only the binary, and an
-  agent's image only its requirements and Python files; CodeQL's Go autobuild
+  agent's image only the files its `.dockerignore` lets in, none of them Markdown; CodeQL's Go autobuild
   extracts `.go` files; `crd-corpus` builds and runs `test/crdcorpus` and reads only YAML from its corpus.
 - `docs-agent`: the same Markdown except under `docs/`, its corpus, and `examples/recipes/docs-agent/`.
 - `echo-agent`: the same Markdown except under `examples/recipes/echo-agent/agent/`, the one directory it reads.

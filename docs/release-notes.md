@@ -60,8 +60,7 @@ steps, and how to roll back.
   and attested as Agent Kourier's image is, and the GitHub Release names their digests. The recipes' manifests name them, so a team no longer
   builds an agent's image to try a recipe.
 - **Both images are built on Wolfi**, with CPython 3.14 and no pip, and still run as user 65532. The images that `make prompt-agent-image` and
-  `make echo-agent-image` build changed the same way: the entrypoint is `/opt/venv/bin/python agent.py`, and the prompt agent's image is about
-  258 MB, down from 332 MB.
+  `make echo-agent-image` build changed the same way: the entrypoint is `/opt/venv/bin/python agent.py`.
 
 ## Version 0.3.2
 

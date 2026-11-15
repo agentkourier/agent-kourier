@@ -2,9 +2,10 @@
 #
 # Apply it into the namespace echo-agent, which the AgentBackend in ../../kourier names (kubectl create namespace
 # echo-agent, then kubectl apply -n echo-agent -f manifests/). The files name no namespace, so the Service lands next
-# to it. Build the image with make echo-agent-image and load or push it where your nodes pull from. Releases after 0.3.2
-# also publish this image, signed, for linux/amd64 and linux/arm64: ghcr.io/agentkourier/agent-kourier-echo-agent,
-# tagged with the release (vX.Y.Z). Each release's notes give its digest; name the image by that digest.
+# to it. Build the image with make echo-agent-image and load or push it where your nodes pull from. From release 0.4.0
+# on, each release also publishes this image, signed, for linux/amd64 and linux/arm64:
+# ghcr.io/agentkourier/agent-kourier-echo-agent, tagged with the release (vX.Y.Z). Each release's notes give its digest;
+# name the image by that digest.
 #
 # One replica on purpose: what the agent remembers of a conversation lives in the pod's memory, and the Service does
 # not pin a thread to a pod. With two, a follow-up can reach the pod that has not seen the conversation, and it counts

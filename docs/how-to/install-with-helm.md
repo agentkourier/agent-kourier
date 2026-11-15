@@ -42,7 +42,7 @@ Each release publishes a Helm chart and a container image for `linux/amd64` and 
 The chart pins the image by digest, so you set no image values to install it. The
 [GitHub Release](https://github.com/agentkourier/agent-kourier/releases) of each version names both digests.
 
-Releases after 0.3.2 also publish the images of two recipes' agents, tagged with the release:
+From release 0.4.0 on, each release also publishes the images of two recipes' agents, tagged with the release:
 `ghcr.io/agentkourier/agent-kourier-prompt-agent` and `ghcr.io/agentkourier/agent-kourier-echo-agent`. The GitHub
 Release names their digests too.
 

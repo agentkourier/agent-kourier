@@ -7,6 +7,7 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 CHECK=${HERE}/check-ci.sh
 CHECK_RELEASE=${HERE}/check-release.sh
 CHECK_VERSION=${HERE}/check-version.sh
+CHECK_PUSHED=${HERE}/check-pushed.sh
 FAKE_GH=${HERE}/testdata/fake-gh
 FIXTURES=${HERE}/testdata
 SHA=0123456789abcdef0123456789abcdef01234567
@@ -245,5 +246,27 @@ if run_release_build root-user FAKE_ROOT_IMAGE=prompt-agent-linux-amd64; then
 fi
 contains "root-user: says which image and why" "prompt-agent linux/amd64: the image does not run as 65532:65532" "${TMP}/root-user.out"
 check "root-user: no image built to keep" 0 "$(grep -c -v '^build load ' "${TMP}/root-user.builds" || true)"
+
+# run_pushed_case NAME WANT_STATUS PUSHED_IMAGE LAYERS: check-pushed.sh for linux/arm64 of a pushed reference whose .Image
+# is PUSHED_IMAGE, against a local image whose layers are LAYERS.
+run_pushed_case() {
+  local name=$1 want=$2 status
+  set +e
+  env PATH="${FIXTURES}/fakebin:${PATH}" FAKE_PUSHED_IMAGE="$3" FAKE_LAYERS="$4" \
+    "${CHECK_PUSHED}" ghcr.io/example/agent-kourier-echo-agent@sha256:1 linux/arm64 check:echo-agent-linux-arm64 >"${TMP}/${name}.out" 2>&1
+  status=$?
+  set -e
+  check "${name}: exit status" "${want}" "${status}"
+}
+
+echo "== a pushed agent image must have the layers of the image that was checked and scanned"
+index='{"linux/amd64":{"rootfs":{"type":"layers","diff_ids":["sha256:a1","sha256:a2"]}},"linux/arm64":{"rootfs":{"type":"layers","diff_ids":["sha256:b1","sha256:b2"]}}}'
+run_pushed_case pushed-same 0 "${index}" '["sha256:b1","sha256:b2"]'
+run_pushed_case pushed-other-platform 1 "${index}" '["sha256:a1","sha256:a2"]'
+contains "pushed-other-platform: says the layers differ" "is not the image that was checked and scanned" "${TMP}/pushed-other-platform.out"
+run_pushed_case pushed-extra-layer 1 "${index}" '["sha256:b1"]'
+run_pushed_case pushed-missing-platform 1 '{"linux/amd64":{"rootfs":{"diff_ids":["sha256:a1"]}}}' '["sha256:a1"]'
+contains "pushed-missing-platform: names the platform" "has no linux/arm64 image" "${TMP}/pushed-missing-platform.out"
+run_pushed_case pushed-single 0 '{"rootfs":{"diff_ids":["sha256:b1","sha256:b2"]}}' '["sha256:b1","sha256:b2"]'
 
 echo "all passed"

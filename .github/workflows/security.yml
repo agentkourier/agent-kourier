@@ -2,8 +2,8 @@
 # why skipping is safe): on a pull request that changes only paths on the docs-only list or Markdown outside every Go
 # package's tree (README.md and the pages under docs/, say), they start and report success under their own names but
 # skip every step after their docs-only step. govulncheck reads a module's Go packages and the files they embed,
-# Agent Kourier's image holds only the binary built from Go, and an agent's image only its requirements and Python
-# files, so neither has new code to scan. gitleaks scans the whole tree and
+# Agent Kourier's image holds only the binary built from Go, and an agent's image only the files its .dockerignore
+# lets in, none of them Markdown, so neither has new code to scan. gitleaks scans the whole tree and
 # its history, so it always runs in full. On any other event the docs-only step does not run, and the jobs run as they
 # did before it.
 name: security

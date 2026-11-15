@@ -184,7 +184,9 @@ fi
 digest=$(image_digest "${OUT}/metadata.json")
 echo "${digest}" >"${OUT}/digest"
 
-# Each agent image as one multi-platform build, like Agent Kourier's, from the cache its checks filled.
+# Each agent image as one multi-platform build, like Agent Kourier's, from the cache its checks filled. A pushed one is
+# held to the layers of the images that were checked and scanned (check-pushed.sh), since its Dockerfile resolves Wolfi's
+# packages when it runs and a cache miss would resolve them again.
 for a in "${AGENTS[@]}"; do
   agent_name="${REPOSITORY}-${a}:${VERSION}"
   agent_build=("${BUILDX[@]}" --platform "${PLATFORMS}" --provenance=mode=max --sbom=true
@@ -192,6 +194,10 @@ for a in "${AGENTS[@]}"; do
   if [ "${PUSH}" = 1 ]; then
     echo "==> pushing ${agent_name} (${PLATFORMS})"
     "${agent_build[@]}" --push "${ROOT}/examples/recipes/${a}/agent"
+    for p in "${PLATFORM_LIST[@]}"; do
+      "${HERE}/check-pushed.sh" "${REPOSITORY}-${a}@$(image_digest "${OUT}/${a}-metadata.json")" "${p}" \
+        "agent-kourier-release-check:${a}-${p//\//-}"
+    done
   else
     archive="${OUT}/agent-kourier-${a}-${VERSION}.oci.tar"
     echo "==> building ${agent_name} (${PLATFORMS}) to ${archive}; nothing is pushed"
