@@ -97,7 +97,8 @@ func TestEnvConfigChatListen(t *testing.T) {
 }
 
 // With AGENTKOURIER_CHAT_LISTEN set, run listens on it before the broker starts, and an address it cannot listen on fails the start and
-// is named. Unset, the start is as it was (here it stops at the cluster, which a test has none of).
+// is named. An address it can listen on lets the start go on, to where it stops here: the cluster, which a test has none of. (That
+// unset reads as no chat listener is TestEnvConfigChatListen's.)
 func TestRunListensOnTheChatAddressOnlyWhenSet(t *testing.T) {
 	t.Setenv("KUBERNETES_SERVICE_HOST", "")
 	t.Setenv("KUBERNETES_SERVICE_PORT", "")

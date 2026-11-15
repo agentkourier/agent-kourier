@@ -57,4 +57,6 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Duration(t, "chatIdle", chat.IdleTimeout)
 	limitsdoc.Bytes(t, "chatBody", chatMaxBody)
 	limitsdoc.Duration(t, "chatHandler", chatHandlerTimeout)
+	limitsdoc.Count(t, "chatInFlight", cap(newChatRoutes(nil, nil).slots))
+	limitsdoc.Duration(t, "chatDrain", chatDrainTimeout)
 }
