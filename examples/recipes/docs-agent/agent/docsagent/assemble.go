@@ -30,9 +30,10 @@ type AssembleOptions struct {
 	// else the server offers. That is how a different retrieval, such as a vector search, is
 	// attached without changing the agent.
 	MCPURL string
-	// Model, PublicURL and Subject are as for Config.
+	// Model, PublicURL, V03URL and Subject are as for Config.
 	Model     model.LLM
 	PublicURL string
+	V03URL    string
 	Subject   string
 }
 
@@ -72,7 +73,7 @@ func Assemble(ctx context.Context, o AssembleOptions) (http.Handler, <-chan erro
 	}
 	// Only the two tools the prompt names reach the model, whatever else an external server offers.
 	tools := tool.FilterToolset(set, tool.AllowedToolsPredicate([]string{docsmcp.ToolSearch, docsmcp.ToolRead}))
-	h, err := New(Config{Model: o.Model, Tools: tools, PublicURL: o.PublicURL, Subject: o.Subject})
+	h, err := New(Config{Model: o.Model, Tools: tools, PublicURL: o.PublicURL, V03URL: o.V03URL, Subject: o.Subject})
 	if err != nil {
 		return nil, nil, err
 	}

@@ -89,6 +89,8 @@ agent/          the agent: a separate Go module, and manifests/ to run it
   docsagent/      the ADK agent, its prompt and the model settings
   cmd/docs-agent/ the agent's command; cmd/docs-mcp/ serves the tools alone; cmd/smoke/ is the smoke test
   manifests/      Namespace, Deployment, Service, NetworkPolicy
+kagent/         the agent, or the tools alone, for a kagent agent that owns the channel (see When another agent owns
+                the channel)
 evals/
   triggers.yaml   what the trigger harness can judge for this recipe (one case; see Checks)
   scenarios/      questions with the page that answers them, and questions the documentation does not answer
@@ -245,6 +247,65 @@ documentation does not cover it.
 `MODEL_PROVIDER` to be `openrouter` or `openai`, costs model usage, and prints the answers for a person to read; it
 checks only that the first one cites the connect page.
 
+## When another agent owns the channel
+
+A channel has one Binding: of two Bindings on the same channel and ChatConnection, only one is accepted, and the other
+is not served, with `Accepted` `False` and the reason `ChannelConflict`; the older one keeps the channel
+([Binding status](../../../docs/reference/binding-status.md)). If another agent answers in the channel, such as a kagent agent that investigates alerts, docs questions have to go through that
+agent. Give it the documentation in one of two ways. Both are for kagent; the files are in `kagent/`, in namespace
+`kagent`.
+
+**The docs agent as a sub-agent.** The agent that owns the channel calls the docs agent as a tool, passes it the
+question, and gets back the answer with its Sources list. The docs agent keeps its own prompt, so its rules (search
+first, answer only from the pages, cite, say what the documentation does not cover) still apply, and the pages it reads
+never enter the other agent's context.
+
+1. Make the model Secret in `kagent` (step 2, with `-n kagent`), replace the image and `MODEL_NAME` in
+   `kagent/docs-agent.yaml`, and apply it with `kagent/networkpolicy.yaml`. kagent runs the image as a BYO Agent: a
+   Deployment and a Service named `docs-agent` on port 8080 (kagent 0.9.4's behaviour, read in its source and seen on
+   a cluster).
+2. Add the tool to the agent that owns the channel:
+
+   ```yaml
+   spec:
+     declarative:
+       tools:
+         - type: Agent
+           agent: {name: docs-agent}
+   ```
+
+3. Tell that agent when to use it, in its `systemMessage`: for example, that questions about Agent Kourier go to the
+   docs-agent tool as one self-contained question, and that it gives back the answer with its Sources list.
+
+kagent 0.9 speaks A2A 0.3, and the docs agent speaks 1.0, so `kagent/docs-agent.yaml` sets `A2A_V03_URL`. With it set,
+the agent also serves A2A 0.3 JSON-RPC at `POST /` and a 0.3-shaped card at `/.well-known/agent-card.json` that names
+`A2A_V03_URL` as its endpoint. In kagent 0.9.4 (read in its source, not in this repository) the BYO readiness probe
+reads that card, and so does the calling agent before it sends the question to the card's URL. `A2A_V03_URL` must be the
+root of the agent's own Service (`http://docs-agent.kagent:8080/` here); the agent refuses to start if its path is
+anything but empty or `/`. Without `A2A_V03_URL`, the root serves nothing and the agent speaks only A2A 1.0 at `/a2a`,
+as in the rest of this recipe. Both versions share the agent's conversations and tasks, and the 1.0 card at `/a2a`
+names only `PUBLIC_URL` either way.
+
+In Slack, the call shows as one step card named after kagent's tool for it (`kagent__NS__docs_agent` with kagent 0.9.4,
+as seen in a Slack thread), and then the owning agent's answer.
+
+**The documentation as tools.** The agent that owns the channel calls `search_docs` and `read_page` itself.
+`kagent/docs-mcp.yaml` runs `/docs-mcp`, which is in the same image, as a Deployment and a Service on port 8090, and
+registers it with kagent as a RemoteMCPServer. It needs no model and no Secret. List the tools on the owning agent:
+
+```yaml
+tools:
+  - type: McpServer
+    mcpServer: {apiGroup: kagent.dev, kind: RemoteMCPServer, name: docs-mcp, toolNames: [search_docs, read_page]}
+```
+
+This costs one model loop instead of two, but the docs agent's prompt is not involved: the owning agent's prompt has to
+say to search first, answer only from the pages, cite them and say when they do not cover a question, and its model
+reads the pages in its own context. In Slack, each call shows as its own step card.
+
+Choose the sub-agent when you want the docs agent's rules and a short context for the owning agent; choose the tools
+when the owning agent already has a careful prompt and you would rather not run a second agent and its model.
+
 ## What to change
 
 To point it at your own knowledge base:
@@ -285,7 +346,7 @@ The search is the one thing meant to be swapped. Two ways, neither of which touc
 - **As another server.** Run any MCP server that offers tools named `search_docs` (input `query` and `limit`) and
   `read_page` (input `path` and `section`) with the same output shapes, and set `MCP_URL` on the agent to its
   streamable HTTP endpoint: an absolute `http` or `https` URL. The agent applies one rule to all its URL settings
-  (`MCP_URL`, `PUBLIC_URL`, `SITE_URL`, `MODEL_BASE_URL`; `agent/urlcheck`): an absolute URL with no credentials, query
+  (`MCP_URL`, `PUBLIC_URL`, `A2A_V03_URL`, `SITE_URL`, `MODEL_BASE_URL`; `agent/urlcheck`): an absolute URL with no credentials, query
   or fragment. `MODEL_BASE_URL` must also be `https`, and `SITE_URL` also accepts `-` for no URLs. The agent then loads
   no corpus of its own. It uses only those two tools: any other tool the server offers is filtered out and never
   reaches the model. It sends that server no credential, so the server must
@@ -345,7 +406,8 @@ them, for a person to read the agent's answers against.
   turn is sent again, answered again and costs model usage again. The first turn of a thread has no `contextId` yet
   and is not looked up ([Agent contract](../../../docs/reference/agent-contract.md)).
 - **No authentication.** The Binding sends `X-User-Id` and the agent trusts its network, which the NetworkPolicy
-  narrows. To the agent every caller is the same anonymous one. A caller the policy admits can send messages (see the
+  narrows. The same holds for the A2A 0.3 surface and for `docs-mcp` under kagent: `kagent/networkpolicy.yaml` admits
+  every pod in the `kagent` namespace. To the agent every caller is the same anonymous one. A caller the policy admits can send messages (see the
   next bullet), read, cancel or subscribe to a task by its ID, and list the tasks of a `contextId` it knows, with their
   history, which holds the questions asked in that thread. A list without a `contextId` is refused, so a caller cannot
   list the threads. For a token instead, put a verifying proxy in front and use `identity.tokenSecretRef`
@@ -353,6 +415,16 @@ them, for a person to read the agent's answers against.
 - **No per-Binding run limit.** Limits belong to `botMessage` and `personMessage` triggers; a mention trigger takes none, and only a
   bot's mention runs under fixed limits of the broker's own. Anyone who can
   mention the bot in the channel can spend model quota, so bound the key at the provider.
+- **Under kagent, one conversation per turn of the owning agent.** kagent 0.9.4 builds the owning agent's tools again
+  for each turn it runs, and the sub-agent tool sends one `contextId` for all its calls in that turn (read in kagent's
+  source, `kagent-adk`'s `_remote_a2a_tool.py`, not in this repository). So the docs agent sees the calls of one turn as
+  one conversation and sees nothing of the Slack thread: a follow-up question in the thread reaches it as a new
+  conversation, and only the owning agent can carry what was said before into the question. Each such turn takes one of
+  the 200 conversations above.
+- **Under kagent, the answer arrives whole.** kagent calls the sub-agent with a blocking `message/send`, so nothing of the
+  answer streams to Slack: the step card for the call stays open until the docs agent has finished. How long kagent
+  waits is its own default: kagent 0.9.4's Agent resource has no setting for it (read in its source), and the value was
+  not measured here.
 - **Two model providers, over HTTPS.** OpenRouter and OpenAI-compatible endpoints, through the Chat Completions API.
   `MODEL_BASE_URL` must be an `https` URL, so an in-cluster `http` gateway needs a TLS front.
 - **Not run in a cluster, and not against a live model, by the checks in this repository.** The live-model smoke and an

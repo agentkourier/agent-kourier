@@ -1,0 +1,47 @@
+# The docs agent as a kagent BYO Agent, so that a kagent agent that owns a channel can call it as a tool
+# (tools: [{type: Agent, agent: {name: docs-agent}}]). kagent runs this image as a Deployment and a Service named
+# docs-agent on port 8080 in the Agent's namespace.
+#
+# kagent 0.9 speaks A2A 0.3. A2A_V03_URL turns on the agent's 0.3 surface: JSON-RPC at POST / and a card in the 0.3
+# shape at /.well-known/agent-card.json, which is where kagent's readiness probe and the calling agent read it. Set it
+# to this Service's root, as below, if you change the name or the namespace. PUBLIC_URL is the A2A 1.0 endpoint that
+# the 1.0 card names; kagent does not use it. networkpolicy.yaml admits only the kagent namespace, so where the network
+# plugin enforces NetworkPolicy, Agent Kourier cannot reach this copy: give it the one in ../agent/manifests.
+#
+# The model Secret docs-agent-model, with the key apiKey, must be in this namespace too: make it as in step 2 of the
+# README, with -n kagent. Replace the image, and MODEL_NAME and MODEL_PROVIDER to suit your provider.
+apiVersion: kagent.dev/v1alpha2
+kind: Agent
+metadata:
+  name: docs-agent
+  namespace: kagent
+spec:
+  # The calling model reads this to decide when to use the tool.
+  description: >-
+    Answers questions about Agent Kourier from its documentation and cites the pages it used. Ask it one
+    self-contained question; it does not see the conversation you are in.
+  type: BYO
+  byo:
+    deployment:
+      image: agent-kourier-docs-agent:dev # build it with make docs-agent-image, and load or push it where your nodes pull from
+      env:
+        - {name: MODEL_PROVIDER, value: openrouter}
+        - {name: MODEL_NAME, value: REPLACEME}
+        - name: MODEL_API_KEY
+          valueFrom:
+            secretKeyRef: {name: docs-agent-model, key: apiKey}
+        - {name: SITE_URL, value: "https://agentkourier.dev"}
+        - {name: PUBLIC_URL, value: "http://docs-agent.kagent:8080/a2a"}
+        - {name: A2A_V03_URL, value: "http://docs-agent.kagent:8080/"}
+      podSecurityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: {drop: [ALL]}
+      resources:
+        requests: {cpu: 50m, memory: 128Mi}
+        limits: {memory: 512Mi}
