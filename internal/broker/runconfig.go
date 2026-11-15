@@ -150,8 +150,9 @@ type RunConfig struct {
 	// startTrace is told as each step of the interactions' startup is done, so a test can see their order
 	// against the Slack intake opening.
 	startTrace func(step string)
-	// identify tells whose bot a connection's token is (appIdentity), in place of auth.test: a seam for this package's tests, which run
-	// connections on doubles. Nil asks Slack, except where newSlack replaces the client, and then asks nothing (identityOf).
+	// identify tells whose bot a connection's token is (appIdentity), in place of the platform's identity call (platformSpec.Identify): a seam
+	// for this package's tests, which run connections on doubles. Nil asks the connection's platform (identityOf); Slack's asks nothing where
+	// newSlack replaces the client (slackIdentityOf).
 	identify func(ctx context.Context, conn Connection) (appIdentity, error)
 	// superviseEvery is how often the supervisor looks at the team connections (5 seconds if zero): a seam for this package's tests,
 	// which cannot wait for it.
