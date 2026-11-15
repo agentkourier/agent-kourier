@@ -57,12 +57,19 @@ for kind in stable prerelease; do
       continue
     fi
   fi
-  # Agent Kourier's image, and the recipes' agent images that releases publish beside it (hack/release/release.sh).
+  # Agent Kourier's image, and the recipes' agent images that releases publish beside it (hack/release/release.sh),
+  # read only from the whole lines release.yml's publish job writes under "Verified artifacts". A digest anywhere
+  # else in the body, such as in a pull request's title among the generated notes, is not selected.
   refs=$(jq -r --arg tag "${tag}" '
     .[]
     | select((.draft // false) == false and .tag_name == $tag)
     | (.body // "")
-    | scan("ghcr\\.io/agentkourier/agent-kourier(?:-prompt-agent|-echo-agent)?@sha256:[0-9a-f]{64}")
+    | split("\n")[]
+    | rtrimstr("\r")
+    | (capture("^- Image: `(?<ref>ghcr\\.io/agentkourier/agent-kourier@sha256:[0-9a-f]{64})`$"),
+       capture("^- Prompt agent image: `(?<ref>ghcr\\.io/agentkourier/agent-kourier-prompt-agent@sha256:[0-9a-f]{64})`$"),
+       capture("^- Echo agent image: `(?<ref>ghcr\\.io/agentkourier/agent-kourier-echo-agent@sha256:[0-9a-f]{64})`$"))
+    | .ref
   ' "${RELEASES_JSON}") || die "could not parse image metadata for release ${tag}"
   grep -F 'ghcr.io/agentkourier/agent-kourier@sha256:' <<<"${refs}" >/dev/null ||
     die "release ${tag} does not publish an immutable Agent Kourier image digest"

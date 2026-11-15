@@ -163,9 +163,10 @@ apply_doubles() {
 
 # The fast tier's prompt agent (examples/recipes/prompt-agent) and its doubles, which fast/prompt-agent/prompt-agent.yaml runs (test/kindmanifests
 # pins that it runs these): the recipe's own image, from its Dockerfile, and the fake model and the test MCP server, from fast/prompt-agent/Dockerfile,
-# on PROMPT_PYTHON_IMAGE, the python stage of the recipe's Dockerfile, which is built here and not loaded into the cluster.
+# on PROMPT_PYTHON_IMAGE, the python stage of the recipe's Dockerfile, which is built here and not loaded into the cluster. Its name is under
+# localhost/, so a builder that cannot see the local image store fails to pull it rather than fetching a namesake from Docker Hub.
 PROMPT_AGENT_IMAGE=agent-kourier-e2e/prompt-agent:dev
-PROMPT_PYTHON_IMAGE=agent-kourier-e2e/prompt-python:dev
+PROMPT_PYTHON_IMAGE=localhost/agent-kourier-e2e/prompt-python:dev
 PROMPT_FAKE_MODEL_IMAGE=agent-kourier-e2e/prompt-fake-model:dev
 PROMPT_MCP_IMAGE=agent-kourier-e2e/prompt-mcp:dev
 # The token Agent Kourier sends the prompt agent and the agent checks. A fake constant, made into the Secret of each side here and never committed.
