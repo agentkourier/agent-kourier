@@ -84,7 +84,7 @@ line's newest and perhaps as latest.
 `.github/workflows/release.yml` runs `hack/release/release.sh`, the script behind `make release-image`:
 
 - First checks the exact tagged commit through the Actions API. `ci.yml` must contain successful `lint`, `test`,
-  `test-testhooks`, `docs-agent`, `crd-corpus (1.37)` and `crd-corpus (1.33)` jobs. `security.yml` must contain successful `govulncheck (root)`,
+  `test-testhooks`, `docs-agent`, `crd-corpus (1.37)`, `crd-corpus (1.33)`, `echo-agent` and `prompt-agent` jobs. `security.yml` must contain successful `govulncheck (root)`,
   `govulncheck (ax)`, `govulncheck (docs-agent)`, `gitleaks`, `trivy (linux-amd64)` and `trivy (linux-arm64)` jobs.
   `codeql.yml` must contain a successful `analyze (go)` job. These are the status checks the `main` ruleset
   requires. `codeql.yml` skips `analyze` while the repository is private, and a skipped run blocks the release.
@@ -211,7 +211,7 @@ are applied now:
      their own pull request. Squash is the only allowed merge method.
    - Require signed commits. A squash merge in GitHub is signed by GitHub, so every commit merged this way passes.
    - Require these status checks, with the branch up to date before merging (strict): `lint`, `test`,
-     `test-testhooks`, `docs-agent`, `crd-corpus (1.37)` and `crd-corpus (1.33)` from `ci`; `govulncheck (root)`, `govulncheck (ax)`,
+     `test-testhooks`, `docs-agent`, `crd-corpus (1.37)`, `crd-corpus (1.33)`, `echo-agent` and `prompt-agent` from `ci`; `govulncheck (root)`, `govulncheck (ax)`,
      `govulncheck (docs-agent)`, `gitleaks`, `trivy (linux-amd64)` and `trivy (linux-arm64)` from `security`; and
      `analyze (go)` from `codeql`. The scheduled released-image rescan is intentionally not a required check.
    - Block force pushes and restrict deletions.

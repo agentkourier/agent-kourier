@@ -661,7 +661,8 @@ jobs:
   # the requirements files. Every run restores and only a push to main saves, as for the Go caches, but it does not
   # roll: what pip downloads depends on those files alone, so a push saves only when they change (a miss of the exact
   # key), and cache-prune then deletes the entry for the old files. The image build proves the Dockerfile and
-  # requirements.txt still install together.
+  # requirements.txt still install together. The job's name, echo-agent, is a required check of the `main` ruleset and in
+  # CI_REQUIRED_JOBS in hack/release/check-ci.sh (RELEASING.md): a rename here is a change to both.
   echo-agent:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
@@ -714,7 +715,8 @@ jobs:
           key: ${{ steps.pip-cache.outputs.cache-primary-key }}
 
   # The prompt-agent recipe is Python too (examples/recipes/prompt-agent/agent), and is built and cached the same way as
-  # the echo agent. Its tests start a small MCP server as a subprocess, and call no model.
+  # the echo agent. Its tests start a small MCP server as a subprocess, and call no model. Its name, prompt-agent, is a
+  # required check and in CI_REQUIRED_JOBS too.
   prompt-agent:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
