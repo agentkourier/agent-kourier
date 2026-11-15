@@ -100,6 +100,10 @@ echo "== a missing recipe agent job fails closed"
 run_case recipe-agent-missing 1 recipe-agent-missing
 contains "recipe-agent-missing: names the missing required job" "required job 'prompt-agent' is missing" "${TMP}/recipe-agent-missing.out"
 
+echo "== a missing scan of an agent image fails closed"
+run_case agent-scan-missing 1 agent-scan-missing
+contains "agent-scan-missing: names the missing required job" "required job 'trivy (echo-agent-linux-arm64)' is missing" "${TMP}/agent-scan-missing.out"
+
 echo "== a skipped required job fails closed"
 run_case skipped-required 1 skipped-required
 contains "skipped-required: names the skipped required job" "required job 'test-testhooks' is skipped" "${TMP}/skipped-required.out"

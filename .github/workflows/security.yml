@@ -152,7 +152,8 @@ jobs:
 
   # Agent Kourier's production image and the recipes' agent images that a release publishes (hack/release/release.sh),
   # each platform scanned with the release's policy, so a finding fails here before it fails a release. The ruleset
-  # requires trivy (linux-amd64) and trivy (linux-arm64), Agent Kourier's; the agents' legs are not required checks.
+  # requires every leg, the agents' included, and so does SECURITY_REQUIRED_JOBS in hack/release/check-ci.sh (RELEASING.md):
+  # a renamed or added leg is a change to both.
   image:
     name: trivy (${{ matrix.name }})
     if: ${{ github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}

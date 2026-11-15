@@ -64,8 +64,10 @@ A pull request merges into `main` only when these checks pass and its branch is 
   `test-testhooks` pass only when every one of those jobs passed. `make test-race TEST_SHARD=1/2` runs
   one leg locally.
 - From `security`: `govulncheck (root)`, `govulncheck (ax)` and `govulncheck (docs-agent)` (one
-  per Go module), `gitleaks` (a secret scan of the whole git history), and `trivy (linux-amd64)` and
-  `trivy (linux-arm64)` (a vulnerability scan of the production image built for each platform).
+  per Go module), `gitleaks` (a secret scan of the whole git history), `trivy (linux-amd64)` and
+  `trivy (linux-arm64)` (a vulnerability scan of the production image built for each platform), and
+  `trivy (prompt-agent-linux-amd64)`, `trivy (prompt-agent-linux-arm64)`, `trivy (echo-agent-linux-amd64)` and
+  `trivy (echo-agent-linux-arm64)` (the same scan of the two recipe agents' images that a release publishes).
 - From `codeql`: `analyze (go)` (CodeQL code scanning).
 
 A gated job checks out and passes without running its other steps when every path a pull request changes, each as a

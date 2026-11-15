@@ -40,6 +40,10 @@ SECURITY_REQUIRED_JOBS=(
   gitleaks
   'trivy (linux-amd64)'
   'trivy (linux-arm64)'
+  'trivy (prompt-agent-linux-amd64)'
+  'trivy (prompt-agent-linux-arm64)'
+  'trivy (echo-agent-linux-amd64)'
+  'trivy (echo-agent-linux-arm64)'
 )
 CODEQL_REQUIRED_JOBS=('analyze (go)')
 

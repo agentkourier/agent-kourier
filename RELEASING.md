@@ -85,7 +85,9 @@ line's newest and perhaps as latest.
 
 - First checks the exact tagged commit through the Actions API. `ci.yml` must contain successful `lint`, `test`,
   `test-testhooks`, `docs-agent`, `crd-corpus (1.37)`, `crd-corpus (1.33)`, `echo-agent` and `prompt-agent` jobs. `security.yml` must contain successful `govulncheck (root)`,
-  `govulncheck (ax)`, `govulncheck (docs-agent)`, `gitleaks`, `trivy (linux-amd64)` and `trivy (linux-arm64)` jobs.
+  `govulncheck (ax)`, `govulncheck (docs-agent)`, `gitleaks`, `trivy (linux-amd64)` and `trivy (linux-arm64)` jobs, and the four scans of the agents'
+  images: `trivy (prompt-agent-linux-amd64)`, `trivy (prompt-agent-linux-arm64)`, `trivy (echo-agent-linux-amd64)` and
+  `trivy (echo-agent-linux-arm64)`.
   `codeql.yml` must contain a successful `analyze (go)` job. These are the status checks the `main` ruleset
   requires. `codeql.yml` skips `analyze` while the repository is private, and a skipped run blocks the release.
   The scheduled released-image rescan is the only permitted skipped job. A pending run fails closed with a message
@@ -212,7 +214,8 @@ are applied now:
    - Require signed commits. A squash merge in GitHub is signed by GitHub, so every commit merged this way passes.
    - Require these status checks, with the branch up to date before merging (strict): `lint`, `test`,
      `test-testhooks`, `docs-agent`, `crd-corpus (1.37)`, `crd-corpus (1.33)`, `echo-agent` and `prompt-agent` from `ci`; `govulncheck (root)`, `govulncheck (ax)`,
-     `govulncheck (docs-agent)`, `gitleaks`, `trivy (linux-amd64)` and `trivy (linux-arm64)` from `security`; and
+     `govulncheck (docs-agent)`, `gitleaks`, `trivy (linux-amd64)`, `trivy (linux-arm64)`, `trivy (prompt-agent-linux-amd64)`,
+     `trivy (prompt-agent-linux-arm64)`, `trivy (echo-agent-linux-amd64)` and `trivy (echo-agent-linux-arm64)` from `security`; and
      `analyze (go)` from `codeql`. The scheduled released-image rescan is intentionally not a required check.
    - Block force pushes and restrict deletions.
    - Bypass: repository admins, for pull requests only. An admin can merge a pull request whose requirements are
