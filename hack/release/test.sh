@@ -96,6 +96,10 @@ echo "== a missing corpus run fails closed"
 run_case corpus-min-missing 1 corpus-min-missing
 contains "corpus-min-missing: names the missing required job" "required job 'crd-corpus (1.33)' is missing" "${TMP}/corpus-min-missing.out"
 
+echo "== a missing recipe agent job fails closed"
+run_case recipe-agent-missing 1 recipe-agent-missing
+contains "recipe-agent-missing: names the missing required job" "required job 'prompt-agent' is missing" "${TMP}/recipe-agent-missing.out"
+
 echo "== a skipped required job fails closed"
 run_case skipped-required 1 skipped-required
 contains "skipped-required: names the skipped required job" "required job 'test-testhooks' is skipped" "${TMP}/skipped-required.out"
