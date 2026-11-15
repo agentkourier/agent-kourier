@@ -511,6 +511,7 @@ fastmcp-slim==4.1.2 \
     --hash=sha256:4b703ddbd35165ebf03b2cc560688f458f3fe4db11e635074fcc303496734154 \
     --hash=sha256:58a4e547a0f85cfee2d2219677ed31c0f1c4911741a5c91a1ee5fbf69dde35fa
     # via
+    #   -r examples/recipes/prompt-agent/agent/requirements.in
     #   fastmcp
     #   pydantic-ai-slim
 filelock==4.2.1 \
