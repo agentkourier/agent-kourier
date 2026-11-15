@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -9,23 +10,28 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 )
 
-// authRejected is the error of a run that ended because the platform rejected the credentials for good. It is ErrSlackAuth for errors.Is, and
+// authRejected is the error of a run that ended because the platform rejected the credentials for good. It is ErrChatAuth for errors.Is, and
 // it keeps the platform's code (never a token), which the supervisor logs for a team connection that stops.
 type authRejected struct {
-	code string
+	// platform is the connection's platform as spec.platform spells it ("slack"), which the text names; "" says the chat platform.
+	platform string
+	code     string
 	// via says what saw the rejection when it was not the connection's own run: "reported by a call".
 	via string
 }
 
+// Error is "<platform> rejected the tokens: <code>", and " (<via>)" after it when a call saw the rejection. For Slack that is the text
+// the broker has always exited with ("slack rejected the tokens: invalid_auth"), which the docs quote.
 func (e *authRejected) Error() string {
+	text := cmp.Or(e.platform, "the chat platform") + " rejected the tokens: " + e.code
 	if e.via == "" {
-		return ErrSlackAuth.Error() + ": " + e.code
+		return text
 	}
-	return ErrSlackAuth.Error() + ": " + e.code + " (" + e.via + ")"
+	return text + " (" + e.via + ")"
 }
 
-// Is makes the error ErrSlackAuth.
-func (e *authRejected) Is(target error) bool { return target == ErrSlackAuth }
+// Is makes the error ErrChatAuth.
+func (e *authRejected) Is(target error) bool { return target == ErrChatAuth }
 
 // authWatch is a chat.Platform that reports a fatal auth error of the Platform it wraps.
 type authWatch struct {
@@ -246,23 +252,23 @@ func (s watchedStream) Stop(ctx context.Context, markdown string, final chat.Mes
 	return err
 }
 
-// stopped is the error of a Slack run whose context has ended: the context's cause if a call
-// reported a rejection (WithAuthFailure), which is a failure, and otherwise a shutdown, wrapping
-// the context's error.
-func stopped(ctx context.Context) error {
-	if cause := context.Cause(ctx); errors.Is(cause, ErrSlackAuth) {
+// stopped is the error of a run on platform (spec.platform, "" for none) whose context has ended: the context's cause if a call
+// reported a rejection (WithAuthFailure), which is a failure, and otherwise a shutdown, wrapping the context's error.
+func stopped(ctx context.Context, platform string) error {
+	if cause := context.Cause(ctx); errors.Is(cause, ErrChatAuth) {
 		return cause
 	}
-	return fmt.Errorf("slack run stopped: %w", ctx.Err())
+	return fmt.Errorf("%s run stopped: %w", cmp.Or(platform, "chat"), ctx.Err())
 }
 
-// WithAuthFailure returns a context for RunPlatform that ends, with ErrSlackAuth as its cause, when
-// report is called with a fatal code. RunPlatform then returns that cause, an error that wraps ErrSlackAuth and keeps the code, so that
+// WithAuthFailure returns a context for RunPlatform that ends, with ErrChatAuth as its cause, when
+// report is called with a fatal code. RunPlatform then returns that cause, an error that wraps ErrChatAuth and keeps the code, so that
 // the run ends as for a rejected connection, and not as for a shutdown: the own connection's ends the process, and a team connection's
-// ends that connection. stop releases the context. report may be called from any goroutine, and only the first call counts.
-func WithAuthFailure(parent context.Context) (ctx context.Context, report func(code string), stop context.CancelFunc) {
+// ends that connection. platform is the connection's (spec.platform), which the error names. stop releases the context. report may be
+// called from any goroutine, and only the first call counts.
+func WithAuthFailure(parent context.Context, platform string) (ctx context.Context, report func(code string), stop context.CancelFunc) {
 	ctx, cancel := context.WithCancelCause(parent)
 	return ctx, func(code string) {
-		cancel(&authRejected{code: code, via: "reported by a call"})
+		cancel(&authRejected{platform: platform, code: code, via: "reported by a call"})
 	}, func() { cancel(nil) }
 }

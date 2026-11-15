@@ -62,7 +62,7 @@ func (e *credentialsRejectedError) Error() string {
 func (e *credentialsRejectedError) Is(target error) bool { return target == errCredentialsRejected }
 
 // rejectionCode is the platform's code in err, if err says the platform rejected the credentials: a run or a call that found them rejected
-// (ErrSlackAuth), or an identity call that did.
+// (ErrChatAuth), or an identity call that did.
 func rejectionCode(err error) (string, bool) {
 	var ar *authRejected
 	var cr *credentialsRejectedError
