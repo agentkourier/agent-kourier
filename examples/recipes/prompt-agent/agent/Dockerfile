@@ -12,16 +12,18 @@
 # in the final image. The base is pinned by digest; Wolfi's python-3.14 package takes its current 3.14 release when the
 # image is built.
 FROM cgr.dev/chainguard/wolfi-base:latest@sha256:833c48f1faf32c90e6f9501a2410a9aa28ceb2c594102edd4470053c30efa089 AS python
-RUN apk add --no-cache python-3.14
+# python-3.14 brings py3-pip-wheel, pip as a wheel for ensurepip; it is deleted in the same layer, so no layer of the
+# final image holds pip.
+RUN apk add --no-cache python-3.14 && rm -rf /usr/share/python-wheels
 
-# The virtualenv is made here, with the pip that venv installs, and pip is removed from it before it is copied.
+# The virtualenv is made here without pip, and Wolfi's pip installs into it from outside, so pip never enters it.
 FROM python AS build
+RUN apk add --no-cache py3.14-pip
 COPY requirements.txt /tmp/requirements.txt
 # Wheels only: pip runs no package's build code. Every pin has a wheel for CPython 3.14 on amd64 and arm64.
-RUN python3.14 -m venv /opt/venv \
- && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check --require-hashes --only-binary=:all: \
-      -r /tmp/requirements.txt \
- && /opt/venv/bin/pip uninstall --yes pip
+RUN python3.14 -m venv --without-pip /opt/venv \
+ && python3.14 -m pip --python /opt/venv/bin/python install --no-cache-dir --disable-pip-version-check \
+      --require-hashes --only-binary=:all: -r /tmp/requirements.txt
 
 FROM python
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1

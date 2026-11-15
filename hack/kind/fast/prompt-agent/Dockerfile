@@ -17,8 +17,11 @@ FROM ${PYTHON_IMAGE} AS mcp
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /app
 COPY requirements-dev.txt ./
-# Wheels only, as in the recipe's image: pip runs no package's build code. The double keeps pip; it is never published.
-RUN python3.14 -m venv /opt/venv && /opt/venv/bin/pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
+# Wheels only, as in the recipe's image: pip runs no package's build code. The recipe's python stage has no pip, so this
+# double adds Wolfi's; it is never published.
+RUN apk add --no-cache py3.14-pip \
+ && python3.14 -m venv --without-pip /opt/venv \
+ && python3.14 -m pip --python /opt/venv/bin/python install --require-hashes --only-binary=:all: -r requirements-dev.txt
 COPY mcp_server.py ./
 USER 65532:65532
 EXPOSE 8080
