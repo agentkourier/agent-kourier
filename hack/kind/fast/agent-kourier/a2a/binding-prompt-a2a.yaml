@@ -1,0 +1,24 @@
+# The prompt agent's scenarios (test/e2e/promptagent_test.go): a mention whose reply used an MCP tool, a thread that goes on, a question
+# answered by a typed reply, and one left to time out. The agent fails closed without a token, so the Binding sends the one of Secret
+# prompt-agent-bearer, which lib.sh's deploy_prompt_agent makes here and in e2e (where the agent mounts it) from one value; on the custom
+# resources route hack/kind/crds-values.yaml grants it by name. The timeout is short so that the scenario that leaves a question
+# unanswered ends in a sweep or two (every 10 seconds), and long enough that a typed answer, sent at once, is taken. A channel of its own
+# on the fake Slack; the channel and the backend are pinned by test/kindmanifests and test/e2e/scenarios.go.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: fast-prompt-a2a, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {namespace: agent-kourier, name: prompt-a2a}
+    namespace: e2e # on the a2a dialect the backend url alone selects the agent and these are labels
+    name: prompt-agent
+  identity:
+    userId: agent-kourier-fast
+    tokenSecretRef: {name: prompt-agent-bearer}
+  chat:
+    connectionRef: {namespace: agent-kourier, name: slack-fast}
+    channel: CPROMPT
+    output: live
+  interactions:
+    askUser: true
+    timeout: 20s

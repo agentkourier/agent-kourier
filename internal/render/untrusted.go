@@ -362,8 +362,12 @@ func (b untrustedBlock) tag(shown []renderedItem, leftOut int) string {
 
 // render returns the section the block makes, in at most MaxUnits, and how many items it leaves out, Dropped among
 // them; "" and 0 for an empty block that OmitWhenEmpty.
-func (b untrustedBlock) render() (section string, leftOut int) {
-	items := b.cleanItems()
+func (b untrustedBlock) render() (section string, leftOut int) { return b.layout(b.cleanItems()) }
+
+// layout is render of items that cleanItems returned for b. It is apart from render for the tests that sweep a block's
+// sizes and counts: cleaning is redaction, nearly all the cost of such a sweep under the race detector, and the same items
+// recur through it, so those tests clean each item once and lay out every block of the sweep from them.
+func (b untrustedBlock) layout(items []cleanedItem) (section string, leftOut int) {
 	if len(items) == 0 && b.OmitWhenEmpty {
 		return "", 0
 	}

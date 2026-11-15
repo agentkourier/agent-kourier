@@ -133,6 +133,15 @@ type envConfig struct {
 	telemetry                   telemetry.Config
 }
 
+// runConfig is the broker's RunConfig as the environment sets it: everything but the listener, the logger and the version, which run adds.
+func (c envConfig) runConfig() broker.RunConfig {
+	return broker.RunConfig{
+		ConfigSource: c.configSource, ChatConnection: c.chatConnection, ConnectionNamespaces: c.connectionNamespaces, ConnectionNamespaceSelector: c.connectionNamespaceSelector,
+		ConfigDir: c.configDir, DBPath: c.dbPath, Store: c.store, Election: c.election, SyncTimeout: c.syncTimeout, KlogVerbosity: c.klogV,
+		Telemetry: c.telemetry, AuditRetention: c.auditRetention,
+	}
+}
+
 // loadEnv reads the environment through getenv. A value it cannot read is an error wrapping
 // broker.ErrWiring that names the variable; nothing is guessed.
 func loadEnv(getenv func(string) string) (envConfig, error) {
@@ -260,7 +269,8 @@ func loadConnectionNamespaces(getenv func(string) string, source broker.ConfigSo
 // the ChatConnections of besides the list's. Unset or empty is no selector, the nil Selector: never labels.Nothing(), which is what
 // metav1.LabelSelectorAsSelector makes of a nil LabelSelector, and which would read namespaces to match none of them. Otherwise the value
 // must be one JSON object and nothing after it, decoded as the API server decodes one (field names case-sensitive, no field a
-// LabelSelector does not have and none twice: a repeated matchLabels would otherwise keep the last, which may be {}, every namespace), and
+// LabelSelector does not have and none twice: the decoder merges a repeated matchLabels into the first, but a repeated matchExpressions,
+// or a repeated field that is null, replaces the first, which can leave no requirement, every namespace), and
 // pass metav1.LabelSelectorAsSelector, which validates each key, value and operator. {}, or any selector that requires nothing, is the
 // empty Selector: every namespace. It is refused with the files source, as the list is.
 //
@@ -465,9 +475,8 @@ func run(args []string, ver string, stdout, stderr io.Writer, getenv func(string
 			return fail(stderr, err)
 		}
 	}
-	cfg := broker.RunConfig{
-		ConfigSource: env.configSource, ChatConnection: env.chatConnection, ConnectionNamespaces: env.connectionNamespaces, ConnectionNamespaceSelector: env.connectionNamespaceSelector, ConfigDir: env.configDir, DBPath: env.dbPath, Store: env.store, Election: env.election, Listener: ln, SyncTimeout: env.syncTimeout, KlogVerbosity: env.klogV, Logger: log, Telemetry: env.telemetry, ServiceVersion: ver, AuditRetention: env.auditRetention,
-	}
+	cfg := env.runConfig()
+	cfg.Listener, cfg.Logger, cfg.ServiceVersion = ln, log, ver
 	applyTestHooks(log)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

@@ -74,6 +74,11 @@ const (
 	ChannelA2AMemory = "CA2AM"
 )
 
+// ChannelPromptAgent is the prompt agent's channel (hack/kind/fast/agent-kourier/a2a/binding-prompt-a2a.yaml, the fast tier only): the
+// recipe's agent (examples/recipes/prompt-agent) through the a2a dialect, on a fake model (hack/kind/fast/prompt-agent), with the recipe's
+// test MCP server and askUser on. Its scenarios each use a thread of their own. test/kindmanifests pins the Binding.
+const ChannelPromptAgent = "CPROMPT"
+
 // S17's channel and bot: the feedback buttons on an investigation an alert started.
 const (
 	// ChannelS17 is S17's: scenario-alert behind a botMessage trigger written as the Alertmanager trigger for the bot BotS17. The fast

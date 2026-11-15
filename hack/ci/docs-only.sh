@@ -1,23 +1,55 @@
 #!/usr/bin/env bash
-# Prints skip=true when a pull request changes only paths whose content no step that the code jobs of ci.yml,
-# security.yml and codeql.yml skip can depend on (see docs_only_path), so those jobs can skip their steps; skip=false
-# otherwise. Run from the repository as `PR_HEAD_SHA=<sha> hack/ci/docs-only.sh [COMMIT]`, COMMIT (default HEAD) being
-# the pull request's merge commit, as a pull_request run checks it out, and PR_HEAD_SHA the pull request's head: the
-# merge commit's second parent must be that head, and its first parent is then the base it merges into. The paths
-# compared are every path whose content, mode or type differs between the base and the merge commit, renames listed as
-# a deletion and an addition.
+# Prints skip=true when a pull request changes only paths that one class of the gated jobs of ci.yml, security.yml and
+# codeql.yml does not read, so a job of that class can skip its steps; skip=false otherwise. A path qualifies when it is
+# on the docs-only list, which no gated job reads (docs_only_path), or when it is Markdown that the class does not read
+# (class_skips). Run from the repository as `PR_HEAD_SHA=<sha> hack/ci/docs-only.sh CLASS [COMMIT]`, CLASS naming the
+# job's class (below), COMMIT (default HEAD) being the pull request's merge commit, as a pull_request run checks it out,
+# and PR_HEAD_SHA the pull request's head: the merge commit's second parent must be that head, and its first parent is
+# then the base it merges into. The paths compared are every path whose content, mode or type differs between the base
+# and the merge commit, renames listed as a deletion and an addition.
 #
-# It fails open: skip=true is printed only when COMMIT is a merge of two parents whose second is PR_HEAD_SHA, the
-# listing succeeded and listed at least one path, every path is on the list in docs_only_path, and every path is a
-# regular file (mode 100644 or 100755) or deleted. Anything else prints skip=false, with the reason on stderr: a COMMIT
-# that cannot be read or is not such a merge (a shallow checkout without the parents, a push, a checkout of the head
-# itself), PR_HEAD_SHA unset or empty, a listing git fails, an empty listing, a path off the list, or a symlink (mode
-# 120000) or submodule (160000) on the list. The listing is git's own, so it has no cap on the number of paths. Exit
-# status is 0 for both answers; any other status means the script itself failed, and the workflow then runs everything
-# too.
+# The classes, and the jobs that pass each (hack/ci/docsonly's test holds every job to its class):
+#   tests       the race and testhooks legs, test-scripts, test-postgres: the docs-only list alone. Their tests read
+#               README.md and pages under docs/ and elsewhere at run time (internal/store/storetest reads
+#               docs/reference/stored-data.md, cmd/agent-kourier's tests read pages under docs/how-to), which nothing but
+#               running them shows, so no Markdown is added for them.
+#   scan        govulncheck (all three modules), trivy (each image and platform) and CodeQL's analyze: also Markdown outside every
+#               Go package's tree. govulncheck reads a module's Go packages (their files, and the files they embed).
+#               CodeQL's Go autobuild runs make (whose default goal is help), checks that go list ./... loads, and
+#               extracts the .go files, by GitHub's documentation of its build options and the Go extractor's
+#               codeql-extractor.yml, whose only file type is .go. The image is the binary of ./cmd/agent-kourier on the
+#               runtime image: .dockerignore drops docs/, the build stage reads only Go inputs, and its verify stage runs
+#               two tests of internal/testhooks that read the binaries. An agent's image (examples/recipes/<agent>/agent)
+#               copies only the files its .dockerignore lets in by name, none of them Markdown.
+#   crd-corpus  both crd-corpus jobs: also Markdown outside every Go package's tree. The job builds and runs
+#               test/crdcorpus, applies charts/agent-kourier/files/crds, and the corpus walk reads only .yaml and .yml
+#               files under its roots (test/crdcorpus/corpus.go).
+#   docs-agent  docs-agent: also Markdown outside docs/, examples/recipes/docs-agent/ and every Go package's tree. Its
+#               tests load the real docs/ as the corpus and read the recipe's evals; its lint reads Go only.
+#   echo-agent  echo-agent: also Markdown outside examples/recipes/echo-agent/agent/ and every Go package's tree. pytest,
+#               ruff, pip-audit and the image build all run in that directory and read nothing above it; the job reads
+#               no Go, but every class that adds Markdown keeps the Go rule, which costs it nothing here.
+#   prompt-agent
+#               prompt-agent: also Markdown outside examples/recipes/prompt-agent/agent/ and every Go package's tree,
+#               as for echo-agent: its pytest, ruff, pip-audit and image build run in that directory and read nothing
+#               above it.
+# A Go package's tree is a directory of the merge commit that holds a .go file, and everything under it: //go:embed
+# reaches only the package's own directory and those below it, and testdata lives there too. It is computed from the
+# merge commit on each run, so a page that a new package could embed stops qualifying with no list to edit. An unknown
+# or missing CLASS runs everything.
+#
+# It fails open: skip=true is printed only when CLASS is a class above, COMMIT is a merge of two parents whose second is
+# PR_HEAD_SHA, the listing succeeded and listed at least one path, every path qualifies for CLASS, and every path is a
+# regular file (mode 100644 or 100755) or deleted. Anything else prints skip=false, with the reason on stderr: an unknown
+# class, a COMMIT that cannot be read or is not such a merge (a shallow checkout without the parents, a push, a checkout
+# of the head itself), PR_HEAD_SHA unset or empty, a listing git fails (the changed paths or, for a class that adds
+# Markdown, the merge commit's tree), an empty listing, a path that does not qualify, or a symlink (mode 120000) or
+# submodule (160000). The listings are git's own, so there is no cap on the number of paths. Exit status is 0 for both
+# answers; any other status means the script itself failed, and the workflow then runs everything too.
 set -euo pipefail
 
-COMMIT=${1:-HEAD}
+CLASS=${1:-}
+COMMIT=${2:-HEAD}
 
 TMP=$(mktemp -d)
 trap 'rm -rf "${TMP}"' EXIT
@@ -49,13 +81,72 @@ docs_only_path() {
   return 1
 }
 
-# run REASON: the answer that runs every job.
+# class_skips PATH: whether PATH is Markdown that the jobs of CLASS do not read (the header says what each reads).
+class_skips() {
+  case "${CLASS}" in
+    tests) return 1 ;;
+    docs-agent)
+      case "$1" in docs/* | examples/recipes/docs-agent/*) return 1 ;; esac
+      ;;
+    echo-agent)
+      case "$1" in examples/recipes/echo-agent/agent/*) return 1 ;; esac
+      ;;
+    prompt-agent)
+      case "$1" in examples/recipes/prompt-agent/agent/*) return 1 ;; esac
+      ;;
+  esac
+  case "$1" in
+    *.md) outside_go_trees "$1" ;;
+    *) return 1 ;;
+  esac
+}
+
+# GO_DIRS holds every directory of COMMIT's tree that holds a .go file, "." for the root, each with a newline before and
+# after it; load_go_dirs fills it. A directory whose name has a newline in it can only make a lookup find more, never
+# less: each is matched whole.
+GO_DIRS=
+load_go_dirs() {
+  git ls-tree -r -z --name-only "${COMMIT}" >"${TMP}/tree" 2>"${TMP}/git.err" ||
+    run "git ls-tree of ${COMMIT} failed: $(head -n 1 "${TMP}/git.err")"
+  GO_DIRS=$'\n'
+  local path dir
+  while IFS= read -r -d '' path || [ -n "${path}" ]; do
+    case "${path}" in
+      *.go) ;;
+      *) continue ;;
+    esac
+    case "${path}" in
+      */*) dir=${path%/*} ;;
+      *) dir=. ;;
+    esac
+    GO_DIRS+="${dir}"$'\n'
+  done <"${TMP}/tree"
+}
+
+# outside_go_trees PATH: whether no directory that holds PATH, up to and including the root, holds a .go file.
+outside_go_trees() {
+  local dir=$1
+  while :; do
+    case "${dir}" in
+      */*) dir=${dir%/*} ;;
+      *) dir=. ;;
+    esac
+    [[ "${GO_DIRS}" != *$'\n'"${dir}"$'\n'* ]] || return 1
+    [ "${dir}" != . ] || return 0
+  done
+}
+
+# run REASON: the answer that runs every step of the job.
 run() {
-  printf 'docs-only: %s; every job runs\n' "$1" >&2
+  printf 'docs-only (%s): %s; every step runs\n' "${CLASS:-no class}" "$1" >&2
   echo skip=false
   exit 0
 }
 
+case "${CLASS}" in
+  tests | scan | crd-corpus | docs-agent | echo-agent | prompt-agent) ;;
+  *) run "'${CLASS}' is not a class" ;;
+esac
 [ -n "${PR_HEAD_SHA:-}" ] || run "PR_HEAD_SHA is not set"
 parents=$(git rev-list --parents -n 1 "${COMMIT}" 2>/dev/null) || run "cannot read commit ${COMMIT}"
 read -r -a commits <<<"${parents}"
@@ -66,6 +157,7 @@ read -r -a commits <<<"${parents}"
 git diff --no-renames --raw -z "${COMMIT}^1" "${COMMIT}" >"${TMP}/paths" 2>"${TMP}/git.err" ||
   run "git diff of ${COMMIT}^1 and ${COMMIT} failed: $(head -n 1 "${TMP}/git.err")"
 [ -s "${TMP}/paths" ] || run "${COMMIT} changes no path"
+[ "${CLASS}" = tests ] || load_go_dirs
 
 count=0
 # git ends every field with a NUL; the tests after || keep a last one without it from being dropped.
@@ -77,9 +169,10 @@ while IFS= read -r -d '' meta || [ -n "${meta}" ]; do
     100644 | 100755 | 000000) ;;
     *) run "${path} has mode ${mode}, not a regular file or a deletion" ;;
   esac
-  docs_only_path "${path}" || run "${path} is not on the docs-only list"
+  docs_only_path "${path}" || class_skips "${path}" ||
+    run "${path} is neither on the docs-only list nor Markdown that this class does not read"
   count=$((count + 1))
 done <"${TMP}/paths"
 
-printf 'docs-only: all %d changed paths are on the docs-only list; the code jobs skip their steps\n' "${count}" >&2
+printf 'docs-only (%s): all %d changed paths are on the docs-only list or Markdown that this class does not read; the job skips its steps\n' "${CLASS}" "${count}" >&2
 echo skip=true

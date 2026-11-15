@@ -1,0 +1,6 @@
+# BuildKit reads this file, beside the Dockerfile of the same name, in place of the context's own .dockerignore (the recipe's, which lets in only
+# what the recipe's image copies). This Dockerfile copies these by name; everything else stays out of the build context.
+*
+!fake_model.py
+!mcp_server.py
+!requirements-dev.txt

@@ -1,7 +1,11 @@
-# On a docs-only pull request (the header of ci.yml says what that is and why skipping is safe), govulncheck and trivy
-# start and report success under their own names but skip every step after their docs-only step: no Go or image file
-# changed, so neither has anything new to scan. gitleaks scans the whole tree and its history, so it always runs in
-# full. On any other event the docs-only step does not run, and the jobs run as they did before it.
+# govulncheck and trivy pass the class scan to the docs-only step (the header of ci.yml says what the classes are and
+# why skipping is safe): on a pull request that changes only paths on the docs-only list or Markdown outside every Go
+# package's tree (README.md and the pages under docs/, say), they start and report success under their own names but
+# skip every step after their docs-only step. govulncheck reads a module's Go packages and the files they embed,
+# Agent Kourier's image holds only the binary built from Go, and an agent's image only the files its .dockerignore
+# lets in, none of them Markdown, so neither has new code to scan. gitleaks scans the whole tree and
+# its history, so it always runs in full. On any other event the docs-only step does not run, and the jobs run as they
+# did before it.
 name: security
 
 on:
@@ -56,15 +60,17 @@ jobs:
           persist-credentials: false
           # The merge commit and both its parents, for the docs-only step.
           fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
-      # On a docs-only pull request every step after this one skips; the header says why that is safe.
+      # On a pull request that changes only paths its class (DOCS_ONLY_CLASS) does not read, every step after this
+      # one skips; the header says why that is safe.
       - id: docs-only
         name: Classify the pull request's changes
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DOCS_ONLY_CLASS: scan
         run: |
-          scope=$(hack/ci/docs-only.sh)
+          scope=$(hack/ci/docs-only.sh "${DOCS_ONLY_CLASS}")
           echo "${scope}" >>"${GITHUB_OUTPUT}"
       # A cache per module, as ci.yml describes. The script pins govulncheck's version, so it is in the key too.
       - id: setup-go
@@ -144,6 +150,10 @@ jobs:
           path: ${{ runner.temp }}/gitleaks.sarif
           if-no-files-found: warn
 
+  # Agent Kourier's production image and the recipes' agent images that a release publishes (hack/release/release.sh),
+  # each platform scanned with the release's policy, so a finding fails here before it fails a release. The ruleset
+  # requires every leg, the agents' included, and so does SECURITY_REQUIRED_JOBS in hack/release/check-ci.sh (RELEASING.md):
+  # a renamed or added leg is a change to both.
   image:
     name: trivy (${{ matrix.name }})
     if: ${{ github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
@@ -159,22 +169,44 @@ jobs:
             platform: linux/amd64
           - name: linux-arm64
             platform: linux/arm64
+          - name: prompt-agent-linux-amd64
+            platform: linux/amd64
+            agent: prompt-agent
+          - name: prompt-agent-linux-arm64
+            platform: linux/arm64
+            agent: prompt-agent
+          - name: echo-agent-linux-amd64
+            platform: linux/amd64
+            agent: echo-agent
+          - name: echo-agent-linux-arm64
+            platform: linux/arm64
+            agent: echo-agent
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           # The merge commit and both its parents, for the docs-only step.
           fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
-      # On a docs-only pull request every step after this one skips; the header says why that is safe.
+      # On a pull request that changes only paths its class (DOCS_ONLY_CLASS) does not read, every step after this
+      # one skips; the header says why that is safe.
       - id: docs-only
         name: Classify the pull request's changes
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DOCS_ONLY_CLASS: scan
         run: |
-          scope=$(hack/ci/docs-only.sh)
+          scope=$(hack/ci/docs-only.sh "${DOCS_ONLY_CLASS}")
           echo "${scope}" >>"${GITHUB_OUTPUT}"
+      # An agent's Dockerfile runs apk and pip in the target platform, so its arm64 leg builds under QEMU, as the release
+      # does (release.yml pins the same binfmt image). Agent Kourier's Dockerfile cross-compiles and emulates nothing.
+      - if: ${{ steps.docs-only.outputs.skip != 'true' && matrix.agent != '' && matrix.platform == 'linux/arm64' }}
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          image: docker.io/tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          platforms: arm64
+          cache-image: false
       - if: ${{ steps.docs-only.outputs.skip != 'true' }}
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Install pinned Trivy
@@ -184,7 +216,7 @@ jobs:
           path=$(hack/security/install-trivy.sh "${RUNNER_TEMP}/security-tools")
           echo "path=${path}" >>"${GITHUB_OUTPUT}"
       - name: Build the production image
-        if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        if: ${{ steps.docs-only.outputs.skip != 'true' && matrix.agent == '' }}
         env:
           PLATFORM: ${{ matrix.platform }}
           IMAGE_REF: agent-kourier-security:${{ matrix.name }}
@@ -198,7 +230,14 @@ jobs:
             --load \
             --tag "${IMAGE_REF}" \
             .
-      - name: Scan the production image
+      - name: Build the agent image
+        if: ${{ steps.docs-only.outputs.skip != 'true' && matrix.agent != '' }}
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          IMAGE_REF: agent-kourier-security:${{ matrix.name }}
+          AGENT: ${{ matrix.agent }}
+        run: docker buildx build --platform "${PLATFORM}" --load --tag "${IMAGE_REF}" "examples/recipes/${AGENT}/agent"
+      - name: Scan the image
         if: ${{ steps.docs-only.outputs.skip != 'true' }}
         env:
           IMAGE_REF: agent-kourier-security:${{ matrix.name }}

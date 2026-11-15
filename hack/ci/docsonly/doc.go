@@ -1,5 +1,8 @@
 // Package docsonly holds the test that keeps the docs-only gate of the workflows the same in every job that has it: the
-// checkout that fetches the merge commit's parents, the step that runs hack/ci/docs-only.sh, and the gate on every later
-// step that a pull request runs. The gate is copied into each job, so a copy that drifts (one that loses
-// continue-on-error, say) would break its failing open without failing anything else.
+// checkout that fetches the merge commit's parents, the step that runs hack/ci/docs-only.sh with the class of paths the
+// job does not read, and the gate on every later step that a pull request runs. The gate is copied into each job, so a
+// copy that drifts (one that loses continue-on-error, say, or passes another job's class) would break its failing open
+// without failing anything else. Its tests also hold the jobs that must run in full (lint, with its zizmor audit of the
+// workflows, and gitleaks) to doing so on every event, and codeql.yml's concurrency to cancelling only a pull request's
+// superseded run, never a run of main that the release gate reads.
 package docsonly

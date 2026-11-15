@@ -76,15 +76,18 @@ func fastConfig(t *testing.T) string {
 	return dir
 }
 
-var upFastSecrets = secrets{"agent-kourier/slack-fast": {"botToken", "appToken"}, "agent-kourier/agent-kourier-agent-token": {"token"}}
+var upFastSecrets = secrets{
+	"agent-kourier/slack-fast": {"botToken", "appToken"}, "agent-kourier/agent-kourier-agent-token": {"token"},
+	"agent-kourier/prompt-agent-bearer": {"token"}, // lib.sh's deploy_prompt_agent
+}
 
 func TestShippedConfigLoadsAndResolves(t *testing.T) {
 	set, err := config.Load(t.Context(), fastConfig(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(set.Bindings) != 29 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 6 {
-		t.Fatalf("Load = %d Bindings, %d connections and %d backends; want a Binding for the smoke test and one for each of fourteen scenarios, three for S16's cases, four for the verification of Bindings, five for the a2a dialect against the plain pod and two against hitlagent, one connection, and the backend of the kagent-v1 Bindings and five of the a2a ones (a2aDir)",
+	if len(set.Bindings) != 30 || len(set.ChatConnections) != 1 || len(set.AgentBackends) != 7 {
+		t.Fatalf("Load = %d Bindings, %d connections and %d backends; want a Binding for the smoke test and one for each of fourteen scenarios, three for S16's cases, four for the verification of Bindings, five for the a2a dialect against the plain pod, two against hitlagent and one against the prompt agent, one connection, and the backend of the kagent-v1 Bindings and six of the a2a ones (a2aDir)",
 			len(set.Bindings), len(set.ChatConnections), len(set.AgentBackends))
 	}
 	snap, err := config.Resolve(t.Context(), set, upFastSecrets)
@@ -96,7 +99,7 @@ func TestShippedConfigLoadsAndResolves(t *testing.T) {
 		t.Errorf("channel C1 resolves to %+v, %v; want the Binding for test-agent on the stub agent's Service", rb, ok)
 	}
 	// The Secrets are the ones up-fast.sh makes: without either, the config does not resolve.
-	for name, missing := range map[string]string{"the Slack tokens": "agent-kourier/slack-fast", "the agent token": "agent-kourier/agent-kourier-agent-token"} {
+	for name, missing := range map[string]string{"the Slack tokens": "agent-kourier/slack-fast", "the agent token": "agent-kourier/agent-kourier-agent-token", "the prompt agent's token": "agent-kourier/prompt-agent-bearer"} {
 		partial := secrets{}
 		for k, v := range upFastSecrets {
 			if k != missing {

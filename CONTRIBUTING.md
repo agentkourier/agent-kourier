@@ -52,27 +52,47 @@ end-to-end tiers (`make e2e-fast-up`, then `make e2e-fast`) need Docker and kind
 A pull request merges into `main` only when these checks pass and its branch is up to date with
 `main`:
 
-- From `ci`: `lint` (`make fmt` leaves no diff, `make lint`, `make docs-check`, `make build`),
-  `test` (`make test-race` with helm installed, so the chart tests cannot skip, then
+- From `ci`: `lint` (`make fmt` leaves no diff, `make lint`, `make docs-check`, `make build`,
+  `make lint-workflows`),
+  `test` (`make test-race` with helm installed, so the chart tests cannot skip, and
   `make test-scripts`), `test-testhooks` (`make test-testhooks`) and `docs-agent` (the tests and
-  lint of the separate module under `examples/recipes/docs-agent/agent`).
+  lint of the separate module under `examples/recipes/docs-agent/agent`), `echo-agent` and `prompt-agent` (the tests, lint and
+  image build of the two Python recipe agents under `examples/recipes/echo-agent/agent` and
+  `examples/recipes/prompt-agent/agent`). Each race pass runs split over
+  two jobs that run side by side, `test-shard (1)` and `(2)` and `test-testhooks-shard (1)` and `(2)`, each
+  running part of the pass's packages, and `make test-scripts` runs in `test-scripts`; `test` and
+  `test-testhooks` pass only when every one of those jobs passed. `make test-race TEST_SHARD=1/2` runs
+  one leg locally.
 - From `security`: `govulncheck (root)`, `govulncheck (ax)` and `govulncheck (docs-agent)` (one
-  per Go module), `gitleaks` (a secret scan of the whole git history), and `trivy (linux-amd64)` and
-  `trivy (linux-arm64)` (a vulnerability scan of the production image built for each platform).
+  per Go module), `gitleaks` (a secret scan of the whole git history), `trivy (linux-amd64)` and
+  `trivy (linux-arm64)` (a vulnerability scan of the production image built for each platform), and
+  `trivy (prompt-agent-linux-amd64)`, `trivy (prompt-agent-linux-arm64)`, `trivy (echo-agent-linux-amd64)` and
+  `trivy (echo-agent-linux-arm64)` (the same scan of the two recipe agents' images that a release publishes).
 - From `codeql`: `analyze (go)` (CodeQL code scanning).
 
-On a pull request whose changed paths are all on the list in `hack/ci/docs-only.sh`, each as a regular file or deleted,
-the code jobs check out and pass without running their other steps; `lint`, `zizmor` and `gitleaks` always run.
+A gated job checks out and passes without running its other steps when every path a pull request changes, each as a
+regular file or deleted, is one its class in `hack/ci/docs-only.sh` does not read. Every job skips on the docs-only
+list there (maintainer prose, `docs/brand`, `docs/spikes`, the site's media under `docs/assets`). The test jobs read
+`README.md` and the pages, so they run on those; the scanners (`govulncheck`, `trivy`, `analyze`) and `crd-corpus` also
+skip Markdown outside every directory that holds Go code and the directories below it, `echo-agent` and `prompt-agent` the same
+except under their own `agent/` directories in `examples/recipes/`, and `docs-agent` the same except under `docs/` and
+`examples/recipes/docs-agent/`. A pull request that changes `README.md` and pages under `docs/` therefore
+runs `lint`, the test jobs and `docs-agent`, and skips the scanners, `crd-corpus`, `echo-agent` and `prompt-agent`. `lint` and
+`gitleaks` always run.
 
-`ci` also runs `zizmor` (`make lint-workflows`), which audits the workflows under `.github/workflows` with
+`lint` also runs `make lint-workflows`, which audits the workflows under `.github/workflows` with
 [zizmor](https://docs.zizmor.sh) and fails on any finding: a `pull_request_target` or `workflow_run` trigger,
 expansion of a value an outsider controls (a pull request title, a branch name) into a `run` step, a checkout that
 keeps its credentials, `actions/cache` or a setup action's cache in a release workflow, or an action not pinned by
-a full commit SHA. It is not a required check yet. If you change a workflow, run `make lint-workflows` (it installs the pinned zizmor and needs `jq`); `.github/zizmor.yml` says how a finding is
-fixed or suppressed.
+a full commit SHA. `lint` is a required check, so a finding blocks the merge; the audit runs even when an earlier
+step of `lint` failed, so its findings show in the same run. Its online audits can fail `lint` with no change in your
+pull request: an advisory published against a pinned action fails every pull request, docs-only ones included, until
+the pin moves. A failed zizmor download or a GitHub API error during those audits fails `lint` too; re-run the job.
+If you change a workflow, run `make lint-workflows` (it installs the pinned zizmor and needs `jq`);
+`.github/zizmor.yml` says how a finding is fixed or suppressed.
 
 `ci` also runs `test-postgres` (`make test-postgres`), the Postgres store's tests and the broker's Postgres tests
-against a throwaway Postgres container; in `test` and `test-testhooks`, which have no database, those tests skip. It is
+against a throwaway Postgres container; in the race passes, which have no database, those tests skip. It is
 not a required check yet. If you change the store or a migration, run it locally; it needs Docker.
 
 `ci` also runs `crd-corpus` (`make crd-corpus`): a throwaway kind cluster with only the CRDs from

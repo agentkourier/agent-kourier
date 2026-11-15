@@ -2,7 +2,9 @@
 
 A release is a pushed tag `vX.Y.Z` (or `vX.Y.Z-rc.1`). It publishes the image `ghcr.io/agentkourier/agent-kourier`
 (linux/amd64 and linux/arm64) and the Helm chart `oci://ghcr.io/agentkourier/charts/agent-kourier`, whose default image
-is that image by digest. Nothing is released by hand.
+is that image by digest. It also publishes the images of two recipes' agents, `ghcr.io/agentkourier/agent-kourier-prompt-agent`
+and `ghcr.io/agentkourier/agent-kourier-echo-agent` (linux/amd64 and linux/arm64), built from
+`examples/recipes/<agent>/agent/Dockerfile`. Nothing is released by hand.
 
 ## Cut a release
 
@@ -12,7 +14,12 @@ is that image by digest. Nothing is released by hand.
    (`release-version`), so the pull request cannot go green with a page left behind. The chart's golden files carry
    the version in a label: refresh them with `go test ./test/chart -update` (with `helm` installed). For a new minor
    version (`X.Y.0`), also add `"X.Y"` at the top of `hack/docs/versions.yaml`, so the documentation site publishes
-   the new release line's tags; until its first tag exists the site skips it. Merge it. Skip this for a prerelease tag
+   the new release line's tags; until its first tag exists the site skips it. The first release that publishes the
+   agents' images (the first after 0.3.2) also points `image:` in `examples/recipes/prompt-agent/agent/manifests/deployment.yaml`
+   and `examples/recipes/echo-agent/agent/manifests/deployment.yaml` at `ghcr.io/agentkourier/agent-kourier-<agent>:vX.Y.Z`,
+   with `imagePullPolicy` and the comments to match, and rewords the sentences that say releases do not publish the
+   prompt agent's image (in `examples/recipes/prompt-agent/README.md` and `docs/how-to/recipes.md`); from then on
+   `release-version` holds those tags to the chart's version. Merge it. Skip this for a prerelease tag
    (`vX.Y.Z-rc.1`): while one is tried, the chart and the docs keep naming the last release.
 3. Before tagging, confirm that `ci.yml`, `security.yml` and `codeql.yml` have completed successfully for that
    exact commit from a push to `main`. The release gate checks the same commit and the latest attempt again; a
@@ -77,8 +84,10 @@ line's newest and perhaps as latest.
 `.github/workflows/release.yml` runs `hack/release/release.sh`, the script behind `make release-image`:
 
 - First checks the exact tagged commit through the Actions API. `ci.yml` must contain successful `lint`, `test`,
-  `test-testhooks`, `docs-agent`, `crd-corpus (1.37)` and `crd-corpus (1.33)` jobs. `security.yml` must contain successful `govulncheck (root)`,
-  `govulncheck (ax)`, `govulncheck (docs-agent)`, `gitleaks`, `trivy (linux-amd64)` and `trivy (linux-arm64)` jobs.
+  `test-testhooks`, `docs-agent`, `crd-corpus (1.37)`, `crd-corpus (1.33)`, `echo-agent` and `prompt-agent` jobs. `security.yml` must contain successful `govulncheck (root)`,
+  `govulncheck (ax)`, `govulncheck (docs-agent)`, `gitleaks`, `trivy (linux-amd64)` and `trivy (linux-arm64)` jobs, and the four scans of the agents'
+  images: `trivy (prompt-agent-linux-amd64)`, `trivy (prompt-agent-linux-arm64)`, `trivy (echo-agent-linux-amd64)` and
+  `trivy (echo-agent-linux-arm64)`.
   `codeql.yml` must contain a successful `analyze (go)` job. These are the status checks the `main` ruleset
   requires. `codeql.yml` skips `analyze` while the repository is private, and a skipped run blocks the release.
   The scheduled released-image rescan is the only permitted skipped job. A pending run fails closed with a message
@@ -90,26 +99,33 @@ line's newest and perhaps as latest.
   release attempt; a published or draft Release, an authorization failure or any other API error stops the workflow.
 - Refuses a tag that is not on `main`.
 - Builds each platform with the Dockerfile, which cross-compiles Go on the runner (no emulation) and sets
-  `main.version` from the tag.
+  `main.version` from the tag. Then builds each platform of each agent image from its own Dockerfile, which runs `apk`
+  and `pip` in the target platform: the arm64 build runs under QEMU, from the binfmt image the workflow pins by digest.
 - Refuses to release a platform whose binary carries a test hook. The Dockerfile's `verify` stage runs
   `internal/testhooks` (the traces `make image-check` looks for, with a testhooks build of the same
   platform as the control) and checks the binary is an ELF of that architecture with the tag as its
   version; the image is not assembled if it fails. The script then checks each platform's image has no
-  `dev.agent-kourier.testhooks` label, runs as 65532:65532, and is that platform.
+  `dev.agent-kourier.testhooks` label, runs as 65532:65532, and is that platform. It checks each agent image's
+  platforms the same way.
+- Builds, checks and scans every platform of every image before the first push, so an agent image that fails leaves
+  nothing pushed.
 - Pushes one multi-platform image tagged `vX.Y.Z` with the workflow's `GITHUB_TOKEN` (`packages: write`),
   with an SBOM and a max-mode provenance attestation attached, and the OCI labels source, revision, version
-  and created (the commit's time).
+  and created (the commit's time). Pushes each agent image the same way, tagged `vX.Y.Z`, to Agent Kourier's repository
+  with `-<agent>` appended, then refuses it unless each platform's layers are those of the image it checked and scanned
+  (`hack/release/check-pushed.sh`): an agent's Dockerfile resolves Wolfi's packages when it runs, so a push that missed
+  the checks' cache would have resolved them again.
 - The Buildx action is pinned by commit, while its BuildKit image and Docker's SBOM generator follow the action's
   defaults. Pin those tool references before claiming byte-for-byte build-tool reproducibility.
 - Installs the pinned Trivy release from `hack/security/install-trivy.sh` and scans each local platform image before
   the multi-platform push. High and critical vulnerabilities, including unfixed findings, fail the release and the
   SARIF reports remain in the release output.
 - Packages `charts/agent-kourier` (`hack/release/package-chart.sh`) with version `X.Y.Z`, appVersion `vX.Y.Z`, and
-  `image.repository` and `image.digest` stamped with the pushed image, reads the package back to check them,
+  `image.repository` and `image.digest` stamped with Agent Kourier's pushed image, reads the package back to check them,
   and pushes it to `oci://ghcr.io/agentkourier/charts`.
-- In a second job that runs no repository code (the only one with `id-token: write`), signs the image digest
-  and the chart digest with cosign v3.0.6 keyless (GitHub's OIDC identity; no key, no secret).
-- In a separate read-only verification job, verifies both signatures with the OIDC issuer and the exact identity
+- In a second job that runs no repository code (the only one with `id-token: write`), signs the image digests
+  and the chart digest with cosign v3.1.4 keyless (GitHub's OIDC identity; no key, no secret).
+- In a separate read-only verification job, verifies every signature with the OIDC issuer and the exact identity
   `https://github.com/agentkourier/agent-kourier/.github/workflows/release.yml@refs/tags/<tag>`.
 - In a final job with `contents: write` and no checkout, creates the GitHub Release with generated notes and the
   verified digests. `.github/release.yml` groups the notes by the labels `pr-labels.yml` sets from each pull
@@ -119,16 +135,20 @@ line's newest and perhaps as latest.
   rebuilds the documentation site with the new tag as a version of its own, its line's newest and, for the newest line,
   latest. A prerelease is not published there.
 
-The job summary lists both digests. The chart's `tag` stays empty: the digest wins.
+The job summary and the GitHub Release list every digest. The chart's `tag` stays empty: the digest wins.
 
 ## Build it locally
 
-`make release-image VERSION=v0.0.0-rc.1` builds both platforms, runs the same checks, and writes an OCI
-archive and the chart package to `bin/release/`. It pushes nothing, and needs helm and jq. It needs a buildx builder that can make multi-platform
+`make release-image VERSION=v0.0.0-rc.1` builds both platforms of each image, runs the same checks, and writes an OCI
+archive of each image and the chart package to `bin/release/`. It pushes nothing, and needs helm and jq. It needs a buildx builder that can make multi-platform
 images with attestations, which Docker's default `docker` driver without the containerd image store cannot:
 
     docker buildx create --name agent-kourier-release --driver docker-container
     BUILDER=agent-kourier-release make release-image VERSION=v0.0.0-rc.1
+
+The agent images' arm64 build runs `apk` and `pip` under emulation. Docker Desktop has it; on a Linux host without
+binfmt handlers, register arm64 first with the binfmt image that `.github/workflows/release.yml` pins (`docker run
+--privileged --rm <that image> --install arm64`), or the build fails at the first `RUN`.
 
 Set `SCAN_IMAGES=1` to run the same per-platform Trivy policy for a local build. `PUSH=1` always enables these
 scans and requires the pinned scanner from `hack/security/install-trivy.sh` (or an executable `TRIVY_BIN`).
@@ -162,6 +182,10 @@ signed by the same identity, and its default image is the image:
       --certificate-identity "$IDENTITY"
     helm show values oci://$CHART --version X.Y.Z | grep -A8 '^image:'   # repository and digest stamped
 
+The agents' images are signed by the same identity and carry the same attestations and labels. Verify each as the
+image above, with `IMAGE=ghcr.io/agentkourier/agent-kourier-prompt-agent` or
+`IMAGE=ghcr.io/agentkourier/agent-kourier-echo-agent` and its digest from the GitHub Release.
+
 Each release's GitHub Release body names the verified image and chart digests.
 
 ## Roll back
@@ -172,7 +196,8 @@ digest); the digests of past releases are in their workflow job summaries. A rel
 so `--set image.tag=...` alone changes nothing: set `image.digest` to the other release's digest (or `image.digest=""`
 with the tag).
 
-If a release fails after its image is pushed (the chart packaging, signing or verification failed), the image tag is
+If a release fails after its image is pushed (an agent image's pushed layers differ from the checked ones, or the chart
+packaging, signing or verification failed), the image tag is
 in GHCR without a verified GitHub Release. An unsigned digest is not a release: deploy only digests that `cosign verify`
 accepts, and re-run or cut a new tag.
 A bad release is not deleted or retagged: cut a new tag with the fix.
@@ -188,8 +213,9 @@ are applied now:
      their own pull request. Squash is the only allowed merge method.
    - Require signed commits. A squash merge in GitHub is signed by GitHub, so every commit merged this way passes.
    - Require these status checks, with the branch up to date before merging (strict): `lint`, `test`,
-     `test-testhooks`, `docs-agent`, `crd-corpus (1.37)` and `crd-corpus (1.33)` from `ci`; `govulncheck (root)`, `govulncheck (ax)`,
-     `govulncheck (docs-agent)`, `gitleaks`, `trivy (linux-amd64)` and `trivy (linux-arm64)` from `security`; and
+     `test-testhooks`, `docs-agent`, `crd-corpus (1.37)`, `crd-corpus (1.33)`, `echo-agent` and `prompt-agent` from `ci`; `govulncheck (root)`, `govulncheck (ax)`,
+     `govulncheck (docs-agent)`, `gitleaks`, `trivy (linux-amd64)`, `trivy (linux-arm64)`, `trivy (prompt-agent-linux-amd64)`,
+     `trivy (prompt-agent-linux-arm64)`, `trivy (echo-agent-linux-amd64)` and `trivy (echo-agent-linux-arm64)` from `security`; and
      `analyze (go)` from `codeql`. The scheduled released-image rescan is intentionally not a required check.
    - Block force pushes and restrict deletions.
    - Bypass: repository admins, for pull requests only. An admin can merge a pull request whose requirements are
@@ -201,7 +227,8 @@ are applied now:
    Optionally add a `release` environment with required reviewers and move the `build` job into it, which
    puts a human approval between a tag and a push.
 4. After the first release: Packages, `agent-kourier` and `charts/agent-kourier`, link them to this repository and set
-   visibility (public if the cluster pulls without a pull secret).
+   visibility (public if the cluster pulls without a pull secret). After the first release that publishes the agents'
+   images, the same for `agent-kourier-prompt-agent` and `agent-kourier-echo-agent`.
 
 The release workflow refuses a tag that is not on `main`, so what ships has passed the `main` ruleset. Cut a
 release tag only from a commit that GitHub signed when it squash-merged a pull request (the commit shows as
@@ -213,12 +240,26 @@ belongs with a change to the other.
 
 ## CI
 
-`.github/workflows/ci.yml` runs `make fmt` (no diff), `make lint` and `make build` (the `lint` job), and what `make test`
-runs as two more jobs side by side, `make test-race` with `make test-scripts` (`test`) and `make test-testhooks`
-(`test-testhooks`), on pull requests and pushes to `main`. The `test` job has helm installed and `AGENTKOURIER_REQUIRE_HELM=1`
-so the chart tests cannot skip. The `test-postgres` job (`make test-postgres`, `hack/postgres/test.sh`) runs the Postgres
-store's tests, the store conformance suite among them, and the broker's Postgres tests against a throwaway Postgres
-container; those tests skip in `test` and `test-testhooks`, which have no database. It is not a required check. To make
+`.github/workflows/ci.yml` runs `make fmt` (no diff), `make lint`, `make build` and `make lint-workflows` (the `lint` job), and what `make test`
+runs, on pull requests and pushes to `main`, in jobs that run side by side. Each race pass is split over the legs of a
+matrix job: `test-shard (1)` and `test-shard (2)` each run part of `make test-race`, and `test-testhooks-shard (1)` and
+`test-testhooks-shard (2)` part of `make test-testhooks`; `test-scripts` runs `make test-scripts`. A leg runs its
+target with `TEST_SHARD=<leg>/<legs>`, its number and the number of legs taken from the strategy context, and
+`hack/ci/test-shard.sh` gives it its part of the pass's packages: each package goes to exactly one leg, longest first,
+balanced by the seconds in `hack/ci/test-weights` (a package not listed there weighs 10). A leg that would get no
+package, when a pass has fewer packages than legs, fails rather than run none. There are two legs per pass because the
+slowest package is the floor of its leg's time (`internal/redact`, about 125 s of a race pass whose weights sum to
+about 1,220 s, and `internal/broker`, about 110 s of about 585 s in the testhooks pass, at four packages at a time).
+Two race legs end about 30 s above their floor and two testhooks legs at theirs, so a third would end at most about
+30 s sooner and would cost a runner and a cache. A leg is added by adding its number
+to the job's `matrix.leg` and its cache prefix to `cache-prune`; `hack/ci/testshards`' test fails until both are there.
+`hack/ci/test-shard.sh` says how to refresh the weights from a push run on `main`; stale weights only unbalance the
+legs. The required checks `test` and `test-testhooks` are jobs of their own that run however their legs ended and fail
+unless every job they need succeeded (for `test`, both `test-shard` legs and `test-scripts`); they check nothing out.
+The `test-shard` legs have helm installed and `AGENTKOURIER_REQUIRE_HELM=1` so the chart tests cannot skip. The
+`test-postgres` job (`make test-postgres`, `hack/postgres/test.sh`) runs the Postgres store's tests, the store
+conformance suite among them, and the broker's Postgres tests against a throwaway Postgres container; those tests skip
+in the race passes' legs, which have no database. It is not a required check. To make
 it one, the owner adds `test-postgres` from `ci` to the `main` ruleset, and the same change adds it to `CI_REQUIRED_JOBS` in
 `hack/release/check-ci.sh` and to the lists above. The `crd-corpus` job (`make crd-corpus`, `hack/kind/crd-corpus.sh`) brings up
 a kind cluster with only the three CRDs from `charts/agent-kourier/files/crds`, with no image and no Agent Kourier, and has
@@ -229,15 +270,21 @@ it. It is the only job that has an API server compile the schemas' CEL rules. It
 `hack/kind/lib.sh` (`NODE_IMAGE`, Kubernetes 1.37, the job `crd-corpus (1.37)`) and on the oldest Kubernetes the chart admits
 (`NODE_IMAGE_MIN`, 1.33, the job `crd-corpus (1.33)`; `CRD_CORPUS_NODE=min make crd-corpus` runs it locally). Both are required checks of
 the `main` ruleset and are in `CI_REQUIRED_JOBS`. Renaming either job, or moving the chart's minimum Kubernetes version, is a change to the
-workflow, `NODE_IMAGE_MIN`, the ruleset and `CI_REQUIRED_JOBS` together. A run took about three minutes on a warm cache; the timeout is 20. The `zizmor` job (`make lint-workflows`, `hack/security/lint-workflows.sh`) audits
-every workflow with a pinned zizmor under the policy in `.github/zizmor.yml` and fails on any finding; it first
-proves the policy still fails a set of unsafe fixtures (`hack/security/testdata/zizmor`), and then that the inline
-ignore comments hide only the findings the script lists. It runs with `contents: read` and uploads no SARIF, so it
-behaves the same on a fork's pull request. It belongs in the `main` ruleset's required checks: the owner adds
-`zizmor` from `ci` there, and the same change adds it to `CI_REQUIRED_JOBS` in `hack/release/check-ci.sh` and to
-the lists above. The Go jobs in `ci.yml`, `security.yml`, `codeql.yml` and `docs.yml` keep the module cache and the build cache
-(plus golangci-lint's cache in the jobs that lint) in Actions caches, one per job, except that `test-postgres` restores
-`test`'s and the two `crd-corpus` jobs share one, which `crd-corpus (1.37)` saves. A key is
+workflow, `NODE_IMAGE_MIN`, the ruleset and `CI_REQUIRED_JOBS` together. A run took about three minutes on a warm cache; the timeout is 20. The `lint` job's last step before its cache upkeep, `make lint-workflows`
+(`hack/security/lint-workflows.sh`), audits every workflow with a pinned zizmor under the policy in
+`.github/zizmor.yml` and fails on any finding; it first proves the policy still fails a set of unsafe fixtures
+(`hack/security/testdata/zizmor`), and then that the inline ignore comments hide only the findings the script lists.
+It runs even when an earlier step of `lint` failed. It is the only `run` step with the job's token (`contents: read`)
+in its environment, for zizmor's online audits, so `make lint`, `make build` and the other steps that run the pull
+request's code never see it; it uploads no SARIF, so it behaves the same on a fork's pull request. Because it is a
+step of `lint`, a required check, a finding blocks the merge and the release. The online audits can raise a finding
+that no change in the pull request caused: an advisory published against a pinned action fails `lint` on every pull
+request, docs-only ones included, until the pin moves. A failed download of zizmor or a GitHub API error during the
+online audits also fails `lint`; a re-run clears it. `hack/ci/docsonly`'s test fails if the step leaves `lint`, loses
+its token, or gets an `if` other than `!cancelled()`, or if `lint` gets a job-level `if`. The Go jobs in `ci.yml`, `security.yml`, `codeql.yml` and `docs.yml` keep the module cache and the build cache
+(plus golangci-lint's cache in the jobs that lint) in Actions caches, one per job and one per leg of `test-shard` and
+`test-testhooks-shard` (`go-test-<leg>-…`, `go-test-testhooks-<leg>-…`), except that `test-postgres` restores the
+second race leg's, which runs `internal/broker`, and the two `crd-corpus` jobs share one, which `crd-corpus (1.37)` saves. A key is
 `go-<cache>-<runner OS>-go<Go version>-<hash of the go.sum files it builds from (and, for govulncheck, its script)>-<commit>`, and a run restores the newest
 entry whose key starts with `go-<cache>-<runner OS>-`, so a pull request starts from what the latest push to `main`
 saved, test results included. Every push run on `main` saves, whether its steps passed or failed (a cancelled job saves
@@ -246,26 +293,91 @@ nothing, nor does a re-run of a job whose entry is already saved); pull requests
 empty when the restored entry is from another `go.sum` or Go version. After the saves, each of the four workflows'
 `cache-prune` job deletes all but the newest entry of every cache it saves (`codeql.yml`'s also deletes all but the
 newest of CodeQL's overlay-base databases); a listing or delete that fails is a warning, not a failure, so an API error
-there does not stop a release, and the next push's prune catches up. One entry of each cache comes to about 4 GB of the repository's
-10 GB cache limit, GitHub's default, past which GitHub evicts the least recently accessed entries. The jobs that
-install Python packages, `echo-agent` in `ci.yml` and `build` in `docs.yml`, keep pip's cache under an exact key on
+there does not stop a release, and the next push's prune catches up. One entry of each cache comes to about 5.4 GB of
+the repository's 10 GB cache limit, about 2.4 GB of it the four test legs' entries (each holds the module cache and
+the race builds of its packages' dependencies, most of which the other leg of its pass holds too). A push to `main`
+holds a second entry of each cache it saves until the prune runs: about 9.4 GB while `ci`'s are in flight, up to about
+10.8 GB if `security.yml`'s and `codeql.yml`'s land before their prunes. The limit is GitHub's default; a repository
+admin or organization owner can raise it, and use past 10 GB is then billed. Past it GitHub evicts the least recently
+accessed entries first, so a cache that was accessed longest ago (one the prune would delete anyway, or a `docs.yml`
+cache, restored only on a docs change) can go, and the next run that wants it starts cold. The jobs that
+install Python packages, `echo-agent` and `prompt-agent` in `ci.yml` and `build` in `docs.yml`, keep pip's cache under an exact key on
 the job, the runner OS, the Python version and the requirements files they install from: a push to `main` saves it
 only when those files or the Python version change, and `cache-prune` then deletes the old entry. `docs.yml` runs on a push to
 `main` only when the push changes a path in its `push` trigger, so only such a push saves the `build` job's caches. Each job has its own timeout, set from the times seen on a cold cache. The kind
 tiers are not in CI, which is why "Cut a release" has you run them, with the custom resource scenarios, by hand. They would need a runner with Docker and about 8 GB free, the `kind`, `kubectl`,
 `helm` and `jq` binaries installed at pinned versions (`hack/ci/install-kind-tools.sh` installs them, each checked
 against a pinned sha256), and the pinned node and base images pulled (the tiers
-take minutes to bring up, so they are best as a separate nightly or label-triggered workflow, not on every PR). The `crd-corpus` job is not a tier: its cluster has only the CRDs, and it runs on every PR but a docs-only one.
+take minutes to bring up, so they are best as a separate nightly or label-triggered workflow, not on every PR). The `crd-corpus` job is not a tier: its cluster has only the CRDs, and it runs on every PR but one that changes only paths it does not read (below).
 
-A docs-only pull request changes nothing but paths on the list in `hack/ci/docs-only.sh`, each as a regular file or
-deleted (maintainer prose such as `spec.md` and `AGENTS.md`, `docs/brand`, `docs/spikes`, and the site's media under
-`docs/assets`), whose content no test, image, scanner or CodeQL reads, but for two tests of the docs checks that `make
-docs-check` in `lint` repeats; `README.md` and the pages under `docs/` are not on it, since tests read them. A symlink
-or submodule on the list is not docs-only: the docs agent's tests walk the real `docs/` and refuse any symlink in it. On
-one, `test`, `test-testhooks`, `test-postgres`, both `crd-corpus` jobs, `docs-agent`, `echo-agent`, the `govulncheck`
-and `trivy` jobs and `analyze` check out, find the pull request docs-only, and skip their other steps, so each still
-reports success under its own name; `lint`, `zizmor` and `gitleaks` run in full. Anything else, including a failure to
-list the paths or a merge commit whose second parent is not the pull request's head, runs every step. A push to `main`
-always runs every step, so the push runs the release gate reads, and the caches they save, are as before. The header of
-`ci.yml` says why the jobs skip steps rather than the whole job, and `hack/ci/docsonly`'s test keeps the copies of the
-gate in the jobs alike.
+A pull request's `test-shard` and `test-testhooks-shard` legs reuse the test results that the latest push to `main`
+saved: `go test` reports a package `(cached)`, and does not run it, when its test binary and the environment variables
+and files of the module its tests read are as they were in that push's run. `go test` compares such a file's size, mode
+and modification time, not its contents, and a checkout gives every file the time of the checkout, so before `make` each
+leg runs `go run ./hack/ci/testmtimes`. It sets every tracked file's time to 2001-01-01 plus the first 58 bits of its
+blob hash as nanoseconds (a time from 2001 to early 2010), a symbolic link's own time the same way from its blob, and
+the time of every directory that holds a tracked path, and of the top directory's `.git`, to 2000-01-01; it leaves
+untracked files, and tracked files that differ from the index, alone. The same step puts a directory unique to the run
+on `PATH`. `go test` cannot see what a program that a test starts reads (`helm` the chart, `bash` a script, `go list`
+the packages), but a test that looks a program up on `PATH` has read `PATH`, so such a package (`test/chart`,
+`test/kindmanifests`, `cmd/agent-kourier`, `api/v1alpha1`, the packages whose tests run `go list -deps`, and others)
+never reuses a result. A push to `main` reuses none: it runs `go clean -testcache` first, so every test runs on every
+push, those are the runs the release gate reads, and their results are the ones pull requests reuse. The legs' make step
+sets `GODEBUG=gocachetest=1`, so the log says for each package whether it reused a result and, for one that ran, whether
+no result was saved for its test binary (`input list not found`: the binary changed) or one was, for other inputs
+(`test output not found`: a file or variable its tests read changed). `go test` keys results on `GODEBUG` too: removing
+it from the legs makes pull requests run every package until a push to `main` saves results without it. `test-postgres`,
+`crd-corpus` and `docs-agent` run `go test` with `-count=1`, which reuses nothing, and do not run `hack/ci/testmtimes`.
+`docs-agent`'s must (`make docs-agent-test`): its smoke test reads `docs/`, outside its module, where `go test` checks
+nothing, so a reused result would pass a pull request that changes only the docs. `hack/ci/testshards`' test holds the
+legs to these steps and every other job to none of them. The limits of the reuse, none of which a setting changes:
+
+- A changed file that keeps its size reuses a stale result if its new blob draws the same time: the odds are 2^-58
+  (about 3.5 × 10^-18) per changed file where the file system keeps times to the nanosecond, as APFS and ext4 do, and
+  about 3.5 × 10^-9 (2^58 ns is about 2.9 × 10^8 s) where it keeps whole seconds; `hack/ci/testmtimes` says how many
+  times its file system cut short. The pull request then passes on the old result, and the push run on `main` after the
+  merge, which runs everything, runs it again. The 58 bits are `hashBits` in `hack/ci/testmtimes`: 59 would end in 2019
+  and 60 in 2037, and `go test` saves no result of a test that read a file whose time is less than 2 s before the read,
+  a time to come included.
+- A program a test starts by its path, the test binary re-run as a child included (the `os.Args[0]` re-runs in
+  `internal/outbox`, `internal/broker` and `cmd/agent-kourier`), is keyed on its own file, but not on the files or
+  variables it reads. A test that depends on what such a program reads must read those inputs itself, or look the
+  program up on `PATH`. A file outside the module is never keyed, which is why `docs-agent` runs with `-count=1`.
+- `go test` keys nothing a test reads before `m.Run` starts its log (in an `init` function, a package variable or
+  `TestMain` before `m.Run`), nor the environment read through `os.Environ`. The one read before `m.Run` today is
+  `internal/testhooks`' `armed` variable, from a variable CI never sets in the process that runs the tests.
+- A test that is flaky, or that depends on the date, passes on a pull request when its package reuses a pass; the push
+  run on `main` runs it again.
+
+Each gated job passes a class to `hack/ci/docs-only.sh` in its first step after the checkout, and on a pull request
+whose changed paths are all, as regular files or deleted, paths its class does not read, it skips its other steps and
+still reports success under its own name. Every class skips the docs-only list (maintainer prose such as `spec.md` and
+`AGENTS.md`, `docs/brand`, `docs/spikes`, and the site's media under `docs/assets`), whose content no test, image,
+scanner or CodeQL reads, but for two tests of the docs checks that `make docs-check` in `lint` repeats. Beyond it:
+
+- `tests` (the `test-shard` and `test-testhooks-shard` legs, `test-scripts`, `test-postgres`): nothing more. Tests read
+  `README.md` and pages under `docs/` and elsewhere when they run, which only running them shows.
+- `scan` (the three `govulncheck` jobs, the `trivy` jobs, `analyze`) and `crd-corpus` (both jobs): any Markdown
+  (`*.md`, in lower case) outside every Go package's tree, such as `README.md`, the pages under `docs/` and the chart's
+  README. govulncheck reads Go packages and the files they embed; Agent Kourier's image holds only the binary, and an
+  agent's image only the files its `.dockerignore` lets in, none of them Markdown; CodeQL's Go autobuild
+  extracts `.go` files; `crd-corpus` builds and runs `test/crdcorpus` and reads only YAML from its corpus.
+- `docs-agent`: the same Markdown except under `docs/`, its corpus, and `examples/recipes/docs-agent/`.
+- `echo-agent`: the same Markdown except under `examples/recipes/echo-agent/agent/`, the one directory it reads.
+- `prompt-agent`: the same Markdown except under `examples/recipes/prompt-agent/agent/`, the one directory it reads.
+
+A Go package's tree is a directory of the merge commit with a `.go` file in it, and everything below it; the script
+finds them on each run, so no class skips a page under a new package's directory, which the package could embed, with
+no list to edit. The rule is wider than what Go embeds: a page in such a tree runs the jobs whether or not anything
+embeds it. So a pull request that changes `README.md` and pages under `docs/` skips both `crd-corpus` jobs,
+`echo-agent`, `prompt-agent`, the `govulncheck` and `trivy` jobs and `analyze`; one that changes only `README.md` also skips
+`docs-agent`; one that changes only the docs-only list skips every gated job, and `test` and `test-testhooks` pass as
+their legs did. A pull request that skips `govulncheck` or `trivy` does not see a vulnerability published since its
+base was scanned; `main`'s push runs do, and so does the nightly `security` run's `govulncheck`. `lint`, with its zizmor
+audit, and `gitleaks` always run in full. A symlink or submodule anywhere in the changes runs every step of every gated job: the
+docs agent's tests walk the real `docs/` and refuse any symlink in it. So does a path the class reads, an unknown
+class, a failure to list the paths or the merge commit's tree, or a merge commit whose second parent is not the pull
+request's head. There is no cap on how many paths it lists. A push to `main` always runs every step, so the push runs
+the release gate reads (`hack/release/check-ci.sh` reads only push runs on `main`), and the caches they save, are as
+before. The header of `ci.yml` says why the jobs skip steps rather than the whole job, and `hack/ci/docsonly`'s test
+keeps the copies of the gate in the jobs alike and holds each job to its class.

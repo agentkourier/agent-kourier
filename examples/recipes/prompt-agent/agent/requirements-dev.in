@@ -1,0 +1,7 @@
+# What the tests and the lint need, on top of requirements.in. Compile with:
+#   uv pip compile examples/recipes/prompt-agent/agent/requirements-dev.in --generate-hashes --universal --python-version 3.14 -o examples/recipes/prompt-agent/agent/requirements-dev.txt
+-r requirements.in
+fastmcp==4.1.0  # the test MCP server (mcp_server.py); the image has only the MCP client
+pytest
+ruff
+pip-audit

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -17,19 +18,32 @@ import (
 // workflowsDir is .github/workflows, from this package.
 const workflowsDir = "../../../.github/workflows"
 
-// gated names, per workflow, the jobs that have the docs-only step. A job is added here on purpose: gitleaks, lint and
-// zizmor must always run in full.
-var gated = map[string][]string{
-	"ci.yml":       {"crd-corpus", "docs-agent", "echo-agent", "test", "test-postgres", "test-testhooks"},
-	"codeql.yml":   {"analyze"},
-	"security.yml": {"govulncheck", "image"},
+// gated names, per workflow, the jobs that have the docs-only step, and the class each passes to hack/ci/docs-only.sh:
+// the paths that the job does not read, which docs-only.sh's header justifies for each class. A job is added here on
+// purpose: gitleaks and lint, which runs zizmor's audit of the workflows, must always run in full (TestUngatedJobsRunInFull).
+// ci.yml's test and test-testhooks are not gated: they check out nothing and only require their legs, which are, to
+// have passed.
+var gated = map[string]map[string]string{
+	"ci.yml": {
+		"crd-corpus":           "crd-corpus",
+		"docs-agent":           "docs-agent",
+		"echo-agent":           "echo-agent",
+		"prompt-agent":         "prompt-agent",
+		"test-postgres":        "tests",
+		"test-scripts":         "tests",
+		"test-shard":           "tests",
+		"test-testhooks-shard": "tests",
+	},
+	"codeql.yml":   {"analyze": "scan"},
+	"security.yml": {"govulncheck": "scan", "image": "scan"},
 }
 
 // checkoutAction is what the first step of a gated job uses, up to the pin. The pin is Renovate's to move, so the check
 // holds the gated jobs' pins to each other, not to a value.
 const checkoutAction = "actions/checkout@"
 
-// The checkout's inputs, and the docs-only step after it. Neither holds anything Renovate updates.
+// The checkout's inputs, and the docs-only step after it, whose DOCS_ONLY_CLASS is the job's class in gated (classToken
+// stands for it here). Neither holds anything Renovate updates.
 const (
 	wantCheckoutWith = `
 persist-credentials: false
@@ -42,10 +56,12 @@ if: ${{ github.event_name == 'pull_request' }}
 continue-on-error: true
 env:
   PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  DOCS_ONLY_CLASS: ` + classToken + `
 run: |
-  scope=$(hack/ci/docs-only.sh)
+  scope=$(hack/ci/docs-only.sh "${DOCS_ONLY_CLASS}")
   echo "${scope}" >>"${GITHUB_OUTPUT}"
 `
+	classToken = "@class@"
 )
 
 // gate is the condition that skips a step on a docs-only pull request, and pushOnly one that holds only on a push.
@@ -67,7 +83,9 @@ var (
 type step map[string]any
 
 type workflow struct {
-	Jobs map[string]struct {
+	Concurrency map[string]any `json:"concurrency"`
+	Jobs        map[string]struct {
+		If    any    `json:"if"`
 		Steps []step `json:"steps"`
 	} `json:"jobs"`
 }
@@ -105,11 +123,8 @@ func classify(cond string, pushIDs map[string]bool) (isGated, isPushOnly bool, p
 // two steps are not the checkout and the docs-only step as wanted, gated jobs whose checkouts differ, a job not in gated
 // with the docs-only step, or a later step that a pull request runs without the gate.
 func check(workflows map[string][]byte) ([]string, error) {
-	var with, docsOnly map[string]any
+	var with map[string]any
 	if err := yaml.Unmarshal([]byte(wantCheckoutWith), &with); err != nil {
-		return nil, err
-	}
-	if err := yaml.Unmarshal([]byte(wantDocsOnly), &docsOnly); err != nil {
 		return nil, err
 	}
 	var problems []string
@@ -123,7 +138,7 @@ func check(workflows map[string][]byte) ([]string, error) {
 			where := fmt.Sprintf("%s: job %s", file, name)
 			steps := wf.Jobs[name].Steps
 			at := slices.IndexFunc(steps, func(s step) bool { return s["id"] == "docs-only" })
-			want := slices.Contains(gated[file], name)
+			class, want := gated[file][name]
 			switch {
 			case at < 0 && !want:
 				continue
@@ -142,8 +157,17 @@ func check(workflows map[string][]byte) ([]string, error) {
 				problems = append(problems, where+": the first step is not the checkout of a gated job (uses and with, with only these inputs)")
 			}
 			checkouts = append(checkouts, uses+"\t"+where)
+			// The class first, by name, so that a job given another job's class says so; then the whole step, the
+			// class put in, so that nothing else may differ (another variable, a run that ignores the class).
+			if env, _ := steps[1]["env"].(map[string]any); env["DOCS_ONLY_CLASS"] != class {
+				problems = append(problems, fmt.Sprintf("%s: its class (DOCS_ONLY_CLASS) is %v, not %s", where, env["DOCS_ONLY_CLASS"], class))
+			}
+			var docsOnly map[string]any
+			if err := yaml.Unmarshal([]byte(strings.Replace(wantDocsOnly, classToken, class, 1)), &docsOnly); err != nil {
+				return nil, err
+			}
 			if !reflect.DeepEqual(map[string]any(steps[1]), docsOnly) {
-				problems = append(problems, where+": the docs-only step is not the one every gated job has")
+				problems = append(problems, where+": the docs-only step is not the one every gated job has, with the job's class")
 			}
 			pushIDs := map[string]bool{}
 			for i, s := range steps[2:] {
@@ -203,16 +227,19 @@ func TestWorkflowsGateAlike(t *testing.T) {
 	}
 }
 
-// testhooksStep is test-testhooks' gated make step, whose if the drift cases below replace.
-const testhooksStep = "      - if: ${{ steps.docs-only.outputs.skip != 'true' }}\n        run: make test-testhooks\n"
+// testhooksRun is the make step's command in test-testhooks-shard.
+const testhooksRun = "        run: make test-testhooks TEST_SHARD=\"$((LEG_INDEX + 1))/${LEG_COUNT}\"\n"
 
-// trimThenSave is the trim and the if of the cache save in test, the first gated job of ci.yml (lint's trim has an
-// argument, so this text is not lint's).
+// testhooksStep is test-testhooks-shard's gated make step, whose if the drift cases below replace.
+const testhooksStep = "      - if: ${{ steps.docs-only.outputs.skip != 'true' }}\n" + testhooksRun
+
+// trimThenSave is the trim and the if of the cache save in test-shard, the first gated job of ci.yml that saves a
+// cache (lint's trim has an argument, so this text is not lint's).
 const trimThenSave = "        run: hack/ci/actions-cache.sh trim\n      - if: ${{ !cancelled() && steps.go-trim.outcome == 'success' }}\n"
 
 // withTesthooksIf is testhooksStep with the if cond.
 func withTesthooksIf(cond string) string {
-	return "      - if: " + cond + "\n        run: make test-testhooks\n"
+	return "      - if: " + cond + "\n" + testhooksRun
 }
 
 // TestCheckFindsDrift: each way a copy of the gate can drift is reported.
@@ -228,7 +255,7 @@ func TestCheckFindsDrift(t *testing.T) {
 		{"a checkout of depth 1", "          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}\n", "", "the first step is not the checkout"},
 		{"a checkout with an if", "          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}\n", "          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}\n        if: false\n", "the first step is not the checkout"},
 		{"a gated job without the step", "      - id: docs-only\n", "      - id: docs-only-renamed\n", "has no docs-only step"},
-		{"a step without an if", testhooksStep, "      - run: make test-testhooks\n", ungated},
+		{"a step without an if", testhooksStep, "      - run: make test-testhooks TEST_SHARD=\"$((LEG_INDEX + 1))/${LEG_COUNT}\"\n", ungated},
 		{"a step that always runs", testhooksStep, withTesthooksIf("${{ always() }}"), ungated},
 		{"a negated gate", testhooksStep, withTesthooksIf("${{ !steps.docs-only.outputs.skip != 'true' }}"), ungated},
 		{"a gate inside a longer term", testhooksStep, withTesthooksIf("${{ steps.docs-only.outputs.skip != 'true' == false }}"), ungated},
@@ -255,13 +282,13 @@ func TestCheckFindsDrift(t *testing.T) {
 	}
 	t.Run("an ungated job with the step", func(t *testing.T) {
 		wfs := maps.Clone(repo)
-		old := "  zizmor:\n    runs-on: ubuntu-26.04\n    timeout-minutes: 10\n    steps:\n"
+		old := "  lint:\n    runs-on: ubuntu-26.04\n    timeout-minutes: 15\n    steps:\n"
 		if !strings.Contains(string(wfs["ci.yml"]), old) {
-			t.Fatalf("ci.yml has no zizmor job as expected")
+			t.Fatalf("ci.yml has no lint job as expected")
 		}
 		wfs["ci.yml"] = []byte(strings.Replace(string(wfs["ci.yml"]), old, old+"      - id: docs-only\n        run: 'true'\n", 1))
-		if problems := checkProblems(t, wfs); !slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, "job zizmor has a docs-only step") }) {
-			t.Errorf("problems = %q, want one for zizmor", problems)
+		if problems := checkProblems(t, wfs); !slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, "job lint has a docs-only step") }) {
+			t.Errorf("problems = %q, want one for lint", problems)
 		}
 	})
 }
@@ -299,4 +326,237 @@ func TestCheckHoldsTheCheckoutPinsAlike(t *testing.T) {
 			t.Error(p)
 		}
 	})
+}
+
+// inJob replaces the first old with replacement after the line that starts job name in a workflow's YAML, or fails the test.
+func inJob(t *testing.T, b []byte, name, old, replacement string) []byte {
+	t.Helper()
+	header := "\n  " + name + ":\n"
+	at := strings.Index(string(b), header)
+	if at < 0 {
+		t.Fatalf("no job %s", name)
+	}
+	rest := string(b[at:])
+	if !strings.Contains(rest, old) {
+		t.Fatalf("job %s (or a job after it) has no %q to change", name, old)
+	}
+	return []byte(string(b[:at]) + strings.Replace(rest, old, replacement, 1))
+}
+
+// TestCheckHoldsEachJobToItsClass: a gated job that passes another job's class, no class, or its class some other way
+// is drift. A scanner given the tests' class would only run more, but a test leg given a scanner's would skip its
+// tests on a page the tests read: both are reported.
+func TestCheckHoldsEachJobToItsClass(t *testing.T) {
+	repo := readWorkflows(t)
+	const run = `hack/ci/docs-only.sh "${DOCS_ONLY_CLASS}"`
+	for _, tt := range []struct {
+		name, file, job, old, new, want string
+	}{
+		{"trivy given the test legs' class", "security.yml", "image", "DOCS_ONLY_CLASS: scan\n", "DOCS_ONLY_CLASS: tests\n", "job image: its class (DOCS_ONLY_CLASS) is tests, not scan"},
+		{"a test leg given a scanner's class", "ci.yml", "test-testhooks-shard", "DOCS_ONLY_CLASS: tests\n", "DOCS_ONLY_CLASS: scan\n", "job test-testhooks-shard: its class (DOCS_ONLY_CLASS) is scan, not tests"},
+		{"test-postgres given crd-corpus's class", "ci.yml", "test-postgres", "DOCS_ONLY_CLASS: tests\n", "DOCS_ONLY_CLASS: crd-corpus\n", "job test-postgres: its class (DOCS_ONLY_CLASS) is crd-corpus, not tests"},
+		{"docs-agent given echo-agent's class", "ci.yml", "docs-agent", "DOCS_ONLY_CLASS: docs-agent\n", "DOCS_ONLY_CLASS: echo-agent\n", "job docs-agent: its class (DOCS_ONLY_CLASS) is echo-agent, not docs-agent"},
+		{"govulncheck given the docs agent's class", "security.yml", "govulncheck", "DOCS_ONLY_CLASS: scan\n", "DOCS_ONLY_CLASS: docs-agent\n", "job govulncheck: its class (DOCS_ONLY_CLASS) is docs-agent, not scan"},
+		{"no class", "ci.yml", "crd-corpus", "          DOCS_ONLY_CLASS: crd-corpus\n", "", "job crd-corpus: its class (DOCS_ONLY_CLASS) is <nil>, not crd-corpus"},
+		{"the class from an expression", "codeql.yml", "analyze", "DOCS_ONLY_CLASS: scan\n", "DOCS_ONLY_CLASS: ${{ matrix.class }}\n", "job analyze: its class (DOCS_ONLY_CLASS) is ${{ matrix.class }}, not scan"},
+		{"a run that names a class itself", "ci.yml", "echo-agent", run, "hack/ci/docs-only.sh scan", "job echo-agent: the docs-only step is not the one"},
+		{"a run that drops the class", "ci.yml", "test-shard", run, "hack/ci/docs-only.sh", "job test-shard: the docs-only step is not the one"},
+		{"the class beside another variable", "security.yml", "image", "DOCS_ONLY_CLASS: scan\n", "DOCS_ONLY_CLASS: scan\n          JOB_CLASS: tests\n", "job image: the docs-only step is not the one"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			wfs := maps.Clone(repo)
+			wfs[tt.file] = inJob(t, wfs[tt.file], tt.job, tt.old, tt.new)
+			if problems := checkProblems(t, wfs); !slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, tt.want) }) {
+				t.Errorf("problems = %q, want one with %q", problems, tt.want)
+			}
+		})
+	}
+}
+
+// TestEveryClassIsTheScripts: hack/ci/docs-only.sh accepts each class a gated job passes. The script runs everything on
+// a class it does not know, so a class missing from it would cost the job its skip without failing anything.
+func TestEveryClassIsTheScripts(t *testing.T) {
+	classes := map[string]bool{}
+	for _, jobs := range gated {
+		for _, class := range jobs {
+			classes[class] = true
+		}
+	}
+	script, err := filepath.Abs("../docs-only.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// stderr runs the script on class, with no PR_HEAD_SHA, which it checks right after the class, from a directory that
+	// is no repository, and returns what it printed there.
+	stderr := func(class string) string {
+		cmd := exec.CommandContext(t.Context(), script, class)
+		cmd.Dir = t.TempDir()
+		cmd.Env = append(slices.DeleteFunc(os.Environ(), func(e string) bool { return strings.HasPrefix(e, "PR_HEAD_SHA=") }), "PR_HEAD_SHA=")
+		var out strings.Builder
+		cmd.Stderr = &out
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("%s %s: %v (%s)", script, class, err, out.String())
+		}
+		return out.String()
+	}
+	if got := stderr("no-such-class"); !strings.Contains(got, "is not a class") {
+		t.Fatalf("an unknown class: stderr %q, want it refused as not a class (control)", got)
+	}
+	for _, class := range slices.Sorted(maps.Keys(classes)) {
+		if got := stderr(class); !strings.Contains(got, "PR_HEAD_SHA is not set") {
+			t.Errorf("class %s: stderr %q, want the script past the class, at PR_HEAD_SHA", class, got)
+		}
+	}
+}
+
+// ungated names, per workflow, the jobs (by id) that run in full on every pull request: lint, and security.yml's
+// secrets, whose check is named gitleaks. check reports a docs-only step in any of them; this list holds them to
+// existing, so a rename cannot leave the rule covering nothing.
+var ungated = map[string][]string{
+	"ci.yml":       {"lint"},
+	"security.yml": {"secrets"},
+}
+
+// The step of ci.yml's lint that audits the workflows with zizmor, the one if it may have, and the one env: it runs
+// whatever the steps before it did, on every event, so a lint or build failure does not hide a finding; and without
+// the token hack/security/lint-workflows.sh runs zizmor offline, which drops its online audits (impostor commits,
+// known vulnerable actions) without failing.
+const (
+	auditRun   = "make lint-workflows"
+	auditIf    = "${{ !cancelled() }}"
+	auditToken = "${{ github.token }}"
+)
+
+// ungatedProblems returns what is wrong with the jobs in ungated: one that is missing, a lint with a job-level if (it
+// must run on every event), and a lint without the workflow audit as wanted.
+func ungatedProblems(t *testing.T, workflows map[string][]byte) []string {
+	t.Helper()
+	var problems []string
+	for _, file := range slices.Sorted(maps.Keys(ungated)) {
+		var wf workflow
+		if err := yaml.Unmarshal(workflows[file], &wf); err != nil {
+			t.Fatalf("%s: %v", file, err)
+		}
+		for _, name := range ungated[file] {
+			if _, ok := wf.Jobs[name]; !ok {
+				problems = append(problems, fmt.Sprintf("%s has no job %s", file, name))
+			}
+		}
+		if file != "ci.yml" {
+			continue
+		}
+		if cond := wf.Jobs["lint"].If; cond != nil {
+			problems = append(problems, fmt.Sprintf("ci.yml: job lint has the if %v; it must run on every event", cond))
+		}
+		var audits []step
+		for _, s := range wf.Jobs["lint"].Steps {
+			if s["run"] == auditRun {
+				audits = append(audits, s)
+			}
+		}
+		switch {
+		case len(audits) != 1:
+			problems = append(problems, fmt.Sprintf("ci.yml: job lint has %d steps that run %s, not one", len(audits), auditRun))
+		case audits[0]["if"] != auditIf:
+			problems = append(problems, fmt.Sprintf("ci.yml: job lint: the %s step's if is %v, not %s", auditRun, audits[0]["if"], auditIf))
+		case !reflect.DeepEqual(audits[0]["env"], map[string]any{"GH_TOKEN": auditToken}):
+			problems = append(problems, fmt.Sprintf("ci.yml: job lint: the %s step's env is %v, not GH_TOKEN: %s alone", auditRun, audits[0]["env"], auditToken))
+		}
+	}
+	return problems
+}
+
+// TestUngatedJobsRunInFull: lint and secrets exist, and lint audits the workflows on every run.
+func TestUngatedJobsRunInFull(t *testing.T) {
+	for _, p := range ungatedProblems(t, readWorkflows(t)) {
+		t.Error(p)
+	}
+}
+
+// TestUngatedProblemsFindDrift: each way the workflow audit can leave lint, or lint leave ci.yml, is reported.
+func TestUngatedProblemsFindDrift(t *testing.T) {
+	repo := readWorkflows(t)
+	const (
+		run  = "        run: " + auditRun + "\n        env:\n          GH_TOKEN: ${{ github.token }}\n"
+		step = "      - if: " + auditIf + "\n" + run
+	)
+	for _, tt := range []struct {
+		name, file, old, new, want string
+	}{
+		{"the audit dropped", "ci.yml", step, "", "has 0 steps that run make lint-workflows"},
+		{"the audit twice", "ci.yml", step, step + step, "has 2 steps that run make lint-workflows"},
+		{"the audit only on a push", "ci.yml", step, "      - if: ${{ github.event_name == 'push' }}\n" + run, "the make lint-workflows step's if is ${{ github.event_name == 'push' }}"},
+		{"the audit skipped after a failure", "ci.yml", step, "      - " + strings.TrimPrefix(run, "        "), "the make lint-workflows step's if is <nil>"},
+		{"the token dropped", "ci.yml", step, "      - if: " + auditIf + "\n        run: " + auditRun + "\n", "the make lint-workflows step's env is <nil>"},
+		{"another variable beside the token", "ci.yml", step, step + "          ZIZMOR_BIN: /tmp/zizmor\n", "the make lint-workflows step's env is"},
+		{"lint only on a push", "ci.yml", "\n  lint:\n    runs-on:", "\n  lint:\n    if: ${{ github.event_name == 'push' }}\n    runs-on:", "job lint has the if ${{ github.event_name == 'push' }}"},
+		{"lint renamed", "ci.yml", "\n  lint:\n", "\n  lint-and-build:\n", "ci.yml has no job lint"},
+		{"secrets renamed", "security.yml", "\n  secrets:\n", "\n  gitleaks-scan:\n", "security.yml has no job secrets"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			wfs := maps.Clone(repo)
+			if !strings.Contains(string(wfs[tt.file]), tt.old) {
+				t.Fatalf("%s has no %q to change", tt.file, tt.old)
+			}
+			wfs[tt.file] = []byte(strings.Replace(string(wfs[tt.file]), tt.old, tt.new, 1))
+			if problems := ungatedProblems(t, wfs); !slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, tt.want) }) {
+				t.Errorf("problems = %q, want one with %q", problems, tt.want)
+			}
+		})
+	}
+}
+
+// codeqlConcurrency is codeql.yml's concurrency, whose comment there says why: a pull request's newer push cancels its
+// run, and every other run is a group of its own, keyed by its run id. A group that main's pushes shared (the tidier
+// ${{ github.workflow }}-${{ github.ref }}) would let a newer push cancel a pending one, whose commit the release gate
+// (hack/release/check-ci.sh) then refuses, its codeql run cancelled.
+var codeqlConcurrency = map[string]any{
+	"group":              "${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+	"cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+}
+
+// concurrencyProblems returns what is wrong with codeql.yml's concurrency: anything but codeqlConcurrency.
+func concurrencyProblems(t *testing.T, workflows map[string][]byte) []string {
+	t.Helper()
+	var wf workflow
+	if err := yaml.Unmarshal(workflows["codeql.yml"], &wf); err != nil {
+		t.Fatalf("codeql.yml: %v", err)
+	}
+	if !reflect.DeepEqual(wf.Concurrency, codeqlConcurrency) {
+		return []string{fmt.Sprintf("codeql.yml: its concurrency is %v, not %v", wf.Concurrency, codeqlConcurrency)}
+	}
+	return nil
+}
+
+// TestCodeQLConcurrencyCancelsOnlyPullRequests: codeql.yml's concurrency is the one wanted.
+func TestCodeQLConcurrencyCancelsOnlyPullRequests(t *testing.T) {
+	for _, p := range concurrencyProblems(t, readWorkflows(t)) {
+		t.Error(p)
+	}
+}
+
+// TestConcurrencyProblemsFindDrift: a group that main's pushes share, a cancel on every event, or no concurrency at
+// all is reported.
+func TestConcurrencyProblemsFindDrift(t *testing.T) {
+	repo := readWorkflows(t)
+	const (
+		group  = "  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}\n"
+		cancel = "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n"
+	)
+	for _, tt := range []struct{ name, old, new string }{
+		{"one group per ref", group, "  group: ${{ github.workflow }}-${{ github.ref }}\n"},
+		{"cancel on every event", cancel, "  cancel-in-progress: true\n"},
+		{"no concurrency", "concurrency:\n" + group + cancel, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			wfs := maps.Clone(repo)
+			if !strings.Contains(string(wfs["codeql.yml"]), tt.old) {
+				t.Fatalf("codeql.yml has no %q to change", tt.old)
+			}
+			wfs["codeql.yml"] = []byte(strings.Replace(string(wfs["codeql.yml"]), tt.old, tt.new, 1))
+			if problems := concurrencyProblems(t, wfs); len(problems) == 0 {
+				t.Error("no problem reported")
+			}
+		})
+	}
 }

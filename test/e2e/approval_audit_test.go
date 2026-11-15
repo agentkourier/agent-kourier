@@ -31,13 +31,20 @@ func waitApprovalMetric(t *testing.T, s *scenario, metric string, labels map[str
 }
 
 func approvalAuditAfter(entries, before []store.AuditEntry, binding string) []store.AuditEntry {
+	return auditAfter(entries, before, func(e store.AuditEntry) bool {
+		return e.Kind == store.AuditInteractionDecision && e.Binding == binding
+	})
+}
+
+// auditAfter is the entries written after every entry of before (a snapshot taken earlier) that keep holds for, oldest first.
+func auditAfter(entries, before []store.AuditEntry, keep func(store.AuditEntry) bool) []store.AuditEntry {
 	var sequence int64
 	for _, entry := range before {
 		sequence = max(sequence, entry.Sequence)
 	}
 	rows := make([]store.AuditEntry, 0)
 	for _, entry := range entries {
-		if entry.Sequence > sequence && entry.Kind == store.AuditInteractionDecision && entry.Binding == binding {
+		if entry.Sequence > sequence && keep(entry) {
 			rows = append(rows, entry)
 		}
 	}
