@@ -518,10 +518,10 @@ func TestDryRunReportsASlackRefusalWithoutTheToken(t *testing.T) {
 	}{
 		{"the bot is not in the channel", "", "not_in_channel", "invite", exitFailure},
 		{"the bot lacks the scope", "", "missing_scope", "channels:history", exitFailure},
-		{"the token is revoked", "", "token_revoked", "token_revoked", exitSlackAuth},
-		{"an error that quotes the token", "", "invalid_auth for " + canaryToken, "invalid_auth", exitSlackAuth},
-		{"auth.test refuses the token and quotes it", "invalid_auth for " + canaryToken, "", "invalid_auth", exitSlackAuth},
-		{"auth.test says the account is inactive", "account_inactive", "", "account_inactive", exitSlackAuth},
+		{"the token is revoked", "", "token_revoked", "token_revoked", exitChatAuth},
+		{"an error that quotes the token", "", "invalid_auth for " + canaryToken, "invalid_auth", exitChatAuth},
+		{"auth.test refuses the token and quotes it", "invalid_auth for " + canaryToken, "", "invalid_auth", exitChatAuth},
+		{"auth.test says the account is inactive", "account_inactive", "", "account_inactive", exitChatAuth},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			getenv := env{"SLACK_BOT_TOKEN": canaryToken}.get

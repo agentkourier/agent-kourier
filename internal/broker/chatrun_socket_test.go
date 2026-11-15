@@ -331,7 +331,7 @@ func TestARefusalOnAReconnectIsFatal(t *testing.T) {
 			select {
 			case <-r.done:
 				var rej *authRejected
-				if !errors.Is(r.err, ErrSlackAuth) || !errors.As(r.err, &rej) || rej.code != tc.code {
+				if !errors.Is(r.err, ErrChatAuth) || !errors.As(r.err, &rej) || rej.code != tc.code {
 					t.Errorf("RunPlatform = %v; want an authRejected with %s", r.err, tc.code)
 				}
 			case p := <-r.clock.calls:

@@ -143,7 +143,7 @@ func (revokedSlack) Find(context.Context, string, string, string, time.Time) (st
 }
 
 // A bot token revoked while the connection is up fails the posts the outbox makes, which the outbox
-// treats as transient. Run must still end with ErrSlackAuth: here a post left unsent by an earlier run
+// treats as transient. Run must still end with ErrChatAuth: here a post left unsent by an earlier run
 // is what finds the token revoked.
 func TestRunEndsWithSlackAuthWhenAPostFindsTheTokenRevoked(t *testing.T) {
 	c := startConfig(t)
@@ -153,8 +153,8 @@ func TestRunEndsWithSlackAuthWhenAPostFindsTheTokenRevoked(t *testing.T) {
 
 	err := r.wait()
 
-	if !errors.Is(err, ErrSlackAuth) || !strings.Contains(err.Error(), "token_revoked") {
-		t.Errorf("Run = %v, want ErrSlackAuth naming token_revoked, from the post", err)
+	if !errors.Is(err, ErrChatAuth) || !strings.Contains(err.Error(), "token_revoked") {
+		t.Errorf("Run = %v, want ErrChatAuth naming token_revoked, from the post", err)
 	}
 }
 
@@ -168,8 +168,8 @@ func TestRunEndsWithSlackAuthWhenAReactionFindsTheTokenRevoked(t *testing.T) {
 
 	err := r.wait()
 
-	if !errors.Is(err, ErrSlackAuth) || !strings.Contains(err.Error(), "token_revoked") {
-		t.Errorf("Run = %v, want ErrSlackAuth naming token_revoked, from the reaction", err)
+	if !errors.Is(err, ErrChatAuth) || !strings.Contains(err.Error(), "token_revoked") {
+		t.Errorf("Run = %v, want ErrChatAuth naming token_revoked, from the reaction", err)
 	}
 }
 

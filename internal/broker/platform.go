@@ -51,7 +51,7 @@ type platformSpec struct {
 // not a table, so that there is no state to change.
 func platformFor(name string) (platformSpec, bool) {
 	if name == v1alpha1.PlatformSlack {
-		return platformSpec{Keys: []string{"botToken", "appToken"}, Name: "Slack"}, true
+		return platformSpec{Keys: v1alpha1.CredentialKeys(name), Name: "Slack"}, true
 	}
 	return platformSpec{}, false
 }

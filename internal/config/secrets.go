@@ -20,12 +20,6 @@ type SecretResolver interface {
 	Keys(ctx context.Context, namespace, name string) ([]string, error)
 }
 
-// The fixed keys of a ChatConnection's credentials Secret (spec section 7).
-const (
-	keyBotToken = "botToken"
-	keyAppToken = "appToken"
-)
-
 // secretRef is one Secret that an object of a Set refers to, and what it must hold.
 type secretRef struct {
 	from identity // the object that names it; the Secret is in its namespace (D29)
@@ -53,7 +47,7 @@ func (s *Set) secretRefs() []secretRef {
 	}
 	for i := range s.ChatConnections {
 		c := &s.ChatConnections[i]
-		refs = append(refs, secretRef{identity{"ChatConnection", c.Namespace, c.Name}, "spec.credentialsSecretRef", c.Spec.CredentialsSecretRef.Name, []string{keyBotToken, keyAppToken}})
+		refs = append(refs, secretRef{identity{"ChatConnection", c.Namespace, c.Name}, "spec.credentialsSecretRef", c.Spec.CredentialsSecretRef.Name, v1alpha1.CredentialKeys(c.Spec.Platform)})
 	}
 	for i := range s.Bindings {
 		b := &s.Bindings[i]
@@ -111,9 +105,6 @@ func secretReads(refs []secretRef) []SecretRead {
 	})
 	return reads
 }
-
-// ChatCredentialKeys returns the keys that a ChatConnection's credentials Secret must hold (spec section 7), sorted.
-func ChatCredentialKeys() []string { return []string{keyAppToken, keyBotToken} }
 
 // KeyedSecretWatcher is a resolver that follows Secrets as a SecretWatcher does, and keeps in memory of each Secret only the keys
 // that it is told are read: a Secret may hold a megabyte of keys that nothing refers to, and the namespace's writers choose them.

@@ -50,7 +50,7 @@ func TestExitCodes(t *testing.T) {
 		want int
 	}{
 		{"a clean stop", nil, exitOK},
-		{"Slack rejected the tokens", fmt.Errorf("run: %w", broker.ErrSlackAuth), exitSlackAuth},
+		{"the chat platform rejected the tokens", fmt.Errorf("run: %w", broker.ErrChatAuth), exitChatAuth},
 		{"the config or the wiring is wrong", fmt.Errorf("run: %w", broker.ErrWiring), exitUsage},
 		{"RBAC denied access to Secrets", fmt.Errorf("bootstrap: %w", k8ssecrets.ErrAccessDenied), exitRBAC},
 		{"any other failure", errors.New("store: disk full"), exitFailure},
@@ -59,8 +59,8 @@ func TestExitCodes(t *testing.T) {
 			t.Errorf("%s: exitCode = %d, want %d", tc.name, got, tc.want)
 		}
 	}
-	codes := map[int]bool{exitOK: true, exitSlackAuth: true, exitUsage: true, exitRBAC: true, exitFailure: true}
-	if len(codes) != 5 || exitOK != 0 || exitSlackAuth != 1 || exitUsage != 2 || exitRBAC != 3 {
+	codes := map[int]bool{exitOK: true, exitChatAuth: true, exitUsage: true, exitRBAC: true, exitFailure: true}
+	if len(codes) != 5 || exitOK != 0 || exitChatAuth != 1 || exitUsage != 2 || exitRBAC != 3 {
 		t.Errorf("the exit codes are %v, want 0 clean, 1 Slack auth, 2 wiring or usage, 3 RBAC, and one more for the rest", codes)
 	}
 }

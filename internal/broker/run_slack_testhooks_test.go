@@ -538,7 +538,7 @@ func waitConnected(t *testing.T, f *fakeslack.Server) {
 		testutil.Within(10*time.Second), testutil.Every(10*time.Millisecond))
 }
 
-// A rejected token ends Run with ErrSlackAuth, which cmd/agent-kourier exits 1 on: no retry can mend it.
+// A rejected token ends Run with ErrChatAuth, which cmd/agent-kourier exits 1 on: no retry can mend it.
 func TestRunExitsWithSlackAuthWhenTheBotTokenIsRejected(t *testing.T) {
 	t.Parallel()
 	w := newSlackWorld(t, "wrong-bot-token") // the fake accepts only well-formed tokens
@@ -547,8 +547,8 @@ func TestRunExitsWithSlackAuthWhenTheBotTokenIsRejected(t *testing.T) {
 
 	err := r.wait()
 
-	if !errors.Is(err, ErrSlackAuth) || !strings.Contains(err.Error(), "invalid_auth") {
-		t.Errorf("Run = %v, want ErrSlackAuth naming invalid_auth", err)
+	if !errors.Is(err, ErrChatAuth) || !strings.Contains(err.Error(), "invalid_auth") {
+		t.Errorf("Run = %v, want ErrChatAuth naming invalid_auth", err)
 	}
 	if strings.Contains(err.Error(), "wrong-bot-token") {
 		t.Errorf("the error holds the token: %v", err)
