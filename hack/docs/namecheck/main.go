@@ -3,7 +3,8 @@
 // name). The identifiers agent-kourier and agentkourier are fine. The exceptions: the SQLite file courier.db, which an
 // install from before the rename keeps, the Postgres function courier_audit_purge, which migration 0024 dropped, a
 // lowercase "kourier/" that starts a path segment, as in a recipe's kourier/binding.yaml, which is a directory name,
-// and lines between <!-- name-check: off --> and <!-- name-check: on -->, for a historical note such as an upgrade
+// the lowercase word kourier-v1, the API value that names a web ChatConnection's profile, and lines between
+// <!-- name-check: off --> and <!-- name-check: on -->, for a historical note such as an upgrade
 // from the old chart name.
 //
 // It reads the site's sources: docs/ (without the directories that mkdocs.yml's exclude_docs names, the brand kit and
@@ -73,6 +74,21 @@ func pathSegment(line string, start, end int) bool {
 	return start == 0 || strings.ContainsRune(" \t\"'`(</", rune(line[start-1]))
 }
 
+// webProfile reports whether the match of kourier at line[start:end] is the name of a web ChatConnection's profile, the
+// API value kourier-v1: lowercase, as a whole word, at the start of the line or after a character that is not a letter,
+// digit, '-' or '_', and not followed by one. "Kourier-v1", "xkourier-v1" and "kourier-v10" are not.
+func webProfile(line string, start, end int) bool {
+	const profile = "-v1"
+	if line[start:end] != "kourier" || !strings.HasPrefix(line[end:], profile) {
+		return false
+	}
+	word := func(b byte) bool {
+		return b == '-' || b == '_' || b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z'
+	}
+	after := end + len(profile)
+	return (start == 0 || !word(line[start-1])) && (after == len(line) || !word(line[after]))
+}
+
 // svgTag is an SVG tag that opens and closes on one line.
 var svgTag = regexp.MustCompile(`<[^>\n]*>`)
 
@@ -123,7 +139,8 @@ func findings(text string) []finding {
 			unrepo = strings.ReplaceAll(unrepo, r, strings.Repeat(" ", len(r)))
 		}
 		for _, m := range kourier.FindAllStringIndex(unrepo, -1) {
-			if start := offsets[i] + m[0]; !fullName.MatchString(text[max(0, start-6):start]) && !pathSegment(line, m[0], m[1]) {
+			if start := offsets[i] + m[0]; !fullName.MatchString(text[max(0, start-6):start]) && !pathSegment(line, m[0], m[1]) &&
+				!webProfile(line, m[0], m[1]) {
 				bad = true
 			}
 		}

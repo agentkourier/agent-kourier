@@ -66,9 +66,10 @@ func TestLoadSpecExamples(t *testing.T) {
 		t.Fatalf("got %d backends, %d connections, %d bindings; want 1, 1, 2",
 			len(set.AgentBackends), len(set.ChatConnections), len(set.Bindings))
 	}
-	// Files load in lexical order: binding-minimal.yaml before binding.yaml.
+	// Files load in lexical order: binding-minimal.yaml before binding.yaml. The output is left for resolution, whose default depends
+	// on the platform (TestResolutionFillsTheOutputOfTheSlackPlatform).
 	minimal := set.Bindings[0]
-	if minimal.Name != "chat-only" || minimal.Spec.Chat.Output != v1alpha1.OutputLive ||
+	if minimal.Name != "chat-only" || minimal.Spec.Chat.Output != "" ||
 		minimal.Spec.Interactions.Timeout.Duration != 30*time.Minute || minimal.Spec.Interactions.ToolApprovals || len(minimal.Spec.Interactions.ApproverGroups) != 0 {
 		t.Errorf("defaults not applied to %s: %+v", minimal.Name, minimal.Spec)
 	}

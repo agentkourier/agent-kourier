@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    agentkourier.dev/schema-sha256: 32b1929a7edf1d9052a844642ad94a2f22184fc5381944040e1fcf889ebc794c
+    agentkourier.dev/schema-sha256: 4b70998eea2f2f2959a670fc5c84f3fd717560155b21b4dcab3382f5d06b8cd7
     controller-gen.kubebuilder.io/version: v0.23.0
   name: chatconnections.agentkourier.dev
 spec:
@@ -22,6 +22,10 @@ spec:
   - additionalPrinterColumns:
     - jsonPath: .spec.platform
       name: Platform
+      type: string
+    - jsonPath: .spec.web.profile
+      name: Profile
+      priority: 1
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -64,8 +68,9 @@ spec:
                 type: array
               credentialsSecretRef:
                 description: |-
-                  CredentialsSecretRef names one Secret whose keys are fixed by the platform and its mode. A Slack connection in Socket Mode needs
-                  botToken and appToken; one in HTTP mode needs botToken and signingSecret.
+                  CredentialsSecretRef names one Secret whose keys are fixed by the platform and its mode or profile. A Slack connection in Socket
+                  Mode needs botToken and appToken; one in HTTP mode needs botToken and signingSecret. A web connection of the kourier-v1 profile
+                  needs signingSecret, and one of the github profile webhookSecret.
                 properties:
                   name:
                     description: |-
@@ -78,8 +83,12 @@ spec:
                 - name
                 type: object
               platform:
+                description: |-
+                  Platform is the chat platform: slack, or web, whose integration spec.web.profile names. No broker runs a web connection
+                  yet: one that is the broker's own connection stops its start, and a team one is not started.
                 enum:
                 - slack
+                - web
                 type: string
               slack:
                 description: |-
@@ -99,6 +108,57 @@ spec:
                     - ""
                     type: string
                 type: object
+              web:
+                description: Web holds the settings of a web connection. A connection
+                  whose platform is web must set it, and no other may.
+                properties:
+                  profile:
+                    description: |-
+                      Profile is the integration the connection speaks. kourier-v1 is Agent Kourier's own signed JSON contract: it takes signed
+                      requests and posts the agent's replies, signed, to url. github takes GitHub's webhooks and sends no replies: the agent
+                      posts on GitHub itself, so its Bindings take output none alone.
+                    enum:
+                    - kourier-v1
+                    - github
+                    type: string
+                  url:
+                    description: |-
+                      URL is where the kourier-v1 profile posts the agent's replies. It is required for kourier-v1 and refused for github, which
+                      sends none. It is an https URL, or an http one only to localhost, a loopback address (127.x.x.x or [::1]) or a Service in
+                      the cluster (a host that ends in .svc or .svc.cluster.local), since a reply carries what the agent wrote. At most 2048
+                      bytes, with no credentials, query or fragment: the replies are signed with the credentials Secret's signingSecret.
+                    maxLength: 2048
+                    type: string
+                    x-kubernetes-validations:
+                    - message: must be an http or https URL with a host
+                      rule: self == '' || self.matches('(?i)^https?://[^/?#]')
+                    - message: must not contain credentials; the replies are signed
+                        with the Secret's signingSecret
+                      rule: '!self.matches(''(?i)^https?://[^/?#]*@'')'
+                    - message: 'invalid URL: must not contain control characters'
+                      rule: '!self.matches(r''^[^#]*[\x00-\x1f\x7f]'')'
+                    - message: 'invalid URL: the host must not contain a space, backslash,
+                        caret, backtick, brace or bar'
+                      rule: '!self.matches(r''(?i)^https?://[^/?#]*[ \\^\x60{|}]'')'
+                    - message: must not have a query or fragment
+                      rule: '!self.matches(''[?#]'')'
+                    - message: http is allowed only to localhost, a loopback address
+                        or a Service in the cluster (a host that ends in .svc or .svc.cluster.local);
+                        use https
+                      rule: '!self.matches(''(?i)^http://'') || self.matches(r''(?i)^http://(?:localhost|127(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}|\[::1\]|(?:[a-z0-9-]+\.)+svc(?:\.cluster\.local)?)(?::[0-9]{1,5})?(?:[/?#]|$)'')'
+                required:
+                - profile
+                type: object
+                x-kubernetes-validations:
+                - fieldPath: .url
+                  message: is required by the kourier-v1 profile, which posts the
+                    replies to it
+                  rule: self.profile != 'kourier-v1' || (has(self.url) && size(self.url)
+                    > 0)
+                - fieldPath: .url
+                  message: is set, but the github profile sends no replies
+                  rule: self.profile != 'github' || !has(self.url) || size(self.url)
+                    == 0
             required:
             - credentialsSecretRef
             - platform
@@ -107,6 +167,12 @@ spec:
             - fieldPath: .slack
               message: is set, but only a slack connection has one
               rule: '!has(self.slack) || self.platform == ''slack'''
+            - fieldPath: .web
+              message: is set, but only a web connection has one
+              rule: '!has(self.web) || self.platform == ''web'''
+            - fieldPath: .web
+              message: 'is required on a web connection: it names the profile'
+              rule: self.platform != 'web' || has(self.web)
         required:
         - spec
         type: object

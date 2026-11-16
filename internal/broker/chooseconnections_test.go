@@ -149,6 +149,59 @@ func TestAChatConnectionOnAPlatformWithNoAdapterIsAWiringError(t *testing.T) {
 	}
 }
 
+// A web ChatConnection, which the API takes before any broker has its adapter, is refused at connection start as a platform with no
+// adapter is, whatever its profile and with its profile's Secret in place: as the broker's own connection it is a wiring error, which
+// stops the start, and as a team connection it is its Err, which leaves it not started beside a Slack connection that is.
+func TestAWebChatConnectionIsRefusedAtConnectionStart(t *testing.T) {
+	for _, web := range []*v1alpha1.WebConnectionSpec{
+		{Profile: v1alpha1.WebProfileKourierV1, URL: "https://receiver.example.com/replies"}, {Profile: v1alpha1.WebProfileGitHub},
+	} {
+		t.Run(string(web.Profile), func(t *testing.T) {
+			conn := func(ns string) v1alpha1.ChatConnection {
+				return v1alpha1.ChatConnection{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "web", CreationTimestamp: metav1.NewTime(time.Unix(2, 0))},
+					Spec: v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb, Web: web, CredentialsSecretRef: v1alpha1.SecretRef{Name: "creds-web"}}}
+			}
+			slack := v1alpha1.ChatConnection{ObjectMeta: metav1.ObjectMeta{Namespace: "platform", Name: "slack", CreationTimestamp: metav1.NewTime(time.Unix(1, 0))},
+				Spec: v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformSlack, CredentialsSecretRef: v1alpha1.SecretRef{Name: "creds-slack"}}}
+			for _, c := range []v1alpha1.ChatConnection{conn("platform"), slack} {
+				if err := c.Validate(); err != nil {
+					t.Fatalf("the connection does not validate: %v", err)
+				}
+			}
+			key := v1alpha1.CredentialKeys(conn("x").Spec)[0]
+			r := &reader{vals: map[string]string{
+				"platform/creds-web/" + key: "fake-web-secret", "team-a/creds-web/" + key: "fake-web-secret",
+				"platform/creds-slack/botToken": "xoxb-own", "platform/creds-slack/appToken": "xapp-own",
+			}}
+			resolved := func(conns ...v1alpha1.ChatConnection) *config.Snapshot {
+				snap, err := config.Resolve(t.Context(), &config.Set{ChatConnections: conns}, keysOf{key, "botToken", "appToken"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return snap
+			}
+
+			_, err := ChooseConnections(t.Context(), resolved(conn("platform")), v1alpha1.ObjectRef{Namespace: "platform", Name: "web"}, r)
+			if !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), `ChatConnection platform/web is "web", a platform this broker has no adapter for`) {
+				t.Errorf("own web connection: ChooseConnections = %v; want a wiring error that names the platform", err)
+			}
+
+			got, err := ChooseConnections(t.Context(), resolved(slack, conn("team-a")), ownRef, r)
+			if err != nil {
+				t.Fatalf("own Slack connection beside a team web one: ChooseConnections = %v; want it served", err)
+			}
+			if len(got.Team) != 1 || !errors.Is(got.Team[0].Err, ErrWiring) || len(got.Team[0].Credentials) != 0 || got.Team[0].Platform != v1alpha1.PlatformWeb {
+				t.Errorf("team web connection = %+v; want its wiring error, its platform and no credentials", got.Team)
+			}
+		})
+	}
+}
+
+// keysOf says every Secret has the keys given, as the snapshot builder only checks that they exist.
+type keysOf []string
+
+func (k keysOf) Keys(context.Context, string, string) ([]string, error) { return k, nil }
+
 // A Slack connection in HTTP mode is served with the keys of its mode, the bot token and the signing secret, and no app token is read; a
 // connection in Socket Mode beside it keeps its own keys. A Secret of HTTP mode that has no signingSecret is a wiring error that names the key.
 func TestASlackConnectionInHTTPModeReadsTheKeysOfItsMode(t *testing.T) {

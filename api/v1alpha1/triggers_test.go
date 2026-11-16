@@ -362,8 +362,10 @@ func TestTriggersValidate(t *testing.T) {
 		{"a display name with a space instead of ID", func(o *Binding) { bot(o).From.ID = "Alert Manager" },
 			at + `.from.id: invalid sender ID "Alert Manager": must be the sender's ID (Slack: a bot ID such as B0123456789), not a name`},
 		{"an app's login ok", func(o *Binding) { bot(o).From.ID = "dependabot[bot]" }, ""},
-		{"a login that ends in a hyphen", func(o *Binding) { bot(o).From.ID = "octocat-" },
-			at + `.from.id: invalid sender ID "octocat-": must be the sender's ID (Slack: a bot ID such as B0123456789), not a name`},
+		// Not a login, but a kourier-v1 sender's ID has its shape: it is refused when the Binding is resolved on Slack or GitHub.
+		{"a login that ends in a hyphen loads: a kourier-v1 ID has its shape", func(o *Binding) { bot(o).From.ID = "octocat-" }, ""},
+		{"an ID that starts with a hyphen", func(o *Binding) { bot(o).From.ID = "-octocat" },
+			at + `.from.id: invalid sender ID "-octocat": must be the sender's ID (Slack: a bot ID such as B0123456789), not a name`},
 		{"a bot ID at the length cap ok", func(o *Binding) { bot(o).From.ID = "B" + strings.Repeat("0", maxChatIDLen-1) }, ""},
 		{"a bot ID over the length cap", func(o *Binding) { bot(o).From.ID = "B" + strings.Repeat("0", maxChatIDLen) },
 			at + fmt.Sprintf(".from.id: is %d bytes, longer than the %d byte limit", maxChatIDLen+1, maxChatIDLen)},

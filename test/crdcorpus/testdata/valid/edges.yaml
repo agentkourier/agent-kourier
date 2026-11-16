@@ -1094,10 +1094,9 @@ spec:
     toolApprovals: true
     approverGroups: [S0000000000000000000000000000000]
 ---
-# The longest chat identifiers that the load takes, of the shape of a platform that is not Slack: a repository of a 39-character
-# owner and a 100-character name as the channel (140, the cap), a login of 39 with an app's [bot] as a mention's user (44, the
-# cap), and a team of the same length as an approver group. The resolution of a Slack connection refuses them; the load and the
-# schema take them.
+# The longest GitHub identifiers that the load takes: a repository of a 39-character owner and a 100-character name as the
+# channel (140, the cap), a login of 39 with an app's [bot] as a mention's user (44, the github profile's cap), and a team of
+# the same length as an approver group. The resolution of a Slack connection refuses them; the load and the schema take them.
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata:
@@ -1536,3 +1535,178 @@ spec:
   platform: slack
   credentialsSecretRef: {name: slack-main}
   slack: {}
+---
+# A web connection of the github profile, which has no url.
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: edges-web-github
+  namespace: sre
+spec:
+  platform: web
+  credentialsSecretRef:
+    name: github-webhook
+  web:
+    profile: github
+---
+# A github connection that writes its url out empty, which the broker reads as unset.
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: edges-web-github-empty-url
+  namespace: sre
+spec:
+  platform: web
+  credentialsSecretRef:
+    name: github-webhook
+  web:
+    profile: github
+    url: ""
+---
+# A web connection of the kourier-v1 profile with an https url, a port and a path.
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: edges-web-kourier-v1
+  namespace: sre
+spec:
+  platform: web
+  credentialsSecretRef:
+    name: kourier-v1-signing
+  web:
+    profile: kourier-v1
+    url: https://receiver.example.com:8443/agent-kourier/replies
+---
+# Each http url that a kourier-v1 connection may name: a Service by its short and its full cluster name, localhost, a
+# loopback address of IPv4 and of IPv6, in upper case, and with no path.
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: edges-web-http-service
+  namespace: sre
+spec:
+  platform: web
+  credentialsSecretRef:
+    name: kourier-v1-signing
+  web:
+    profile: kourier-v1
+    url: http://receiver.team-a.svc:8080/replies
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: edges-web-http-cluster-local
+  namespace: sre
+spec:
+  platform: web
+  credentialsSecretRef:
+    name: kourier-v1-signing
+  web:
+    profile: kourier-v1
+    url: http://receiver.team-a.svc.cluster.local/replies
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: edges-web-http-localhost
+  namespace: sre
+spec:
+  platform: web
+  credentialsSecretRef:
+    name: kourier-v1-signing
+  web:
+    profile: kourier-v1
+    url: HTTP://LOCALHOST:9000
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: edges-web-http-loopback
+  namespace: sre
+spec:
+  platform: web
+  credentialsSecretRef:
+    name: kourier-v1-signing
+  web:
+    profile: kourier-v1
+    url: http://127.0.0.1:9000/replies
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: edges-web-http-loopback-v6
+  namespace: sre
+spec:
+  platform: web
+  credentialsSecretRef:
+    name: kourier-v1-signing
+  web:
+    profile: kourier-v1
+    url: http://[::1]:9000/replies
+---
+# A Binding with output none, which the load and the schema take; only a platform where the agent replies itself (the github
+# profile) serves it, and the resolution of a Slack connection refuses it.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: edges-output-none
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: edges-web-github}
+    channel: octo-org/hello-world
+    output: none
+---
+# The kourier-v1 profile's IDs at their edges: a channel of one digit, a channel of 64 that has its digit last, a sender and a
+# user of 64 with no digit, the ID characters '.', '_' and '-', and a UUID. The load and the schema take
+# them, and so does the resolution of a kourier-v1 connection; the resolution of a Slack connection refuses them.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: edges-kourier-v1-ids
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: edges-web-kourier-v1}
+    channel: "1"
+    mentions:
+      - {name: long, user: uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu}
+      - {name: dotted, user: sam.o_neil-2}
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert."
+      - type: botMessage
+        from: {id: 0b7a9c1e-3f2d-4a5b-8c6d-9e0f1a2b3c4d}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert."
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: edges-kourier-v1-longest-channel
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: edges-web-kourier-v1}
+    channel: ccccccccccccccccccccccccccccccccccccccccccccccccccccccc.ch_ops-9

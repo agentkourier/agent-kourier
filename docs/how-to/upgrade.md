@@ -1005,3 +1005,24 @@ has another platform's ID with `InvalidSpec`, and a broker that has just started
 files route such a Binding fails the config. This release refuses such a Binding on a Slack connection too, so fix its IDs before the
 rollback. An earlier release's CRDs have Slack's patterns and 32-byte caps; whether the API server then lets you change another field of
 a stored object that breaks them depends on its version, so fix the IDs in the same edit.
+
+## Upgrade to the release that adds the web platform
+
+The API takes a ChatConnection whose `spec.platform` is `web`, with `spec.web.profile` (`kourier-v1` or `github`), and a Binding's
+`chat.output` takes `none` ([What each platform supports](../reference/platforms.md)). No broker runs a web connection yet: one that is
+the broker's own connection stops the start (exit code 2), and a team's is not started. Every object stored before the upgrade loads as
+it did, and a Slack Binding behaves as before.
+
+- **`chat.output` has no default in the CRD.** The broker fills in the platform's default when it reads the Binding with its
+  ChatConnection: `live` on Slack. A Binding stored before the upgrade keeps the `live` that the API server wrote; one applied after it
+  without `output` has none stored, and `kubectl get -o yaml` shows no `output`. It still runs `live`. `output: none` on a Slack
+  connection is refused with `UnsupportedOnPlatform`.
+- **A mention's `user` may be 64 bytes**, up from 44, and the four chat ID fields take a `kourier-v1` ID beside Slack's and GitHub's
+  shapes. A Slack connection still holds them to Slack's shapes.
+- **`kubectl get akconnection -o wide` shows `PROFILE`**, the web profile, after `PLATFORM`. Without `-o wide` the columns are as before.
+  The ChatConnection and Binding CRDs change, and their schema hashes with them: the chart applies them with the release when
+  `crds.install` is true, or unset on `config.source: crds`; if you apply the CRDs yourself, apply `charts/agent-kourier/files/crds` again.
+
+**Roll back.** An earlier broker's validation refuses a web ChatConnection, a Binding with `output: none` and a mention `user` longer
+than 44 bytes: on custom resources it does not serve them (the Binding's `Accepted` condition says `InvalidSpec`, and a Binding on a
+refused connection is not served either), and on the files route the config fails. Delete or change them before the rollback.

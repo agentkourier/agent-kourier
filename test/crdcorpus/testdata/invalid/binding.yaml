@@ -821,8 +821,8 @@ spec:
     toolApprovals: true
     approverGroups: [""]
 ---
-# rule: binding/spec.interactions.approverGroups[]: not a user group ID
-# want: spec.interactions.approverGroups[0]: invalid group ID "C0123456789"
+# rule: binding/spec.interactions.approverGroups[]: a word with no digit, which no platform's group is
+# want: spec.interactions.approverGroups[0]: invalid group ID "sre"
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
@@ -841,7 +841,7 @@ spec:
     channel: C0123456789
   interactions:
     toolApprovals: true
-    approverGroups: [C0123456789]
+    approverGroups: [sre]
 ---
 # rule: binding/spec.interactions.approverGroups[]: named twice
 # want: spec.interactions.approverGroups[1]: duplicate of index 0
@@ -1373,8 +1373,8 @@ spec:
         limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
         promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
 ---
-# rule: binding/spec.chat.mentions[].user: over 44 characters
-# want: spec.chat.mentions[0].user: is 45 bytes, longer than the 44 byte limit
+# rule: binding/spec.chat.mentions[].user: over 64 characters
+# want: spec.chat.mentions[0].user: is 65 bytes, longer than the 64 byte limit
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
@@ -1391,7 +1391,7 @@ spec:
   chat:
     connectionRef: {name: slack}
     channel: C0123456789
-    mentions: [{name: sam, user: U00000000000000000000000000000000000000000000}]
+    mentions: [{name: sam, user: U0000000000000000000000000000000000000000000000000000000000000000}]
     triggers:
       - {type: mention}
       - type: botMessage
@@ -1467,3 +1467,61 @@ spec:
         limits: {rateLimit: {maxRuns: 5, per: "10m", maxConcurrent: 2}, maxRunsPerDay: 20}
         promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
   session: {threadTTL: "0000000000000000000000000000000000000000000000000000000000002160h"}
+---
+# rule: binding/spec.chat.channel: a word with no digit, which no platform's channel is
+# want: spec.chat.channel: invalid channel "general"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: general
+---
+# rule: binding/spec.chat.channel: a colon, which a kourier-v1 ID leaves out
+# want: spec.chat.channel: invalid channel "ch:1"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: "ch:1"
+---
+# rule: binding/spec.chat.mentions[].user: starts with a dot
+# want: spec.chat.mentions[0].user: invalid user ID ".octocat"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    mentions: [{name: oncall, user: .octocat}]

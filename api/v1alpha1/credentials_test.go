@@ -7,7 +7,8 @@ import (
 
 // The keys of a Slack connection's credentials Secret are those of spec section 7 for its mode, the bot token first, as the broker reads
 // and reports them: Socket Mode, which is also the mode of a connection that names none, needs the app-level token, and HTTP mode the
-// signing secret. A platform that is not supported, or a mode that is not, has none.
+// signing secret. A web connection's are its profile's: the signing secret for kourier-v1, and GitHub's webhook secret for github. A
+// platform, mode or profile that is not supported has none.
 func TestCredentialKeysPerPlatformAndMode(t *testing.T) {
 	socket, http := []string{"botToken", "appToken"}, []string{"botToken", "signingSecret"}
 	tests := []struct {
@@ -20,6 +21,11 @@ func TestCredentialKeysPerPlatformAndMode(t *testing.T) {
 		{"slack in Socket Mode", ChatConnectionSpec{Platform: PlatformSlack, Slack: &SlackConnectionSpec{Mode: SlackModeSocket}}, socket},
 		{"slack in HTTP mode", ChatConnectionSpec{Platform: PlatformSlack, Slack: &SlackConnectionSpec{Mode: SlackModeHTTP}}, http},
 		{"slack in a mode that is not supported", ChatConnectionSpec{Platform: PlatformSlack, Slack: &SlackConnectionSpec{Mode: "websocket"}}, nil},
+		{"web, kourier-v1", ChatConnectionSpec{Platform: PlatformWeb, Web: &WebConnectionSpec{Profile: WebProfileKourierV1}}, []string{"signingSecret"}},
+		{"web, github", ChatConnectionSpec{Platform: PlatformWeb, Web: &WebConnectionSpec{Profile: WebProfileGitHub}}, []string{"webhookSecret"}},
+		{"web with no web block", ChatConnectionSpec{Platform: PlatformWeb}, nil},
+		{"web with no profile", ChatConnectionSpec{Platform: PlatformWeb, Web: &WebConnectionSpec{}}, nil},
+		{"web with a profile that is not supported", ChatConnectionSpec{Platform: PlatformWeb, Web: &WebConnectionSpec{Profile: "gitlab"}}, nil},
 		{"no platform", ChatConnectionSpec{}, nil},
 		{"teams", ChatConnectionSpec{Platform: "teams"}, nil},
 		{"Slack, capitalised", ChatConnectionSpec{Platform: "Slack"}, nil},
@@ -33,12 +39,15 @@ func TestCredentialKeysPerPlatformAndMode(t *testing.T) {
 
 // A caller may sort or change the slice it is given (the broker sorts it) without changing what the next caller gets.
 func TestCredentialKeysReturnsACopy(t *testing.T) {
-	for _, mode := range []SlackMode{SlackModeSocket, SlackModeHTTP} {
-		spec := ChatConnectionSpec{Platform: PlatformSlack, Slack: &SlackConnectionSpec{Mode: mode}}
+	for _, spec := range []ChatConnectionSpec{
+		{Platform: PlatformSlack, Slack: &SlackConnectionSpec{Mode: SlackModeSocket}}, {Platform: PlatformSlack, Slack: &SlackConnectionSpec{Mode: SlackModeHTTP}},
+		{Platform: PlatformWeb, Web: &WebConnectionSpec{Profile: WebProfileKourierV1}}, {Platform: PlatformWeb, Web: &WebConnectionSpec{Profile: WebProfileGitHub}},
+	} {
+		want := CredentialKeys(spec)[0]
 		keys := CredentialKeys(spec)
 		keys[0] = "changed"
-		if got := CredentialKeys(spec); got[0] != "botToken" {
-			t.Errorf("CredentialKeys in mode %q = %q after a caller changed its slice, want the table unchanged", mode, got)
+		if got := CredentialKeys(spec); got[0] != want {
+			t.Errorf("CredentialKeys of %+v = %q after a caller changed its slice, want the table unchanged", spec, got)
 		}
 	}
 }
@@ -53,6 +62,14 @@ func TestEveryPlatformAndModeValidateAcceptsHasCredentialKeys(t *testing.T) {
 			if valid, keyed := c.Validate() == nil, CredentialKeys(c.Spec) != nil; valid != keyed {
 				t.Errorf("platform %q, slack %+v: Validate accepts it %v, CredentialKeys has keys %v: the two must agree", p, slack, valid, keyed)
 			}
+		}
+	}
+	for _, web := range []*WebConnectionSpec{nil, {}, {Profile: WebProfileKourierV1, URL: "https://r.example.com"}, {Profile: WebProfileGitHub},
+		{Profile: "gitlab"}, {Profile: "GitHub"}} {
+		c := load[ChatConnection](t, "chatconnection.yaml")
+		c.Spec.Platform, c.Spec.Web = PlatformWeb, web
+		if valid, keyed := c.Validate() == nil, CredentialKeys(c.Spec) != nil; valid != keyed {
+			t.Errorf("platform web, web %+v: Validate accepts it %v, CredentialKeys has keys %v: the two must agree", web, valid, keyed)
 		}
 	}
 }
