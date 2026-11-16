@@ -179,7 +179,7 @@ func (d interactionDeps) build(inner session.Sink) (*interactionRuntime, error) 
 	if err != nil {
 		return nil, fmt.Errorf("interactions: the feedback handler: %w", err)
 	}
-	if worker, err = interact.NewWorker(interact.WorkerConfig{Processor: pressRouter{interactions: pipeline, feedback: votes}, Logger: d.log}); err != nil {
+	if worker, err = interact.NewWorker(interact.WorkerConfig{Processor: pressRouter{interactions: pipeline, feedback: votes}, Presses: d.st, Logger: d.log}); err != nil {
 		return nil, fmt.Errorf("interactions: the worker: %w", err)
 	}
 	tap, err := interact.NewTap(interact.TapConfig{Sink: inner, Handler: intake, Lookup: d.bindings, Logger: d.log})

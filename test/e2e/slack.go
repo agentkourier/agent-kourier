@@ -230,6 +230,24 @@ func (s *Slack) acked(ctx context.Context, envelopeID string) (bool, json.RawMes
 	return out.Acked, out.Payload, err
 }
 
+// DoneWait waits up to timeout until the fake Slack will send none of the envelopes again: at once in Socket Mode, and in HTTP mode
+// once each request is answered 200 or its retries are over. It polls rather than holding a request open.
+func (s *Slack) DoneWait(ctx context.Context, timeout time.Duration, envelopeIDs ...string) error {
+	for _, id := range envelopeIDs {
+		err := Wait(ctx, timeout, "the fake Slack's last delivery of "+id, func(ctx context.Context) (bool, error) {
+			var out struct {
+				Done bool `json:"done"`
+			}
+			err := s.c.do(ctx, http.MethodGet, "/_control/done/"+url.PathEscape(id), nil, &out)
+			return out.Done, err
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // AckWait waits up to timeout for Agent Kourier to ack the envelope and returns the ack's payload. It
 // polls acked rather than holding a request open.
 func (s *Slack) AckWait(ctx context.Context, timeout time.Duration, envelopeID string) (json.RawMessage, error) {

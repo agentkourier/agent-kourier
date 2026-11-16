@@ -178,6 +178,7 @@ type Server struct {
 
 	mu       sync.Mutex
 	last     int64                 // microseconds of the last ts issued, guarded by mu
+	lastAct  int64                 // microseconds of the last action_ts issued, guarded by mu
 	events   int                   // Events API events issued, guarded by mu
 	channels map[string][]*Message // messages per channel in ts order, guarded by mu
 	users    map[string]User       // guarded by mu
@@ -271,6 +272,7 @@ func NewHandler(opts ...Option) *Server {
 	}
 	s.finishApps()
 	s.web.onAck = func(id string) { s.sock.settle(id, nil) }
+	s.web.onDone = s.sock.finish
 	s.web.revoked = s.isRevoked
 	s.web.start()
 	s.control = s.newControlRoutes()

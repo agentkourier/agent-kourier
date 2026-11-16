@@ -106,6 +106,7 @@ func TestTheOutcomeOfAnOperationIsClassifiedOnce(t *testing.T) {
 		{wrap(store.ErrConflict), "conflict"},
 		{wrap(store.ErrExpired), "expired"},
 		{wrap(store.ErrLimit), "limited"},
+		{wrap(store.ErrDuplicate), "duplicate"},
 		{wrap(store.ErrInvalid), "invalid"},
 		{wrap(store.ErrDeposed), "error"},
 		{wrap(context.Canceled), "cancelled"},

@@ -249,6 +249,10 @@ func pendingPresses(id string, before time.Time) call {
 	}
 }
 
+func getPress(seq int64) call {
+	return func(ctx context.Context, s store.Store) error { _, err := s.GetPress(ctx, seq); return err }
+}
+
 func purgePresses(now time.Time, grace time.Duration) call {
 	return func(ctx context.Context, s store.Store) error { _, err := s.PurgePresses(ctx, now, grace); return err }
 }
@@ -556,6 +560,7 @@ func specs() []spec {
 			"PerUser limit 0":  recordPress(nil, store.PressLimits{Total: 10, PerUser: 0}),
 		}},
 		{"ListPresses", func(ctx context.Context, s store.Store) error { _, err := s.ListPresses(ctx); return err }, nil},
+		{"GetPress", getPress(1), map[string]call{"seq 0": getPress(0), "negative seq": getPress(-1)}},
 		{"ServedConnections", func(ctx context.Context, s store.Store) error { _, err := s.ServedConnections(ctx); return err }, nil},
 		{"ReplaceServedConnections", replaceServedConnections(t0, "ns/a", "ns/b"), map[string]call{
 			"an empty connection": replaceServedConnections(t0, "ns/a", ""),

@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// maxAckWait bounds the timeout of GET /_control/acks/{id}; a wait never hangs.
+// maxAckWait bounds the timeout of GET /_control/acks/{id} and GET /_control/done/{id}; a wait never hangs.
 const maxAckWait = 30 * time.Second
 
 // isControlPath reports whether a request path belongs to the control surface
@@ -308,6 +308,7 @@ func (s *Server) newControlRoutes() controlRoutes {
 	})
 	mux.HandleFunc("GET /_control/reactions", s.controlReactions)
 	mux.HandleFunc("GET /_control/acks/{id}", s.controlAck)
+	mux.HandleFunc("GET /_control/done/{id}", s.controlDone)
 	return controlRoutes{mux}
 }
 
@@ -349,13 +350,9 @@ func (s *Server) controlReactions(w http.ResponseWriter, r *http.Request) {
 // for the ack. A timeout is an answer, not an error: acked is false.
 func (s *Server) controlAck(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	wait := time.Duration(0)
-	if v := r.URL.Query().Get("timeout"); v != "" {
-		var err error
-		if wait, err = time.ParseDuration(v); err != nil || wait < 0 || wait > maxAckWait {
-			writeControl(w, http.StatusBadRequest, map[string]string{"error": "timeout must be a duration from 0s to 30s"})
-			return
-		}
+	wait, ok := controlWait(w, r)
+	if !ok {
+		return
 	}
 	if s.envelope(id) == nil {
 		writeControlError(w, ErrNotFound, nil)
@@ -369,6 +366,41 @@ func (s *Server) controlAck(w http.ResponseWriter, r *http.Request) {
 		Acked   bool            `json:"acked"`
 		Payload json.RawMessage `json:"payload,omitempty"`
 	}{acked, payload})
+}
+
+// controlDone answers whether the fake will send an envelope no more (WaitDone), waiting up to the request's timeout parameter
+// (as for controlAck). A timeout is an answer, not an error: done is false.
+func (s *Server) controlDone(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	wait, ok := controlWait(w, r)
+	if !ok {
+		return
+	}
+	if s.envelope(id) == nil {
+		writeControlError(w, ErrNotFound, nil)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), wait)
+	defer cancel()
+	err := s.WaitDone(ctx, id)
+	writeControl(w, http.StatusOK, struct {
+		Done bool `json:"done"`
+	}{err == nil})
+}
+
+// controlWait reads a wait's timeout parameter, a Go duration from 0 to maxAckWait (none: 0), and answers 400 and false for
+// any other.
+func controlWait(w http.ResponseWriter, r *http.Request) (time.Duration, bool) {
+	v := r.URL.Query().Get("timeout")
+	if v == "" {
+		return 0, true
+	}
+	wait, err := time.ParseDuration(v)
+	if err != nil || wait < 0 || wait > maxAckWait {
+		writeControl(w, http.StatusBadRequest, map[string]string{"error": "timeout must be a duration from 0s to 30s"})
+		return 0, false
+	}
+	return wait, true
 }
 
 // post wraps a control call as a handler. It decodes the JSON body strictly: a
