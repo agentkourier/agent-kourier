@@ -200,7 +200,7 @@ func TestDefault(t *testing.T) {
 	if b.Spec.Chat.Progress != ProgressStepsAndActivity {
 		t.Errorf("progress after Default = %q; want the default, %q", b.Spec.Chat.Progress, ProgressStepsAndActivity)
 	}
-	if b.Spec.Chat.Output != OutputLive || b.Spec.Interactions.Timeout.Duration != 30*time.Minute || b.Spec.Interactions.ToolApprovals || len(b.Spec.Interactions.ApproverGroups) != 0 ||
+	if b.Spec.Chat.Output != "" || b.Spec.Interactions.Timeout.Duration != 30*time.Minute || b.Spec.Interactions.ToolApprovals || len(b.Spec.Interactions.ApproverGroups) != 0 ||
 		b.Spec.Session.ThreadTTL.Duration != 2160*time.Hour || b.Spec.Feedback.Enabled {
 		t.Errorf("defaults not applied: %+v", b.Spec)
 	}

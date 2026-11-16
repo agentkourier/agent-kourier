@@ -70,19 +70,46 @@ func Run(t *testing.T, f Factory, opts Options) {
 		t.Fatal("Options.Edit is nil: the cases of an edit need it")
 	}
 	spec := Spec(t)
-	for _, c := range append([]Corpus{spec}, Recipes(t)...) {
+	for _, c := range append([]Corpus{spec, Web(t)}, Recipes(t)...) {
 		t.Run("corpus "+c.Name+" reads as the same objects and the same routing table as Load's", func(t *testing.T) { sameObjects(t, f, c) })
 	}
 	t.Run("the fingerprint is the state that Set read, and holds still", func(t *testing.T) { fingerprintHolds(t, f, spec) })
 	t.Run("each Set is the caller's own", func(t *testing.T) { setsAreIndependent(t, f, spec) })
 	t.Run("an invalid object is refused with the problem the validator names", func(t *testing.T) { invalidObjects(t, f, spec, opts) })
 	t.Run("a rule across objects says the same of the objects of either source", func(t *testing.T) { crossObject(t, f, spec) })
-	t.Run("a chat ID that the connection's platform does not take is refused as the route refuses a bad object", func(t *testing.T) {
-		otherPlatformID(t, f, spec, opts)
-	})
-	t.Run("an edit to a chat ID that the platform does not take leaves the Binding as it was", func(t *testing.T) {
-		otherPlatformEdit(t, spec, opts)
-	})
+	for _, c := range platformCases {
+		t.Run(c.name+" is refused as the route refuses a bad object", func(t *testing.T) { refusedOnPlatform(t, f, opts, c) })
+		t.Run("an edit to "+c.name+" leaves the Binding as it was", func(t *testing.T) { refusedEdit(t, opts, c) })
+	}
+}
+
+// Web returns a corpus of a web connection of the github profile, with the spec corpus' backend and a Binding of a repository that
+// names no output: both sources serve it, and resolution serves it with the profile's default output, none.
+func Web(t *testing.T) Corpus {
+	const conn = `apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: { name: github-prs, namespace: agent-kourier-system }
+spec:
+  platform: web
+  web: { profile: github }
+  credentialsSecretRef: { name: github-prs }   # key webhookSecret
+  allowedNamespaces: ["sre"]
+`
+	const binding = `apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: { name: pr-review, namespace: sre }
+spec:
+  agent:
+    backendRef: { namespace: agent-kourier-system, name: kagent-pilot }
+    name: k8s-agent
+    namespace: kagent
+  identity: { userId: agent-kourier-pr-review }
+  chat:
+    connectionRef: { namespace: agent-kourier-system, name: github-prs }
+    channel: octo-org/hello-world
+    mentions: [{ name: maintainer, user: octocat }]
+`
+	return Corpus{Name: "web", Docs: []string{Valid(t)[0], conn, binding}, Connection: v1alpha1.ObjectRef{Namespace: ConnectionNamespace, Name: "github-prs"}}
 }
 
 // Spec returns the corpus of the API's examples: one backend, one connection and two Bindings, which refer to each other. The
@@ -210,13 +237,14 @@ func viewsOf(t *testing.T, set *config.Set) []string {
 	return out
 }
 
-// routing renders the routing table that ResolvePartial makes of set, one line for each Binding and channel.
+// routing renders the routing table that ResolvePartial makes of set, one line for each Binding and channel, with the output that the
+// Binding is served with, which resolution fills in from the platform when the Binding leaves it out.
 func routing(set *config.Set) string {
 	snap, rejections := config.ResolvePartial(set)
 	var b strings.Builder
 	for _, rb := range snap.Bindings() {
-		fmt.Fprintf(&b, "%s/%s -> %s/%s on %s/%s channel %s\n", rb.Binding.Namespace, rb.Binding.Name, rb.Backend.Namespace, rb.Backend.Name,
-			rb.Connection.Namespace, rb.Connection.Name, rb.Binding.Spec.Chat.Channel)
+		fmt.Fprintf(&b, "%s/%s -> %s/%s on %s/%s channel %s output %s\n", rb.Binding.Namespace, rb.Binding.Name, rb.Backend.Namespace,
+			rb.Backend.Name, rb.Connection.Namespace, rb.Connection.Name, rb.Binding.Spec.Chat.Channel, rb.Binding.Spec.Chat.Output)
 	}
 	for _, r := range rejections {
 		fmt.Fprintf(&b, "rejected %s/%s %s\n", r.Namespace, r.Name, r.Reason)
@@ -234,8 +262,8 @@ func routingStrict(t *testing.T, set *config.Set) string {
 	}
 	var b strings.Builder
 	for _, rb := range snap.Bindings() {
-		fmt.Fprintf(&b, "%s/%s -> %s/%s on %s/%s channel %s\n", rb.Binding.Namespace, rb.Binding.Name, rb.Backend.Namespace, rb.Backend.Name,
-			rb.Connection.Namespace, rb.Connection.Name, rb.Binding.Spec.Chat.Channel)
+		fmt.Fprintf(&b, "%s/%s -> %s/%s on %s/%s channel %s output %s\n", rb.Binding.Namespace, rb.Binding.Name, rb.Backend.Namespace,
+			rb.Backend.Name, rb.Connection.Namespace, rb.Connection.Name, rb.Binding.Spec.Chat.Channel, rb.Binding.Spec.Chat.Output)
 	}
 	return b.String()
 }
@@ -266,6 +294,13 @@ func sameObjects(t *testing.T, f Factory, c Corpus) {
 	if got != want || strings.HasPrefix(got, "error:") {
 		t.Errorf("strict routing table:\n%s\nwant the same as Load's, which is:\n%s", got, want)
 	}
+	if c.Name == "web" {
+		// The Binding names no output, and is served with the github profile's, none, strictly and object by object.
+		const route = "sre/pr-review -> agent-kourier-system/kagent-pilot on agent-kourier-system/github-prs channel octo-org/hello-world output none\n"
+		if partial := routing(set); partial != route || got != route {
+			t.Errorf("routing table:\n%s\nstrictly:\n%s\nwant each:\n%s", partial, got, route)
+		}
+	}
 	if c.Name != "spec" {
 		return
 	}
@@ -276,8 +311,10 @@ func sameObjects(t *testing.T, f Factory, c Corpus) {
 			t.Fatalf("objects = %v; want four, the %dth starting %q", got, i, w)
 		}
 	}
-	if got := routing(set); !strings.Contains(got, "sre/chat-only -> agent-kourier-system/kagent-pilot on agent-kourier-system/slack-main channel G0123456789\n") || strings.Contains(got, "rejected") {
-		t.Errorf("routing table:\n%s\nwant sre/chat-only routed and nothing rejected", got)
+	// chat-only names no output, and is served with Slack's default, live; sre-alerts names live, as a Binding stored by an earlier
+	// version does, and keeps it.
+	if got := routing(set); !strings.Contains(got, chatOnlyRoute) || !strings.Contains(got, " channel C0123456789 output live\n") || strings.Contains(got, "rejected") {
+		t.Errorf("routing table:\n%s\nwant sre/chat-only and sre/sre-alerts routed with output live, and nothing rejected", got)
 	}
 }
 
@@ -392,56 +429,93 @@ var crossCases = []crossCase{
 		"is already bound by Binding sre/"},
 }
 
-// The chat IDs of the spec corpus' Binding sre/sre-alerts: its bot ID, and another platform's ID (a GitHub login) that the load
-// takes and Slack does not, with the problem that resolution names.
-const (
-	slackBotID       = "from: { id: B0123456789 }"
-	otherPlatformBot = "from: { id: alertmanager }"
-	otherProblem     = `spec.chat.triggers[1].from.id: "alertmanager" is not a bot ID on Slack, the platform of ChatConnection agent-kourier-system/slack-main`
-)
+// chatOnlyRoute is the routing line of the spec corpus' Binding sre/chat-only, which names no output and is served with Slack's.
+const chatOnlyRoute = "sre/chat-only -> agent-kourier-system/kagent-pilot on agent-kourier-system/slack-main channel G0123456789 output live\n"
 
-// withOtherPlatformID returns docs, the spec corpus, with the sender of sre/sre-alerts made another platform's ID.
-func withOtherPlatformID(t *testing.T, docs []string) []string {
+// platformCase is a change to a Binding of a corpus that the load takes and its connection's platform does not, with the reason and
+// the problem that resolution gives; how a Snapshot serves the field, before the change; and the routing table of the rest.
+type platformCase struct {
+	name     string
+	corpus   func(*testing.T) Corpus
+	doc      int    // the Binding's document in the corpus
+	binding  string // the Binding's name, in namespace sre
+	from, to string
+	reason   config.RejectionReason
+	problem  string
+	served   func(config.ResolvedBinding) string
+	before   string
+	rest     string
+}
+
+var platformCases = []platformCase{
+	{
+		name: "a chat ID that the connection's platform does not take", corpus: Spec, doc: 2, binding: "sre-alerts", rest: chatOnlyRoute,
+		from: "from: { id: B0123456789 }", to: "from: { id: alertmanager }",
+		reason:  config.ReasonInvalidPlatformID,
+		problem: `spec.chat.triggers[1].from.id: "alertmanager" is not a bot ID on Slack, the platform of ChatConnection agent-kourier-system/slack-main`,
+		served:  func(rb config.ResolvedBinding) string { return rb.Binding.Spec.Chat.Triggers[1].From.ID }, before: "B0123456789",
+	},
+	{
+		name: "an output that the connection's platform does not serve", corpus: Spec, doc: 2, binding: "sre-alerts", rest: chatOnlyRoute,
+		from: "output: live ", to: "output: none ",
+		reason:  config.ReasonUnsupportedOnPlatform,
+		problem: `spec.chat.output: "none" is not supported on Slack, the platform of ChatConnection agent-kourier-system/slack-main`,
+		served:  func(rb config.ResolvedBinding) string { return string(rb.Binding.Spec.Chat.Output) }, before: string(v1alpha1.OutputLive),
+	},
+	{
+		// The github profile posts nothing: a Binding that leaves its output out is served with none, and an edit to live does not take.
+		name: "an output that a web profile does not serve", corpus: Web, doc: 2, binding: "pr-review",
+		from: "    channel: octo-org/hello-world\n", to: "    channel: octo-org/hello-world\n    output: live\n",
+		reason:  config.ReasonUnsupportedOnPlatform,
+		problem: `spec.chat.output: "live" is not supported on web (github profile), the platform of ChatConnection agent-kourier-system/github-prs`,
+		served:  func(rb config.ResolvedBinding) string { return string(rb.Binding.Spec.Chat.Output) }, before: string(v1alpha1.OutputNone),
+	},
+}
+
+// changed returns docs, the case's corpus, with the case's change made to its Binding.
+func (c platformCase) changed(t *testing.T, docs []string) []string {
 	t.Helper()
 	docs = slices.Clone(docs)
-	if !strings.Contains(docs[2], slackBotID) {
-		t.Fatalf("the corpus is stale: binding.yaml has no %q", slackBotID)
+	if !strings.Contains(docs[c.doc], c.from) {
+		t.Fatalf("the corpus is stale: the Binding sre/%s has no %q", c.binding, c.from)
 	}
-	docs[2] = strings.Replace(docs[2], slackBotID, otherPlatformBot, 1)
+	docs[c.doc] = strings.Replace(docs[c.doc], c.from, c.to, 1)
 	return docs
 }
 
-// otherPlatformID: a Binding whose chat ID is another platform's passes Default and Validate, and its connection's platform
-// refuses it, in the same words on either route. The files fail resolution, and so the whole load. The custom resources refuse
-// that Binding as they refuse one that fails Validate, with the platform's reason: it is listed in Set.Invalid, with nothing
-// served in its place, and the rest is read and served.
-func otherPlatformID(t *testing.T, f Factory, base Corpus, opts Options) {
-	src := f(t, Corpus{Name: base.Name, Docs: withOtherPlatformID(t, Valid(t)), Connection: base.Connection})
+// refusedOnPlatform: a Binding that names a chat ID or asks for a feature that its connection's platform does not take passes
+// Default and Validate, and the platform refuses it, in the same words on either route. The files fail resolution, and so the
+// whole load. The custom resources refuse that Binding as they refuse one that fails Validate, with the platform's reason: it is
+// listed in Set.Invalid, with nothing served in its place, and the rest is read and served.
+func refusedOnPlatform(t *testing.T, f Factory, opts Options, c platformCase) {
+	base := c.corpus(t)
+	src := f(t, Corpus{Name: base.Name, Docs: c.changed(t, base.Docs), Connection: base.Connection})
 	set, _ := read(t, src)
 	if !opts.PerObject {
-		if got := routingStrict(t, set); !strings.HasPrefix(got, "error:") || !strings.Contains(got, otherProblem) {
-			t.Errorf("strict resolution = %q; want the problem %q", got, otherProblem)
+		if got := routingStrict(t, set); !strings.HasPrefix(got, "error:") || !strings.Contains(got, c.problem) {
+			t.Errorf("strict resolution = %q; want the problem %q", got, c.problem)
 		}
 		return
 	}
 	if len(set.Invalid) != 1 {
-		t.Fatalf("Invalid = %+v; want sre/sre-alerts alone", set.Invalid)
+		t.Fatalf("Invalid = %+v; want sre/%s alone", set.Invalid, c.binding)
 	}
 	inv := set.Invalid[0]
-	if inv.Name != "sre-alerts" || inv.Reason != config.ReasonInvalidPlatformID || !strings.Contains(inv.Message, otherProblem) || inv.Served != 0 {
-		t.Errorf("Invalid = %+v; want sre/sre-alerts, not served, refused with %s and the problem %q", inv, config.ReasonInvalidPlatformID, otherProblem)
+	if inv.Name != c.binding || inv.Reason != c.reason || !strings.Contains(inv.Message, c.problem) || inv.Served != 0 {
+		t.Errorf("Invalid = %+v; want sre/%s, not served, refused with %s and the problem %q", inv, c.binding, c.reason, c.problem)
 	}
-	if got := routing(set); got != "sre/chat-only -> agent-kourier-system/kagent-pilot on agent-kourier-system/slack-main channel G0123456789\n" {
-		t.Errorf("routing table:\n%s\nwant sre/chat-only alone, and nothing rejected", got)
+	if got := routing(set); got != c.rest {
+		t.Errorf("routing table:\n%s\nwant the other Bindings alone, and nothing rejected:\n%s", got, c.rest)
 	}
 }
 
-// otherPlatformEdit: an edit that gives a serving Binding another platform's chat ID does not take, on either route, as an edit
+// refusedEdit: an edit that gives a serving Binding what its platform does not take does not take, on either route, as an edit
 // that fails Validate does not. The files fail the reload with the problem, and the Reloader keeps the config it serves. The custom
 // resources keep serving the Binding's last good generation, and the Report says why the new one is refused, with the platform's
 // reason, which the Binding's status carries.
-func otherPlatformEdit(t *testing.T, base Corpus, opts Options) {
-	docs := Valid(t)
+func refusedEdit(t *testing.T, opts Options, c platformCase) {
+	base := c.corpus(t)
+	docs := base.Docs
 	src, change := opts.Edit(t, Corpus{Name: base.Name, Docs: docs, Connection: base.Connection})
 	first, _ := read(t, src)
 	errs := make(chan error, 16)
@@ -460,45 +534,45 @@ func otherPlatformEdit(t *testing.T, base Corpus, opts Options) {
 		t.Fatalf("Start: %v", err)
 	}
 	served := func() string {
-		rb, ok := rl.Current().Binding("sre", "sre-alerts")
+		rb, ok := rl.Current().Binding("sre", c.binding)
 		if !ok {
 			return "not served"
 		}
-		return rb.Binding.Spec.Chat.Triggers[1].From.ID
+		return c.served(rb)
 	}
-	if got := served(); got != "B0123456789" {
-		t.Fatalf("before the edit sre/sre-alerts serves the sender %q; want B0123456789", got)
+	if got := served(); got != c.before {
+		t.Fatalf("before the edit sre/%s serves %q; want %q", c.binding, got, c.before)
 	}
 
-	change(withOtherPlatformID(t, docs))
+	change(c.changed(t, docs))
 	if !opts.PerObject {
 		select {
 		case err := <-errs:
-			if !strings.Contains(err.Error(), otherProblem) {
-				t.Errorf("the reload failed with %v; want the problem %q", err, otherProblem)
+			if !strings.Contains(err.Error(), c.problem) {
+				t.Errorf("the reload failed with %v; want the problem %q", err, c.problem)
 			}
 		case <-time.After(5 * time.Second):
 			t.Fatal("the reload did not fail within 5s")
 		}
-		if got := served(); got != "B0123456789" {
-			t.Errorf("after the edit sre/sre-alerts serves the sender %q; want B0123456789, the config before the edit", got)
+		if got := served(); got != c.before {
+			t.Errorf("after the edit sre/%s serves %q; want %q, the config before the edit", c.binding, got, c.before)
 		}
 		return
 	}
 	var rej config.Rejection
-	testutil.Eventually(t, "the Report rejects sre/sre-alerts", func() bool {
+	testutil.Eventually(t, "the Report rejects sre/"+c.binding, func() bool {
 		rejections := rl.Report().Rejections
-		i := slices.IndexFunc(rejections, func(r config.Rejection) bool { return r.Namespace == "sre" && r.Name == "sre-alerts" })
+		i := slices.IndexFunc(rejections, func(r config.Rejection) bool { return r.Namespace == "sre" && r.Name == c.binding })
 		if i >= 0 {
 			rej = rejections[i]
 		}
 		return i >= 0
 	}, testutil.Within(5*time.Second), testutil.Every(10*time.Millisecond))
-	if rej.Reason != config.ReasonInvalidPlatformID || !strings.Contains(rej.Message, otherProblem) || rej.Served == 0 || rej.Generation <= rej.Served {
-		t.Errorf("Rejection = %+v; want %s with the problem %q, the new generation refused and an older one served", rej, config.ReasonInvalidPlatformID, otherProblem)
+	if rej.Reason != c.reason || !strings.Contains(rej.Message, c.problem) || rej.Served == 0 || rej.Generation <= rej.Served {
+		t.Errorf("Rejection = %+v; want %s with the problem %q, the new generation refused and an older one served", rej, c.reason, c.problem)
 	}
-	if got := served(); got != "B0123456789" {
-		t.Errorf("after the edit sre/sre-alerts serves the sender %q; want B0123456789, its last good generation", got)
+	if got := served(); got != c.before {
+		t.Errorf("after the edit sre/%s serves %q; want %q, its last good generation", c.binding, got, c.before)
 	}
 }
 

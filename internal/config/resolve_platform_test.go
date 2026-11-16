@@ -119,8 +119,8 @@ func TestPlatformIsNotToldToABindingTheConnectionDoesNotAdmit(t *testing.T) {
 // A platform that cannot serve a feature the Binding asks for rejects it with UnsupportedOnPlatform. Slack serves every feature
 // that the rules name, so the case is made with a table of the test's own: Slack's, without tool approvals.
 func TestUnsupportedOnPlatform(t *testing.T) {
-	noApprovals := func(platform string) (v1alpha1.ChatPlatform, bool) {
-		p, ok := v1alpha1.ChatPlatformOf(platform)
+	noApprovals := func(spec v1alpha1.ChatConnectionSpec) (v1alpha1.ChatPlatform, bool) {
+		p, ok := v1alpha1.ChatPlatformOf(spec)
 		p.ToolApprovals = false
 		return p, ok
 	}
@@ -158,8 +158,8 @@ func TestUnsupportedOnPlatform(t *testing.T) {
 // feature the platform does not take, and every one of them in the words of resolution, joined; nothing for a Binding that the
 // platform takes, or that the connection does not admit, which learns nothing of the platform.
 func TestRefusedOnPlatform(t *testing.T) {
-	noApprovals := func(platform string) (v1alpha1.ChatPlatform, bool) {
-		p, ok := v1alpha1.ChatPlatformOf(platform)
+	noApprovals := func(spec v1alpha1.ChatConnectionSpec) (v1alpha1.ChatPlatform, bool) {
+		p, ok := v1alpha1.ChatPlatformOf(spec)
 		p.ToolApprovals = false
 		return p, ok
 	}

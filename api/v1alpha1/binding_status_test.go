@@ -146,7 +146,8 @@ func TestBindingPrinterColumns(t *testing.T) {
 	}
 }
 
-// A ChatConnection shows its platform, so that a list of the connections says which a Binding's CONNECTION column names.
+// A ChatConnection shows its platform, so that a list of the connections says which a Binding's CONNECTION column names, and a web
+// connection its profile too; a Slack connection's PROFILE is empty.
 func TestChatConnectionPrinterColumns(t *testing.T) {
 	v := readCRD(t, "agentkourier.dev_chatconnections.yaml").Spec.Versions[0]
 	type column struct{ Name, Type, JSONPath string }
@@ -156,14 +157,24 @@ func TestChatConnectionPrinterColumns(t *testing.T) {
 		got = append(got, column{c.Name, c.Type, c.JSONPath})
 		paths[c.Name] = c.JSONPath
 	}
-	want := []column{{"Platform", "string", `.spec.platform`}, {"Age", "date", `.metadata.creationTimestamp`}}
+	want := []column{{"Platform", "string", `.spec.platform`}, {"Profile", "string", `.spec.web.profile`}, {"Age", "date", `.metadata.creationTimestamp`}}
 	if !slices.Equal(got, want) {
 		t.Fatalf("printer columns = %+v, want %+v", got, want)
 	}
-	obj := map[string]any{"metadata": map[string]any{"creationTimestamp": "2026-11-04T10:00:00Z"}, "spec": map[string]any{"platform": "slack"}}
-	for col, want := range map[string]string{"Platform": "slack", "Age": "2026-11-04T10:00:00Z"} {
-		if got := printerColumn(t, paths[col], obj); got != want {
-			t.Errorf("column %s = %q, want %q", col, got, want)
+	slack := map[string]any{"metadata": map[string]any{"creationTimestamp": "2026-11-04T10:00:00Z"}, "spec": map[string]any{"platform": "slack"}}
+	github := map[string]any{"metadata": map[string]any{"creationTimestamp": "2026-11-04T10:00:00Z"},
+		"spec": map[string]any{"platform": "web", "web": map[string]any{"profile": "github"}}}
+	for _, tc := range []struct {
+		obj  map[string]any
+		want map[string]string
+	}{
+		{slack, map[string]string{"Platform": "slack", "Profile": "", "Age": "2026-11-04T10:00:00Z"}},
+		{github, map[string]string{"Platform": "web", "Profile": "github"}},
+	} {
+		for col, want := range tc.want {
+			if got := printerColumn(t, paths[col], tc.obj); got != want {
+				t.Errorf("column %s = %q, want %q", col, got, want)
+			}
 		}
 	}
 }

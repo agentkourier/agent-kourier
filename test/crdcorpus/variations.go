@@ -191,6 +191,28 @@ func urls() func(*rand.Rand) any {
 	}
 }
 
+// webURLs is a pool of a kourier-v1 connection's reply URLs: the AgentBackend's pool, whose http URLs a reply URL mostly may not
+// use, and the hosts that an http reply URL may and may not name (a Service, localhost and loopback, and hosts that only look
+// like them), in odd cases and with ports and paths.
+func webURLs() func(*rand.Rand) any {
+	backend := urls()
+	hosts := []string{"localhost", "LocalHost", "127.0.0.1", "127.1.2.3", "127.0.0.1.nip.io", "127.0.0", "[::1]", "[::2]", "r.ns.svc", "r.ns.SVC",
+		"r.ns.svc.cluster.local", "r.ns.svc.cluster.local.", "r.svc.example.com", "svc", ".svc", "r..svc", "r_ns.svc", "localhost.example.com",
+		"%6cocalhost", "r.example.com", "r.ns.svc.cluster", "xlocalhost"}
+	tails := []string{"", "/", "/replies", ":8080", ":8080/replies", ":", ":99999", ":80:80", "?q", "#f", "/a b", "@x", "\\x"}
+	return func(r *rand.Rand) any {
+		switch r.IntN(4) {
+		case 0:
+			return backend(r)
+		case 1:
+			return []any{absent{}, "", nil, "http://" + strings.Repeat("a", 2048-7), "http://localhost/" + strings.Repeat("a", 2048-17),
+				"http://localhost/" + strings.Repeat("a", 2048-16), "https://u:p@r.example.com/", "https://@r.example.com/"}[r.IntN(8)]
+		}
+		scheme := []string{"http://", "https://", "HTTP://", "hTtP://"}[r.IntN(4)]
+		return scheme + hosts[r.IntN(len(hosts))] + tails[r.IntN(len(tails))]
+	}
+}
+
 // headerNames is a pool of header names: each reserved one in random case, with a space, a suffix or a prefix, and names
 // of multibyte characters that are near 256 bytes.
 func headerNames() func(*rand.Rand) any {
@@ -267,6 +289,15 @@ func variationTemplates() []template {
 		}},
 		{kind: "Binding", doc: bindingDoc, mutations: bindingMutations(dur, messageFields, extractNames)},
 		{kind: "Binding", doc: bindingDoc, mutations: bindingMutations(dur, messageFields, extractNames)},
+		{kind: "ChatConnection", doc: webConnectionDoc, mutations: []mutation{
+			{"spec.platform", of("web", "web", "slack", "", "Web")},
+			{"spec.web", of(absent{}, nil, map[string]any{}, map[string]any{"profile": "github"}, map[string]any{"profile": "github", "url": ""},
+				map[string]any{"profile": "kourier-v1"}, map[string]any{"profile": "kourier-v1", "url": nil})},
+			{"spec.web.profile", of("kourier-v1", "kourier-v1", "github", "", "GitHub", "kourier-v2", absent{})},
+			{"spec.web.url", webURLs()},
+			{"spec.web.url", webURLs()},
+			{"spec.slack", of(absent{}, absent{}, nil, map[string]any{}, map[string]any{"mode": "http"})},
+		}},
 		{kind: "Binding", doc: mentionBindingDoc, mutations: []mutation{
 			{"spec.chat.triggers.0.from", of(absent{}, map[string]any{"id": "B0123456789"}, map[string]any{})},
 			{"spec.chat.triggers.0.match", of(absent{}, map[string]any{}, map[string]any{"title": "x"}, map[string]any{"title": ""})},
@@ -303,24 +334,32 @@ func bindingMutations(dur, messageFields, extractNames func(*rand.Rand) any) []m
 		{"spec.identity.userId", of("u", "", absent{}, nil)},
 		{"spec.chat.channel", of("C0123456789", "C"+strings.Repeat("0", 31), "C"+strings.Repeat("0", 32), "G"+strings.Repeat("A", 31), "#"+strings.Repeat("x", 32), "C"+strings.Repeat("é", 20),
 			"C"+strings.Repeat("0", 139), "C"+strings.Repeat("0", 140), "general", "octo/repo", strings.Repeat("o", 39)+"/"+strings.Repeat("r", 100),
-			strings.Repeat("o", 39)+"/"+strings.Repeat("r", 101), "o-/r", "o/r/s", "o/"+strings.Repeat("é", 20))},
+			strings.Repeat("o", 39)+"/"+strings.Repeat("r", 101), "o-/r", "o/r/s", "o/"+strings.Repeat("é", 20),
+			// The kourier-v1 shape: an opaque ID with a digit, at the union's cap and past it, and the characters it leaves out.
+			"1", "ch-1", "a.b_c-2", "general1", strings.Repeat("c", 139)+"1", strings.Repeat("c", 140)+"1", "ch:1", "-1", "_1", "ch-é1", "ch 1")},
+		{"spec.chat.output", of("live", "final", "none", "", absent{}, nil, "None", "off")},
 		{"spec.chat.acknowledgment.emoji", of("eyes", "+1", "-1", strings.Repeat("a", 100), strings.Repeat("a", 101), strings.Repeat("é", 60), absent{})},
 		{"spec.identity.tokenSecretRef", of(absent{}, map[string]any{"name": "s"}, map[string]any{"name": "s", "key": ""})},
 		{"spec.identity", of(map[string]any{}, map[string]any{"userId": ""}, map[string]any{"userId": "u"})},
 		{"spec.interactions.toolApprovals", of(true, false, absent{})},
 		{"spec.interactions.approverGroups", of(absent{}, []any{}, []any{"S0123456789"}, []any{"S" + strings.Repeat("0", 31)}, []any{"S" + strings.Repeat("0", 32)},
-			[]any{"S" + strings.Repeat("0", 140)}, []any{"octo-org/sre"}, []any{"sre"}, []any{"octo-org/"})},
+			[]any{"S" + strings.Repeat("0", 140)}, []any{"octo-org/sre"}, []any{"sre"}, []any{"octo-org/"}, []any{"grp-1"}, []any{"grp:1"},
+			[]any{strings.Repeat("g", 139) + "1"}, []any{"grp-1", "grp-1"})},
 		{"spec.interactions.timeout", dur},
 		{"spec.session.threadTTL", dur},
 		{"spec.chat.mentions", of(absent{}, []any{map[string]any{"name": "here", "user": "U0123456789"}}, []any{map[string]any{"name": "ok", "user": "U0123456789"}},
 			[]any{map[string]any{"name": "channel", "user": "U0123456789"}}, []any{map[string]any{"name": "everyone", "user": "U0123456789"}},
 			[]any{map[string]any{"name": strings.Repeat("m", 63), "user": "U" + strings.Repeat("0", 20)}}, []any{map[string]any{"name": strings.Repeat("m", 64), "user": "U" + strings.Repeat("0", 21)}},
 			[]any{map[string]any{"name": "ok", "user": strings.Repeat("l", 39) + "[bot]"}}, []any{map[string]any{"name": "ok", "user": strings.Repeat("l", 40) + "[bot]"}},
-			[]any{map[string]any{"name": "ok", "user": "octo--cat"}}, []any{map[string]any{"name": "ok", "user": "S0123456789"}})},
+			[]any{map[string]any{"name": "ok", "user": "octo--cat"}}, []any{map[string]any{"name": "ok", "user": "S0123456789"}},
+			[]any{map[string]any{"name": "ok", "user": "sam.o_neil-2"}}, []any{map[string]any{"name": "ok", "user": strings.Repeat("u", 64)}},
+			[]any{map[string]any{"name": "ok", "user": strings.Repeat("u", 65)}}, []any{map[string]any{"name": "ok", "user": "sam:1"}},
+			[]any{map[string]any{"name": "ok", "user": ".sam"}})},
 		{t + "type", of("botMessage", "botMessage", "botMessage", "mention", "")},
 		{t + "from", of(absent{}, map[string]any{"id": "B0123456789"}, map[string]any{"id": "B0123456789", "kind": "bot"}, map[string]any{"id": "B0123456789", "kind": ""})},
 		{t + "from.id", of("B0123456789", "", "b1", "Bx", "B", "B"+strings.Repeat("0", 31), "B"+strings.Repeat("0", 32), "B"+strings.Repeat("0", 140),
-			"dependabot[bot]", "[bot]", "a-[bot]", "Alert Manager")},
+			"dependabot[bot]", "[bot]", "a-[bot]", "Alert Manager", "sender.1", "0b7a9c1e-3f2d-4a5b-8c6d-9e0f1a2b3c4d", strings.Repeat("s", 140),
+			strings.Repeat("s", 141), "_s", "s/1", "s:1")},
 		{t + "match", of(absent{}, map[string]any{}, map[string]any{"title": "^FIRING"})},
 		{t + "match." + "text", regexes()},
 		{t + "match." + "title", regexes()},
@@ -429,6 +468,16 @@ spec:
         promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
   interactions: {toolApprovals: true, approverGroups: [S0123456789], timeout: 30m}
   session: {threadTTL: 90h}
+`
+
+const webConnectionDoc = `
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: variation, namespace: sre}
+spec:
+  platform: web
+  credentialsSecretRef: {name: s}
+  web: {profile: kourier-v1, url: "https://receiver.example.com/replies"}
 `
 
 const mentionBindingDoc = `

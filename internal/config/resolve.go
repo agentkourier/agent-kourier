@@ -14,7 +14,9 @@ import (
 // ResolvedBinding is a Binding with the backend and connection its references name. Treat it as read-only. The Binding and
 // the backend are copies of the structs of the Set that Resolve or ResolvePartial took over, which share with the Set what
 // those hold (strings, slices, maps), so that a Snapshot keeps alive only the objects it serves and not the slices of the Set
-// they came from. The connection points into the Set.
+// they came from. The connection points into the Set. The Binding has the defaults of its connection's platform filled in, which
+// Default leaves out (v1alpha1.BindingSpec.DefaultOn): an output left out is the platform's, live on Slack. The Set's Binding keeps
+// them out.
 type ResolvedBinding struct {
 	Binding    *v1alpha1.Binding
 	Backend    *v1alpha1.AgentBackend
@@ -217,9 +219,9 @@ type problem struct {
 	rejection *Rejection
 }
 
-// platformRules returns the rules of the chat platform that a ChatConnection's spec.platform names, and false for one that has
-// none: v1alpha1.ChatPlatformOf, or a test's own table.
-type platformRules func(platform string) (v1alpha1.ChatPlatform, bool)
+// platformRules returns the rules of the chat platform of a ChatConnection's spec (its platform, and on web its profile), and false
+// for one that has none: v1alpha1.ChatPlatformOf, or a test's own table.
+type platformRules func(spec v1alpha1.ChatConnectionSpec) (v1alpha1.ChatPlatform, bool)
 
 // PlatformsPage is the reference page that says what each platform supports, which the message of a rejection for the platform
 // links.
@@ -331,6 +333,11 @@ func (r *resolver) binding(b *v1alpha1.Binding) {
 		r.served[backend] = &be
 	}
 	nb := *b
+	// The defaults that depend on the platform are filled in on the copy that is served, and not in the Set: the Binding as stored
+	// (and as a source compares it) leaves them out.
+	if p, ok := r.platforms(conn.Spec); ok {
+		nb.Spec.DefaultOn(p)
+	}
 	rb := ResolvedBinding{&nb, r.served[backend], conn}
 	key := channelKey{identity{"ChatConnection", conn.Namespace, conn.Name}, b.Spec.Chat.Channel}
 	if first, taken := r.snap.byChannel[key]; taken {
@@ -344,8 +351,8 @@ func (r *resolver) binding(b *v1alpha1.Binding) {
 
 // fitsPlatform rejects b for each chat ID it names and each feature it asks for that the platform of conn does not take, and
 // reports whether there was none. It is asked only once conn admits b, so that a Binding the connection does not admit learns
-// nothing of its platform. A platform with no rules is not checked: ChatConnection's Validate refuses every platform that
-// v1alpha1.ChatPlatformOf has no rules for, so a Set holds no connection of one (a connection that a test builds by hand may).
+// nothing of its platform. A platform with no rules is not checked: ChatConnection's Validate refuses every platform and profile
+// that v1alpha1.ChatPlatformOf has no rules for, so a Set holds no connection of one (a connection that a test builds by hand may).
 func (r *resolver) fitsPlatform(from identity, b *v1alpha1.Binding, conn *v1alpha1.ChatConnection) bool {
 	problems := platformProblems(b, conn, r.platforms)
 	for _, p := range problems {
@@ -364,7 +371,7 @@ type platformProblem struct {
 // platformProblems returns what fitsPlatform rejects b for on conn, in the order of b's fields: nothing for a platform that
 // platforms has no rules for.
 func platformProblems(b *v1alpha1.Binding, conn *v1alpha1.ChatConnection, platforms platformRules) []platformProblem {
-	p, ok := platforms(conn.Spec.Platform)
+	p, ok := platforms(conn.Spec)
 	if !ok {
 		return nil
 	}
