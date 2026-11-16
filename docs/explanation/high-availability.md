@@ -150,7 +150,8 @@ alone:
 that crashed answers nothing. Until the new leader has started to lead and put the label on, the chat Service has no
 endpoint and Slack's requests fail: after a crash, about a lease duration (15 s) plus the new leader's start-up; after a
 signal, the old leader's ordered shutdown (up to 25 s) plus the new leader's start-up. Slack sends an event again when it
-gets no 200 (Slack's documentation says a few times over several minutes; not checked here), and Agent Kourier answers 200
+gets no 200 (Slack's documentation says a few times over several minutes; in one test against Slack the first retry came
+about a second after the failed delivery), and Agent Kourier answers 200
 only once the event's turn is queued, so an event the old leader did not answer is taken by the new one. A message that the
 old leader took and whose 200 never reached Slack comes again, and is one turn, because turns are queued by message ID.
 Whether Slack sends a button press again is Slack's to decide; a press it does not send again is lost, and the person
