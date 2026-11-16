@@ -25,7 +25,8 @@ and `ghcr.io/agentkourier/agent-kourier-echo-agent` (linux/amd64 and linux/arm64
    exact commit from a push to `main`. The release gate checks the same commit and the latest attempt again; a
    missing, pending, failed or pull-request-only run blocks the release.
 4. Run the kind tiers on that commit by hand, since no workflow does ([CI](#ci) says why). The custom resource
-   route has its own runs of the tiers, two scenarios that nothing else runs, and a run of the failover tests. Each tier needs Docker and
+   route has its own runs of the tiers, two scenarios that nothing else runs, and a run of the failover tests, and Slack's
+   HTTP mode has two runs of its own. Each tier needs Docker and
    about 8 GB free; take each down before the next comes up:
 
    ```sh
@@ -35,6 +36,8 @@ and `ghcr.io/agentkourier/agent-kourier-echo-agent` (linux/amd64 and linux/arm64
    E2E_CONFIG_SOURCE=crds make e2e-full-up e2e-full e2e-full-down                # custom resources
    E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up e2e-crs-migration e2e-fast-down
    E2E_CONFIG_SOURCE=crds E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up e2e-fast e2e-fast-down   # failover
+   E2E_SLACK_MODE=http E2E_CONFIG_SOURCE=crds make e2e-fast-up e2e-fast e2e-fast-down                  # Slack HTTP mode
+   E2E_SLACK_MODE=http E2E_CONFIG_SOURCE=crds E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up e2e-fast e2e-fast-down
    ```
 
    `make e2e-fast` and `make e2e-full` read which route the Deployment is on and run the tests of that route. What the
@@ -54,6 +57,13 @@ and `ghcr.io/agentkourier/agent-kourier-echo-agent` (linux/amd64 and linux/arm64
       S16 (`TestS16_FailoverLosesNoEventAndDuplicatesNone`) needs the fast tier with two replicas and runs on either route;
       `TestCR_FailoverDoesNotBlankStatus` needs the custom resource route as well. Both skip anywhere else, so no other run
       executes them.
+   7. The fast tier on the custom resource route with the fake Slack in HTTP mode (`E2E_SLACK_MODE=http`), with one
+      replica: the same `make e2e-fast` suite as run 3, with every event and press of the fake Slack's app sent as a signed request to the chat listener instead of over
+      Socket Mode. The runs above all use Socket Mode, so this is the only run of the suite through the chat listener.
+   8. Run 6 in HTTP mode: the failover tests, with Slack's requests going to whichever replica carries the leader label.
+      S16's press cases check what differs by mode: in HTTP mode a press sent while no replica leads is sent again by the
+      fake Slack and decided by the new leader, which must have answered at least one such retry, and the person whose press
+      lost is told so once.
 
    `make e2e-crs-scenarios` and `make e2e-crs-migration` say what they need and stop if the tier is not as they need it. A failure blocks the tag.
 5. `git tag vX.Y.Z <the release pull request's commit on main>` and `git push origin vX.Y.Z`.
