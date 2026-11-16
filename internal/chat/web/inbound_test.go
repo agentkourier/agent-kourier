@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -147,6 +148,7 @@ func TestTheHandlerRefusesWhatItCannotTake(t *testing.T) {
 		{"no ID", request(http.MethodPost, `{"Channel":"ch-1","User":"u-1"}`, true), http.StatusBadRequest},
 		{"a colon in the ID", request(http.MethodPost, `{"Channel":"ch-1","ID":"a:b","User":"u-1"}`, true), http.StatusBadRequest},
 		{"a colon in the channel", request(http.MethodPost, `{"Channel":"c:1","ID":"m-1","User":"u-1"}`, true), http.StatusBadRequest},
+		{"a colon in the thread", request(http.MethodPost, `{"Channel":"ch-1","Thread":"t:1","ID":"m-1","User":"u-1"}`, true), http.StatusBadRequest},
 	} {
 		if w := serve(t, p, tc.req); w.Code != tc.want {
 			t.Errorf("%s: status %d, want %d", tc.name, w.Code, tc.want)
@@ -177,8 +179,8 @@ func TestTheHandlerAnswers503WhenItCannotTakeTheEventNow(t *testing.T) {
 	p := newPlatform(t, newTestProfile(false), "", nil)
 	unavailable := func(name string, w *httptest.ResponseRecorder) {
 		t.Helper()
-		if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") == "" {
-			t.Errorf("%s: status %d, Retry-After %q; want 503 with a Retry-After", name, w.Code, w.Header().Get("Retry-After"))
+		if want := strconv.Itoa(int(web.BusyRetryAfter / time.Second)); w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") != want {
+			t.Errorf("%s: status %d, Retry-After %q; want 503 with a Retry-After of %s", name, w.Code, w.Header().Get("Retry-After"), want)
 		}
 	}
 	unavailable("before Run", serve(t, p, request(http.MethodPost, event, true)))
@@ -336,4 +338,36 @@ func (s *syncBuffer) String() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.b.String()
+}
+
+// A handler that loaded the Run just before the Run ended hands its event to no Sink: the Sink of a Run that returned is the broker's
+// no longer. A hook holds the handler between the load and the check while the Run ends. The race is run many times, since without
+// the check the handler reaches the Sink only when its wait for the order loses to the Run's ended context, about half the time.
+func TestAHandlerHandsNoEventToARunThatEnded(t *testing.T) {
+	for i := range 32 {
+		p := newPlatform(t, newTestProfile(false), "", nil)
+		h, _ := p.HTTPHandler()
+		loaded, release := make(chan struct{}), make(chan struct{})
+		p.SetAfterLoad(func() { close(loaded); <-release })
+		sk := &sink{}
+		ctx, cancel := context.WithCancel(t.Context())
+		ran := make(chan error, 1)
+		go func() { ran <- p.Run(ctx, sk) }()
+		testutil.Eventually(t, "the platform to take requests", p.Running)
+
+		w := httptest.NewRecorder()
+		answered := make(chan struct{})
+		go func() { defer close(answered); h.ServeHTTP(w, request(http.MethodPost, event, true)) }()
+		<-loaded
+		cancel()
+		_ = <-ran
+		close(release)
+		<-answered
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("try %d: answered %d, want 503: the Run had ended", i, w.Code)
+		}
+		if got := sk.messages(); len(got) != 0 {
+			t.Fatalf("try %d: the Sink of an ended Run got %d events", i, len(got))
+		}
+	}
 }

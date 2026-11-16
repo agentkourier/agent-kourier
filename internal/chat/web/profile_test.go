@@ -35,7 +35,7 @@ type testProfile struct {
 // testEvent is the test profile's body.
 type testEvent struct {
 	Channel, Thread, ID, User, Text string
-	Mentioned, Supersedes, Ignore   bool
+	Mentioned, Ignore               bool
 }
 
 func newTestProfile(replies bool) *testProfile {
@@ -64,7 +64,7 @@ func (p *testProfile) Decode(_ http.Header, body []byte) (web.Event, bool, error
 	if e.Ignore {
 		return web.Event{}, false, nil
 	}
-	return web.Event{Channel: e.Channel, Thread: e.Thread, ID: e.ID, User: e.User, Text: e.Text, Mentioned: e.Mentioned, Supersedes: e.Supersedes}, true, nil
+	return web.Event{Channel: e.Channel, Thread: e.Thread, ID: e.ID, User: e.User, Text: e.Text, Mentioned: e.Mentioned}, true, nil
 }
 
 func (p *testProfile) Caps() chat.Caps { return p.caps }

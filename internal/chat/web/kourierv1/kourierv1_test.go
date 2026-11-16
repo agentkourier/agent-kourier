@@ -111,25 +111,26 @@ func TestDecodeRefusesWhatIsNotTheSchema(t *testing.T) {
 	p := newProfile(t)
 	long := strings.Repeat("a", 65)
 	for name, body := range map[string]string{
-		"not JSON":                 `hello`,
-		"null":                     `null`,
-		"an array":                 `[]`,
-		"an unknown field":         `{"v":1,"channel":"ch-1","id":"m-1","user":"u-1","text":"hi","url":"http://evil.example/"}`,
-		"another version":          `{"v":2,"channel":"ch-1","id":"m-1","user":"u-1","text":"hi"}`,
-		"no version":               `{"channel":"ch-1","id":"m-1","user":"u-1","text":"hi"}`,
-		"no channel":               `{"v":1,"id":"m-1","user":"u-1","text":"hi"}`,
-		"no id":                    `{"v":1,"channel":"ch-1","user":"u-1","text":"hi"}`,
-		"no user":                  `{"v":1,"channel":"ch-1","id":"m-1","text":"hi"}`,
-		"a channel with no digit":  `{"v":1,"channel":"general","id":"m-1","user":"u-1","text":"hi"}`,
-		"a repository's name":      `{"v":1,"channel":"octo/repo1","id":"m-1","user":"u-1","text":"hi"}`,
-		"a colon in the id":        `{"v":1,"channel":"ch-1","id":"a:b","user":"u-1","text":"hi"}`,
-		"an id too long":           `{"v":1,"channel":"ch-1","id":"` + long + `","user":"u-1","text":"hi"}`,
-		"a channel too long":       `{"v":1,"channel":"1` + long + `","id":"m-1","user":"u-1","text":"hi"}`,
-		"a thread of another form": `{"v":1,"channel":"ch-1","thread":"a b","id":"m-1","user":"u-1","text":"hi"}`,
-		"a user with a space":      `{"v":1,"channel":"ch-1","id":"m-1","user":"u 1","text":"hi"}`,
-		"text that is no string":   `{"v":1,"channel":"ch-1","id":"m-1","user":"u-1","text":1}`,
-		"two documents":            `{"v":1,"channel":"ch-1","id":"m-1","user":"u-1","text":"hi"}{"v":1}`,
-		"a stray bracket after":    `{"v":1,"channel":"ch-1","id":"m-1","user":"u-1","text":"hi"}]`,
+		"not JSON":                    `hello`,
+		"null":                        `null`,
+		"an array":                    `[]`,
+		"an unknown field":            `{"v":1,"channel":"ch-1","id":"m-1","user":"u-1","text":"hi","url":"http://evil.example/"}`,
+		"another version":             `{"v":2,"channel":"ch-1","id":"m-1","user":"u-1","text":"hi"}`,
+		"no version":                  `{"channel":"ch-1","id":"m-1","user":"u-1","text":"hi"}`,
+		"no channel":                  `{"v":1,"id":"m-1","user":"u-1","text":"hi"}`,
+		"no id":                       `{"v":1,"channel":"ch-1","user":"u-1","text":"hi"}`,
+		"no user":                     `{"v":1,"channel":"ch-1","id":"m-1","text":"hi"}`,
+		"a channel with no digit":     `{"v":1,"channel":"general","id":"m-1","user":"u-1","text":"hi"}`,
+		"a repository's name":         `{"v":1,"channel":"octo/repo1","id":"m-1","user":"u-1","text":"hi"}`,
+		"a colon in the id":           `{"v":1,"channel":"ch-1","id":"a:b","user":"u-1","text":"hi"}`,
+		"an id too long":              `{"v":1,"channel":"ch-1","id":"` + long + `","user":"u-1","text":"hi"}`,
+		"a channel too long":          `{"v":1,"channel":"1` + long + `","id":"m-1","user":"u-1","text":"hi"}`,
+		"a thread of another form":    `{"v":1,"channel":"ch-1","thread":"a b","id":"m-1","user":"u-1","text":"hi"}`,
+		"a thread that is its own id": `{"v":1,"channel":"ch-1","thread":"m-1","id":"m-1","user":"u-1","text":"hi"}`,
+		"a user with a space":         `{"v":1,"channel":"ch-1","id":"m-1","user":"u 1","text":"hi"}`,
+		"text that is no string":      `{"v":1,"channel":"ch-1","id":"m-1","user":"u-1","text":1}`,
+		"two documents":               `{"v":1,"channel":"ch-1","id":"m-1","user":"u-1","text":"hi"}{"v":1}`,
+		"a stray bracket after":       `{"v":1,"channel":"ch-1","id":"m-1","user":"u-1","text":"hi"}]`,
 	} {
 		_, _, err := p.Decode(nil, []byte(body))
 		if err == nil || errors.Is(err, web.ErrTooLarge) {
@@ -181,18 +182,24 @@ func TestTheProfilePassesTheProfileSuite(t *testing.T) {
 			{Name: "a channel of another form", Body: []byte(`{"v":1,"channel":"general","id":"m-1","user":"u-1","text":"hi"}`)},
 			{Name: "a colon in the id", Body: []byte(`{"v":1,"channel":"ch-1","id":"a:b","user":"u-1","text":"hi"}`)},
 		},
-		CheckReply: func(h http.Header, body []byte) error {
+		CheckReply: func(want web.Reply, h http.Header, body []byte) (string, error) {
 			if err := kourierv1.VerifySignature([]byte(fakeKey), epoch, h.Get(kourierv1.HeaderTimestamp), h.Get(kourierv1.HeaderSignature), body); err != nil {
-				return err
+				return "", err
 			}
 			var env kourierv1.Outbound
-			if err := json.Unmarshal(body, &env); err != nil || env.V != kourierv1.OutboundVersion {
-				return fmt.Errorf("not the envelope: %w", err)
+			if err := json.Unmarshal(body, &env); err != nil {
+				return "", fmt.Errorf("not the envelope: %w", err)
 			}
-			if h.Get(kourierv1.HeaderIdempotencyKey) == "" {
-				return errors.New("no idempotency key")
+			wantEnv := kourierv1.Outbound{V: kourierv1.OutboundVersion, Kind: want.Kind, Connection: want.Connection, Channel: want.Channel,
+				Thread: want.Thread, ID: want.ID, Message: want.Message}
+			if !reflect.DeepEqual(env, wantEnv) {
+				return "", fmt.Errorf("the envelope is %+v, want %+v", env, wantEnv)
 			}
-			return nil
+			key := h.Get(kourierv1.HeaderIdempotencyKey)
+			if want.Key != "" && key != want.Key {
+				return "", fmt.Errorf("the idempotency key is %q, want the outbox's tag %q", key, want.Key)
+			}
+			return key, nil
 		},
 	})
 }

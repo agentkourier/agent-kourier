@@ -7,7 +7,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -33,6 +35,10 @@ type profileLeaks struct {
 	freshID         bool // every delivery of an event has an ID of its own
 	wrongMention    bool // an event's Mentioned is the opposite of what the sender said
 	unsignedReplies bool // the replies carry no signature
+	dropsKey        bool // the replies carry no idempotency key
+	constantKey     bool // every reply has the one idempotency key
+	mangledID       bool // a reply carries an ID of its own, not the one it was given
+	offShape        bool // the events are in a channel whose ID has no digit, which no kourier-v1 Binding can name
 }
 
 // hmacProfile is a profile of the suite's tests: HMAC-SHA256 of the timestamp and the body, in two headers, over a small JSON schema.
@@ -128,7 +134,13 @@ func (p *hmacProfile) Encoder() web.Encoder {
 	return p
 }
 
+// hmacKeyHeader carries a reply's idempotency key.
+const hmacKeyHeader = "X-Test-Key"
+
 func (p *hmacProfile) Encode(r web.Reply, now time.Time) (web.Request, error) {
+	if p.leaks.mangledID {
+		r.ID = "mangled"
+	}
 	body, err := json.Marshal(r)
 	if err != nil {
 		return web.Request{}, err
@@ -136,6 +148,12 @@ func (p *hmacProfile) Encode(r web.Reply, now time.Time) (web.Request, error) {
 	h := hmacSign(suiteSecret, body, now)
 	if p.leaks.unsignedReplies {
 		h = http.Header{}
+	}
+	switch {
+	case p.leaks.constantKey:
+		h.Set(hmacKeyHeader, "one-key")
+	case !p.leaks.dropsKey:
+		h.Set(hmacKeyHeader, r.Key)
 	}
 	return web.Request{Header: h, Body: body}, nil
 }
@@ -160,15 +178,33 @@ func hmacSubject(p *hmacProfile) ProfileSubject {
 		},
 	}
 	if p.replies {
-		s.CheckReply = func(h http.Header, body []byte) error {
+		s.CheckReply = func(want web.Reply, h http.Header, body []byte) (string, error) {
 			sec, err := strconv.ParseInt(h.Get("X-Test-Timestamp"), 10, 64)
 			if err != nil {
-				return errors.New("no timestamp")
+				return "", errors.New("no timestamp")
 			}
 			if hmacSign(suiteSecret, body, time.Unix(sec, 0)).Get("X-Test-Signature") != h.Get("X-Test-Signature") {
-				return errors.New("bad signature")
+				return "", errors.New("bad signature")
 			}
-			return nil
+			var got web.Reply
+			if err := json.Unmarshal(body, &got); err != nil {
+				return "", err
+			}
+			got.Key, want.Key = "", ""
+			if !reflect.DeepEqual(got, want) {
+				return "", fmt.Errorf("the reply is %+v, want %+v", got, want)
+			}
+			return h.Get(hmacKeyHeader), nil
+		}
+	}
+	if p.leaks.offShape {
+		for i, e := range s.Events {
+			s.Events[i].Body = bytes.ReplaceAll(e.Body, []byte(`"ch-1"`), []byte(`"general"`))
+			if e.Want != nil {
+				w := *e.Want
+				w.Channel = "general"
+				s.Events[i].Want = &w
+			}
 		}
 	}
 	return s
@@ -196,6 +232,10 @@ func TestEveryWayAProfileCanFailIsCaught(t *testing.T) {
 		"an ID per try":     {leaks: profileLeaks{freshID: true}, want: []string{"repeat: a message that opens a thread", "repeat: a reply in a thread"}},
 		"the wrong mention": {leaks: profileLeaks{wrongMention: true}, want: []string{"a message that opens a thread", "a reply in a thread"}},
 		"unsigned replies":  {leaks: profileLeaks{unsignedReplies: true}, replies: true, want: []string{"reply"}},
+		"no reply key":      {leaks: profileLeaks{dropsKey: true}, replies: true, want: []string{"reply", "update"}},
+		"one reply key":     {leaks: profileLeaks{constantKey: true}, replies: true, want: []string{"another reply", "update again"}},
+		"a mangled reply":   {leaks: profileLeaks{mangledID: true}, replies: true, want: []string{"reply", "update"}},
+		"an off-shape ID":   {leaks: profileLeaks{offShape: true}, want: []string{"shape: a message that opens a thread", "shape: a reply in a thread"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			vs := CheckProfile(t.Context(), hmacSubject(&hmacProfile{leaks: tc.leaks, replies: tc.replies}))

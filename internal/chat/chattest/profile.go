@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/web"
 )
@@ -43,9 +44,11 @@ type ProfileSubject struct {
 	// Malformed are bodies the profile's schema refuses, beyond the suite's own (an empty body, one that is not JSON, one cut short):
 	// an unknown version, an unknown field, an ID of the wrong shape.
 	Malformed []ProfileCase
-	// CheckReply says whether a request of the profile's replies is one its receiver takes: signed with Secret, in the profile's
-	// envelope. It is required of a profile that sends replies.
-	CheckReply func(h http.Header, body []byte) error
+	// CheckReply says whether a request of the profile's replies is one its receiver takes, and carries want: signed with Secret, in the
+	// profile's envelope, with want's kind, connection, channel, thread, ID and message. want.Key is the outbox's tag for a post, and ""
+	// for an update, whose key the platform makes. It returns the idempotency key the receiver reads from the request, which the suite
+	// holds to the same for every try of a post and new for each update. It is required of a profile that sends replies.
+	CheckReply func(want web.Reply, h http.Header, body []byte) (key string, err error)
 }
 
 // ProfileEvent is one documented event of a profile.
@@ -77,7 +80,8 @@ func ProfileConformance(t *testing.T, s ProfileSubject) {
 // CheckProfile runs the whole of ProfileConformance and returns what it found, without failing anything. It checks, through the web
 // platform's handler with the profile:
 //
-//   - that every documented event decodes to what it says, and reaches the Sink as that, or that nothing does;
+//   - that every documented event decodes to what it says, its channel and user of the shapes of the profile's IDs
+//     (v1alpha1.ChatPlatformOf), and reaches the Sink as that, or that nothing does;
 //   - that a repeat of an event reaches the Sink with the same chat.MessageID, which the reply queue drops, and that no two events share
 //     one;
 //   - that a request is refused 401, with nothing handed on, when it is not signed, when any one of its signature's headers is missing,
@@ -86,7 +90,8 @@ func ProfileConformance(t *testing.T, s ProfileSubject) {
 //   - that a body that is empty, not JSON, cut short or of the subject's own malformed cases is refused 400, one past the bound 413 and
 //     one of the bound taken, and a method other than POST 405;
 //   - that a profile without replies makes no request, and Post, Update, Ephemeral and Fits say web.ErrNoReplies, and that a profile
-//     with replies sends a post and an update to the connection's URL, each one its receiver takes (CheckReply).
+//     with replies sends posts and updates to the connection's URL, each one its receiver takes and carrying what was sent
+//     (CheckReply), with an idempotency key that is the same on each try of a post and differs between posts and between updates.
 func CheckProfile(ctx context.Context, s ProfileSubject) []Violation {
 	first, ok := s.firstEvent()
 	if v, bad := s.setup(first, ok); bad {
@@ -230,9 +235,18 @@ func (c *profileChecker) inbound(ev web.Event) chat.Inbound {
 	return chat.Inbound{At: c.p.RefAt(ev.Channel, ev.Thread, ev.ID), User: ev.User, Text: ev.Text, Mentioned: ev.Mentioned}
 }
 
-// events checks that every documented event decodes to what it says, and reaches the Sink as that.
+// events checks that every documented event decodes to what it says, of the shapes of the profile's IDs, and reaches the Sink as that.
 func (c *profileChecker) events() {
+	shapes, known := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb,
+		Web: &v1alpha1.WebConnectionSpec{Profile: c.s.Profile.Name()}})
+	if !known {
+		c.add("Name", "shape", "the API has no web profile %q", c.s.Profile.Name())
+	}
 	for _, e := range c.s.Events {
+		if known && e.Want != nil && (!shapes.Channel.Matches(e.Want.Channel) || !shapes.User.Matches(e.Want.User)) {
+			c.add("Decode", "shape: "+e.Name, "the channel %q or the user %q is not of the shape of %s's IDs: a Binding cannot name it",
+				e.Want.Channel, e.Want.User, c.s.Profile.Name())
+		}
 		ev, ok, err := c.s.Profile.Decode(e.Header, e.Body)
 		switch {
 		case err != nil:
@@ -371,12 +385,24 @@ func (c *profileChecker) replies(ctx context.Context) {
 		}
 		return
 	}
+	post := func(tag string) func() error {
+		return func() error { _, err := c.p.Post(ctx, t, msg, tag); return err }
+	}
+	posted := func(tag string) web.Reply {
+		return web.Reply{Kind: web.ReplyPost, Connection: profileConn, Channel: t.Channel, Thread: t.Thread, ID: tag, Key: tag, Message: msg}
+	}
+	updated := web.Reply{Kind: web.ReplyUpdate, Connection: profileConn, Channel: ref.Channel, Thread: ref.Thread, ID: ref.ID, Message: msg}
+	keys := map[string]string{}
 	for _, call := range []struct {
-		cs string
-		do func() error
+		cs   string
+		do   func() error
+		want web.Reply
 	}{
-		{"reply", func() error { _, err := c.p.Post(ctx, t, msg, "tag-conformance"); return err }},
-		{"update", func() error { return c.p.Update(ctx, ref, msg) }},
+		{"reply", post("tag-conformance"), posted("tag-conformance")},
+		{"reply again", post("tag-conformance"), posted("tag-conformance")},
+		{"another reply", post("tag-conformance-2"), posted("tag-conformance-2")},
+		{"update", func() error { return c.p.Update(ctx, ref, msg) }, updated},
+		{"update again", func() error { return c.p.Update(ctx, ref, msg) }, updated},
 	} {
 		if err := call.do(); err != nil {
 			c.add("Post", call.cs, "failed: %v", err)
@@ -390,9 +416,23 @@ func (c *profileChecker) replies(ctx context.Context) {
 		if r.method != http.MethodPost || r.url != profileURL {
 			c.add("Post", call.cs, "the request is %s %s, want POST to the connection's URL", r.method, r.url)
 		}
-		if err := c.s.CheckReply(r.header, r.body); err != nil {
+		key, err := c.s.CheckReply(call.want, r.header, r.body)
+		switch {
+		case err != nil:
 			c.add("Post", call.cs, "the receiver would refuse it: %v", err)
+		case key == "":
+			c.add("Post", call.cs, "the request has no idempotency key: the receiver cannot drop a repeat")
 		}
+		keys[call.cs] = key
+	}
+	if keys["reply again"] != keys["reply"] {
+		c.add("Post", "reply again", "two tries of one post have different idempotency keys: the receiver would show the post twice")
+	}
+	if keys["another reply"] == keys["reply"] {
+		c.add("Post", "another reply", "two posts have one idempotency key: the receiver would drop the second")
+	}
+	if keys["update again"] == keys["update"] {
+		c.add("Update", "update again", "two updates have one idempotency key: the receiver would drop the second")
 	}
 }
 

@@ -135,6 +135,7 @@ func TestChannelAccessReadsTheProfilesShape(t *testing.T) {
 // TestLimitsPage holds docs/reference/limits.md to the bounds of the platform.
 func TestLimitsPage(t *testing.T) {
 	limitsdoc.Duration(t, "webAckWait", web.AckWait)
+	limitsdoc.Duration(t, "webBusyRetryAfter", web.BusyRetryAfter)
 	limitsdoc.Duration(t, "webReplyTimeout", web.ReplyTimeout)
 	limitsdoc.Duration(t, "webRetryAfter", web.MaxRetryAfter)
 }

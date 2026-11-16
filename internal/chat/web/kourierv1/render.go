@@ -8,7 +8,8 @@ import (
 
 // markdownEscaper puts a backslash before each character that can open CommonMark's links, images, link reference definitions,
 // autolinks and raw HTML, and before the backslash itself, so that a receiver's CommonMark shows the characters as they are. Emphasis,
-// code and lists are left to render.
+// code and lists are left to render. It is not aware of code yet: inside a code span or block, where CommonMark shows a backslash as it
+// is, the receiver shows the escapes too.
 var markdownEscaper = strings.NewReplacer(`\`, `\\`, `[`, `\[`, `]`, `\]`, `<`, `\<`)
 
 // inert returns a copy of o to send: every literal field cleaned, on one line where its place is one, and cut to maxText (chat.Literal);

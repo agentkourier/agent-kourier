@@ -70,7 +70,7 @@ type Inbound struct {
 	// bytes), which the Binding's spec.chat.channel names.
 	Channel string `json:"channel"`
 	// Thread is the ID of the message that opened the thread, for a reply in one, and empty for a message that opens one: the message's
-	// own ID is then the thread's.
+	// own ID is then the thread's. A thread that is the message's own ID is refused.
 	Thread string `json:"thread,omitempty"`
 	// ID is the message's own, which the sender sends again unchanged with every delivery of the message: a delivery of an ID that was
 	// taken is dropped. ID, Thread and User have the kourier-v1 shape of an ID (letters, digits, '.', '_' and '-', starting with a
@@ -162,6 +162,8 @@ func (p *Profile) Decode(_ http.Header, body []byte) (web.Event, bool, error) {
 		return web.Event{}, false, fmt.Errorf("%w: the channel is not a kourier-v1 channel ID", errSchema)
 	case !p.ids.Matches(in.ID), in.Thread != "" && !p.ids.Matches(in.Thread):
 		return web.Event{}, false, fmt.Errorf("%w: the id or the thread is not a kourier-v1 ID", errSchema)
+	case in.Thread == in.ID:
+		return web.Event{}, false, fmt.Errorf("%w: the thread is the message's own id: a message that opens a thread names none", errSchema)
 	case !p.shapes.User.Matches(in.User):
 		return web.Event{}, false, fmt.Errorf("%w: the user is not a kourier-v1 user ID", errSchema)
 	}

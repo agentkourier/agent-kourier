@@ -37,6 +37,8 @@ const (
 	// counts from when the handler is called, inside the chat listener's own deadline for the handler (chatHandlerTimeout in
 	// internal/broker), and covers the wait for the event before it in the connection's order too.
 	ackWait = 2 * time.Second
+	// busyRetryAfter is the Retry-After of a 503: how long a sender is asked to wait before it sends an event that was not taken again.
+	busyRetryAfter = time.Second
 	// replyTimeout bounds one reply's request as a whole: the dial, the wait for the answer and the reading of what is read of it. Past
 	// it the reply fails as Transient, and the caller (the outbox, the live output) tries it again on its own schedule.
 	replyTimeout = 10 * time.Second
@@ -83,11 +85,6 @@ type Event struct {
 	// Mentioned says the event is addressed to Agent Kourier (chat.Inbound.Mentioned): one that is not, in a thread Agent Kourier has
 	// not been asked into, starts nothing.
 	Mentioned bool
-	// Supersedes says the event makes the turn that is running in its thread moot, if one is: a push to a pull request does that to the
-	// review of the commit before it. The platform does not carry it to the Sink yet, since chat.Inbound has no field for it and the
-	// session no operation that cancels a running turn for a new message: an event that sets it is taken as any other, and waits
-	// behind the running turn.
-	Supersedes bool
 }
 
 // Encoder makes the requests that send a profile's replies. The platform sends each with POST to the connection's URL, which comes from
@@ -173,6 +170,9 @@ type Platform struct {
 	// whole connection, which is coarser than the contract asks: the Sink takes an event in milliseconds, and a connection's senders
 	// are few.
 	order chan struct{}
+	// afterLoad, if set, is called by the handler once it has loaded the Run to hand an event to: a test holds the handler there. It is
+	// nil outside tests.
+	afterLoad func()
 }
 
 var (
