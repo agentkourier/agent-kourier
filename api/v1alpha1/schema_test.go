@@ -329,7 +329,7 @@ func TestSchemaPatternsEqualTheGoLiterals(t *testing.T) {
 		re           *regexp.Regexp
 	}{
 		{"bindings", "spec.chat.channel", channelID},
-		{"bindings", "spec.chat.triggers[].from.id", botID},
+		{"bindings", "spec.chat.triggers[].from.id", senderID},
 		{"bindings", "spec.chat.mentions[].name", mentionName},
 		{"bindings", "spec.chat.mentions[].user", mentionUser},
 		{"bindings", "spec.interactions.approverGroups[]", approverGroupID},

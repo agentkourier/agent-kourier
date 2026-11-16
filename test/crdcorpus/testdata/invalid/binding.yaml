@@ -676,8 +676,8 @@ spec:
     channel: C0123456789
     mentions: [{name: sam}]
 ---
-# rule: binding/spec.chat.mentions[].user: a user group
-# want: spec.chat.mentions[0].user: invalid user ID "S0123456789"
+# rule: binding/spec.chat.mentions[].user: an e-mail address
+# want: spec.chat.mentions[0].user: invalid user ID "sam@example.com"
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
@@ -694,7 +694,7 @@ spec:
   chat:
     connectionRef: {name: slack}
     channel: C0123456789
-    mentions: [{name: oncall, user: S0123456789}]
+    mentions: [{name: oncall, user: sam@example.com}]
 ---
 # rule: binding/spec.chat.maxMentionsPerTurn: 0
 # want: spec.chat.maxMentionsPerTurn: 0 is out of range
@@ -1248,8 +1248,8 @@ spec:
     connectionRef: {name: slack}
     channel: C0123456789
 ---
-# rule: binding/spec.chat.channel: over 32 characters
-# want: spec.chat.channel: is 33 bytes, longer than the 32 byte limit
+# rule: binding/spec.chat.channel: over 140 characters
+# want: spec.chat.channel: is 141 bytes, longer than the 140 byte limit
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
@@ -1265,7 +1265,7 @@ spec:
     userId: agent-kourier-sre
   chat:
     connectionRef: {name: slack}
-    channel: C00000000000000000000000000000000
+    channel: C00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
     triggers:
       - {type: mention}
       - type: botMessage
@@ -1309,8 +1309,8 @@ spec:
         limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
         promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
 ---
-# rule: binding/spec.interactions.approverGroups[]: over 32 characters
-# want: spec.interactions.approverGroups[0]: is 33 bytes, longer than the 32 byte limit
+# rule: binding/spec.interactions.approverGroups[]: over 140 characters
+# want: spec.interactions.approverGroups[0]: is 141 bytes, longer than the 140 byte limit
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
@@ -1340,7 +1340,7 @@ spec:
         promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
   interactions:
     toolApprovals: true
-    approverGroups: [S00000000000000000000000000000000]
+    approverGroups: [S00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000]
 ---
 # rule: binding/spec.chat.mentions[].name: over 63 characters
 # want: spec.chat.mentions[0].name: is 64 bytes, longer than the 63 byte limit
@@ -1373,8 +1373,8 @@ spec:
         limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
         promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
 ---
-# rule: binding/spec.chat.mentions[].user: over 21 characters
-# want: spec.chat.mentions[0].user: is 22 bytes, longer than the 21 byte limit
+# rule: binding/spec.chat.mentions[].user: over 44 characters
+# want: spec.chat.mentions[0].user: is 45 bytes, longer than the 44 byte limit
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
@@ -1391,7 +1391,7 @@ spec:
   chat:
     connectionRef: {name: slack}
     channel: C0123456789
-    mentions: [{name: sam, user: U000000000000000000000}]
+    mentions: [{name: sam, user: U00000000000000000000000000000000000000000000}]
     triggers:
       - {type: mention}
       - type: botMessage

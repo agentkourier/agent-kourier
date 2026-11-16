@@ -164,6 +164,7 @@ nav:
       - Helm values: reference/helm-values.md
       - Command line and environment: reference/cli.md
       - Chat triggers: reference/chat-triggers.md
+      - What each platform supports: reference/platforms.md
       - Metrics: reference/metrics.md
       - Logs and traces: reference/logs-and-traces.md
       - Stored data: reference/stored-data.md

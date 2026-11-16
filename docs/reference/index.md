@@ -28,6 +28,7 @@ With custom resources a Binding also has a status, which [Binding status](bindin
 - [Helm values](helm-values.md): every value of the chart, with its default.
 - [Command line and environment](cli.md): the binary's environment variables, flags, subcommands and exit codes.
 - [Chat triggers](chat-triggers.md): what starts a turn, and what the `botMessage` trigger does.
+- [What each platform supports](platforms.md): the shape of each chat ID a Binding names, and the features each platform serves.
 
 ## Operation
 

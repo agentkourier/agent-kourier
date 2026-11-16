@@ -44,7 +44,7 @@ resource's validation. Replace each one before you apply the recipe:
 
 | Placeholder | Where | Replace it with |
 |---|---|---|
-| `CREPLACESRE`, `CREPLACECI`, `CREPLACEDOCS`, `CREPLACEPROMPT` | the channel in each recipe's `kourier/binding.yaml` | The channel's ID (a channel ID must match `^[CG][A-Z0-9]+$`, so the placeholder starts with `CREPLACE` and ends with the recipe). Each recipe has its own, so that recipes applied together never put two Bindings on one channel. |
+| `CREPLACESRE`, `CREPLACECI`, `CREPLACEDOCS`, `CREPLACEPROMPT` | the channel in each recipe's `kourier/binding.yaml` | The channel's ID (a Slack channel ID must match `^[CG][A-Z0-9]+$`, so the placeholder starts with `CREPLACE` and ends with the recipe). Each recipe has its own, so that recipes applied together never put two Bindings on one channel. |
 | `B0REPLACEME` | `sre-triage` and `custom-bot-trigger`: `from.id` in the Binding, and the `bot` of the cases in `evals/triggers.yaml` | The `bot_id` of the bot whose posts the trigger reads. The dry run in the recipe's README prints it. |
 | `REPLACE-ME` | `custom-bot-trigger`: the host in the AgentBackend's `url` (`http://REPLACE-ME.agents.svc.cluster.local:8080`) | Your A2A agent's URL. |
 

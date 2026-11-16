@@ -241,6 +241,8 @@ type Header struct {
 //
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Namespaced,shortName=akconnection,categories=agentkourier
+// +kubebuilder:printcolumn:name="Platform",type=string,JSONPath=`.spec.platform`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type ChatConnection struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitzero"`
@@ -310,6 +312,7 @@ type SlackConnectionSpec struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].reason`
+// +kubebuilder:printcolumn:name="Connection",type=string,JSONPath=`.spec.chat.connectionRef.name`
 // +kubebuilder:printcolumn:name="Channel",type=string,JSONPath=`.spec.chat.channel`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type Binding struct {
@@ -386,9 +389,15 @@ type Identity struct {
 // ChatBinding places the Binding in a channel.
 type ChatBinding struct {
 	ConnectionRef ObjectRef `json:"connectionRef"`
-	// Channel is the platform's channel ID, not its name (Slack: `C…` or `G…`). At most 32 bytes.
-	// +kubebuilder:validation:MaxLength=32
-	// +kubebuilder:validation:Pattern=`^[CG][A-Z0-9]+$`
+	// Channel is the platform's channel ID, not its name (Slack: `C…` or `G…`). At most 140 bytes. The schema takes the shape of
+	// any platform's channel ID: Slack's, or a repository's `owner/name`, which no platform served today takes. A name such as
+	// `general` has no platform's shape, and is refused. The broker holds the channel to the shape of its connection's platform when
+	// it reads the Binding with its connection (on Slack: `C` or `G`, then capitals and digits, at most 32 bytes), and refuses a
+	// Binding whose channel has another shape as it refuses an invalid one: with custom resources its Accepted condition is False
+	// with the reason InvalidPlatformID and its last good generation, if it has one, stays served; on the files route the whole
+	// config fails. agent-kourier dry-run holds it to Slack's shape.
+	// +kubebuilder:validation:MaxLength=140
+	// +kubebuilder:validation:Pattern=`^(?:[CG][A-Z0-9]+|[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}/[A-Za-z0-9._-]{1,100})$`
 	Channel string `json:"channel"`
 	// Output defaults to live.
 	// +kubebuilder:validation:Enum=live;final;""
@@ -465,9 +474,11 @@ type ChatMention struct {
 	// +kubebuilder:validation:Pattern=`^[a-z][a-z0-9-]{0,62}$`
 	// +kubebuilder:validation:XValidation:rule="!(self in ['here', 'channel', 'everyone'])",message="a broadcast name (here, channel or everyone) is reserved and cannot be declared"
 	Name string `json:"name"`
-	// User is the platform's user ID of the person (Slack: `U…` or `W…`). It comes only from here, never from the agent.
-	// +kubebuilder:validation:MaxLength=21
-	// +kubebuilder:validation:Pattern=`^[UW][A-Z0-9]{2,20}$`
+	// User is the platform's user ID of the person (Slack: `U…` or `W…`). It comes only from here, never from the agent. At most 44
+	// bytes. The schema takes the shape of any platform's user ID, Slack's or a login such as `octocat`, and the broker holds it to
+	// the shape of its connection's platform as it does spec.chat.channel (on Slack: `U` or `W`, then 2 to 20 capitals and digits).
+	// +kubebuilder:validation:MaxLength=44
+	// +kubebuilder:validation:Pattern=`^(?:[UW][A-Z0-9]{2,20}|[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}(?:\[bot\])?)$`
 	User string `json:"user"`
 }
 
@@ -513,11 +524,14 @@ type Interactions struct {
 	// +optional
 	ToolApprovals bool `json:"toolApprovals,omitempty"`
 	// ApproverGroups names the platform's user groups whose members may decide a tool approval, by the platform's ID (Slack: `S…`).
-	// An empty list allows any non-bot channel member. At most 10 groups may be named. Group IDs start with S and contain
-	// uppercase letters and digits, at most 32 bytes; duplicates and empty entries are refused.
+	// An empty list allows any non-bot channel member. At most 10 groups may be named, each at most 140 bytes; duplicates and empty
+	// entries are refused. The schema takes the shape of any platform's group ID, Slack's or a team's `org/team-slug`, and the broker
+	// holds each to the shape of its connection's platform as it does spec.chat.channel (on Slack: `S`, then capitals and digits, at
+	// most 32 bytes). A platform that cannot ask for tool approvals refuses toolApprovals: true in the same way, with the reason
+	// UnsupportedOnPlatform; Slack can.
 	// +kubebuilder:validation:MaxItems=10
-	// +kubebuilder:validation:items:MaxLength=32
-	// +kubebuilder:validation:items:Pattern=`^S[A-Z0-9]+$`
+	// +kubebuilder:validation:items:MaxLength=140
+	// +kubebuilder:validation:items:Pattern=`^(?:S[A-Z0-9]+|[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}/[A-Za-z0-9._-]{1,100})$`
 	// +listType=set
 	// +optional
 	ApproverGroups []string `json:"approverGroups,omitempty"`

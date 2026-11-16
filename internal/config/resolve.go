@@ -92,7 +92,12 @@ func (s *Snapshot) ChatConnections() []*v1alpha1.ChatConnection {
 // It is all or nothing, as the config files are, and the first Binding of set to claim a channel keeps it. ResolvePartial
 // serves what it can, and decides a channel by age.
 func Resolve(ctx context.Context, set *Set, secrets SecretResolver) (*Snapshot, error) {
-	r := newResolver(set)
+	return resolve(ctx, set, secrets, v1alpha1.ChatPlatformOf)
+}
+
+// resolve is Resolve with the rules of the chat platforms that platforms gives, which a test can choose.
+func resolve(ctx context.Context, set *Set, secrets SecretResolver, platforms platformRules) (*Snapshot, error) {
+	r := newResolver(set, platforms)
 	r.secrets = secrets
 	r.resolveReferences(set)
 	r.checkSecrets(ctx, set)
@@ -129,6 +134,13 @@ const (
 	// ReasonAgentNamespaceNotAllowed: the AgentBackend sets agents, and the Binding's agent.namespace is neither the
 	// Binding's own namespace, with sameNamespace, nor listed in namespaces.
 	ReasonAgentNamespaceNotAllowed RejectionReason = "AgentNamespaceNotAllowed"
+	// ReasonInvalidPlatformID: a chat ID of the Binding (its channel, a botMessage trigger's sender, a mention's user or an
+	// approver group) does not have the shape of the IDs of its ChatConnection's platform, though it has another platform's, which
+	// is what the load takes (v1alpha1.BindingSpec.PlatformMismatches).
+	ReasonInvalidPlatformID RejectionReason = "InvalidPlatformID"
+	// ReasonUnsupportedOnPlatform: the Binding asks for a feature that the platform of its ChatConnection does not serve, such as
+	// tool approvals on a platform that cannot ask for them.
+	ReasonUnsupportedOnPlatform RejectionReason = "UnsupportedOnPlatform"
 	// ReasonChannelConflict: another Binding owns the channel on the connection.
 	ReasonChannelConflict RejectionReason = "ChannelConflict"
 	// ReasonInvalidSpec: the Binding does not pass Default and Validate. ResolvePartial never gives it, since a Set holds
@@ -159,8 +171,9 @@ type Rejection struct {
 
 // ResolvePartial checks the references between the objects of set as Resolve does, and builds a Snapshot of what is
 // sound. A Binding whose backendRef or connectionRef cannot be followed, whose backend is on a dialect that is not
-// built, whose agent.namespace the backend's agents field does not allow, or that lost its channel to another Binding is left out of the Snapshot and has a Rejection. The Rejections are
-// sorted by Namespace and Name, and a Binding's own are in the order of its fields.
+// built, whose agent.namespace the backend's agents field does not allow, that names a chat ID or asks for a feature that the
+// platform of its connection does not take, or that lost its channel to another Binding is left out of the Snapshot and has a
+// Rejection. The Rejections are sorted by Namespace and Name, and a Binding's own are in the order of its fields.
 //
 // Where two Bindings claim a channel of a connection the oldest creationTimestamp wins, then the smaller namespace and
 // name; a Binding without a timestamp, as one read from a file has none, counts as the oldest. Only a Binding whose
@@ -175,11 +188,16 @@ type Rejection struct {
 // the Secret. ResolvePartial reads no Secret and does no I/O. Like Resolve it takes ownership of set, and it reorders
 // set.Bindings by age. The Snapshot is never nil.
 func ResolvePartial(set *Set) (*Snapshot, []Rejection) {
+	return resolvePartial(set, v1alpha1.ChatPlatformOf)
+}
+
+// resolvePartial is ResolvePartial with the rules of the chat platforms that platforms gives, which a test can choose.
+func resolvePartial(set *Set, platforms platformRules) (*Snapshot, []Rejection) {
 	// The first Binding to claim a channel keeps it, so the oldest goes first.
 	slices.SortStableFunc(set.Bindings, func(a, b v1alpha1.Binding) int {
 		return cmp.Or(a.CreationTimestamp.Compare(b.CreationTimestamp.Time), cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name))
 	})
-	r := newResolver(set)
+	r := newResolver(set, platforms)
 	r.resolveReferences(set)
 	r.groupProblems()
 	var rejections []Rejection
@@ -199,23 +217,34 @@ type problem struct {
 	rejection *Rejection
 }
 
+// platformRules returns the rules of the chat platform that a ChatConnection's spec.platform names, and false for one that has
+// none: v1alpha1.ChatPlatformOf, or a test's own table.
+type platformRules func(platform string) (v1alpha1.ChatPlatform, bool)
+
+// PlatformsPage is the reference page that says what each platform supports, which the message of a rejection for the platform
+// links.
+const PlatformsPage = "https://agentkourier.dev/reference/platforms/"
+
 type resolver struct {
-	secrets  SecretResolver
-	sources  map[identity]string
-	backends map[identity]*v1alpha1.AgentBackend
-	conns    map[identity]*v1alpha1.ChatConnection
-	snap     *Snapshot
-	served   map[*v1alpha1.AgentBackend]*v1alpha1.AgentBackend // the copy of each backend that a served Binding names
-	problems []problem
+	secrets   SecretResolver
+	platforms platformRules
+	sources   map[identity]string
+	backends  map[identity]*v1alpha1.AgentBackend
+	conns     map[identity]*v1alpha1.ChatConnection
+	snap      *Snapshot
+	served    map[*v1alpha1.AgentBackend]*v1alpha1.AgentBackend // the copy of each backend that a served Binding names
+	problems  []problem
 }
 
-// newResolver returns a resolver for set. Resolve adds the Secret reader.
-func newResolver(set *Set) *resolver {
+// newResolver returns a resolver for set that holds each Binding to the rules of its connection's platform that platforms gives.
+// Resolve adds the Secret reader.
+func newResolver(set *Set, platforms platformRules) *resolver {
 	r := &resolver{
-		sources:  set.sources,
-		backends: index("AgentBackend", set.AgentBackends),
-		conns:    index("ChatConnection", set.ChatConnections),
-		served:   map[*v1alpha1.AgentBackend]*v1alpha1.AgentBackend{},
+		platforms: platforms,
+		sources:   set.sources,
+		backends:  index("AgentBackend", set.AgentBackends),
+		conns:     index("ChatConnection", set.ChatConnections),
+		served:    map[*v1alpha1.AgentBackend]*v1alpha1.AgentBackend{},
 		snap: &Snapshot{
 			bindings:  map[identity]ResolvedBinding{},
 			byChannel: map[channelKey]ResolvedBinding{},
@@ -288,6 +317,9 @@ func (r *resolver) binding(b *v1alpha1.Binding) {
 	conn, reason, err := find(r.conns, "ChatConnection", ReasonConnectionNotFound, from, b.Spec.Chat.ConnectionRef,
 		func(c *v1alpha1.ChatConnection) []string { return c.Spec.AllowedNamespaces })
 	r.reject(from, reason, "spec.chat.connectionRef", err)
+	if conn != nil && !r.fitsPlatform(from, b, conn) {
+		conn = nil
+	}
 	if backend == nil || conn == nil {
 		return
 	}
@@ -308,6 +340,70 @@ func (r *resolver) binding(b *v1alpha1.Binding) {
 	}
 	r.snap.bindings[from] = rb
 	r.snap.byChannel[key] = rb
+}
+
+// fitsPlatform rejects b for each chat ID it names and each feature it asks for that the platform of conn does not take, and
+// reports whether there was none. It is asked only once conn admits b, so that a Binding the connection does not admit learns
+// nothing of its platform. A platform with no rules is not checked: ChatConnection's Validate refuses every platform that
+// v1alpha1.ChatPlatformOf has no rules for, so a Set holds no connection of one (a connection that a test builds by hand may).
+func (r *resolver) fitsPlatform(from identity, b *v1alpha1.Binding, conn *v1alpha1.ChatConnection) bool {
+	problems := platformProblems(b, conn, r.platforms)
+	for _, p := range problems {
+		r.reject(from, p.reason, p.path, p.err)
+	}
+	return len(problems) == 0
+}
+
+// platformProblem is one chat ID or feature of a Binding that the platform of its connection does not take.
+type platformProblem struct {
+	reason RejectionReason
+	path   string
+	err    error
+}
+
+// platformProblems returns what fitsPlatform rejects b for on conn, in the order of b's fields: nothing for a platform that
+// platforms has no rules for.
+func platformProblems(b *v1alpha1.Binding, conn *v1alpha1.ChatConnection, platforms platformRules) []platformProblem {
+	p, ok := platforms(conn.Spec.Platform)
+	if !ok {
+		return nil
+	}
+	id := identity{KindChatConnection, conn.Namespace, conn.Name}
+	var out []platformProblem
+	for _, m := range b.Spec.PlatformMismatches(p) {
+		reason := ReasonInvalidPlatformID
+		if m.Unsupported {
+			reason = ReasonUnsupportedOnPlatform
+		}
+		out = append(out, platformProblem{reason, m.Path, fmt.Errorf("%s on %s, the platform of %s: %s (see %s)", m.Problem, p.Name, id, m.Fix, PlatformsPage)})
+	}
+	return out
+}
+
+// RefusedOnPlatform says why resolution would reject b on conn for its platform, the check that fitsPlatform makes: the reason of
+// the first chat ID or feature that the platform does not take (InvalidPlatformID or UnsupportedOnPlatform), and each of them as
+// "path: message", joined with "; ". Both are empty when the platform takes all of b, and when conn does not admit b (it is in
+// another namespace that conn's allowedNamespaces does not list), since such a Binding learns nothing of conn's platform. A source
+// that fails one object at a time asks it of each valid Binding whose connection it holds, and refuses that generation as it
+// refuses one that fails Validate, so that a mistyped ID in an edit leaves the last good generation served (see Invalid.Reason).
+func RefusedOnPlatform(b *v1alpha1.Binding, conn *v1alpha1.ChatConnection) (RejectionReason, string) {
+	return refusedOnPlatform(b, conn, v1alpha1.ChatPlatformOf)
+}
+
+// refusedOnPlatform is RefusedOnPlatform with the rules of the chat platforms that platforms gives, which a test can choose.
+func refusedOnPlatform(b *v1alpha1.Binding, conn *v1alpha1.ChatConnection, platforms platformRules) (RejectionReason, string) {
+	if !ReferenceAllowed(b.Namespace, conn.Namespace, conn.Spec.AllowedNamespaces) {
+		return "", ""
+	}
+	problems := platformProblems(b, conn, platforms)
+	if len(problems) == 0 {
+		return "", ""
+	}
+	parts := make([]string, len(problems))
+	for i, p := range problems {
+		parts[i] = p.path + ": " + p.err.Error()
+	}
+	return problems[0].reason, strings.Join(parts, "; ")
 }
 
 // index maps the identity of each object of one kind to the object.

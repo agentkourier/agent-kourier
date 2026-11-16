@@ -189,11 +189,11 @@ resource, which is something else. `kubectl get bindings -n <namespace>` answers
 `binding/<name>` answers `NotFound`: use `akbinding` or `bindings.agentkourier.dev`.
 
 ```text
-NAMESPACE       NAME                           READY   REASON   CHANNEL   AGE
-agent-kourier   binding.agentkourier.dev/sre   True    OK       C1        2m
+NAMESPACE       NAME                           READY   REASON   CONNECTION   CHANNEL   AGE
+agent-kourier   binding.agentkourier.dev/sre   True    OK       slack        C1        2m
 ```
 
-The columns come from the Binding's status. A Binding that shows `False` has a reason in the `REASON` column, and the
+`READY` and `REASON` come from the Binding's status, and `CONNECTION` and `CHANNEL` from its spec. A Binding that shows `False` has a reason in the `REASON` column, and the
 conditions with their messages are in `kubectl -n <namespace> get akbinding <name> -o yaml`. [Binding status](../reference/binding-status.md)
 explains each, and [Troubleshoot an install](troubleshoot.md#a-binding-is-not-accepted) says what to do about each reason.
 

@@ -44,6 +44,8 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Count(t, "agentNamespaces", maxAllowedNamespaces)
 	limitsdoc.Count(t, "chatID", maxChatIDLen)
 	limitsdoc.Count(t, "mentionUserLen", maxMentionUserLen)
+	limitsdoc.Count(t, "slackChatID", maxSlackIDLen)
+	limitsdoc.Count(t, "slackUserLen", maxSlackUserIDLen)
 	limitsdoc.Count(t, "emoji", maxEmojiLen)
 	limitsdoc.Count(t, "backendURL", maxURLLen)
 	limitsdoc.Count(t, "headerValue", maxHeaderValueLen)

@@ -581,6 +581,49 @@ func TestTheBackendOfALiveBindingOfAHeldConnectionIsHeld(t *testing.T) {
 	}
 }
 
+// While the own connection is deleted and held, a Binding of it that is still there is held to the platform of the held connection,
+// which is in no listing: an edit that gives it a bot's name as its sender is refused with InvalidPlatformID, as on a live connection,
+// and its last good generation stays served.
+func TestAnEditOfABindingOfTheHeldConnectionIsHeldToItsPlatform(t *testing.T) {
+	leakCheck(t)
+	objs := corpus(t)
+	c := newCluster(t, objs...)
+	src := c.start(t)
+	set(t, src)
+	until(t, func() { c.remove(find(objs, "slack-main")) }, func() bool { s, _ := set(t, src); return len(held(s)) == 1 })
+
+	edited := find(objs, "sre-alerts")
+	triggers, _, err := unstructured.NestedSlice(edited.Object, "spec", "chat", "triggers")
+	if err != nil || len(triggers) < 2 {
+		t.Fatalf("the corpus is stale: sre-alerts has triggers %v (%v)", triggers, err)
+	}
+	triggers[1].(map[string]any)["from"] = map[string]any{"id": "alertmanager"}
+	if err := unstructured.SetNestedSlice(edited.Object, triggers, "spec", "chat", "triggers"); err != nil {
+		t.Fatal(err)
+	}
+	edited.SetGeneration(2)
+	edited.SetResourceVersion("2")
+	refused := func(s *config.Set) int {
+		return slices.IndexFunc(s.Invalid, func(i config.Invalid) bool { return i.Name == "sre-alerts" && !i.Deleted })
+	}
+	until(t, func() { c.apply(edited) }, func() bool { s, _ := set(t, src); return refused(s) >= 0 })
+
+	s, _ := set(t, src)
+	const problem = `spec.chat.triggers[1].from.id: "alertmanager" is not a bot ID on Slack, the platform of ChatConnection agent-kourier-system/slack-main`
+	if inv := s.Invalid[refused(s)]; inv.Reason != config.ReasonInvalidPlatformID || inv.Generation != 2 || inv.Served != 1 || !strings.Contains(inv.Message, problem) {
+		t.Errorf("Invalid = %+v; want generation 2 refused with %s and the problem %q, and generation 1 served", inv, config.ReasonInvalidPlatformID, problem)
+	}
+	rep := report(t, src)
+	rb, ok := rep.Snapshot.Binding("sre", "sre-alerts")
+	if !ok || rb.Binding.Spec.Chat.Triggers[1].From.ID != "B0123456789" {
+		t.Fatalf("sre-alerts served = %t; want it served at generation 1, with the sender B0123456789", ok)
+	}
+	i := slices.IndexFunc(rep.Rejections, func(r config.Rejection) bool { return r.Name == "sre-alerts" })
+	if i < 0 || rep.Rejections[i].Reason != config.ReasonInvalidPlatformID || rep.Rejections[i].Served != 1 {
+		t.Errorf("rejections = %+v; want sre-alerts with %s, served at generation 1", rep.Rejections, config.ReasonInvalidPlatformID)
+	}
+}
+
 // The references of the chart's own objects name no namespace, since they are all in the release's: a hold that read a
 // reference without the Binding's namespace would find neither the connection nor the backend.
 func TestAHoldReadsReferencesThatNameNoNamespace(t *testing.T) {

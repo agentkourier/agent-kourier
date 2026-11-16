@@ -16,21 +16,10 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
-// channelID matches Slack channel IDs, the only platform's; its literal must equal ChatBinding.Channel's Pattern marker.
-var channelID = regexp.MustCompile(`^[CG][A-Z0-9]+$`)
-
-// IsChannelID reports whether s has the form of a channel ID, rather than a channel name. It checks the pattern only:
-// the length cap a Binding's spec.chat.channel also has is the caller's.
-func IsChannelID(s string) bool { return channelID.MatchString(s) }
-
 // reactionName matches Slack's bare reaction names. The platform adds and removes
 // the surrounding colons; accepting only names keeps configuration out of the
 // platform adapter and prevents an invalid outbox row.
 var reactionName = regexp.MustCompile(`^(?:[a-z0-9][a-z0-9+_-]*|[+-][a-z0-9][a-z0-9+_-]*)$`)
-
-// botID matches Slack bot IDs, the only platform's; its literal must equal BotSource.ID's Pattern marker. A second
-// platform moves it to a per-platform check at resolution.
-var botID = regexp.MustCompile(`^B[A-Z0-9]+$`)
 
 // extractName is what a template can reach as .Fields.<name>: a Go identifier that starts
 // with a lower-case letter. It is also the name of the regex group that supplies the value.
@@ -87,10 +76,13 @@ const (
 // set far above any real use, which today is:
 //
 //   - maxAllowedNamespaces 256: one namespace in every example (a namespace is at most 63 characters, so the list is at most 16 KiB).
-//   - maxChatIDLen 32: a channel, a sender and a user group are 11 characters in every example, and Slack's IDs are 9 to 11
-//     (unverified: not readable in this repository). A mention's name and user ID are already bounded by their patterns, to
-//     63 and 21: maxMentionNameLen and maxMentionUserLen say so as caps, so that the schema has a maxLength for them and a
-//     value over one is refused without being shown.
+//   - maxChatIDLen 140: a channel, a sender and a user group are 11 characters in every example, and Slack's IDs are 9 to 11
+//     (unverified: not readable in this repository). The cap fits a GitHub repository, owner/name, of a 39-character owner and
+//     a 100-character name (GitHub's own limits, unverified here); a Slack connection holds its IDs to Slack's 32 when the
+//     broker resolves the Binding (maxSlackIDLen). A mention's name is already bounded by its pattern, to 63, and
+//     maxMentionNameLen says so as a cap, so that the schema has a maxLength for it and a value over one is refused without
+//     being shown. maxMentionUserLen 44 fits a GitHub login of 39 characters with the "[bot]" of an app; a Slack user ID is
+//     21 at most, by its pattern.
 //   - maxEmojiLen 100: the default reaction, hourglass_flowing_sand, is 21. Slack's own limit on a custom emoji name is
 //     100 characters (unverified: not readable in this repository).
 //   - maxURLLen 2048: the longest URL in an example or a test fixture is under 100 characters.
@@ -100,9 +92,9 @@ const (
 //   - maxCloseWhenValueLen 256: the value in an example is RESOLVED.
 const (
 	maxAllowedNamespaces = 256
-	maxChatIDLen         = 32
+	maxChatIDLen         = 140
 	maxMentionNameLen    = 63
-	maxMentionUserLen    = 21
+	maxMentionUserLen    = 44
 	maxEmojiLen          = 100
 	maxURLLen            = 2048
 	maxHeaderValueLen    = 4096
@@ -110,20 +102,13 @@ const (
 	maxCloseWhenValueLen = 256
 )
 
-// mentionName is what an agent writes after an "@"; its literal must equal ChatMention.Name's Pattern marker. mentionUser
-// is a Slack user ID, the only platform's; its literal must equal ChatMention.User's Pattern marker, and matches what the
-// Slack adapter makes a mention of.
-var (
-	mentionName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
-	mentionUser = regexp.MustCompile(`^[UW][A-Z0-9]{2,20}$`)
-)
+// mentionName is what an agent writes after an "@"; its literal must equal ChatMention.Name's Pattern marker. (The shape of
+// the user it names, mentionUser, is in platforms.go with the other chat IDs.)
+var mentionName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 
 // broadcastNames are the words a platform reads as a mention of everyone. None may be declared, so that no reply that names
 // one can ever look as if a broadcast were allowed.
 var broadcastNames = map[string]bool{"here": true, "channel": true, "everyone": true}
-
-// approverGroupID matches Slack user group IDs. Its literal is also documented by Interactions.ApproverGroups.
-var approverGroupID = regexp.MustCompile(`^S[A-Z0-9]+$`)
 
 // IsReservedHeader reports whether name carries or could forge the Binding identity (D14),
 // so an AgentBackend must not set it. Dialects refuse it too. The kagent alpha5 headers
@@ -353,7 +338,7 @@ func (b *Binding) Validate() error {
 		p.add("spec.chat.channel", "required")
 	} else if len(c) > maxChatIDLen {
 		p.maxBytes("spec.chat.channel", c, maxChatIDLen) // not shown: the channel is in the messages that name a conflict
-	} else if !IsChannelID(c) {
+	} else if !channelID.MatchString(c) {
 		p.add("spec.chat.channel", "invalid channel %q: must be a channel ID such as C0123456789, not a name", c)
 	}
 	p.oneOf("spec.chat.output", string(s.Chat.Output), string(OutputLive), string(OutputFinal))
@@ -432,7 +417,7 @@ func (p *problems) interactions(path string, in Interactions) {
 		case len(group) > maxChatIDLen:
 			p.maxBytes(at, group, maxChatIDLen)
 		case !approverGroupID.MatchString(group):
-			p.add(at, "invalid group ID %q: must be a Slack user group ID such as S0123456789", group)
+			p.add(at, "invalid group ID %q: must be a user group ID (Slack: S0123456789)", group)
 		}
 		if previous, ok := seen[group]; ok {
 			p.add(at, "duplicate of index %d", previous)
@@ -602,7 +587,7 @@ func (p *problems) botMessageTrigger(path string, t *Trigger, b *regexBudget) {
 		p.add(path+".from.id", "required")
 	case len(t.From.ID) > maxChatIDLen:
 		p.maxBytes(path+".from.id", t.From.ID, maxChatIDLen)
-	case !botID.MatchString(t.From.ID):
+	case !senderID.MatchString(t.From.ID):
 		p.add(path+".from.id", "invalid sender ID %q: must be the sender's ID (Slack: a bot ID such as B0123456789), not a name", t.From.ID)
 	}
 	if t.From != nil {

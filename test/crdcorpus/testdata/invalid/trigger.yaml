@@ -407,8 +407,8 @@ spec:
         limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
         promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
 ---
-# rule: trigger/spec.chat.triggers[].from.id: a name, not an ID
-# want: spec.chat.triggers[1].from.id: invalid sender ID "alertmanager"
+# rule: trigger/spec.chat.triggers[].from.id: a display name, not an ID
+# want: spec.chat.triggers[1].from.id: invalid sender ID "Alert Manager"
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
@@ -428,7 +428,7 @@ spec:
     triggers:
       - {type: mention}
       - type: botMessage
-        from: {id: alertmanager}
+        from: {id: "Alert Manager"}
         match: {title: "^FIRING"}
         extract:
           state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
@@ -437,8 +437,8 @@ spec:
         limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
         promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
 ---
-# rule: trigger/spec.chat.triggers[].from.id: a user ID
-# want: spec.chat.triggers[1].from.id: invalid sender ID "U0123456789"
+# rule: trigger/spec.chat.triggers[].from.id: mention markup, not an ID
+# want: spec.chat.triggers[1].from.id: invalid sender ID "<@B0123456789>"
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
@@ -458,7 +458,7 @@ spec:
     triggers:
       - {type: mention}
       - type: botMessage
-        from: {id: U0123456789}
+        from: {id: "<@B0123456789>"}
         match: {title: "^FIRING"}
         extract:
           state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
@@ -2150,8 +2150,8 @@ spec:
         limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
         promptTemplate: '{{ printf "%2000000000d" 1 }}'
 ---
-# rule: trigger/spec.chat.triggers[].from.id: over 32 characters
-# want: spec.chat.triggers[1].from.id: is 33 bytes, longer than the 32 byte limit
+# rule: trigger/spec.chat.triggers[].from.id: over 140 characters
+# want: spec.chat.triggers[1].from.id: is 141 bytes, longer than the 140 byte limit
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
@@ -2171,7 +2171,7 @@ spec:
     triggers:
       - {type: mention}
       - type: botMessage
-        from: {id: B00000000000000000000000000000000}
+        from: {id: B00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000}
         match: {title: "^FIRING"}
         extract:
           state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}

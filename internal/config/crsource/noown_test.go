@@ -76,15 +76,14 @@ func TestNewRefusesABlankNamespaceOnTheList(t *testing.T) {
 // The conformance suite, over a source that has no own connection and serves the corpus' connection as it serves a team's: the
 // objects it reads, the fingerprint, the Sets, the invalid objects and the rules across objects are the files' all the same.
 func TestConformanceWithoutAnOwnConnection(t *testing.T) {
+	start := func(t *testing.T, c *cluster, corpus sourcetest.Corpus) config.Source {
+		src, _ := c.startTeamOnly(t, nil, corpus.Connection.Namespace)
+		return src
+	}
 	sourcetest.Run(t, func(t *testing.T, corpus sourcetest.Corpus) config.Source {
 		leakCheck(t)
-		var objs []*unstructured.Unstructured
-		for i, d := range corpus.Docs {
-			objs = append(objs, object(t, d, fmt.Sprintf("uid-%d", i), 1))
-		}
-		src, _ := newCluster(t, objs...).startTeamOnly(t, nil, corpus.Connection.Namespace)
-		return src
-	}, sourcetest.Options{PerObject: true, IgnoresUnknownFields: true})
+		return start(t, newCluster(t, corpusObjects(t, corpus.Docs)...), corpus)
+	}, sourcetest.Options{PerObject: true, IgnoresUnknownFields: true, Edit: editor(start)})
 }
 
 // With no own connection the served set is the ChatConnections of the admitted namespaces and no other: the corpus' connection, which

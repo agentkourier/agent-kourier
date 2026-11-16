@@ -976,3 +976,32 @@ replicas: with SQLite every rollout leaves Slack nothing to answer it until the 
   `spec.slack` whatever it holds (above).
 - **Take `chatListener` and `networkPolicy.chatFrom` off the values in the same change.** The chart of an earlier release refuses keys it does
   not have (its values schema, read in the chart of 0.4.0, not run).
+
+## Upgrade to the release that takes other platforms' chat IDs
+
+The schema and the broker's load now take, in `chat.channel`, a `botMessage` trigger's `from.id`, a mention's `user` and
+`interactions.approverGroups`, the shape of another platform's ID beside Slack's: a repository `owner/name`, a login such as `octocat`
+or `dependabot[bot]`, and a team `org/team-slug`. The broker holds each ID to the platform of the Binding's ChatConnection when it reads
+the two together, and Slack's shapes and its 32-byte cap are unchanged there ([What each platform supports](../reference/platforms.md)).
+A value that is no platform's ID, such as the channel name `general`, is still refused when it is applied. Every object stored before
+the upgrade loads as it did.
+
+- **A Slack ID typo with a login's shape is refused later.** A bot's name such as `alertmanager` as `from.id`, or a user group ID as a
+  mention's `user`, was refused by the API server and at load. The API server now stores it, and the broker refuses it with
+  `InvalidPlatformID`. On custom resources an edit of a served Binding does not take: the broker keeps serving its last good generation,
+  and the Binding's `Accepted` condition says why the new one is refused and which generation is served
+  ([Binding status](../reference/binding-status.md#accepted)). A new Binding with such an ID is not served. On the files route the
+  whole config fails, as before, with the new message: at start the broker exits with [code 2](../reference/cli.md#exit-codes), and on a
+  reload it keeps its last good config. `agent-kourier dry-run` still refuses it.
+- **New columns in `kubectl get`.** `kubectl get akbinding` shows `CONNECTION`, the name of the ChatConnection, before `CHANNEL`, and
+  `kubectl get akconnection` shows `PLATFORM` and `AGE`. A script that reads the columns by position needs the new order. The Binding and
+  ChatConnection CRDs change, and their schema hashes with them: the chart applies them with the release when `crds.install` is true, or
+  unset on `config.source: crds`; if you apply the CRDs yourself, apply `charts/agent-kourier/files/crds` again.
+- **The approver group message.** An approver group that is no platform's ID is refused with
+  `invalid group ID "...": must be a user group ID (Slack: S0123456789)`.
+
+**Roll back.** An earlier broker holds the four fields to Slack's shapes at load. On custom resources it refuses a stored Binding that
+has another platform's ID with `InvalidSpec`, and a broker that has just started has no earlier generation of it to serve; on the
+files route such a Binding fails the config. This release refuses such a Binding on a Slack connection too, so fix its IDs before the
+rollback. An earlier release's CRDs have Slack's patterns and 32-byte caps; whether the API server then lets you change another field of
+a stored object that breaks them depends on its version, so fix the IDs in the same edit.

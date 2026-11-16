@@ -19,15 +19,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // Corpus is a set of objects and the connection that a source of them serves.
@@ -43,6 +46,11 @@ type Corpus struct {
 // Factory builds a Source over the corpus. It registers its own cleanup with t. The source is ready to read.
 type Factory func(t *testing.T, c Corpus) config.Source
 
+// Editor builds a Source over the corpus, as a Factory does, and returns it with a function that changes its objects to docs:
+// each document of docs that differs from the corpus' is the next generation of the object of its kind, namespace and name.
+// The function returns once the source holds the change.
+type Editor func(t *testing.T, c Corpus) (src config.Source, change func(docs []string))
+
 // Options says how a source fails.
 type Options struct {
 	// PerObject means that a bad object is left out of the Set and listed in Set.Invalid while the rest is read, as the
@@ -52,10 +60,15 @@ type Options struct {
 	// field, as the custom resources do (the API server's schema decides what an object holds, and a broker may be older
 	// than its CRDs). Otherwise the object is refused with the problem "path: unknown field", as the files are.
 	IgnoresUnknownFields bool
+	// Edit builds a source that the suite then edits, for the cases of an edit. Every source gives one.
+	Edit Editor
 }
 
 // Run runs the suite against the source that f builds.
 func Run(t *testing.T, f Factory, opts Options) {
+	if opts.Edit == nil {
+		t.Fatal("Options.Edit is nil: the cases of an edit need it")
+	}
 	spec := Spec(t)
 	for _, c := range append([]Corpus{spec}, Recipes(t)...) {
 		t.Run("corpus "+c.Name+" reads as the same objects and the same routing table as Load's", func(t *testing.T) { sameObjects(t, f, c) })
@@ -64,6 +77,12 @@ func Run(t *testing.T, f Factory, opts Options) {
 	t.Run("each Set is the caller's own", func(t *testing.T) { setsAreIndependent(t, f, spec) })
 	t.Run("an invalid object is refused with the problem the validator names", func(t *testing.T) { invalidObjects(t, f, spec, opts) })
 	t.Run("a rule across objects says the same of the objects of either source", func(t *testing.T) { crossObject(t, f, spec) })
+	t.Run("a chat ID that the connection's platform does not take is refused as the route refuses a bad object", func(t *testing.T) {
+		otherPlatformID(t, f, spec, opts)
+	})
+	t.Run("an edit to a chat ID that the platform does not take leaves the Binding as it was", func(t *testing.T) {
+		otherPlatformEdit(t, spec, opts)
+	})
 }
 
 // Spec returns the corpus of the API's examples: one backend, one connection and two Bindings, which refer to each other. The
@@ -371,6 +390,116 @@ var crossCases = []crossCase{
 		config.ReasonAgentNamespaceNotAllowed, "spec.agent.namespace: AgentBackend agent-kourier-system/kagent-pilot does not allow agents in namespace kagent"},
 	{"a channel that two Bindings claim", "binding-minimal.yaml", "channel: G0123456789", "channel: C0123456789", config.ReasonChannelConflict,
 		"is already bound by Binding sre/"},
+}
+
+// The chat IDs of the spec corpus' Binding sre/sre-alerts: its bot ID, and another platform's ID (a GitHub login) that the load
+// takes and Slack does not, with the problem that resolution names.
+const (
+	slackBotID       = "from: { id: B0123456789 }"
+	otherPlatformBot = "from: { id: alertmanager }"
+	otherProblem     = `spec.chat.triggers[1].from.id: "alertmanager" is not a bot ID on Slack, the platform of ChatConnection agent-kourier-system/slack-main`
+)
+
+// withOtherPlatformID returns docs, the spec corpus, with the sender of sre/sre-alerts made another platform's ID.
+func withOtherPlatformID(t *testing.T, docs []string) []string {
+	t.Helper()
+	docs = slices.Clone(docs)
+	if !strings.Contains(docs[2], slackBotID) {
+		t.Fatalf("the corpus is stale: binding.yaml has no %q", slackBotID)
+	}
+	docs[2] = strings.Replace(docs[2], slackBotID, otherPlatformBot, 1)
+	return docs
+}
+
+// otherPlatformID: a Binding whose chat ID is another platform's passes Default and Validate, and its connection's platform
+// refuses it, in the same words on either route. The files fail resolution, and so the whole load. The custom resources refuse
+// that Binding as they refuse one that fails Validate, with the platform's reason: it is listed in Set.Invalid, with nothing
+// served in its place, and the rest is read and served.
+func otherPlatformID(t *testing.T, f Factory, base Corpus, opts Options) {
+	src := f(t, Corpus{Name: base.Name, Docs: withOtherPlatformID(t, Valid(t)), Connection: base.Connection})
+	set, _ := read(t, src)
+	if !opts.PerObject {
+		if got := routingStrict(t, set); !strings.HasPrefix(got, "error:") || !strings.Contains(got, otherProblem) {
+			t.Errorf("strict resolution = %q; want the problem %q", got, otherProblem)
+		}
+		return
+	}
+	if len(set.Invalid) != 1 {
+		t.Fatalf("Invalid = %+v; want sre/sre-alerts alone", set.Invalid)
+	}
+	inv := set.Invalid[0]
+	if inv.Name != "sre-alerts" || inv.Reason != config.ReasonInvalidPlatformID || !strings.Contains(inv.Message, otherProblem) || inv.Served != 0 {
+		t.Errorf("Invalid = %+v; want sre/sre-alerts, not served, refused with %s and the problem %q", inv, config.ReasonInvalidPlatformID, otherProblem)
+	}
+	if got := routing(set); got != "sre/chat-only -> agent-kourier-system/kagent-pilot on agent-kourier-system/slack-main channel G0123456789\n" {
+		t.Errorf("routing table:\n%s\nwant sre/chat-only alone, and nothing rejected", got)
+	}
+}
+
+// otherPlatformEdit: an edit that gives a serving Binding another platform's chat ID does not take, on either route, as an edit
+// that fails Validate does not. The files fail the reload with the problem, and the Reloader keeps the config it serves. The custom
+// resources keep serving the Binding's last good generation, and the Report says why the new one is refused, with the platform's
+// reason, which the Binding's status carries.
+func otherPlatformEdit(t *testing.T, base Corpus, opts Options) {
+	docs := Valid(t)
+	src, change := opts.Edit(t, Corpus{Name: base.Name, Docs: docs, Connection: base.Connection})
+	first, _ := read(t, src)
+	errs := make(chan error, 16)
+	rl := config.NewReloader(config.ReloaderConfig{
+		Source: src, Secrets: config.PresentSecrets(first), PollInterval: 10 * time.Millisecond, PerObject: opts.PerObject,
+		Logger: slog.New(slog.DiscardHandler), OnError: func(err error) {
+			select {
+			case errs <- err:
+			default:
+			}
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() { cancel(); rl.Wait() })
+	if err := rl.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	served := func() string {
+		rb, ok := rl.Current().Binding("sre", "sre-alerts")
+		if !ok {
+			return "not served"
+		}
+		return rb.Binding.Spec.Chat.Triggers[1].From.ID
+	}
+	if got := served(); got != "B0123456789" {
+		t.Fatalf("before the edit sre/sre-alerts serves the sender %q; want B0123456789", got)
+	}
+
+	change(withOtherPlatformID(t, docs))
+	if !opts.PerObject {
+		select {
+		case err := <-errs:
+			if !strings.Contains(err.Error(), otherProblem) {
+				t.Errorf("the reload failed with %v; want the problem %q", err, otherProblem)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the reload did not fail within 5s")
+		}
+		if got := served(); got != "B0123456789" {
+			t.Errorf("after the edit sre/sre-alerts serves the sender %q; want B0123456789, the config before the edit", got)
+		}
+		return
+	}
+	var rej config.Rejection
+	testutil.Eventually(t, "the Report rejects sre/sre-alerts", func() bool {
+		rejections := rl.Report().Rejections
+		i := slices.IndexFunc(rejections, func(r config.Rejection) bool { return r.Namespace == "sre" && r.Name == "sre-alerts" })
+		if i >= 0 {
+			rej = rejections[i]
+		}
+		return i >= 0
+	}, testutil.Within(5*time.Second), testutil.Every(10*time.Millisecond))
+	if rej.Reason != config.ReasonInvalidPlatformID || !strings.Contains(rej.Message, otherProblem) || rej.Served == 0 || rej.Generation <= rej.Served {
+		t.Errorf("Rejection = %+v; want %s with the problem %q, the new generation refused and an older one served", rej, config.ReasonInvalidPlatformID, otherProblem)
+	}
+	if got := served(); got != "B0123456789" {
+		t.Errorf("after the edit sre/sre-alerts serves the sender %q; want B0123456789, its last good generation", got)
+	}
 }
 
 func crossObject(t *testing.T, f Factory, base Corpus) {

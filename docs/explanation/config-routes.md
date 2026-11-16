@@ -52,6 +52,7 @@ file and field. On a reload it keeps the last good config, logs `config reload f
 | An object is deleted | Removes it. |
 | A Binding names an AgentBackend or ChatConnection that does not exist, or that does not allow its namespace | Drops the Binding from routing, with a condition (`BackendNotFound`, `ConnectionNotFound`, `NamespaceNotAllowed`). |
 | A Binding names an agent namespace that its AgentBackend's `agents` field does not allow | Drops the Binding from routing, with `AgentNamespaceNotAllowed`. |
+| A Binding names a chat ID that its ChatConnection's platform does not have (a repository as the channel of a Slack connection, a bot's name as a sender), or asks for a feature the platform does not serve | Refuses that generation as it refuses an invalid one: keeps serving the last good generation, or does not serve a Binding that has none. The status says `InvalidPlatformID` or `UnsupportedOnPlatform`, and the generation being served ([What each platform supports](../reference/platforms.md)). |
 | A Binding names an AgentBackend that is invalid | Serves the AgentBackend's last good generation, or drops the Binding if it has none, with `BackendRejected`. |
 | The broker's own ChatConnection is edited into something invalid | Keeps serving its last good generation, and each of its Bindings says `ConnectionRejected`. |
 | A Binding names a ChatConnection that exists and that this broker does not serve | If the broker served the connection before and does not now (its namespace is no longer admitted: it was taken off the list, it lost the label the selector matches, the selector changed, or a broker that admitted every namespace was narrowed to a list, a selector or its own connection alone; or it was the broker's own and the setting now names another or none, and its namespace is not admitted), or the connection is past the 16, or it is a second connection of a Slack app, and in all three cases the connection admits the Binding's namespace, the leader writes `Accepted=False` with `ConnectionNotServed`, once, and does not put it back, so that a broker that serves the connection has the last word. Otherwise (a connection in a namespace that was never admitted, or a Binding the connection does not admit) nothing reads the Binding and nothing writes its status: `READY` stays empty. Point `connectionRef` at a connection that a broker serves. |
@@ -103,7 +104,7 @@ nothing is accepted on the file route that the schema refuses.
 ```text
 $ kubectl apply -f bad.yaml
 The Binding "bad" is invalid:
-* spec.chat.channel: Invalid value: "general": spec.chat.channel in body should match '^[CG][A-Z0-9]+$'
+* spec.chat.channel: Invalid value: "general": spec.chat.channel in body should match '^(?:[CG][A-Z0-9]+|[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}/[A-Za-z0-9._-]{1,100})$'
 * spec.identity: Invalid value: "object": set userId, tokenSecretRef, or both
 ```
 
@@ -114,7 +115,11 @@ count over a cap, and most of the rules between the fields of one object.
 does not compile, or compiles to more than 2000 instructions, or takes the regexes of a Binding past 5000 instructions together; a trigger's `promptTemplate` that does not parse, names an extract the trigger lacks, or fails when it runs; a duplicate trigger; the
 parts of a URL that only Go's parser refuses (a bad percent escape, port or bracket); a `match` or `exclude` value of 512 characters or fewer that is
 over 512 bytes; and every rule that spans objects: that the AgentBackend and ChatConnection exist and allow the namespace, that the AgentBackend's `agents` field allows the agent namespace, that the dialect has an adapter, that
-one Binding holds the channel, and that a Secret has its key.
+one Binding holds the channel, that a Secret has its key, and that each chat ID has the shape of the IDs of the ChatConnection's platform
+and the platform serves what the Binding asks for. The schema takes the shape of any known platform's ID, so `general` as a channel is
+refused at apply, and a Slack connection's Binding with a repository `owner/name` as its channel, or a bot's name such as `alertmanager` as
+a sender, is stored and then refused by the broker: a new one is not served, and an edit of a served one does not take
+([What each platform supports](../reference/platforms.md)).
 
 The caps (50 triggers in a Binding, 32 `extract` entries in a trigger, 32 headers and 256 bytes of a header's name in an AgentBackend) apply on
 both routes, because the schema and the broker's own validation both have them. [Upgrade](../how-to/upgrade.md#upgrade-to-the-release-that-bounds-triggers-extract-entries-and-headers) says how to find a config over one before you upgrade.

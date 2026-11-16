@@ -1137,6 +1137,20 @@ func TestSeveralRejectionsGiveOneAcceptedReasonInAFixedOrder(t *testing.T) {
 			[]config.Rejection{rej(config.ReasonAgentNamespaceNotAllowed, 2)}, 0,
 			metav1.ConditionFalse, "AgentNamespaceNotAllowed", "spec.agentnamespacenotallowed", 2,
 		},
+		"the platform's IDs and features come after the agent namespace, and before the channel": {
+			[]config.Rejection{rej(config.ReasonChannelConflict, 2), rej(config.ReasonUnsupportedOnPlatform, 2), rej(config.ReasonInvalidPlatformID, 2),
+				rej(config.ReasonAgentNamespaceNotAllowed, 2)}, 0,
+			metav1.ConditionFalse, "AgentNamespaceNotAllowed",
+			"spec.agentnamespacenotallowed; spec.invalidplatformid; spec.unsupportedonplatform; " + channelConflictMessage, 2,
+		},
+		"an ID of another platform's shape": {
+			[]config.Rejection{rej(config.ReasonInvalidPlatformID, 2)}, 0,
+			metav1.ConditionFalse, "InvalidPlatformID", "spec.invalidplatformid", 2,
+		},
+		"a feature the platform does not serve": {
+			[]config.Rejection{rej(config.ReasonUnsupportedOnPlatform, 2)}, 0,
+			metav1.ConditionFalse, "UnsupportedOnPlatform", "spec.unsupportedonplatform", 2,
+		},
 		"a reason that is not known": {
 			[]config.Rejection{rej("Weird Reason!", 2)}, 0, metav1.ConditionFalse, "Rejected", "spec.weird reason!", 2,
 		},

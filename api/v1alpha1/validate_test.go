@@ -295,6 +295,18 @@ func TestBindingValidate(t *testing.T) {
 		{"empty channel", func(o *Binding) { o.Spec.Chat.Channel = "" }, "spec.chat.channel: required"},
 		{"channel name instead of ID", func(o *Binding) { o.Spec.Chat.Channel = "#sre-alerts" },
 			`spec.chat.channel: invalid channel "#sre-alerts": must be a channel ID such as C0123456789, not a name`},
+		{"a bare channel name instead of ID", func(o *Binding) { o.Spec.Chat.Channel = "general" },
+			`spec.chat.channel: invalid channel "general": must be a channel ID such as C0123456789, not a name`},
+		{"a repository as a channel ok", func(o *Binding) { o.Spec.Chat.Channel = "octo-org/hello.world_2-x" }, ""},
+		{"a repository with no name", func(o *Binding) { o.Spec.Chat.Channel = "octo-org/" },
+			`spec.chat.channel: invalid channel "octo-org/": must be a channel ID such as C0123456789, not a name`},
+		{"a repository whose owner starts with a hyphen", func(o *Binding) { o.Spec.Chat.Channel = "-octo/repo" },
+			`spec.chat.channel: invalid channel "-octo/repo": must be a channel ID such as C0123456789, not a name`},
+		{"a repository under two owners", func(o *Binding) { o.Spec.Chat.Channel = "a/b/c" },
+			`spec.chat.channel: invalid channel "a/b/c": must be a channel ID such as C0123456789, not a name`},
+		{"the longest repository ok", func(o *Binding) {
+			o.Spec.Chat.Channel = strings.Repeat("o", 39) + "/" + strings.Repeat("r", 100)
+		}, ""},
 		{"a channel at the length cap ok", func(o *Binding) { o.Spec.Chat.Channel = "C" + strings.Repeat("0", maxChatIDLen-1) }, ""},
 		{"a channel over the length cap", func(o *Binding) { o.Spec.Chat.Channel = "C" + strings.Repeat("0", maxChatIDLen) },
 			fmt.Sprintf("spec.chat.channel: is %d bytes, longer than the %d byte limit", maxChatIDLen+1, maxChatIDLen)},
@@ -318,7 +330,7 @@ func TestBindingValidate(t *testing.T) {
 			o.Spec.Chat.Mentions = []ChatMention{{Name: strings.Repeat("a", maxMentionNameLen+1), User: "U0123456789"}}
 		}, fmt.Sprintf("spec.chat.mentions[0].name: is %d bytes, longer than the %d byte limit", maxMentionNameLen+1, maxMentionNameLen)},
 		{"a mention user at the length cap ok", func(o *Binding) {
-			o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "U" + strings.Repeat("0", maxMentionUserLen-1)}}
+			o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: strings.Repeat("a", maxMentionUserLen-len("[bot]")) + "[bot]"}}
 		}, ""},
 		{"a mention user over the length cap", func(o *Binding) {
 			o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "U" + strings.Repeat("0", maxMentionUserLen)}}
@@ -331,8 +343,18 @@ func TestBindingValidate(t *testing.T) {
 		{"mention named everyone", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "everyone", User: "U0123456789"}} },
 			`spec.chat.mentions[0].name: "everyone" is reserved: a broadcast cannot be declared`},
 		{"mention with no user", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam"}} }, "spec.chat.mentions[0].user: required"},
-		{"mention of a user group", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "oncall", User: "S0123456789"}} },
-			`spec.chat.mentions[0].user: invalid user ID "S0123456789": must be a user ID such as U0123456789`},
+		{"mention of a user group", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "oncall", User: "C0123456789/x"}} },
+			`spec.chat.mentions[0].user: invalid user ID "C0123456789/x": must be a user ID such as U0123456789`},
+		// S0123456789 is a Slack user group, and also a GitHub login: it is refused when the Binding is resolved on Slack.
+		{"a Slack user group ID as a user loads: another platform's login has its shape", func(o *Binding) {
+			o.Spec.Chat.Mentions = []ChatMention{{Name: "oncall", User: "S0123456789"}}
+		}, ""},
+		{"a login as a user ok", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "octo-cat"}} }, ""},
+		{"an app's login as a user ok", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "bot", User: "dependabot[bot]"}} }, ""},
+		{"a login with two hyphens in a row as a user", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "octo--cat"}} },
+			`spec.chat.mentions[0].user: invalid user ID "octo--cat": must be a user ID such as U0123456789`},
+		{"an e-mail address as a user", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "sam@example.com"}} },
+			`spec.chat.mentions[0].user: invalid user ID "sam@example.com": must be a user ID such as U0123456789`},
 		{"mention with user markup", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "<@U0123456789>"}} },
 			`spec.chat.mentions[0].user: invalid user ID "<@U0123456789>": must be a user ID such as U0123456789`},
 		{"mention declared twice", func(o *Binding) {
@@ -383,7 +405,15 @@ func TestBindingValidate(t *testing.T) {
 		{"invalid approver group", func(o *Binding) {
 			o.Spec.Interactions.ToolApprovals = true
 			o.Spec.Interactions.ApproverGroups = []string{"C0123456789"}
-		}, `spec.interactions.approverGroups[0]: invalid group ID "C0123456789": must be a Slack user group ID such as S0123456789`},
+		}, `spec.interactions.approverGroups[0]: invalid group ID "C0123456789": must be a user group ID (Slack: S0123456789)`},
+		{"a team as an approver group ok", func(o *Binding) {
+			o.Spec.Interactions.ToolApprovals = true
+			o.Spec.Interactions.ApproverGroups = []string{"octo-org/sre-team"}
+		}, ""},
+		{"a team with no organisation", func(o *Binding) {
+			o.Spec.Interactions.ToolApprovals = true
+			o.Spec.Interactions.ApproverGroups = []string{"/sre-team"}
+		}, `spec.interactions.approverGroups[0]: invalid group ID "/sre-team": must be a user group ID (Slack: S0123456789)`},
 		{"an approver group at the length cap ok", func(o *Binding) {
 			o.Spec.Interactions.ToolApprovals = true
 			o.Spec.Interactions.ApproverGroups = []string{"S" + strings.Repeat("0", maxChatIDLen-1)}
@@ -417,27 +447,4 @@ func TestBindingValidate(t *testing.T) {
 		{"threadTTL of the largest Duration", func(o *Binding) { o.Spec.Session.ThreadTTL.Duration = math.MaxInt64 },
 			"spec.session.threadTTL: 2562047h47m16.854775807s is out of range, must be at most 8760h0m0s"},
 	})
-}
-
-func TestIsChannelID(t *testing.T) {
-	tests := []struct {
-		in   string
-		want bool
-	}{
-		{"C0123456789", true},
-		{"G0123456789", true},
-		{"C", false},
-		{"", false},
-		{"general", false},
-		{"#general", false},
-		{"D0123456789", false},
-		{"c0123456789", false},
-		{"C012345678a", false},
-		{"C0123456789\n", false},
-	}
-	for _, tt := range tests {
-		if got := IsChannelID(tt.in); got != tt.want {
-			t.Errorf("IsChannelID(%q) = %v, want %v", tt.in, got, tt.want)
-		}
-	}
 }
