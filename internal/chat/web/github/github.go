@@ -74,7 +74,6 @@ const (
 
 // The events and actions the profile reads.
 const (
-	eventPing          = "ping"
 	eventPullRequest   = "pull_request"
 	eventIssueComment  = "issue_comment"
 	eventReviewComment = "pull_request_review_comment"
@@ -177,6 +176,10 @@ func (p *Profile) Decode(h http.Header, body []byte) (web.Event, bool, error) {
 // signed body again under a new ID. Its 64 hex digits hold no ':', which chat.MessageID joins with, and are never a thread's ID
 // (threadOf). The body is hashed without the white space around it, which JSON does not read and which a sender may add; any change
 // to the bytes the signature covers is refused by Verify, so the white space is no way to make a new ID either.
+//
+// The reply queue drops a body it has taken only as long as the broker keeps the pull request's session: its Binding's threadTTL,
+// then the retention loop's grace (internal/retention, 90 days by default) before the session is deleted with its rows. A signed
+// body sent again after that is a new message.
 //
 // The hash takes two events as one only if their bodies are the same. That two events GitHub sends have two bodies is an assumption
 // of the profile (unverified): a push carries the commits before and after it (before and after), a comment its own id, and every
