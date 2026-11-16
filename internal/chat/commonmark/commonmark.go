@@ -7,7 +7,7 @@
 //
 //   - a fenced block (a run of three or more backticks or tildes, at most three columns past the list item it is in, or right
 //     after the item's marker) and an indented block (four columns past the item, where no paragraph goes on: after a blank line,
-//     a heading or a block, or at the start) are each written as a fence of backticks at column 0, longer than every run of
+//     a heading, a rule or a block, at the start, or five columns or more after the item's marker) are each written as a fence of backticks at column 0, longer than every run of
 //     backticks in the code, then the code's lines as they are, then the same fence. The fence's info string keeps its first
 //     word if that word is only letters, digits and "-", "_", "+", "." or "#", and nothing else. A fence at column 0 is in no
 //     list item, so a block ends the list it was in: the lines of the item that follow it lose the item's indent while they
@@ -34,10 +34,12 @@ import (
 )
 
 // Inert returns md cleaned (chat.Clean) and written as the package says, cut so that what is sent is at most limit UTF-16 units:
-// the escapes and the fences are counted. A cut is marked with chat.Truncated, and the marker is never in code: a cut in a block
-// closes the block with its fence, and the marker follows on a line of its own. A character, an escape, a span and a fence line
-// are each sent whole or not at all, so a span that does not fit is dropped whole. A limit too small for the marker gets the
-// start of the marker alone.
+// the escapes and the fences are counted. A cut is marked with chat.Truncated, which is never in code that Agent Kourier writes: a
+// cut in a block closes the block with its fence, and the marker follows on a line of its own; a cut in prose drops the white space
+// at the end of its line. A receiver may still read the marker as code where it reads as code a line that Agent Kourier took for
+// prose, where the two read differently: an indented block in a block quote, or in a list item opened by a second marker on the
+// same line ("1. - " and then four more columns), since Agent Kourier reads one marker a line. A character, an escape, a span and a fence line are each sent whole or not at all, so a span that does not fit is
+// dropped whole. A limit too small for the marker gets the start of the marker alone.
 func Inert(md string, limit int) string {
 	s := chat.Clean(md, false)
 	whole := &writer{limit: math.MaxInt}
@@ -101,9 +103,11 @@ func (w *writer) chars(s, fence string) bool {
 	return true
 }
 
-// end is the text of a cut, ended: the block that is open closed, and the marker on a line of its own after a fence.
+// end is the text of a cut, ended: the block that is open closed, and the marker on a line of its own after a fence. In prose, the
+// white space at the end of the line the marker ends is dropped, so that a line of white space alone, which a receiver may read as
+// code once the marker follows it, is not one.
 func (w *writer) end() string {
-	var tail string
+	text, tail := w.b.String(), ""
 	switch {
 	case w.fence != "" && w.nl:
 		tail = w.fence + "\n"
@@ -111,8 +115,10 @@ func (w *writer) end() string {
 		tail = "\n" + w.fence + "\n"
 	case w.closed:
 		tail = "\n"
+	default:
+		text = strings.TrimRight(text, " \t")
 	}
-	return w.b.String() + tail + chat.Truncated
+	return text + tail + chat.Truncated
 }
 
 // endUnits is the length of what end adds in the state that fence, nl and closed describe.
@@ -167,6 +173,10 @@ func (r *reader) block(i int) (int, bool) {
 		return i + 1, r.prose(i, line)
 	}
 	marker := listMarker(body)
+	rule := thematicBreak(body)
+	if rule {
+		marker = 0 // "* * *" and "- - -" are rules, not items
+	}
 	_, run, _ := fenceOf(body)
 	if ind < r.dedent {
 		r.dedent = 0
@@ -176,7 +186,7 @@ func (r *reader) block(i int) (int, bool) {
 			return 0, false
 		}
 	}
-	for len(r.items) > 0 && ind < r.items[len(r.items)-1] && (!r.para || marker > 0 || run > 0) {
+	for len(r.items) > 0 && ind < r.items[len(r.items)-1] && (!r.para || marker > 0 || run > 0 || rule) {
 		r.items = r.items[:len(r.items)-1] // the item ends: a paragraph of it does not go on lazily into this line
 	}
 	base := 0
@@ -185,7 +195,7 @@ func (r *reader) block(i int) (int, bool) {
 	}
 	switch rel := ind - base; {
 	case rel >= 4 && !r.para:
-		return r.indented(i, base)
+		return r.indented(i, base, "", strip(line, base+4))
 	case rel < 0 || rel >= 4:
 		r.para = true // a paragraph's line, which the paragraph before goes on with
 	case run > 0:
@@ -198,12 +208,17 @@ func (r *reader) block(i int) (int, bool) {
 			content = after + 1
 		}
 		r.items = append(r.items, content)
-		if _, run, _ := fenceOf(rest); run > 0 && content == col {
-			return r.fenced(i, line[:len(line)-len(body)+marker], rest, col, content)
+		head := line[:len(line)-len(body)+marker]
+		if rest != "" && content != col {
+			// The item starts with an indented block: its first line is what follows the marker and one column.
+			return r.indented(i, content, head, stripAt(body[marker:], after, content+4))
 		}
-		r.para = paragraph(rest)
+		if _, run, _ := fenceOf(rest); run > 0 {
+			return r.fenced(i, head, rest, col, content)
+		}
+		r.para = paragraph(rest, false)
 	default:
-		r.para = paragraph(body)
+		r.para = paragraph(body, r.para)
 	}
 	return i + 1, r.prose(i, line)
 }
@@ -235,8 +250,10 @@ func (r *reader) fenced(i int, head, body string, ind, base int) (int, bool) {
 }
 
 // indented reads the indented block that starts with the line i, in a list item whose content is at column base, and writes
-// it: the lines indented four columns past base, and the blank lines between them, each without those columns.
-func (r *reader) indented(i, base int) (int, bool) {
+// it: the lines indented four columns past base, and the blank lines between them, each without those columns. first is the
+// text of the line i in the block, and head what stands before it on its line (a list marker), if anything, which is written on
+// a line of its own before the block.
+func (r *reader) indented(i, base int, head, first string) (int, bool) {
 	last := i
 	for j := i + 1; j < len(r.lines); j++ {
 		col, rest := indent(r.lines[j], 0)
@@ -249,10 +266,11 @@ func (r *reader) indented(i, base int) (int, bool) {
 		last = j
 	}
 	code := make([]string, 0, last+1-i)
-	for _, l := range r.lines[i : last+1] {
+	code = append(code, first)
+	for _, l := range r.lines[i+1 : last+1] {
 		code = append(code, strip(l, base+4))
 	}
-	return last + 1, r.code("", "", code, last+1, base)
+	return last + 1, r.code(head, "", code, last+1, base)
 }
 
 // code writes a block: head on a line of its own if there is one, the fence with info, the lines of code raw, and the fence again,
@@ -301,14 +319,20 @@ func (r *reader) prose(i int, line string) bool {
 	if r.dedent > 0 {
 		line = strip(line, r.dedent)
 	}
+	runs := backtickRuns(line)
+	next := 0     // the first of runs not yet passed
+	link := false // the word so far may be linked: it has a ":" or an "@" in it, or "www."
 	for j := 0; j < len(line); {
 		var piece string
 		size := 1
 		switch c := line[j]; c {
 		case '`':
-			n := runLen(line[j:], '`')
-			if at := closer(line[j+n:], n); at >= 0 && r.span(i, line[:j], line[j+n:j+n+at]) {
-				piece, size = line[j:j+n+at+n], n+at+n // a span, as the agent wrote it
+			for runs[next].at < j {
+				next++
+			}
+			n := runs[next].n
+			if k := runs[next].same; k >= 0 && r.span(i, link, line[j+n:runs[k].at]) {
+				piece, size = line[j:runs[k].at+n], runs[k].at+n-j // a span, as the agent wrote it
 			} else {
 				piece, size = strings.Repeat("\\`", n), n
 			}
@@ -329,6 +353,16 @@ func (r *reader) prose(i int, line string) bool {
 		if !r.w.put(piece, "") {
 			return false
 		}
+		for k := j; k < j+size; k++ { // what was read, span text included, makes the word that a span after it follows
+			switch line[k] {
+			case ' ', '\t':
+				link = false
+			case ':', '@':
+				link = true
+			case '.':
+				link = link || k >= 3 && strings.EqualFold(line[k-3:k+1], "www.")
+			}
+		}
 		j += size
 	}
 	if i < len(r.lines)-1 || r.last {
@@ -337,19 +371,46 @@ func (r *reader) prose(i int, line string) bool {
 	return true
 }
 
-// span says whether a span whose text is code, after before in the line i, is written as code: raw. It is not, and is prose, where a
-// receiver could read its text otherwise than as code:
+// run is a run of backticks in a line: where it starts, its length, and the index of the next run of the same length (-1 if none).
+type run struct{ at, n, same int }
+
+// backtickRuns are the runs of backticks in line, in order, each with the next of its length, which closes a span it opens. A
+// last run past the end of the line stands for none, so that a search for the run at a position always stops.
+func backtickRuns(line string) []run {
+	end := run{at: len(line), same: -1}
+	if strings.IndexByte(line, '`') < 0 {
+		return []run{end}
+	}
+	var runs []run
+	for i := 0; i < len(line); {
+		if line[i] != '`' {
+			i++
+			continue
+		}
+		n := runLen(line[i:], '`')
+		runs = append(runs, run{at: i, n: n})
+		i += n
+	}
+	last := map[int]int{}
+	for k := len(runs) - 1; k >= 0; k-- {
+		runs[k].same = -1
+		if s, ok := last[runs[k].n]; ok {
+			runs[k].same = s
+		}
+		last[runs[k].n] = k
+	}
+	return append(runs, end)
+}
+
+// span says whether a span whose text is code, in the line i, is written as code: raw. link says that the word right before it may
+// be linked. It is not written as code, and is prose, where a receiver could read its text otherwise than as code:
 //
 //   - in a line that may be a row of a GFM table, if code holds a "|": the table splits the row into cells there before it reads
 //     code, and the text after the "|" would be read raw;
 //   - right after a word that a receiver may link (one with a ":" or an "@" in it, or "www."): a bare URL runs on to white space or
 //     "<", and so takes in the span's opening backticks, and the text after them would be read raw.
-func (r *reader) span(i int, before, code string) bool {
-	if r.table[i] && strings.Contains(code, "|") {
-		return false
-	}
-	word := before[strings.LastIndexAny(before, " \t")+1:]
-	return !strings.ContainsAny(word, ":@") && !strings.Contains(strings.ToLower(word), "www.")
+func (r *reader) span(i int, link bool, code string) bool {
+	return !link && (!r.table[i] || !strings.Contains(code, "|"))
 }
 
 // indent reads the white space s starts with, from column col, and returns the column after it and the rest of s. A tab goes on to
@@ -370,8 +431,10 @@ func indent(s string, col int) (int, string) {
 
 // strip is line without its first n columns of white space, or without all of it if it has less. A tab that reaches past column
 // n leaves the columns past it as spaces.
-func strip(line string, n int) string {
-	col := 0
+func strip(line string, n int) string { return stripAt(line, 0, n) }
+
+// stripAt is strip for a line that starts at column col: s without its white space up to column n.
+func stripAt(line string, col, n int) string {
 	for i := 0; i < len(line); i++ {
 		if col >= n {
 			return line[i:]
@@ -449,11 +512,42 @@ func listMarker(body string) int {
 }
 
 // paragraph says whether body, the text of a line after its white space and list marker, is text that a paragraph goes on
-// with: it is not empty and not a heading.
-func paragraph(body string) bool {
+// with: it is not empty, not a heading and not a rule. After a paragraph's line (after), a line of "=" or "-" underlines it as a
+// heading, which ends it too.
+func paragraph(body string, after bool) bool {
+	if body == "" || thematicBreak(body) || after && setextUnderline(body) {
+		return false
+	}
 	n := runLen(body, '#')
-	heading := n >= 1 && n <= 6 && (n == len(body) || body[n] == ' ' || body[n] == '\t')
-	return body != "" && !heading
+	return n < 1 || n > 6 || (n < len(body) && body[n] != ' ' && body[n] != '\t')
+}
+
+// thematicBreak says whether body is a rule: three or more of one of "*", "-" and "_", and nothing else but spaces and tabs.
+func thematicBreak(body string) bool {
+	c := body[0]
+	if c != '*' && c != '-' && c != '_' {
+		return false
+	}
+	n := 0
+	for i := 0; i < len(body); i++ {
+		switch body[i] {
+		case c:
+			n++
+		case ' ', '\t':
+		default:
+			return false
+		}
+	}
+	return n >= 3
+}
+
+// setextUnderline says whether body is a run of "=" or of "-", and nothing after it but spaces and tabs.
+func setextUnderline(body string) bool {
+	c := body[0]
+	if c != '=' && c != '-' {
+		return false
+	}
+	return strings.Trim(body[runLen(body, c):], " \t") == ""
 }
 
 // runLen is the length of the run of c that s starts with.
@@ -463,22 +557,6 @@ func runLen(s string, c byte) int {
 		n++
 	}
 	return n
-}
-
-// closer is where in s the first run of exactly n backticks starts, which closes a span that a run of n opened, or -1.
-func closer(s string, n int) int {
-	for i := 0; i < len(s); {
-		if s[i] != '`' {
-			i++
-			continue
-		}
-		m := runLen(s[i:], '`')
-		if m == n {
-			return i
-		}
-		i += m
-	}
-	return -1
 }
 
 // tableRows marks the lines that may be rows of a GFM table: every line of a group of lines with no blank line between them, one

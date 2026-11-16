@@ -61,6 +61,44 @@ var samples = []struct {
 	{"a fence of three backticks after code with four", "```\na ```` b\n```", "`````\na ```` b\n`````"},
 	{"an info string that is not a word", "```{.python <x>}\nprint(1)\n```", "```\nprint(1)\n```"},
 	{"an empty block, then a span", "```\n```\n`x`", "```\n```\n`x`"},
+	{"an indented block after a setext heading", "x\n===\n    <b>", "x\n===\n```\n<b>\n```"},
+	{"an indented block after a rule", "***\n    <b>", "***\n```\n<b>\n```"},
+	{"an indented block after a rule of spaced dashes", "a\n\n- - -\n    <b>", "a\n\n- - -\n```\n<b>\n```"},
+	{"an indented block on a list marker", "-     <img src=x>\n\n      [a]\n  b", "-\n```\n<img src=x>\n\n[a]\n```\nb"},
+}
+
+// The escapes of prose are sent as pinned here: a reader's view alone cannot tell "~~~" from "\~\~\~", which a receiver may read
+// as a fence.
+func TestProseEscapesAreSent(t *testing.T) {
+	for _, tc := range []struct{ md, want string }{
+		{"a ~~~ b <c>", `a \~\~\~ b &lt;c>`},
+		{"a ~~ b", "a ~~ b"},
+		{"it's a ` mark", "it's a \\` mark"},
+		{`a\b [x]`, `a\\b \[x\]`},
+	} {
+		if got := commonmark.Inert(tc.md, math.MaxInt); got != tc.want {
+			t.Errorf("%q: sent %q, want %q", tc.md, got, tc.want)
+		}
+	}
+}
+
+// A cut in prose drops the white space at the end of its line: a line of white space alone, four columns or more, would be code
+// to a receiver once the marker follows it.
+func TestACutDropsTheWhiteSpaceBeforeTheMarker(t *testing.T) {
+	md := "    \n" + strings.Repeat("x", 50)
+	if got := commonmark.Inert(md, 17); got != chat.Truncated {
+		t.Errorf("sent %q, want the marker alone", got)
+	}
+	doc := "p\n\n    \n\t\n        \nq <b> r\n\n  - a\n\n      \n" + strings.Repeat("y", 30)
+	whole := commonmark.Inert(doc, math.MaxInt)
+	for limit := chat.Units(chat.Truncated) + 1; limit < chat.Units(whole); limit++ {
+		got := commonmark.Inert(doc, limit)
+		for _, c := range codeOf(got) {
+			if strings.Contains(c, "truncated") {
+				t.Fatalf("limit %d: the marker is in code: %q", limit, got)
+			}
+		}
+	}
 }
 
 // Text in code spans and in fenced and indented blocks reaches the receiver as the agent wrote it, and a fence is one that
@@ -225,7 +263,7 @@ func TestACutLandsOutsideCode(t *testing.T) {
 		{"in an indented block", "x\n\n    0123456789abcdefghij", 26, "x\n\n```\n0\n```\n" + chat.Truncated},
 		{"in a fence longer than the code's", "````\n```\n0123456789abcdefghij\n````", 29, "````\n```\n0\n````\n" + chat.Truncated},
 		{"right after the block", "```\n0\n```\nabcdefghijklmnop", 24, "```\n0\n```\na" + chat.Truncated},
-		{"a span that does not fit", "ab `0123456789abcdef` cd", 20, "ab " + chat.Truncated},
+		{"a span that does not fit", "ab `0123456789abcdef` cd", 20, "ab" + chat.Truncated},
 		{"in prose, between escapes", "[[[[[[[[[[", 16, `\[` + chat.Truncated},
 		{"a limit too small for the marker", "```\n0123456789\n0123456789\n```", 5, string([]rune(chat.Truncated)[:5])},
 	} {
