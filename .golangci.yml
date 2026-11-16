@@ -56,6 +56,15 @@ linters:
               desc: "package chat is the chat-neutral model and the Platform contract, and chattest tests it: what keeps trigger threads and limits is the intake's, in internal/trigger"
             - pkg: github.com/agentkourier/agent-kourier/internal/telemetry
               desc: "package chat is the chat-neutral model and the Platform contract, and chattest tests it: what counts and traces the intake is the intake's, in internal/trigger"
+        web-is-a-platform-alone:
+          files: ["**/internal/chat/web/**", "!$test"]
+          deny:
+            - pkg: github.com/agentkourier/agent-kourier/internal/session
+              desc: "the web platform and its profiles speak chat.Platform and hand events to a chat.Sink: what feeds the session manager is the intake's, in internal/trigger"
+            - pkg: github.com/agentkourier/agent-kourier/internal/config
+              desc: "the web platform and its profiles are given their connection, profile and URL by the broker: they read no config"
+            - pkg: github.com/agentkourier/agent-kourier/internal/store
+              desc: "the web platform and its profiles keep nothing: a repeat is dropped by the intake, and the outbox keeps the replies"
     nolintlint:
       require-explanation: true
       require-specific: true

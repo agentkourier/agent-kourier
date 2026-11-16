@@ -1171,3 +1171,70 @@ func TestConformanceAcceptsGroupsThatResetEveryGroup(t *testing.T) {
 		}
 	}
 }
+
+// A platform that has no such state as an archived channel or a readable group says so, with the reason: the suite does not ask for
+// the state, and checks the others as before.
+func TestConformanceSkipsTheStatesASubjectSaysThePlatformLacks(t *testing.T) {
+	t.Parallel()
+	s := NewFake().Subject()
+	s.AbsentChannels = map[ChannelState]string{ChannelNotJoined: "no membership", ChannelArchived: "no archive", ChannelScopeMissing: "no permissions"}
+	s.AbsentGroups = map[GroupState]string{GroupReadable: "no groups", GroupScopeMissing: "no permissions"}
+	var channels []ChannelState
+	var groups []GroupState
+	arrangeChannel, arrangeGroup := s.Channels, s.Groups
+	s.Channels = func(st ChannelState) string { channels = append(channels, st); return arrangeChannel(st) }
+	s.Groups = func(st GroupState) string { groups = append(groups, st); return arrangeGroup(st) }
+	if vs := CheckWith(t.Context(), s, Options{Short: true}); len(vs) != 0 {
+		t.Fatalf("violations: %v", vs)
+	}
+	// The joined channel is asked for again at the end, for the cancelled context; with no readable group, no group is.
+	if want := []ChannelState{ChannelJoined, ChannelUnknown, ChannelJoined}; !slices.Equal(channels, want) {
+		t.Errorf("the channel states arranged were %v, want %v", channels, want)
+	}
+	if want := []GroupState{GroupUnknown}; !slices.Equal(groups, want) {
+		t.Errorf("the group states arranged were %v, want %v", groups, want)
+	}
+}
+
+// An unknown group is still checked when the readable one is absent: alone, and failing at itself.
+func TestConformanceChecksTheUnknownGroupWithoutAReadableOne(t *testing.T) {
+	t.Parallel()
+	w := &wrongGroups{FakePlatform: NewFake(), leaks: groupLeaks{unknownPlain: true}}
+	s := w.Subject()
+	s.Platform = w
+	s.AbsentGroups = map[GroupState]string{GroupReadable: "no groups"}
+	var found []string
+	for _, v := range CheckWith(t.Context(), s, Options{Short: true}) {
+		if v.Method == "GroupsReadable" {
+			found = append(found, v.Case)
+		}
+	}
+	if !slices.Equal(found, []string{"unknown group"}) {
+		t.Errorf("GroupsReadable violations in %v, want the unknown group's", found)
+	}
+}
+
+// An absence needs a reason, and the states the other checks rest on cannot be absent: a joined channel, an unknown channel and an
+// unknown group, which every platform has.
+func TestConformanceRefusesAnAbsenceItCannotTake(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		channels map[ChannelState]string
+		groups   map[GroupState]string
+	}{
+		"no reason":          {channels: map[ChannelState]string{ChannelArchived: ""}},
+		"no group reason":    {groups: map[GroupState]string{GroupReadable: ""}},
+		"a joined channel":   {channels: map[ChannelState]string{ChannelJoined: "why"}},
+		"an unknown channel": {channels: map[ChannelState]string{ChannelUnknown: "why"}},
+		"an unknown group":   {groups: map[GroupState]string{GroupUnknown: "why"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := NewFake().Subject()
+			s.AbsentChannels, s.AbsentGroups = tc.channels, tc.groups
+			vs := CheckWith(t.Context(), s, Options{Short: true})
+			if len(vs) != 1 || vs[0].Rule != RuleSetup {
+				t.Errorf("violations %v, want one setup violation", vs)
+			}
+		})
+	}
+}
