@@ -53,6 +53,7 @@ test/crdcorpus          valid and invalid objects that the CRD schemas and the b
 hack/kind/              kind tier scripts (fast, full, ax, sandbox)
 hack/{docs,release,postgres,crdhashes}  doc generators, release scripts, Postgres test helpers, the CRD schema hashes
 hack/{ci,github,security,clip}  CI tool installer and testhooks package selection, PR label check, scan and workflow policy, the demo clip's recording
+hack/slack/             the live probe of a ChatConnection in Slack's HTTP mode, run against Slack itself before a release that touches the mode
 ```
 
 ## Make targets
@@ -60,7 +61,7 @@ hack/{ci,github,security,clip}  CI tool installer and testhooks package selectio
 Run `make` for help. Only Go and the tools pinned in `go.mod` (`tool` directive) are needed;
 golangci-lint runs as `go tool golangci-lint`, never a global install.
 
-- `make fmt lint test build tidy`: `test` runs `go test -race ./...`, then `go test -race -tags testhooks` over the `./internal/...` packages whose test build the tag changes (`hack/ci/testhooks-packages.sh`), then the scripts' own tests (`test-scripts`: kind, security policy, release gate, PR labels, CI tool installer, testhooks package selection, Actions cache upkeep); `build` writes `bin/agent-kourier`.
+- `make fmt lint test build tidy`: `test` runs `go test -race ./...`, then `go test -race -tags testhooks` over the `./internal/...` packages whose test build the tag changes (`hack/ci/testhooks-packages.sh`), then the scripts' own tests (`test-scripts`: kind, security policy, release gate, PR labels, the Slack HTTP-mode probe, CI tool installer, testhooks package selection, Actions cache upkeep); `build` writes `bin/agent-kourier`.
 - `make crds` regenerates the CustomResourceDefinitions in `charts/agent-kourier/files/crds/` from the markers in `api/v1alpha1` with
   `controller-gen` (pinned as a `tool` in `go.mod`, run as `go tool controller-gen`). Run it after changing an API type or marker and commit the
   result: `TestCommittedCRDsMatchGeneration` in `make test` fails when the committed files differ from what generation produces. The

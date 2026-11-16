@@ -45,11 +45,12 @@ else
 		go test $(TESTHOOKS_BUILD_FLAGS) -timeout 20m -tags testhooks $$pkgs
 endif
 
-test-scripts: ## Run kind, security policy, release gate, PR label, CI tool installer, testhooks package selection, test leg split, Actions cache upkeep and docs-only classification tests (no cluster)
+test-scripts: ## Run kind, security policy, release gate, PR label, Slack HTTP-mode probe, CI tool installer, testhooks package selection, test leg split, Actions cache upkeep and docs-only classification tests (no cluster)
 	hack/kind/netpol_test.sh
 	hack/security/test.sh
 	hack/release/test.sh
 	hack/github/test.sh
+	hack/slack/test.sh
 	hack/ci/test.sh
 	hack/ci/testhooks-packages_test.sh
 	hack/ci/test-shard_test.sh
