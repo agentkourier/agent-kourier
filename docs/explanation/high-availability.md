@@ -154,9 +154,9 @@ gets no 200 (Slack's documentation says a few times over several minutes; not ch
 only once the event's turn is queued, so an event the old leader did not answer is taken by the new one. A message that the
 old leader took and whose 200 never reached Slack comes again, and is one turn, because turns are queued by message ID.
 Whether Slack sends a button press again is Slack's to decide; a press it does not send again is lost, and the person
-presses again. A press that the old leader recorded and whose 200 never reached Slack comes again, and is recorded once,
-by who pressed, the button and the `action_ts` Slack gave it (that Slack sends the same `action_ts` again is not checked
-here): its person is told the outcome once. The failover end-to-end test runs in both modes against the tests' fake Slack, whose retries copy what
+presses again. If Slack sends again a press that the old leader recorded and whose 200 never reached Slack, it is recorded
+once, by who pressed, the button and the `action_ts` Slack gave it, provided Slack sends the same `action_ts` again (not
+checked here): its person is told the outcome once. The failover end-to-end test runs in both modes against the tests' fake Slack, whose retries copy what
 Slack's documentation says at a faster pace; Slack's own retries are not tested.
 
 **HTTP mode wants Postgres.** With SQLite there is one replica and the Deployment's strategy is `Recreate`, so every rollout,

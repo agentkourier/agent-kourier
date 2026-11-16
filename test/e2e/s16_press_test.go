@@ -381,30 +381,45 @@ func s16StallWithRacingPresses(t *testing.T) {
 		if winner == first {
 			loser = second
 		}
-		p.toldLost(loser, winner)
+		p.toldLost(loser, winner, early, late)
 	}
 }
 
 // toldLost waits for the ephemeral notice that tells loser, in the case's thread, that winner decided first, and checks that there
-// is exactly one. Press intake records a press once by its delivery key, which the Slack adapter makes from the payload's action_ts
-// among others, and the fake's retries repeat the payload: a retry of a press whose 200 was lost on the way, which the broker sees
-// twice, is still told once.
-func (p *pressCase) toldLost(loser, winner string) {
+// is exactly one, however many times the presses (the envelopes of the case's presses) were delivered. Press intake records a press
+// once by its delivery key, which the Slack adapter makes from the payload's action_ts among others, and the fake's retries repeat
+// the payload: a retry of a press whose 200 was lost on the way, which the broker sees twice, is still told once.
+//
+// The count waits for the fake's last delivery of each press (in HTTP mode its retries come seconds to half a minute apart; in Socket
+// Mode it sends an envelope once, and there is nothing to wait for), and then for the worker, which tells a person after the press
+// is acknowledged: a second notice that a retry caused would come in that time.
+func (p *pressCase) toldLost(loser, winner string, presses ...string) {
 	f := p.f
 	f.t.Helper()
 	const lost = "decided this request first."
 	waitFullEphemeralWithWinner(f.t, f.scenario, pressChannel, p.mention.TS, loser, winner, lost)
-	notices, err := f.slack.Ephemerals(f.ctx, pressChannel)
-	if err != nil {
-		f.t.Fatal(err)
+	if err := f.slack.DoneWait(f.ctx, 2*time.Minute, presses...); err != nil {
+		f.t.Fatalf("the fake Slack did not finish delivering the presses: %v", err)
 	}
-	n := 0
-	for _, e := range notices {
-		if e.Recipient == loser && e.ThreadTS == p.mention.TS && strings.Contains(e.Text, lost) && HasBlockText(e.Blocks, "<@"+winner+">") {
-			n++
+	told := func(ctx context.Context) (int, error) {
+		notices, err := f.slack.Ephemerals(ctx, pressChannel)
+		n := 0
+		for _, e := range notices {
+			if e.Recipient == loser && e.ThreadTS == p.mention.TS && strings.Contains(e.Text, lost) && HasBlockText(e.Blocks, "<@"+winner+">") {
+				n++
+			}
 		}
+		return n, err
 	}
-	if n != 1 {
-		f.t.Errorf("%s was told %d times that %s decided first; want once, however many times the press was delivered", loser, n, winner)
+	err := Consistently(f.ctx, 5*time.Second, loser+" is told once that "+winner+" decided first", func(ctx context.Context) (bool, error) {
+		n, err := told(ctx)
+		return n <= 1, err
+	})
+	n, cerr := told(f.ctx)
+	if cerr != nil {
+		f.t.Fatal(cerr)
+	}
+	if err != nil || n != 1 {
+		f.t.Errorf("%s was told %d times that %s decided first; want once, however many times the press was delivered (%v)", loser, n, winner, err)
 	}
 }
