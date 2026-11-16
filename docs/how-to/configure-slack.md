@@ -131,7 +131,7 @@ Either way Agent Kourier calls Slack's Web API with the bot token to post, so it
 
         HTTP mode is tested end to end against the end-to-end tests' fake Slack, and has been tried once against Slack itself,
         on one installation reached through a tunnel: the URL check, a mention, a button press, a bot message that a trigger
-        matched, requests with a wrong, missing or old signature, and a message sent while the only replica was being replaced.
+        matched, requests with a wrong, missing or old signature (answered 401), and a message sent while the only replica was being replaced.
         What this tab says of Slack's settings pages comes from that test. Slack's retry schedule, and when Slack gives up on an
         app, come from Slack's documentation. It needs a release later than 0.4.0: the 0.4.0 chart's values schema refuses
         `chatListener` and `networkPolicy.chatFrom`, and its broker does not know `spec.slack.mode`.
@@ -174,11 +174,13 @@ Either way Agent Kourier calls Slack's Web API with the bot token to post, so it
 
     The scopes and the three bot events are the same as in Socket Mode; `socket_mode_enabled: false` and the two
     `request_url` fields are what differ. Slack checks an Events request URL by sending it a `url_verification` request,
-    which Agent Kourier can answer only once it serves the connection (step 7), and it serves it only once the Secret of
-    step 5 holds the bot token. So the block above is the app's end state, and a new app gets its URLs in step 7. The
-    manifest editor refuses `event_subscriptions` and `interactivity` that have neither a `request_url` nor Socket Mode, so
-    create a new app with `socket_mode_enabled: true` and without the two `request_url` lines; it needs no app-level token
-    for that, and step 7 turns Socket Mode off. Whether Slack takes a manifest whose URL it cannot check yet was not tried.
+    which Agent Kourier can answer only once it serves the connection (step 7). It serves it only once the Secret of step 5
+    holds the bot token and the signing secret, and the bot token exists only once the app is installed (step 3). So the
+    block above is the app's end state, and a new app gets its URLs in step 7. The manifest editor refuses
+    `event_subscriptions` and `interactivity` that have neither a `request_url` nor Socket Mode, so create a new app from
+    the block with two changes: `socket_mode_enabled: true`, and the two `request_url` lines left out. The app needs no
+    app-level token for that, and step 7 turns Socket Mode off. Whether Slack takes a manifest whose URL it cannot check yet
+    was not tried.
 
     For an app you already have, the same settings are in its pages: **Socket Mode** off, **Event Subscriptions** on with the
     request URL and the three bot events, and **Interactivity & Shortcuts** on with the same URL.
@@ -261,13 +263,13 @@ Either way Agent Kourier calls Slack's Web API with the bot token to post, so it
     `the chat listener serves the connection`, with the `path`, and `slack: http mode taking requests`.
 
     **7. Let Slack check the URL.** If the app was created with Socket Mode on, turn it off on the **Socket Mode** page
-    first; Slack warns that the features without a request URL stop working, and turns **Interactivity** off when it has no
-    URL. In the app's **Event Subscriptions** page, enter the request URL (or, if the manifest had it, have Slack check it
+    first. Slack shows a notice that the features without a request URL need one; in the test, **Interactivity** was off
+    afterwards. In the app's **Event Subscriptions** page, enter the request URL (or, if the manifest had it, have Slack check it
     again). Slack sends a `url_verification` request as soon as the URL is entered; Agent Kourier checks its signature and
     answers it with its challenge, and Slack shows the URL as **Verified**. Save the page. Then, under **Interactivity &
     Shortcuts**, turn Interactivity on if it is off, set the same URL, and save. The page shows no check of that URL; a
-    button press is the check. The **Event Subscriptions** page also has a **Delayed Events** setting, which Slack
-    describes as retrying missed deliveries slowly over 24 hours. Agent Kourier has not been tried with it on.
+    button press is the check. The **Event Subscriptions** page also has a **Delayed Events** setting, whose text on the
+    page says it retries missed deliveries slowly over 24 hours. Agent Kourier has not been tried with it on.
 
     Only the leading replica answers, and only while it serves the connection: the broker must be running, leading, and its
     pod must carry the leader label, which the chart's chat Service selects. If the check fails, see
@@ -287,8 +289,9 @@ Either way Agent Kourier calls Slack's Web API with the bot token to post, so it
         that it waits about 3 seconds for an answer, sends an unanswered event again a few times over several minutes with an
         `X-Slack-Retry-Num` header, and can turn an app's event subscriptions off when most of its requests fail for a long
         time. The schedule and the turning off are not checked here against Slack. In the one test against Slack, a message
-        was sent while the only replica was being replaced: its first deliveries failed at the connection, Slack sent it
-        again with `X-Slack-Retry-Num` about a second later, the new leader took it, and the thread got one reply.
+        was sent while the only replica was being replaced: its first deliveries were refused at the tunnel in front of the
+        chat Service, a retry with `X-Slack-Retry-Num` reached the new leader within a second of the post, and the thread
+        got one reply.
         `agentkourier_slack_http_retries_total` counts the retries that reach Agent Kourier.
         [High availability](../explanation/high-availability.md#slack-in-http-mode) says when no replica answers.
 
