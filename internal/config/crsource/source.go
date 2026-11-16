@@ -1095,6 +1095,11 @@ func (s *Source) platformCheck(conns []v1alpha1.ChatConnection) func(*v1alpha1.B
 			conn = typedOf[v1alpha1.ChatConnection](s.good[k])
 		}
 		if conn == nil {
+			// The connection is not in the Set at this read: it is not found, or is invalid with no good generation. The generation is
+			// not checked, and so read remembers it as good. A later read, once the connection is there, checks it and refuses it if it
+			// fails, but it is then its own last good generation, and goes in the Set in its own place: resolution, which makes the same
+			// check, rejects it there (InvalidPlatformID), so it is not served, and the status says that its last good generation is
+			// not served either.
 			return "", ""
 		}
 		reason, message := config.RefusedOnPlatform(b, conn)

@@ -38,7 +38,7 @@ What the API server and the load take is wider: for each field, Slack's shape or
 a channel, a login such as `octocat` or `dependabot[bot]` as a sender or a user, and a team `org/team-slug` as an approver group), which
 no platform served today takes. A value that has neither shape, such as the channel name `general`, is refused when it is applied.
 A Slack ID of the wrong kind can have a login's shape, a bot's name such as `alertmanager` as a sender or a user group ID as a user,
-and so it is refused at resolution, not when it is applied. The length caps of each field are in [Limits](limits.md#write-a-binding-an-agentbackend-or-a-chatconnection).
+and so it is refused by the broker, as above, and not when it is applied. The length caps of each field are in [Limits](limits.md#write-a-binding-an-agentbackend-or-a-chatconnection).
 
 ## Features
 

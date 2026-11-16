@@ -8,7 +8,9 @@ import (
 // The chat IDs of a Binding (spec D42) are checked in two places. The schema and Validate hold each ID field to the union of the
 // shapes of the platforms the API knows, so that a value that is no platform's ID, such as the channel name general, is refused when
 // it is applied. Which of those shapes it must have depends on the platform of the ChatConnection it names, which neither the schema
-// nor Validate reads: the broker checks that when it resolves the Binding (PlatformMismatches, with the platform's ChatPlatform).
+// nor Validate reads. The broker checks it (PlatformMismatches, with the platform's ChatPlatform) in two places where it has the
+// connection: when the custom resource source reads the Binding (config.RefusedOnPlatform, which refuses that generation as a
+// failed Validate does), and when it resolves the Binding.
 //
 // The union holds Slack's shapes and GitHub's: a repository (owner/name) for a channel, a login (octocat, or an app's
 // dependabot[bot]) for a sender or a user, and a team (org/team-slug) for an approver group. GitHub's shapes are in the union before
@@ -30,10 +32,10 @@ var (
 	approverGroupID = regexp.MustCompile(`^(?:S[A-Z0-9]+|[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}/[A-Za-z0-9._-]{1,100})$`)
 )
 
-// Slack's shapes, which a Binding of a Slack connection is held to when the broker resolves it. Each is one alternative of the
-// union above, and a test holds it to that. maxSlackIDLen is the length cap that the schema had for a Slack channel, sender and user
-// group before it took other platforms' IDs; Slack's IDs are 9 to 11 characters (unverified: not readable in this repository). A
-// Slack user ID is bounded by its pattern, to 21 characters.
+// Slack's shapes, which a Binding of a Slack connection is held to when the broker reads it with its connection. Each is one
+// alternative of the union above, and a test holds it to that. maxSlackIDLen is the length cap that the schema had for a Slack
+// channel, sender and user group before it took other platforms' IDs; Slack's IDs are 9 to 11 characters (unverified: not readable
+// in this repository). A Slack user ID is bounded by its pattern, to 21 characters.
 var (
 	slackChannelID = regexp.MustCompile(`^[CG][A-Z0-9]+$`)
 	slackBotID     = regexp.MustCompile(`^B[A-Z0-9]+$`)

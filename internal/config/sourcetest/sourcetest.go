@@ -30,6 +30,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // Corpus is a set of objects and the connection that a source of them serves.
@@ -470,14 +471,13 @@ func otherPlatformEdit(t *testing.T, base Corpus, opts Options) {
 	}
 
 	change(withOtherPlatformID(t, docs))
-	deadline := time.Now().Add(5 * time.Second)
 	if !opts.PerObject {
 		select {
 		case err := <-errs:
 			if !strings.Contains(err.Error(), otherProblem) {
 				t.Errorf("the reload failed with %v; want the problem %q", err, otherProblem)
 			}
-		case <-time.After(time.Until(deadline)):
+		case <-time.After(5 * time.Second):
 			t.Fatal("the reload did not fail within 5s")
 		}
 		if got := served(); got != "B0123456789" {
@@ -486,17 +486,14 @@ func otherPlatformEdit(t *testing.T, base Corpus, opts Options) {
 		return
 	}
 	var rej config.Rejection
-	for {
-		i := slices.IndexFunc(rl.Report().Rejections, func(r config.Rejection) bool { return r.Namespace == "sre" && r.Name == "sre-alerts" })
+	testutil.Eventually(t, "the Report rejects sre/sre-alerts", func() bool {
+		rejections := rl.Report().Rejections
+		i := slices.IndexFunc(rejections, func(r config.Rejection) bool { return r.Namespace == "sre" && r.Name == "sre-alerts" })
 		if i >= 0 {
-			rej = rl.Report().Rejections[i]
-			break
+			rej = rejections[i]
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("the Report did not reject sre/sre-alerts within 5s")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return i >= 0
+	}, testutil.Within(5*time.Second), testutil.Every(10*time.Millisecond))
 	if rej.Reason != config.ReasonInvalidPlatformID || !strings.Contains(rej.Message, otherProblem) || rej.Served == 0 || rej.Generation <= rej.Served {
 		t.Errorf("Rejection = %+v; want %s with the problem %q, the new generation refused and an older one served", rej, config.ReasonInvalidPlatformID, otherProblem)
 	}
