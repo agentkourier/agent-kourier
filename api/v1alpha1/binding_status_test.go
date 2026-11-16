@@ -46,7 +46,13 @@ type bindingCRD struct {
 
 func readBindingCRD(t *testing.T) bindingCRD {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(crdsDir, "agentkourier.dev_bindings.yaml"))
+	return readCRD(t, "agentkourier.dev_bindings.yaml")
+}
+
+// readCRD reads the generated CRD of one kind, with the one version it serves.
+func readCRD(t *testing.T, file string) bindingCRD {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(crdsDir, file))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +61,7 @@ func readBindingCRD(t *testing.T) bindingCRD {
 		t.Fatal(err)
 	}
 	if len(crd.Spec.Versions) != 1 || crd.Spec.Versions[0].Name != "v1alpha1" {
-		t.Fatalf("Binding CRD versions = %+v, want v1alpha1 only", crd.Spec.Versions)
+		t.Fatalf("%s versions = %+v, want v1alpha1 only", file, crd.Spec.Versions)
 	}
 	return crd
 }
@@ -105,6 +111,7 @@ func TestBindingPrinterColumns(t *testing.T) {
 	want := []column{
 		{"Ready", "string", `.status.conditions[?(@.type=="Ready")].status`},
 		{"Reason", "string", `.status.conditions[?(@.type=="Ready")].reason`},
+		{"Connection", "string", `.spec.chat.connectionRef.name`},
 		{"Channel", "string", `.spec.chat.channel`},
 		{"Age", "date", `.metadata.creationTimestamp`},
 	}
@@ -113,21 +120,21 @@ func TestBindingPrinterColumns(t *testing.T) {
 	}
 
 	meta := map[string]any{"creationTimestamp": "2026-11-04T10:00:00Z"}
-	spec := map[string]any{"chat": map[string]any{"channel": "C0123456789"}}
+	spec := map[string]any{"chat": map[string]any{"channel": "C0123456789", "connectionRef": map[string]any{"name": "slack-main"}}}
 	for _, tc := range []struct {
 		name string
 		obj  map[string]any
 		want map[string]string
 	}{
 		{"no status", map[string]any{"metadata": meta, "spec": spec},
-			map[string]string{"Ready": "", "Reason": "", "Channel": "C0123456789", "Age": "2026-11-04T10:00:00Z"}},
+			map[string]string{"Ready": "", "Reason": "", "Connection": "slack-main", "Channel": "C0123456789", "Age": "2026-11-04T10:00:00Z"}},
 		{"the Ready condition among others", map[string]any{"metadata": meta, "spec": spec, "status": map[string]any{"conditions": []any{
 			map[string]any{"type": "BackendReachable", "status": "True", "reason": "Reachable"},
 			map[string]any{"type": "Ready", "status": "False", "reason": "Accepted:ChannelConflict"},
-		}}}, map[string]string{"Ready": "False", "Reason": "Accepted:ChannelConflict", "Channel": "C0123456789", "Age": "2026-11-04T10:00:00Z"}},
+		}}}, map[string]string{"Ready": "False", "Reason": "Accepted:ChannelConflict", "Connection": "slack-main", "Channel": "C0123456789", "Age": "2026-11-04T10:00:00Z"}},
 		{"conditions with no Ready", map[string]any{"metadata": meta, "spec": spec, "status": map[string]any{"conditions": []any{
 			map[string]any{"type": "BackendReachable", "status": "True", "reason": "Reachable"},
-		}}}, map[string]string{"Ready": "", "Reason": "", "Channel": "C0123456789", "Age": "2026-11-04T10:00:00Z"}},
+		}}}, map[string]string{"Ready": "", "Reason": "", "Connection": "slack-main", "Channel": "C0123456789", "Age": "2026-11-04T10:00:00Z"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for col, want := range tc.want {
@@ -136,5 +143,27 @@ func TestBindingPrinterColumns(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A ChatConnection shows its platform, so that a list of the connections says which a Binding's CONNECTION column names.
+func TestChatConnectionPrinterColumns(t *testing.T) {
+	v := readCRD(t, "agentkourier.dev_chatconnections.yaml").Spec.Versions[0]
+	type column struct{ Name, Type, JSONPath string }
+	var got []column
+	paths := map[string]string{}
+	for _, c := range v.AdditionalPrinterColumns {
+		got = append(got, column{c.Name, c.Type, c.JSONPath})
+		paths[c.Name] = c.JSONPath
+	}
+	want := []column{{"Platform", "string", `.spec.platform`}, {"Age", "date", `.metadata.creationTimestamp`}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("printer columns = %+v, want %+v", got, want)
+	}
+	obj := map[string]any{"metadata": map[string]any{"creationTimestamp": "2026-11-04T10:00:00Z"}, "spec": map[string]any{"platform": "slack"}}
+	for col, want := range map[string]string{"Platform": "slack", "Age": "2026-11-04T10:00:00Z"} {
+		if got := printerColumn(t, paths[col], obj); got != want {
+			t.Errorf("column %s = %q, want %q", col, got, want)
+		}
 	}
 }

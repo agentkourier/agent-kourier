@@ -1058,8 +1058,9 @@ spec:
     - t254
     - t255
 ---
-# The longest chat identifiers and names: a channel, a sender and an approver group of 32 characters, a reaction name of 100,
-# a mention name of 63 and a user of 21, an extract name of 63 and a closeWhen value of 256.
+# The longest Slack chat identifiers and other names: a channel, a sender and an approver group of 32 characters, which is
+# Slack's cap at resolution, a reaction name of 100, a mention name of 63 and a user of 21, an extract name of 63 and a
+# closeWhen value of 256.
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata:
@@ -1092,6 +1093,73 @@ spec:
   interactions:
     toolApprovals: true
     approverGroups: [S0000000000000000000000000000000]
+---
+# The longest chat identifiers that the load takes, of the shape of a platform that is not Slack: a repository of a 39-character
+# owner and a 100-character name as the channel (140, the cap), a login of 39 with an app's [bot] as a mention's user (44, the
+# cap), and a team of the same length as an approver group. The resolution of a Slack connection refuses them; the load and the
+# schema take them.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: edges-longest-other-platform-ids
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: ooooooooooooooooooooooooooooooooooooooo/rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr
+    mentions: [{name: app, user: "lllllllllllllllllllllllllllllllllllllll[bot]"}]
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: "dependabot[bot]"}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert."
+      - type: botMessage
+        from: {id: lllllllllllllllllllllllllllllllllllllll}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert."
+  interactions:
+    toolApprovals: true
+    approverGroups: [ooooooooooooooooooooooooooooooooooooooo/rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr]
+---
+# Slack's longest IDs at the union's caps, which the load and the schema take and the resolution of a Slack connection refuses:
+# a channel, a sender and an approver group of 140, and the IDs of the wrong kind that have a login's shape: a user ID as a
+# sender, and a user group ID and a bot's name as a mention's user.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: edges-slack-shaped-at-the-union-caps
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+    mentions: [{name: group, user: S0123456789}, {name: bot, user: alertmanager}]
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert."
+      - type: botMessage
+        from: {id: U0123456789}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert."
+  interactions:
+    toolApprovals: true
+    approverGroups: [S0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000]
 ---
 # The longest text of every duration: 64 characters each, written with leading zeros.
 apiVersion: agentkourier.dev/v1alpha1

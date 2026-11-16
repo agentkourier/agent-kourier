@@ -371,6 +371,8 @@ var crossCases = []crossCase{
 		config.ReasonAgentNamespaceNotAllowed, "spec.agent.namespace: AgentBackend agent-kourier-system/kagent-pilot does not allow agents in namespace kagent"},
 	{"a channel that two Bindings claim", "binding-minimal.yaml", "channel: G0123456789", "channel: C0123456789", config.ReasonChannelConflict,
 		"is already bound by Binding sre/"},
+	{"a channel that is another platform's ID", "binding-minimal.yaml", "channel: G0123456789", "channel: octo-org/hello-world", config.ReasonInvalidPlatformID,
+		`spec.chat.channel: "octo-org/hello-world" is not a channel ID on Slack, the platform of ChatConnection agent-kourier-system/slack-main`},
 }
 
 func crossObject(t *testing.T, f Factory, base Corpus) {

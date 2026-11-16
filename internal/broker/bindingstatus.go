@@ -98,7 +98,7 @@ var probedTypes = []bindingcheck.ConditionType{bindingcheck.BackendReachable, bi
 var acceptedReasonOrder = []config.RejectionReason{
 	config.ReasonInvalidSpec, config.ReasonBackendNotFound, config.ReasonBackendRejected, config.ReasonConnectionNotFound,
 	config.ReasonConnectionRejected, config.ReasonConnectionNotServed, config.ReasonNamespaceNotAllowed, config.ReasonAgentNamespaceNotAllowed,
-	config.ReasonChannelConflict,
+	config.ReasonInvalidPlatformID, config.ReasonUnsupportedOnPlatform, config.ReasonChannelConflict,
 }
 
 // boundBy finds the Binding that holds a channel in the message of a ChannelConflict, which names it as "already bound by
