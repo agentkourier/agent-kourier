@@ -47,8 +47,9 @@ What the Binding of --channel must have:
   - a mention trigger (or no triggers, which is the mention trigger), and chat.botMentions any, its default. A Binding
     with botMentions: none fails the bot mention check. A bot that a botMessage trigger names is never taken as
     a mention, so the mention poster must be an app that no botMessage trigger of the Binding names: that is why it
-    is a third app. The bot mentions of one Binding start at most 3 turns in 30 minutes and 20 in a day, so a fourth
-    run within 30 minutes fails that check.
+    is a third app. The bot mentions of one Binding start at most 3 turns in 30 minutes and 20 in a day, and one at
+    a time, so a fourth run within 30 minutes fails that check, and so does a run while the last one's turn still
+    runs.
 The poster and the mention poster need chat:write and chat:write.public (or membership of the channel). The probe's
 token reads the threads with conversations.replies (channels:history, or groups:history for a private channel).
 With more than one replica, --metrics-url must reach the leader, which serves the connection.
@@ -306,10 +307,13 @@ post() {
 # wait_reply TS: poll the thread of TS with the probe's token until a message of the probe's bot is in it, and print
 # that message's ts; or print why not, and fail, once the timeout has passed or Slack refused the read.
 wait_reply() {
-  local ts=$1 out=${TMP}/replies.json deadline=$((SECONDS + timeout)) interval=3 reply err
+  local ts=$1 out=${TMP}/replies.json deadline=$((SECONDS + timeout)) interval=3 reply err last=
   [ "${timeout}" -ge "${interval}" ] || interval=${timeout}
   while :; do
-    if slack conversations.replies "${PROBE_AUTH}" "${out}" -G --data-urlencode "channel=${channel}" --data-urlencode "ts=${ts}"; then
+    if ! slack conversations.replies "${PROBE_AUTH}" "${out}" -G --data-urlencode "channel=${channel}" --data-urlencode "ts=${ts}"; then
+      last="conversations.replies: curl failed"
+    else
+      last=
       if [ "$(field "${out}" .ok)" = true ]; then
         reply=$(jq -r --arg bot "${probe_bot}" --arg parent "${ts}" \
           '[.messages[]? | select(.bot_id == $bot and .ts != $parent)][0].ts | values' "${out}" 2>/dev/null || true)
@@ -328,7 +332,7 @@ wait_reply() {
     [ "${SECONDS}" -lt "${deadline}" ] || break
     sleep "${interval}"
   done
-  echo "no reply from ${probe_bot} in thread ${ts} within ${timeout} s"
+  echo "no reply from ${probe_bot} in thread ${ts} within ${timeout} s${last:+ (the last read: ${last})}"
   return 1
 }
 

@@ -69,6 +69,7 @@ and `ghcr.io/agentkourier/agent-kourier-echo-agent` (linux/amd64 and linux/arm64
 
    ```sh
    kubectl -n agent-kourier port-forward "$(kubectl -n agent-kourier get pod -l agentkourier.dev/role=leader -o name)" 8080 &
+   until curl -fsS -o /dev/null http://127.0.0.1:8080/metrics; do sleep 1; done
    hack/slack/http-probe.sh \
      --url https://chat.example.com/chat/slack/agent-kourier/slack \
      --channel C0123456789 \
@@ -76,6 +77,7 @@ and `ghcr.io/agentkourier/agent-kourier-echo-agent` (linux/amd64 and linux/arm64
      --poster-env ~/.config/agent-kourier/poster.env \
      --mention-env ~/.config/agent-kourier/mention.env \
      --metrics-url http://127.0.0.1:8080/metrics
+   kill %1
    ```
 
    The three files are mode 600: `probe.env` holds the connection's `botToken=`, and the two others each `SLACK_BOT_TOKEN=`

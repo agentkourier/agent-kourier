@@ -25,10 +25,14 @@ CHANNEL=C0PROBE
 # The fake curl. It reads the options the probe passes (-o, -w, -H, --data-binary, --data-urlencode, -G) and the URL,
 # appends its arguments to ${STUB_DIR}/calls, and answers:
 #   - a POST to the connection's URL: 401 (STUB_SIGNED, STUB_UNSIGNED or STUB_STALE override it by which headers came);
-#   - a POST to any other /chat/slack/ URL: 503 with the chat listener's text (STUB_UNKNOWN overrides the code);
+#   - a POST to any other /chat/slack/ URL: 503 with the chat listener's text (STUB_UNKNOWN overrides the code,
+#     STUB_UNKNOWN_BODY the text, and STUB_UNKNOWN_CURL_FAIL has curl fail with no answer);
 #   - auth.test: the identity of the token in the -H @file, by the table below;
-#   - chat.postMessage: ok with a new ts, and the text is appended to ${STUB_DIR}/posts;
+#   - chat.postMessage: ok with a new ts, and the text is appended to ${STUB_DIR}/posts (STUB_POST_ERROR: ok=false
+#     with that error);
 #   - conversations.replies: the parent and, unless STUB_NO_REPLY is set, a reply from the bot STUB_REPLY_BOT (B0PROBE);
+#     STUB_REPLIES_ERROR answers ok=false with that error, STUB_RATELIMITED_ONCE answers the first read ratelimited,
+#     and STUB_REPLIES_CURL_FAIL has curl fail;
 #   - the metrics URL: ${STUB_DIR}/metrics.<n>, n counting the reads from 1.
 mkdir -p "${TMP}/bin"
 cat >"${TMP}/bin/curl" <<'FAKE'
@@ -73,8 +77,9 @@ case "${url}" in
     body=Unauthorized
     ;;
   https://chat.example.test/chat/slack/*)
+    [ -z "${STUB_UNKNOWN_CURL_FAIL:-}" ] || exit 7
     code=${STUB_UNKNOWN:-503}
-    body='the connection does not run on this replica'
+    body=${STUB_UNKNOWN_BODY:-the connection does not run on this replica}
     ;;
   https://slack.com/api/auth.test)
     case "${token}" in
@@ -85,14 +90,25 @@ case "${url}" in
     esac
     ;;
   https://slack.com/api/chat.postMessage)
+    if [ -n "${STUB_POST_ERROR:-}" ]; then
+      printf '{"ok":false,"error":"%s"}\n' "${STUB_POST_ERROR}" >"${out}"
+      exit 0
+    fi
     jq -r '.text' "${data}" >>"${STUB_DIR}/posts"
     n=$(wc -l <"${STUB_DIR}/posts" | tr -d ' ')
     body=$(printf '{"ok":true,"channel":"%s","ts":"1700000000.00000%s"}' "$(jq -r .channel "${data}")" "${n}")
     ;;
   https://slack.com/api/conversations.replies)
+    [ -z "${STUB_REPLIES_CURL_FAIL:-}" ] || exit 28
+    reads=$(($(cat "${STUB_DIR}/replies-reads" 2>/dev/null || echo 0) + 1))
+    echo "${reads}" >"${STUB_DIR}/replies-reads"
     parent=
     for q in "${query[@]}"; do case "${q}" in ts=*) parent=${q#ts=} ;; esac; done
-    if [ -n "${STUB_NO_REPLY:-}" ]; then
+    if [ -n "${STUB_REPLIES_ERROR:-}" ]; then
+      body=$(printf '{"ok":false,"error":"%s"}' "${STUB_REPLIES_ERROR}")
+    elif [ -n "${STUB_RATELIMITED_ONCE:-}" ] && [ "${reads}" = 1 ]; then
+      body='{"ok":false,"error":"ratelimited"}'
+    elif [ -n "${STUB_NO_REPLY:-}" ]; then
       body=$(printf '{"ok":true,"messages":[{"ts":"%s","bot_id":"B0POSTER"}]}' "${parent}")
     else
       body=$(printf '{"ok":true,"messages":[{"ts":"%s","bot_id":"B0POSTER"},{"ts":"1700000001.000001","bot_id":"%s","text":"a reply"}]}' \
@@ -240,6 +256,13 @@ new_case unknown-404
 probe STUB_UNKNOWN=404 -- "${REQUIRED[@]}"
 expect 1 '^FAIL unknown connection: .*: HTTP 404, want 503 and "the connection does not run on this replica"$' \
   "a 404 for an unknown connection fails"
+new_case unknown-other-503
+probe STUB_UNKNOWN_BODY='the chat listener is busy' -- "${REQUIRED[@]}"
+expect 1 '^FAIL unknown connection: .*: HTTP 503, want 503 and "the connection does not run on this replica"$' \
+  "a 503 with another text for an unknown connection fails"
+new_case unknown-no-answer
+probe STUB_UNKNOWN_CURL_FAIL=1 -- "${REQUIRED[@]}"
+expect 1 '^FAIL unknown connection: .*: HTTP 000, want 503' "no answer reads as HTTP 000 and fails"
 new_case same-app
 cred "${CASE}/same.env" SLACK_BOT_TOKEN "${PROBE_TOKEN}"
 probe -- --url "${URL}" --channel "${CHANNEL}" --probe-env "${TMP}/probe.env" --poster-env "${CASE}/same.env" \
@@ -261,6 +284,23 @@ new_case no-reply
 probe STUB_NO_REPLY=1 -- "${REQUIRED[@]}" --timeout 1
 expect 1 '^FAIL alert trigger: no reply from B0PROBE in thread 1700000000.000001 within 1 s$' "no reply fails at the timeout"
 expect 1 '^FAIL bot mention: no reply from B0PROBE in thread 1700000000.000002 within 1 s$' "no mention reply fails at the timeout"
+new_case post-refused
+probe STUB_POST_ERROR=not_in_channel -- "${REQUIRED[@]}"
+expect 1 '^FAIL alert trigger: chat.postMessage: ok=false error=not_in_channel$' "a post Slack refuses fails with its error"
+expect 1 '^FAIL bot mention: chat.postMessage: ok=false error=not_in_channel$' "a mention Slack refuses fails with its error"
+new_case replies-refused
+probe STUB_REPLIES_ERROR=missing_scope -- "${REQUIRED[@]}" --timeout 30
+expect 1 '^FAIL alert trigger: conversations.replies of thread 1700000000.000001: ok=false error=missing_scope$' \
+  "a thread read Slack refuses fails at once with its error"
+[ "$(cat "${CASE}/replies-reads")" = 2 ] || fail "a refused thread read was retried: $(cat "${CASE}/replies-reads") reads"
+new_case replies-ratelimited
+probe STUB_RATELIMITED_ONCE=1 -- "${REQUIRED[@]}" --timeout 2
+expect 0 '^PASS alert trigger: B0PROBE replied' "a ratelimited thread read is read again"
+expect 0 '^all 7 checks passed$' "a ratelimited read does not fail the run"
+new_case replies-no-answer
+probe STUB_REPLIES_CURL_FAIL=1 -- "${REQUIRED[@]}" --timeout 1
+expect 1 '^FAIL alert trigger: no reply from B0PROBE in thread 1700000000.000001 within 1 s \(the last read: conversations.replies: curl failed\)$' \
+  "a thread read that gets no answer is named at the timeout"
 new_case other-bot
 probe STUB_REPLY_BOT=B0MENTION -- "${REQUIRED[@]}" --timeout 1
 expect 1 '^FAIL alert trigger: no reply from B0PROBE' "a reply from another bot does not count"
