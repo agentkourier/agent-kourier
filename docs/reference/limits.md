@@ -84,8 +84,9 @@ Counts are of entries. A length in bytes is of bytes.
 | `agents.namespaces` of an AgentBackend | `256`<!--limit:agentNamespaces--> namespaces | Refused at load, and by the API server. | None |
 | The `url` of an AgentBackend | `2048`<!--limit:backendURL--> bytes. A `?` or a `#` anywhere in it is refused, so a URL has no query and no fragment, even an empty one. | Refused at load, and by the API server. | None |
 | The `value` of a header | `4096`<!--limit:headerValue--> bytes | Refused at load, and by the API server. | None |
-| `chat.channel`, a trigger's `from.id`, and each entry of `interactions.approverGroups` | `32`<!--limit:chatID--> bytes each | Refused at load, and by the API server. | None |
-| The `user` of a `chat.mentions` entry | `21`<!--limit:mentionUserLen--> characters | Refused at load, and by the API server. | None |
+| `chat.channel`, a trigger's `from.id`, and each entry of `interactions.approverGroups` | `140`<!--limit:chatID--> bytes each, which fits a GitHub repository's `owner/name` | Refused at load, and by the API server. | None |
+| The `user` of a `chat.mentions` entry | `44`<!--limit:mentionUserLen--> characters, which fits a GitHub login of 39 and the `[bot]` of an app | Refused at load, and by the API server. | None |
+| The same IDs on a Slack connection | `32`<!--limit:slackChatID--> bytes for a channel, a sender and a user group, and `21`<!--limit:slackUserLen--> for a mention's user, as Slack's shapes (`C…`, `B…`, `S…`, `U…`) bound them | Refused when the broker resolves the Binding, which names its connection: the load and the API server take any platform's shape up to the caps above. With custom resources the Binding is not served, and its `Accepted` condition is `False` with the reason `InvalidPlatformID`; on the files route the whole config fails, at start or on a reload. [What each platform supports](platforms.md) has each platform's shapes. | None |
 | `chat.acknowledgment.emoji` | `100`<!--limit:emoji--> bytes | Refused at load, and by the API server. | None |
 | The name of an `extract` entry. The keys of `thread.closeWhen` are extract names, so the same number bounds them. | `63`<!--limit:extractName--> bytes | Refused at load, and by the API server. | None |
 | A value of `thread.closeWhen` | `256`<!--limit:closeWhenValue--> bytes | Refused at load, and by the API server. | None |

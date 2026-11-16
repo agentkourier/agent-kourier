@@ -13,13 +13,13 @@ kubectl get akbinding -A
 ```
 
 ```text
-NAMESPACE   NAME          READY   REASON                       CHANNEL   AGE
-team-a      team-a-chat   True    OK                           C2        4m
-team-a      late          False   Accepted:ChannelConflict     C1        1m
+NAMESPACE   NAME          READY   REASON                       CONNECTION   CHANNEL   AGE
+team-a      team-a-chat   True    OK                           slack-main   C2        4m
+team-a      late          False   Accepted:ChannelConflict     slack-main   C1        1m
 ```
 
-`READY` and `REASON` are the status and reason of the `Ready` condition, `CHANNEL` is `spec.chat.channel`, and `AGE` is the
-object's age. A Binding that has no status yet shows empty `READY` and `REASON`.
+`READY` and `REASON` are the status and reason of the `Ready` condition, `CONNECTION` is the name of the ChatConnection that
+`spec.chat.connectionRef` names (not its namespace), `CHANNEL` is `spec.chat.channel`, and `AGE` is the object's age. A Binding that has no status yet shows empty `READY` and `REASON`.
 
 ## The conditions
 
@@ -63,6 +63,8 @@ is written today.
 | `ConnectionNotServed` | `spec.chat.connectionRef` names a ChatConnection that exists and that this broker does not serve: it served it before and does not now (its namespace is no longer admitted: it was taken off the list, it lost the label the selector matches, the selector changed, or a broker that admitted every namespace was narrowed to a list, a selector or its own connection alone; or it was the broker's own ChatConnection and the broker now has another or none, and its namespace is not admitted), it left it out because it serves at most 16 chat connections, or the connection is a second connection of a Slack app that an older connection of this broker uses, and an app is served once. `message` says which. The broker writes it when it first sees the Binding, or when its words change, and does not put it back if the status is changed, so that a broker that does serve the connection has the last word. It tells a Binding only if the ChatConnection admits the Binding's namespace (it is the connection's own, or listed in `allowedNamespaces`); to any other Binding it says nothing. Session retention keeps the sessions of the Binding, as it keeps those of a Binding that is not served for any other reason. A condition does not say which broker wrote it, so a broker cannot tell the words of another broker that serves the connection from the stale ones it exists to replace. After a restart or a change of leader, the broker that first sees a Binding of a connection it left out or stopped serving therefore writes `ConnectionNotServed` over a status that says anything else, another broker's `Ready=True` included, and `Ready` is `False` until that broker puts its own words back, which it does within about 10 seconds while it has a leader and its writes succeed (it checks each second, and waits 10 seconds after its last write to that Binding; after failed writes it backs off for up to 5 minutes). |
 | `NamespaceNotAllowed` | The AgentBackend or ChatConnection is in another namespace and its `allowedNamespaces` does not list this Binding's. The answer is the same for a valid object and an invalid one, so it says nothing of the object but that it exists. |
 | `AgentNamespaceNotAllowed` | The AgentBackend it names sets `agents`, and `spec.agent.namespace` is neither the Binding's own namespace, with `sameNamespace: true`, nor listed in `namespaces`. The Binding is not served. `message` names the AgentBackend and the agent namespace, and nothing else of the AgentBackend's spec. When the AgentBackend's newest generation is invalid, or it was deleted and is held, `message` adds that the limit is that of the generation being served, and which generation that is; the problems of an invalid generation are added only for a Binding in the AgentBackend's own namespace. |
+| `InvalidPlatformID` | A chat ID of the Binding (`spec.chat.channel`, a trigger's `from.id`, a mention's `user` or an approver group) does not have the shape of the IDs of its ChatConnection's platform, though it has another platform's, which is what the schema takes: on Slack, a repository `owner/name` as the channel, or a bot's name such as `alertmanager` as a sender. The Binding is not served. `message` has one entry for each such ID, in the order of the fields, with the field, the value, the platform, the ChatConnection and the shape to use; [What each platform supports](platforms.md#chat-ids) lists the shapes. |
+| `UnsupportedOnPlatform` | The Binding asks for a feature that the platform of its ChatConnection does not serve, such as tool approvals on a platform that cannot ask for them. The Binding is not served. `message` names the field, the platform, the ChatConnection and what to change. Slack serves every feature that the broker checks, so no Binding on Slack has it; [What each platform supports](platforms.md#features) has the list. |
 | `ChannelConflict` | Another Binding on the same ChatConnection holds the channel. The older one, by `creationTimestamp`, then by namespace and name, holds it. |
 
 A `message` about an AgentBackend or ChatConnection of another namespace never quotes that object's problems. A `ChannelConflict`
