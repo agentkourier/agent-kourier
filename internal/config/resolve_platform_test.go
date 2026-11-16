@@ -12,7 +12,7 @@ import (
 // with the platform, the connection and the page.
 func onSlack(path, problem, fix string) string {
 	return path + ": " + problem + " on Slack, the platform of ChatConnection agent-kourier-system/slack-main: " + fix +
-		" (see " + platformsPage + ")"
+		" (see " + PlatformsPage + ")"
 }
 
 const (
@@ -125,7 +125,7 @@ func TestUnsupportedOnPlatform(t *testing.T) {
 		return p, ok
 	}
 	const msg = "spec.interactions.toolApprovals: tool approvals are not supported on Slack, the platform of ChatConnection " +
-		"agent-kourier-system/slack-main: set it to false (see " + platformsPage + ")"
+		"agent-kourier-system/slack-main: set it to false (see " + PlatformsPage + ")"
 	asks := func(set *Set) { sreAlerts(set).Spec.Interactions.ToolApprovals = true }
 
 	t.Run("ResolvePartial", func(t *testing.T) {
@@ -152,4 +152,55 @@ func TestUnsupportedOnPlatform(t *testing.T) {
 			t.Errorf("rejections = %+v; want none", got)
 		}
 	})
+}
+
+// RefusedOnPlatform is the check of resolution, given to a source that fails one object at a time: the reason of the first ID or
+// feature the platform does not take, and every one of them in the words of resolution, joined; nothing for a Binding that the
+// platform takes, or that the connection does not admit, which learns nothing of the platform.
+func TestRefusedOnPlatform(t *testing.T) {
+	noApprovals := func(platform string) (v1alpha1.ChatPlatform, bool) {
+		p, ok := v1alpha1.ChatPlatformOf(platform)
+		p.ToolApprovals = false
+		return p, ok
+	}
+	channel := onSlack("spec.chat.channel", `"octo-org/hello-world" is not a channel ID`, channelFix)
+	sender := onSlack("spec.chat.triggers[1].from.id", `"alertmanager" is not a bot ID`, botFix)
+	approvals := "spec.interactions.toolApprovals: tool approvals are not supported on Slack, the platform of ChatConnection " +
+		"agent-kourier-system/slack-main: set it to false (see " + PlatformsPage + ")"
+	tests := []struct {
+		name        string
+		mutate      func(*Set)
+		platforms   platformRules
+		wantReason  RejectionReason
+		wantMessage string
+	}{
+		{"Slack's own shapes", func(*Set) {}, v1alpha1.ChatPlatformOf, "", ""},
+		{"a bot's name as the sender", func(s *Set) { sreAlerts(s).Spec.Chat.Triggers[1].From.ID = "alertmanager" }, v1alpha1.ChatPlatformOf,
+			ReasonInvalidPlatformID, sender},
+		{"two IDs, joined in the order of the fields", func(s *Set) {
+			sreAlerts(s).Spec.Chat.Channel = "octo-org/hello-world"
+			sreAlerts(s).Spec.Chat.Triggers[1].From.ID = "alertmanager"
+		}, v1alpha1.ChatPlatformOf, ReasonInvalidPlatformID, channel + "; " + sender},
+		{"a feature the platform does not serve", func(s *Set) { sreAlerts(s).Spec.Interactions.ToolApprovals = true }, noApprovals,
+			ReasonUnsupportedOnPlatform, approvals},
+		{"a Binding that the connection does not admit", func(s *Set) {
+			s.ChatConnections[0].Spec.AllowedNamespaces = []string{"payments"}
+			sreAlerts(s).Spec.Chat.Triggers[1].From.ID = "alertmanager"
+		}, v1alpha1.ChatPlatformOf, "", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			set := specSet(t)
+			tc.mutate(set)
+			reason, message := refusedOnPlatform(sreAlerts(set), &set.ChatConnections[0], tc.platforms)
+			if reason != tc.wantReason || message != tc.wantMessage {
+				t.Errorf("refusedOnPlatform = %q, %q; want %q, %q", reason, message, tc.wantReason, tc.wantMessage)
+			}
+		})
+	}
+	set := specSet(t)
+	sreAlerts(set).Spec.Chat.Triggers[1].From.ID = "alertmanager"
+	if reason, message := RefusedOnPlatform(sreAlerts(set), &set.ChatConnections[0]); reason != ReasonInvalidPlatformID || message != sender {
+		t.Errorf("RefusedOnPlatform = %q, %q; want the rules of v1alpha1.ChatPlatformOf", reason, message)
+	}
 }

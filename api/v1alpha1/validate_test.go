@@ -405,7 +405,7 @@ func TestBindingValidate(t *testing.T) {
 		{"invalid approver group", func(o *Binding) {
 			o.Spec.Interactions.ToolApprovals = true
 			o.Spec.Interactions.ApproverGroups = []string{"C0123456789"}
-		}, `spec.interactions.approverGroups[0]: invalid group ID "C0123456789": must be a Slack user group ID such as S0123456789`},
+		}, `spec.interactions.approverGroups[0]: invalid group ID "C0123456789": must be a user group ID (Slack: S0123456789)`},
 		{"a team as an approver group ok", func(o *Binding) {
 			o.Spec.Interactions.ToolApprovals = true
 			o.Spec.Interactions.ApproverGroups = []string{"octo-org/sre-team"}
@@ -413,7 +413,7 @@ func TestBindingValidate(t *testing.T) {
 		{"a team with no organisation", func(o *Binding) {
 			o.Spec.Interactions.ToolApprovals = true
 			o.Spec.Interactions.ApproverGroups = []string{"/sre-team"}
-		}, `spec.interactions.approverGroups[0]: invalid group ID "/sre-team": must be a Slack user group ID such as S0123456789`},
+		}, `spec.interactions.approverGroups[0]: invalid group ID "/sre-team": must be a user group ID (Slack: S0123456789)`},
 		{"an approver group at the length cap ok", func(o *Binding) {
 			o.Spec.Interactions.ToolApprovals = true
 			o.Spec.Interactions.ApproverGroups = []string{"S" + strings.Repeat("0", maxChatIDLen-1)}

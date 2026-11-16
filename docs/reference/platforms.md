@@ -4,15 +4,17 @@ A Binding names its chat platform through its ChatConnection, whose `spec.platfo
 platform, the shape of the chat IDs a Binding names and the features of a Binding that the platform serves. Slack is the only
 platform today.
 
-A Binding is checked against its platform when the broker resolves it, which is when it knows the ChatConnection: the API server and
-the broker's load check only that each ID has the shape of some platform's ID. A Binding that names an ID of another shape, or asks
-for a feature that its platform does not serve, is rejected then:
+A Binding is checked against its platform when the broker reads it with its ChatConnection: the API server and the broker's load
+check only that each ID has the shape of some platform's ID. A Binding that names an ID of another shape, or asks for a feature that its
+platform does not serve, is refused then, as a Binding that fails validation is:
 
-- with custom resources it is not served, and its `Accepted` condition is `False` with the reason `InvalidPlatformID` or
-  `UnsupportedOnPlatform` ([Binding status](binding-status.md#accepted)); the other Bindings keep running;
-- on the files route the whole config fails, at start or on a reload, with the same message.
+- with custom resources its `Accepted` condition is `False` with the reason `InvalidPlatformID` or `UnsupportedOnPlatform`
+  ([Binding status](binding-status.md#accepted)). A Binding that had a good generation keeps serving it, and the message says which
+  (`serving generation 1`), so an edit with a mistyped ID does not take; a new Binding is not served. The other Bindings keep running;
+- on the files route the whole config fails, with the same message: at start the broker exits with code 2, and on a reload it keeps
+  its last good config.
 
-`agent-kourier dry-run` loads the config and does not resolve it, so it does not run these checks.
+`agent-kourier dry-run`, which reads only Slack, holds the Binding to Slack's shapes too, and refuses it with the same problem and fix.
 
 The message names the field, the value, the platform, the ChatConnection and what to write instead, and links this page, for example:
 

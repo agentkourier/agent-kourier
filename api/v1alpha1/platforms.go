@@ -74,8 +74,8 @@ type ChatPlatform struct {
 }
 
 // ChatPlatformOf returns what a Binding may name and use on the platform that a ChatConnection's spec.platform names, and false
-// for a platform that ChatConnection's Validate refuses. It is the one table of the platforms' rules: a second platform is one
-// more case here. It is a func and not a map, so that there is no state to change.
+// for a platform that ChatConnection's Validate refuses. It is the one table of what a Binding may name and use on each platform:
+// a second platform is one more case here. It is a func and not a map, so that there is no state to change.
 func ChatPlatformOf(platform string) (ChatPlatform, bool) {
 	if platform != PlatformSlack {
 		return ChatPlatform{}, false
@@ -101,7 +101,8 @@ type PlatformMismatch struct {
 	// Unsupported says that the field asks for a feature that the platform does not serve. Otherwise the field holds an ID that
 	// does not have the platform's shape.
 	Unsupported bool
-	// Problem says what is wrong, without the platform: `"octo/repo" is not a channel ID`, or "tool approvals are not supported".
+	// Problem says what is wrong, without the platform: `"octo/repo" is not a channel ID`, "is 33 bytes, longer than the 32 byte
+	// limit of a channel ID", or "tool approvals are not supported".
 	Problem string
 	// Fix says what to do about it.
 	Fix string
@@ -113,8 +114,14 @@ type PlatformMismatch struct {
 func (s *BindingSpec) PlatformMismatches(p ChatPlatform) []PlatformMismatch {
 	var out []PlatformMismatch
 	id := func(path, value string, shape IDShape) {
-		if !shape.Matches(value) {
+		switch {
+		case !shape.pattern.MatchString(value):
 			out = append(out, PlatformMismatch{Path: path, Problem: fmt.Sprintf("%q is not %s", value, shape.What), Fix: shape.Fix})
+		case len(value) > shape.maxLen:
+			// The shape is the platform's and only the length is not: the message says the length, as Validate's cap does, and
+			// does not quote a value that may be long.
+			out = append(out, PlatformMismatch{Path: path, Fix: shape.Fix,
+				Problem: fmt.Sprintf("is %d bytes, longer than the %d byte limit of %s", len(value), shape.maxLen, shape.What)})
 		}
 	}
 	id("spec.chat.channel", s.Chat.Channel, p.Channel)

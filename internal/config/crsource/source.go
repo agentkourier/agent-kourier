@@ -9,7 +9,10 @@
 // reason to refuse a custom resource (see "Unknown fields"). Unlike the files, one bad object is not a bad config: an object that fails to decode or
 // validate is left out of the Set and listed in Set.Invalid, and when the object had a good generation, that generation is
 // kept in memory and put in the Set in its place, so that a typo in an update does not take a Binding out of routing. A
-// Reloader that is PerObject turns the two into what is served and what is reported.
+// Binding that validates and names a chat ID or a feature that the platform of its connection does not take
+// (config.RefusedOnPlatform) is refused the same way, with that reason in its Invalid: the schema takes any platform's IDs, and
+// only the connection says which platform's the Binding needs. A Reloader that is PerObject turns the two into what is served
+// and what is reported.
 //
 // # What it reads
 //
@@ -713,10 +716,11 @@ func (s *Source) Set(context.Context) (*config.Set, string, error) {
 	served := s.selectServed(l)
 	set.UnservedConnections = served.left
 	s.noteCapped(served)
-	read(s, config.KindAgentBackend, l.backends, live, func(*unstructured.Unstructured) bool { return true }, &set.AgentBackends, &set.Invalid)
+	read(s, config.KindAgentBackend, l.backends, live, func(*unstructured.Unstructured) bool { return true }, nil, &set.AgentBackends, &set.Invalid)
 	read(s, config.KindChatConnection, l.connections, live,
-		func(u *unstructured.Unstructured) bool { return served.keys[keyOf(config.KindChatConnection, u)] }, &set.ChatConnections, &set.Invalid)
-	read(s, config.KindBinding, l.bindings, live, func(u *unstructured.Unstructured) bool { return s.owns(l, served, u) }, &set.Bindings, &set.Invalid)
+		func(u *unstructured.Unstructured) bool { return served.keys[keyOf(config.KindChatConnection, u)] }, nil, &set.ChatConnections, &set.Invalid)
+	read(s, config.KindBinding, l.bindings, live, func(u *unstructured.Unstructured) bool { return s.owns(l, served, u) },
+		s.platformCheck(set.ChatConnections), &set.Bindings, &set.Invalid)
 	for k := range s.warned { // what is not read now has no generation to be told of again
 		if !live[k] {
 			delete(s.warned, k)
@@ -1003,11 +1007,16 @@ func compareKeys(a, b key) int {
 // And a generation that fails to decode cannot be trusted to say whose it is: when the object has a last good generation,
 // that one decides whether the broker owns it, so an edit that is invalid and also names another broker's connection does not
 // take a Binding out of routing unreported.
+//
+// check, when it is not nil, is asked of each object that decodes and that the broker owns, and a reason it gives refuses the
+// object as a failed Validate does, with that reason in the Invalid: a Binding whose chat IDs the platform of its connection does
+// not take (platformCheck). It is not remembered as good, and its last good generation is served in its place.
 func read[T any, PT interface {
 	*T
 	Default()
 	Validate() error
-}](s *Source, kind string, objs []*unstructured.Unstructured, live map[key]bool, owns func(*unstructured.Unstructured) bool, dst *[]T, invalid *[]config.Invalid) {
+}](s *Source, kind string, objs []*unstructured.Unstructured, live map[key]bool, owns func(*unstructured.Unstructured) bool,
+	check func(*T) (config.RejectionReason, string), dst *[]T, invalid *[]config.Invalid) {
 	for _, u := range objs {
 		k := keyOf(kind, u)
 		g, hasGood := s.good[k]
@@ -1018,7 +1027,14 @@ func read[T any, PT interface {
 		}
 		d := decodeCached[T, PT](s, k, u)
 		s.noteUnknown(k, u, d.unknown)
-		if obj, _ := d.obj.(*T); obj != nil {
+		obj, _ := d.obj.(*T)
+		message, reason := d.message, config.RejectionReason("")
+		if obj != nil && mine && check != nil {
+			if reason, message = check(obj); reason != "" {
+				obj = nil
+			}
+		}
+		if obj != nil {
 			if !mine { // a valid edit to another broker's connection: the Binding is that broker's now, and the pruning forgets it
 				continue
 			}
@@ -1036,7 +1052,7 @@ func read[T any, PT interface {
 		if hasGood && !same { // another object of the name than the one that was last good: that one is gone for good
 			delete(s.good, k)
 		}
-		inv := config.Invalid{Kind: kind, Namespace: u.GetNamespace(), Name: u.GetName(), Generation: u.GetGeneration(), Message: d.message}
+		inv := config.Invalid{Kind: kind, Namespace: u.GetNamespace(), Name: u.GetName(), Generation: u.GetGeneration(), Message: message, Reason: reason}
 		if kind != config.KindBinding {
 			inv.AllowedNamespaces, _, _ = unstructured.NestedStringSlice(u.Object, "spec", "allowedNamespaces")
 		}
@@ -1061,6 +1077,29 @@ func decodeObject[T any, PT interface {
 		return nil, nil, []error{err}
 	}
 	return config.DecodeObject[T, PT](j)
+}
+
+// platformCheck returns the check that read makes of a valid Binding, given the connections of the Set: config.RefusedOnPlatform
+// on the connection it names, if that is one of conns or the own connection held after its deletion. A Binding whose connection is
+// in neither is not checked here: it names none that exists, or another broker's, and resolution says so. The caller holds s.mu,
+// and conns is not appended to while the check runs.
+func (s *Source) platformCheck(conns []v1alpha1.ChatConnection) func(*v1alpha1.Binding) (config.RejectionReason, string) {
+	byKey := make(map[key]*v1alpha1.ChatConnection, len(conns))
+	for i := range conns {
+		byKey[key{config.KindChatConnection, conns[i].Namespace, conns[i].Name}] = &conns[i]
+	}
+	return func(b *v1alpha1.Binding) (config.RejectionReason, string) {
+		k := key{config.KindChatConnection, b.Spec.Chat.ConnectionRef.NamespaceOr(b.Namespace), b.Spec.Chat.ConnectionRef.Name}
+		conn := byKey[k]
+		if conn == nil && s.isOwn(k) {
+			conn = typedOf[v1alpha1.ChatConnection](s.good[k])
+		}
+		if conn == nil {
+			return "", ""
+		}
+		reason, message := config.RefusedOnPlatform(b, conn)
+		return reason, config.CapMessage(message)
+	}
 }
 
 // typedOf returns the decoded object of the last good generation g, or nil if it holds none.

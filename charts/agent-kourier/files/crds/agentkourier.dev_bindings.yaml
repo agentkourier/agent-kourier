@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    agentkourier.dev/schema-sha256: fa9958dd91ede5748a93a2ade41161c6016b03d890a0a96493473a63c5a5803e
+    agentkourier.dev/schema-sha256: 45b21dd80f1ff7ca9337cac444819c5991dc7a17d000853f42efeba07f3d8b63
     controller-gen.kubebuilder.io/version: v0.23.0
   name: bindings.agentkourier.dev
 spec:
@@ -147,10 +147,10 @@ spec:
                       Channel is the platform's channel ID, not its name (Slack: `C…` or `G…`). At most 140 bytes. The schema takes the shape of
                       any platform's channel ID: Slack's, or a repository's `owner/name`, which no platform served today takes. A name such as
                       `general` has no platform's shape, and is refused. The broker holds the channel to the shape of its connection's platform when
-                      it resolves the Binding (on Slack: `C` or `G`, then capitals and digits, at most 32 bytes). A Binding whose channel has another
-                      shape is rejected: with custom resources it is not served and its Accepted condition is False with the reason
-                      InvalidPlatformID, and on the files route the whole config fails when the broker resolves it (agent-kourier dry-run does not
-                      resolve it).
+                      it reads the Binding with its connection (on Slack: `C` or `G`, then capitals and digits, at most 32 bytes), and refuses a
+                      Binding whose channel has another shape as it refuses an invalid one: with custom resources its Accepted condition is False
+                      with the reason InvalidPlatformID and its last good generation, if it has one, stays served; on the files route the whole
+                      config fails. agent-kourier dry-run holds it to Slack's shape.
                     maxLength: 140
                     pattern: ^(?:[CG][A-Z0-9]+|[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}/[A-Za-z0-9._-]{1,100})$
                     type: string
@@ -344,8 +344,8 @@ spec:
                                 matches nothing, and the Slack adapter logs one warning, the first time one of its posts arrives.
                                 At most 140 bytes. The schema takes the shape of any platform's sender ID, Slack's or a login such as `dependabot[bot]`, and
                                 the broker holds it to the shape of its connection's platform as it does spec.chat.channel (on Slack: `B`, then capitals and
-                                digits, at most 32 bytes). A bot's name, such as `alertmanager`, has a login's shape, so on Slack it is refused then and not
-                                when it is applied.
+                                digits, at most 32 bytes). A bot's name, such as `alertmanager`, has a login's shape, so on Slack the broker refuses it, and
+                                the API server does not.
                               maxLength: 140
                               pattern: ^(?:B[A-Z0-9]+|[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}(?:\[bot\])?)$
                               type: string

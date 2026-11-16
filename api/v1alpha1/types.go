@@ -392,10 +392,10 @@ type ChatBinding struct {
 	// Channel is the platform's channel ID, not its name (Slack: `C…` or `G…`). At most 140 bytes. The schema takes the shape of
 	// any platform's channel ID: Slack's, or a repository's `owner/name`, which no platform served today takes. A name such as
 	// `general` has no platform's shape, and is refused. The broker holds the channel to the shape of its connection's platform when
-	// it resolves the Binding (on Slack: `C` or `G`, then capitals and digits, at most 32 bytes). A Binding whose channel has another
-	// shape is rejected: with custom resources it is not served and its Accepted condition is False with the reason
-	// InvalidPlatformID, and on the files route the whole config fails when the broker resolves it (agent-kourier dry-run does not
-	// resolve it).
+	// it reads the Binding with its connection (on Slack: `C` or `G`, then capitals and digits, at most 32 bytes), and refuses a
+	// Binding whose channel has another shape as it refuses an invalid one: with custom resources its Accepted condition is False
+	// with the reason InvalidPlatformID and its last good generation, if it has one, stays served; on the files route the whole
+	// config fails. agent-kourier dry-run holds it to Slack's shape.
 	// +kubebuilder:validation:MaxLength=140
 	// +kubebuilder:validation:Pattern=`^(?:[CG][A-Z0-9]+|[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}/[A-Za-z0-9._-]{1,100})$`
 	Channel string `json:"channel"`

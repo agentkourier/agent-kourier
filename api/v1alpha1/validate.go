@@ -417,7 +417,7 @@ func (p *problems) interactions(path string, in Interactions) {
 		case len(group) > maxChatIDLen:
 			p.maxBytes(at, group, maxChatIDLen)
 		case !approverGroupID.MatchString(group):
-			p.add(at, "invalid group ID %q: must be a Slack user group ID such as S0123456789", group)
+			p.add(at, "invalid group ID %q: must be a user group ID (Slack: S0123456789)", group)
 		}
 		if previous, ok := seen[group]; ok {
 			p.add(at, "duplicate of index %d", previous)

@@ -146,8 +146,8 @@ type BotSource struct {
 	// matches nothing, and the Slack adapter logs one warning, the first time one of its posts arrives.
 	// At most 140 bytes. The schema takes the shape of any platform's sender ID, Slack's or a login such as `dependabot[bot]`, and
 	// the broker holds it to the shape of its connection's platform as it does spec.chat.channel (on Slack: `B`, then capitals and
-	// digits, at most 32 bytes). A bot's name, such as `alertmanager`, has a login's shape, so on Slack it is refused then and not
-	// when it is applied.
+	// digits, at most 32 bytes). A bot's name, such as `alertmanager`, has a login's shape, so on Slack the broker refuses it, and
+	// the API server does not.
 	// +kubebuilder:validation:MaxLength=140
 	// +kubebuilder:validation:Pattern=`^(?:B[A-Z0-9]+|[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}(?:\[bot\])?)$`
 	ID string `json:"id"`

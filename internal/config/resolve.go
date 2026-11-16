@@ -221,9 +221,9 @@ type problem struct {
 // none: v1alpha1.ChatPlatformOf, or a test's own table.
 type platformRules func(platform string) (v1alpha1.ChatPlatform, bool)
 
-// platformsPage is the reference page that says what each platform supports, which the message of a rejection for the platform
+// PlatformsPage is the reference page that says what each platform supports, which the message of a rejection for the platform
 // links.
-const platformsPage = "https://agentkourier.dev/reference/platforms/"
+const PlatformsPage = "https://agentkourier.dev/reference/platforms/"
 
 type resolver struct {
 	secrets   SecretResolver
@@ -347,20 +347,63 @@ func (r *resolver) binding(b *v1alpha1.Binding) {
 // nothing of its platform. A platform with no rules is not checked: ChatConnection's Validate refuses every platform that
 // v1alpha1.ChatPlatformOf has no rules for, so a Set holds no connection of one (a connection that a test builds by hand may).
 func (r *resolver) fitsPlatform(from identity, b *v1alpha1.Binding, conn *v1alpha1.ChatConnection) bool {
-	p, ok := r.platforms(conn.Spec.Platform)
-	if !ok {
-		return true
+	problems := platformProblems(b, conn, r.platforms)
+	for _, p := range problems {
+		r.reject(from, p.reason, p.path, p.err)
 	}
-	id := identity{"ChatConnection", conn.Namespace, conn.Name}
-	mismatches := b.Spec.PlatformMismatches(p)
-	for _, m := range mismatches {
+	return len(problems) == 0
+}
+
+// platformProblem is one chat ID or feature of a Binding that the platform of its connection does not take.
+type platformProblem struct {
+	reason RejectionReason
+	path   string
+	err    error
+}
+
+// platformProblems returns what fitsPlatform rejects b for on conn, in the order of b's fields: nothing for a platform that
+// platforms has no rules for.
+func platformProblems(b *v1alpha1.Binding, conn *v1alpha1.ChatConnection, platforms platformRules) []platformProblem {
+	p, ok := platforms(conn.Spec.Platform)
+	if !ok {
+		return nil
+	}
+	id := identity{KindChatConnection, conn.Namespace, conn.Name}
+	var out []platformProblem
+	for _, m := range b.Spec.PlatformMismatches(p) {
 		reason := ReasonInvalidPlatformID
 		if m.Unsupported {
 			reason = ReasonUnsupportedOnPlatform
 		}
-		r.reject(from, reason, m.Path, fmt.Errorf("%s on %s, the platform of %s: %s (see %s)", m.Problem, p.Name, id, m.Fix, platformsPage))
+		out = append(out, platformProblem{reason, m.Path, fmt.Errorf("%s on %s, the platform of %s: %s (see %s)", m.Problem, p.Name, id, m.Fix, PlatformsPage)})
 	}
-	return len(mismatches) == 0
+	return out
+}
+
+// RefusedOnPlatform says why resolution would reject b on conn for its platform, the check that fitsPlatform makes: the reason of
+// the first chat ID or feature that the platform does not take (InvalidPlatformID or UnsupportedOnPlatform), and each of them as
+// "path: message", joined with "; ". Both are empty when the platform takes all of b, and when conn does not admit b (it is in
+// another namespace that conn's allowedNamespaces does not list), since such a Binding learns nothing of conn's platform. A source
+// that fails one object at a time asks it of each valid Binding whose connection it holds, and refuses that generation as it
+// refuses one that fails Validate, so that a mistyped ID in an edit leaves the last good generation served (see Invalid.Reason).
+func RefusedOnPlatform(b *v1alpha1.Binding, conn *v1alpha1.ChatConnection) (RejectionReason, string) {
+	return refusedOnPlatform(b, conn, v1alpha1.ChatPlatformOf)
+}
+
+// refusedOnPlatform is RefusedOnPlatform with the rules of the chat platforms that platforms gives, which a test can choose.
+func refusedOnPlatform(b *v1alpha1.Binding, conn *v1alpha1.ChatConnection, platforms platformRules) (RejectionReason, string) {
+	if !ReferenceAllowed(b.Namespace, conn.Namespace, conn.Spec.AllowedNamespaces) {
+		return "", ""
+	}
+	problems := platformProblems(b, conn, platforms)
+	if len(problems) == 0 {
+		return "", ""
+	}
+	parts := make([]string, len(problems))
+	for i, p := range problems {
+		parts[i] = p.path + ": " + p.err.Error()
+	}
+	return problems[0].reason, strings.Join(parts, "; ")
 }
 
 // index maps the identity of each object of one kind to the object.

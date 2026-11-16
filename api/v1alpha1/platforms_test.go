@@ -120,9 +120,20 @@ func TestPlatformMismatches(t *testing.T) {
 		{"a Slack ID typo that has a login's shape", slack(t), func(b *Binding) { bot(b).From.ID = "alertmanager" }, []PlatformMismatch{
 			{Path: "spec.chat.triggers[1].from.id", Problem: `"alertmanager" is not a bot ID`, Fix: "use the bot's ID, such as B0123456789, not its name"},
 		}},
-		{"a Slack channel over Slack's length", slack(t), func(b *Binding) { b.Spec.Chat.Channel = "C" + strings.Repeat("0", maxSlackIDLen) }, []PlatformMismatch{
-			{Path: "spec.chat.channel", Problem: `"C` + strings.Repeat("0", maxSlackIDLen) + `" is not a channel ID`,
+		{"a Slack channel over Slack's length: the length, and not the value", slack(t), func(b *Binding) {
+			b.Spec.Chat.Channel = "C" + strings.Repeat("0", maxSlackIDLen)
+		}, []PlatformMismatch{
+			{Path: "spec.chat.channel", Problem: "is 33 bytes, longer than the 32 byte limit of a channel ID",
 				Fix: "use the channel's ID, such as C0123456789 (G… for an older private channel), not its name"},
+		}},
+		{"a Slack channel at Slack's length", slack(t), func(b *Binding) { b.Spec.Chat.Channel = "C" + strings.Repeat("0", maxSlackIDLen-1) }, nil},
+		{"a sender and a group over Slack's length", slack(t), func(b *Binding) {
+			bot(b).From.ID = "B" + strings.Repeat("0", maxSlackIDLen)
+			b.Spec.Interactions.ToolApprovals = true
+			b.Spec.Interactions.ApproverGroups = []string{"S" + strings.Repeat("0", maxSlackIDLen)}
+		}, []PlatformMismatch{
+			{Path: "spec.chat.triggers[1].from.id", Problem: "is 33 bytes, longer than the 32 byte limit of a bot ID", Fix: "use the bot's ID, such as B0123456789, not its name"},
+			{Path: "spec.interactions.approverGroups[0]", Problem: "is 33 bytes, longer than the 32 byte limit of a user group ID", Fix: "use the user group's ID, such as S0123456789"},
 		}},
 		{"a mention trigger names no sender", slack(t), func(b *Binding) { b.Spec.Chat.Triggers = b.Spec.Chat.Triggers[:1] }, nil},
 		{"tool approvals on a platform without them", noApprovals, func(b *Binding) { b.Spec.Interactions.ToolApprovals = true }, []PlatformMismatch{

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -196,14 +197,58 @@ func bindingNames(s *config.Set) []string {
 
 // The custom resource source runs the same conformance suite as the files.
 func TestConformance(t *testing.T) {
+	start := func(t *testing.T, c *cluster, corpus sourcetest.Corpus) config.Source {
+		return c.startAs(t, corpus.Connection)
+	}
 	sourcetest.Run(t, func(t *testing.T, corpus sourcetest.Corpus) config.Source {
 		leakCheck(t)
-		var objs []*unstructured.Unstructured
-		for i, d := range corpus.Docs {
-			objs = append(objs, object(t, d, fmt.Sprintf("uid-%d", i), 1))
+		return start(t, newCluster(t, corpusObjects(t, corpus.Docs)...), corpus)
+	}, sourcetest.Options{PerObject: true, IgnoresUnknownFields: true, Edit: editor(start)})
+}
+
+// corpusObjects returns the documents of a sourcetest corpus as a cluster holds them, the ith with the uid uid-i, at generation 1.
+func corpusObjects(t *testing.T, docs []string) []*unstructured.Unstructured {
+	t.Helper()
+	var objs []*unstructured.Unstructured
+	for i, d := range docs {
+		objs = append(objs, object(t, d, fmt.Sprintf("uid-%d", i), 1))
+	}
+	return objs
+}
+
+// editor is the sourcetest.Editor of the source that start builds over a cluster of the corpus. A change applies each document
+// that differs from the one before it as the next generation of its object, and returns once the source's fingerprint moves.
+func editor(start func(t *testing.T, c *cluster, corpus sourcetest.Corpus) config.Source) sourcetest.Editor {
+	return func(t *testing.T, corpus sourcetest.Corpus) (config.Source, func([]string)) {
+		leakCheck(t)
+		c := newCluster(t, corpusObjects(t, corpus.Docs)...)
+		src := start(t, c, corpus)
+		current := slices.Clone(corpus.Docs)
+		generations := make([]int64, len(current))
+		for i := range generations {
+			generations[i] = 1
 		}
-		return newCluster(t, objs...).startAs(t, corpus.Connection)
-	}, sourcetest.Options{PerObject: true, IgnoresUnknownFields: true})
+		return src, func(docs []string) {
+			t.Helper()
+			before := src.Fingerprint(t.Context())
+			var changed []*unstructured.Unstructured
+			for i, d := range docs {
+				if d == current[i] {
+					continue
+				}
+				current[i] = d
+				generations[i]++
+				u := object(t, d, fmt.Sprintf("uid-%d", i), generations[i])
+				u.SetResourceVersion(strconv.FormatInt(generations[i], 10))
+				changed = append(changed, u)
+			}
+			until(t, func() {
+				for _, u := range changed {
+					c.apply(u)
+				}
+			}, func() bool { return src.Fingerprint(t.Context()) != before })
+		}
+	}
 }
 
 // The objects of a cluster carry what an API server adds: a uid, a generation, a creation time. The Set keeps them, since
