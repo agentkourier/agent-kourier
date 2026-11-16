@@ -309,13 +309,15 @@ func (d *Decider) settle(ctx context.Context, pd PressDecision, cur store.Intera
 
 // send gives the answer to the session, which streams what follows to the thread.
 //
-// A task that is not paused cannot take it. If the thread's session no longer records the task, it has
-// ended or moved on: the thread is told, once, since the notice's ID comes from the interaction. If it
-// still records it, the session may only not have parked on it yet (right after a restart, before the
-// recovery has re-emitted the pause), and the answer is likely to be resent from its record then: a
-// retryable error is returned, so the press is decided again, and the notice is not posted, since it
-// would say the answer was not sent. A retry that is refused again says nothing either: it cannot be
-// known whether the answer got through before a crash.
+// A task that is not paused on the interaction cannot take it: the session refuses the answer while the
+// task waits on another question, as it does once this answer, sent before, has continued it. If the thread's
+// session no longer records the task, it has ended or moved on: the thread is told, once, since the
+// notice's ID comes from the interaction. If it still records it, the session may only not have parked
+// on it yet (right after a restart, before the recovery has re-emitted the pause), and the answer is
+// likely to be resent from its record then: a retryable error is returned, so the press is decided
+// again, and the notice is not posted, since it would say the answer was not sent. A retry that is
+// refused again says nothing either: it cannot be known whether the answer got through before a crash,
+// or whether it is a press of the same person on a question that its answer already moved past.
 //
 // store.ErrInvalid is final: no retry would change it, so it is logged and the press is done. Any other
 // failure is returned, for the press to be decided again.

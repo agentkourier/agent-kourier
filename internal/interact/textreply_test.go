@@ -34,7 +34,7 @@ func textQuestionWithPrompt(t *testing.T, r *pressRig, posted bool) (a2a.Task, s
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := interact.InteractionID(*in)
+	id := dialect.InteractionID(*in)
 	req, _ := json.Marshal(in)
 	_, err = r.st.CreateInteraction(t.Context(), store.Interaction{TextReplies: true, ID: id, Key: key, TaskID: "task-1", Kind: store.InteractionAskUser, Request: req, CreatedAt: d0, Deadline: deadline})
 	if err != nil {
@@ -322,7 +322,7 @@ func TestTextReplyToAStructuredFreeTextQuestionOnA2AStaysQueued(t *testing.T) {
 	if err != nil || in == nil || in.TextReplies || in.Kind != dialect.AskUser {
 		t.Fatalf("pause = %+v, %v; want a structured question that takes no text replies", in, err)
 	}
-	id := interact.InteractionID(*in)
+	id := dialect.InteractionID(*in)
 	req, _ := json.Marshal(in)
 	if _, err := r.st.CreateInteraction(t.Context(), store.Interaction{ID: id, Key: key, TaskID: "task-1", Kind: store.InteractionAskUser, Request: req, CreatedAt: d0, Deadline: deadline}); err != nil {
 		t.Fatal(err)

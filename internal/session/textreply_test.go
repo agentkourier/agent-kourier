@@ -14,14 +14,14 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
-func textPauseFixture(t *testing.T) (*fixture, *fakeSink) {
+func textPauseFixture(t *testing.T, opts ...func(*fixture)) (*fixture, *fakeSink) {
 	t.Helper()
-	return textPauseFixtureIn(t, "")
+	return textPauseFixtureIn(t, "", opts...)
 }
 
 // textPauseFixtureIn is textPauseFixture for a Binding whose chat.threadReplies is mode. The first turn creates
-// the session, so it is the same in every mode.
-func textPauseFixtureIn(t *testing.T, mode v1alpha1.ThreadReplies) (*fixture, *fakeSink) {
+// the session, so it is the same in every mode. Each of opts sets the fixture up further before the first turn.
+func textPauseFixtureIn(t *testing.T, mode v1alpha1.ThreadReplies, opts ...func(*fixture)) (*fixture, *fakeSink) {
 	t.Helper()
 	f := newFixture(t)
 	f.textReplies = true
@@ -33,6 +33,9 @@ func textPauseFixtureIn(t *testing.T, mode v1alpha1.ThreadReplies) (*fixture, *f
 	}
 	f.agent.answer = func(_ *a2a.Message, h agent.Handler) error {
 		return turn(h, 0, a2a.TaskStateCompleted)
+	}
+	for _, opt := range opts {
+		opt(f)
 	}
 	sink := f.live()
 	if _, err := f.submit(inbound("1")); err != nil {

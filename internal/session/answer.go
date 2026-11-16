@@ -165,6 +165,8 @@ func (m *Manager) readAnswered(t *tstate, refused error, waiting string) (outcom
 	if !busy {
 		detail = waiting // an outcome that was unknown, and the task still waits
 	}
+	// The answer may have continued the task into another question: the pause reopens on the one the task waits on.
+	t.question = t.b.questionOf(*task)
 	return m.repark(t, detail), nil
 }
 

@@ -539,6 +539,7 @@ type tstate struct {
 	answer    bool            // the attempt answers the paused task
 	nid       string          // what a notice of this attempt is named after, if not the turn
 	taskID    a2a.TaskID      // the task the agent named, or the one followed or answered
+	question  string          // while the task is paused: the interaction it waits on (Backend.questionOf), the one answer it takes
 	op        audit.Op        // the call audit rows name, when not a send
 	traceCtx  context.Context // current attempt, for correlated lifecycle logs
 	system    bool            // Agent Kourier made the call itself: no person, no turn
@@ -732,9 +733,12 @@ func (m *Manager) drive(t *tstate, send func(context.Context, agent.Handler) err
 				pausedTaskID = string(final.ID)
 				pausedTurnID = t.outputTurn().ID
 				// The pause is rendered inside this handler, and whoever renders it may end it at
-				// once: the runner must already be parked on this task.
+				// once: the runner must already be parked on this task, and know which question it
+				// waits on, before the interaction module has recorded that question.
+				question := t.b.questionOf(*final)
 				m.mu.Lock()
 				c.textAfter, c.textTries, c.textRejected = 0, 0, false
+				t.question = question
 				c.parked, c.paused, c.driving = final.ID, t, "" // a pause is not a stream
 				m.mu.Unlock()
 				paused = true

@@ -123,6 +123,7 @@ func TestTakesSaysWhatSubmitWouldDoAndWritesNothing(t *testing.T) {
 // reaction: the limit on running mentions reads it, and it decides which buttons the final message carries.
 func TestAMentionsTaskStaysTheMentionsThroughAnAnswer(t *testing.T) {
 	f := newFixture(t)
+	f.parse = askedBy
 	f.ackConfigured, f.ackEnabled, f.ackEmoji = true, true, "eyes"
 	f.textReplies = true
 	answerStarted, releaseAnswer := make(chan struct{}), make(chan struct{})
@@ -147,7 +148,7 @@ func TestAMentionsTaskStaysTheMentionsThroughAnAnswer(t *testing.T) {
 	}
 	f.setTextReply(func(ctx context.Context, k Key, r store.Reply, task a2a.Task) (TextReplyOutcome, error) {
 		msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(r.Text))
-		msg.ID, msg.TaskID, msg.ContextID = r.ID+"/answer", task.ID, task.ContextID
+		msg.ID, msg.TaskID, msg.ContextID = answerIDFor(task), task.ID, task.ContextID
 		return TextReplyConsumed, f.m.Answer(ctx, k, msg)
 	})
 	answer := inbound("2")

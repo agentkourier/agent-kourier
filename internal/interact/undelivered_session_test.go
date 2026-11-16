@@ -44,6 +44,8 @@ type scriptedAgent struct {
 	gate     chan struct{}        // if set, an answer waits for it to be closed
 	sendAt   func(n int) a2a.Task // the task the n-th send ends on (from 0); nil: the approval
 	sends    int
+	// answerTo is the task the n-th answer (from 0) ends on when it is taken; nil, or a nil task: completed.
+	answerTo func(n int) *a2a.Task
 }
 
 func newScriptedAgent() *scriptedAgent { return &scriptedAgent{state: a2a.TaskStateInputRequired} }
@@ -106,7 +108,7 @@ func (a *scriptedAgent) Answer(_ context.Context, msg *a2a.Message, h agent.Hand
 	a.mu.Lock()
 	n := len(a.answers)
 	a.answers = append(a.answers, msg)
-	gate, at := a.gate, a.answerAt
+	gate, at, then := a.gate, a.answerAt, a.answerTo
 	a.mu.Unlock()
 	if gate != nil {
 		<-gate
@@ -114,6 +116,15 @@ func (a *scriptedAgent) Answer(_ context.Context, msg *a2a.Message, h agent.Hand
 	if at != nil {
 		if err := at(n); err != nil {
 			return err
+		}
+	}
+	if then != nil {
+		if next := then(n); next != nil {
+			a.mu.Lock()
+			a.state = next.Status.State
+			a.mu.Unlock()
+			a.emit(h, *next)
+			return nil
 		}
 	}
 	a.mu.Lock()
@@ -191,7 +202,7 @@ func (o *oneBackend) Backend(string) (session.Backend, error) {
 	if o.gone.Load() {
 		return session.Backend{}, fmt.Errorf("no Binding: %w", session.ErrUnknownBinding)
 	}
-	return session.Backend{ThreadTTL: time.Hour, Agent: o.ag}, nil
+	return session.Backend{ThreadTTL: time.Hour, Agent: o.ag, ParseInteraction: o.b.Dialect.ParseInteraction}, nil
 }
 
 func (o *oneBackend) Binding(string) (interact.Binding, error) {
@@ -310,7 +321,7 @@ func (p *process) waitRow(ok func(store.Interaction) bool) store.Interaction {
 	var row store.Interaction
 	testutil.Eventually(p.t, "the interaction", func() bool {
 		var err error
-		row, err = p.st.GetInteraction(p.t.Context(), interact.InteractionID(*in))
+		row, err = p.st.GetInteraction(p.t.Context(), dialect.InteractionID(*in))
 		return err == nil && ok(row)
 	}, testutil.Within(10*time.Second), testutil.Every(2*time.Millisecond))
 	return row
