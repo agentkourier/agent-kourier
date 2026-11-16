@@ -21,7 +21,8 @@ The [glossary](../../docs/reference/glossary.md) defines kind full tier, Agent S
 Each recipe's README defines them again where it first uses them.
 
 All four also need a Slack app with a bot token and an app-level token, and the bot invited to the channel:
-[Configure Slack](../../docs/how-to/configure-slack.md). The recipes call the Slack Secret `slack`, as that guide and
+[Configure Slack](../../docs/how-to/configure-slack.md). The recipes use Socket Mode; to run one with Slack's Events API
+instead, see [Slack in HTTP mode](#slack-in-http-mode). The recipes call the Slack Secret `slack`, as that guide and
 [Install with Helm](../../docs/how-to/install-with-helm.md) do; each recipe's
 Secret step says so.
 
@@ -56,8 +57,9 @@ A broker serves exactly one ChatConnection, the one `config.chatConnection` name
 `connectionRef` names it. To run more than one recipe on one broker, apply each recipe's `kourier/` directory. Then:
 
 - **One ChatConnection.** Every recipe ships the same one: `slack` in the namespace `agent-kourier`, whose Secret
-  `slack` holds the keys `botToken` and `appToken`. The copies are one object, so applying a second recipe leaves it as
-  it is. You create the Secret once.
+  `slack` holds the keys `botToken` and `appToken` (`botToken` and `signingSecret` in [HTTP mode](#slack-in-http-mode)).
+  The copies are one object, so applying a second recipe leaves it as it is (in HTTP mode, only once every copy you
+  apply has `slack: {mode: http}`: see below). You create the Secret once.
 - **One channel each.** A channel of a ChatConnection belongs to at most one Binding. The older Binding keeps it, and a
   second one for the same connection and channel is not served: `kubectl get akbinding -A` shows it `False` with the
   reason `Accepted:ChannelConflict`. Each recipe ships its own channel placeholder, so replace each with a channel of
@@ -73,6 +75,38 @@ connection's, change it in every recipe too, and set `config.chatConnectionSecre
 On a ConfigMap, the files of several recipes go in one directory under names that do not collide
 (`sre-triage-binding.yaml`, not `binding.yaml` twice), with one copy of the ChatConnection: the load refuses a second
 (`duplicate of <file>#<n>`).
+
+## Slack in HTTP mode
+
+Every recipe connects to Slack over Socket Mode, where Agent Kourier opens a WebSocket to Slack. Any of them can use
+Slack's Events API instead, where Slack sends the app's events and button presses to Agent Kourier as signed HTTPS
+requests. HTTP mode is experimental and needs a release later than 0.4.0: the 0.4.0 chart's values schema refuses
+`chatListener`, and its broker does not know `spec.slack.mode`. The Bindings, the agents and the checks stay as they are;
+four things change, and
+[Configure Slack](../../docs/how-to/configure-slack.md), on its **Events API (HTTP)** tab, has each step in full:
+
+1. **The Slack app** has no app-level token. It has a signing secret, Socket Mode off, and the request URL
+   `https://<host>/chat/slack/agent-kourier/slack` under both Event Subscriptions and Interactivity: the path is the
+   recipes' ChatConnection, `slack` in `agent-kourier`.
+2. **The ChatConnection** gets `slack: {mode: http}` in its spec, in `kourier/chatconnection.yaml`:
+
+    ```yaml
+    spec:
+      platform: slack
+      credentialsSecretRef: {name: slack}
+      slack: {mode: http}
+    ```
+
+    Make the change in the `kourier/chatconnection.yaml` of every recipe you apply. The copies are one object, and a
+    `kubectl apply` of a copy without the field removes it from that object again.
+3. **The Secret `slack`** holds `botToken` and `signingSecret`, and does not need `appToken`.
+4. **The chart's values** open the chat listener and expose it over HTTPS: `chatListener.enabled: true`, and an Ingress
+   (`chatListener.ingress.enabled`, with its host and TLS) or another way to reach the chat Service. With
+   `networkPolicy.enabled`, the chart also requires `networkPolicy.chatFrom`: the peers that pass Slack's requests on to
+   the chat port (an ingress controller's pods, or an `ipBlock`).
+
+Slack's check of the request URL succeeds only once Agent Kourier serves the connection, so set the URL after the install,
+as Configure Slack's step 7 says.
 
 ## Writing or changing a recipe
 
