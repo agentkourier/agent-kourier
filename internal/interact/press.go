@@ -126,7 +126,7 @@ func NewPipeline(cfg PressConfig) (*Pipeline, error) {
 // wait. A press that the platform delivers again (the same i.Delivery) after it was recorded returns nil and
 // records nothing: the first delivery is decided, or its person told, once. While that press waits it is handed to
 // Notify again, as it was recorded, in case the first delivery's record committed and returned an error
-// (store.RecordOnce); the worker ignores a press it holds.
+// (store.RecordOnce); the worker ignores a press it holds, and skips one it has finished since.
 func (p *Pipeline) Press(ctx context.Context, i chat.Interaction) error {
 	if !strings.HasPrefix(i.PromptID, "ix-") {
 		return ErrNotInteraction

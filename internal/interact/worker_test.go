@@ -19,6 +19,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
@@ -73,12 +74,19 @@ func pr(seq int64, id string) store.Press {
 	return store.Press{Seq: seq, InteractionID: id, User: "UALICE1", Channel: "C1", MessageRef: "100.1", PressedAt: d0}
 }
 
-// startWorker runs a Worker, by default on a clock that stands at the time of every press, until the test ends
-// or stop is called. It returns what Run returned.
+// allRecorded is a PressLookup that finds every press it is asked for: a fakeProc deletes nothing.
+type allRecorded struct{}
+
+func (allRecorded) GetPress(_ context.Context, seq int64) (store.Press, error) {
+	return store.Press{Seq: seq}, nil
+}
+
+// startWorker runs a Worker, by default on a clock that stands at the time of every press and over a lookup that
+// finds every press, until the test ends or stop is called. It returns what Run returned.
 func startWorker(t *testing.T, p interact.PressProcessor, mod func(*interact.WorkerConfig)) (w *interact.Worker, logs *logBuf, stop func() error) {
 	t.Helper()
 	logs = &logBuf{}
-	cfg := interact.WorkerConfig{Processor: p, Now: func() time.Time { return d0 }, Logger: slog.New(slog.NewTextHandler(logs, nil))}
+	cfg := interact.WorkerConfig{Processor: p, Presses: allRecorded{}, Now: func() time.Time { return d0 }, Logger: slog.New(slog.NewTextHandler(logs, nil))}
 	if mod != nil {
 		mod(&cfg)
 	}
@@ -468,6 +476,7 @@ type crashRig struct {
 func (c crashRig) restart(t *testing.T, mod func(*interact.WorkerConfig)) (stop func() error) {
 	t.Helper()
 	w, _, stop := startWorker(t, c.pl, func(cfg *interact.WorkerConfig) {
+		cfg.Presses = c.st
 		cfg.Now = func() time.Time { return c.now }
 		if mod != nil {
 			mod(cfg)
@@ -556,5 +565,115 @@ func TestPressesRecordedTwiceAreDecidedOnceInOrder(t *testing.T) {
 	want := []string{"UBOB22: @UALICE1 answered this question first."}
 	if got := c.eph.list(); !slices.Equal(got, want) || len(c.sess.answers()) != 2 || len(c.aud.got) != 1 || c.aud.got[0].Result != audit.DecisionAnswered {
 		t.Errorf("told %q, %d sends, audit %+v; want the repeat sent again, the other told, and the one decision audited", got, len(c.sess.answers()), c.aud.got)
+	}
+}
+
+func TestAWorkerNeedsAPressLookup(t *testing.T) {
+	if _, err := interact.NewWorker(interact.WorkerConfig{Processor: &fakeProc{}}); err == nil {
+		t.Fatal("NewWorker with no press lookup succeeded; want it refused")
+	}
+}
+
+// slowGet is a press store whose GetPress, once it has read the press, says so on read and returns when release
+// is closed.
+type slowGet struct {
+	store.Presses
+	read, release chan struct{}
+}
+
+func (s *slowGet) GetPress(ctx context.Context, seq int64) (store.Press, error) {
+	p, err := s.Presses.GetPress(ctx, seq)
+	close(s.read)
+	<-s.release
+	return p, err
+}
+
+// TestAPressHandedOverAgainAfterItWasFinishedIsNotProcessedAgain: a delivery of a press again reads the press as
+// waiting, the worker finishes it and forgets it, and the delivery then hands it over. The worker sees it is no
+// longer recorded and skips it, so its person is told once.
+func TestAPressHandedOverAgainAfterItWasFinishedIsNotProcessedAgain(t *testing.T) {
+	st := sqlitetest.Open(t)
+	limits := store.PressLimits{Total: 10, PerUser: 10}
+	record := func(s store.Presses, key string) (store.Press, bool) {
+		t.Helper()
+		p := store.Press{InteractionID: "ix-1", User: "UALICE1", Connection: "ns/conn", Channel: "C1", MessageRef: "100.1", PressedAt: d0, Delivery: key}
+		got, ok, err := store.RecordOnce(t.Context(), s, p, limits)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got, ok
+	}
+	gate := make(chan struct{})
+	var first int64
+	f := &fakeProc{handle: func(ctx context.Context, p store.Press) (interact.Result, error) {
+		if p.Seq == first {
+			<-gate
+		}
+		if err := st.DeletePress(ctx, p.Seq); err != nil {
+			return interact.Retry, err
+		}
+		return interact.Done, nil
+	}}
+	w, logs, _ := startWorker(t, f, func(c *interact.WorkerConfig) { c.Presses = st })
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(gate) }) }) // before the worker is stopped
+
+	press, _ := record(st, "k1")
+	first = press.Seq
+	w.Submit(press)
+	testutil.Eventually(t, "the first press in flight", func() bool { return f.processed()[first] == 1 })
+	slow := &slowGet{Presses: st, read: make(chan struct{}), release: make(chan struct{})}
+	again := make(chan store.Press, 1)
+	go func() {
+		defer close(again)
+		if p, ok := record(slow, "k1"); ok { // the delivery again finds the press waiting
+			again <- p
+		}
+	}()
+	<-slow.read
+	later, _ := record(st, "k2") // queued behind the first press: it runs once the worker has forgotten the first
+	w.Submit(later)
+	once.Do(func() { close(gate) })
+	testutil.Eventually(t, "the press after it", func() bool { return f.processed()[later.Seq] == 1 })
+	close(slow.release)
+	p, ok := <-again
+	if !ok {
+		t.Fatal("the delivery again was not handed the waiting press")
+	}
+	w.Submit(p)
+	last, _ := record(st, "k3") // queued behind the press handed over again: once it runs, that one has had its turn
+	w.Submit(last)
+	testutil.Eventually(t, "the last press", func() bool { return f.processed()[last.Seq] == 1 })
+	if got := f.processed(); got[first] != 1 {
+		t.Errorf("processed %v; want press %d once", got, first)
+	}
+	if !strings.Contains(logs.String(), "it is skipped") {
+		t.Errorf("log %q; want the skip logged", logs.String())
+	}
+}
+
+// failingLookup fails its first fails lookups, and then finds every press.
+type failingLookup struct{ fails atomic.Int32 }
+
+func (f *failingLookup) GetPress(_ context.Context, seq int64) (store.Press, error) {
+	if f.fails.Add(-1) >= 0 {
+		return store.Press{}, errBoom
+	}
+	return store.Press{Seq: seq}, nil
+}
+
+// TestAPressThatCannotBeLookedUpIsTriedAgain: a press whose record cannot be read is not processed, and is
+// tried again as a failed try is.
+func TestAPressThatCannotBeLookedUpIsTriedAgain(t *testing.T) {
+	f := &fakeProc{handle: func(context.Context, store.Press) (interact.Result, error) { return interact.Done, nil }}
+	look := &failingLookup{}
+	look.fails.Store(2)
+	w, logs, _ := startWorker(t, f, func(c *interact.WorkerConfig) {
+		c.Presses, c.Backoff, c.MaxBackoff = look, time.Millisecond, time.Millisecond
+	})
+	w.Submit(pr(1, "ix-1"))
+	testutil.Eventually(t, "the press", func() bool { return f.processed()[1] == 1 })
+	if look.fails.Load() != -1 || !strings.Contains(logs.String(), "could not be processed") || !strings.Contains(logs.String(), "boom") {
+		t.Errorf("lookups left %d, log %q; want two failed lookups, each logged, before the one try", look.fails.Load(), logs.String())
 	}
 }
