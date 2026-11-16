@@ -366,8 +366,9 @@ type GitHubWebSpec struct {
 
 	// Login is the GitHub login the agent posts as: a user's, such as pr-reviewer, or a GitHub App's, such as
 	// pr-reviewer[bot]. A comment on a pull request, or a review comment, starts a turn only when it mentions the login (an
-	// app's login without its [bot]), and a comment whose author is the login starts none. At most 39 letters and digits with single
-	// hyphens between them, then an optional [bot], at most 44 bytes.
+	// app's login without its [bot]). No event that the login sent starts one, such as its own push to a pull request, nor a
+	// comment whose author it is. At most 39 letters and digits with single hyphens between them, then an optional [bot], at most
+	// 44 bytes.
 	// +kubebuilder:validation:MaxLength=44
 	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}(?:\[bot\])?$`
 	Login string `json:"login"`

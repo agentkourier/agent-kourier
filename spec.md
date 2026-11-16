@@ -559,8 +559,9 @@ Rules:
   `spec.web`, which it must set: `profile` (`kourier-v1`, whose Secret key is `signingSecret`, or `github`, whose key is
   `webhookSecret`) and, for `kourier-v1` alone, the `url` its replies are posted to (D42). A `github` connection, and no
   other, must set `spec.web.github.login`: the GitHub login the agent posts as (a user's, or an app's with `[bot]`; a Binding's
-  login shape and its 44-byte cap). A comment starts a turn only when it mentions it, and a comment by it starts none (issue
-  #347). No broker runs a web connection yet: its start is refused as a platform with no adapter.
+  login shape and its 44-byte cap). A comment starts a turn only when it mentions it, and no event that it sent starts one,
+  its own push to a pull request or its own comment included, so that the agent never answers its own work (issue #347). No
+  broker runs a web connection yet: its start is refused as a platform with no adapter.
 - An empty namespace in a reference means the referring resource's namespace.
 - **One bearer token per request.** The Binding identity (D14) owns the `Authorization`
   header. `AgentBackend` has no credentials of its own; a gateway in front of the

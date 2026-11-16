@@ -191,9 +191,6 @@ func urls() func(*rand.Rand) any {
 	}
 }
 
-// webURLs is a pool of a kourier-v1 connection's reply URLs: the AgentBackend's pool, whose http URLs a reply URL mostly may not
-// use, and the hosts that an http reply URL may and may not name (a Service, localhost and loopback, and hosts that only look
-// like them), in odd cases and with ports and paths.
 // githubLogins is a pool of logins for spec.web.github.login: a user's and an app's, at the 44-byte cap and past it with hyphens, past
 // the 39 letters and digits of the pattern, and the shapes the pattern refuses.
 func githubLogins() func(*rand.Rand) any {
@@ -203,6 +200,9 @@ func githubLogins() func(*rand.Rand) any {
 		"octo-org/sre", "octocat[bot][bot]", "octocát")
 }
 
+// webURLs is a pool of a kourier-v1 connection's reply URLs: the AgentBackend's pool, whose http URLs a reply URL mostly may not
+// use, and the hosts that an http reply URL may and may not name (a Service, localhost and loopback, and hosts that only look
+// like them), in odd cases and with ports and paths.
 func webURLs() func(*rand.Rand) any {
 	backend := urls()
 	hosts := []string{"localhost", "LocalHost", "127.0.0.1", "127.1.2.3", "127.0.0.1.nip.io", "127.0.0", "127.255.255.255", "127.999.0.1", "127.0.0.256", "127.0.0.01", "[::1]", "[::2]", "r.ns.svc", "r.ns.SVC",
