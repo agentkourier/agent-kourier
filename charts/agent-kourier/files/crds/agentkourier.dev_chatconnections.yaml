@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    agentkourier.dev/schema-sha256: 63a61cb6c13d94cd2850a2156e6273a1f08c280570a725b6aed1cb13431048b0
+    agentkourier.dev/schema-sha256: d3a3844a9f8c5b58a925fc142b5a82f0c583cdb72e22b3a2bc85f749254e35eb
     controller-gen.kubebuilder.io/version: v0.23.0
   name: chatconnections.agentkourier.dev
 spec:
@@ -152,12 +152,12 @@ spec:
                 - fieldPath: .url
                   message: is required by the kourier-v1 profile, which posts the
                     replies to it
-                  rule: self.profile != 'kourier-v1' || (has(self.url) && self.url
-                    != '')
+                  rule: self.profile != 'kourier-v1' || (has(self.url) && size(self.url)
+                    > 0)
                 - fieldPath: .url
                   message: is set, but the github profile sends no replies
-                  rule: self.profile != 'github' || !has(self.url) || self.url ==
-                    ''
+                  rule: self.profile != 'github' || !has(self.url) || size(self.url)
+                    == 0
             required:
             - credentialsSecretRef
             - platform

@@ -323,8 +323,8 @@ type SlackConnectionSpec struct {
 
 // WebConnectionSpec is the settings of a web connection: the profile that its requests and replies follow.
 //
-// +kubebuilder:validation:XValidation:rule="self.profile != 'kourier-v1' || (has(self.url) && self.url != ”)",message="is required by the kourier-v1 profile, which posts the replies to it",fieldPath=".url"
-// +kubebuilder:validation:XValidation:rule="self.profile != 'github' || !has(self.url) || self.url == ”",message="is set, but the github profile sends no replies",fieldPath=".url"
+// +kubebuilder:validation:XValidation:rule="self.profile != 'kourier-v1' || (has(self.url) && size(self.url) > 0)",message="is required by the kourier-v1 profile, which posts the replies to it",fieldPath=".url"
+// +kubebuilder:validation:XValidation:rule="self.profile != 'github' || !has(self.url) || size(self.url) == 0",message="is set, but the github profile sends no replies",fieldPath=".url"
 type WebConnectionSpec struct {
 	// Profile is the integration the connection speaks. kourier-v1 is Agent Kourier's own signed JSON contract: it takes signed
 	// requests and posts the agent's replies, signed, to url. github takes GitHub's webhooks and sends no replies: the agent

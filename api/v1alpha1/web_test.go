@@ -121,8 +121,8 @@ func TestBindingOutputValues(t *testing.T) {
 	}
 }
 
-// webURLRule is one rule of spec.web.url, a disjunction of `self == ”`, `self.matches(...)` and `!self.matches(...)` terms, as Go
-// evaluates it: CEL's matches is Go's regexp, so a term is its regex.
+// webURLRule is one rule of spec.web.url, a disjunction of terms (a test for the empty string, `self.matches(...)` and
+// `!self.matches(...)`), as Go evaluates it: CEL's matches is Go's regexp, so a term is its regex.
 type webURLRule struct {
 	terms []func(string) bool
 }
