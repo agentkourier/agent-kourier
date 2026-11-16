@@ -124,7 +124,9 @@ func NewPipeline(cfg PressConfig) (*Pipeline, error) {
 // not Slack's, and is the time of the decision whenever it is made (WP-33e contract). It returns
 // ErrNotInteraction for a button that is not an interaction's, and store.ErrLimit when too many presses
 // wait. A press that the platform delivers again (the same i.Delivery) after it was recorded returns nil and
-// does nothing: the first delivery is decided, or its person told, once, whether it is processed yet or not.
+// records nothing: the first delivery is decided, or its person told, once. While that press waits it is handed to
+// Notify again, as it was recorded, in case the first delivery's record committed and returned an error
+// (store.RecordOnce); the worker ignores a press it holds.
 func (p *Pipeline) Press(ctx context.Context, i chat.Interaction) error {
 	if !strings.HasPrefix(i.PromptID, "ix-") {
 		return ErrNotInteraction
@@ -135,14 +137,15 @@ func (p *Pipeline) Press(ctx context.Context, i chat.Interaction) error {
 	}
 	press := store.Press{InteractionID: i.PromptID, User: i.User, Connection: i.At.Conn, Channel: i.At.Channel, MessageRef: i.At.ID, Inputs: inputs, PressedAt: p.cfg.Now(), Delivery: i.Delivery}
 	press.TraceParent, press.TraceState = telemetry.Capture(ctx)
-	switch press.Seq, err = p.cfg.Store.RecordPress(ctx, press, p.cfg.Limits); {
-	case errors.Is(err, store.ErrDuplicate):
-		p.cfg.Logger.InfoContext(ctx, "interact: a press delivered again was recorded before; it is acknowledged and not recorded again", "interaction", i.PromptID)
-		return nil
+	recorded, ok, err := store.RecordOnce(ctx, p.cfg.Store, press, p.cfg.Limits)
+	switch {
 	case err != nil:
 		return fmt.Errorf("interact: record a press of %s: %w", i.PromptID, err)
+	case !ok:
+		p.cfg.Logger.InfoContext(ctx, "interact: a press delivered again was processed before; it is acknowledged and not recorded again", "interaction", i.PromptID)
+		return nil
 	}
-	p.cfg.Notify(press)
+	p.cfg.Notify(recorded)
 	return nil
 }
 

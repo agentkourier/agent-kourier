@@ -79,6 +79,8 @@ type webDeliveries struct {
 	timeout time.Duration   // set by WithHTTPTimeout, read-only after construction
 	// onAck is told of each request an app answered 200: the Server records the ack, with no payload (sockets.settle).
 	onAck func(id string)
+	// onDone is told of each request the fake will send no more (sockets.finish): answered 200, or its retries over.
+	onDone func(id string)
 	// revoked says whether an app is revoked (Server.isRevoked): a request of a revoked app is not sent, or sent again.
 	revoked func(appID string) bool
 
@@ -150,6 +152,8 @@ func (d *webDeliveries) drain(key string) {
 		d.mu.Unlock()
 		if reason := d.attempt(r, 0, ""); reason != "" && len(d.retries) > 0 {
 			d.wg.Go(func() { d.retry(r, reason) }) // this goroutine is counted in wg, so the count is not 0 here
+		} else {
+			d.onDone(r.id)
 		}
 		d.mu.Lock()
 		d.queues[key] = d.queues[key][1:]
@@ -162,6 +166,7 @@ func (d *webDeliveries) drain(key string) {
 // (retryReason). reason is why the first attempt failed. Close ends it, at once, and so does a revocation of its app, before the next
 // attempt.
 func (d *webDeliveries) retry(r *webRequest, reason string) {
+	defer d.onDone(r.id)
 	for n, wait := range d.retries {
 		t := time.NewTimer(wait)
 		select {
@@ -273,8 +278,9 @@ func (s *Server) sendHTTP(app App, lane, typ string, payload any) (string, error
 	default:
 		return "", invalid("fakeslack: an app in HTTP mode is sent events_api and interactive payloads, not %q", typ)
 	}
-	r.id = s.sock.issue()
+	r.id = s.sock.issueRequest()
 	if !s.web.enqueue(app.AppID+"\x00"+lane, r) {
+		s.sock.finish(r.id)
 		return "", fmt.Errorf("fakeslack: closing: %w", ErrNoConnection)
 	}
 	return r.id, nil

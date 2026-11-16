@@ -93,17 +93,24 @@ func (su suite) presses(t *testing.T) {
 		}
 		seq, err := s.RecordPress(ctx, delivered("ns/a", "k1"), roomy)
 		noErr(t, err, "the first delivery")
-		_, err = s.RecordPress(ctx, delivered("ns/a", "k1"), roomy)
+		again, err := s.RecordPress(ctx, delivered("ns/a", "k1"), roomy)
 		isErr(t, err, store.ErrDuplicate, "the second delivery, with the press waiting")
+		if again != seq {
+			t.Errorf("the second delivery, with the press waiting, returned seq %d; want the waiting press's, %d", again, seq)
+		}
 		if got, _ := s.ListPresses(ctx); len(got) != 1 || got[0].Seq != seq {
 			t.Fatalf("presses = %+v; want only the first delivery's", got)
 		}
-		noErr(t, s.DeletePress(ctx, seq), "DeletePress")
-		_, err = s.RecordPress(ctx, delivered("ns/a", "k1"), roomy)
-		isErr(t, err, store.ErrDuplicate, "a delivery after the press was processed")
 		s = reopen()
-		_, err = s.RecordPress(ctx, delivered("ns/a", "k1"), roomy)
-		isErr(t, err, store.ErrDuplicate, "a delivery after a restart")
+		if again, err := s.RecordPress(ctx, delivered("ns/a", "k1"), roomy); !errors.Is(err, store.ErrDuplicate) || again != seq {
+			t.Errorf("a delivery after a restart, with the press waiting = %d, %v; want %d and ErrDuplicate", again, err, seq)
+		}
+		noErr(t, s.DeletePress(ctx, seq), "DeletePress")
+		again, err = s.RecordPress(ctx, delivered("ns/a", "k1"), roomy)
+		isErr(t, err, store.ErrDuplicate, "a delivery after the press was processed")
+		if again != 0 {
+			t.Errorf("a delivery after the press was processed returned seq %d; want 0", again)
+		}
 		for _, p := range []store.Press{delivered("ns/b", "k1"), delivered("ns/a", "k2"), delivered("ns/a", ""), delivered("ns/a", "")} {
 			_, err := s.RecordPress(ctx, p, roomy)
 			noErr(t, err, fmt.Sprintf("a press on %q with key %q", p.Connection, p.Delivery))
@@ -111,6 +118,58 @@ func (su suite) presses(t *testing.T) {
 		if got, _ := s.ListPresses(ctx); len(got) != 4 {
 			t.Errorf("%d presses waiting; want 4: another connection's key, another key, and two presses with none", len(got))
 		}
+	})
+
+	// A commit can succeed and its caller see an error, so the first delivery of a press may never have been handed to the
+	// worker: RecordOnce hands over the press that waits, as it was recorded, when the platform sends it again, and nothing once
+	// it is processed.
+	su.run(t, "RecordOnce hands over the waiting press of a delivery recorded before, and nothing once it is processed", func(t *testing.T, s store.Store) {
+		ctx := t.Context()
+		first := press("ix", "U1", t0)
+		first.Delivery = "k1"
+		seq, err := s.RecordPress(ctx, first, roomy) // its caller saw an error, say, and told no worker
+		noErr(t, err, "the first delivery")
+		again := first
+		again.PressedAt, again.Inputs = t0.Add(time.Minute), []byte(`{"other":"inputs"}`)
+		got, ok, err := store.RecordOnce(ctx, s, again, roomy)
+		want := first
+		want.Seq = seq
+		if err != nil || !ok || !samePress(got, want) {
+			t.Fatalf("RecordOnce of the delivery again = %+v, %t, %v; want the press as it was recorded, %+v", got, ok, err, want)
+		}
+		if l, _ := s.ListPresses(ctx); len(l) != 1 {
+			t.Errorf("%d presses waiting; want the one", len(l))
+		}
+		noErr(t, s.DeletePress(ctx, seq), "DeletePress")
+		if got, ok, err := store.RecordOnce(ctx, s, again, roomy); err != nil || ok {
+			t.Errorf("RecordOnce after the press was processed = %+v, %t, %v; want nothing to hand over", got, ok, err)
+		}
+		fresh := press("ix", "U2", t0)
+		fresh.Delivery = "k2"
+		if got, ok, err := store.RecordOnce(ctx, s, fresh, roomy); err != nil || !ok || got.Seq == 0 || got.User != "U2" {
+			t.Errorf("RecordOnce of a new press = %+v, %t, %v; want it recorded and handed over with its seq", got, ok, err)
+		}
+		_, ok, err = store.RecordOnce(ctx, s, press("ix", "U3", t0), store.PressLimits{Total: 1, PerUser: 1})
+		isErr(t, err, store.ErrLimit, "RecordOnce past the limits")
+		if ok {
+			t.Error("RecordOnce past the limits has a press to hand over")
+		}
+	})
+
+	su.run(t, "GetPress returns a waiting press as it was recorded, and ErrNotFound once it is processed", func(t *testing.T, s store.Store) {
+		ctx := t.Context()
+		p := press("ix", "U1", t0)
+		seq, err := s.RecordPress(ctx, p, roomy)
+		noErr(t, err, "RecordPress")
+		p.Seq = seq
+		if got, err := s.GetPress(ctx, seq); err != nil || !samePress(got, p) {
+			t.Errorf("GetPress = %+v, %v; want %+v", got, err, p)
+		}
+		noErr(t, s.DeletePress(ctx, seq), "DeletePress")
+		_, err = s.GetPress(ctx, seq)
+		isErr(t, err, store.ErrNotFound, "GetPress of a processed press")
+		_, err = s.GetPress(ctx, 0)
+		isErr(t, err, store.ErrInvalid, "GetPress of seq 0")
 	})
 
 	// A press sent again is reported as recorded even when the limits are full, so that its acknowledgement is not refused; and a

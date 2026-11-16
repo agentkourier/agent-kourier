@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -24,12 +25,16 @@ func (s *adapter) RecordPress(ctx context.Context, p store.Press, limits store.P
 			return err
 		}
 		if p.Delivery != "" {
-			var seen bool
-			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM press_deliveries WHERE connection = $1 AND delivery_key = $2)`, p.Connection, p.Delivery).Scan(&seen); err != nil {
-				return fmt.Errorf("look up the delivery: %w", err)
-			}
-			if seen {
+			var waiting *int64
+			switch err := tx.QueryRow(ctx, `SELECT p.seq FROM press_deliveries d LEFT JOIN interaction_presses p ON p.seq = d.seq
+				WHERE d.connection = $1 AND d.delivery_key = $2`, p.Connection, p.Delivery).Scan(&waiting); {
+			case err == nil:
+				if waiting != nil {
+					seq = *waiting
+				} // 0 once the press is processed
 				return store.ErrDuplicate
+			case !errors.Is(err, pgx.ErrNoRows):
+				return fmt.Errorf("look up the delivery: %w", err)
 			}
 		}
 		var total, user int
@@ -47,31 +52,55 @@ func (s *adapter) RecordPress(ctx context.Context, p store.Press, limits store.P
 		if p.Delivery == "" {
 			return nil
 		}
-		_, err := tx.Exec(ctx, `INSERT INTO press_deliveries (connection, delivery_key, pressed_at) VALUES ($1, $2, $3)`, p.Connection, p.Delivery, p.PressedAt)
+		_, err := tx.Exec(ctx, `INSERT INTO press_deliveries (connection, delivery_key, seq, pressed_at) VALUES ($1, $2, $3, $4)`, p.Connection, p.Delivery, seq, p.PressedAt)
 		return err
 	})
 	if err != nil {
-		return 0, fmt.Errorf("record press of %s: %w", p.InteractionID, err)
+		if !errors.Is(err, store.ErrDuplicate) {
+			seq = 0
+		}
+		return seq, fmt.Errorf("record press of %s: %w", p.InteractionID, err)
 	}
 	return seq, nil
 }
 
+// pressColumns are the columns of a press, in the order scanPress reads them.
+const pressColumns = `seq, interaction_id, user_id, connection, channel, message_ts, inputs, pressed_at, trace_parent, trace_state`
+
+func scanPress(r pgx.Row) (store.Press, error) {
+	var p store.Press
+	var at time.Time
+	if err := r.Scan(&p.Seq, &p.InteractionID, &p.User, &p.Connection, &p.Channel, &p.MessageRef, &p.Inputs, &at, &p.TraceParent, &p.TraceState); err != nil {
+		return store.Press{}, err
+	}
+	p.PressedAt = utc(at)
+	return p, nil
+}
+
+// GetPress implements store.Presses.
+func (s *adapter) GetPress(ctx context.Context, seq int64) (store.Press, error) {
+	p, err := scanPress(s.pool.QueryRow(ctx, `SELECT `+pressColumns+` FROM interaction_presses WHERE seq = $1`, seq))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.Press{}, fmt.Errorf("get press %d: %w", seq, store.ErrNotFound)
+	} else if err != nil {
+		return store.Press{}, fmt.Errorf("get press %d: %w", seq, err)
+	}
+	return p, nil
+}
+
 // ListPresses implements store.Presses.
 func (s *adapter) ListPresses(ctx context.Context) ([]store.Press, error) {
-	rows, err := s.pool.Query(ctx, `SELECT seq, interaction_id, user_id, connection, channel, message_ts, inputs, pressed_at, trace_parent, trace_state
-		FROM interaction_presses ORDER BY seq`)
+	rows, err := s.pool.Query(ctx, `SELECT `+pressColumns+` FROM interaction_presses ORDER BY seq`)
 	if err != nil {
 		return nil, fmt.Errorf("list presses: %w", err)
 	}
 	defer rows.Close()
 	var out []store.Press
 	for rows.Next() {
-		var p store.Press
-		var at time.Time
-		if err := rows.Scan(&p.Seq, &p.InteractionID, &p.User, &p.Connection, &p.Channel, &p.MessageRef, &p.Inputs, &at, &p.TraceParent, &p.TraceState); err != nil {
+		p, err := scanPress(rows)
+		if err != nil {
 			return nil, fmt.Errorf("list presses: %w", err)
 		}
-		p.PressedAt = utc(at)
 		out = append(out, p)
 	}
 	if err := rows.Err(); err != nil {

@@ -203,6 +203,11 @@ func (f *fakeAdapter) ListPendingAcknowledgmentReplies(_ context.Context) ([]sto
 	return zero[[]store.Reply](), f.err
 }
 
+func (f *fakeAdapter) GetPress(_ context.Context, _ int64) (store.Press, error) {
+	f.record("GetPress")
+	return zero[store.Press](), f.err
+}
+
 func (f *fakeAdapter) ListPresses(_ context.Context) ([]store.Press, error) {
 	f.record("ListPresses")
 	return zero[[]store.Press](), f.err

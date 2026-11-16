@@ -272,6 +272,7 @@ func NewHandler(opts ...Option) *Server {
 	}
 	s.finishApps()
 	s.web.onAck = func(id string) { s.sock.settle(id, nil) }
+	s.web.onDone = s.sock.finish
 	s.web.revoked = s.isRevoked
 	s.web.start()
 	s.control = s.newControlRoutes()

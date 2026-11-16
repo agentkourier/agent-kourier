@@ -14,7 +14,10 @@ var ErrNoConnection = errors.New("fakeslack: no Socket Mode client is connected"
 
 // envelope is the fake's record of one envelope it sent.
 type envelope struct {
-	acked   chan struct{} // closed on the first ack
+	acked chan struct{} // closed on the first ack
+	// sent is closed once the fake will send the envelope no more: at once over Socket Mode, where it never sends one again,
+	// and for a request to an app in HTTP mode once it is answered 200, its retries have run out or end (webDeliveries).
+	sent    chan struct{}
 	payload json.RawMessage
 }
 
@@ -139,19 +142,61 @@ func (sk *sockets) settle(id string, payload json.RawMessage) {
 	}
 }
 
-// issue records a new envelope, not yet acked, and returns its ID.
-func (sk *sockets) issue() string {
+// issueRequest records a new request to an app in HTTP mode, not yet acked and not yet sent for the last time (finish), and
+// returns its ID.
+func (sk *sockets) issueRequest() string {
 	sk.mu.Lock()
 	defer sk.mu.Unlock()
-	return sk.issueLocked()
+	id := sk.issueLocked()
+	sk.pending[id].sent = make(chan struct{})
+	return id
 }
 
-// issueLocked is issue for a caller that holds mu.
+// issueLocked records a new Socket Mode envelope, not yet acked, and returns its ID. The fake never sends one again, so it is
+// sent for the last time as it is issued. The caller holds mu.
 func (sk *sockets) issueLocked() string {
 	sk.issued++
 	id := fmt.Sprintf("env-%06d", sk.issued)
-	sk.pending[id] = &envelope{acked: make(chan struct{})}
+	sent := make(chan struct{})
+	close(sent)
+	sk.pending[id] = &envelope{acked: make(chan struct{}), sent: sent}
 	return id
+}
+
+// finish records that the fake will send the request id no more. A second call is a no-op.
+func (sk *sockets) finish(id string) {
+	sk.mu.Lock()
+	defer sk.mu.Unlock()
+	env := sk.pending[id]
+	if env == nil {
+		return
+	}
+	select {
+	case <-env.sent:
+	default:
+		close(env.sent)
+	}
+}
+
+// WaitDone blocks until the fake will send none of the envelopes again, or ctx ends, or the Server is closed: an envelope over
+// Socket Mode at once, since the fake never sends one again, and a request to an app in HTTP mode once it is answered 200, or
+// its retries have run out or ended (a 4xx, a revoked app, the Server closing). A test that counts what an app did for a press
+// waits for it, so that a retry the app saw twice is counted. It fails at once for an envelope ID the fake never issued.
+func (s *Server) WaitDone(ctx context.Context, envelopeIDs ...string) error {
+	for _, id := range envelopeIDs {
+		env := s.envelope(id)
+		if env == nil {
+			return fmt.Errorf("fakeslack: no envelope %q was sent: %w", id, ErrNotFound)
+		}
+		select {
+		case <-env.sent:
+		case <-ctx.Done():
+			return fmt.Errorf("fakeslack: waiting for the last delivery of %s: %w", id, ctx.Err())
+		case <-s.sock.closing:
+			return fmt.Errorf("fakeslack: closed while waiting for the last delivery of %s", id)
+		}
+	}
+	return nil
 }
 
 // envelope returns the record of an envelope the fake sent, or nil.

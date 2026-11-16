@@ -137,6 +137,19 @@ func (g *Guarded) RecordPress(ctx context.Context, p Press, limits PressLimits) 
 	return seq, err
 }
 
+// GetPress implements Presses.
+func (g *Guarded) GetPress(ctx context.Context, seq int64) (press Press, err error) {
+	err = g.run(ctx, "agentkourier.store.GetPress", func(ctx context.Context) error {
+		if seq < 1 {
+			return fmt.Errorf("get press %d: a positive seq is required: %w", seq, ErrInvalid)
+		}
+		var err error
+		press, err = g.a.GetPress(ctx, seq)
+		return err
+	})
+	return press, err
+}
+
 // ListPresses implements Presses.
 func (g *Guarded) ListPresses(ctx context.Context) (presses []Press, err error) {
 	err = g.run(ctx, "agentkourier.store.ListPresses", func(ctx context.Context) error {
