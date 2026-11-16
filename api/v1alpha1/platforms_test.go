@@ -11,7 +11,7 @@ import (
 var (
 	slackSpec     = ChatConnectionSpec{Platform: PlatformSlack}
 	kourierV1Spec = ChatConnectionSpec{Platform: PlatformWeb, Web: &WebConnectionSpec{Profile: WebProfileKourierV1, URL: "https://receiver.example.com/replies"}}
-	githubSpec    = ChatConnectionSpec{Platform: PlatformWeb, Web: &WebConnectionSpec{Profile: WebProfileGitHub}}
+	githubSpec    = ChatConnectionSpec{Platform: PlatformWeb, Web: &WebConnectionSpec{Profile: WebProfileGitHub, GitHub: &GitHubWebSpec{Login: testLogin}}}
 )
 
 // platformOf is the rules of the connection with spec, which the tests below cannot do without.
@@ -261,7 +261,7 @@ func TestKourierV1IDShapes(t *testing.T) {
 // added to Validate without a case in ChatPlatformOf fails here, before resolution can meet a connection whose Bindings it cannot
 // check.
 func TestChatPlatformOfAnswersThePlatformsValidateAccepts(t *testing.T) {
-	webs := []*WebConnectionSpec{nil, {}, {Profile: WebProfileKourierV1, URL: "https://r.example.com"}, {Profile: WebProfileGitHub},
+	webs := []*WebConnectionSpec{nil, {}, {Profile: WebProfileKourierV1, URL: "https://r.example.com"}, {Profile: WebProfileGitHub, GitHub: &GitHubWebSpec{Login: testLogin}},
 		{Profile: "gitlab"}, {Profile: "GitHub"}}
 	for _, platform := range []string{PlatformSlack, PlatformWeb, "github", "teams", "Slack", ""} {
 		for _, web := range webs {

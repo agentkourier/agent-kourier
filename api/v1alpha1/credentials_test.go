@@ -64,7 +64,7 @@ func TestEveryPlatformAndModeValidateAcceptsHasCredentialKeys(t *testing.T) {
 			}
 		}
 	}
-	for _, web := range []*WebConnectionSpec{nil, {}, {Profile: WebProfileKourierV1, URL: "https://r.example.com"}, {Profile: WebProfileGitHub},
+	for _, web := range []*WebConnectionSpec{nil, {}, {Profile: WebProfileKourierV1, URL: "https://r.example.com"}, {Profile: WebProfileGitHub, GitHub: &GitHubWebSpec{Login: testLogin}},
 		{Profile: "gitlab"}, {Profile: "GitHub"}} {
 		c := load[ChatConnection](t, "chatconnection.yaml")
 		c.Spec.Platform, c.Spec.Web = PlatformWeb, web

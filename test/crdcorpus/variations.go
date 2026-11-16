@@ -194,6 +194,15 @@ func urls() func(*rand.Rand) any {
 // webURLs is a pool of a kourier-v1 connection's reply URLs: the AgentBackend's pool, whose http URLs a reply URL mostly may not
 // use, and the hosts that an http reply URL may and may not name (a Service, localhost and loopback, and hosts that only look
 // like them), in odd cases and with ports and paths.
+// githubLogins is a pool of logins for spec.web.github.login: a user's and an app's, at the 44-byte cap and past it with hyphens, past
+// the 39 letters and digits of the pattern, and the shapes the pattern refuses.
+func githubLogins() func(*rand.Rand) any {
+	hyphenated := func(n int) string { return strings.TrimSuffix(strings.Repeat("a-", n), "-") }
+	return of("octocat", "pr-reviewer[bot]", "a", strings.Repeat("a", 39)+"[bot]", hyphenated(22)+"x", hyphenated(23), strings.Repeat("a", 40),
+		strings.Repeat("a", 39), "", nil, absent{}, "@octocat", "octo--cat", "-octocat", "octocat-", "octo.cat", "octo_cat", "octocat[app]", "[bot]",
+		"octo-org/sre", "octocat[bot][bot]", "octocát")
+}
+
 func webURLs() func(*rand.Rand) any {
 	backend := urls()
 	hosts := []string{"localhost", "LocalHost", "127.0.0.1", "127.1.2.3", "127.0.0.1.nip.io", "127.0.0", "127.255.255.255", "127.999.0.1", "127.0.0.256", "127.0.0.01", "[::1]", "[::2]", "r.ns.svc", "r.ns.SVC",
@@ -292,10 +301,17 @@ func variationTemplates() []template {
 		{kind: "ChatConnection", doc: webConnectionDoc, mutations: []mutation{
 			{"spec.platform", of("web", "web", "slack", "", "Web")},
 			{"spec.web", of(absent{}, nil, map[string]any{}, map[string]any{"profile": "github"}, map[string]any{"profile": "github", "url": ""},
-				map[string]any{"profile": "kourier-v1"}, map[string]any{"profile": "kourier-v1", "url": nil})},
+				map[string]any{"profile": "kourier-v1"}, map[string]any{"profile": "kourier-v1", "url": nil},
+				map[string]any{"profile": "github", "github": map[string]any{"login": "pr-reviewer[bot]"}},
+				map[string]any{"profile": "github", "url": "", "github": map[string]any{"login": "octocat"}})},
 			{"spec.web.profile", of("kourier-v1", "kourier-v1", "github", "", "GitHub", "kourier-v2", absent{})},
 			{"spec.web.url", webURLs()},
 			{"spec.web.url", webURLs()},
+			// The github block, which only the github profile has and which it must have, and its login: a GitHub login of 44 bytes at
+			// most, an app's with [bot].
+			{"spec.web.github", of(absent{}, nil, map[string]any{}, map[string]any{"login": nil}, map[string]any{"login": "octocat"},
+				map[string]any{"login": "pr-reviewer[bot]"})},
+			{"spec.web.github.login", githubLogins()},
 			{"spec.slack", of(absent{}, absent{}, nil, map[string]any{}, map[string]any{"mode": "http"})},
 		}},
 		{kind: "Binding", doc: mentionBindingDoc, mutations: []mutation{

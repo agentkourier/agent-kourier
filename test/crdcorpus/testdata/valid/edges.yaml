@@ -1536,7 +1536,7 @@ spec:
   credentialsSecretRef: {name: slack-main}
   slack: {}
 ---
-# A web connection of the github profile, which has no url.
+# A web connection of the github profile, which has no url, and the login of a user the agent posts as.
 apiVersion: agentkourier.dev/v1alpha1
 kind: ChatConnection
 metadata:
@@ -1548,6 +1548,38 @@ spec:
     name: github-webhook
   web:
     profile: github
+    github:
+      login: pr-reviewer
+---
+# A github connection whose login is a GitHub App's: 39 letters and its [bot], at the 44-byte cap.
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: edges-web-github-app-login
+  namespace: sre
+spec:
+  platform: web
+  credentialsSecretRef:
+    name: github-webhook
+  web:
+    profile: github
+    github:
+      login: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa[bot]
+---
+# A github connection whose login has hyphens between its letters: 23 letters and 21 hyphens, at the 44-byte cap.
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: edges-web-github-hyphenated-login
+  namespace: sre
+spec:
+  platform: web
+  credentialsSecretRef:
+    name: github-webhook
+  web:
+    profile: github
+    github:
+      login: a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-ax
 ---
 # A github connection that writes its url out empty, which the broker reads as unset.
 apiVersion: agentkourier.dev/v1alpha1
@@ -1562,6 +1594,8 @@ spec:
   web:
     profile: github
     url: ""
+    github:
+      login: pr-reviewer[bot]
 ---
 # A web connection of the kourier-v1 profile with an https url, a port and a path.
 apiVersion: agentkourier.dev/v1alpha1

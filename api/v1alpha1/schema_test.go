@@ -339,6 +339,7 @@ func TestSchemaPatternsEqualTheGoLiterals(t *testing.T) {
 		{"bindings", "spec.chat.mentions[].name", mentionName},
 		{"bindings", "spec.chat.mentions[].user", mentionUser},
 		{"bindings", "spec.interactions.approverGroups[]", approverGroupID},
+		{"chatconnections", "spec.web.github.login", githubLogin},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			if got := crdSchema(t, tc.plural).at(t, tc.path).str("pattern"); got != tc.re.String() {
@@ -365,6 +366,7 @@ func TestSchemaCapsEqualTheBrokersCaps(t *testing.T) {
 		// The broker counts bytes and the schema characters, so the schema is never the stricter of the two.
 		{"backend url", backends.at(t, "spec.url"), "maxLength", maxURLLen},
 		{"web reply url", connections.at(t, "spec.web.url"), "maxLength", maxURLLen},
+		{"github login", connections.at(t, "spec.web.github.login"), "maxLength", maxGitHubLoginLen},
 		{"header value", backends.at(t, "spec.headers[].value"), "maxLength", maxHeaderValueLen},
 		{"channel", bindings.at(t, "spec.chat.channel"), "maxLength", maxChatIDLen},
 		{"sender ID", bindings.at(t, trigger+".from.id"), "maxLength", maxChatIDLen},

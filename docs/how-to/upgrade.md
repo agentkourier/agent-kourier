@@ -1019,6 +1019,9 @@ it did, and a Slack Binding behaves as before.
   connection is refused with `UnsupportedOnPlatform`.
 - **A mention's `user` may be 64 bytes**, up from 44, and the four chat ID fields take a `kourier-v1` ID beside Slack's and GitHub's
   shapes. A Slack connection still holds them to Slack's shapes.
+- **A `github` connection names the agent's GitHub login** in `spec.web.github.login`, which it must set and no other profile may:
+  a user's login, or a GitHub App's with its `[bot]`, at most 44 bytes. An earlier release has no web connection, so no stored
+  object needs it.
 - **`kubectl get akconnection -o wide` shows `PROFILE`**, the web profile, after `PLATFORM`. Without `-o wide` the columns are as before.
   The ChatConnection and Binding CRDs change, and their schema hashes with them: the chart applies them with the release when
   `crds.install` is true, or unset on `config.source: crds`; if you apply the CRDs yourself, apply `charts/agent-kourier/files/crds` again.
