@@ -716,6 +716,7 @@ func TestRecoverAttachesToARunnerThatWokeFirst(t *testing.T) {
 func TestRecoverPinnedAnswerWaitsForInteractionsWithoutHandlerErrors(t *testing.T) {
 	f, sink := restarted(t)
 	f.textReplies = true
+	f.parse = askedBy
 	var logs bytes.Buffer
 	f.m.cfg.Logger = slog.New(slog.NewTextHandler(&logs, nil))
 	f.agent.get = func(a2a.TaskID) (*a2a.Task, error) {
@@ -741,7 +742,7 @@ func TestRecoverPinnedAnswerWaitsForInteractionsWithoutHandlerErrors(t *testing.
 		if r.InteractionID != reply.InteractionID {
 			t.Errorf("question = %q; want %q", r.InteractionID, reply.InteractionID)
 		}
-		msg := answerMsg("original-question/answer")
+		msg := answerMsg(answerIDFor(task))
 		msg.TaskID = task.ID
 		return TextReplyConsumed, f.m.Answer(ctx, k, msg)
 	})

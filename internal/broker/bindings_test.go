@@ -26,6 +26,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/internal/session"
@@ -262,6 +263,14 @@ func TestBackendCarriesWhatTheSessionNeeds(t *testing.T) {
 	be.Attribute(msg, dialect.User{ID: "U1", Name: "Ada"})
 	if _, ok := msg.Metadata["agentkourier.dev/actor"]; !ok {
 		t.Errorf("Attribute left no actor in %v: it is not the kagent-v1 dialect's", msg.Metadata)
+	}
+	if be.ParseInteraction == nil {
+		t.Fatal("ParseInteraction is nil: the session could not tell which question a task waits on, and would take no answer")
+	}
+	question := map[string]any{"type": "ask_user_request", "id": "req-1", "questions": []map[string]any{{"question": "Which?"}}}
+	paused := a2a.Task{ID: "task-1", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired, Message: &a2a.Message{Metadata: map[string]any{kagentv1.HITLExtension: question}}}}
+	if in, err := be.ParseInteraction(paused); err != nil || in == nil || in.Kind != dialect.AskUser || in.RequestID != "req-1" {
+		t.Errorf("ParseInteraction = %+v, %v; want the kagent-v1 dialect's reading of the question req-1", in, err)
 	}
 }
 

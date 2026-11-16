@@ -198,7 +198,7 @@ func (i *Intake) closeUnusable(ctx context.Context, p Pause, row store.Interacti
 // refuseAskUser turns away a question on a Binding that does not allow them: the thread is told, the
 // task is cancelled, and the decision is audited and counted, once, by the same rule as refuseUnusable.
 func (i *Intake) refuseAskUser(ctx context.Context, p Pause, b Binding, in dialect.Interaction) error {
-	id := InteractionID(in)
+	id := dialect.InteractionID(in)
 	handled, err := i.cancel(ctx, p, "ask-user not allowed", noticeAskUser, id)
 	switch {
 	case handled:

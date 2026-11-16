@@ -5,8 +5,6 @@ package interact
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -115,22 +113,6 @@ type Pause struct {
 	// Recovered says the task was found again after a restart. A recovered pause may already be past its
 	// original interaction deadline, so the tap gives a failed hand-off a fresh retry window.
 	Recovered bool
-}
-
-// InteractionID is the ID a pause becomes: a hash of its kind, task, request ID and tool IDs, so the
-// same pause always has the same ID and agent text never reaches one.
-func InteractionID(in dialect.Interaction) string {
-	tools := make([]string, len(in.Tools))
-	for i, t := range in.Tools {
-		tools[i] = t.ID
-	}
-	slices.Sort(tools)
-	var b strings.Builder
-	for _, f := range append([]string{string(in.Kind), string(in.TaskID), in.RequestID}, tools...) {
-		fmt.Fprintf(&b, "%d:%s;", len(f), f) // length-prefixed, so no two field lists hash alike
-	}
-	sum := sha256.Sum256([]byte(b.String()))
-	return "ix-" + hex.EncodeToString(sum[:])[:32]
 }
 
 // errAuthRequired is the cause of refusing a task that asks for authentication: no dialect can answer it from the thread,
@@ -426,7 +408,7 @@ func (i *Intake) record(ctx context.Context, p Pause, b Binding, in dialect.Inte
 	case in.Kind == dialect.ToolApproval:
 		kind = store.InteractionToolApproval
 	}
-	id := InteractionID(in)
+	id := dialect.InteractionID(in)
 	row := store.Interaction{TextReplies: in.TextReplies, ID: id, Key: p.Key, TaskID: string(in.TaskID), Kind: kind, Request: request, CreatedAt: at, Deadline: at.Add(b.Timeout)}
 	if _, err := i.cfg.Store.CreateInteraction(ctx, row); err != nil {
 		return store.Interaction{}, fmt.Errorf("interact: record %s: %w", id, err)

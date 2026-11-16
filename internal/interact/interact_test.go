@@ -176,7 +176,7 @@ func (r *rig) row(t *testing.T, task a2a.Task) store.Interaction {
 	if err != nil || in == nil {
 		t.Fatal(in, err)
 	}
-	row, err := r.st.GetInteraction(t.Context(), interact.InteractionID(*in))
+	row, err := r.st.GetInteraction(t.Context(), dialect.InteractionID(*in))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,25 +232,6 @@ func TestCrashAtEachSeamLeavesOneInteractionAndOnePrompt(t *testing.T) {
 				t.Errorf("posts %v, ref %q; want one prompt, recorded", r.slack.posted, row.MessageRef)
 			}
 		})
-	}
-}
-
-func TestInteractionIDIsDeterministic(t *testing.T) {
-	ask := dialect.Interaction{Kind: dialect.AskUser, TaskID: "task-1", RequestID: "req-1"}
-	tools := dialect.Interaction{Kind: dialect.ToolApproval, TaskID: "task-1", Tools: []dialect.Tool{{ID: "t1"}, {ID: "t2"}}}
-	reordered := tools
-	reordered.Tools = []dialect.Tool{{ID: "t2"}, {ID: "t1"}}
-	id := interact.InteractionID(ask)
-	if id != interact.InteractionID(ask) || interact.InteractionID(tools) != interact.InteractionID(reordered) {
-		t.Error("the same pause got two IDs")
-	}
-	if interact.InteractionID(dialect.Interaction{TaskID: "ab", RequestID: "c"}) == interact.InteractionID(dialect.Interaction{TaskID: "a", RequestID: "bc"}) {
-		t.Error("fields that run together hash alike: the length prefixes are not doing their job")
-	}
-	for _, other := range []dialect.Interaction{{Kind: dialect.AskUser, TaskID: "task-1", RequestID: "req-2"}, {Kind: dialect.AskUser, TaskID: "task-2", RequestID: "req-1"}, tools} {
-		if got := interact.InteractionID(other); got == id || len(got) > 40 {
-			t.Errorf("%+v: ID %q; want one that is different and short", other, got)
-		}
 	}
 }
 
@@ -311,7 +292,7 @@ func TestAStoredQuestionWithOtherUntrustedFieldsIsStillTheSame(t *testing.T) {
 	fields["hint"] = "a hint from an older version"
 	fields["context_id"] = "another-context"
 	old, _ := json.Marshal(fields)
-	row := store.Interaction{ID: interact.InteractionID(*in), Key: key, TaskID: "task-1", Kind: store.InteractionAskUser, Request: old, CreatedAt: t0, Deadline: t0.Add(timeout)}
+	row := store.Interaction{ID: dialect.InteractionID(*in), Key: key, TaskID: "task-1", Kind: store.InteractionAskUser, Request: old, CreatedAt: t0, Deadline: t0.Add(timeout)}
 	if _, err := r.st.CreateInteraction(t.Context(), row); err != nil {
 		t.Fatal(err)
 	}

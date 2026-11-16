@@ -188,6 +188,8 @@ type fixture struct {
 	ackConfigured    bool
 	ackEnabled       bool
 	ackEmoji         string
+	// parse is the Backend's ParseInteraction; nil reads no pause as an interaction.
+	parse func(a2a.Task) (*dialect.Interaction, error)
 }
 
 func (f *fixture) reject(_ context.Context, _ audit.Actor, c audit.Call) error {
@@ -221,7 +223,7 @@ func (f *fixture) Backend(name string) (Backend, error) {
 	if f.real != nil {
 		ag = f.real
 	}
-	b := Backend{AgentName: "kagent/agent-1", Dialect: f.dialect(), ThreadTTL: ttl, Agent: ag, Attribute: f.attr, Platform: f.platform, Rejected: f.reject, Identity: "secret:ns/token", Output: f.output, Progress: f.progress, Feedback: f.feedback, ThreadReplies: f.threadReplies, Mentions: f.mentions, MaxMentions: f.maxMentions, MentionPrompt: f.mentionPrompt, AcknowledgmentConfigured: f.ackConfigured, AcknowledgmentEnabled: f.ackEnabled, AcknowledgmentEmoji: f.ackEmoji}
+	b := Backend{AgentName: "kagent/agent-1", Dialect: f.dialect(), ThreadTTL: ttl, Agent: ag, Attribute: f.attr, ParseInteraction: f.parse, Platform: f.platform, Rejected: f.reject, Identity: "secret:ns/token", Output: f.output, Progress: f.progress, Feedback: f.feedback, ThreadReplies: f.threadReplies, Mentions: f.mentions, MaxMentions: f.maxMentions, MentionPrompt: f.mentionPrompt, AcknowledgmentConfigured: f.ackConfigured, AcknowledgmentEnabled: f.ackEnabled, AcknowledgmentEmoji: f.ackEmoji}
 	if f.noRejected {
 		b.Rejected = nil
 	}

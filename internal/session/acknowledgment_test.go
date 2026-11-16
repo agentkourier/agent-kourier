@@ -197,6 +197,7 @@ func TestDisabledAcknowledgmentDoesNotMarkAcceptedMessages(t *testing.T) {
 func TestAcknowledgmentIsClearedAtPauseAndRecreatedForTypedAnswer(t *testing.T) {
 	f := newFixture(t)
 	f.textReplies = true
+	f.parse = askedBy
 	f.ackConfigured, f.ackEnabled, f.ackEmoji = true, true, "eyes"
 	f.agent.script = pauseFirst
 	f.agent.get = func(a2a.TaskID) (*a2a.Task, error) {
@@ -226,7 +227,7 @@ func TestAcknowledgmentIsClearedAtPauseAndRecreatedForTypedAnswer(t *testing.T) 
 	answer := inbound("2")
 	f.setTextReply(func(ctx context.Context, k Key, r store.Reply, task a2a.Task) (TextReplyOutcome, error) {
 		msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(r.Text))
-		msg.ID, msg.TaskID, msg.ContextID = r.ID+"/answer", task.ID, task.ContextID
+		msg.ID, msg.TaskID, msg.ContextID = answerIDFor(task), task.ID, task.ContextID
 		return TextReplyConsumed, f.m.Answer(ctx, k, msg)
 	})
 	if _, err := f.submit(answer); err != nil {
@@ -237,7 +238,7 @@ func TestAcknowledgmentIsClearedAtPauseAndRecreatedForTypedAnswer(t *testing.T) 
 	case <-time.After(10 * time.Second):
 		t.Fatal("the answer was not sent")
 	}
-	if sess, err := f.session(); err != nil || sess.Turn.ID != answer.MessageID+"/answer" || sess.Turn.AcknowledgmentID != answer.MessageID || sess.Turn.MessageRef != answer.MessageRef || sess.Turn.Acknowledgment != "eyes" {
+	if sess, err := f.session(); err != nil || sess.Turn.ID != answerTo("q-A").ID || sess.Turn.AcknowledgmentID != answer.MessageID || sess.Turn.MessageRef != answer.MessageRef || sess.Turn.Acknowledgment != "eyes" {
 		t.Fatalf("answer session = %+v, %v; want the answer's durable acknowledgment metadata", sess, err)
 	}
 	close(releaseAnswer)
@@ -258,11 +259,11 @@ func TestAcknowledgmentIsClearedAtPauseAndRecreatedForTypedAnswer(t *testing.T) 
 // A typed answer's A2A message ID is interaction/answer, while its temporary reaction belongs to the
 // incoming chat reply. Persisting both IDs keeps a restart from removing a different outbox row.
 func TestTypedAnswerAcknowledgmentSurvivesCrashBeforeReplySettlement(t *testing.T) {
-	f, sink := textPauseFixture(t)
+	f, sink := textPauseFixture(t, func(f *fixture) { f.parse = askedBy })
 	f.ackConfigured, f.ackEnabled, f.ackEmoji = true, true, "eyes"
 	f.setTextReply(func(ctx context.Context, k Key, r store.Reply, task a2a.Task) (TextReplyOutcome, error) {
 		msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(r.Text))
-		msg.ID, msg.TaskID, msg.ContextID = r.ID+"/answer", task.ID, task.ContextID
+		msg.ID, msg.TaskID, msg.ContextID = answerIDFor(task), task.ID, task.ContextID
 		return TextReplyConsumed, f.m.Answer(ctx, k, msg)
 	})
 	answer := inbound("2")
@@ -275,7 +276,7 @@ func TestTypedAnswerAcknowledgmentSurvivesCrashBeforeReplySettlement(t *testing.
 	}
 	testutil.Eventually(t, "the answer turn to be durably paired with its source", func() bool {
 		sess, err := f.session()
-		return err == nil && sess.Turn.ID == answer.MessageID+"/answer" && sess.Turn.AcknowledgmentID == answer.MessageID
+		return err == nil && sess.Turn.ID == answerTo("q-A").ID && sess.Turn.AcknowledgmentID == answer.MessageID
 	})
 	if err := f.close(); err != nil {
 		t.Fatal(err)

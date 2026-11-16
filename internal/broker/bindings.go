@@ -163,6 +163,7 @@ func (b *Bindings) Backend(name string) (session.Backend, error) {
 		ThreadTTL:                rb.Binding.Spec.Session.ThreadTTL.Duration,
 		Agent:                    ag,
 		Attribute:                k.attribute,
+		ParseInteraction:         k.dialect.ParseInteraction,
 		Platform:                 actorPlatform(rb.Connection.Spec.Platform),
 		Rejected:                 src.Rejected,
 		Identity:                 src.Identity(),

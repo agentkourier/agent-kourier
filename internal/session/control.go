@@ -281,9 +281,13 @@ func (m *Manager) cancelActive(ctx context.Context, key Key, id a2a.TaskID, by s
 // Answer sends msg, an answer to the paused task msg.TaskID (built by the dialect, validated,
 // with the Slack user as attribution), through the conversation's runner, which streams what
 // follows to the sink under the turn that paused. It returns once the runner has it: ErrNotPaused
-// means the conversation is not paused on that task, or it was already answered. How the send
-// ends, a rejection or a busy task included, reaches the thread as a notice, and the queued
-// replies go on when the task ends.
+// means the conversation is not paused on that task, it was already answered, or the task is
+// paused on another interaction than the one msg answers. msg.ID names that interaction
+// (dialect.AnswerID), and the runner learnt the one the task waits on when it parked
+// (Backend.ParseInteraction), so an answer to an earlier question of the same task, sent again,
+// never answers a later one. A message that names no interaction is taken only by a pause that
+// has none. How the send ends, a rejection or a busy task included, reaches the thread as a
+// notice, and the queued replies go on when the task ends.
 func (m *Manager) Answer(ctx context.Context, key Key, msg *a2a.Message) error {
 	if msg == nil || msg.TaskID == "" || msg.ID == "" {
 		return fmt.Errorf("answer: a message with an ID and a task is required: %w", store.ErrInvalid)
@@ -291,7 +295,7 @@ func (m *Manager) Answer(ctx context.Context, key Key, msg *a2a.Message) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	c := m.convos[key]
-	if c == nil || c.parked != msg.TaskID || c.released {
+	if c == nil || c.parked != msg.TaskID || c.released || c.paused == nil || c.paused.question != dialect.AnsweredInteraction(msg.ID) {
 		return ErrNotPaused
 	}
 	c.released = true

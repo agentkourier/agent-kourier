@@ -68,6 +68,10 @@ type Backend struct {
 	// Attribute records the acting user on a turn: the dialect's Attribute. Nil means a turn
 	// carries no attribution.
 	Attribute func(msg *a2a.Message, actor dialect.User)
+	// ParseInteraction is the dialect's: it reads which interaction (dialect.InteractionID) a paused task waits on, so that the
+	// manager takes only an answer to that interaction (Manager.Answer). Nil reads every pause as one with no interaction,
+	// which takes no answer that names one.
+	ParseInteraction func(task a2a.Task) (*dialect.Interaction, error)
 	// Platform is the chat platform of the Binding's ChatConnection, which the manager puts on the actor it
 	// attributes a turn to. The zero value attributes a turn with no platform.
 	Platform dialect.Platform
@@ -98,6 +102,20 @@ type Backend struct {
 	// AcknowledgmentConfigured distinguishes a Binding that explicitly selected the new lifecycle (including disabled)
 	// from older direct session configurations that still use the queued marker.
 	AcknowledgmentConfigured bool
+}
+
+// questionOf is the interaction the paused task waits on (dialect.InteractionID), as the interaction module names the one it
+// records for the pause, or "" when the dialect reads none: a pause with nothing structured to answer, or one it cannot read,
+// which the interaction module does not answer.
+func (b *Backend) questionOf(task a2a.Task) string {
+	if b.ParseInteraction == nil {
+		return ""
+	}
+	in, err := b.ParseInteraction(task)
+	if err != nil || in == nil {
+		return ""
+	}
+	return dialect.InteractionID(*in)
 }
 
 // Auditor records agent calls: *audit.Writer. A failed write is logged, never fatal (spec 8.6).

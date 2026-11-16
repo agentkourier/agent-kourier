@@ -90,7 +90,10 @@ the agent. A press that Slack sends again, because the answer to its first deliv
 `action_ts` that Slack gives the press and repeats when it sends it again (Slack's behaviour, not checked here): its
 person is told the outcome once, and a winning press is decided and sent to the agent once. The broker knows the press
 for at least an hour after it was recorded ([Limits](../reference/limits.md#what-the-broker-keeps-and-logs)). Pressing
-the button again is a new press. Agent Kourier audits the decision before sending it under the Binding's service identity, then replaces the
+the button again is a new press. A new press by the person who already decided decides nothing: the decision that was
+recorded, while the broker keeps it, is sent again, and the task takes it only while it is still paused on that same
+approval. A task that has gone on, to its end or to a later question or approval, gets nothing, and nobody is told.
+Agent Kourier audits the decision before sending it under the Binding's service identity, then replaces the
 prompt with an ending that shows each tool's Approved or Denied verdict and removes the controls. The audit records the
 Binding, Slack user, time, counts and cleaned tool names; it never records arguments or rejection text. A denial uses the
 dialect's fixed reason.

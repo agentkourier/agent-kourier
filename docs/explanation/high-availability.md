@@ -87,8 +87,8 @@ agent, and the process is stopped with exit code 5. The refused turn is not lost
 refusal ends the process before anything marks it delivered (a sent turn leaves the queue when the agent names its task), and
 the new leader's recovery sends it. As after any
 restart, a turn of a session that already has a context is looked up on the agent first. A recorded answer stays recorded as answered, and the new leader sends it again when it
-finds the task paused. Calls that only read pass: getting a task, looking up a turn by its message ID, and following a
-task.
+finds the task paused on that same question; a task paused on a later question does not take it. Calls that only read
+pass: getting a task, looking up a turn by its message ID, and following a task.
 
 ## What the standby does
 

@@ -309,7 +309,7 @@ func refusedBeforeRecording(t *testing.T, r *rig, task a2a.Task, reason string) 
 	if err != nil || in == nil {
 		t.Fatal(in, err)
 	}
-	if _, err := r.st.GetInteraction(t.Context(), interact.InteractionID(*in)); !errors.Is(err, store.ErrNotFound) {
+	if _, err := r.st.GetInteraction(t.Context(), dialect.InteractionID(*in)); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("GetInteraction = %v; want no interaction made for a pause that is refused", err)
 	}
 	if len(r.slack.posted) != 0 || len(r.asked) != 0 || len(r.sess.cancels) != 1 || len(r.sess.answers) != 0 || len(r.hook) != 0 || len(r.notices(t)) != 1 {
