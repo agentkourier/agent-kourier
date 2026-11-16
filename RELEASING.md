@@ -56,6 +56,30 @@ and `ghcr.io/agentkourier/agent-kourier-echo-agent` (linux/amd64 and linux/arm64
       executes them.
 
    `make e2e-crs-scenarios` and `make e2e-crs-migration` say what they need and stop if the tier is not as they need it. A failure blocks the tag.
+
+   The kind tiers reach only the end-to-end tests' fake Slack. When the release changes Slack's HTTP mode (the Slack
+   adapter's HTTP handling, the chat listener, or the chart's chat Service and its values), also deploy that commit's image
+   to an install with a ChatConnection in HTTP mode that Slack itself reaches, and run `hack/slack/http-probe.sh` against
+   it. It sends requests that Slack did not sign (each must be answered 401) and one to an unknown connection (503), then
+   posts an alert and a bot's mention in the channel, and waits for the connection's bot to reply to each. It needs three
+   Slack apps: the connection's own, one whose bot the Binding's `botMessage` trigger names, and one that mentions the
+   connection's bot, which no `botMessage` trigger of the Binding may name. `--help` says what the Binding must have, and
+   names the two checks left to be done by hand: a button press, and a leader killed while a message is posted. With the
+   leader's metrics port forwarded, the probe also checks the increments of `agentkourier_slack_http_requests_total`:
+
+   ```sh
+   kubectl -n agent-kourier port-forward "$(kubectl -n agent-kourier get pod -l agentkourier.dev/role=leader -o name)" 8080 &
+   hack/slack/http-probe.sh \
+     --url https://chat.example.com/chat/slack/agent-kourier/slack \
+     --channel C0123456789 \
+     --probe-env ~/.config/agent-kourier/probe.env \
+     --poster-env ~/.config/agent-kourier/poster.env \
+     --mention-env ~/.config/agent-kourier/mention.env \
+     --metrics-url http://127.0.0.1:8080/metrics
+   ```
+
+   The three files are mode 600: `probe.env` holds the connection's `botToken=`, and the two others each `SLACK_BOT_TOKEN=`
+   of their app. The probe exits non-zero if any check fails, and a failure blocks the tag.
 5. `git tag vX.Y.Z <the release pull request's commit on main>` and `git push origin vX.Y.Z`.
 6. Watch the `release` workflow. Its job summary and the GitHub Release body name the pushed image and chart
    digests. A GitHub Release is created only after both signatures verify.
