@@ -25,9 +25,9 @@ and `ghcr.io/agentkourier/agent-kourier-echo-agent` (linux/amd64 and linux/arm64
    exact commit from a push to `main`. The release gate checks the same commit and the latest attempt again; a
    missing, pending, failed or pull-request-only run blocks the release.
 4. Run the kind tiers on that commit by hand, since no workflow does ([CI](#ci) says why). The custom resource
-   route has its own runs of the tiers, two scenarios that nothing else runs and the failover tests; the last two runs
-   send the fake Slack's requests through the chat listener (Slack's HTTP mode). Each tier needs Docker and about 8 GB
-   free; take each down before the next comes up:
+   route has its own runs of the tiers, two scenarios that nothing else runs, and runs of the failover tests; the last
+   two runs send the fake Slack's requests through the chat listener (Slack's HTTP mode). Each tier needs Docker and
+   about 8 GB free; take each down before the next comes up:
 
    ```sh
    make e2e-fast-up e2e-fast e2e-fast-down                                       # the ConfigMap route
