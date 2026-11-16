@@ -58,6 +58,12 @@ func TestWebReplyURL(t *testing.T) {
 		{"http://LOCALHOST:8080", ""},
 		{"http://127.0.0.1:9000/replies", ""},
 		{"http://127.1.2.3", ""},
+		{"http://127.255.255.254:9000", ""},
+		{"http://127.200.249.9", ""},
+		{"http://127.999.0.1/replies", refusedHTTP("http://127.999.0.1")},
+		{"http://127.0.0.256/replies", refusedHTTP("http://127.0.0.256")},
+		{"http://127.0.0.01/replies", refusedHTTP("http://127.0.0.01")},
+		{"http://127.0.0/replies", refusedHTTP("http://127.0.0")},
 		{"http://[::1]:8080/r", ""},
 		{"http://receiver.team-a.svc/replies", ""},
 		{"http://receiver.team-a.svc:8080/replies", ""},
@@ -183,7 +189,7 @@ func TestCELWebURLRulesRefuseOnlyWhatValidateRefuses(t *testing.T) {
 	}
 
 	schemes := []string{"http://", "https://", "HTTP://", "hTTps://", "http:", "http:/", "http:///", "ftp://", "//", ""}
-	pieces := []string{"h", "localhost", "LocalHost", "127.0.0.1", "127.1", "[::1]", "[::2]", ".svc", ".svc.cluster.local", "svc", "ns", "a-b", ".",
+	pieces := []string{"h", "localhost", "LocalHost", "127.0.0.1", "127.1", "127.255.0.9", "127.256.0.1", "127.0.0.01", "[::1]", "[::2]", ".svc", ".svc.cluster.local", "svc", "ns", "a-b", ".",
 		":", ":80", "/", "//", "@", "u:p@", "#", "?", "%", "%41", "%zz", "[", "]", " ", "\t", "\n", "\x00", "\x7f",
 		"\\", "^", "`", "{", "}", "|", "<", ">", "\"", "'", "é", "!", "$", "&", "(", ")", "*", "+", ",", ";", "=", "~", "_", "-"}
 	r := rand.New(rand.NewPCG(3, 4)) // seeded, so that a failure repeats

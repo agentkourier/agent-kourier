@@ -544,6 +544,22 @@ spec:
     profile: kourier-v1
     url: http://receiver.example.com/replies
 ---
+# rule: chatconnection/spec.web.url: http to a loopback address with an octet past 255
+# want: spec.web.url: invalid URL "http://127.999.0.1": http is allowed only to localhost
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: web
+  namespace: sre
+spec:
+  platform: web
+  credentialsSecretRef:
+    name: web
+  web:
+    profile: kourier-v1
+    url: http://127.999.0.1/replies
+---
 # rule: chatconnection/spec.web.url: http to a host that only starts like a Service
 # want: spec.web.url: invalid URL "http://receiver.svc.example.com": http is allowed only to localhost
 # schema: refuses

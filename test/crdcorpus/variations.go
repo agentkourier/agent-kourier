@@ -196,7 +196,7 @@ func urls() func(*rand.Rand) any {
 // like them), in odd cases and with ports and paths.
 func webURLs() func(*rand.Rand) any {
 	backend := urls()
-	hosts := []string{"localhost", "LocalHost", "127.0.0.1", "127.1.2.3", "127.0.0.1.nip.io", "127.0.0", "[::1]", "[::2]", "r.ns.svc", "r.ns.SVC",
+	hosts := []string{"localhost", "LocalHost", "127.0.0.1", "127.1.2.3", "127.0.0.1.nip.io", "127.0.0", "127.255.255.255", "127.999.0.1", "127.0.0.256", "127.0.0.01", "[::1]", "[::2]", "r.ns.svc", "r.ns.SVC",
 		"r.ns.svc.cluster.local", "r.ns.svc.cluster.local.", "r.svc.example.com", "svc", ".svc", "r..svc", "r_ns.svc", "localhost.example.com",
 		"%6cocalhost", "r.example.com", "r.ns.svc.cluster", "xlocalhost"}
 	tails := []string{"", "/", "/replies", ":8080", ":8080/replies", ":", ":99999", ":80:80", "?q", "#f", "/a b", "@x", "\\x"}

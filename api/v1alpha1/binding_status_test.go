@@ -23,6 +23,7 @@ type bindingCRD struct {
 				Name     string `json:"name"`
 				Type     string `json:"type"`
 				JSONPath string `json:"jsonPath"`
+				Priority int32  `json:"priority"`
 			} `json:"additionalPrinterColumns"`
 			Schema struct {
 				OpenAPIV3Schema struct {
@@ -147,17 +148,21 @@ func TestBindingPrinterColumns(t *testing.T) {
 }
 
 // A ChatConnection shows its platform, so that a list of the connections says which a Binding's CONNECTION column names, and a web
-// connection its profile too; a Slack connection's PROFILE is empty.
+// connection its profile too. PROFILE has priority 1, so that kubectl get shows it only with -o wide, and a list of Slack
+// connections has no empty column.
 func TestChatConnectionPrinterColumns(t *testing.T) {
 	v := readCRD(t, "agentkourier.dev_chatconnections.yaml").Spec.Versions[0]
-	type column struct{ Name, Type, JSONPath string }
+	type column struct {
+		Name, Type, JSONPath string
+		Priority             int32
+	}
 	var got []column
 	paths := map[string]string{}
 	for _, c := range v.AdditionalPrinterColumns {
-		got = append(got, column{c.Name, c.Type, c.JSONPath})
+		got = append(got, column{c.Name, c.Type, c.JSONPath, c.Priority})
 		paths[c.Name] = c.JSONPath
 	}
-	want := []column{{"Platform", "string", `.spec.platform`}, {"Profile", "string", `.spec.web.profile`}, {"Age", "date", `.metadata.creationTimestamp`}}
+	want := []column{{"Platform", "string", `.spec.platform`, 0}, {"Profile", "string", `.spec.web.profile`, 1}, {"Age", "date", `.metadata.creationTimestamp`, 0}}
 	if !slices.Equal(got, want) {
 		t.Fatalf("printer columns = %+v, want %+v", got, want)
 	}

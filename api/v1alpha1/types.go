@@ -250,7 +250,7 @@ type Header struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Namespaced,shortName=akconnection,categories=agentkourier
 // +kubebuilder:printcolumn:name="Platform",type=string,JSONPath=`.spec.platform`
-// +kubebuilder:printcolumn:name="Profile",type=string,JSONPath=`.spec.web.profile`
+// +kubebuilder:printcolumn:name="Profile",type=string,JSONPath=`.spec.web.profile`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type ChatConnection struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -347,7 +347,7 @@ type WebConnectionSpec struct {
 	// +kubebuilder:validation:XValidation:rule=`!self.matches(r'^[^#]*[\x00-\x1f\x7f]')`,message="invalid URL: must not contain control characters"
 	// +kubebuilder:validation:XValidation:rule=`!self.matches(r'(?i)^https?://[^/?#]*[ \\^\x60{|}]')`,message="invalid URL: the host must not contain a space, backslash, caret, backtick, brace or bar"
 	// +kubebuilder:validation:XValidation:rule=`!self.matches('[?#]')`,message="must not have a query or fragment"
-	// +kubebuilder:validation:XValidation:rule=`!self.matches('(?i)^http://') || self.matches(r'(?i)^http://(?:localhost|127(?:\.[0-9]{1,3}){3}|\[::1\]|(?:[a-z0-9-]+\.)+svc(?:\.cluster\.local)?)(?::[0-9]{1,5})?(?:[/?#]|$)')`,message="http is allowed only to localhost, a loopback address or a Service in the cluster (a host that ends in .svc or .svc.cluster.local); use https"
+	// +kubebuilder:validation:XValidation:rule=`!self.matches('(?i)^http://') || self.matches(r'(?i)^http://(?:localhost|127(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}|\[::1\]|(?:[a-z0-9-]+\.)+svc(?:\.cluster\.local)?)(?::[0-9]{1,5})?(?:[/?#]|$)')`,message="http is allowed only to localhost, a loopback address or a Service in the cluster (a host that ends in .svc or .svc.cluster.local); use https"
 	// +optional
 	URL string `json:"url,omitempty"`
 }

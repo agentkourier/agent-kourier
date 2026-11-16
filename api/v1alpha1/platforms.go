@@ -16,9 +16,10 @@ import (
 //
 //   - GitHub's, the web platform's github profile: a repository (owner/name) for a channel, a login (octocat, or an app's
 //     dependabot[bot]) for a sender or a user, and a team (org/team-slug) for an approver group. They follow GitHub's rules as
-//     GitHub documents them, which are not read in this repository: an owner of at most 39 letters, digits and single hyphens that
-//     neither starts nor ends with a hyphen, and a repository name of at most 100 letters, digits, '.', '_' or '-'. The team slug
-//     takes the repository name's characters.
+//     GitHub documents them, which are not read in this repository: an owner of letters, digits and single hyphens that neither
+//     starts nor ends with a hyphen, and a repository name of at most 100 letters, digits, '.', '_' or '-'. The team slug takes the
+//     repository name's characters. The pattern takes at most 39 letters and digits in an owner or a login, and the hyphens
+//     between them come on top; GitHub's 39 for the whole owner is not checked, and the length caps below are looser.
 //   - The kourier-v1 profile's: an opaque ID, which the sender chooses and Agent Kourier reads as it is, of letters, digits, '.',
 //     '_' and '-' that starts with a letter or a digit. A channel or an approver group must have a digit as well, so that a name
 //     such as general is still no platform's channel and is refused when it is applied, while every machine ID that we know of (a
@@ -53,8 +54,10 @@ var (
 	slackGroupID   = regexp.MustCompile(`^S[A-Z0-9]+$`)
 )
 
-// GitHub's shapes, the github profile's, as the union describes them. Their patterns bound their length: a repository or a team
-// is at most 39 + 1 + 100 bytes, and a login 39, or 44 with an app's "[bot]".
+// GitHub's shapes, the github profile's, as the union describes them. Their patterns bound the characters and not the length:
+// an owner or a login takes at most 39 letters and digits, with a single hyphen between any two of them, so up to 77 bytes. The
+// caps bound the length: a repository or a team is at most maxGitHubRepoLen (39 + 1 + 100) bytes, and a login maxGitHubLoginLen
+// (39, and 5 more for an app's "[bot]").
 var (
 	githubRepo  = regexp.MustCompile(`^[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}/[A-Za-z0-9._-]{1,100}$`)
 	githubLogin = regexp.MustCompile(`^[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}(?:\[bot\])?$`)

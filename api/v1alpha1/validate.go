@@ -353,7 +353,7 @@ func (p *problems) web(w *WebConnectionSpec) {
 // signature does not hide it, so plain http may go only where the request does not leave the pod or the cluster. It reads the URL
 // as written, not as url.Parse reads it, so that the schema's rule, whose regex is this literal, refuses no URL that Validate
 // accepts (TestTheWebHTTPRuleIsValidatesRegex): a host that url.Parse decodes from %XX, say, matches neither.
-var webHTTPURL = regexp.MustCompile(`(?i)^http://(?:localhost|127(?:\.[0-9]{1,3}){3}|\[::1\]|(?:[a-z0-9-]+\.)+svc(?:\.cluster\.local)?)(?::[0-9]{1,5})?(?:[/?#]|$)`)
+var webHTTPURL = regexp.MustCompile(`(?i)^http://(?:localhost|127(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}|\[::1\]|(?:[a-z0-9-]+\.)+svc(?:\.cluster\.local)?)(?::[0-9]{1,5})?(?:[/?#]|$)`)
 
 // webURL checks the reply URL of a web connection, as backendURL does an AgentBackend's, and holds an http one to webHTTPURL.
 func (p *problems) webURL(raw string) {

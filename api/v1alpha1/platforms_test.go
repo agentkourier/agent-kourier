@@ -185,12 +185,33 @@ func TestGitHubIDShapes(t *testing.T) {
 		{"group", p.Group, "octo-org/sre", true},
 		{"group", p.Group, "sre", false},
 		{"group", p.Group, "S0123456789", false},
+		// The pattern counts letters and digits, at most 39, with single hyphens between them, and so does not bound the
+		// length: the caps do, 44 bytes for a login and 140 for a repository or a team.
+		{"login past 39 with its hyphens", p.User, hyphenated(22), true},
+		{"login at the cap", p.Sender, hyphenated(22) + "x", true},
+		{"login past the cap", p.User, hyphenated(23), false},
+		{"login of the pattern's most", p.Sender, hyphenated(39), false},
+		{"repository at the cap", p.Channel, hyphenated(39) + "/" + strings.Repeat("r", 62), true},
+		{"repository past the cap", p.Channel, hyphenated(39) + "/" + strings.Repeat("r", 63), false},
+		{"team past the cap", p.Group, hyphenated(39) + "/" + strings.Repeat("r", 63), false},
 	} {
 		if got := tc.shape.Matches(tc.in); got != tc.want {
 			t.Errorf("github's %s shape Matches(%q) = %v, want %v", tc.name, tc.in, got, tc.want)
 		}
 	}
+
+	// Past the cap, the broker says the length, which the reference pages give.
+	b := &BindingSpec{Chat: ChatBinding{Channel: "octo-org/hello-world", Output: OutputNone,
+		Mentions: []ChatMention{{Name: "long", User: hyphenated(23)}}}}
+	want := []PlatformMismatch{{Path: "spec.chat.mentions[0].user", Problem: "is 45 bytes, longer than the 44 byte limit of a login",
+		Fix: "use the person's login, such as octocat"}}
+	if got := b.PlatformMismatches(p); !reflect.DeepEqual(got, want) {
+		t.Errorf("a login of 45 bytes: PlatformMismatches = %+v, want %+v", got, want)
+	}
 }
+
+// hyphenated returns n letters with a hyphen between each two: 2n-1 bytes, a login's shape whatever n is.
+func hyphenated(n int) string { return strings.TrimSuffix(strings.Repeat("a-", n), "-") }
 
 // The kourier-v1 profile's shapes: an opaque ID of letters, digits, '.', '_' and '-', starting with a letter or a digit, at most
 // maxKourierV1IDLen bytes; a channel or a group has a digit too, so that a name such as general is not one.

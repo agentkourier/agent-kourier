@@ -39,8 +39,10 @@ A Binding that its ChatConnection does not admit (in another namespace that `all
 | A `chat.mentions` entry's `user` | A user ID: `U` or `W`, then 2 to 20 capitals and digits, such as `U0123456789`. | The person's ID, of the sender's shape, at most 64 bytes. | A login, such as `octocat`. |
 | An entry of `interactions.approverGroups` | A user group ID: `S`, then capitals and digits, at most 32 bytes, such as `S0123456789`. | A group ID, of the channel's shape, at most 64 bytes. | A team, `org/team-slug`, such as `octo-org/sre`. |
 
-A repository's owner and a login are 1 to 39 letters, digits and single hyphens that neither start nor end with a hyphen, and a login
-may end in `[bot]`; a repository's name and a team's slug are 1 to 100 letters, digits, `.`, `_` and `-`. A `kourier-v1` ID has no `:`
+A repository's owner and a login are at most 39 letters and digits, with single hyphens between them, so they neither start nor end
+with a hyphen, and a login may end in `[bot]`; a repository's name and a team's slug are 1 to 100 letters, digits, `.`, `_` and `-`.
+The hyphens do not count toward the 39: the broker bounds the length with the caps alone, 44 bytes for a login (`[bot]` included) and
+140 for a repository or a team, so a login such as `a-b-c-…` of 43 bytes is taken. A `kourier-v1` ID has no `:`
 and no `/`. Since tool approvals are not served on either web profile (see [Features](#features)), a web Binding's approver groups are
 refused with `toolApprovals` anyway.
 
