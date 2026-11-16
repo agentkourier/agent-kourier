@@ -58,7 +58,8 @@ A broker serves exactly one ChatConnection, the one `config.chatConnection` name
 
 - **One ChatConnection.** Every recipe ships the same one: `slack` in the namespace `agent-kourier`, whose Secret
   `slack` holds the keys `botToken` and `appToken` (`botToken` and `signingSecret` in [HTTP mode](#slack-in-http-mode)).
-  The copies are one object, so applying a second recipe leaves it as it is. You create the Secret once.
+  The copies are one object, so applying a second recipe leaves it as it is (in HTTP mode, only once every copy you
+  apply has `slack: {mode: http}`: see below). You create the Secret once.
 - **One channel each.** A channel of a ChatConnection belongs to at most one Binding. The older Binding keeps it, and a
   second one for the same connection and channel is not served: `kubectl get akbinding -A` shows it `False` with the
   reason `Accepted:ChannelConflict`. Each recipe ships its own channel placeholder, so replace each with a channel of
@@ -79,7 +80,9 @@ On a ConfigMap, the files of several recipes go in one directory under names tha
 
 Every recipe connects to Slack over Socket Mode, where Agent Kourier opens a WebSocket to Slack. Any of them can use
 Slack's Events API instead, where Slack sends the app's events and button presses to Agent Kourier as signed HTTPS
-requests. The Bindings, the agents and the checks stay as they are; four things change, and
+requests. HTTP mode is experimental and needs a release later than 0.4.0: the 0.4.0 chart's values schema refuses
+`chatListener`, and its broker does not know `spec.slack.mode`. The Bindings, the agents and the checks stay as they are;
+four things change, and
 [Configure Slack](../../docs/how-to/configure-slack.md), on its **Events API (HTTP)** tab, has each step in full:
 
 1. **The Slack app** has no app-level token. It has a signing secret, Socket Mode off, and the request URL
@@ -96,10 +99,11 @@ requests. The Bindings, the agents and the checks stay as they are; four things 
 
     Make the change in the `kourier/chatconnection.yaml` of every recipe you apply. The copies are one object, and a
     `kubectl apply` of a copy without the field removes it from that object again.
-3. **The Secret `slack`** holds `botToken` and `signingSecret`, and no `appToken`.
+3. **The Secret `slack`** holds `botToken` and `signingSecret`, and does not need `appToken`.
 4. **The chart's values** open the chat listener and expose it over HTTPS: `chatListener.enabled: true`, and an Ingress
-   (`chatListener.ingress`) or another way to reach the chat Service. With `networkPolicy.enabled`, the chart also requires
-   `networkPolicy.chatFrom`: the pods that pass Slack's requests on to the chat port.
+   (`chatListener.ingress.enabled`, with its host and TLS) or another way to reach the chat Service. With
+   `networkPolicy.enabled`, the chart also requires `networkPolicy.chatFrom`: the peers that pass Slack's requests on to
+   the chat port (an ingress controller's pods, or an `ipBlock`).
 
 Slack's check of the request URL succeeds only once Agent Kourier serves the connection, so set the URL after the install,
 as Configure Slack's step 7 says.
