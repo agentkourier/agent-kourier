@@ -594,14 +594,16 @@ func (s *slowGet) GetPress(ctx context.Context, seq int64) (store.Press, error) 
 func TestAPressHandedOverAgainAfterItWasFinishedIsNotProcessedAgain(t *testing.T) {
 	st := sqlitetest.Open(t)
 	limits := store.PressLimits{Total: 10, PerUser: 10}
-	record := func(s store.Presses, key string) (store.Press, bool) {
+	press := func(key string) store.Press {
+		return store.Press{InteractionID: "ix-1", User: "UALICE1", Connection: "ns/conn", Channel: "C1", MessageRef: "100.1", PressedAt: d0, Delivery: key}
+	}
+	record := func(key string) store.Press {
 		t.Helper()
-		p := store.Press{InteractionID: "ix-1", User: "UALICE1", Connection: "ns/conn", Channel: "C1", MessageRef: "100.1", PressedAt: d0, Delivery: key}
-		got, ok, err := store.RecordOnce(t.Context(), s, p, limits)
+		got, _, err := store.RecordOnce(t.Context(), st, press(key), limits)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return got, ok
+		return got
 	}
 	gate := make(chan struct{})
 	var first int64
@@ -618,30 +620,40 @@ func TestAPressHandedOverAgainAfterItWasFinishedIsNotProcessedAgain(t *testing.T
 	var once sync.Once
 	t.Cleanup(func() { once.Do(func() { close(gate) }) }) // before the worker is stopped
 
-	press, _ := record(st, "k1")
-	first = press.Seq
-	w.Submit(press)
+	pressed := record("k1")
+	first = pressed.Seq
+	w.Submit(pressed)
 	testutil.Eventually(t, "the first press in flight", func() bool { return f.processed()[first] == 1 })
 	slow := &slowGet{Presses: st, read: make(chan struct{}), release: make(chan struct{})}
-	again := make(chan store.Press, 1)
-	go func() {
-		defer close(again)
-		if p, ok := record(slow, "k1"); ok { // the delivery again finds the press waiting
-			again <- p
-		}
+	type result struct {
+		p   store.Press
+		ok  bool
+		err error
+	}
+	again := make(chan result, 1)
+	go func() { // the delivery again finds the press waiting
+		p, ok, err := store.RecordOnce(t.Context(), slow, press("k1"), limits)
+		again <- result{p, ok, err}
 	}()
-	<-slow.read
-	later, _ := record(st, "k2") // queued behind the first press: it runs once the worker has forgotten the first
+	select {
+	case <-slow.read:
+	case r := <-again:
+		t.Fatalf("the delivery again returned (%+v) before it read the press", r)
+	}
+	later := record("k2") // queued behind the first press: it runs once the worker has forgotten the first
 	w.Submit(later)
 	once.Do(func() { close(gate) })
 	testutil.Eventually(t, "the press after it", func() bool { return f.processed()[later.Seq] == 1 })
 	close(slow.release)
-	p, ok := <-again
-	if !ok {
+	r := <-again
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	if !r.ok {
 		t.Fatal("the delivery again was not handed the waiting press")
 	}
-	w.Submit(p)
-	last, _ := record(st, "k3") // queued behind the press handed over again: once it runs, that one has had its turn
+	w.Submit(r.p)
+	last := record("k3") // queued behind the press handed over again: once it runs, that one has had its turn
 	w.Submit(last)
 	testutil.Eventually(t, "the last press", func() bool { return f.processed()[last.Seq] == 1 })
 	if got := f.processed(); got[first] != 1 {

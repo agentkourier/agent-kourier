@@ -243,13 +243,14 @@ func (w *Worker) work(ctx context.Context, l *lane) {
 	}
 }
 
-// try processes the press j of l once, if it is still recorded. A press already finished is Done with no try: Submit
-// forgets a press once it is finished, so one handed over again after that (by a delivery of it again that read it
-// before, or by Recover) would otherwise be processed twice. A failure to look the press up fails the try.
+// try processes the press j of l once, if it is still recorded. A press no longer recorded (finished, or purged by
+// retention) is Done with no try: Submit forgets a press once it is finished, so one handed over again after that (by a
+// delivery of it again that read it before, or by Recover) would otherwise be processed twice. A failure to look the
+// press up fails the try.
 func (w *Worker) try(ctx context.Context, l *lane, j *job) (Result, error) {
 	switch _, err := w.cfg.Presses.GetPress(ctx, j.press.Seq); {
 	case errors.Is(err, store.ErrNotFound):
-		w.cfg.Logger.InfoContext(ctx, "interact: a press handed over again was finished before; it is skipped", "interaction", l.id, "seq", j.press.Seq)
+		w.cfg.Logger.InfoContext(ctx, "interact: a press is no longer recorded (finished or purged); it is skipped", "interaction", l.id, "seq", j.press.Seq)
 		return Done, nil
 	case err != nil:
 		return Retry, fmt.Errorf("interact: see that press %d is still recorded: %w", j.press.Seq, err)
