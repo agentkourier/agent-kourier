@@ -71,6 +71,30 @@ func TestIntakeConfigConnectsTheTriggerPath(t *testing.T) {
 	}
 }
 
+// The Intake of a connection whose platform has no replies is told so, and one with replies is not: the session manager then makes a
+// fresh session for a turn in a thread that has ended, rather than answering it with a notice nothing can post.
+func TestIntakeConfigSaysWhetherTheConnectionHasReplies(t *testing.T) {
+	st := sqlitetest.Open(t)
+	s := newStarter(t)
+	for _, c := range []Connection{
+		{Ref: v1alpha1.ObjectRef{Namespace: "platform", Name: "slack"}, Platform: v1alpha1.PlatformSlack},
+		{Ref: v1alpha1.ObjectRef{Namespace: "platform", Name: "v1"}, Platform: v1alpha1.PlatformWeb, Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileKourierV1}},
+		{Ref: v1alpha1.ObjectRef{Namespace: "platform", Name: "github"}, Platform: v1alpha1.PlatformWeb, Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileGitHub}},
+	} {
+		cfg, err := newIntakeConfig(intakeParts{
+			conn: c.Ref, snapshot: func() *config.Snapshot { return nil },
+			submitter: s.sub, interactions: func(context.Context, chat.Interaction) error { return nil }, notice: s.notes.take,
+			starter: s.triggerStarter, threads: st, runs: st, replies: st, log: s.log, noReplies: !c.hasReplies(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := c.Ref.Name == "github"; cfg.NoReplies != want {
+			t.Errorf("NoReplies of %s = %v; want %v", c.Ref.Name, cfg.NoReplies, want)
+		}
+	}
+}
+
 // newIntakeConfig refuses a part that is left out, and the error names it: each is a part of the path that would compile
 // and run without it, and do nothing.
 func TestIntakeConfigNamesThePartThatIsMissing(t *testing.T) {

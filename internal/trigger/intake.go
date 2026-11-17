@@ -88,6 +88,11 @@ type IntakeConfig struct {
 	// from its own message, and the fire is a repeat in it. Its error is the event's: the platform delivers it
 	// again. Nil asks nothing, and a stale reservation is always taken over.
 	TurnQueued func(ctx context.Context, messageID string) (bool, error)
+	// NoReplies says the connection's platform has no replies of Agent Kourier's (v1alpha1.ChatPlatform.Replies): a person's turn
+	// that Message submits says so (session.Inbound.NoReplies), so that one that may create a session replaces an ended one rather
+	// than being answered with a notice that cannot be posted. A trigger's start (OnStart) is not a person's turn and is not told: a
+	// platform with no replies has no bot messages for a trigger to match.
+	NoReplies bool
 	// Now is the time the thread rules take for a bot message, which is when it arrives (time.Now if nil).
 	Now    func() time.Time
 	Logger *slog.Logger // slog.Default() if nil
@@ -214,6 +219,7 @@ func (in *Intake) Message(ctx context.Context, m chat.Inbound) (telemetryErr err
 		MessageID:  in.messageID(m),
 		MessageRef: m.At.ID, UserID: m.User, Text: m.Text,
 		Mentioned: m.Mentioned || m.Direct, // a direct message needs no mention
+		NoReplies: in.cfg.NoReplies,
 	}
 	if m.Mentioned {
 		req.Binding, req.Create = in.binding(ctx, m.At.Channel)

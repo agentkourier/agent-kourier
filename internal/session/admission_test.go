@@ -32,6 +32,7 @@ var (
 	admGoneQuietly = Admission{Kind: AdmitIgnored, Ignored: IgnoredBindingGone}
 	admExpired     = Admission{Kind: AdmitNotice, Notice: NoticeExpired}
 	admGone        = Admission{Kind: AdmitNotice, Notice: NoticeBindingGone}
+	admReplace     = Admission{Kind: AdmitTurn, Replaces: true}
 	withMention    = func(f *ReplyFacts) { f.Mentioned = true }
 )
 
@@ -79,6 +80,19 @@ func TestReplyAdmission(t *testing.T) {
 		{"live: the channel's mode is not asked, all", func(f *ReplyFacts) { f.ChannelMode, f.Mode = modeMention, modeAll }, admTurn, false},
 		{"live: the channel's mode is not asked, mention", func(f *ReplyFacts) { f.ChannelMode, f.Mode, f.Dialect = modeAll, modeMention, dialectKagent }, admUnmentioned, false},
 
+		// A platform with no replies: no notice can reach the thread, so a turn that may create makes a fresh session in place of one
+		// that has ended, and has no task. Every other reply is decided as it is where there are replies.
+		{"no replies, expired: a turn that may create replaces the session", func(f *ReplyFacts) { f.NoReplies, f.Expired, f.Create, f.TaskID = true, true, true, "" }, admReplace, false},
+		{"no replies, gone: a turn that may create replaces the session", func(f *ReplyFacts) { f.NoReplies, f.BindingGone, f.Create, f.TaskID = true, true, true, "" }, admReplace, false},
+		{"no replies, gone and old: a turn that may create replaces the session", func(f *ReplyFacts) {
+			f.NoReplies, f.BindingGone, f.Expired, f.Create, f.TaskID = true, true, true, true, ""
+		}, admReplace, false},
+		{"no replies, expired: a session with a task is not replaced", func(f *ReplyFacts) { f.NoReplies, f.Expired, f.Create = true, true, true }, admExpired, false},
+		{"no replies, expired: a reply that may not create is as it is with replies", func(f *ReplyFacts) { f.NoReplies, f.Expired, f.TaskID = true, true, ""; withMention(f) }, admExpired, false},
+		{"no replies, live: a turn that may create goes on in the session", func(f *ReplyFacts) { f.NoReplies, f.Create, f.TaskID = true, true, "" }, admTurn, false},
+		{"replies, expired: a turn that may create is told the thread expired", func(f *ReplyFacts) { f.Expired, f.Create, f.TaskID = true, true, "" }, admExpired, false},
+		{"replies, gone: a turn that may create is told the Binding is gone", func(f *ReplyFacts) { f.BindingGone, f.Create, f.TaskID = true, true, "" }, admGone, false},
+
 		// A typed answer to a question that takes text replies, in a mention-only Binding.
 		{"mention: the answer to the pending text question", func(*ReplyFacts) {}, admAnswerQ1, true},
 		{"mention: a dialect with no text questions", func(f *ReplyFacts) { f.Dialect = dialectKagent }, admUnmentioned, false},
@@ -121,6 +135,7 @@ func TestReplyAdmissionInvariants(t *testing.T) {
 		flag(func(f *ReplyFacts) { f.Mentioned = true }),
 		flag(func(f *ReplyFacts) { f.BindingGone = true }),
 		flag(func(f *ReplyFacts) { f.Expired = true }),
+		flag(func(f *ReplyFacts) { f.NoReplies = true }),
 		modes(func(f *ReplyFacts, m v1alpha1.ThreadReplies) { f.Mode = m }),
 		modes(func(f *ReplyFacts, m v1alpha1.ThreadReplies) { f.ChannelMode = m }),
 		{func(f *ReplyFacts) { f.Dialect = dialectA2A }, func(f *ReplyFacts) { f.Dialect = dialectKagent }},
@@ -150,6 +165,9 @@ func TestReplyAdmissionInvariants(t *testing.T) {
 			if got.Question != "" || got.Notice != "" || got.Ignored != "" {
 				t.Fatalf("%+v: a turn with more than its kind: %+v", f, got)
 			}
+			if replaces := f.NoReplies && f.Create && f.Owned && f.TaskID == "" && (f.BindingGone || f.Expired); got.Replaces != replaces {
+				t.Fatalf("%+v: a turn that replaces the session = %v; only a turn that may create, on a platform with no replies, replaces an ended session with no task", f, got.Replaces)
+			}
 		case AdmitAnswer:
 			q := f.Question
 			if q == nil || got.Question != q.ID || !q.Posted || q.TaskID != f.TaskID || !f.Owned || f.BindingGone || f.Expired || f.Mode != modeMention || f.Mentioned || f.Create || !TakesTextReplies(f.Dialect) {
@@ -172,6 +190,12 @@ func TestReplyAdmissionInvariants(t *testing.T) {
 		default:
 			t.Fatalf("%+v: kind %q is not one of the four", f, got.Kind)
 		}
+		if got.Kind != AdmitTurn && got.Replaces {
+			t.Fatalf("%+v: %+v replaces the session, and is no turn", f, got)
+		}
+		if got.Kind == AdmitNotice && f.NoReplies && f.Create && f.TaskID == "" {
+			t.Fatalf("%+v: a notice %+v on a platform with no replies, for a turn that could have made a fresh session", f, got)
+		}
 		if !f.NeedsQuestion() {
 			g := f
 			g.Question = &PendingQuestion{ID: "other", TaskID: f.TaskID, Posted: true}
@@ -181,7 +205,7 @@ func TestReplyAdmissionInvariants(t *testing.T) {
 		}
 	}
 	sweep(0, ReplyFacts{})
-	if want := 2 * 2 * 2 * 2 * 2 * 3 * 3 * 2 * 2 * 4; swept != want {
+	if want := 2 * 2 * 2 * 2 * 2 * 2 * 3 * 3 * 2 * 2 * 4; swept != want {
 		t.Fatalf("swept %d combinations; want %d", swept, want)
 	}
 }

@@ -28,6 +28,8 @@ type intakeParts struct {
 	runs    store.TriggerRuns
 	replies store.ReplyQueue
 	log     *slog.Logger
+	// noReplies says the connection's platform has no replies of Agent Kourier's (trigger.IntakeConfig.NoReplies).
+	noReplies bool
 }
 
 // newIntakeConfig is the Intake's configuration, in one place so that a test can see that every part of the
@@ -63,7 +65,7 @@ func newIntakeConfig(p intakeParts) (trigger.IntakeConfig, error) {
 	}
 	return trigger.IntakeConfig{
 		Connection: p.conn, Snapshot: p.snapshot, Submitter: p.submitter, Logger: p.log,
-		Interactions: p.interactions, Notice: p.notice,
+		Interactions: p.interactions, Notice: p.notice, NoReplies: p.noReplies,
 		TriggerThreads: p.threads, TriggerRuns: p.runs, OnStart: p.starter.OnStart, OnLimited: p.starter.Limited, TakesBotMention: p.starter.TakesBotMention, TurnQueued: p.replies.HasReply,
 	}, nil
 }

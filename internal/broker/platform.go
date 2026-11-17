@@ -41,6 +41,14 @@ type Connection struct {
 	Credentials map[string]secret.Value
 }
 
+// hasReplies says whether Agent Kourier posts the agent's replies on the connection's platform (v1alpha1.ChatPlatform.Replies): false
+// on a web connection of the github profile, where the agent replies itself. A platform the API does not know has them, as before
+// there were platforms without.
+func (c Connection) hasReplies() bool {
+	p, ok := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: c.Platform, Web: c.Web})
+	return !ok || p.Replies
+}
+
 // platformSpec is what the broker knows of a platform: the name it is called in the text an agent reads ("Slack"), and the call that tells
 // whose bot a connection's credentials are. The keys of its credentials Secret depend on the connection's mode as well, so they are not
 // here: v1alpha1.CredentialKeys gives them for a connection's spec. Its adapter is built by RunConfig.newPlatform, which

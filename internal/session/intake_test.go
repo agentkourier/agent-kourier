@@ -607,6 +607,73 @@ func TestSubmitBindingGone(t *testing.T) {
 	}
 }
 
+// On a platform with no replies, no notice can tell a thread that it has expired or that its Binding is gone, and a turn that may
+// create the session (the github profile's every event) would be refused in silence for good: so it makes a fresh session under the
+// same key, under the Binding that owns the channel now, and is Created and queued, and no notice is asked for. Where there are
+// replies (Slack) the same turn is still answered with the notice and changes nothing, and a session that has a task is not replaced.
+func TestSubmitOnAPlatformWithoutRepliesReplacesAnEndedSession(t *testing.T) {
+	ended := func(binding string, age time.Duration) func(f *fixture) store.Session {
+		return func(f *fixture) store.Session {
+			f.t.Helper()
+			sess := store.Session{Key: key, ContextID: "c-old", Binding: binding, Origin: store.Origin{Source: store.OriginPersonMessage, Subject: "old"},
+				Agent: "kagent/old", LastActivity: t0.Add(-age)}
+			if err := f.st.UpsertSession(f.t.Context(), sess); err != nil {
+				f.t.Fatal(err)
+			}
+			f.st.upserts = 0
+			return sess
+		}
+	}
+	withTask := func(seed func(f *fixture) store.Session) func(f *fixture) store.Session {
+		return func(f *fixture) store.Session {
+			sess := seed(f)
+			sess.TaskID = "t-old"
+			if err := f.st.UpsertSession(f.t.Context(), sess); err != nil {
+				f.t.Fatal(err)
+			}
+			f.st.upserts = 0
+			return sess
+		}
+	}
+	for _, tc := range []struct {
+		name      string
+		seed      func(f *fixture) store.Session
+		noReplies bool
+		want      Result
+	}{
+		{"no replies, expired", ended("ns/b1", 2*time.Hour), true, Result{Disposition: Created, Admission: Admission{Kind: AdmitTurn, Replaces: true}}},
+		{"no replies, Binding gone", ended("ns/gone", 0), true, Result{Disposition: Created, Admission: Admission{Kind: AdmitTurn, Replaces: true}}},
+		{"no replies, expired, with a task", withTask(ended("ns/b1", 2*time.Hour)), true, Result{Disposition: Expired, Admission: admExpired}},
+		{"replies, expired", ended("ns/b1", 2*time.Hour), false, Result{Disposition: Expired, Admission: admExpired}},
+		{"replies, Binding gone", ended("ns/gone", 0), false, Result{Disposition: BindingGone, Admission: admGone}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			seeded := tc.seed(f)
+			in := inbound("1700.02")
+			in.Origin, in.NoReplies = store.Origin{Source: store.OriginPersonMessage, Subject: "new"}, tc.noReplies
+			res, err := f.submitAny(in)
+			if err != nil || res != tc.want {
+				t.Fatalf("Submit = %+v, %v; want %+v", res, err, tc.want)
+			}
+			got, _ := f.session()
+			if tc.want.Disposition != Created {
+				if got != seeded || f.st.upserts != 0 || f.st.touches != 0 || f.woke != 0 || len(f.drain()) != 0 {
+					t.Errorf("session %+v (seeded %+v), %d upserts, %d touches, woke %d; want nothing written, queued or woken", got, seeded, f.st.upserts, f.st.touches, f.woke)
+				}
+				return
+			}
+			want := store.Session{Key: key, Binding: "ns/b1", Origin: in.Origin, Agent: "kagent/agent-1", LastActivity: t0}
+			if got != want {
+				t.Errorf("session = %+v; want a fresh one under the channel's Binding: %+v", got, want)
+			}
+			if queued := f.drain(); len(queued) != 1 || queued[0].ID != in.MessageID || f.woke != 1 {
+				t.Errorf("queued %+v, woke %d; want the turn queued and the runner woken once", queued, f.woke)
+			}
+		})
+	}
+}
+
 // A Binding lookup that fails for any reason but ErrUnknownBinding (a config reload, say) is an
 // error, not a removed Binding: nothing is written, queued or woken, and the queue handler
 // retries.
