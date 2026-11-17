@@ -315,8 +315,8 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	newIntake := func(conn Connection) (chat.Sink, error) {
 		ref := conn.Ref
 		intakeCfg, err := newIntakeConfig(intakeParts{
-			conn: ref, snapshot: boot.Reloader.Current, submitter: mgr, interactions: interactions, log: log,
-			notice: sink.QueueNotice, starter: starter, threads: st, runs: st, replies: st, noReplies: !conn.hasReplies(),
+			conn: conn, snapshot: boot.Reloader.Current, submitter: mgr, interactions: interactions, log: log,
+			notice: sink.QueueNotice, starter: starter, threads: st, runs: st, replies: st,
 		})
 		if err != nil {
 			return nil, err

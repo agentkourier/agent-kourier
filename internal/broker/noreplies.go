@@ -17,7 +17,10 @@ import (
 // QueueNotice says it was written, so that no event is delivered again for it.
 type quietSink struct {
 	renderSink
-	// quiet says the connection, as "namespace/name", has no replies.
+	// quiet says the connection, as "namespace/name", has no replies. It reads the config (noRepliesIn), not the runtime table's
+	// Connection, which the intake reads (intakeParts.conn): an intake lives and dies with its runtime, but a turn outlives it, going on
+	// with the platform it holds while its connection restarts (connRuntime.life), and the table has no runtime of the connection in
+	// between, so it could not say that what the turn queues then is for a platform with no replies.
 	quiet func(conn string) bool
 }
 
