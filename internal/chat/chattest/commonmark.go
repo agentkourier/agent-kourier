@@ -27,7 +27,9 @@ func ScanCommonMark(wire string) Shown { return scanCommonMark(wire, false) }
 // "<#") is still reported there, since an adapter that writes code raw must keep those out of it. The
 // Slack adapter relies on it, as measured in a probe of the sandbox workspace on 2026-10-04 (a link, a user, a masked
 // link, "&" and "<" in a fence and in a span all showed as written: docs/spikes/slack-code-rendering.md, rows 04, 19,
-// 20). A platform that has not been measured uses ScanCommonMark, which does not take code for inert.
+// 20). So does a profile whose contract says that its receiver reads CommonMark, in which code is literal by definition
+// (the web platform's kourier-v1). A platform that has not been measured, and whose contract does not say so, uses
+// ScanCommonMark, which does not take code for inert.
 func ScanCommonMarkLiteralCode(wire string) Shown { return scanCommonMark(wire, true) }
 
 // cmParser is the one parser of every scan: goldmark builds its tables of block and inline parsers when it is made,
