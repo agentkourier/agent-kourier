@@ -150,8 +150,11 @@ type Config struct {
 	// replyTimeout, and follows no redirect, so that a receiver cannot send the signed body on to another address.
 	Transport http.RoundTripper
 	// Now is the clock of the signatures; time.Now if nil.
-	Now    func() time.Time
-	Logger *slog.Logger
+	Now func() time.Time
+	// OnConnection, if set, is told true when a Run starts to take requests and false when it stops: the connection is up while a
+	// Run takes them, as a Slack connection in HTTP mode is.
+	OnConnection func(connected bool)
+	Logger       *slog.Logger
 }
 
 // Platform is a web connection. It implements chat.Platform and chat.HTTPReceiver. Every method is safe for concurrent use.
@@ -163,10 +166,14 @@ type Platform struct {
 	url     string
 	client  *http.Client
 	now     func() time.Time
+	onConn  func(connected bool)
 	log     *slog.Logger
 	ackWait time.Duration
 	// run is the Run that takes requests, or nil: the handler answers 503 then, and the sender sends the request again.
 	run atomic.Pointer[run]
+	// last is the latest Run, kept once it ends: its context carries the broker's instruments, which count a request that comes between
+	// two Runs or after the last. Nil until the first Run.
+	last atomic.Pointer[run]
 	// order holds one event at a time to the Sink, which keeps the events of a channel in order (chat.Sink). It is one place for the
 	// whole connection, which is coarser than the contract asks: the Sink takes an event in milliseconds, and a connection's senders
 	// are few.
@@ -218,7 +225,7 @@ func New(cfg Config) (*Platform, error) {
 	}
 	return &Platform{
 		conn: cfg.Connection, profile: cfg.Profile, enc: enc, shapes: shapes, url: cfg.URL, client: client,
-		now: now, log: cmp.Or(cfg.Logger, slog.Default()), ackWait: ackWait, order: make(chan struct{}, 1),
+		now: now, onConn: cfg.OnConnection, log: cmp.Or(cfg.Logger, slog.Default()), ackWait: ackWait, order: make(chan struct{}, 1),
 	}, nil
 }
 
@@ -254,16 +261,23 @@ type run struct {
 
 // Run takes the requests of the connection to sink until ctx ends. The listener is the broker's, which routes to the handler of
 // HTTPHandler, so Run opens nothing: it makes the handler hand events to sink, and a request that comes before or after it is answered
-// 503.
+// 503. It tells Config.OnConnection that the connection is up once it takes requests, and down once it no longer does.
 func (p *Platform) Run(ctx context.Context, sink chat.Sink) error {
 	r := &run{sink: sink, ctx: ctx}
 	p.run.Store(r)
+	p.last.Store(r)
+	if p.onConn != nil {
+		p.onConn(true)
+	}
 	p.log.InfoContext(ctx, "web: taking requests", "connection", p.conn, "profile", p.profile.Name())
 	<-ctx.Done()
 	p.run.CompareAndSwap(r, nil)
 	r.mu.Lock()
 	r.closed = true
 	r.mu.Unlock()
+	if p.onConn != nil {
+		p.onConn(false)
+	}
 	return fmt.Errorf("web: %w", ctx.Err())
 }
 
