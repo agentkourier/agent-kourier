@@ -13,9 +13,11 @@
 //
 // The routes:
 //
-//	POST /replies              the receiver: a kourier-v1 reply, recorded; 200, or 401 for one it does not verify
+//	POST /replies              the receiver: a kourier-v1 reply, recorded; 200, 401 for one it does not verify, 400 for one that is
+//	                           not the contract, or the status of a Failure
 //	GET  /_control/replies     what the receiver has recorded, oldest first, as JSON
 //	POST /_control/send        the sender: one request to the chat listener, as a Send says; answers a Sent
+//	POST /_control/fail-next   a Failure: the receiver fails the next replies that keep the contract with its status; 204
 //
 // The control surface has no authentication, and the sender POSTs to the chat listener alone (Config.ChatURL, with a path under
 // /chat/web/): run it only behind a ClusterIP Service. The secrets it signs with are fake constants that the tier gives it on its
@@ -40,6 +42,8 @@ const (
 	ControlRepliesPath = "/_control/replies"
 	// ControlSendPath is the sender.
 	ControlSendPath = "/_control/send"
+	// ControlFailNextPath takes a Failure: the receiver fails the next replies on purpose.
+	ControlFailNextPath = "/_control/fail-next"
 )
 
 // maxBody is the most bytes of a request's body the server reads: a reply past it is refused (413) and not recorded, and so is a Send.
@@ -70,9 +74,11 @@ type Server struct {
 	client  *http.Client
 	now     func() time.Time
 
-	mu      sync.Mutex
-	replies []Reply         // guarded by mu
-	keys    map[string]bool // the Idempotency-Keys of the posts recorded, guarded by mu
+	mu         sync.Mutex
+	replies    []Reply         // guarded by mu
+	keys       map[string]bool // the Idempotency-Keys of the posts taken, guarded by mu
+	failures   int             // how many more replies to fail on purpose (Failure), guarded by mu
+	failStatus int             // the status they are failed with, guarded by mu
 }
 
 // New returns the fake of cfg, or an error for a config it cannot run with. The error names no secret.
@@ -115,6 +121,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		route(http.MethodGet, s.serveReplies)
 	case ControlSendPath:
 		route(http.MethodPost, s.serveSend)
+	case ControlFailNextPath:
+		route(http.MethodPost, s.serveFailNext)
 	default:
 		http.NotFound(w, r)
 	}

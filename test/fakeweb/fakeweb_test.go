@@ -336,7 +336,7 @@ func TestTheReceiverTakesWhatTheProfileEncodes(t *testing.T) {
 		t.Fatalf("the receiver recorded %d replies; want 3: %+v", len(got), got)
 	}
 	first := got[0]
-	if first.Problem != "" || first.Key != "tag-1" || first.Repeat || first.Kind != "post" || first.Connection != "e2e-web/kourier" || first.Channel != "web-1" ||
+	if first.Problem != "" || first.Status != http.StatusOK || first.Key != "tag-1" || first.Repeat || first.Kind != "post" || first.Connection != "e2e-web/kourier" || first.Channel != "web-1" ||
 		first.Thread != "m-1" || first.ID != "tag-1" || first.Fallback != "hi" || !first.At.Equal(epoch) {
 		t.Errorf("the first reply is recorded as %+v", first)
 	}
@@ -388,8 +388,65 @@ func TestTheReceiverRefusesAReplyThatBreaksTheContract(t *testing.T) {
 	} {
 		status, _ := post(t, fake+fakeweb.RepliesPath, tc.h, tc.body)
 		got := replies(t, fake)
-		if status != tc.status || len(got) == 0 || got[len(got)-1].Problem != tc.problem {
-			t.Errorf("%s: status %d, recorded %+v; want %d and the problem %s", tc.name, status, got[len(got)-1:], tc.status, tc.problem)
+		if status != tc.status || len(got) == 0 || got[len(got)-1].Problem != tc.problem || got[len(got)-1].Status != tc.status {
+			t.Fatalf("%s: status %d, recorded %+v; want %d and the problem %s", tc.name, status, got[len(got)-1:], tc.status, tc.problem)
+		}
+		// A refused reply keeps the envelope it carried, so that a test waiting for its thread sees it, and why.
+		if last := got[len(got)-1]; tc.problem != fakeweb.ProblemEnvelope && (last.Kind != "post" || last.Connection != "e2e-web/kourier" || last.Channel != "web-1" || last.ID != "tag-1") {
+			t.Errorf("%s: recorded %+v; want the refused reply's envelope", tc.name, last)
+		}
+	}
+	if got := replies(t, fake); slices.ContainsFunc(got, func(r fakeweb.Reply) bool { return r.Repeat }) {
+		t.Errorf("a refused reply was taken as a post: the next was a repeat: %+v", got)
+	}
+}
+
+// TestTheReceiverFailsTheRepliesATestAsksItTo: after a Failure the receiver answers the next replies that keep the contract with its
+// status, a 503 with a Retry-After, and records each with that status; a failed post was not taken, so its next try with the same key is
+// no repeat, and the one after that is. A reply that breaks the contract does not use up a failure. A Failure it cannot take is a 400.
+func TestTheReceiverFailsTheRepliesATestAsksItTo(t *testing.T) {
+	fake, _ := newFake(t)
+	msg := chat.Say(chat.Message{Fallback: "hi", Parts: []chat.Part{chat.Body{Markdown: "hi"}}})
+	good := encode(t, web.Reply{Kind: web.ReplyPost, Connection: "e2e-web/kourier", Channel: "web-1", ID: "tag-1", Key: "tag-1", Message: msg}, epoch)
+	if status, body := post(t, fake+fakeweb.ControlFailNextPath, nil, []byte(`{"n":1,"status":503}`)); status != http.StatusNoContent {
+		t.Fatalf("fail-next answered %d (%s); want 204", status, body)
+	}
+	unsigned := good.Header.Clone()
+	unsigned.Del(fakeweb.HeaderSignature)
+	if status, _ := post(t, fake+fakeweb.RepliesPath, unsigned, good.Body); status != http.StatusUnauthorized {
+		t.Errorf("an unsigned reply after a Failure is answered %d; want 401", status)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fake+fakeweb.RepliesPath, bytes.NewReader(good.Body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header = good.Header.Clone()
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") != "1" {
+		t.Errorf("the failed post is answered %d with Retry-After %q; want 503 and 1", resp.StatusCode, resp.Header.Get("Retry-After"))
+	}
+	for i := range 2 {
+		if status, _ := post(t, fake+fakeweb.RepliesPath, good.Header, good.Body); status != http.StatusOK {
+			t.Errorf("try %d after the failed one is answered %d; want 200", i+2, status)
+		}
+	}
+	got := replies(t, fake)
+	if len(got) != 4 {
+		t.Fatalf("recorded %d replies; want 4: %+v", len(got), got)
+	}
+	if failed := got[1]; failed.Status != http.StatusServiceUnavailable || failed.Problem != "" || failed.Repeat || failed.Key != "tag-1" {
+		t.Errorf("the failed post is recorded as %+v; want status 503, no problem, no repeat", failed)
+	}
+	if got[2].Status != http.StatusOK || got[2].Repeat || !got[3].Repeat {
+		t.Errorf("the tries after the failed one are %+v and %+v; want the first taken, not a repeat, and the second a repeat", got[2], got[3])
+	}
+	for _, bad := range []string{`{"n":0,"status":503}`, `{"n":11,"status":503}`, `{"n":1,"status":200}`, `{"n":1,"status":600}`, `{"n":1,"status":503,"x":1}`, `nope`} {
+		if status, _ := post(t, fake+fakeweb.ControlFailNextPath, nil, []byte(bad)); status != http.StatusBadRequest {
+			t.Errorf("fail-next %s answered %d; want 400", bad, status)
 		}
 	}
 }

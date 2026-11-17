@@ -35,8 +35,8 @@ func newWebFake(t *testing.T) (*Web, string) {
 	return NewWeb(srv.URL), srv.URL
 }
 
-// postReply sends the fake receiver the reply r as the kourier-v1 profile encodes it.
-func postReply(t *testing.T, base string, r web.Reply) {
+// postReply sends the fake receiver the reply r as the kourier-v1 profile encodes it, and fails the test unless it answers want.
+func postReply(t *testing.T, base string, r web.Reply, want int) {
 	t.Helper()
 	p, err := kourierv1.New(secret.New(webTestSecret))
 	if err != nil {
@@ -56,13 +56,14 @@ func postReply(t *testing.T, base string, r web.Reply) {
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("the receiver answered %d", resp.StatusCode)
+	if resp.StatusCode != want {
+		t.Fatalf("the receiver answered %d; want %d", resp.StatusCode, want)
 	}
 }
 
 // TestWebSendsAndReadsTheThreadsReplies: Send reports the chat listener's answer; ThreadReplies keeps the replies of one thread of one
-// connection; Posts leaves out the updates and the repeats; WaitThread returns once its predicate holds.
+// connection; Posts leaves out the updates, the repeats and a try the receiver failed (FailNext); WaitThread returns once its predicate
+// holds.
 func TestWebSendsAndReadsTheThreadsReplies(t *testing.T) {
 	w, base := newWebFake(t)
 	ctx := t.Context()
@@ -72,18 +73,22 @@ func TestWebSendsAndReadsTheThreadsReplies(t *testing.T) {
 	}
 	msg := chat.Say(chat.Message{Fallback: "hi", Parts: []chat.Part{chat.Body{Markdown: "hi"}}})
 	post := web.Reply{Kind: web.ReplyPost, Connection: ConnWebKourier, Channel: ChannelWebKourier, Thread: "m-1", ID: "tag-1", Key: "tag-1", Message: msg}
-	postReply(t, base, post)
-	postReply(t, base, post) // a repeat
+	if err := w.FailNext(ctx, 1, http.StatusServiceUnavailable); err != nil {
+		t.Fatal(err)
+	}
+	postReply(t, base, post, http.StatusServiceUnavailable) // failed on purpose
+	postReply(t, base, post, http.StatusOK)
+	postReply(t, base, post, http.StatusOK) // a repeat
 	update := post
 	update.Kind, update.Key = web.ReplyUpdate, "update-1"
-	postReply(t, base, update)
+	postReply(t, base, update, http.StatusOK)
 	other := post
 	other.Thread, other.ID, other.Key = "m-9", "tag-9", "tag-9"
-	postReply(t, base, other)
+	postReply(t, base, other, http.StatusOK)
 
 	got, err := w.ThreadReplies(ctx, ConnWebKourier, ChannelWebKourier, "m-1")
-	if err != nil || len(got) != 3 {
-		t.Fatalf("ThreadReplies = %d replies, %v; want the post, its repeat and the update of m-1", len(got), err)
+	if err != nil || len(got) != 4 {
+		t.Fatalf("ThreadReplies = %d replies, %v; want the failed try, the post, its repeat and the update of m-1", len(got), err)
 	}
 	if posts := Posts(got); len(posts) != 1 || posts[0].Key != "tag-1" {
 		t.Errorf("Posts = %+v; want the one post tag-1", posts)
@@ -133,8 +138,8 @@ func TestWebAgentTokenIsTheOneTheStubOwnsTheTasksBy(t *testing.T) {
 	}
 	enc := base64.RawURLEncoding
 	other := enc.EncodeToString([]byte(`{"alg":"none"}`)) + "." + enc.EncodeToString([]byte(`{"email":"someone-else@example.test"}`)) + "."
-	if mine, err := stub.Tasks(t.Context(), "kagent", AgentWebGitHub, other); err == nil && len(mine) != 0 {
-		t.Errorf("another identity lists %d tasks; want none", len(mine))
+	if mine, err := stub.Tasks(t.Context(), "kagent", AgentWebGitHub, other); err != nil || len(mine) != 0 {
+		t.Errorf("another identity lists %d tasks (%v); want none", len(mine), err)
 	}
 	if _, err := stub.Tasks(t.Context(), "kagent", "no-such-agent", WebAgentToken()); err == nil {
 		t.Error("Tasks of an agent the stub does not have succeeded")

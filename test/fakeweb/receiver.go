@@ -35,11 +35,15 @@ const (
 	ProblemEnvelope  = "envelope"  // the body is not an envelope of version 1 with a kind, a connection, a channel, an ID and a message
 )
 
-// Reply is one request the receiver was sent, as it read it.
+// Reply is one request the receiver was sent, as it read it. The envelope's fields are read from a reply that does not keep the contract
+// too, as far as its body is JSON, so that a test that waits for the replies of a thread sees one that was refused, and why.
 type Reply struct {
 	At time.Time `json:"at"`
 	// Problem is why the reply does not keep the contract, or empty for one that does (the Problem constants).
 	Problem string `json:"problem,omitempty"`
+	// Status is what the receiver answered: 200 for a reply that keeps the contract, the status a test asked for (Failure) for one it
+	// failed on purpose, 401 or 400 for a Problem.
+	Status int `json:"status"`
 	// Key is its Idempotency-Key. Repeat says a post with that key was recorded before: a receiver that keeps the contract drops it,
 	// and this one answers it 200 as it did the first.
 	Key    string `json:"key"`
@@ -88,44 +92,68 @@ func (s *Server) receive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rep := Reply{At: s.now(), Key: r.Header.Get(HeaderIdempotencyKey)}
+	envelopeProblem := read(body, &rep) // the envelope is read whatever the signature, for the record; a bad signature is the problem first
 	rep.Problem = verify(s.kourier, s.now(), r.Header.Get(HeaderTimestamp), r.Header.Get(HeaderSignature), body)
 	if rep.Problem == "" {
-		rep.Problem = read(body, &rep)
+		rep.Problem = envelopeProblem
 	}
 	if rep.Problem == "" && rep.Key == "" {
 		rep.Problem = ProblemNoKey
 	}
 	s.mu.Lock()
-	if rep.Problem == "" && rep.Kind == "post" {
-		rep.Repeat = s.keys[rep.Key]
-		s.keys[rep.Key] = true
+	switch {
+	case rep.Problem == ProblemUnsigned, rep.Problem == ProblemStale, rep.Problem == ProblemSignature:
+		rep.Status = http.StatusUnauthorized
+	case rep.Problem != "":
+		rep.Status = http.StatusBadRequest
+	case s.failures > 0:
+		// A reply failed on purpose was not taken: its key is not recorded, so its next try is not a repeat.
+		s.failures--
+		rep.Status = s.failStatus
+	default:
+		rep.Status = http.StatusOK
+		if rep.Kind == "post" {
+			rep.Repeat = s.keys[rep.Key]
+			s.keys[rep.Key] = true
+		}
 	}
 	s.replies = append(s.replies, rep)
 	s.mu.Unlock()
-	switch rep.Problem {
-	case "":
+	switch {
+	case rep.Status == http.StatusOK:
 		w.WriteHeader(http.StatusOK)
-	case ProblemUnsigned, ProblemStale, ProblemSignature:
-		http.Error(w, "not signed with the connection's secret", http.StatusUnauthorized)
+	case rep.Problem == "":
+		if rep.Status == http.StatusServiceUnavailable || rep.Status == http.StatusTooManyRequests {
+			w.Header().Set("Retry-After", "1")
+		}
+		http.Error(w, "failed on purpose", rep.Status)
+	case rep.Status == http.StatusUnauthorized:
+		http.Error(w, "not signed with the connection's secret", rep.Status)
 	default:
-		http.Error(w, "not the kourier-v1 reply contract: "+rep.Problem, http.StatusBadRequest)
+		http.Error(w, "not the kourier-v1 reply contract: "+rep.Problem, rep.Status)
 	}
 }
 
-// read fills rep from a verified body, and returns ProblemEnvelope for one that is not an envelope.
+// read fills rep from a body, and returns ProblemEnvelope for one that is not an envelope. It reads the envelope's fields of a body
+// that is not one too, as far as the body is JSON, for the record.
 func read(body []byte, rep *Reply) string {
 	var env envelope
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
-	if dec.Decode(&env) != nil || env.V != 1 || (env.Kind != "post" && env.Kind != "update") || env.Connection == "" || env.Channel == "" ||
-		env.ID == "" || len(env.Message) == 0 {
+	if err := dec.Decode(&env); err != nil {
+		env = envelope{}
+		_ = json.Unmarshal(body, &env) // best effort: what routing a body that is not the schema has
+		rep.Kind, rep.Connection, rep.Channel, rep.Thread, rep.ID = env.Kind, env.Connection, env.Channel, env.Thread, env.ID
+		return ProblemEnvelope
+	}
+	rep.Kind, rep.Connection, rep.Channel, rep.Thread, rep.ID, rep.Message = env.Kind, env.Connection, env.Channel, env.Thread, env.ID, env.Message
+	if env.V != 1 || (env.Kind != "post" && env.Kind != "update") || env.Connection == "" || env.Channel == "" || env.ID == "" || len(env.Message) == 0 {
 		return ProblemEnvelope
 	}
 	var out outgoing
 	if json.Unmarshal(env.Message, &out) != nil || out.V != 1 {
 		return ProblemEnvelope
 	}
-	rep.Kind, rep.Connection, rep.Channel, rep.Thread, rep.ID, rep.Message = env.Kind, env.Connection, env.Channel, env.Thread, env.ID, env.Message
 	if out.Message != nil {
 		rep.Fallback = out.Message.Fallback
 		for _, p := range out.Message.Parts {
@@ -160,6 +188,32 @@ func kourierMAC(key []byte, timestamp string, body []byte) []byte {
 	h.Write([]byte("v1:" + timestamp + ":"))
 	h.Write(body)
 	return h.Sum(nil)
+}
+
+// Failure is a test's word that the receiver fail the next N replies that keep the contract with Status, as a receiver that is down or
+// overloaded does, so that the test sees the sender try again. A 503 or a 429 carries a Retry-After of 1 second. A later Failure replaces
+// what is left of an earlier one.
+type Failure struct {
+	N      int `json:"n"`
+	Status int `json:"status"`
+}
+
+// maxFailures bounds Failure.N: a test fails a try or a few, not the sender's whole patience.
+const maxFailures = 10
+
+// serveFailNext takes a Failure: 204, or 400 for one with N outside 1 to maxFailures or a Status that is not 4xx or 5xx.
+func (s *Server) serveFailNext(w http.ResponseWriter, r *http.Request) {
+	var f Failure
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&f); err != nil || f.N < 1 || f.N > maxFailures || f.Status < 400 || f.Status > 599 {
+		http.Error(w, "want {\"n\": 1 to 10, \"status\": 4xx or 5xx}", http.StatusBadRequest)
+		return
+	}
+	s.mu.Lock()
+	s.failures, s.failStatus = f.N, f.Status
+	s.mu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // serveReplies answers the receiver's record, never null.

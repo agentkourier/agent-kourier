@@ -560,7 +560,8 @@ deploy_web() {
   # shellcheck disable=SC2016 # the script runs in the pod
   "${K[@]}" -n e2e run "${pod}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" --command -- sh -c '
     up() { printf %s "$2" | grep -q "^agentkourier_chat_connected{connection=\"$1\"} 1$"; }
-    for _ in $(seq 90); do
+    end=$(( $(date +%s) + 180 ))
+    while [ "$(date +%s)" -lt "${end}" ]; do
       m=$(curl -s -m 5 "$1")
       if up e2e-web/kourier "$m" && up e2e-web/github "$m"; then exit 0; fi
       sleep 2

@@ -62,6 +62,12 @@ func (w *Web) Send(ctx context.Context, in fakeweb.Send) (fakeweb.Sent, error) {
 	return sent, err
 }
 
+// FailNext has the fake receiver fail the next n replies that keep the contract with status, a 503 with a Retry-After of 1 second
+// (fakeweb.Failure), so that a scenario sees the broker try a reply again.
+func (w *Web) FailNext(ctx context.Context, n, status int) error {
+	return w.c.do(ctx, http.MethodPost, fakeweb.ControlFailNextPath, fakeweb.Failure{N: n, Status: status}, nil)
+}
+
 // Replies returns every reply the fake receiver has been sent, oldest first.
 func (w *Web) Replies(ctx context.Context) ([]fakeweb.Reply, error) {
 	var out []fakeweb.Reply
@@ -95,12 +101,12 @@ func (w *Web) WaitThread(ctx context.Context, timeout time.Duration, desc, conn,
 	return got, err
 }
 
-// Posts are the replies that are posts and keep the contract, the repeats of one post left out: one for each message the receiver
-// shows.
+// Posts are the replies that are posts, keep the contract and were taken (200), the repeats of one post left out: one for each message
+// the receiver shows. A try the receiver failed on purpose (FailNext) is not one.
 func Posts(rs []fakeweb.Reply) []fakeweb.Reply {
 	var out []fakeweb.Reply
 	for _, r := range rs {
-		if r.Kind == "post" && r.Problem == "" && !r.Repeat {
+		if r.Kind == "post" && r.Problem == "" && r.Status == http.StatusOK && !r.Repeat {
 			out = append(out, r)
 		}
 	}

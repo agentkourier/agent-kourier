@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -33,8 +34,11 @@ type webScenario struct {
 	web *Web
 }
 
-// requireWeb skips the test unless the run is in the fast tier with the web connections served: on custom resources, with their
-// namespace admitted. A selector or namespaces it cannot read fail the test (Env.Admits).
+// requireWeb returns when the run is in the fast tier with the web connections served: on custom resources, with their namespace
+// admitted. It skips in another tier, on the files route, which serves the one ChatConnection of its directory, and on the admission of
+// the tier with two Slack apps, which admits team-a's namespace in place of e2e-web (the MC_ tests hold it to that). Any other admission
+// on custom resources fails the test: up-fast.sh admits e2e-web there (web-values.yaml), and a bring-up that lost the overlay must not
+// pass as a skip. A selector or namespaces it cannot read fail the test too (Env.Admits).
 func requireWeb(t *testing.T) {
 	t.Helper()
 	env := NewEnv(os.Getenv)
@@ -44,13 +48,20 @@ func requireWeb(t *testing.T) {
 	if env.Tier != "fast" {
 		t.Skipf("the web connections are the fast tier's: their doubles, the fake web sender and receiver, run there, not in the %s tier", env.Tier)
 	}
-	admits, err := env.Admits(WebNamespace)
-	if err != nil {
-		t.Fatal(err)
+	if env.ConfigSource != "crds" {
+		t.Skipf("the broker reads its config from %s (%s): the web ChatConnections are custom resources of a team's namespace, which the files route, serving its one connection, never reads; bring the tier up with E2E_CONFIG_SOURCE=crds", env.ConfigSource, env.Admission())
 	}
-	if !admits {
-		t.Skipf("the broker does not serve the namespace %s (%s): the web ChatConnections are custom resources of a team's namespace, which the files route, serving its one connection, never reads; bring the tier up with E2E_CONFIG_SOURCE=crds and without E2E_TWO_APPS", WebNamespace, env.Admission())
+	web, webErr := env.Admits(WebNamespace)
+	if webErr == nil && web {
+		return
 	}
+	if teams, err := env.Admits(kube.MultiTeamNamespace); err == nil && teams {
+		t.Skipf("the broker admits the namespaces of the tier with two Slack apps (%s), which leaves %s out: bring the tier up without E2E_TWO_APPS", env.Admission(), WebNamespace)
+	}
+	if webErr != nil {
+		t.Fatal(webErr)
+	}
+	t.Fatalf("on custom resources the fast tier admits %s (hack/kind/web-values.yaml, which up-fast.sh gives the route upgrade), and this broker does not (%s): the bring-up lost the overlay", WebNamespace, env.Admission())
 }
 
 // newWebScenario returns a webScenario once the broker is ready and both web connections run, or skips (requireWeb).
@@ -187,14 +198,19 @@ func githubSend(event, body string) fakeweb.Send {
 
 // thread waits for the kourier-v1 thread of the message id (its replies, ThreadReplies) to hold n posts (Posts), and returns its
 // replies. Every reply the receiver was sent in the thread must keep the contract: a reply the receiver refused, unsigned, badly signed
-// or without its Idempotency-Key, fails the test.
+// or without its Idempotency-Key, ends the wait and fails the test with its problem.
 func (w *webScenario) thread(id string, n int, desc string) []fakeweb.Reply {
 	w.t.Helper()
-	got, err := w.web.WaitThread(w.ctx, stepTimeout, desc, ConnWebKourier, ChannelWebKourier, id, func(rs []fakeweb.Reply) bool { return len(Posts(rs)) >= n })
+	refused := func(rs []fakeweb.Reply) bool {
+		return slices.ContainsFunc(rs, func(r fakeweb.Reply) bool { return r.Problem != "" })
+	}
+	got, err := w.web.WaitThread(w.ctx, stepTimeout, desc, ConnWebKourier, ChannelWebKourier, id, func(rs []fakeweb.Reply) bool { return len(Posts(rs)) >= n || refused(rs) })
 	if err != nil {
 		w.t.Fatalf("%s: %v\nthe thread: %s", desc, err, describeReplies(got))
 	}
-	w.kept(got)
+	if w.kept(got); w.t.Failed() {
+		w.t.FailNow()
+	}
 	if posts := Posts(got); len(posts) != n {
 		w.t.Fatalf("%s: the thread holds %d posts; want %d\nthe thread: %s", desc, len(posts), n, describeReplies(got))
 	}
@@ -230,7 +246,7 @@ func (w *webScenario) stillPosts(id string, n int, desc string) {
 func describeReplies(rs []fakeweb.Reply) string {
 	var b strings.Builder
 	for _, r := range rs {
-		fmt.Fprintf(&b, "\n  %s %s key %q repeat %v problem %q: %s", r.Kind, r.ID, r.Key, r.Repeat, r.Problem, strings.Join(r.Markdown, " | "))
+		fmt.Fprintf(&b, "\n  %s %s answered %d key %q repeat %v problem %q: %s", r.Kind, r.ID, r.Status, r.Key, r.Repeat, r.Problem, strings.Join(r.Markdown, " | "))
 	}
 	return b.String()
 }
@@ -297,7 +313,8 @@ const (
 // TestWEB_KourierV1TurnRepliesSignedKeyedAndInert: a kourier-v1 message that opens a thread starts a turn, and its reply reaches the
 // receiver as a post of the thread, signed with the connection's signingSecret (the receiver verifies it), with an Idempotency-Key that
 // is the post's tag; a reply in the thread is the session's second turn, and its answer, quoting the first message, has that message's
-// link and tag made inert.
+// link and tag made inert. The receiver fails the first try of the second post (503): the broker tries it again with the same key, and
+// the receiver shows the one post, not a repeat.
 func TestWEB_KourierV1TurnRepliesSignedKeyedAndInert(t *testing.T) {
 	w := newWebScenario(t)
 	tok := w.token("turn")
@@ -313,10 +330,26 @@ func TestWEB_KourierV1TurnRepliesSignedKeyedAndInert(t *testing.T) {
 		t.Errorf("the first reply is %q; want the agent's answer to the first turn", got)
 	}
 
+	if err := w.web.FailNext(w.ctx, 1, http.StatusServiceUnavailable); err != nil {
+		t.Fatal(err)
+	}
 	reply := fakeweb.Message{Channel: ChannelWebKourier, Thread: open.ID, ID: tok + "-2", User: "web-user-b", Text: "and then " + tok}
 	w.sendUntilTaken(kourierSend(reply), "the reply in the thread")
-	th = w.thread(open.ID, 2, "the second turn's reply")
+	th = w.thread(open.ID, 2, "the second turn's reply, after the receiver failed its first try")
 	second := Posts(th)[1]
+	var failed []fakeweb.Reply
+	for _, r := range th {
+		if r.Status == http.StatusServiceUnavailable {
+			failed = append(failed, r)
+		}
+	}
+	switch {
+	case len(failed) != 1:
+		t.Errorf("the receiver failed %d tries of the thread; want the one it was asked to\nthe thread: %s", len(failed), describeReplies(th))
+	case failed[0].Kind != "post" || failed[0].Key != second.Key || failed[0].ID != second.ID || second.Repeat:
+		t.Errorf("the failed try is a %s with key %q and tag %q, and the post taken has key %q and tag %q (repeat %v); want the post tried again with its key\nthe thread: %s",
+			failed[0].Kind, failed[0].Key, failed[0].ID, second.Key, second.ID, second.Repeat, describeReplies(th))
+	}
 	got := markdown(second)
 	if !strings.Contains(got, "Message 2.") || !strings.Contains(got, tok) {
 		t.Errorf("the second reply is %q; want turn 2 of the session, quoting the first message", got)
@@ -469,10 +502,12 @@ func TestWEB_GitHubPullRequestStartsATurnAndPostsNothing(t *testing.T) {
 	}
 
 	w.sendStatus(githubSend("pull_request", opened), http.StatusAccepted, "the same body, delivered again")
+	// The login's own pull requests, each opened on a number of its own: from anyone else, an opened pull request starts a turn, so it is
+	// the sender that drops these, and not the action or the thread.
 	selfTok := w.token("pr-self")
-	for _, login := range []string{GitHubLogin, strings.ToUpper(GitHubLogin)} {
-		push := fakeweb.PullRequest{Action: "synchronize", Repo: GitHubRepo, Number: number, Title: title + " " + selfTok, Sender: login}.Body()
-		w.sendStatus(githubSend("pull_request", push), http.StatusAccepted, "a push the connection's login made, as "+login)
+	for i, login := range []string{GitHubLogin, strings.ToUpper(GitHubLogin)} {
+		own := fakeweb.PullRequest{Action: "opened", Repo: GitHubRepo, Number: number + 2 + i, Title: "Bump the parser for " + selfTok, Sender: login}.Body()
+		w.sendStatus(githubSend("pull_request", own), http.StatusAccepted, "a pull request the connection's login opened, as "+login)
 	}
 	w.sendStatus(githubSend("ping", fakeweb.Ping(GitHubRepo)), http.StatusAccepted, "a ping")
 	for _, signing := range []string{fakeweb.SignNone, fakeweb.SignBad} {
@@ -480,9 +515,9 @@ func TestWEB_GitHubPullRequestStartsATurnAndPostsNothing(t *testing.T) {
 		in.Signing = signing
 		w.sendStatus(in, http.StatusUnauthorized, "a delivery signed "+signing)
 	}
-	w.stillTasks(AgentWebGitHub, tok, 1, "the pull request's one turn: the delivery again, the login's pushes and the forged ones start none")
+	w.stillTasks(AgentWebGitHub, tok, 1, "the pull request's one turn: the delivery again and the forged ones start none")
 	if got := w.tasks(AgentWebGitHub, selfTok); len(got) != 0 {
-		t.Errorf("the login's own push started %d turns; want none", len(got))
+		t.Errorf("the login's own pull requests started %d turns; want none", len(got))
 	}
 
 	commentTok := w.token("pr-comment")
@@ -496,15 +531,13 @@ func TestWEB_GitHubPullRequestStartsATurnAndPostsNothing(t *testing.T) {
 		t.Error(err)
 	}
 
-	err := Consistently(w.ctx, quiet, "the github connection has no outbound row and posts nothing", func(ctx context.Context) (bool, error) {
-		if pending := w.sum("agentkourier_outbox_pending", map[string]string{"connection": ConnWebGitHub}); pending != 0 {
-			return false, fmt.Errorf("agentkourier_outbox_pending of %s is %v", ConnWebGitHub, pending)
-		}
-		all, err := w.web.Replies(ctx)
-		for _, r := range all {
-			if r.Connection == ConnWebGitHub {
-				return false, fmt.Errorf("the receiver was sent a reply of %s: %s %s", ConnWebGitHub, r.Kind, r.ID)
-			}
+	// The evidence that output none queues nothing: the connection's backlog gauge, which the store exports for every connection served (0
+	// with no unposted row; absent is a failure, not a 0), stays 0, and no row is abandoned, as a row the connection cannot post (it has no
+	// reply URL) would be. The receiver is no evidence: the connection has no URL to send it anything.
+	err := Consistently(w.ctx, quiet, "the github connection has no unposted outbound row", func(ctx context.Context) (bool, error) {
+		pending, err := w.leaderCounter(ctx, "agentkourier_outbox_pending", map[string]string{"connection": ConnWebGitHub})
+		if err == nil && pending != 0 {
+			err = fmt.Errorf("agentkourier_outbox_pending of %s is %v", ConnWebGitHub, pending)
 		}
 		return err == nil, err
 	})
@@ -518,7 +551,7 @@ func TestWEB_GitHubPullRequestStartsATurnAndPostsNothing(t *testing.T) {
 		t.Errorf("agentkourier_web_requests_total{outcome=accepted} rose by %v; want 3: the pull request, its repeat and the comment", got)
 	}
 	if got := w.requests(ConnWebGitHub, "ignored") - ignored; got != 3 {
-		t.Errorf("agentkourier_web_requests_total{outcome=ignored} rose by %v; want 3: the login's two pushes and the ping", got)
+		t.Errorf("agentkourier_web_requests_total{outcome=ignored} rose by %v; want 3: the login's two pull requests and the ping", got)
 	}
 	if got := w.requests(ConnWebGitHub, "unverified") - unverified; got != 2 {
 		t.Errorf("agentkourier_web_requests_total{outcome=unverified} rose by %v; want 2", got)
