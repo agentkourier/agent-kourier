@@ -913,7 +913,7 @@ does not mention Agent Kourier gets no notice. A reply in a thread whose Binding
 Agent Kourier, or if the Binding that now owns the channel takes all replies, or when no Binding owns the channel (the
 default mode is `all`). **Amended 2026-11-16 (carried over from the review of the web adapter's github profile).** On a
 platform with no replies of Agent Kourier's (the web adapter's `github` profile), where no notice can be posted, the
-thread is not expired for good: a turn that may create a session (a mention, or a trigger's) in a thread whose session
+thread is not expired for good: a person's turn that may create a session (a mention) in a thread whose session
 has expired or whose Binding is gone replaces that session with a fresh one, with no notice, and the agent's earlier
 context is lost. The replacement is not made, and the event is dropped as a notice would be, while the old session
 records a task or the thread holds a reply not yet delivered (a turn of the old session that may be in flight), or
