@@ -65,6 +65,9 @@ var samples = []struct {
 	{"an indented block after a rule", "***\n    <b>", "***\n```\n<b>\n```"},
 	{"an indented block after a rule of spaced dashes", "a\n\n- - -\n    <b>", "a\n\n- - -\n```\n<b>\n```"},
 	{"an indented block on a list marker", "-     <img src=x>\n\n      [a]\n  b", "-\n```\n<img src=x>\n\n[a]\n```\nb"},
+	{"an indented block after an empty item", "- \n\n    <b>", "- \n\n```\n<b>\n```"},
+	{"an indented block after an empty ordered item", "1.\n\n    <b>\n2. x", "1.\n\n```\n<b>\n```\n2. x"},
+	{"an empty item that goes on", "-\n  a\n\n      <b>", ""},
 }
 
 // The escapes of prose are sent as pinned here: a reader's view alone cannot tell "~~~" from "\~\~\~", which a receiver may read
@@ -205,9 +208,9 @@ func TestASpanWithAPipeIsCodeOutsideATable(t *testing.T) {
 	}
 }
 
-// A bare URL that a receiver links runs on to white space or "<" (GitHub's flavour, as Agent Kourier understands it, not measured
-// here): it takes in what follows it, a backslash or a span's backticks. So "<" after it is an entity, and a span right after a word
-// that may be linked is prose; a span after white space is code.
+// A bare URL that a receiver links runs on to white space or "<" (GitHub's flavour, as Agent Kourier understands it, not
+// measured here): it takes in what follows it, a backslash or a span's backticks. So "<" after it is an entity, and a span right
+// after a word that may be linked is prose; a span after white space is code.
 func TestNoURLRunsIntoMarkup(t *testing.T) {
 	for _, tc := range []struct{ md, want string }{
 		{"http://e.test<b>", "http://e.test&lt;b>"},

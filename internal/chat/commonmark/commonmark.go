@@ -7,11 +7,12 @@
 //
 //   - a fenced block (a run of three or more backticks or tildes, at most three columns past the list item it is in, or right
 //     after the item's marker) and an indented block (four columns past the item, where no paragraph goes on: after a blank line,
-//     a heading, a rule or a block, at the start, or five columns or more after the item's marker) are each written as a fence of backticks at column 0, longer than every run of
-//     backticks in the code, then the code's lines as they are, then the same fence. The fence's info string keeps its first
-//     word if that word is only letters, digits and "-", "_", "+", "." or "#", and nothing else. A fence at column 0 is in no
-//     list item, so a block ends the list it was in: the lines of the item that follow it lose the item's indent while they
-//     have it, so that they are read as text and not as code;
+//     a heading, a rule or a block, at the start, or five columns or more after the item's marker; an empty item ends at a blank
+//     line) are each written as a fence of backticks at column 0, longer than every run of backticks in the code, then the
+//     code's lines as they are, then the same fence. The fence's info string keeps its first word if that word is only letters,
+//     digits and "-", "_", "+", "." or "#", and nothing else. A fence at column 0 is in no list item, so a block ends the list it
+//     was in: the lines of the item that follow it lose the item's indent while they have it, so that they are read as text and
+//     not as code;
 //   - a code span (a run of backticks, then text, then a run of the same length, in one line) is written as it is: the agent's
 //     runs and the text between them. Where a receiver of GitHub's flavour could read its text other than as code, it is prose
 //     instead (reader.span): a span with a "|" in a line that may be a row of a table, and a span right after a word that may be
@@ -38,8 +39,9 @@ import (
 // cut in a block closes the block with its fence, and the marker follows on a line of its own; a cut in prose drops the white space
 // at the end of its line. A receiver may still read the marker as code where it reads as code a line that Agent Kourier took for
 // prose, where the two read differently: an indented block in a block quote, or in a list item opened by a second marker on the
-// same line ("1. - " and then four more columns), since Agent Kourier reads one marker a line. A character, an escape, a span and a fence line are each sent whole or not at all, so a span that does not fit is
-// dropped whole. A limit too small for the marker gets the start of the marker alone.
+// same line ("1. - " and then four more columns), since Agent Kourier reads one marker a line. A character, an escape, a span
+// and a fence line are each sent whole or not at all, so a span that does not fit is dropped whole. A limit too small for the
+// marker gets the start of the marker alone.
 func Inert(md string, limit int) string {
 	s := chat.Clean(md, false)
 	whole := &writer{limit: math.MaxInt}
@@ -143,6 +145,7 @@ type reader struct {
 	table  []bool // the lines that may be rows of a GFM table (tableRows)
 	items  []int  // the content columns of the list items that are open, the innermost last
 	para   bool   // the line before is text of a paragraph, which a line indented further goes on with
+	empty  bool   // the line before opened a list item with nothing after its marker, which a blank line ends
 	dedent int    // the columns that the lines of a list item lose after a block of it, while they have them
 }
 
@@ -169,9 +172,13 @@ func (r *reader) block(i int) (int, bool) {
 	line := r.lines[i]
 	ind, body := indent(line, 0)
 	if body == "" {
-		r.para = false
+		if r.empty {
+			r.items = r.items[:len(r.items)-1] // an item may start with one blank line, but not when it is empty
+		}
+		r.para, r.empty = false, false
 		return i + 1, r.prose(i, line)
 	}
+	r.empty = false
 	marker := listMarker(body)
 	rule := thematicBreak(body)
 	if rule {
@@ -208,6 +215,7 @@ func (r *reader) block(i int) (int, bool) {
 			content = after + 1
 		}
 		r.items = append(r.items, content)
+		r.empty = rest == ""
 		head := line[:len(line)-len(body)+marker]
 		if rest != "" && content != col {
 			// The item starts with an indented block: its first line is what follows the marker and one column.

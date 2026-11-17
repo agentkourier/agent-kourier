@@ -12,8 +12,9 @@ import (
 
 // dense are lines whose reading costs the most per character: a span every few characters, of ASCII or of CJK, and runs of
 // backticks that close nothing, each of another length, so that each would be looked for to the end of the line. Each is made at
-// two sizes, of about 2.5 kB and 64 times that: n is how many times the line has its pattern, and bench is the n of a line of
-// about 40000 units.
+// two sizes: n is how many times the line has its pattern, small and large are the n of the two, and bench is the n of a line of
+// about 40000 units. The spans grow from about 2.5 kB to 64 times that, and the runs from about 0.7 kB to about 680 times that,
+// with 27 times as many runs.
 var dense = []struct {
 	name         string
 	line         func(n int) string
@@ -29,41 +30,45 @@ var dense = []struct {
 			b.WriteString("a")
 		}
 		return b.String()
-	}, 70, 566, 280},
+	}, 37, 1000, 280},
 }
 
-// fastest is the shortest of five timings of reps runs of Inert on md, each cut one unit short of md's whole length, which reads md
-// twice. Each timing starts after a collection, so that the garbage of the one before is not paid for in it.
-func fastest(md string, reps int) time.Duration {
-	limit := chat.Units(commonmark.Inert(md, 1<<62)) - 1
-	best := time.Duration(1<<63 - 1)
-	for range 5 {
-		runtime.GC()
-		start := time.Now()
-		for range reps {
-			commonmark.Inert(md, limit)
-		}
-		best = min(best, time.Since(start))
+// timed is how long reps runs of Inert on md take, each cut at limit. It starts after a collection, so that the garbage of the
+// timing before is not paid for in it.
+func timed(md string, limit, reps int) time.Duration {
+	runtime.GC()
+	start := time.Now()
+	for range reps {
+		commonmark.Inert(md, limit)
 	}
-	return best
+	return time.Since(start)
 }
 
-// Inert takes time in proportion to the text. A line 64 times as long is timed once, against as many runs of the short line
-// as make the same number of bytes: in proportion, the two take about as long; a cost that grows with the square of a line takes
-// 64 times as long, and one that grows with its length times the runs in it eight times. The bound is three times. Both timings are
-// of the same work, long enough to measure, on the same machine in the same run, so that neither a slow machine nor the race
-// detector moves the ratio.
+// Inert takes time in proportion to the text. A long line is timed once, against as many runs of a short line as make the same
+// number of bytes: in proportion, the two take about as long. A writer that looks for each span's close to the end of the line
+// took 61 and 64 times as long on the spans, and 6.5 times as long on the runs, where the work it does for each character
+// anyway dilutes the search. The two are timed in turn, eleven times each, and the fastest of each is kept, so that a load on
+// the machine, which slows both alike while it lasts, does not move the ratio. Each line is cut one unit short of its whole,
+// which reads it twice. The bound is 4.5 times.
 func TestInertTakesTimeInProportionToTheText(t *testing.T) {
 	if testing.Short() {
-		t.Skip("times texts of 160 kB")
+		t.Skip("times texts of up to 500 kB")
 	}
 	for _, tc := range dense {
 		small, large := tc.line(tc.small), tc.line(tc.large)
 		reps := (len(large) + len(small)/2) / len(small)
-		ratio := float64(fastest(large, 1)) / float64(fastest(small, reps))
+		ls := chat.Units(commonmark.Inert(small, 1<<62)) - 1
+		ll := chat.Units(commonmark.Inert(large, 1<<62)) - 1
+		bs, bl := time.Duration(1<<62), time.Duration(1<<62)
+		for range 11 {
+			bs = min(bs, timed(small, ls, reps))
+			bl = min(bl, timed(large, ll, 1))
+		}
+		ratio := float64(bl) / float64(bs)
 		t.Logf("%s: %d bytes once took %.2f times as long as %d bytes %d times", tc.name, len(large), ratio, len(small), reps)
-		if ratio > 3 {
-			t.Errorf("%s: a line of %d bytes took %.2f times as long as %d lines of %d bytes, over three times", tc.name, len(large), ratio, reps, len(small))
+		if ratio > 4.5 {
+			t.Errorf("%s: a line of %d bytes took %.2f times as long as %d lines of %d bytes, over 4.5 times",
+				tc.name, len(large), ratio, reps, len(small))
 		}
 	}
 }
