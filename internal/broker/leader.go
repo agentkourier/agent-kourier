@@ -164,6 +164,8 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	if cfg.sink != nil {
 		sink = cfg.sink
 	}
+	// Nothing is rendered or queued for a connection whose platform has no replies: its platform would refuse every row.
+	sink = quietSink{renderSink: sink, quiet: noRepliesIn(boot.Reloader.Current)}
 	// The manager's sink is the tap, which hands the pauses of its turns to the interactions' intake; the
 	// intake answers through the manager, so its session is bound once the manager is built (D2).
 	// Whatever the interactions start adds its stop to stops, which runs between the intake, which feeds
@@ -313,7 +315,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	newIntake := func(conn Connection) (chat.Sink, error) {
 		ref := conn.Ref
 		intakeCfg, err := newIntakeConfig(intakeParts{
-			conn: ref, snapshot: boot.Reloader.Current, submitter: mgr, interactions: interactions, log: log,
+			conn: conn, snapshot: boot.Reloader.Current, submitter: mgr, interactions: interactions, log: log,
 			notice: sink.QueueNotice, starter: starter, threads: st, runs: st, replies: st,
 		})
 		if err != nil {

@@ -911,7 +911,13 @@ saying the conversation has expired and that a new mention in the channel starts
 one. The mention's two events (app_mention and message) give one notice. In `mention`, a reply in an expired thread that
 does not mention Agent Kourier gets no notice. A reply in a thread whose Binding is gone gets the notice if it mentions
 Agent Kourier, or if the Binding that now owns the channel takes all replies, or when no Binding owns the channel (the
-default mode is `all`).
+default mode is `all`). **Amended 2026-11-16 (carried over from the review of the web adapter's github profile).** On a
+platform with no replies of Agent Kourier's (the web adapter's `github` profile), where no notice can be posted, the
+thread is not expired for good: a person's turn that may create a session (a mention) in a thread whose session
+has expired or whose Binding is gone replaces that session with a fresh one, with no notice, and the agent's earlier
+context is lost. The replacement is not made, and the event is dropped as a notice would be, while the old session
+records a task or the thread holds a reply not yet delivered (a turn of the old session that may be in flight), or
+when the event's message was queued before (a body the broker already took).
 
 **Reply while a task is running.** kagent allows one active task per session and
 rejects a new message while one runs, with JSON-RPC `-32004` "resource conflict" (inside

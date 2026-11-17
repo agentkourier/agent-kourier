@@ -156,13 +156,16 @@ func ChooseConnection(ctx context.Context, snap *config.Snapshot, own v1alpha1.O
 	return connectionOf(ctx, conns[0], secrets)
 }
 
+// errNoAdapter is wrapped by the error of a ChatConnection whose platform this broker has no adapter for (platformFor does not know it).
+var errNoAdapter = errors.New("a platform this broker has no adapter for")
+
 // connectionOf is the Connection of c with the credentials of its platform and mode (v1alpha1.CredentialKeys) read through secrets. A
-// platform with no adapter is an error wrapping ErrWiring, and so is a Secret, key or value that is missing; a Secret that cannot be read
-// just now is not.
+// platform with no adapter is an error wrapping ErrWiring and errNoAdapter, and a Secret, key or value that is missing one wrapping
+// ErrWiring; a Secret that cannot be read just now is not.
 func connectionOf(ctx context.Context, c *v1alpha1.ChatConnection, secrets identity.SecretReader) (Connection, error) {
 	name := v1alpha1.NamespacedName(c.Namespace, c.Name)
 	if _, ok := platformFor(c.Spec.Platform); !ok {
-		return Connection{}, fmt.Errorf("%w: ChatConnection %s is %q, a platform this broker has no adapter for", ErrWiring, name, c.Spec.Platform)
+		return Connection{}, fmt.Errorf("%w: ChatConnection %s is %q, %w", ErrWiring, name, c.Spec.Platform, errNoAdapter)
 	}
 	read := func(key string) (secret.Value, error) {
 		v, err := secrets.Value(ctx, c.Namespace, c.Spec.CredentialsSecretRef.Name, key)
@@ -188,7 +191,20 @@ func connectionOf(ctx context.Context, c *v1alpha1.ChatConnection, secrets ident
 		}
 		creds[key] = v
 	}
-	return Connection{Ref: v1alpha1.ObjectRef{Namespace: c.Namespace, Name: c.Name}, Platform: c.Spec.Platform, Credentials: creds}, nil
+	return Connection{Ref: v1alpha1.ObjectRef{Namespace: c.Namespace, Name: c.Name}, Platform: c.Spec.Platform, Web: copyWeb(c.Spec.Web), Credentials: creds}, nil
+}
+
+// copyWeb is a copy of s that shares nothing with it, so that a Connection keeps what the ChatConnection said when it was read, or nil.
+func copyWeb(s *v1alpha1.WebConnectionSpec) *v1alpha1.WebConnectionSpec {
+	if s == nil {
+		return nil
+	}
+	c := *s
+	if s.GitHub != nil {
+		g := *s.GitHub
+		c.GitHub = &g
+	}
+	return &c
 }
 
 // Connections are the ChatConnections a broker runs: its own, if it has one, and the team connections it serves besides (spec D52, D53).

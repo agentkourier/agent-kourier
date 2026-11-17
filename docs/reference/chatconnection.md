@@ -21,7 +21,7 @@ ChatConnectionSpec is the desired state of a ChatConnection.
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `platform` | string | Yes | None | Platform is the chat platform: slack, or web, whose integration spec.web.profile names. No broker runs a web connection yet: one that is the broker's own connection stops its start, and a team one is not started. One of `slack`, `web`. |
+| `platform` | string | Yes | None | Platform is the chat platform: slack, or web, whose integration spec.web.profile names. A web connection takes its sender's requests on the broker's chat listener (AGENTKOURIER_CHAT_LISTEN) at POST /chat/web/&lt;namespace&gt;/&lt;name&gt;. A broker with no chat listener does not run one: its own fails the start, and a team connection is not started. One of `slack`, `web`. |
 | `credentialsSecretRef` | [SecretRef](#secretref) | Yes | None | CredentialsSecretRef names one Secret whose keys are fixed by the platform and its mode or profile. A Slack connection in Socket Mode needs botToken and appToken; one in HTTP mode needs botToken and signingSecret. A web connection of the kourier-v1 profile needs signingSecret, and one of the github profile webhookSecret. |
 | `allowedNamespaces` | []string | No | Empty list | AllowedNamespaces lists the other namespaces whose Bindings may reference this connection. Each is a DNS-1123 label. An empty list permits references only from the connection's own namespace. At most 256. |
 | `slack` | [SlackConnectionSpec](#slackconnectionspec) | No | None | Slack holds the settings of a Slack connection. Only a connection whose platform is slack may set it. Omitted, the connection uses Socket Mode. |

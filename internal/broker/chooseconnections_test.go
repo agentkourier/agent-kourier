@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -149,10 +150,10 @@ func TestAChatConnectionOnAPlatformWithNoAdapterIsAWiringError(t *testing.T) {
 	}
 }
 
-// A web ChatConnection, which the API takes before any broker has its adapter, is refused at connection start as a platform with no
-// adapter is, whatever its profile and with its profile's Secret in place: as the broker's own connection it is a wiring error, which
-// stops the start, and as a team connection it is its Err, which leaves it not started beside a Slack connection that is.
-func TestAWebChatConnectionIsRefusedAtConnectionStart(t *testing.T) {
+// A web ChatConnection is chosen with the key of its profile's Secret and its spec.web, whatever its profile: as the broker's own
+// connection, and as a team connection beside a Slack one. A Secret that lacks the profile's key is a wiring error that names it, as a
+// Slack connection's is.
+func TestAWebChatConnectionIsChosenWithItsProfilesKey(t *testing.T) {
 	for _, web := range []*v1alpha1.WebConnectionSpec{
 		{Profile: v1alpha1.WebProfileKourierV1, URL: "https://receiver.example.com/replies"},
 		{Profile: v1alpha1.WebProfileGitHub, GitHub: &v1alpha1.GitHubWebSpec{Login: "pr-reviewer"}},
@@ -182,17 +183,32 @@ func TestAWebChatConnectionIsRefusedAtConnectionStart(t *testing.T) {
 				return snap
 			}
 
-			_, err := ChooseConnections(t.Context(), resolved(conn("platform")), v1alpha1.ObjectRef{Namespace: "platform", Name: "web"}, r)
-			if !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), `ChatConnection platform/web is "web", a platform this broker has no adapter for`) {
-				t.Errorf("own web connection: ChooseConnections = %v; want a wiring error that names the platform", err)
+			own, err := ChooseConnections(t.Context(), resolved(conn("platform")), v1alpha1.ObjectRef{Namespace: "platform", Name: "web"}, r)
+			if err != nil {
+				t.Fatalf("own web connection: ChooseConnections = %v; want it served", err)
+			}
+			if c := own.Own; c.Platform != v1alpha1.PlatformWeb || !reflect.DeepEqual(c.Web, web) || len(c.Credentials) != 1 || c.Credentials[key].Reveal() != "fake-web-secret" {
+				t.Errorf("own web connection = %+v; want its platform, its spec.web and the key of its profile alone", c)
+			}
+			if c := own.Own; c.Web == web {
+				t.Error("the connection shares spec.web with the snapshot; want a copy")
 			}
 
 			got, err := ChooseConnections(t.Context(), resolved(slack, conn("team-a")), ownRef, r)
 			if err != nil {
 				t.Fatalf("own Slack connection beside a team web one: ChooseConnections = %v; want it served", err)
 			}
-			if len(got.Team) != 1 || !errors.Is(got.Team[0].Err, ErrWiring) || len(got.Team[0].Credentials) != 0 || got.Team[0].Platform != v1alpha1.PlatformWeb {
-				t.Errorf("team web connection = %+v; want its wiring error, its platform and no credentials", got.Team)
+			if len(got.Team) != 1 || got.Team[0].Err != nil || got.Team[0].Credentials[key].Reveal() != "fake-web-secret" || got.Team[0].Web == nil {
+				t.Errorf("team web connection = %+v; want it with its key and its spec.web", got.Team)
+			}
+
+			delete(r.vals, "team-a/creds-web/"+key)
+			got, err = ChooseConnections(t.Context(), resolved(slack, conn("team-a")), ownRef, r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Team) != 1 || !errors.Is(got.Team[0].Err, ErrWiring) || !strings.Contains(got.Team[0].Err.Error(), "read "+key+" of Secret team-a/creds-web") {
+				t.Errorf("team web connection with no %s = %+v; want a wiring error naming the key", key, got.Team)
 			}
 		})
 	}

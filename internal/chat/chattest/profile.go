@@ -33,7 +33,8 @@ type ProfileSubject struct {
 	// each header it returns away in turn, and expects the request refused without it.
 	Sign func(secret string, body []byte, at time.Time) http.Header
 	// MaxSkew is how far from the receiver's clock the time of a signature may be, either way, or 0 for a profile whose signature
-	// carries no time: such a profile has no replay window, and a replayed delivery is dropped by its ID alone.
+	// carries no time: such a profile has no replay window, and a replayed request is dropped by its event's ID alone (web.Event.ID,
+	// which on the github profile is the hash of the body, and not GitHub's delivery ID).
 	MaxSkew time.Duration
 	// MaxBody is the most bytes of a body the profile takes; a longer one is refused 413. The suite makes a body of the bound, and one
 	// past it, by padding the first event that has something to take with trailing spaces, which a JSON profile reads as the same
@@ -54,7 +55,8 @@ type ProfileSubject struct {
 // ProfileEvent is one documented event of a profile.
 type ProfileEvent struct {
 	Name string
-	// Header holds what the sender sends beside the signature (GitHub's event name and delivery ID), and Body the body.
+	// Header holds what the sender sends beside the signature (GitHub's event name, and its delivery ID, which the profile does not
+	// read), and Body the body.
 	Header http.Header
 	Body   []byte
 	// Want is what the event decodes to, or nil for an event that carries nothing to take, such as a ping.

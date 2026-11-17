@@ -144,6 +144,10 @@ func TestResolutionOnTheGitHubProfile(t *testing.T) {
 			rejected("sre-alerts", ReasonUnsupportedOnPlatform, "spec.interactions.toolApprovals: tool approvals are not supported"+on+"set it to false"+page),
 			rejected("sre-alerts", ReasonUnsupportedOnPlatform, "spec.feedback.enabled: feedback buttons are not supported"+on+"set it to false"+page),
 		}},
+		{"triggers with no mention trigger, which no event could start", func(b *v1alpha1.Binding) { b.Spec.Chat.Triggers = b.Spec.Chat.Triggers[1:] }, "", []Rejection{
+			rejected("sre-alerts", ReasonUnsupportedOnPlatform, "spec.chat.triggers: a list with no mention trigger is not supported"+on+
+				"add {type: mention} to it, or leave it out, which is [{type: mention}]: every event the platform hands on is a mention, and no other trigger starts a turn"+page)}},
+		{"its triggers left out, which is the mention trigger", func(b *v1alpha1.Binding) { b.Spec.Chat.Triggers = nil }, v1alpha1.OutputNone, nil},
 		{"a Slack channel", func(b *v1alpha1.Binding) { b.Spec.Chat.Channel = "C0123456789" }, "", []Rejection{
 			rejected("sre-alerts", ReasonInvalidPlatformID, `spec.chat.channel: "C0123456789" is not a repository`+on+
 				"use the repository's owner/name, such as octo-org/hello-world"+page)}},

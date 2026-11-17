@@ -105,15 +105,23 @@ func canceled(t *testing.T) context.Context {
 }
 
 // A turn is attributed to a person on a platform: the ID is the ChatConnection's spec.platform and the name is the one the
-// broker holds for it. A platform the broker does not know keeps its ID, with no name, so that a prefix still reads true.
+// broker holds for it, GitHub's for a web connection of the github profile. A platform the broker does not know keeps its ID, with no
+// name, so that a prefix still reads true.
 func TestActorPlatformNamesThePlatformOfTheConnection(t *testing.T) {
-	for id, want := range map[string]dialect.Platform{
-		v1alpha1.PlatformSlack: {ID: "slack", Name: "Slack"},
-		"teams":                {ID: "teams"},
-		"":                     {},
+	for _, tc := range []struct {
+		spec v1alpha1.ChatConnectionSpec
+		want dialect.Platform
+	}{
+		{v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformSlack}, dialect.Platform{ID: "slack", Name: "Slack"}},
+		{v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb, Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileKourierV1}},
+			dialect.Platform{ID: "web", Name: "web"}},
+		{v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb, Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileGitHub}},
+			dialect.Platform{ID: "web", Name: "GitHub"}},
+		{v1alpha1.ChatConnectionSpec{Platform: "teams"}, dialect.Platform{ID: "teams"}},
+		{v1alpha1.ChatConnectionSpec{}, dialect.Platform{}},
 	} {
-		if got := actorPlatform(id); got != want {
-			t.Errorf("actorPlatform(%q) = %+v, want %+v", id, got, want)
+		if got := actorPlatform(tc.spec); got != tc.want {
+			t.Errorf("actorPlatform(%+v) = %+v, want %+v", tc.spec, got, tc.want)
 		}
 	}
 }

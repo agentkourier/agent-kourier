@@ -28,7 +28,9 @@ const (
 	// store.ReplyQueue.AbandonStrandedReplies). A turn waits, by design, behind a task that runs or is paused on a
 	// question (which the store leaves alone however old), and a busy or not-ready session is waited out without
 	// limit; none of those is a matter of weeks. 30 days is long past any of them, and a third of the default
-	// threadTTL, after which a thread's session is expired and its queue is never read again.
+	// threadTTL, after which a thread's session is expired and its queue is never worked again. On a platform with no
+	// replies the intake still reads the queue there: an undelivered reply holds off the fresh session that a new turn
+	// would make, until this loop gives the reply up (session.ReplyFacts.Unsettled).
 	defaultStrandedReplyAge = 30 * 24 * time.Hour
 	// defaultAuditBatch is how many entries one purge call deletes: small enough that one is a short transaction,
 	// under Postgres's statement timeout and SQLite's one writer.
