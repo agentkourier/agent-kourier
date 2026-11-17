@@ -164,7 +164,7 @@ func (b *Bindings) Backend(name string) (session.Backend, error) {
 		Agent:                    ag,
 		Attribute:                k.attribute,
 		ParseInteraction:         k.dialect.ParseInteraction,
-		Platform:                 actorPlatform(rb.Connection.Spec.Platform),
+		Platform:                 actorPlatform(rb.Connection.Spec),
 		Rejected:                 src.Rejected,
 		Identity:                 src.Identity(),
 		Output:                   rb.Binding.Spec.Chat.Output,
@@ -324,7 +324,7 @@ func (b *Bindings) Binding(name string) (interact.Binding, error) {
 	}
 	in := rb.Binding.Spec.Interactions
 	return interact.Binding{
-		Dialect: k.dialect, Identity: src.Identity(), Platform: actorPlatform(rb.Connection.Spec.Platform), AskUser: in.AskUser, ToolApprovals: in.ToolApprovals,
+		Dialect: k.dialect, Identity: src.Identity(), Platform: actorPlatform(rb.Connection.Spec), AskUser: in.AskUser, ToolApprovals: in.ToolApprovals,
 		ApproverGroups: slices.Clone(in.ApproverGroups), Timeout: in.Timeout.Duration,
 	}, nil
 }

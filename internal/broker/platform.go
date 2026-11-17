@@ -34,7 +34,10 @@ const slackAPITimeout = 30 * time.Second
 type Connection struct {
 	Ref v1alpha1.ObjectRef
 	// Platform is ChatConnection.spec.platform, which chooses the adapter (newPlatform).
-	Platform    string
+	Platform string
+	// Web is ChatConnection.spec.web, a copy, on a web connection: its profile, the URL of its replies and the github profile's login.
+	// Nil on any other platform.
+	Web         *v1alpha1.WebConnectionSpec
 	Credentials map[string]secret.Value
 }
 
@@ -55,17 +58,27 @@ type platformSpec struct {
 // newPlatform for its adapter, and its keys in v1alpha1.CredentialKeys. One that is not here has no adapter, and a ChatConnection of it is a wiring
 // error. It is a func and not a table, so that there is no state to change.
 func platformFor(name string) (platformSpec, bool) {
-	if name == v1alpha1.PlatformSlack {
+	switch name {
+	case v1alpha1.PlatformSlack:
 		return platformSpec{Name: "Slack", Identify: slackIdentityOf}, true
+	case v1alpha1.PlatformWeb:
+		// No identity call: a web connection has no bot that the platform could name, and no app that two connections could share, so
+		// its connections have the zero identity. The bot guard has no bot of a web connection to tell from a person, and needs none:
+		// a web profile hands on no bot's message (web.Platform.IsBot), and the github profile drops what its own login sent.
+		return platformSpec{Name: "web"}, true
 	}
 	return platformSpec{}, false
 }
 
 // actorPlatform is the platform a ChatConnection's users are on, as the dialects attribute a turn to them: the ID is
-// spec.platform, and the display name is the one platformFor knows. A platform it does not know has an ID alone.
-func actorPlatform(id string) dialect.Platform {
-	spec, _ := platformFor(id)
-	return dialect.Platform{ID: id, Name: spec.Name}
+// spec.platform, and the display name is the one platformFor knows. A platform it does not know has an ID alone. The users of a web
+// connection of the github profile are GitHub's, which is the name the agent reads ("[GitHub: octocat]").
+func actorPlatform(spec v1alpha1.ChatConnectionSpec) dialect.Platform {
+	p, _ := platformFor(spec.Platform)
+	if spec.Platform == v1alpha1.PlatformWeb && spec.Web != nil && spec.Web.Profile == v1alpha1.WebProfileGitHub {
+		p.Name = "GitHub"
+	}
+	return dialect.Platform{ID: spec.Platform, Name: p.Name}
 }
 
 // slackAPI is the Slack client as the Slack adapter takes it, which is the seam of RunConfig.newSlack.
@@ -79,17 +92,20 @@ type builtPlatform struct {
 	closeIdle func()
 }
 
-// newPlatform builds the adapter of the connection's platform: the one place that names a platform. Only
-// slack exists; any other platform is a wiring error, which no retry mends. The Slack client gets a transport of its
+// newPlatform builds the adapter of the connection's platform: the one place that names a platform. Slack and web
+// exist; any other platform is a wiring error, which no retry mends. Each client gets a transport of its
 // own, so that its idle connections can be closed at shutdown. onConnection, if set, is told whether the platform's
-// connection is up: it is Config.OnConnection of the Slack adapter, and another platform would report through the same func.
+// connection is up: it is Config.OnConnection of the Slack adapter and of the web platform.
 // It refuses a connection that needs the chat listener on a broker that has none (needsChatListener).
 func (c RunConfig) newPlatform(conn Connection, log *slog.Logger, onConnection func(connected bool)) (builtPlatform, error) {
 	name := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
 	if err := c.needsChatListener(conn); err != nil {
 		return builtPlatform{}, err
 	}
-	if conn.Platform == v1alpha1.PlatformSlack { // a second platform is one more case here, and one in platformFor
+	switch conn.Platform { // a platform is one more case here, and one in platformFor
+	case v1alpha1.PlatformWeb:
+		return newWebPlatform(conn, log, onConnection)
+	case v1alpha1.PlatformSlack:
 		sc := c.slackConfig(conn, log)
 		transport := http.DefaultTransport.(*http.Transport).Clone()
 		sc.HTTPClient = &http.Client{Transport: telemetry.Transport(transport, false), Timeout: cmp.Or(c.slackHTTPTimeout, slackAPITimeout)}
@@ -107,15 +123,23 @@ func (c RunConfig) newPlatform(conn Connection, log *slog.Logger, onConnection f
 
 // needsChatListener refuses, with a wiring error, a connection that takes its platform's requests on the chat listener when the broker has
 // none (AGENTKOURIER_CHAT_LISTEN unset): a Slack connection in HTTP mode, whose credentials are read with the signing secret
-// (v1alpha1.CredentialKeys). Slack could not reach it, and it would show as connected while nothing came in. Run checks its own
-// connection with it at start, on every replica, so that a standby refuses the config as the leader does; newPlatform checks each
-// connection it builds.
+// (v1alpha1.CredentialKeys), and every web connection. The platform could not reach it, and it would show as connected while nothing came
+// in. Run checks its own connection with it at start, on every replica, so that a standby refuses the config as the leader does; newPlatform
+// checks each connection it builds.
 func (c RunConfig) needsChatListener(conn Connection) error {
-	if conn.Platform != v1alpha1.PlatformSlack || conn.Credentials[v1alpha1.SlackSigningSecretKey].IsEmpty() || c.ChatListener != nil {
+	if c.ChatListener != nil {
 		return nil
 	}
-	return fmt.Errorf("%w: ChatConnection %s is in Slack HTTP mode, and the broker has no chat listener for Slack to send to: set AGENTKOURIER_CHAT_LISTEN",
-		ErrWiring, v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name))
+	name := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
+	switch {
+	case conn.Platform == v1alpha1.PlatformWeb:
+		return fmt.Errorf("%w: ChatConnection %s is a web connection, and the broker has no chat listener for its sender to send to: set AGENTKOURIER_CHAT_LISTEN",
+			ErrWiring, name)
+	case conn.Platform == v1alpha1.PlatformSlack && !conn.Credentials[v1alpha1.SlackSigningSecretKey].IsEmpty():
+		return fmt.Errorf("%w: ChatConnection %s is in Slack HTTP mode, and the broker has no chat listener for Slack to send to: set AGENTKOURIER_CHAT_LISTEN",
+			ErrWiring, name)
+	}
+	return nil
 }
 
 // slackConfig is the Slack client's config for conn. Its API URL comes from testhooks.SlackAPIURL and

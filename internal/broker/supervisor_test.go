@@ -472,6 +472,49 @@ func TestSupervisorRestartsATeamConnectionSwitchedToAnotherMode(t *testing.T) {
 	}
 }
 
+// onWeb is the team connection name as teamConnections gives it once its ChatConnection, at generation gen, is a web connection of the
+// kourier-v1 profile whose Secret holds the signing secret signing: the key of the profile, read from its Secret by connectionOf.
+func onWeb(t *testing.T, name string, gen int64, signing string, age int) TeamConnection {
+	t.Helper()
+	ns, n, _ := strings.Cut(name, "/")
+	c := &v1alpha1.ChatConnection{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: n}, Spec: v1alpha1.ChatConnectionSpec{
+		Platform: v1alpha1.PlatformWeb, CredentialsSecretRef: v1alpha1.SecretRef{Name: "creds"},
+		Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileKourierV1, URL: "https://receiver.example/kourier"}}}
+	conn, err := connectionOf(t.Context(), c, &reader{vals: map[string]string{ns + "/creds/" + v1alpha1.KourierV1SigningSecretKey: signing}})
+	if err != nil {
+		t.Fatalf("connectionOf on web = %v; want its key read", err)
+	}
+	tc := team(name, gen, "", age)
+	tc.Connection = conn
+	return tc
+}
+
+// A team web connection is served beside the Slack ones: its identity is the zero one (no app to hold), so two of them both run. Its
+// Secret rotated to another signing secret restarts it on the new one, as a rotated Slack token does, and a Secret that loses the key leaves the
+// runtime of the old secret running until the key is back.
+func TestSupervisorServesTeamWebConnectionsAndRestartsThemOnRotation(t *testing.T) {
+	w := newSupWorld(t)
+	w.reconcile(onWeb(t, "team-w/web", 1, "fake-signing-1", 1), onWeb(t, "team-x/web", 1, "fake-signing-x", 2))
+	if got := w.running(); !slices.Equal(got, []string{ownName, "team-w/web", "team-x/web"}) {
+		t.Fatalf("running = %v; want both web connections served, neither holding an app against the other", got)
+	}
+	built := len(w.tokens())
+
+	w.reconcile(onWeb(t, "team-w/web", 1, "fake-signing-2", 1), onWeb(t, "team-x/web", 1, "fake-signing-x", 2))
+	w.mu.Lock()
+	closed := slices.Clone(w.closed)
+	w.mu.Unlock()
+	if got := len(w.tokens()); got != built+1 || !slices.Equal(closed, []string{"team-w/web"}) {
+		t.Errorf("after team-w's signing secret rotated: %d platforms built (want %d), transports closed %v (want team-w's); want team-w restarted, alone",
+			got, built+1, closed)
+	}
+
+	w.reconcile(unready("team-w/web", 1, 1), onWeb(t, "team-x/web", 1, "fake-signing-x", 2))
+	if got := w.running(); !slices.Equal(got, []string{ownName, "team-w/web", "team-x/web"}) || len(w.tokens()) != built+1 {
+		t.Errorf("running = %v, %d platforms built, once team-w's key cannot be read; want it left running on the secret it had", got, len(w.tokens()))
+	}
+}
+
 // Two connections of one Slack app are not both served: the older is, the own connection first. The younger says so to its Bindings (the
 // refusals), and is served once the older goes. A younger one that runs is stopped when an older of its app turns up.
 func TestSupervisorServesTheOlderConnectionOfASlackApp(t *testing.T) {
