@@ -41,7 +41,7 @@ Channel
     connection.
 
 ChatConnection
-:   The resource that connects Agent Kourier to one chat platform workspace, with the Secret that holds its tokens.
+:   The resource that connects Agent Kourier to one chat platform workspace, with the Secret that holds its credentials.
     The platform team owns the broker's own; a team may own one in a namespace the platform admits.
 
 Config route
@@ -106,7 +106,7 @@ Outbox
     sending and recording is found and not posted twice.
 
 Platform
-:   A chat platform behind the `chat.Platform` interface. Slack is the one platform in v1.
+:   A chat platform behind the `chat.Platform` interface. Slack is the only platform today.
 
 Post
 :   A message Agent Kourier writes into a channel or thread.

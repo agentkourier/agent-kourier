@@ -264,6 +264,7 @@ type ChatConnectionList struct {
 //
 // +kubebuilder:validation:XValidation:rule="!has(self.slack) || self.platform == 'slack'",message="is set, but only a slack connection has one",fieldPath=".slack"
 type ChatConnectionSpec struct {
+	// Platform is the chat platform: slack.
 	// +kubebuilder:validation:Enum=slack
 	Platform string `json:"platform"`
 	// CredentialsSecretRef names one Secret whose keys are fixed by the platform and its mode. A Slack connection in Socket Mode needs

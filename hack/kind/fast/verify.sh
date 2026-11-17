@@ -4,7 +4,7 @@
 # endpoint, are published nowhere (spec 12.1).
 # Every check prints "ok: ..." or "FAIL: ..." (exit 1). Two groups:
 #  1. host side, lib.sh's assert_never_published (full/verify.sh runs it too): every Service that
-#     selects the fake Slack's or the stub agent's pods is ClusterIP with no nodePort, external IP
+#     selects the pods of the fake Slack, the stub agent or hitlagent is ClusterIP with no nodePort, external IP
 #     or load-balancer ingress; no Ingress in e2e; none of those pods has a hostPort or
 #     hostNetwork; the kind node publishes only the API server, on loopback;
 #  2. Agent Kourier: its pods (one, or two with E2E_REPLICAS=2), ready (the Deployment's rollout has finished and the API server can reach

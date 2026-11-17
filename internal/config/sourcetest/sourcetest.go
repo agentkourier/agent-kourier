@@ -396,11 +396,12 @@ var crossCases = []crossCase{
 // chatOnlyRoute is the routing line of the spec corpus' Binding sre/chat-only, which names no output and is served with the default.
 const chatOnlyRoute = "sre/chat-only -> agent-kourier-system/kagent-pilot on agent-kourier-system/slack-main channel G0123456789 output live\n"
 
-// platformCase is a change to a Binding of a corpus that the load takes and its connection's platform does not, with the reason and
-// the problem that resolution gives; how a Snapshot serves the field, before the change; and the routing table of the rest.
+// platformCase is a change to a Binding of the spec corpus that the load takes and its connection's platform does not, with the
+// reason and the problem that resolution gives; how a Snapshot serves the field, before the change; and the routing table of the
+// rest. Each case is a chat ID: Slack, the one platform, serves every feature, so no source can be given a Binding that asks for one
+// it does not; TestUnsupportedOnPlatform and TestRefusedOnPlatform in internal/config cover that refusal with a table of their own.
 type platformCase struct {
 	name     string
-	corpus   func(*testing.T) Corpus
 	doc      int    // the Binding's document in the corpus
 	binding  string // the Binding's name, in namespace sre
 	from, to string
@@ -413,7 +414,7 @@ type platformCase struct {
 
 var platformCases = []platformCase{
 	{
-		name: "a chat ID that the connection's platform does not take", corpus: Spec, doc: 2, binding: "sre-alerts", rest: chatOnlyRoute,
+		name: "a chat ID that the connection's platform does not take", doc: 2, binding: "sre-alerts", rest: chatOnlyRoute,
 		from: "from: { id: B0123456789 }", to: "from: { id: alertmanager }",
 		reason:  config.ReasonInvalidPlatformID,
 		problem: `spec.chat.triggers[1].from.id: "alertmanager" is not a bot ID on Slack, the platform of ChatConnection agent-kourier-system/slack-main`,
@@ -421,7 +422,7 @@ var platformCases = []platformCase{
 	},
 	{
 		// A channel's name passes Validate, which takes any platform's IDs, and the connection's platform refuses it.
-		name: "a channel's name on Slack", corpus: Spec, doc: 2, binding: "sre-alerts", rest: chatOnlyRoute,
+		name: "a channel's name on Slack", doc: 2, binding: "sre-alerts", rest: chatOnlyRoute,
 		from: "channel: C0123456789 ", to: "channel: general ",
 		reason:  config.ReasonInvalidPlatformID,
 		problem: `spec.chat.channel: "general" is not a channel ID on Slack, the platform of ChatConnection agent-kourier-system/slack-main`,
@@ -440,12 +441,12 @@ func (c platformCase) changed(t *testing.T, docs []string) []string {
 	return docs
 }
 
-// refusedOnPlatform: a Binding that names a chat ID or asks for a feature that its connection's platform does not take passes
+// refusedOnPlatform: a Binding that names a chat ID that its connection's platform does not take passes
 // Default and Validate, and the platform refuses it, in the same words on either route. The files fail resolution, and so the
 // whole load. The custom resources refuse that Binding as they refuse one that fails Validate, with the platform's reason: it is
 // listed in Set.Invalid, with nothing served in its place, and the rest is read and served.
 func refusedOnPlatform(t *testing.T, f Factory, opts Options, c platformCase) {
-	base := c.corpus(t)
+	base := Spec(t)
 	src := f(t, Corpus{Name: base.Name, Docs: c.changed(t, base.Docs), Connection: base.Connection})
 	set, _ := read(t, src)
 	if !opts.PerObject {
@@ -466,12 +467,12 @@ func refusedOnPlatform(t *testing.T, f Factory, opts Options, c platformCase) {
 	}
 }
 
-// refusedEdit: an edit that gives a serving Binding what its platform does not take does not take, on either route, as an edit
+// refusedEdit: an edit that gives a serving Binding a chat ID that its platform does not take does not take, on either route, as an edit
 // that fails Validate does not. The files fail the reload with the problem, and the Reloader keeps the config it serves. The custom
 // resources keep serving the Binding's last good generation, and the Report says why the new one is refused, with the platform's
 // reason, which the Binding's status carries.
 func refusedEdit(t *testing.T, opts Options, c platformCase) {
-	base := c.corpus(t)
+	base := Spec(t)
 	docs := base.Docs
 	src, change := opts.Edit(t, Corpus{Name: base.Name, Docs: docs, Connection: base.Connection})
 	first, _ := read(t, src)

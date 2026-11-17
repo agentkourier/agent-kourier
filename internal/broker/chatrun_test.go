@@ -120,7 +120,7 @@ func TestRunPlatformStopsAtOnceOnAFatalAuthError(t *testing.T) {
 func TestRunPlatformNamesThePlatformThatRejectedTheTokens(t *testing.T) {
 	for _, tc := range []struct{ platform, want string }{
 		{v1alpha1.PlatformSlack, "slack rejected the tokens: invalid_auth"},
-		{"web", "web rejected the tokens: invalid_auth"},
+		{"other", "other rejected the tokens: invalid_auth"},
 		{"", "the chat platform rejected the tokens: invalid_auth"},
 	} {
 		c := &clock{}
@@ -140,7 +140,7 @@ func TestRunPlatformNamesThePlatformThatRejectedTheTokens(t *testing.T) {
 func TestRunPlatformLogsThePlatformWhoseConnectionEnded(t *testing.T) {
 	for _, tc := range []struct{ platform, want string }{
 		{v1alpha1.PlatformSlack, `msg="slack connection ended; connecting again"`},
-		{"web", `msg="web connection ended; connecting again"`},
+		{"other", `msg="other connection ended; connecting again"`},
 		{"", `msg="chat connection ended; connecting again"`},
 	} {
 		ctx, cancel := context.WithCancel(t.Context())

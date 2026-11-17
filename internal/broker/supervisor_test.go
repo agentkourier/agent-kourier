@@ -599,15 +599,15 @@ func TestSupervisorServesAnAppInstalledInTwoWorkspacesOnce(t *testing.T) {
 func TestSupervisorTellsTheAppsOfTwoPlatformsApart(t *testing.T) {
 	w := newSupWorld(t)
 	w.ids["tok-slack"] = appIdentity{App: "AAPP", Team: "T1", User: "UAPP", Bot: "BAPP"}
-	w.ids["tok-web"] = appIdentity{App: "AAPP", Team: "T1", User: "UAPP", Bot: "BAPP"}
-	w.ids["tok-web-own"] = appIdentity{App: "AOWN", Team: "T1", User: "UOWN", Bot: "BOWN"}
+	w.ids["tok-other"] = appIdentity{App: "AAPP", Team: "T1", User: "UAPP", Bot: "BAPP"}
+	w.ids["tok-other-own"] = appIdentity{App: "AOWN", Team: "T1", User: "UOWN", Bot: "BOWN"}
 	w.ids["tok-slack-twin"] = appIdentity{App: "AAPP", Team: "T2", User: "UTWIN", Bot: "BTWIN"}
 	slackTeam := team("team-a/slack", 1, "tok-slack", 1)
-	webTeam := teamOn("web", "team-b/web", 1, "tok-web", 2)
-	webOwn := teamOn("web", "team-c/web", 1, "tok-web-own", 3)
+	otherTeam := teamOn("other", "team-b/other", 1, "tok-other", 2)
+	otherOwn := teamOn("other", "team-c/other", 1, "tok-other-own", 3)
 
-	w.reconcileChecked(slackTeam, webTeam, webOwn) // oldest first, as teamConnections gives it
-	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack", "team-b/web", "team-c/web"}) {
+	w.reconcileChecked(slackTeam, otherTeam, otherOwn) // oldest first, as teamConnections gives it
+	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack", "team-b/other", "team-c/other"}) {
 		t.Fatalf("running = %v; want every connection, since no two are of one platform's app", got)
 	}
 	if got := w.sup.refusals.names(); len(got) != 0 {
@@ -615,9 +615,9 @@ func TestSupervisorTellsTheAppsOfTwoPlatformsApart(t *testing.T) {
 	}
 	for _, c := range []struct{ platform, bot, user, conn string }{
 		{v1alpha1.PlatformSlack, "BAPP", "UAPP", "team-a/slack"},
-		{"web", "BAPP", "UAPP", "team-b/web"},
+		{"other", "BAPP", "UAPP", "team-b/other"},
 		{v1alpha1.PlatformSlack, "BOWN", "UOWN", ownName},
-		{"web", "BOWN", "UOWN", "team-c/web"},
+		{"other", "BOWN", "UOWN", "team-c/other"},
 	} {
 		if got, _ := w.table.botOwner(c.platform, c.bot); got != c.conn {
 			t.Errorf("botOwner(%s, %s) = %q; want %q", c.platform, c.bot, got, c.conn)
@@ -630,9 +630,9 @@ func TestSupervisorTellsTheAppsOfTwoPlatformsApart(t *testing.T) {
 		t.Error("botOwner(github, BAPP) names a connection; want no bot of a platform the broker serves nothing on")
 	}
 
-	// The younger Slack connection of the Slack app is refused, as before; the web connection of an app with the same ID is left alone.
-	w.reconcileChecked(slackTeam, webTeam, webOwn, team("team-d/slack", 1, "tok-slack-twin", 4))
-	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack", "team-b/web", "team-c/web"}) {
+	// The younger Slack connection of the Slack app is refused, as before; the other platform's connection of an app with the same ID is left alone.
+	w.reconcileChecked(slackTeam, otherTeam, otherOwn, team("team-d/slack", 1, "tok-slack-twin", 4))
+	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack", "team-b/other", "team-c/other"}) {
 		t.Errorf("running = %v; want the second Slack connection of the app not run", got)
 	}
 	if got := w.sup.refusals.names(); !slices.Equal(got, []string{"team-d/slack"}) {

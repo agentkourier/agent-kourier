@@ -73,9 +73,9 @@ func connWithBotToken(tok string) Connection {
 // no token would be an error).
 func TestAPlatformWithNoIdentityCallGivesTheZeroIdentity(t *testing.T) {
 	t.Parallel()
-	id, err := RunConfig{}.identityOf(t.Context(), Connection{Ref: v1alpha1.ObjectRef{Namespace: "team-a", Name: "web"}, Platform: "web"})
+	id, err := RunConfig{}.identityOf(t.Context(), Connection{Ref: v1alpha1.ObjectRef{Namespace: "team-a", Name: "other"}, Platform: "other"})
 	if err != nil || id.known() || id != (appIdentity{}) {
-		t.Errorf("identityOf(a web connection) = %+v, %v; want the zero identity and no error", id, err)
+		t.Errorf("identityOf(a connection of another platform) = %+v, %v; want the zero identity and no error", id, err)
 	}
 }
 

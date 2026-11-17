@@ -177,6 +177,8 @@ func TestPlatformMismatches(t *testing.T) {
 	noApprovals.ToolApprovals = false
 	noChannels := slack(t)
 	noChannels.Channel = IDShape{}
+	noButtons := slack(t)
+	noButtons.AskUser, noButtons.ToolApprovals, noButtons.Feedback = false, false, false
 	for _, tc := range []struct {
 		name     string
 		platform ChatPlatform
@@ -233,6 +235,13 @@ func TestPlatformMismatches(t *testing.T) {
 		{"no tool approvals on a platform without them", noApprovals, func(*Binding) {}, nil},
 		{"a channel on a platform that takes no channel ID: unsupported, and no panic", noChannels, func(*Binding) {}, []PlatformMismatch{
 			{Path: "spec.chat.channel", Unsupported: true, Problem: "an ID of this kind is not supported", Fix: "remove it: the platform takes no such ID"},
+		}},
+		{"questions, tool approvals and feedback on a platform without them, in the order of the fields", noButtons, func(b *Binding) {
+			b.Spec.Interactions.AskUser, b.Spec.Interactions.ToolApprovals, b.Spec.Feedback.Enabled = true, true, true
+		}, []PlatformMismatch{
+			{Path: "spec.interactions.askUser", Unsupported: true, Problem: "questions to a person are not supported", Fix: "set it to false"},
+			{Path: "spec.interactions.toolApprovals", Unsupported: true, Problem: "tool approvals are not supported", Fix: "set it to false"},
+			{Path: "spec.feedback.enabled", Unsupported: true, Problem: "feedback buttons are not supported", Fix: "set it to false"},
 		}},
 		{"output final on Slack", slack(t), func(b *Binding) { b.Spec.Chat.Output = OutputFinal }, nil},
 		{"a Slack channel's name on Slack, which the schema takes", slack(t), func(b *Binding) { b.Spec.Chat.Channel = "general" }, []PlatformMismatch{

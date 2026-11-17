@@ -21,7 +21,7 @@ ChatConnectionSpec is the desired state of a ChatConnection.
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `platform` | string | Yes | None | One of `slack`. |
+| `platform` | string | Yes | None | Platform is the chat platform: slack. One of `slack`. |
 | `credentialsSecretRef` | [SecretRef](#secretref) | Yes | None | CredentialsSecretRef names one Secret whose keys are fixed by the platform and its mode. A Slack connection in Socket Mode needs botToken and appToken; one in HTTP mode needs botToken and signingSecret. |
 | `allowedNamespaces` | []string | No | Empty list | AllowedNamespaces lists the other namespaces whose Bindings may reference this connection. Each is a DNS-1123 label. An empty list permits references only from the connection's own namespace. At most 256. |
 | `slack` | [SlackConnectionSpec](#slackconnectionspec) | No | None | Slack holds the settings of a Slack connection. Only a connection whose platform is slack may set it. Omitted, the connection uses Socket Mode. |
