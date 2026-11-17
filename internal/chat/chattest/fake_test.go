@@ -464,6 +464,24 @@ func TestEphemeralsAreKeptAndNeedAMessage(t *testing.T) {
 	}
 }
 
+// A fake whose caps say it has no ephemeral messages says chat.ErrNoEphemeral, which it calls Permanent, and shows and keeps nothing.
+func TestAFakeWithNoEphemeralMessagesSaysSoAndShowsNothing(t *testing.T) {
+	f := NewFake()
+	c := f.Capabilities()
+	c.Ephemeral = false
+	f.SetCaps(c)
+	err := f.Ephemeral(ctx, tgt, "U1", chat.Message{Fallback: "only you"})
+	if !errors.Is(err, chat.ErrNoEphemeral) {
+		t.Fatalf("Ephemeral = %v, want chat.ErrNoEphemeral", err)
+	}
+	if v := f.Classify(chat.OpPost, err); v.Class != chat.Permanent {
+		t.Errorf("Classify = %+v, want Permanent", v)
+	}
+	if got, shown := f.Ephemerals(), f.Subject().Sent(); len(got) != 0 || len(shown) != 0 {
+		t.Errorf("kept %+v and showed %d texts, want nothing", got, len(shown))
+	}
+}
+
 func TestFieldsListsEveryPieceOfTextWithItsPlace(t *testing.T) {
 	m := chat.Message{Fallback: "f", Parts: []chat.Part{
 		chat.Header{Text: "h"}, chat.Body{Markdown: "b"}, chat.Context{Text: "c"}, chat.Note{Text: "n"},

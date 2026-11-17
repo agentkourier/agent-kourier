@@ -405,10 +405,14 @@ func (s *fakeStream) Stop(_ context.Context, markdown string, final chat.Message
 	return nil
 }
 
-// Ephemeral implements chat.Platform.
+// Ephemeral implements chat.Platform. A fake whose caps say it has no ephemeral messages says chat.ErrNoEphemeral and keeps
+// nothing.
 func (f *FakePlatform) Ephemeral(_ context.Context, t chat.Target, user string, m chat.Message) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if !f.caps.Ephemeral {
+		return chat.ErrNoEphemeral
+	}
 	if err := f.fail("Ephemeral"); err != nil {
 		return err
 	}
@@ -709,6 +713,9 @@ func (f *FakePlatform) Classify(op chat.Op, err error) chat.Verdict {
 	}
 	if errors.Is(err, chat.ErrNoReactions) {
 		return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonOther, Code: "no_reactions"}
+	}
+	if errors.Is(err, chat.ErrNoEphemeral) {
+		return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonOther, Code: "no_ephemeral"}
 	}
 	if op == chat.OpOther {
 		switch {

@@ -397,6 +397,16 @@ func (p *Pipeline) finish(ctx context.Context, press store.Press, row *store.Int
 	return p.finishWith(ctx, press, row, chat.Message{Fallback: text})
 }
 
+// untoldLevel is the level at which a person not told the outcome of their press is logged: debug on a platform that has no
+// ephemeral messages (chat.ErrNoEphemeral), where the person was not told by design and the card shows the outcome; a warning for
+// any other error.
+func untoldLevel(err error) slog.Level {
+	if errors.Is(err, chat.ErrNoEphemeral) {
+		return slog.LevelDebug
+	}
+	return slog.LevelWarn
+}
+
 // finishWith is finish for a message that has parts, such as one that names a person.
 func (p *Pipeline) finishWith(ctx context.Context, press store.Press, row *store.Interaction, m chat.Message) (Result, error) {
 	if m.Fallback != "" || len(m.Parts) > 0 {
@@ -411,7 +421,7 @@ func (p *Pipeline) finishWith(ctx context.Context, press store.Press, row *store
 			err = e.Ephemeral(ctx, to, press.User, m)
 		}
 		if err != nil {
-			p.cfg.Logger.WarnContext(ctx, "interact: a person could not be told the outcome of their press", "interaction", press.InteractionID, "err", err)
+			p.cfg.Logger.Log(ctx, untoldLevel(err), "interact: a person could not be told the outcome of their press", "interaction", press.InteractionID, "err", err)
 		}
 	}
 	if err := p.cfg.Store.DeletePress(ctx, press.Seq); err != nil {

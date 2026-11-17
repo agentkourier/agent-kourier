@@ -15,6 +15,7 @@ import (
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 )
 
 // stepClock is a clock a test moves by hand. It starts from a real reading, so its times carry the monotonic clock as
@@ -544,4 +545,22 @@ func TestChatFenceChecksBusyMarksAndPassesThemOn(t *testing.T) {
 		t.Errorf("MarkBusy after the freeze = %v, marks %v, %d stops; want ErrChatFenced, no call and one stop", err, inner.marks, len(stops))
 	}
 
+}
+
+// A platform with no ephemeral messages says chat.ErrNoEphemeral. Within the renew deadline the fence passes that answer on untouched,
+// and does not take it for a refusal: nothing is stopped.
+func TestChatFencePassesNoEphemeralOnAndStopsNothing(t *testing.T) {
+	var stops []string
+	now := newStepClock()
+	lease := newLeaseClock(now.now)
+	lease.renewed(now.now())
+	fence := &leaseFence{clock: lease, limit: 10 * time.Second, stop: func(reason string) { stops = append(stops, reason) }}
+	f := chattest.NewFake()
+	caps := f.Capabilities()
+	caps.Ephemeral = false
+	f.SetCaps(caps)
+	err := fenceChat(f, fence).Ephemeral(t.Context(), chat.Target{Conn: "ns/conn", Channel: "C1"}, "U1", chat.Message{Fallback: "only you"})
+	if !errors.Is(err, chat.ErrNoEphemeral) || errors.Is(err, ErrChatFenced) || len(stops) != 0 {
+		t.Errorf("Ephemeral = %v, %d stops; want chat.ErrNoEphemeral untouched, not fenced, and no stop", err, len(stops))
+	}
 }

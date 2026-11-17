@@ -135,7 +135,7 @@ func (p *Platform) Classify(_ chat.Op, err error) chat.Verdict {
 		return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonInvalidContent, Code: "invalid"}
 	case errors.Is(err, chat.ErrChannelNotFound):
 		return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonChannelGone, Code: "channel_not_found"}
-	case errors.Is(err, chat.ErrNoReactions), errors.Is(err, errNoEphemeral), errors.Is(err, chat.ErrNotStreaming),
+	case errors.Is(err, chat.ErrNoReactions), errors.Is(err, chat.ErrNoEphemeral), errors.Is(err, chat.ErrNotStreaming),
 		errors.Is(err, chat.ErrGroupsMisconfigured):
 		return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonOther}
 	}
