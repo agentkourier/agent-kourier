@@ -474,8 +474,8 @@ func TestAnEphemeralThatFailsDoesNotFailTheDecision(t *testing.T) {
 }
 
 // TestAPlatformWithNoEphemeralMessagesIsNotAFault: a platform that shows no message to one person alone says
-// chat.ErrNoEphemeral, which is logged at debug and not as a warning, since the card shows the outcome; any other
-// failure still warns.
+// chat.ErrNoEphemeral, which is logged at debug and not as a warning: the person is not told, by design, and nothing is
+// posted for all to see in its place. Any other failure still warns.
 func TestAPlatformWithNoEphemeralMessagesIsNotAFault(t *testing.T) {
 	for name, tc := range map[string]struct {
 		err       error

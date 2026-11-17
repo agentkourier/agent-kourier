@@ -625,11 +625,10 @@ func (c *checker) noEphemeral() {
 	p := c.s.Platform
 	c.s.Sent()
 	err := p.Ephemeral(c.ctx, c.target, "U1", chat.Message{Fallback: "only you"})
-	switch {
-	case !errors.Is(err, chat.ErrNoEphemeral):
+	if !errors.Is(err, chat.ErrNoEphemeral) {
 		c.add(RuleContract, 0, "Ephemeral", "no ephemeral messages", "a platform with Ephemeral false gave %v, want an error wrapping chat.ErrNoEphemeral", err)
-	case p.Classify(chat.OpPost, err).Class != chat.Permanent:
-		c.add(RuleContract, 0, "Classify", "no ephemeral messages", "chat.ErrNoEphemeral is %+v, want Permanent: no retry shows a message the platform has no way to show", p.Classify(chat.OpPost, err))
+	} else if v := p.Classify(chat.OpPost, err); v.Class != chat.Permanent {
+		c.add(RuleContract, 0, "Classify", "no ephemeral messages", "chat.ErrNoEphemeral is %+v, want Permanent: no retry shows a message the platform has no way to show", v)
 	}
 	if shown := c.s.Sent(); len(shown) > 0 {
 		c.add(RuleContract, 0, "Ephemeral", "no ephemeral messages", "a platform with no ephemeral messages showed %d texts, want none", len(shown))

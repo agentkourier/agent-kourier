@@ -398,8 +398,8 @@ func (p *Pipeline) finish(ctx context.Context, press store.Press, row *store.Int
 }
 
 // untoldLevel is the level at which a person not told the outcome of their press is logged: debug on a platform that has no
-// ephemeral messages (chat.ErrNoEphemeral), where the person was not told by design and the card shows the outcome; a warning for
-// any other error.
+// ephemeral messages (chat.ErrNoEphemeral), where the person is not told, by design: nothing is posted for all to see in its place.
+// A warning for any other error.
 func untoldLevel(err error) slog.Level {
 	if errors.Is(err, chat.ErrNoEphemeral) {
 		return slog.LevelDebug

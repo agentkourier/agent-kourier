@@ -357,8 +357,8 @@ func (r *pressRig) loggedPipeline(t *testing.T) (*interact.Pipeline, *logBuf) {
 }
 
 // TestAPressOnAPlatformWithNoEphemeralMessagesIsNotAFault: a platform that shows no message to one person alone says
-// chat.ErrNoEphemeral, which is logged at debug and not as a warning: the card shows the outcome. Any other failure to
-// tell the person still warns. Either way the press is done.
+// chat.ErrNoEphemeral, which is logged at debug and not as a warning: the person is not told, by design. Any other failure
+// to tell the person still warns. Either way the press is done.
 func TestAPressOnAPlatformWithNoEphemeralMessagesIsNotAFault(t *testing.T) {
 	for name, tc := range map[string]struct {
 		err       error
