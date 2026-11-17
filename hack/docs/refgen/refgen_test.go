@@ -134,6 +134,7 @@ func TestAPIReferenceDefaultsMatchRuntime(t *testing.T) {
 		kind, section, field, typ, value string
 	}{
 		{"AgentBackend", "SecretKeyRef", "key", "string", backend.Spec.Headers[0].ValueSecretRef.Key},
+		{"Binding", "ChatBinding", "output", "string", string(binding.Spec.Chat.Output)},
 		{"Binding", "ChatBinding", "threadReplies", "string", string(binding.Spec.Chat.ThreadReplies)},
 		{"Binding", "ChatBinding", "botMentions", "string", string(binding.Spec.Chat.BotMentions)},
 		{"Binding", "ChatBinding", "triggers", "[][Trigger](#trigger)", "[{type: " + string(binding.Spec.Chat.Triggers[0].Type) + "}]"},
@@ -149,30 +150,6 @@ func TestAPIReferenceDefaultsMatchRuntime(t *testing.T) {
 			}
 		})
 	}
-
-	// Output has no default of the API: resolution fills in the platform's, which the column gives for Slack and for the one web
-	// profile whose default differs.
-	t.Run("Binding/ChatBinding/output", func(t *testing.T) {
-		on := func(spec v1alpha1.ChatConnectionSpec) string {
-			p, ok := v1alpha1.ChatPlatformOf(spec)
-			if !ok {
-				t.Fatalf("no platform for %+v", spec)
-			}
-			s := binding.Spec
-			s.DefaultOn(p)
-			return string(s.Chat.Output)
-		}
-		slack := on(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformSlack})
-		kourierV1 := on(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb, Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileKourierV1}})
-		github := on(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb, Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileGitHub}})
-		if binding.Spec.Chat.Output != "" || kourierV1 != slack {
-			t.Fatalf("Default gives %q, Slack %q and kourier-v1 %q; want none from Default, and the two alike", binding.Spec.Chat.Output, slack, kourierV1)
-		}
-		want := fmt.Sprintf("| `output` | string | No | %s (%s on the github profile) |", slack, github)
-		if body := section(t, pages["Binding"], "ChatBinding"); !strings.Contains(body, want) {
-			t.Errorf("reference lacks the platforms' defaults %q:\n%s", want, body)
-		}
-	})
 }
 
 func TestAPIReferenceSectionsInFieldOrderOnce(t *testing.T) {

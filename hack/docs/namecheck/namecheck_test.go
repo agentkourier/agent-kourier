@@ -36,7 +36,7 @@ func TestFindings(t *testing.T) {
 		{"the word without a slash", "the kourier directory\n", []int{1}},
 		{"a path segment does not excuse a misspelling on the line", "kourier/binding.yaml and then Kourier alone\n", []int{1}},
 		{"a path segment does not excuse courier", "kourier/courier.yaml\n", []int{1}},
-		{"the web profile's name", "A connection of the `kourier-v1` profile.\nthe kourier-v1 profile (its kourier-v1 profile)\nOne of `kourier-v1`, `github`.\nkourier-v1\n", nil},
+		{"the web profile's name", "A connection of the `kourier-v1` profile.\nthe kourier-v1 profile (its kourier-v1 profile)\nOne of `kourier-v1`.\nkourier-v1\n", nil},
 		{"the profile's name must be lowercase", "the Kourier-v1 profile\n", []int{1}},
 		{"a longer word is not the profile", "the xkourier-v1 profile\n", []int{1}},
 		{"another version is not the profile", "the kourier-v10 profile\nthe kourier-v1x profile\nthe kourier-v2 profile\n", []int{1, 2, 3}},

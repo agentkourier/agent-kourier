@@ -191,16 +191,6 @@ func urls() func(*rand.Rand) any {
 	}
 }
 
-// identities is a pool of a web connection's spec.web.identity, which the github profile needs as a GitHub login and the kourier-v1
-// profile refuses: a user's and an app's login, at the 44-byte cap and past it with hyphens, past the 39 letters and digits of the
-// pattern, the shapes the pattern refuses, and values at and past the 128-byte cap of every profile.
-func identities() func(*rand.Rand) any {
-	hyphenated := func(n int) string { return strings.TrimSuffix(strings.Repeat("a-", n), "-") }
-	return of("octocat", "pr-reviewer[bot]", "a", strings.Repeat("a", 39)+"[bot]", hyphenated(22)+"x", hyphenated(23), strings.Repeat("a", 40),
-		strings.Repeat("a", 39), "", nil, absent{}, absent{}, absent{}, "@octocat", "octo--cat", "-octocat", "octocat-", "octo.cat", "octo_cat", "octocat[app]", "[bot]",
-		"octo-org/sre", "octocat[bot][bot]", "octocát", strings.Repeat("a", 128), strings.Repeat("a", 129))
-}
-
 // webURLs is a pool of a kourier-v1 connection's reply URLs: the AgentBackend's pool, whose http URLs a reply URL mostly may not
 // use, and the hosts that an http reply URL may and may not name (a Service, localhost and loopback, and hosts that only look
 // like them), in odd cases and with ports and paths.
@@ -301,17 +291,11 @@ func variationTemplates() []template {
 		{kind: "Binding", doc: bindingDoc, mutations: bindingMutations(dur, messageFields, extractNames)},
 		{kind: "ChatConnection", doc: webConnectionDoc, mutations: []mutation{
 			{"spec.platform", of("web", "web", "slack", "", "Web")},
-			{"spec.web", of(absent{}, nil, map[string]any{}, map[string]any{"profile": "github"}, map[string]any{"profile": "github", "url": ""},
-				map[string]any{"profile": "kourier-v1"}, map[string]any{"profile": "kourier-v1", "url": nil},
-				map[string]any{"profile": "github", "identity": "pr-reviewer[bot]"},
-				map[string]any{"profile": "github", "url": "", "identity": "octocat"},
-				map[string]any{"profile": "kourier-v1", "url": "https://receiver.example.com/replies", "identity": ""})},
-			{"spec.web.profile", of("kourier-v1", "kourier-v1", "github", "", "GitHub", "kourier-v2", absent{})},
+			{"spec.web", of(absent{}, nil, map[string]any{}, map[string]any{"profile": "github"}, map[string]any{"profile": "kourier-v1", "url": ""},
+				map[string]any{"profile": "kourier-v1"}, map[string]any{"profile": "kourier-v1", "url": nil})},
+			{"spec.web.profile", of("kourier-v1", "kourier-v1", "github", "", "Kourier-v1", "kourier-v2", absent{})},
 			{"spec.web.url", webURLs()},
 			{"spec.web.url", webURLs()},
-			// The identity, which only the github profile takes and which it must have: a GitHub login of 44 bytes at most, an app's
-			// with [bot].
-			{"spec.web.identity", identities()},
 			{"spec.slack", of(absent{}, absent{}, nil, map[string]any{}, map[string]any{"mode": "http"})},
 		}},
 		{kind: "Binding", doc: mentionBindingDoc, mutations: []mutation{

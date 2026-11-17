@@ -433,8 +433,8 @@ spec:
   credentialsSecretRef:
     name: slack
   web:
-    profile: github
-    identity: pr-reviewer
+    profile: kourier-v1
+    url: https://receiver.example.com/replies
 ---
 # rule: chatconnection/spec.slack: set on a web connection
 # want: spec.slack: is set, but only a slack connection has one
@@ -449,8 +449,8 @@ spec:
   credentialsSecretRef:
     name: web
   web:
-    profile: github
-    identity: pr-reviewer
+    profile: kourier-v1
+    url: https://receiver.example.com/replies
   slack:
     mode: http
 ---
@@ -466,7 +466,8 @@ spec:
   platform: web
   credentialsSecretRef:
     name: web
-  web: {}
+  web:
+    url: https://receiver.example.com/replies
 ---
 # rule: chatconnection/spec.web.profile: unsupported
 # want: spec.web.profile: unsupported value "gitlab"
@@ -482,9 +483,26 @@ spec:
     name: web
   web:
     profile: gitlab
+    url: https://receiver.example.com/replies
+---
+# rule: chatconnection/spec.web.profile: github, a profile the API does not have
+# want: spec.web.profile: unsupported value "github"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: web
+  namespace: sre
+spec:
+  platform: web
+  credentialsSecretRef:
+    name: web
+  web:
+    profile: github
+    url: https://receiver.example.com/replies
 ---
 # rule: chatconnection/spec.web.url: missing on the kourier-v1 profile
-# want: spec.web.url: is required: the profile sends replies, and posts them to it
+# want: spec.web.url: is required: Agent Kourier posts the agent's replies to it
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: ChatConnection
@@ -499,7 +517,7 @@ spec:
     profile: kourier-v1
 ---
 # rule: chatconnection/spec.web.url: empty on the kourier-v1 profile
-# want: spec.web.url: is required: the profile sends replies, and posts them to it
+# want: spec.web.url: is required: Agent Kourier posts the agent's replies to it
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: ChatConnection
@@ -513,167 +531,6 @@ spec:
   web:
     profile: kourier-v1
     url: ""
----
-# rule: chatconnection/spec.web.url: set on the github profile
-# want: spec.web.url: is set, but the profile sends no replies
-# schema: refuses
-apiVersion: agentkourier.dev/v1alpha1
-kind: ChatConnection
-metadata:
-  name: web
-  namespace: sre
-spec:
-  platform: web
-  credentialsSecretRef:
-    name: web
-  web:
-    profile: github
-    url: https://receiver.example.com/replies
-    identity: pr-reviewer
----
-# rule: chatconnection/spec.web.identity: missing on the github profile
-# want: spec.web.identity: is required: the profile finds the agent's mentions, and drops the agent's own events, by it
-# schema: refuses
-apiVersion: agentkourier.dev/v1alpha1
-kind: ChatConnection
-metadata:
-  name: web
-  namespace: sre
-spec:
-  platform: web
-  credentialsSecretRef:
-    name: web
-  web:
-    profile: github
----
-# rule: chatconnection/spec.web.identity: empty on the github profile
-# want: spec.web.identity: is required: the profile finds the agent's mentions, and drops the agent's own events, by it
-# schema: refuses
-apiVersion: agentkourier.dev/v1alpha1
-kind: ChatConnection
-metadata:
-  name: web
-  namespace: sre
-spec:
-  platform: web
-  credentialsSecretRef:
-    name: web
-  web:
-    profile: github
-    identity: ""
----
-# rule: chatconnection/spec.web.identity: set on the kourier-v1 profile
-# want: spec.web.identity: is set, but the profile takes none
-# schema: refuses
-apiVersion: agentkourier.dev/v1alpha1
-kind: ChatConnection
-metadata:
-  name: web
-  namespace: sre
-spec:
-  platform: web
-  credentialsSecretRef:
-    name: web
-  web:
-    profile: kourier-v1
-    url: https://receiver.example.com/replies
-    identity: pr-reviewer
----
-# rule: chatconnection/spec.web.identity: over 128 bytes, the cap of every profile
-# want: spec.web.identity: is 129 bytes, longer than the 128 byte limit
-# schema: refuses
-apiVersion: agentkourier.dev/v1alpha1
-kind: ChatConnection
-metadata:
-  name: web
-  namespace: sre
-spec:
-  platform: web
-  credentialsSecretRef:
-    name: web
-  web:
-    profile: github
-    identity: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
----
-# rule: chatconnection/spec.web.identity: over 44 bytes on the github profile, a login's shape with its hyphens
-# want: spec.web.identity: is 45 bytes, longer than the 44 byte limit
-# schema: refuses
-apiVersion: agentkourier.dev/v1alpha1
-kind: ChatConnection
-metadata:
-  name: web
-  namespace: sre
-spec:
-  platform: web
-  credentialsSecretRef:
-    name: web
-  web:
-    profile: github
-    identity: a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a
----
-# rule: chatconnection/spec.web.identity: 40 letters on the github profile
-# want: spec.web.identity: invalid identity "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": is not a GitHub login: use the login the agent posts as: a user's, such as pr-reviewer, or a GitHub App's, such as pr-reviewer[bot]
-# schema: refuses
-apiVersion: agentkourier.dev/v1alpha1
-kind: ChatConnection
-metadata:
-  name: web
-  namespace: sre
-spec:
-  platform: web
-  credentialsSecretRef:
-    name: web
-  web:
-    profile: github
-    identity: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
----
-# rule: chatconnection/spec.web.identity: with an @, as a mention writes it
-# want: spec.web.identity: invalid identity "@pr-reviewer": is not a GitHub login: use the login the agent posts as: a user's, such as pr-reviewer, or a GitHub App's, such as pr-reviewer[bot]
-# schema: refuses
-apiVersion: agentkourier.dev/v1alpha1
-kind: ChatConnection
-metadata:
-  name: web
-  namespace: sre
-spec:
-  platform: web
-  credentialsSecretRef:
-    name: web
-  web:
-    profile: github
-    identity: "@pr-reviewer"
----
-# rule: chatconnection/spec.web.identity: two hyphens in a row
-# want: spec.web.identity: invalid identity "kourier--reviewer": is not a GitHub login: use the login the agent posts as: a user's, such as pr-reviewer, or a GitHub App's, such as pr-reviewer[bot]
-# schema: refuses
-apiVersion: agentkourier.dev/v1alpha1
-kind: ChatConnection
-metadata:
-  name: web
-  namespace: sre
-spec:
-  platform: web
-  credentialsSecretRef:
-    name: web
-  web:
-    profile: github
-    identity: kourier--reviewer
----
-# rule: chatconnection/spec.web.identity: a suffix other than [bot]
-# want: spec.web.identity: invalid identity "pr-reviewer[app]": is not a GitHub login: use the login the agent posts as: a user's, such as pr-reviewer, or a GitHub App's, such as pr-reviewer[bot]
-# schema: refuses
-apiVersion: agentkourier.dev/v1alpha1
-kind: ChatConnection
-metadata:
-  name: web
-  namespace: sre
-spec:
-  platform: web
-  credentialsSecretRef:
-    name: web
-  web:
-    profile: github
-    identity: pr-reviewer[app]
 ---
 # rule: chatconnection/spec.web.url: http to a host outside the cluster
 # want: spec.web.url: invalid URL "http://receiver.example.com": http is allowed only to localhost

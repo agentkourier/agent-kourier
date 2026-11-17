@@ -50,15 +50,11 @@ func TestNewRefusesNoSecret(t *testing.T) {
 	}
 }
 
-// The profile holds what it decodes to the platform it is handed, so it refuses one that takes no channel or no user ID: the github
-// profile's, which takes no user ID, or none.
+// The profile holds what it decodes to the platform it is handed, so it refuses one that takes no channel or no user ID.
 func TestNewRefusesAPlatformWithNoChannelOrNoUser(t *testing.T) {
-	gh, ok := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb,
-		Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileGitHub}})
-	if !ok {
-		t.Fatal("the API has no github profile")
-	}
-	for name, rules := range map[string]v1alpha1.ChatPlatform{"none": {}, "github": gh} {
+	noUser := platform(t)
+	noUser.User = v1alpha1.IDShape{}
+	for name, rules := range map[string]v1alpha1.ChatPlatform{"none": {}, "with no user ID": noUser} {
 		if _, err := kourierv1.New(secret.New(fakeKey), rules); err == nil {
 			t.Errorf("a profile on the platform %s was made", name)
 		}

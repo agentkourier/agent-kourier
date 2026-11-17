@@ -27,19 +27,18 @@ func main() {
 	}
 }
 
-// run parses args and serves until ctx ends. The default address is loopback; the container passes -addr 0.0.0.0:8080. The secrets
-// are fake constants of the tier; an error never repeats one.
+// run parses args and serves until ctx ends. The default address is loopback; the container passes -addr 0.0.0.0:8080. The secret
+// is a fake constant of the tier; an error never repeats it.
 func run(ctx context.Context, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("fakeweb", flag.ContinueOnError)
 	fs.SetOutput(io.Discard) // the flag package repeats a rejected value in its message, and a value may be a secret
 	addr := fs.String("addr", "127.0.0.1:8080", "address to listen on")
 	chatURL := fs.String("chat-url", "", "the broker's chat listener, scheme and host, which the sender POSTs to")
 	kourier := fs.String("kourier-v1-secret", "", "the signingSecret of the kourier-v1 connection")
-	github := fs.String("github-secret", "", "the webhookSecret of the github connection")
 	if err := fs.Parse(args); err != nil {
-		return errors.New("flags: want -addr, -chat-url, -kourier-v1-secret and -github-secret")
+		return errors.New("flags: want -addr, -chat-url and -kourier-v1-secret")
 	}
-	srv, err := fakeweb.New(fakeweb.Config{ChatURL: *chatURL, KourierV1Secret: []byte(*kourier), GitHubSecret: []byte(*github)})
+	srv, err := fakeweb.New(fakeweb.Config{ChatURL: *chatURL, KourierV1Secret: []byte(*kourier)})
 	if err != nil {
 		return err
 	}

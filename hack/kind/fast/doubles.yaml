@@ -164,10 +164,10 @@ spec:
   selector: {app: sink}
   ports: [{port: 8080, targetPort: 8080}]
 ---
-# The far side of the web ChatConnections (test/fakeweb; hack/kind/fast/web, which only the tier on custom resources serves): the sender POSTs the
-# requests the WEB_ tests ask for, signed as kourier-v1 and as GitHub, to the broker's chat Service, and the receiver is the kourier-v1 connection's
-# spec.web.url, which checks and keeps the replies. Its /_control/ has no authentication, so its port is never published (verify.sh checks it). The secrets
-# are fake constants, the same that lib.sh's deploy_web puts in the connections' Secrets (test/kindmanifests pins that they agree).
+# The far side of the web ChatConnection (test/fakeweb; hack/kind/fast/web, which only the tier on custom resources serves): the sender POSTs the
+# requests the WEB_ tests ask for, signed as kourier-v1, to the broker's chat Service, and the receiver is the kourier-v1 connection's spec.web.url,
+# which checks and keeps the replies. Its /_control/ has no authentication, so its port is never published (verify.sh checks it). The secret is a fake
+# constant, the same that lib.sh's deploy_web puts in the connection's Secret (test/kindmanifests pins that they agree).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -195,8 +195,6 @@ spec:
             - http://agent-kourier-chat.agent-kourier.svc.cluster.local:8081
             - -kourier-v1-secret
             - fake-web-kourier-signing-secret
-            - -github-secret
-            - fake-web-github-webhook-secret
           ports: [{containerPort: 8080}]
           readinessProbe: {tcpSocket: {port: 8080}}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}

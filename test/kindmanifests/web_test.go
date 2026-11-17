@@ -2,7 +2,6 @@ package kindmanifests_test
 
 import (
 	"encoding/json"
-	"fmt"
 	"maps"
 	"regexp"
 	"slices"
@@ -18,9 +17,9 @@ import (
 	"github.com/agentkourier/agent-kourier/test/fakeweb"
 )
 
-// The fast tier's web ChatConnections (hack/kind/fast/web, on custom resources; test/e2e's WEB_ tests): the manifests are valid objects of the API, with the
-// names, channels and agents that test/e2e's web.go gives them; the fake web sender and receiver sign and check with the secrets lib.sh's deploy_web puts in the
-// connections' Secrets; and the tier serves them on custom resources only.
+// The fast tier's web ChatConnection (hack/kind/fast/web, on custom resources; test/e2e's WEB_ tests): the manifests are valid objects of the API, with the
+// names, channel and agent that test/e2e's web.go gives them; the fake web sender and receiver sign and check with the secret lib.sh's deploy_web puts in the
+// connection's Secret; and the tier serves it on custom resources only.
 
 const (
 	webFile   = "../../hack/kind/fast/web/web.yaml"
@@ -48,8 +47,8 @@ func decodeWeb[T any, PT interface {
 }
 
 // webObjects decodes the API objects of web.yaml as the broker does, and resolves them together (config.ResolvePartial), as the broker resolves what it
-// serves: every Binding must be served, with its connection's platform rules applied (output none on the github profile, the channel's shape). It returns
-// the resolved objects by namespace/name.
+// serves: every Binding must be served, with its connection's platform rules applied (the channel's shape, the features the profile serves). It returns the
+// resolved objects by namespace/name.
 func webObjects(t *testing.T) (conns map[string]v1alpha1.ChatConnection, bindings map[string]v1alpha1.Binding, backends map[string]v1alpha1.AgentBackend) {
 	t.Helper()
 	var set config.Set
@@ -80,27 +79,24 @@ func webObjects(t *testing.T) (conns map[string]v1alpha1.ChatConnection, binding
 	return conns, bindings, backends
 }
 
-// TestTheWebManifestsAreTheConnectionsTheTestsUse: a kourier-v1 connection whose replies go to the fake receiver, a github one with no reply URL, each
-// with a Binding of its name on the channel and stub agent test/e2e expects, in the output the tests count on.
+// TestTheWebManifestsAreTheConnectionsTheTestsUse: a kourier-v1 connection whose replies go to the fake receiver, with a Binding of its name on the
+// channel and stub agent test/e2e expects, in the output the tests count on.
 func TestTheWebManifestsAreTheConnectionsTheTestsUse(t *testing.T) {
 	conns, bindings, backends := webObjects(t)
 	receiver := e2e.NewEnv(func(string) string { return "" }).WebURL + fakeweb.RepliesPath
 	for key, want := range map[string]struct {
-		profile  v1alpha1.WebProfile
-		url      string
-		identity string
-		secret   string
+		profile v1alpha1.WebProfile
+		url     string
+		secret  string
 	}{
-		e2e.ConnWebKourier: {v1alpha1.WebProfileKourierV1, receiver, "", "web-kourier"},
-		e2e.ConnWebGitHub:  {v1alpha1.WebProfileGitHub, "", e2e.GitHubLogin, "web-github"},
+		e2e.ConnWebKourier: {v1alpha1.WebProfileKourierV1, receiver, "web-kourier"},
 	} {
 		c, ok := conns[key]
 		switch {
 		case !ok:
 			t.Errorf("%s has no ChatConnection %s; it has %v", webFile, key, slices.Sorted(maps.Keys(conns)))
-		case c.Spec.Platform != v1alpha1.PlatformWeb || c.Spec.Web == nil || c.Spec.Web.Profile != want.profile || c.Spec.Web.URL != want.url ||
-			c.Spec.Web.Identity != want.identity:
-			t.Errorf("the ChatConnection %s is %+v; want platform web, profile %s, reply URL %q and identity %q", key, c.Spec, want.profile, want.url, want.identity)
+		case c.Spec.Platform != v1alpha1.PlatformWeb || c.Spec.Web == nil || c.Spec.Web.Profile != want.profile || c.Spec.Web.URL != want.url:
+			t.Errorf("the ChatConnection %s is %+v; want platform web, profile %s and reply URL %q", key, c.Spec, want.profile, want.url)
 		case c.Spec.CredentialsSecretRef.Name != want.secret:
 			t.Errorf("the ChatConnection %s reads the Secret %q; want %q, which deploy_web makes", key, c.Spec.CredentialsSecretRef.Name, want.secret)
 		}
@@ -110,7 +106,6 @@ func TestTheWebManifestsAreTheConnectionsTheTestsUse(t *testing.T) {
 		output               v1alpha1.OutputMode
 	}{
 		e2e.ConnWebKourier: {"kourier", e2e.ChannelWebKourier, e2e.AgentWebKourier, v1alpha1.OutputFinal},
-		e2e.ConnWebGitHub:  {"github", e2e.GitHubRepo, e2e.AgentWebGitHub, v1alpha1.OutputNone},
 	} {
 		b, ok := bindings[key]
 		if !ok {
@@ -132,38 +127,8 @@ func TestTheWebManifestsAreTheConnectionsTheTestsUse(t *testing.T) {
 	}
 }
 
-// TestTheGitHubLoginIsWrittenOnce: the github connection's login, which test/e2e's GitHubLogin is the value of, appears once in the manifests, so that a change of
-// the field that holds it is one line. The test looks for the value, not the field, for the same reason.
-func TestTheGitHubLoginIsWrittenOnce(t *testing.T) {
-	var found []string
-	var walk func(path string, v any)
-	walk = func(path string, v any) {
-		switch v := v.(type) {
-		case map[string]any:
-			for k, x := range v {
-				walk(path+"."+k, x)
-			}
-		case []any:
-			for i, x := range v {
-				walk(fmt.Sprintf("%s[%d]", path, i), x)
-			}
-		case string:
-			if v == e2e.GitHubLogin {
-				found = append(found, path)
-			}
-		}
-	}
-	for _, doc := range objects(t, webFile) {
-		meta := doc["metadata"].(map[string]any)
-		walk(fmt.Sprintf("%s %s/%s", doc["kind"], meta["namespace"], meta["name"]), doc)
-	}
-	if len(found) != 1 || !strings.HasPrefix(found[0], "ChatConnection "+e2e.ConnWebGitHub+".spec.web.") {
-		t.Errorf("the login %q is at %v; want it once, in the github ChatConnection's spec.web", e2e.GitHubLogin, found)
-	}
-}
-
-// TestTheFakeWebSignsWithTheConnectionsSecrets: the fake web's command gives it the secrets that deploy_web puts in the connections' Secrets, under the keys the
-// profiles read, and the chat listener's Service and port that web-values.yaml turns on; the Role grants the broker the Secrets the objects name, and deploy_web
+// TestTheFakeWebSignsWithTheConnectionsSecrets: the fake web's command gives it the secret that deploy_web puts in the connection's Secret, under the key the
+// profile reads, and the chat listener's Service and port that web-values.yaml turns on; the Role grants the broker the Secrets the objects name, and deploy_web
 // makes each, the agent token with test/e2e's WebAgentEmail.
 func TestTheFakeWebSignsWithTheConnectionsSecrets(t *testing.T) {
 	var d appsv1.Deployment
@@ -195,9 +160,6 @@ func TestTheFakeWebSignsWithTheConnectionsSecrets(t *testing.T) {
 	if got, want := args["-kourier-v1-secret"], constant("FAKE_WEB_KOURIER_V1_SECRET"); got != want {
 		t.Errorf("the fake web signs kourier-v1 with %q; deploy_web puts %q in the connection's Secret", got, want)
 	}
-	if got, want := args["-github-secret"], constant("FAKE_WEB_GITHUB_SECRET"); got != want {
-		t.Errorf("the fake web signs GitHub's deliveries with %q; deploy_web puts %q in the connection's Secret", got, want)
-	}
 	if got := constant("WEB_AGENT_EMAIL"); got != e2e.WebAgentEmail {
 		t.Errorf("deploy_web's agent token is of %q; test/e2e lists the tasks of %q", got, e2e.WebAgentEmail)
 	}
@@ -207,7 +169,6 @@ func TestTheFakeWebSignsWithTheConnectionsSecrets(t *testing.T) {
 	}
 	for _, want := range []string{
 		"create secret generic web-kourier --from-literal=" + v1alpha1.KourierV1SigningSecretKey + `="${FAKE_WEB_KOURIER_V1_SECRET}"`,
-		"create secret generic web-github --from-literal=" + v1alpha1.GitHubWebhookSecretKey + `="${FAKE_WEB_GITHUB_SECRET}"`,
 		`create secret generic web-agent-token --from-literal=token="$(unsigned_jwt "${WEB_AGENT_EMAIL}")"`,
 	} {
 		if !strings.Contains(lib, want) {

@@ -82,9 +82,6 @@ const (
 //     resolves the Binding (a Slack connection to 32, maxSlackIDLen). A mention's name is already bounded by its pattern, to 63,
 //     and maxMentionNameLen says so as a cap, so that the schema has a maxLength for it and a value over one is refused without
 //     being shown. maxMentionUserLen 64 fits a kourier-v1 ID (maxKourierV1IDLen); a Slack user ID is 21 at most, by its pattern.
-//   - maxWebIdentityLen 128, for a web connection's identity, which each profile holds to its own shape and cap besides: it fits
-//     a GitHub login (maxGitHubLoginLen, 44), and an Atlassian account ID, which Atlassian documents as at most 128 characters
-//     (unverified: not readable in this repository), for the profiles that are planned.
 //   - maxEmojiLen 100: the default reaction, hourglass_flowing_sand, is 21. Slack's own limit on a custom emoji name is
 //     100 characters (unverified: not readable in this repository).
 //   - maxURLLen 2048, for an AgentBackend's url and a web connection's: the longest URL in an example or a test fixture is under
@@ -98,7 +95,6 @@ const (
 	maxChatIDLen         = 140
 	maxMentionNameLen    = 63
 	maxMentionUserLen    = 64
-	maxWebIdentityLen    = 128
 	maxEmojiLen          = 100
 	maxURLLen            = 2048
 	maxHeaderValueLen    = 4096
@@ -330,48 +326,22 @@ func (c *ChatConnection) Validate() error {
 	return errors.Join(p...)
 }
 
-// web checks the settings of a web connection against what its profile takes (ChatPlatformOf): a profile, the reply URL that a
-// profile with replies needs and one without refuses, and the identity that a profile with an identity's shape needs, of that shape,
-// and every other refuses. A profile that is not one the API knows is refused, and nothing is checked against it.
+// web checks the settings of a web connection: a profile the API knows (ChatPlatformOf), and the URL that Agent Kourier posts the
+// agent's replies to.
 func (p *problems) web(w *WebConnectionSpec) {
-	var (
-		profile ChatPlatform
-		known   bool
-	)
 	if w.Profile == "" {
 		p.add("spec.web.profile", "required")
-	} else if profile, known = ChatPlatformOf(ChatConnectionSpec{Platform: PlatformWeb, Web: w}); !known {
+	} else if _, known := ChatPlatformOf(ChatConnectionSpec{Platform: PlatformWeb, Web: w}); !known {
 		names := make([]string, 0, len(webProfiles()))
 		for _, n := range webProfiles() {
 			names = append(names, string(n))
 		}
 		p.oneOf("spec.web.profile", string(w.Profile), names...)
 	}
-	switch {
-	case w.URL == "":
-		if known && profile.Replies {
-			p.add("spec.web.url", "is required: the profile sends replies, and posts them to it")
-		}
-	case known && !profile.Replies:
-		p.add("spec.web.url", "is set, but the profile sends no replies")
-	default:
+	if w.URL == "" {
+		p.add("spec.web.url", "is required: Agent Kourier posts the agent's replies to it")
+	} else {
 		p.webURL(w.URL)
-	}
-	const identity = "spec.web.identity"
-	switch shape := profile.Identity; {
-	case w.Identity == "":
-		if shape.Taken() {
-			p.add(identity, "is required: the profile finds the agent's mentions, and drops the agent's own events, by it")
-		}
-	case len(w.Identity) > maxWebIdentityLen:
-		p.maxBytes(identity, w.Identity, maxWebIdentityLen)
-	case !known:
-	case !shape.Taken():
-		p.add(identity, "is set, but the profile takes none")
-	case len(w.Identity) > shape.maxLen:
-		p.maxBytes(identity, w.Identity, shape.maxLen)
-	case !shape.Matches(w.Identity):
-		p.add(identity, "invalid identity %q: is not %s: %s", w.Identity, shape.What, shape.Fix)
 	}
 }
 
@@ -430,9 +400,7 @@ func (b *Binding) Validate() error {
 	} else {
 		p.chatID("spec.chat.channel", "channel", c, maxChatIDLen) // past the cap not shown: the channel is in the messages that name a conflict
 	}
-	if s.Chat.Output != "" { // left out, it is the platform's default, which resolution fills in (BindingSpec.DefaultOn)
-		p.oneOf("spec.chat.output", string(s.Chat.Output), string(OutputLive), string(OutputFinal), string(OutputNone))
-	}
+	p.oneOf("spec.chat.output", string(s.Chat.Output), string(OutputLive), string(OutputFinal))
 	p.oneOf("spec.chat.progress", string(s.Chat.Progress), string(ProgressSteps), string(ProgressStepsAndActivity), string(ProgressActivity))
 	p.oneOf("spec.chat.threadReplies", string(s.Chat.ThreadReplies), string(ThreadRepliesAll), string(ThreadRepliesMention))
 	p.oneOf("spec.chat.botMentions", string(s.Chat.BotMentions), string(BotMentionsAny), string(BotMentionsNone))

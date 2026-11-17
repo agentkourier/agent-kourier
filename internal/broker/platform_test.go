@@ -105,8 +105,7 @@ func canceled(t *testing.T) context.Context {
 }
 
 // A turn is attributed to a person on a platform: the ID is the ChatConnection's spec.platform and the name is the one the
-// API holds for it (ActorName), GitHub for a web connection of the github profile. A platform the API does not know keeps its ID, with no
-// name, so that a prefix still reads true.
+// API holds for it (ActorName). A platform the API does not know keeps its ID, with no name, so that a prefix still reads true.
 func TestActorPlatformNamesThePlatformOfTheConnection(t *testing.T) {
 	for _, tc := range []struct {
 		spec v1alpha1.ChatConnectionSpec
@@ -115,8 +114,6 @@ func TestActorPlatformNamesThePlatformOfTheConnection(t *testing.T) {
 		{v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformSlack}, dialect.Platform{ID: "slack", Name: "Slack"}},
 		{v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb, Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileKourierV1}},
 			dialect.Platform{ID: "web", Name: "web"}},
-		{v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb, Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileGitHub}},
-			dialect.Platform{ID: "web", Name: "GitHub"}},
 		{v1alpha1.ChatConnectionSpec{Platform: "teams"}, dialect.Platform{ID: "teams"}},
 		{v1alpha1.ChatConnectionSpec{}, dialect.Platform{}},
 	} {

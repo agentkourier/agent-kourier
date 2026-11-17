@@ -167,14 +167,14 @@ func TestChatConnectionPrinterColumns(t *testing.T) {
 		t.Fatalf("printer columns = %+v, want %+v", got, want)
 	}
 	slack := map[string]any{"metadata": map[string]any{"creationTimestamp": "2026-11-04T10:00:00Z"}, "spec": map[string]any{"platform": "slack"}}
-	github := map[string]any{"metadata": map[string]any{"creationTimestamp": "2026-11-04T10:00:00Z"},
-		"spec": map[string]any{"platform": "web", "web": map[string]any{"profile": "github"}}}
+	web := map[string]any{"metadata": map[string]any{"creationTimestamp": "2026-11-04T10:00:00Z"},
+		"spec": map[string]any{"platform": "web", "web": map[string]any{"profile": "kourier-v1"}}}
 	for _, tc := range []struct {
 		obj  map[string]any
 		want map[string]string
 	}{
 		{slack, map[string]string{"Platform": "slack", "Profile": "", "Age": "2026-11-04T10:00:00Z"}},
-		{github, map[string]string{"Platform": "web", "Profile": "github"}},
+		{web, map[string]string{"Platform": "web", "Profile": "kourier-v1"}},
 	} {
 		for col, want := range tc.want {
 			if got := printerColumn(t, paths[col], tc.obj); got != want {

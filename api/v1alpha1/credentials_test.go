@@ -7,8 +7,8 @@ import (
 
 // The keys of a Slack connection's credentials Secret are those of spec section 7 for its mode, the bot token first, as the broker reads
 // and reports them: Socket Mode, which is also the mode of a connection that names none, needs the app-level token, and HTTP mode the
-// signing secret. A web connection's are its profile's: the signing secret for kourier-v1, and GitHub's webhook secret for github. A
-// platform, mode or profile that is not supported has none.
+// signing secret. A web connection's are its profile's: the signing secret for kourier-v1. A platform, mode or profile that is not
+// supported has none.
 func TestCredentialKeysPerPlatformAndMode(t *testing.T) {
 	socket, http := []string{"botToken", "appToken"}, []string{"botToken", "signingSecret"}
 	tests := []struct {
@@ -22,7 +22,6 @@ func TestCredentialKeysPerPlatformAndMode(t *testing.T) {
 		{"slack in HTTP mode", ChatConnectionSpec{Platform: PlatformSlack, Slack: &SlackConnectionSpec{Mode: SlackModeHTTP}}, http},
 		{"slack in a mode that is not supported", ChatConnectionSpec{Platform: PlatformSlack, Slack: &SlackConnectionSpec{Mode: "websocket"}}, nil},
 		{"web, kourier-v1", ChatConnectionSpec{Platform: PlatformWeb, Web: &WebConnectionSpec{Profile: WebProfileKourierV1}}, []string{"signingSecret"}},
-		{"web, github", ChatConnectionSpec{Platform: PlatformWeb, Web: &WebConnectionSpec{Profile: WebProfileGitHub}}, []string{"webhookSecret"}},
 		{"web with no web block", ChatConnectionSpec{Platform: PlatformWeb}, nil},
 		{"web with no profile", ChatConnectionSpec{Platform: PlatformWeb, Web: &WebConnectionSpec{}}, nil},
 		{"web with a profile that is not supported", ChatConnectionSpec{Platform: PlatformWeb, Web: &WebConnectionSpec{Profile: "gitlab"}}, nil},
@@ -41,7 +40,7 @@ func TestCredentialKeysPerPlatformAndMode(t *testing.T) {
 func TestCredentialKeysReturnsACopy(t *testing.T) {
 	for _, spec := range []ChatConnectionSpec{
 		{Platform: PlatformSlack, Slack: &SlackConnectionSpec{Mode: SlackModeSocket}}, {Platform: PlatformSlack, Slack: &SlackConnectionSpec{Mode: SlackModeHTTP}},
-		{Platform: PlatformWeb, Web: &WebConnectionSpec{Profile: WebProfileKourierV1}}, {Platform: PlatformWeb, Web: &WebConnectionSpec{Profile: WebProfileGitHub}},
+		{Platform: PlatformWeb, Web: &WebConnectionSpec{Profile: WebProfileKourierV1}},
 	} {
 		want := CredentialKeys(spec)[0]
 		keys := CredentialKeys(spec)
@@ -64,8 +63,8 @@ func TestEveryPlatformAndModeValidateAcceptsHasCredentialKeys(t *testing.T) {
 			}
 		}
 	}
-	for _, web := range []*WebConnectionSpec{nil, {}, {Profile: WebProfileKourierV1, URL: "https://r.example.com"}, {Profile: WebProfileGitHub, Identity: testLogin},
-		{Profile: "gitlab"}, {Profile: "GitHub"}} {
+	for _, web := range []*WebConnectionSpec{nil, {}, {Profile: WebProfileKourierV1, URL: "https://r.example.com"}, {Profile: "github", URL: "https://r.example.com"},
+		{Profile: "gitlab"}, {Profile: "Kourier-v1", URL: "https://r.example.com"}} {
 		c := load[ChatConnection](t, "chatconnection.yaml")
 		c.Spec.Platform, c.Spec.Web = PlatformWeb, web
 		if valid, keyed := c.Validate() == nil, CredentialKeys(c.Spec) != nil; valid != keyed {

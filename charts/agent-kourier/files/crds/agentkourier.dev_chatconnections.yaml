@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    agentkourier.dev/schema-sha256: 9a784da9123a30bebace65ded95e3108dfa1bfabddb4a71e8ad9800114c5ad6b
+    agentkourier.dev/schema-sha256: 3eca432ad7151e4e1e52daf09ce99044f31a336e85882dd42dbd4cc5705c4715
     controller-gen.kubebuilder.io/version: v0.23.0
   name: chatconnections.agentkourier.dev
 spec:
@@ -70,7 +70,7 @@ spec:
                 description: |-
                   CredentialsSecretRef names one Secret whose keys are fixed by the platform and its mode or profile. A Slack connection in Socket
                   Mode needs botToken and appToken; one in HTTP mode needs botToken and signingSecret. A web connection of the kourier-v1 profile
-                  needs signingSecret, and one of the github profile webhookSecret.
+                  needs signingSecret.
                 properties:
                   name:
                     description: |-
@@ -113,32 +113,19 @@ spec:
                 description: Web holds the settings of a web connection. A connection
                   whose platform is web must set it, and no other may.
                 properties:
-                  identity:
-                    description: |-
-                      Identity is the account the agent works as on the profile's service. A profile that finds the agent's mentions, or drops the
-                      agent's own events, by it requires it (github), and every other refuses it (kourier-v1, whose sender sends only what is meant
-                      for Agent Kourier). Each profile holds it to its own shape. On github it is the GitHub login the agent posts as: a user's, such
-                      as pr-reviewer, or a GitHub App's, such as pr-reviewer[bot], of at most 39 letters and digits with single hyphens between them,
-                      then an optional [bot], at most 44 bytes. A comment on a pull request, or a review comment, starts a turn only when it mentions
-                      the login (an app's login without its [bot]), and no event that the login sent starts one, such as its own push to a pull
-                      request, nor a comment whose author it is. At most 128 bytes on any profile.
-                    maxLength: 128
-                    type: string
                   profile:
                     description: |-
                       Profile is the integration the connection speaks. kourier-v1 is Agent Kourier's own signed JSON contract: it takes signed
-                      requests and posts the agent's replies, signed, to url. github takes GitHub's webhooks and sends no replies: the agent
-                      posts on GitHub itself, so its Bindings take output none alone.
+                      requests and posts the agent's replies, signed, to url.
                     enum:
                     - kourier-v1
-                    - github
                     type: string
                   url:
                     description: |-
-                      URL is where a profile that sends replies posts them: it is required by such a profile (kourier-v1) and refused by one that
-                      sends none (github). It is an https URL, or an http one only to localhost, a loopback address (127.x.x.x or [::1]) or a Service
-                      in the cluster (a host that ends in .svc or .svc.cluster.local), since a reply carries what the agent wrote. At most 2048
-                      bytes, with no credentials, query or fragment: the replies are signed with the credentials Secret's signingSecret.
+                      URL is where Agent Kourier posts the agent's replies, and is required. It is an https URL, or an http one only to localhost, a
+                      loopback address (127.x.x.x or [::1]) or a Service in the cluster (a host that ends in .svc or .svc.cluster.local), since a
+                      reply carries what the agent wrote. At most 2048 bytes, with no credentials, query or fragment: the replies are signed with the
+                      credentials Secret's signingSecret.
                     maxLength: 2048
                     type: string
                     x-kubernetes-validations:
@@ -163,28 +150,9 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - fieldPath: .url
-                  message: 'is required: the profile sends replies, and posts them
+                  message: 'is required: Agent Kourier posts the agent''s replies
                     to it'
-                  rule: '!(self.profile in [''kourier-v1'']) || (has(self.url) &&
-                    size(self.url) > 0)'
-                - fieldPath: .url
-                  message: is set, but the profile sends no replies
-                  rule: self.profile in ['kourier-v1'] || !has(self.url) || size(self.url)
-                    == 0
-                - fieldPath: .identity
-                  message: 'is required: the profile finds the agent''s mentions,
-                    and drops the agent''s own events, by it'
-                  rule: '!(self.profile in [''github'']) || (has(self.identity) &&
-                    size(self.identity) > 0)'
-                - fieldPath: .identity
-                  message: is set, but the profile takes none
-                  rule: self.profile in ['github'] || !has(self.identity) || size(self.identity)
-                    == 0
-                - fieldPath: .identity
-                  message: 'must be a GitHub login of at most 44 bytes: a user''s,
-                    such as pr-reviewer, or a GitHub App''s, such as pr-reviewer[bot]'
-                  rule: self.profile != 'github' || !has(self.identity) || (size(self.identity)
-                    <= 44 && self.identity.matches(r'^[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}(?:\[bot\])?$'))
+                  rule: has(self.url) && size(self.url) > 0
             required:
             - credentialsSecretRef
             - platform

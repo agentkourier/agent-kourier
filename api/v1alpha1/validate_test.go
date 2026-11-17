@@ -318,7 +318,7 @@ func TestBindingValidate(t *testing.T) {
 		{"a channel over the length cap that is not an ID is not shown", func(o *Binding) { o.Spec.Chat.Channel = "#" + strings.Repeat("x", maxChatIDLen) },
 			fmt.Sprintf("spec.chat.channel: is %d bytes, longer than the %d byte limit", maxChatIDLen+1, maxChatIDLen)},
 		{"bad output", func(o *Binding) { o.Spec.Chat.Output = "carrier-pigeon" },
-			`spec.chat.output: unsupported value "carrier-pigeon", must be one of live, final, none`},
+			`spec.chat.output: unsupported value "carrier-pigeon", must be one of live, final`},
 		{"final output ok", func(o *Binding) { o.Spec.Chat.Output = OutputFinal }, ""},
 		{"steps progress ok", func(o *Binding) { o.Spec.Chat.Progress = ProgressSteps }, ""},
 		{"steps-and-activity progress ok", func(o *Binding) { o.Spec.Chat.Progress = ProgressStepsAndActivity }, ""},

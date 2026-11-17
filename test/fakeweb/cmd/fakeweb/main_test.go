@@ -22,7 +22,7 @@ func TestRunServesTheRepliesAndStopsWhenCancelled(t *testing.T) {
 	out := make(lineWriter, 1)
 	done := make(chan error, 1)
 	go func() {
-		done <- run(ctx, []string{"-addr", "127.0.0.1:0", "-chat-url", "http://chat.test:8081", "-kourier-v1-secret", "fake-a", "-github-secret", "fake-b"}, out)
+		done <- run(ctx, []string{"-addr", "127.0.0.1:0", "-chat-url", "http://chat.test:8081", "-kourier-v1-secret", "fake-a"}, out)
 	}()
 	addr, ok := strings.CutPrefix(<-out, "fakeweb: listening on ")
 	if !ok {
@@ -47,8 +47,8 @@ func TestRunServesTheRepliesAndStopsWhenCancelled(t *testing.T) {
 func TestRunRefusesFlagsWithoutRepeatingThem(t *testing.T) {
 	for _, args := range [][]string{
 		{"-signing", "fake-secret-value"},
-		{"-chat-url", "http://chat.test/path", "-kourier-v1-secret", "fake-secret-value", "-github-secret", "fake-secret-value"},
-		{"-chat-url", "http://chat.test", "-kourier-v1-secret", "fake-secret-value"},
+		{"-chat-url", "http://chat.test/path", "-kourier-v1-secret", "fake-secret-value"},
+		{"-chat-url", "http://chat.test"},
 	} {
 		err := run(t.Context(), args, io.Discard)
 		if err == nil {

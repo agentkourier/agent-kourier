@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    agentkourier.dev/schema-sha256: 75c41a3e6e84af7544100c2739080247e6acdce37da258498807ebbfb0b378b2
+    agentkourier.dev/schema-sha256: 00cdf9604b46c13ad157123ca23e38a8f125303c0547138e4737dd320bfd3a85
     controller-gen.kubebuilder.io/version: v0.23.0
   name: bindings.agentkourier.dev
 spec:
@@ -146,11 +146,10 @@ spec:
                     description: |-
                       Channel is the platform's channel ID, not its name (Slack: `C…` or `G…`). At most 140 bytes of printable ASCII with no space
                       and no ':', as the schema checks. The broker holds the channel to the shape of its connection's platform when it reads the
-                      Binding with its connection (on Slack: `C` or `G`, then capitals and digits, at most 32 bytes; on the web platform's github
-                      profile a repository's `owner/name`), and refuses a Binding whose channel has another shape, such as a Slack channel's name
-                      `general`, as it refuses an invalid one: with custom resources its Accepted condition is False with the reason
-                      InvalidPlatformID and its last good generation, if it has one, stays served; on the files route the whole config fails.
-                      agent-kourier dry-run holds it to Slack's shape.
+                      Binding with its connection (on Slack: `C` or `G`, then capitals and digits, at most 32 bytes), and refuses a Binding whose
+                      channel has another shape, such as a Slack channel's name `general`, as it refuses an invalid one: with custom resources its
+                      Accepted condition is False with the reason InvalidPlatformID and its last good generation, if it has one, stays served; on the
+                      files route the whole config fails. agent-kourier dry-run holds it to Slack's shape.
                     maxLength: 140
                     pattern: ^[!-9;-~]+$
                     type: string
@@ -209,9 +208,7 @@ spec:
                           description: |-
                             User is the platform's user ID of the person (Slack: `U…` or `W…`). It comes only from here, never from the agent. At most 64
                             bytes of printable ASCII with no space and no ':', as the schema checks; the broker holds it to the shape of its connection's
-                            platform as it does spec.chat.channel (on Slack: `U` or `W`, then 2 to 20 capitals and digits). A platform without replies
-                            (the web platform's github profile) refuses spec.chat.mentions with the reason UnsupportedOnPlatform, as Agent Kourier posts
-                            nothing there.
+                            platform as it does spec.chat.channel (on Slack: `U` or `W`, then 2 to 20 capitals and digits).
                           maxLength: 64
                           pattern: ^[!-9;-~]+$
                           type: string
@@ -225,17 +222,13 @@ spec:
                     - name
                     x-kubernetes-list-type: map
                   output:
+                    default: live
                     description: |-
-                      Output says what Agent Kourier posts of the agent's work: live, the reply as it is written; final, the finished reply
-                      alone; or none, nothing, on a platform where the agent replies itself. A platform takes only the outputs it serves: Slack
-                      and the web platform's kourier-v1 profile take live and final, and the github profile none alone. Another is refused when
-                      the broker reads the Binding with its connection, with the reason UnsupportedOnPlatform. Left out, it is the platform's
-                      default, which the broker fills in then (live, or none on github). The API server stores no default, so that a stored
-                      Binding does not carry one platform's default. A Binding stored with output live by an earlier version keeps it.
+                      Output says what Agent Kourier posts of the agent's work: live, the reply as it is written, or final, the finished reply
+                      alone. Defaults to live.
                     enum:
                     - live
                     - final
-                    - none
                     - ""
                     type: string
                   progress:
@@ -247,7 +240,7 @@ spec:
                       that first post) whenever 3 seconds pass with nothing new, titled or stood in for by the agent's own progress line.
                       activity shows one Working… card (a line in an alert thread) that counts the steps, or the agent's working updates
                       until the first step is counted, and names no tool, no argument and nothing the agent said. A Binding that sets none
-                      gets steps-and-activity. Output final and output none ignore it.
+                      gets steps-and-activity. Output final ignores it.
                     enum:
                     - steps
                     - steps-and-activity
@@ -352,9 +345,7 @@ spec:
                                 matches nothing, and the Slack adapter logs one warning, the first time one of its posts arrives.
                                 At most 140 bytes of printable ASCII with no space and no ':', as the schema checks; the broker holds it to the shape of its
                                 connection's platform as it does spec.chat.channel (on Slack: `B`, then capitals and digits, at most 32 bytes). A bot's name,
-                                such as `alertmanager`, is refused there, with the reason InvalidPlatformID, and not by the API server. A platform without
-                                replies (the web platform's github profile) hands on no bot's message, and refuses a botMessage trigger with the reason
-                                UnsupportedOnPlatform.
+                                such as `alertmanager`, is refused there, with the reason InvalidPlatformID, and not by the API server.
                               maxLength: 140
                               pattern: ^[!-9;-~]+$
                               type: string
@@ -679,8 +670,7 @@ spec:
                       An empty list allows any non-bot channel member. At most 10 groups may be named, each at most 140 bytes of printable ASCII with
                       no space and no ':'; duplicates and empty entries are refused. The broker holds each to the shape of its connection's platform
                       as it does spec.chat.channel (on Slack: `S`, then capitals and digits, at most 32 bytes). A platform that cannot ask for tool
-                      approvals refuses toolApprovals: true in the same way, with the reason UnsupportedOnPlatform, and one without replies (the web
-                      platform's github profile) refuses approverGroups too; Slack can.
+                      approvals refuses toolApprovals: true in the same way, with the reason UnsupportedOnPlatform; Slack can.
                     items:
                       maxLength: 140
                       pattern: ^[!-9;-~]+$

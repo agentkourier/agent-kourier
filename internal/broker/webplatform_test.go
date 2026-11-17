@@ -19,17 +19,13 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/web"
-	"github.com/agentkourier/agent-kourier/internal/chat/web/github"
 	"github.com/agentkourier/agent-kourier/internal/chat/web/kourierv1"
 	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
-// The fake secrets of the web connections of these tests.
-const (
-	fakeWebSigning = "fake-kourier-v1-signing-secret"
-	fakeWebhook    = "fake-github-webhook-secret"
-)
+// fakeWebSigning is the fake secret of the web connections of these tests.
+const fakeWebSigning = "fake-kourier-v1-signing-secret"
 
 // kourierV1Conn is the web connection ns/name of the kourier-v1 profile, which posts its replies to url.
 func kourierV1Conn(name, url string) Connection {
@@ -38,26 +34,18 @@ func kourierV1Conn(name, url string) Connection {
 		Credentials: map[string]secret.Value{v1alpha1.KourierV1SigningSecretKey: secret.New(fakeWebSigning)}}
 }
 
-// githubConn is the web connection ns/name of the github profile, for the agent that posts as pr-reviewer.
-func githubConn(name string) Connection {
-	return Connection{Ref: v1alpha1.ObjectRef{Namespace: "ns", Name: name}, Platform: v1alpha1.PlatformWeb,
-		Web:         &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileGitHub, Identity: "pr-reviewer"},
-		Credentials: map[string]secret.Value{v1alpha1.GitHubWebhookSecretKey: secret.New(fakeWebhook)}}
-}
-
 // A web connection is built as the web platform, with its profile made from its spec and from the key of its Secret that the profile
-// reads: kourier-v1 sends replies, and github none. A broker with no chat listener refuses to build either, with a wiring error that names
-// AGENTKOURIER_CHAT_LISTEN, since its sender could not reach it; and a spec its profile cannot run with is a wiring error too.
-func TestNewPlatformBuildsAWebConnectionOfEachProfile(t *testing.T) {
+// reads. A broker with no chat listener refuses to build it, with a wiring error that names AGENTKOURIER_CHAT_LISTEN, since its sender
+// could not reach it; and a spec its profile cannot run with is a wiring error too.
+func TestNewPlatformBuildsAWebConnection(t *testing.T) {
 	var none RunConfig
-	for _, conn := range []Connection{kourierV1Conn("v1", "https://receiver.example.com/replies"), githubConn("gh")} {
-		built, err := none.newPlatform(conn, nil, nil)
-		if !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), "AGENTKOURIER_CHAT_LISTEN") || built.Platform != nil {
-			t.Errorf("%s with no chat listener: newPlatform = %+v, %v; want a wiring error that names AGENTKOURIER_CHAT_LISTEN", conn.Web.Profile, built, err)
-		}
-		if err := none.needsChatListener(conn); !errors.Is(err, ErrWiring) {
-			t.Errorf("%s: needsChatListener with no chat listener = %v; want a wiring error, which Run checks on every replica", conn.Web.Profile, err)
-		}
+	conn := kourierV1Conn("v1", "https://receiver.example.com/replies")
+	built, err := none.newPlatform(conn, nil, nil)
+	if !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), "AGENTKOURIER_CHAT_LISTEN") || built.Platform != nil {
+		t.Errorf("with no chat listener: newPlatform = %+v, %v; want a wiring error that names AGENTKOURIER_CHAT_LISTEN", built, err)
+	}
+	if err := none.needsChatListener(conn); !errors.Is(err, ErrWiring) {
+		t.Errorf("needsChatListener with no chat listener = %v; want a wiring error, which Run checks on every replica", err)
 	}
 
 	cfg := RunConfig{ChatListener: someListener(t)}
@@ -74,26 +62,18 @@ func TestNewPlatformBuildsAWebConnectionOfEachProfile(t *testing.T) {
 	if got := v1.Capabilities(); got.MaxText == 0 || got.Streams || got.AckReaction != "" {
 		t.Errorf("the kourier-v1 connection's capabilities are %+v; want the profile's limits and nothing else", got)
 	}
-	gh, err := cfg.newPlatform(githubConn("gh"), nil, nil)
-	if err != nil {
-		t.Fatalf("newPlatform(github) = %v; want the web platform", err)
-	}
-	if _, err := gh.Post(t.Context(), chat.Target{Conn: "ns/gh", Channel: "octo-org/hello-world"}, chat.Say(chat.Message{Fallback: "x"}), "tag"); !errors.Is(err, web.ErrNoReplies) {
-		t.Errorf("a post on the github connection = %v; want ErrNoReplies: the profile sends none", err)
-	}
 
 	for name, conn := range map[string]Connection{
 		"no spec.web":            {Ref: v1alpha1.ObjectRef{Namespace: "ns", Name: "w"}, Platform: v1alpha1.PlatformWeb},
-		"github with no login":   func() Connection { c := githubConn("gh"); c.Web.Identity = ""; return c }(),
 		"kourier-v1 with no URL": kourierV1Conn("v1", ""),
 		"no signing secret":      func() Connection { c := kourierV1Conn("v1", "https://r.example/"); c.Credentials = nil; return c }(),
-		"an unknown profile":     func() Connection { c := githubConn("gh"); c.Web.Profile = "gitlab"; return c }(),
+		"an unknown profile":     func() Connection { c := kourierV1Conn("v1", "https://r.example/"); c.Web.Profile = "gitlab"; return c }(),
 	} {
 		built, err := cfg.newPlatform(conn, nil, nil)
 		if !errors.Is(err, ErrWiring) || built.Platform != nil {
 			t.Errorf("%s: newPlatform = %+v, %v; want a wiring error and no platform", name, built, err)
 		}
-		if err != nil && (strings.Contains(err.Error(), fakeWebSigning) || strings.Contains(err.Error(), fakeWebhook)) {
+		if err != nil && strings.Contains(err.Error(), fakeWebSigning) {
 			t.Errorf("%s: the error %q holds the secret", name, err)
 		}
 	}
@@ -114,20 +94,6 @@ func signedKourierV1(t *testing.T, base, conn, body string, sign bool) *http.Req
 	return req
 }
 
-// signedGitHub is a GitHub delivery of the event to the connection's route, signed with the connection's webhook secret (or not at all).
-func signedGitHub(t *testing.T, base, conn, event, body string, sign bool) *http.Request {
-	t.Helper()
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+"/chat/web/ns/"+conn, strings.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set(github.HeaderEvent, event)
-	if sign {
-		req.Header.Set(github.HeaderSignature, github.Sign([]byte(fakeWebhook), []byte(body)))
-	}
-	return req
-}
-
 // statusOf sends req and returns the status of its answer.
 func statusOf(t *testing.T, c *http.Client, req *http.Request) int {
 	t.Helper()
@@ -140,19 +106,9 @@ func statusOf(t *testing.T, c *http.Client, req *http.Request) int {
 	return resp.StatusCode
 }
 
-// githubFixture is the body of the github profile's fixture name (internal/chat/web/github/testdata), as GitHub's documentation shows it.
-func githubFixture(t *testing.T, name string) string {
-	t.Helper()
-	b, err := os.ReadFile(filepath.Join("..", "chat", "web", "github", "testdata", name))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(b)
-}
-
 // A web connection runs as a runtime does, with the real platform and profile: while it runs its route on the chat listener takes its
 // sender's signed requests and hands them to the connection's sink, refuses one that is not signed, and agentkourier_chat_connected says
-// 1; once the runtime is halted, the route answers 503 and the series says 0. Both profiles, each with its own signature.
+// 1; once the runtime is halted, the route answers 503 and the series says 0.
 func TestAWebConnectionServesItsRouteWhileItRuns(t *testing.T) {
 	for _, tc := range []struct {
 		profile v1alpha1.WebProfile
@@ -165,11 +121,6 @@ func TestAWebConnectionServesItsRouteWhileItRuns(t *testing.T) {
 				return signedKourierV1(t, base, "v1", `{"v":1,"channel":"ch-1","id":"m-1","user":"u-1","text":"hello"}`, sign)
 			},
 			chat.Inbound{At: chat.Ref{Platform: "web", Conn: "ns/v1", Channel: "ch-1", ID: "m-1"}, User: "u-1", Text: "hello", Mentioned: true}},
-		{v1alpha1.WebProfileGitHub, githubConn("gh"),
-			func(t *testing.T, base string, sign bool) *http.Request {
-				return signedGitHub(t, base, "gh", "pull_request", githubFixture(t, "pull_request.opened.json"), sign)
-			},
-			chat.Inbound{At: chat.Ref{Platform: "web", Conn: "ns/gh", Channel: "octo-org/hello-world", Thread: "pr-42"}, User: "octocat", Mentioned: true}},
 	} {
 		t.Run(string(tc.profile), func(t *testing.T) {
 			cfg := RunConfig{ChatListener: someListener(t)}
@@ -199,11 +150,7 @@ func TestAWebConnectionServesItsRouteWhileItRuns(t *testing.T) {
 			if len(got) != 1 {
 				t.Fatalf("the sink was given %d messages; want 1", len(got))
 			}
-			m := got[0]
-			if tc.profile == v1alpha1.WebProfileGitHub { // its ID is the body's hash and its text the profile's own: the rest is what matters here
-				m.At.ID, m.Text = "", ""
-			}
-			if m != tc.want {
+			if got[0] != tc.want {
 				t.Errorf("the sink was given %+v; want %+v", got[0], tc.want)
 			}
 

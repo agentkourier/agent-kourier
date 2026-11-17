@@ -48,10 +48,10 @@
 # E2E_REPLICAS=2 the failover scenarios of that suite run too. Bringing the tier up again without it takes the admission list away, and the team's
 # objects stay in the cluster, not served. hack/kind/two-apps.sh (make e2e-two-apps) runs the scenarios that change the admission list with Helm.
 #
-# On custom resources the tier also serves two web ChatConnections, a kourier-v1 one and a github one, in the namespace e2e-web (hack/kind/fast/web, lib.sh's
-# deploy_web; the WEB_ tests of test/e2e drive them through the fake web sender and receiver, test/fakeweb): hack/kind/web-values.yaml admits the namespace
-# and turns on the chat listener. The ConfigMap route serves one ChatConnection, so it has no web connections, and the WEB_ tests skip there. With
-# E2E_TWO_APPS=1 the admission list is the MC_ tests' own, so the web connections stay in the cluster, not served, and the WEB_ tests skip too.
+# On custom resources the tier also serves a web ChatConnection of the kourier-v1 profile, in the namespace e2e-web (hack/kind/fast/web, lib.sh's
+# deploy_web; the WEB_ tests of test/e2e drive it through the fake web sender and receiver, test/fakeweb): hack/kind/web-values.yaml admits the namespace
+# and turns on the chat listener. The ConfigMap route serves one ChatConnection, so it has no web connection, and the WEB_ tests skip there. With
+# E2E_TWO_APPS=1 the admission list is the MC_ tests' own, so the web connection stays in the cluster, not served, and the WEB_ tests skip too.
 set -eEuo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -177,7 +177,7 @@ if [ "${E2E_TWO_APPS}" = 1 ]; then
 fi
 
 if [ "${WEB}" = 1 ]; then
-  step "e2e-web: the web ChatConnections (kourier-v1 and github), their Secrets and Bindings"
+  step "e2e-web: the web ChatConnection (kourier-v1), its Secrets and Binding"
   deploy_web
 fi
 

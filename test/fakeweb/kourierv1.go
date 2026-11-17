@@ -1,5 +1,7 @@
 package fakeweb
 
+import "encoding/json"
+
 // Message is the one schema a kourier-v1 sender POSTs, version 1, as the profile's contract gives it.
 type Message struct {
 	// Channel is the conversation; Thread the ID of the message that opened the thread, or empty for a message that opens one; ID the
@@ -18,5 +20,6 @@ func (m Message) Body() string {
 	if m.Mention {
 		v["mention"] = true
 	}
-	return marshal(v)
+	b, _ := json.Marshal(v) //nolint:errchkjson // a map of strings, a number and a bool always marshals
+	return string(b)
 }

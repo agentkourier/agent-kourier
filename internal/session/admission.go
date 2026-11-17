@@ -56,10 +56,7 @@ const (
 // Admission is the classification of a reply. Only the field of its Kind is set.
 type Admission struct {
 	Kind     AdmissionKind
-	Question string // AdmitAnswer: the ID of the question the reply answers
-	// Replaces, on AdmitTurn: the turn makes a fresh session in place of the thread's, which has expired or whose Binding is gone,
-	// on a platform where no notice could say so (ReplyFacts.NoReplies).
-	Replaces bool
+	Question string       // AdmitAnswer: the ID of the question the reply answers
 	Notice   NoticeKind   // AdmitNotice: NoticeExpired or NoticeBindingGone
 	Ignored  IgnoreReason // AdmitIgnored
 }
@@ -189,21 +186,6 @@ type ReplyFacts struct {
 	// Question is the thread's pending question that takes text replies, nil when it has none. Read it only if
 	// NeedsQuestion.
 	Question *PendingQuestion
-	// NoReplies: the connection's platform has no replies of Agent Kourier's (v1alpha1.ChatPlatform.Replies), so no notice can tell
-	// the thread that it cannot be continued. A turn that may create the session then replaces one that has expired or whose Binding
-	// is gone, unless the old session may still be at work or the turn is a repeat (Unsettled): the thread goes on as a new session
-	// rather than being refused in silence.
-	NoReplies bool
-	// Unsettled: the thread's queue holds a reply that is not delivered yet (a turn of the old session that may be in flight, whose
-	// task is recorded only as it is delivered), the session has a task that was recorded since it was first read (such a turn,
-	// delivered meanwhile), or this turn's message was queued before (a repeat of a body the broker took). Read only when the
-	// replacement could apply (MayReplace): such a turn is decided as it is where there are replies.
-	Unsettled bool
-}
-
-// MayReplace says the turn would replace the thread's session (Admission.Replaces) but for Unsettled, which admit then reads.
-func (f ReplyFacts) MayReplace() bool {
-	return f.NoReplies && f.Create && f.Owned && f.TaskID == "" && (f.BindingGone || f.Expired)
 }
 
 // TakesTextReplies says whether a Binding whose backend speaks dialect has questions that a typed reply in the
@@ -255,8 +237,6 @@ func (f ReplyFacts) decideWithoutQuestion() (Admission, bool) {
 		return ignored(IgnoredNotOwned), true
 	case !f.Owned:
 		return Admission{Kind: AdmitTurn}, true
-	case f.MayReplace() && !f.Unsettled:
-		return Admission{Kind: AdmitTurn, Replaces: true}, true
 	case f.BindingGone && f.gated():
 		return ignored(IgnoredBindingGone), true
 	case f.BindingGone:

@@ -156,7 +156,6 @@ func TestAChatConnectionOnAPlatformWithNoAdapterIsAWiringError(t *testing.T) {
 func TestAWebChatConnectionIsChosenWithItsProfilesKey(t *testing.T) {
 	for _, web := range []*v1alpha1.WebConnectionSpec{
 		{Profile: v1alpha1.WebProfileKourierV1, URL: "https://receiver.example.com/replies"},
-		{Profile: v1alpha1.WebProfileGitHub, Identity: "pr-reviewer"},
 	} {
 		t.Run(string(web.Profile), func(t *testing.T) {
 			conn := func(ns string) v1alpha1.ChatConnection {

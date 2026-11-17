@@ -228,9 +228,9 @@ func TestSchemaEmojiMatchesTheBrokersRule(t *testing.T) {
 // TestSchemaEnumsListTheEmptyValueExactlyWhereTheBrokerAcceptsIt holds the enums to the invariant for a field written as
 // "": where the broker accepts it, the schema must too, and where it refuses it, the enum must not list it, or a
 // fast-fail is lost. The broker is asked: each row sets the field to "" in a valid object and runs Default and
-// Validate, so the answer is the code's and not a column kept by hand. Default fills four of these from "" (progress,
-// threadReplies, botMentions, from.kind); Validate reads an empty thread.by as unset, and an empty output as the platform's
-// default, which resolution fills in. Every enum of the spec has a row, so a new one must be put in the table.
+// Validate, so the answer is the code's and not a column kept by hand. Default fills five of these from "" (output,
+// progress, threadReplies, botMentions, from.kind); Validate reads an empty thread.by as unset. Every enum of the spec has a
+// row, so a new one must be put in the table.
 func TestSchemaEnumsListTheEmptyValueExactlyWhereTheBrokerAcceptsIt(t *testing.T) {
 	bindings, backends, conns := crdSchema(t, "bindings"), crdSchema(t, "agentbackends"), crdSchema(t, "chatconnections")
 	trigger := "spec.chat.triggers[]"
@@ -365,7 +365,6 @@ func TestSchemaCapsEqualTheBrokersCaps(t *testing.T) {
 		// The broker counts bytes and the schema characters, so the schema is never the stricter of the two.
 		{"backend url", backends.at(t, "spec.url"), "maxLength", maxURLLen},
 		{"web reply url", connections.at(t, "spec.web.url"), "maxLength", maxURLLen},
-		{"web identity", connections.at(t, "spec.web.identity"), "maxLength", maxWebIdentityLen},
 		{"header value", backends.at(t, "spec.headers[].value"), "maxLength", maxHeaderValueLen},
 		{"channel", bindings.at(t, "spec.chat.channel"), "maxLength", maxChatIDLen},
 		{"sender ID", bindings.at(t, trigger+".from.id"), "maxLength", maxChatIDLen},

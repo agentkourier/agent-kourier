@@ -1,15 +1,15 @@
 // Package fakeweb is the far side of Agent Kourier's web ChatConnections, for the fast E2E tier (spec 12.1). It plays two roles on
 // one port:
 //
-//   - the sender (sender.go): on a test's word it signs a request as a kourier-v1 sender or as GitHub signs a webhook delivery, POSTs
-//     it once to the broker's chat listener, and tells the test how it was answered;
+//   - the sender (sender.go): on a test's word it signs a request as a kourier-v1 sender signs one, POSTs it once to the broker's chat
+//     listener, and tells the test how it was answered;
 //   - the receiver (receiver.go): it is the URL a kourier-v1 connection posts its replies to (spec.web.url). It checks each reply's
 //     signature and Idempotency-Key, answers it, and keeps what it was sent for the tests to read.
 //
-// It is written from the wire contracts (the kourier-v1 profile's package comment, and GitHub's webhook documentation), not from
-// Agent Kourier's code, so that a test through it checks the contract and not the code against itself: it signs and checks with
-// HMAC-SHA256 of its own. Its unit tests hand what it sends to the profiles, and what the kourier-v1 profile encodes to it, so that the
-// two sides are known to agree before a cluster runs them.
+// It is written from the wire contract (the kourier-v1 profile's package comment), not from Agent Kourier's code, so that a test
+// through it checks the contract and not the code against itself: it signs and checks with HMAC-SHA256 of its own. Its unit tests hand
+// what it sends to the profile, and what the profile encodes to it, so that the two sides are known to agree before a cluster runs
+// them.
 //
 // The routes:
 //
@@ -58,9 +58,7 @@ type Config struct {
 	// KourierV1Secret is the signingSecret of the kourier-v1 connection: the sender signs its messages with it, and the receiver
 	// checks the replies with it.
 	KourierV1Secret []byte
-	// GitHubSecret is the webhookSecret of the github connection, which the sender signs its deliveries with.
-	GitHubSecret []byte
-	// Client sends the sender's requests; one with a 10 s timeout, GitHub's own wait for an answer (unverified), if nil.
+	// Client sends the sender's requests; one with a 10 s timeout if nil.
 	Client *http.Client
 	// Now is the clock of the signatures; time.Now if nil.
 	Now func() time.Time
@@ -70,7 +68,6 @@ type Config struct {
 type Server struct {
 	chat    *url.URL
 	kourier []byte
-	github  []byte
 	client  *http.Client
 	now     func() time.Time
 
@@ -89,8 +86,8 @@ func New(cfg Config) (*Server, error) {
 		return nil, errors.New("fakeweb: the chat URL is not an absolute http or https URL")
 	case u.Path != "" && u.Path != "/", u.RawQuery != "", u.Fragment != "":
 		return nil, errors.New("fakeweb: the chat URL has a path, a query or a fragment; the sender adds the path")
-	case len(cfg.KourierV1Secret) == 0 || len(cfg.GitHubSecret) == 0:
-		return nil, errors.New("fakeweb: a secret is empty")
+	case len(cfg.KourierV1Secret) == 0:
+		return nil, errors.New("fakeweb: the secret is empty")
 	}
 	u.Path = ""
 	client := cfg.Client
@@ -101,7 +98,7 @@ func New(cfg Config) (*Server, error) {
 	if now == nil {
 		now = time.Now
 	}
-	return &Server{chat: u, kourier: cfg.KourierV1Secret, github: cfg.GitHubSecret, client: client, now: now, keys: map[string]bool{}}, nil
+	return &Server{chat: u, kourier: cfg.KourierV1Secret, client: client, now: now, keys: map[string]bool{}}, nil
 }
 
 // ServeHTTP routes a request (see the package comment).

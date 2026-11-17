@@ -63,9 +63,9 @@ func requests(t *testing.T, reg *prometheus.Registry) map[string]float64 {
 // Each answer of the handler is counted once, by its outcome, with the connection's profile and name, on Run's context: what the
 // broker's operators read to tell a wrong secret (unverified) from a sender that sends what the profile does not take (malformed).
 func TestEveryAnswerIsCountedByItsOutcome(t *testing.T) {
-	prof := newTestProfile(false)
+	prof := newTestProfile()
 	prof.maxBody = 256
-	p := newPlatform(t, prof, "", nil)
+	p := newPlatform(t, prof, receiverURL, nil)
 	p.SetAckWait(20 * time.Millisecond)
 	sk := &sink{}
 	reg, stop := runningObserved(t, p, sk)
@@ -118,8 +118,8 @@ func TestEveryAnswerIsCountedByItsOutcome(t *testing.T) {
 func TestOnConnectionFollowsTheRun(t *testing.T) {
 	var mu sync.Mutex
 	var told []bool
-	prof := newTestProfile(false)
-	p, err := web.New(web.Config{Connection: "ns/web", Profile: prof, Platform: prof.platform(), Logger: testutil.DiscardLogger(),
+	prof := newTestProfile()
+	p, err := web.New(web.Config{Connection: "ns/web", Profile: prof, Platform: prof.platform(), URL: receiverURL, Logger: testutil.DiscardLogger(),
 		OnConnection: func(up bool) { mu.Lock(); told = append(told, up); mu.Unlock() }})
 	if err != nil {
 		t.Fatal(err)

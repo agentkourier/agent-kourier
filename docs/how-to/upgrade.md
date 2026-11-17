@@ -1008,25 +1008,17 @@ a stored object that breaks them depends on its version, so fix the IDs in the s
 
 ## Upgrade to the release that adds the web platform
 
-The API takes a ChatConnection whose `spec.platform` is `web`, with `spec.web.profile` (`kourier-v1` or `github`), and a Binding's
-`chat.output` takes `none` ([What each platform supports](../reference/platforms.md)). A web connection runs on the chat listener
+The API takes a ChatConnection whose `spec.platform` is `web`, with `spec.web.profile` (`kourier-v1`) and the `spec.web.url` it posts
+the agent's replies to ([What each platform supports](../reference/platforms.md)). A web connection runs on the chat listener
 (`chatListener` in the chart): a broker with none does not run one, and then one that is the broker's own connection stops the start
 (exit code 2), and a team's is not started. Every object stored before the upgrade loads as it did, and a Slack Binding behaves as
 before.
 
-- **`chat.output` has no default in the CRD.** The broker fills in the platform's default when it reads the Binding with its
-  ChatConnection: `live` on Slack. A Binding stored before the upgrade keeps the `live` that the API server wrote; one applied after it
-  without `output` has none stored, and `kubectl get -o yaml` shows no `output`. It still runs `live`. `output: none` on a Slack
-  connection is refused with `UnsupportedOnPlatform`.
 - **A mention's `user` may be 64 bytes**, up from 44. A Slack connection still holds it to Slack's shape.
-- **A `github` connection names the agent's GitHub login** in `spec.web.identity`, which it must set and a `kourier-v1` connection may
-  not: a user's login, or a GitHub App's with its `[bot]`, at most 44 bytes. An earlier release has no web connection, so no stored
-  object needs it. A Binding of a `github` connection names no sender, mention or approver group: the profile hands on no bot's message
-  and Agent Kourier posts nothing there, so each is refused with `UnsupportedOnPlatform`.
 - **`kubectl get akconnection -o wide` shows `PROFILE`**, the web profile, after `PLATFORM`. Without `-o wide` the columns are as before.
   The ChatConnection and Binding CRDs change, and their schema hashes with them: the chart applies them with the release when
   `crds.install` is true, or unset on `config.source: crds`; if you apply the CRDs yourself, apply `charts/agent-kourier/files/crds` again.
 
-**Roll back.** An earlier broker's validation refuses a web ChatConnection, a Binding with `output: none` and a mention `user` longer
-than 44 bytes: on custom resources it does not serve them (the Binding's `Accepted` condition says `InvalidSpec`, and a Binding on a
-refused connection is not served either), and on the files route the config fails. Delete or change them before the rollback.
+**Roll back.** An earlier broker's validation refuses a web ChatConnection and a mention `user` longer than 44 bytes: on custom
+resources it does not serve them (the Binding's `Accepted` condition says `InvalidSpec`, and a Binding on a refused connection is not
+served either), and on the files route the config fails. Delete or change them before the rollback.
