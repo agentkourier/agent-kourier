@@ -100,6 +100,7 @@ func onWeb(t *testing.T, profile v1alpha1.WebProfile) (*Set, fakeSecrets) {
 	chatOnly := &set.Bindings[slices.IndexFunc(set.Bindings, func(b v1alpha1.Binding) bool { return b.Name == "chat-only" })]
 	switch profile {
 	case v1alpha1.WebProfileGitHub:
+		conn.Spec.Web.GitHub = &v1alpha1.GitHubWebSpec{Login: "pr-reviewer"}
 		b.Spec.Chat.Channel, b.Spec.Chat.Triggers[1].From.ID = "octo-org/hello-world", "dependabot[bot]"
 		chatOnly.Spec.Chat.Channel = "octo-org/chat"
 	case v1alpha1.WebProfileKourierV1:

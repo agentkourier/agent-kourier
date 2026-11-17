@@ -9,10 +9,16 @@ import (
 	"testing"
 )
 
-// web makes the fixture's connection a web connection of the profile, with url.
+// testLogin is the login of the tests' github connections.
+const testLogin = "pr-reviewer[bot]"
+
+// web makes the fixture's connection a web connection of the profile, with url, and with the login testLogin on the github profile.
 func web(o *ChatConnection, profile WebProfile, url string) {
 	o.Spec.Platform = PlatformWeb
 	o.Spec.Web = &WebConnectionSpec{Profile: profile, URL: url}
+	if profile == WebProfileGitHub {
+		o.Spec.Web.GitHub = &GitHubWebSpec{Login: testLogin}
+	}
 }
 
 func TestWebConnectionValidate(t *testing.T) {
@@ -31,13 +37,68 @@ func TestWebConnectionValidate(t *testing.T) {
 			"spec.web.url: is required by the kourier-v1 profile, which posts the replies to it"},
 		{"github with a url", func(o *ChatConnection) { web(o, WebProfileGitHub, reply) },
 			"spec.web.url: is set, but the github profile sends no replies"},
-		{"a web block on a slack connection", func(o *ChatConnection) { o.Spec.Web = &WebConnectionSpec{Profile: WebProfileGitHub} },
-			"spec.web: is set, but only a web connection has one"},
+		{"a web block on a slack connection", func(o *ChatConnection) {
+			o.Spec.Web = &WebConnectionSpec{Profile: WebProfileGitHub, GitHub: &GitHubWebSpec{Login: testLogin}}
+		}, "spec.web: is set, but only a web connection has one"},
 		{"a slack block on a web connection", func(o *ChatConnection) {
 			web(o, WebProfileGitHub, "")
 			o.Spec.Slack = &SlackConnectionSpec{Mode: SlackModeHTTP}
 		}, "spec.slack: is set, but only a slack connection has one"},
 	})
+}
+
+// The github profile names the login the agent posts as, in spec.web.github, which only that profile has (issue #347): a login of
+// a Binding's GitHub shape and cap.
+func TestWebGitHubLogin(t *testing.T) {
+	login := func(l string) func(*ChatConnection) {
+		return func(o *ChatConnection) { web(o, WebProfileGitHub, ""); o.Spec.Web.GitHub.Login = l }
+	}
+	invalid := func(l string) string {
+		return fmt.Sprintf("spec.web.github.login: invalid login %q: must be a GitHub login, such as octocat, or an app's, such as pr-reviewer[bot]", l)
+	}
+	runMutations[ChatConnection](t, "chatconnection.yaml", []mutation[ChatConnection]{
+		{"a user's login", login("octocat"), ""},
+		{"an app's login", login("pr-reviewer[bot]"), ""},
+		{"a login of one character", login("a"), ""},
+		{"39 characters with [bot], at the cap", login(strings.Repeat("a", 39) + "[bot]"), ""},
+		{"a hyphenated login at the cap", login(hyphenated(22) + "x"), ""},
+		{"a hyphenated login past the cap", login(hyphenated(23)), "spec.web.github.login: is 45 bytes, longer than the 44 byte limit"},
+		{"40 letters", login(strings.Repeat("a", 40)), invalid(strings.Repeat("a", 40))},
+		{"an empty login", login(""), "spec.web.github.login: required"},
+		{"a login with an @", login("@octocat"), invalid("@octocat")},
+		{"two hyphens in a row", login("octo--cat"), invalid("octo--cat")},
+		{"a login that ends in a hyphen", login("octocat-"), invalid("octocat-")},
+		{"a login with a dot", login("octo.cat"), invalid("octo.cat")},
+		{"another suffix", login("octocat[app]"), invalid("octocat[app]")},
+		{"[bot] alone", login("[bot]"), invalid("[bot]")},
+		{"a team, not a login", login("octo-org/sre"), invalid("octo-org/sre")},
+		{"github with no github block", func(o *ChatConnection) { web(o, WebProfileGitHub, ""); o.Spec.Web.GitHub = nil },
+			"spec.web.github: is required by the github profile: it names the login the agent posts as"},
+		{"a github block on kourier-v1", func(o *ChatConnection) {
+			web(o, WebProfileKourierV1, "https://receiver.example.com/replies")
+			o.Spec.Web.GitHub = &GitHubWebSpec{Login: testLogin}
+		}, "spec.web.github: is set, but only the github profile has one"},
+	})
+}
+
+// A github block on a connection with no profile, or one that is not supported, is refused with the profile, and its login is
+// checked too, so that everything is told at once.
+func TestAGitHubBlockWithoutTheGitHubProfileIsCheckedToo(t *testing.T) {
+	for _, tc := range []struct {
+		profile WebProfile
+		want    []string
+	}{
+		{"", []string{"spec.web.profile: required", "spec.web.github: is set, but only the github profile has one", "spec.web.github.login: required"}},
+		{"gitlab", []string{`spec.web.profile: unsupported value "gitlab", must be one of kourier-v1, github`,
+			"spec.web.github: is set, but only the github profile has one", "spec.web.github.login: required"}},
+	} {
+		c := load[ChatConnection](t, "chatconnection.yaml")
+		c.Spec.Platform = PlatformWeb
+		c.Spec.Web = &WebConnectionSpec{Profile: tc.profile, GitHub: &GitHubWebSpec{}}
+		if got := problemsOf(c.Validate()); !slices.Equal(got, tc.want) {
+			t.Errorf("profile %q: Validate() problems = %q, want %q", tc.profile, got, tc.want)
+		}
+	}
 }
 
 // The reply URL of a kourier-v1 connection: https, or http to a host that does not leave the pod or the cluster; never credentials,

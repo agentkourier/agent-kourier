@@ -74,8 +74,9 @@ type Profile interface {
 
 // Event is what one request carries, as its profile decodes it: a message written in a conversation.
 type Event struct {
-	// Channel is the conversation, and Thread the message that opened the thread the event is in, or "" for an event that opens one.
-	// Each has the profile's shape (v1alpha1.ChatPlatformOf), and neither holds ':'.
+	// Channel is the conversation, and Thread the thread the event is in, or "" for an event that opens one: the ID of the message that
+	// opened it, or a name the profile gives a thread that no message of its own opens (github: the pull request's), which every event
+	// of that thread carries. Channel has the profile's shape (v1alpha1.ChatPlatformOf), and neither holds ':'.
 	Channel, Thread string
 	// ID is the event's own: the same for every delivery of the same event, and different for every other, since the reply queue keeps
 	// the IDs it has taken (chat.MessageID) and drops a delivery of one it has, across restarts. It is not empty and holds no ':'.

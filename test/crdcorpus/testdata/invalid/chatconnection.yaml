@@ -434,6 +434,8 @@ spec:
     name: slack
   web:
     profile: github
+    github:
+      login: pr-reviewer
 ---
 # rule: chatconnection/spec.slack: set on a web connection
 # want: spec.slack: is set, but only a slack connection has one
@@ -449,6 +451,8 @@ spec:
     name: web
   web:
     profile: github
+    github:
+      login: pr-reviewer
   slack:
     mode: http
 ---
@@ -527,6 +531,159 @@ spec:
   web:
     profile: github
     url: https://receiver.example.com/replies
+    github:
+      login: pr-reviewer
+---
+# rule: chatconnection/spec.web.github: missing on the github profile
+# want: spec.web.github: is required by the github profile: it names the login the agent posts as
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: web
+  namespace: sre
+spec:
+  platform: web
+  credentialsSecretRef:
+    name: web
+  web:
+    profile: github
+---
+# rule: chatconnection/spec.web.github: set on the kourier-v1 profile
+# want: spec.web.github: is set, but only the github profile has one
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: web
+  namespace: sre
+spec:
+  platform: web
+  credentialsSecretRef:
+    name: web
+  web:
+    profile: kourier-v1
+    url: https://receiver.example.com/replies
+    github:
+      login: pr-reviewer
+---
+# rule: chatconnection/spec.web.github.login: missing
+# want: spec.web.github.login: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: web
+  namespace: sre
+spec:
+  platform: web
+  credentialsSecretRef:
+    name: web
+  web:
+    profile: github
+    github: {}
+---
+# rule: chatconnection/spec.web.github.login: empty
+# want: spec.web.github.login: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: web
+  namespace: sre
+spec:
+  platform: web
+  credentialsSecretRef:
+    name: web
+  web:
+    profile: github
+    github:
+      login: ""
+---
+# rule: chatconnection/spec.web.github.login: over 44 bytes, a login's shape with its hyphens
+# want: spec.web.github.login: is 45 bytes, longer than the 44 byte limit
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: web
+  namespace: sre
+spec:
+  platform: web
+  credentialsSecretRef:
+    name: web
+  web:
+    profile: github
+    github:
+      login: a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a
+---
+# rule: chatconnection/spec.web.github.login: 40 letters
+# want: spec.web.github.login: invalid login "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": must be a GitHub login
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: web
+  namespace: sre
+spec:
+  platform: web
+  credentialsSecretRef:
+    name: web
+  web:
+    profile: github
+    github:
+      login: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+---
+# rule: chatconnection/spec.web.github.login: with an @, as a mention writes it
+# want: spec.web.github.login: invalid login "@pr-reviewer": must be a GitHub login
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: web
+  namespace: sre
+spec:
+  platform: web
+  credentialsSecretRef:
+    name: web
+  web:
+    profile: github
+    github:
+      login: "@pr-reviewer"
+---
+# rule: chatconnection/spec.web.github.login: two hyphens in a row
+# want: spec.web.github.login: invalid login "kourier--reviewer": must be a GitHub login
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: web
+  namespace: sre
+spec:
+  platform: web
+  credentialsSecretRef:
+    name: web
+  web:
+    profile: github
+    github:
+      login: kourier--reviewer
+---
+# rule: chatconnection/spec.web.github.login: a suffix other than [bot]
+# want: spec.web.github.login: invalid login "pr-reviewer[app]": must be a GitHub login
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: web
+  namespace: sre
+spec:
+  platform: web
+  credentialsSecretRef:
+    name: web
+  web:
+    profile: github
+    github:
+      login: pr-reviewer[app]
 ---
 # rule: chatconnection/spec.web.url: http to a host outside the cluster
 # want: spec.web.url: invalid URL "http://receiver.example.com": http is allowed only to localhost
