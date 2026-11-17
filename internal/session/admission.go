@@ -195,8 +195,9 @@ type ReplyFacts struct {
 	// rather than being refused in silence.
 	NoReplies bool
 	// Unsettled: the thread's queue holds a reply that is not delivered yet (a turn of the old session that may be in flight, whose
-	// task is recorded only as it is delivered), or this turn's message was queued before (a repeat of a body the broker took). Read
-	// only when the replacement could apply (MayReplace): such a turn is decided as it is where there are replies.
+	// task is recorded only as it is delivered), the session has a task that was recorded since it was first read (such a turn,
+	// delivered meanwhile), or this turn's message was queued before (a repeat of a body the broker took). Read only when the
+	// replacement could apply (MayReplace): such a turn is decided as it is where there are replies.
 	Unsettled bool
 }
 

@@ -698,6 +698,44 @@ func TestSubmitOnAPlatformWithoutRepliesReplacesAnEndedSession(t *testing.T) {
 	}
 }
 
+// The runner records a turn's task, and then marks its reply delivered, without the intake lock. When both land after the intake read
+// the session (no task) and before it reads the queue (now empty), the intake reads the session again and finds the task: the old
+// session is not replaced, and the task the runner recorded is kept.
+func TestSubmitOnAPlatformWithoutRepliesKeepsATaskRecordedWhileItDecides(t *testing.T) {
+	f := newFixture(t)
+	old := store.Session{Key: key, ContextID: "c-old", Binding: "ns/b1", Origin: store.Origin{Source: store.OriginPersonMessage, Subject: "old"},
+		Agent: "kagent/old", LastActivity: t0.Add(-2 * time.Hour)}
+	if err := f.st.UpsertSession(t.Context(), old); err != nil {
+		t.Fatal(err)
+	}
+	earlier := store.Reply{ID: "slack:slack:C1:1700.01", Key: key, UserID: "U1", MessageRef: "1700.01", Text: "earlier", EnqueuedAt: t0.Add(-3 * time.Hour)}
+	if _, err := f.st.EnqueueReply(t.Context(), earlier); err != nil {
+		t.Fatal(err)
+	}
+	f.st.upserts = 0
+	var once sync.Once
+	f.st.onNext = func() { // just before the intake reads the queue, the runner accepts the earlier turn, as accept does
+		once.Do(func() {
+			if err := f.st.Store.SetSessionTask(t.Context(), key, "c-old", "t-old", store.TaskTurn{ID: earlier.ID, User: "U1", MessageRef: "1700.01"}); err != nil {
+				t.Error(err)
+			}
+			if err := f.st.Store.MarkReplyDelivered(t.Context(), earlier.ID, t0); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+
+	in := inbound("1700.02")
+	in.Origin, in.NoReplies = store.Origin{Source: store.OriginPersonMessage, Subject: "new"}, true
+	res, err := f.submitAny(in)
+	if want := (Result{Disposition: Expired, Admission: admExpired}); err != nil || res != want {
+		t.Fatalf("Submit = %+v, %v; want %+v: the session has the task the runner recorded", res, err, want)
+	}
+	if got, _ := f.session(); got.TaskID != "t-old" || got.ContextID != "c-old" || f.st.upserts != 0 {
+		t.Errorf("session %+v after %d upserts; want the old one, with the task the runner recorded", got, f.st.upserts)
+	}
+}
+
 // A Binding lookup that fails for any reason but ErrUnknownBinding (a config reload, say) is an
 // error, not a removed Binding: nothing is written, queued or woken, and the queue handler
 // retries.

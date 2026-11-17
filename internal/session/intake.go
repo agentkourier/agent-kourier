@@ -262,6 +262,18 @@ func (m *Manager) unsettled(ctx context.Context, in Inbound) (bool, error) {
 	case !errors.Is(err, store.ErrNotFound):
 		return false, fmt.Errorf("read the reply queue of %+v: %w", in.Key, err)
 	}
+	// The session is read again, after the queue: the runner records a turn's task before it marks the turn's reply delivered, and
+	// takes no intake lock to do so, so a reply delivered between the first read of the session and the queue's left a task that
+	// the first read did not see. Once the queue is empty, any task of the replies it held is recorded, and no reply is queued while
+	// the intake lock is held: this read sees it. The queue is not read before the session instead, which would close the window
+	// too, because whether it is read at all (MayReplace) depends on the session: read first, it would be read for every turn.
+	switch sess, err := m.cfg.Store.GetSession(ctx, in.Key, store.AnyAge, m.cfg.Now()); {
+	case errors.Is(err, store.ErrNotFound):
+	case err != nil:
+		return false, fmt.Errorf("read session %+v: %w", in.Key, err)
+	case sess.TaskID != "":
+		return true, nil
+	}
 	taken, err := m.cfg.Store.HasReply(ctx, in.MessageID)
 	if err != nil {
 		return false, fmt.Errorf("read reply %s: %w", in.MessageID, err)
