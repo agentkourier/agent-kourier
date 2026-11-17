@@ -218,7 +218,7 @@ The chat side cuts text to what a message holds. Units are UTF-16 units, as the 
 | Limit | Value | Past it | Setting |
 |---|---|---|---|
 | The agent's reply in one message | `12000`<!--limit:replyUnits--> units (Slack's markdown block) | Cut. The cut is marked. | None |
-| Each text of a reply on a web connection of the `kourier-v1` profile | `40000`<!--limit:webTextUnits--> units. The body's markdown is counted and cut before the backslashes that escape it are added, and those backslashes are not counted; inside code, where CommonMark shows a backslash as it is, the receiver shows them too. | Cut. The cut is marked. | None |
+| Each text of a reply on a web connection of the `kourier-v1` profile | `40000`<!--limit:webTextUnits--> units. The body's markdown is counted as it is sent: the escapes outside code count (a backslash, or `&lt;` for each `<`), and so do the fences written around its code blocks. The text inside code is sent as the agent wrote it, with no escapes. | Cut. The cut is marked. A cut inside a code block closes the block, and the mark follows on a line of its own. A code span that does not fit whole is dropped. | None |
 | Steps a live stream shows | `50`<!--limit:steps--> | The calls after these are made and not shown. | None. `chat.progress` and `chat.output` choose what is shown, not how many steps. |
 | Steps a message shows when it is updated | The latest `20`<!--limit:stepsListed-->, under a line that counts the earlier ones | The earlier ones are not listed. | None. `chat.progress` and `chat.output` choose what is shown, not how many steps. |
 | A tool's name and its arguments in a status line | `64`<!--limit:toolName--> units and `160`<!--limit:toolArgs--> units | Cut. | None |

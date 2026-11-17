@@ -1,20 +1,15 @@
 package kourierv1
 
 import (
-	"strings"
-
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/commonmark"
 )
 
-// markdownEscaper puts a backslash before each character that can open CommonMark's links, images, link reference definitions,
-// autolinks and raw HTML, and before the backslash itself, so that a receiver's CommonMark shows the characters as they are. Emphasis,
-// code and lists are left to render. It is not aware of code yet: inside a code span or block, where CommonMark shows a backslash as it
-// is, the receiver shows the escapes too.
-var markdownEscaper = strings.NewReplacer(`\`, `\\`, `[`, `\[`, `]`, `\]`, `<`, `\<`)
-
 // inert returns a copy of o to send: every literal field cleaned, on one line where its place is one, and cut to maxText (chat.Literal);
-// the body's markdown cleaned, cut, then escaped (markdownEscaper); a user ID kept only if it has the kourier-v1 shape; and the Steps
-// parts dropped, since the profile has no progress steps. The caller's o is not changed.
+// the body's markdown cleaned and written as CommonMark in which nothing links, mentions or is HTML outside code, and code is the
+// agent's text as it is, then cut so that what is sent, escapes and fences counted, is at most maxText (commonmark.Inert); a user ID kept
+// only if it has the kourier-v1 shape; and the Steps parts dropped, since the profile has no progress steps. The caller's o is not
+// changed.
 func (p *Profile) inert(o chat.Outgoing) chat.Outgoing {
 	out := chat.Outgoing{V: o.V}
 	switch {
@@ -38,7 +33,7 @@ func (p *Profile) message(m chat.Message) chat.Message {
 		case chat.Header:
 			out.Parts = append(out.Parts, chat.Header{Text: p.literal(part.Text, chat.WhereHeader)})
 		case chat.Body:
-			out.Parts = append(out.Parts, chat.Body{Markdown: markdownEscaper.Replace(p.literal(part.Markdown, chat.WhereBody))})
+			out.Parts = append(out.Parts, chat.Body{Markdown: commonmark.Inert(part.Markdown, p.Caps().Limit(chat.WhereBody))})
 		case chat.Context:
 			out.Parts = append(out.Parts, chat.Context{Text: p.literal(part.Text, chat.WhereContext)})
 		case chat.Note:
