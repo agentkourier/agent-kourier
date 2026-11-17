@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/web"
 	"github.com/agentkourier/agent-kourier/internal/chat/web/github"
@@ -123,9 +124,19 @@ func replies(t *testing.T, fake string) []fakeweb.Reply {
 	return out
 }
 
+// platformOf returns the API's platform of the web profile, which a profile holds its IDs to.
+func platformOf(t *testing.T, web v1alpha1.WebConnectionSpec) v1alpha1.ChatPlatform {
+	t.Helper()
+	p, ok := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb, Web: &web})
+	if !ok {
+		t.Fatalf("the API has no web profile %s", web.Profile)
+	}
+	return p
+}
+
 func kourierProfile(t *testing.T) *kourierv1.Profile {
 	t.Helper()
-	p, err := kourierv1.New(secret.New(kourierKey))
+	p, err := kourierv1.New(secret.New(kourierKey), platformOf(t, v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileKourierV1}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +145,7 @@ func kourierProfile(t *testing.T) *kourierv1.Profile {
 
 func githubProfile(t *testing.T) *github.Profile {
 	t.Helper()
-	p, err := github.New(secret.New(githubKey), login)
+	p, err := github.New(secret.New(githubKey), login, platformOf(t, v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileGitHub, Identity: login}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,7 +374,7 @@ func TestTheReceiverRefusesAReplyThatBreaksTheContract(t *testing.T) {
 		return h
 	}
 	stale := encode(t, web.Reply{Kind: web.ReplyPost, Connection: "e2e-web/kourier", Channel: "web-1", ID: "tag-1", Key: "tag-1", Message: msg}, epoch.Add(-fakeweb.MaxSkew-time.Second))
-	other, err := kourierv1.New(secret.New("another-fake-secret"))
+	other, err := kourierv1.New(secret.New("another-fake-secret"), platformOf(t, v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileKourierV1}))
 	if err != nil {
 		t.Fatal(err)
 	}

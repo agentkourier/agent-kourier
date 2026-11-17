@@ -32,8 +32,8 @@ spec:
     profile: kourier-v1
     url: http://fakeweb.e2e.svc.cluster.local:8080/replies
 ---
-# The github connection: the fake sends it deliveries signed as GitHub signs them, and it posts nothing (the agent replies on GitHub itself). The login
-# is the account the agent posts as, whose own events start nothing; it is written here alone (test/e2e's GitHubLogin is its value).
+# The github connection: the fake sends it deliveries signed as GitHub signs them, and it posts nothing (the agent replies on GitHub itself). Its
+# identity is the login of the account the agent posts as, whose own events start nothing; it is written here alone (test/e2e's GitHubLogin is its value).
 apiVersion: agentkourier.dev/v1alpha1
 kind: ChatConnection
 metadata: {name: github, namespace: e2e-web}
@@ -42,7 +42,7 @@ spec:
   credentialsSecretRef: {name: web-github}
   web:
     profile: github
-    github: {login: pr-reviewer}
+    identity: pr-reviewer
 ---
 apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend
