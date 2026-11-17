@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -635,6 +636,24 @@ func TestSubmitOnAPlatformWithoutRepliesReplacesAnEndedSession(t *testing.T) {
 			return sess
 		}
 	}
+	// withReply queues the reply id on the thread after seed, as a turn of the old session would be; delivered marks the thread's queued
+	// replies delivered, as the runner does once their turn was sent.
+	withReply := func(id string, seed func(f *fixture) store.Session) func(f *fixture) store.Session {
+		return func(f *fixture) store.Session {
+			sess := seed(f)
+			if _, err := f.st.EnqueueReply(f.t.Context(), store.Reply{ID: id, Key: key, UserID: "U1", MessageRef: "1700.01", Text: "earlier", EnqueuedAt: t0.Add(-3 * time.Hour)}); err != nil {
+				f.t.Fatal(err)
+			}
+			return sess
+		}
+	}
+	delivered := func(seed func(f *fixture) store.Session) func(f *fixture) store.Session {
+		return func(f *fixture) store.Session {
+			sess := seed(f)
+			f.drain()
+			return sess
+		}
+	}
 	for _, tc := range []struct {
 		name      string
 		seed      func(f *fixture) store.Session
@@ -644,6 +663,10 @@ func TestSubmitOnAPlatformWithoutRepliesReplacesAnEndedSession(t *testing.T) {
 		{"no replies, expired", ended("ns/b1", 2*time.Hour), true, Result{Disposition: Created, Admission: Admission{Kind: AdmitTurn, Replaces: true}}},
 		{"no replies, Binding gone", ended("ns/gone", 0), true, Result{Disposition: Created, Admission: Admission{Kind: AdmitTurn, Replaces: true}}},
 		{"no replies, expired, with a task", withTask(ended("ns/b1", 2*time.Hour)), true, Result{Disposition: Expired, Admission: admExpired}},
+		{"no replies, expired, with a reply undelivered", withReply("slack:slack:C1:1700.01", ended("ns/b1", 2*time.Hour)), true, Result{Disposition: Expired, Admission: admExpired}},
+		{"no replies, Binding gone, with a reply undelivered", withReply("slack:slack:C1:1700.01", ended("ns/gone", 0)), true, Result{Disposition: BindingGone, Admission: admGone}},
+		{"no replies, expired, the turn taken before", delivered(withReply("slack:slack:C1:1700.02", ended("ns/b1", 2*time.Hour))), true, Result{Disposition: Expired, Admission: admExpired}},
+		{"no replies, Binding gone, the turn taken before", delivered(withReply("slack:slack:C1:1700.02", ended("ns/gone", 0))), true, Result{Disposition: BindingGone, Admission: admGone}},
 		{"replies, expired", ended("ns/b1", 2*time.Hour), false, Result{Disposition: Expired, Admission: admExpired}},
 		{"replies, Binding gone", ended("ns/gone", 0), false, Result{Disposition: BindingGone, Admission: admGone}},
 	} {
@@ -658,7 +681,8 @@ func TestSubmitOnAPlatformWithoutRepliesReplacesAnEndedSession(t *testing.T) {
 			}
 			got, _ := f.session()
 			if tc.want.Disposition != Created {
-				if got != seeded || f.st.upserts != 0 || f.st.touches != 0 || f.woke != 0 || len(f.drain()) != 0 {
+				// The queue keeps only what the seed put there: a reply of the old session that is not delivered yet.
+				if got != seeded || f.st.upserts != 0 || f.st.touches != 0 || f.woke != 0 || slices.ContainsFunc(f.drain(), func(r store.Reply) bool { return r.ID == in.MessageID }) {
 					t.Errorf("session %+v (seeded %+v), %d upserts, %d touches, woke %d; want nothing written, queued or woken", got, seeded, f.st.upserts, f.st.touches, f.woke)
 				}
 				return

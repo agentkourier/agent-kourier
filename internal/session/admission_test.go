@@ -88,6 +88,12 @@ func TestReplyAdmission(t *testing.T) {
 			f.NoReplies, f.BindingGone, f.Expired, f.Create, f.TaskID = true, true, true, true, ""
 		}, admReplace, false},
 		{"no replies, expired: a session with a task is not replaced", func(f *ReplyFacts) { f.NoReplies, f.Expired, f.Create = true, true, true }, admExpired, false},
+		{"no replies, expired: a session with a reply undelivered, or a repeat, is not replaced", func(f *ReplyFacts) {
+			f.NoReplies, f.Expired, f.Create, f.TaskID, f.Unsettled = true, true, true, "", true
+		}, admExpired, false},
+		{"no replies, gone: a session with a reply undelivered, or a repeat, is not replaced", func(f *ReplyFacts) {
+			f.NoReplies, f.BindingGone, f.Create, f.TaskID, f.Unsettled = true, true, true, "", true
+		}, admGone, false},
 		{"no replies, expired: a reply that may not create is as it is with replies", func(f *ReplyFacts) { f.NoReplies, f.Expired, f.TaskID = true, true, ""; withMention(f) }, admExpired, false},
 		{"no replies, live: a turn that may create goes on in the session", func(f *ReplyFacts) { f.NoReplies, f.Create, f.TaskID = true, true, "" }, admTurn, false},
 		{"replies, expired: a turn that may create is told the thread expired", func(f *ReplyFacts) { f.Expired, f.Create, f.TaskID = true, true, "" }, admExpired, false},
@@ -136,6 +142,7 @@ func TestReplyAdmissionInvariants(t *testing.T) {
 		flag(func(f *ReplyFacts) { f.BindingGone = true }),
 		flag(func(f *ReplyFacts) { f.Expired = true }),
 		flag(func(f *ReplyFacts) { f.NoReplies = true }),
+		flag(func(f *ReplyFacts) { f.Unsettled = true }),
 		modes(func(f *ReplyFacts, m v1alpha1.ThreadReplies) { f.Mode = m }),
 		modes(func(f *ReplyFacts, m v1alpha1.ThreadReplies) { f.ChannelMode = m }),
 		{func(f *ReplyFacts) { f.Dialect = dialectA2A }, func(f *ReplyFacts) { f.Dialect = dialectKagent }},
@@ -165,8 +172,8 @@ func TestReplyAdmissionInvariants(t *testing.T) {
 			if got.Question != "" || got.Notice != "" || got.Ignored != "" {
 				t.Fatalf("%+v: a turn with more than its kind: %+v", f, got)
 			}
-			if replaces := f.NoReplies && f.Create && f.Owned && f.TaskID == "" && (f.BindingGone || f.Expired); got.Replaces != replaces {
-				t.Fatalf("%+v: a turn that replaces the session = %v; only a turn that may create, on a platform with no replies, replaces an ended session with no task", f, got.Replaces)
+			if replaces := f.NoReplies && f.Create && f.Owned && f.TaskID == "" && !f.Unsettled && (f.BindingGone || f.Expired); got.Replaces != replaces {
+				t.Fatalf("%+v: a turn that replaces the session = %v; only a turn that may create, on a platform with no replies, replaces an ended session with no task, no reply undelivered and that has not taken the turn", f, got.Replaces)
 			}
 		case AdmitAnswer:
 			q := f.Question
@@ -193,8 +200,15 @@ func TestReplyAdmissionInvariants(t *testing.T) {
 		if got.Kind != AdmitTurn && got.Replaces {
 			t.Fatalf("%+v: %+v replaces the session, and is no turn", f, got)
 		}
-		if got.Kind == AdmitNotice && f.NoReplies && f.Create && f.TaskID == "" {
+		if got.Kind == AdmitNotice && f.NoReplies && f.Create && f.TaskID == "" && !f.Unsettled {
 			t.Fatalf("%+v: a notice %+v on a platform with no replies, for a turn that could have made a fresh session", f, got)
+		}
+		if !f.MayReplace() {
+			g := f
+			g.Unsettled = !f.Unsettled
+			if again := g.Classify(); again != got {
+				t.Fatalf("%+v: classified %+v, but %+v with Unsettled changed, though MayReplace says it is not read", f, got, again)
+			}
 		}
 		if !f.NeedsQuestion() {
 			g := f
@@ -205,7 +219,7 @@ func TestReplyAdmissionInvariants(t *testing.T) {
 		}
 	}
 	sweep(0, ReplyFacts{})
-	if want := 2 * 2 * 2 * 2 * 2 * 2 * 3 * 3 * 2 * 2 * 4; swept != want {
+	if want := 2 * 2 * 2 * 2 * 2 * 2 * 2 * 3 * 3 * 2 * 2 * 4; swept != want {
 		t.Fatalf("swept %d combinations; want %d", swept, want)
 	}
 }

@@ -97,7 +97,8 @@ type Result struct {
 // returned as Expired and left as it was, and a reply that a mention-only Binding does not
 // take as Unmentioned, with nothing written. On a platform with no replies (Inbound.NoReplies)
 // a turn that may create the session replaces an expired one, or one whose Binding is gone,
-// that has no task, and is Created.
+// that has no task and no undelivered reply, unless its message was queued before, and is
+// Created.
 func (m *Manager) Submit(ctx context.Context, in Inbound) (Result, error) {
 	if in.Key.Connection == "" || in.Key.Channel == "" || in.Key.Thread == "" || in.MessageID == "" || in.MessageRef == "" || in.Text == "" || in.UserID == SystemUser || strings.HasPrefix(in.MessageID, recoveredPrefix) || (in.Create && in.Binding == "") {
 		return Result{}, fmt.Errorf("submit %q: the key, MessageID, MessageRef and Text are required, and a Binding to create; UserID is never %q, and MessageID never starts %q: %w", in.MessageID, SystemUser, recoveredPrefix, store.ErrInvalid)
@@ -232,6 +233,14 @@ func (m *Manager) replyFacts(ctx context.Context, in Inbound, now time.Time) (Re
 			return ReplyFacts{}, "", fmt.Errorf("read session %+v: %w", in.Key, err)
 		}
 	}
+	if f.MayReplace() {
+		// Read under the intake lock, with the facts above, so that no turn is queued between the reads and the decision.
+		unsettled, err := m.unsettled(ctx, in)
+		if err != nil {
+			return ReplyFacts{}, "", err
+		}
+		f.Unsettled = unsettled
+	}
 	if f.NeedsQuestion() {
 		switch q, err := m.cfg.Questions.PendingTextQuestion(ctx, in.Key); {
 		case errors.Is(err, store.ErrNotFound):
@@ -242,6 +251,22 @@ func (m *Manager) replyFacts(ctx context.Context, in Inbound, now time.Time) (Re
 		}
 	}
 	return f, binding, nil
+}
+
+// unsettled says whether the thread of in still has a reply that is not delivered, or in's message was queued before
+// (ReplyFacts.Unsettled).
+func (m *Manager) unsettled(ctx context.Context, in Inbound) (bool, error) {
+	switch _, err := m.cfg.Store.NextReply(ctx, in.Key); {
+	case err == nil:
+		return true, nil
+	case !errors.Is(err, store.ErrNotFound):
+		return false, fmt.Errorf("read the reply queue of %+v: %w", in.Key, err)
+	}
+	taken, err := m.cfg.Store.HasReply(ctx, in.MessageID)
+	if err != nil {
+		return false, fmt.Errorf("read reply %s: %w", in.MessageID, err)
+	}
+	return taken, nil
 }
 
 // sessionBackend is the Backend that a session goes by: its Binding's, but a session that a bot's mention or a person's message
