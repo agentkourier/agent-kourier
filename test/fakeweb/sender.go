@@ -2,52 +2,24 @@ package fakeweb
 
 import (
 	"bytes"
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha1" //nolint:gosec // GitHub's legacy X-Hub-Signature is SHA-1; the fake sends it as GitHub does, and nothing verifies with it
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash"
 	"io"
 	"net/http"
 	"regexp"
 	"strconv"
 )
 
-// The profiles the sender speaks (ChatConnection spec.web.profile).
-const (
-	ProfileKourierV1 = "kourier-v1"
-	ProfileGitHub    = "github"
-)
+// ProfileKourierV1 is the profile the sender speaks (ChatConnection spec.web.profile).
+const ProfileKourierV1 = "kourier-v1"
 
 // The ways the sender signs a request (Send.Signing).
 const (
 	SignValid = ""     // with the connection's secret
 	SignNone  = "none" // not at all: no signature header
 	SignBad   = "bad"  // with a secret that is not the connection's
-)
-
-// The headers of a GitHub delivery, as GitHub's webhook documentation gives them (read 2026-11-16, not checked against a live
-// delivery): the event, a GUID for the delivery, the HMAC-SHA256 of the body (and the legacy HMAC-SHA1), and the hook's own.
-const (
-	HeaderGitHubEvent      = "X-GitHub-Event"
-	HeaderGitHubDelivery   = "X-GitHub-Delivery"
-	HeaderGitHubSignature  = "X-Hub-Signature-256"
-	HeaderGitHubSignature1 = "X-Hub-Signature"
-	HeaderGitHubHookID     = "X-GitHub-Hook-ID"
-	HeaderGitHubTargetType = "X-GitHub-Hook-Installation-Target-Type"
-	HeaderGitHubTargetID   = "X-GitHub-Hook-Installation-Target-ID"
-)
-
-// What the fake's GitHub hook says of itself: made up, of the shapes GitHub's documentation shows.
-const (
-	gitHubUserAgent  = "GitHub-Hookshot/fakeweb"
-	gitHubHookID     = "424242"
-	gitHubTargetType = "repository"
-	gitHubTargetID   = "4242"
 )
 
 const (
@@ -63,7 +35,7 @@ var chatWebPath = regexp.MustCompile(`^/chat/web/[a-z0-9]([a-z0-9-]*[a-z0-9])?/[
 
 // Send is a test's word to the sender: one request to the broker's chat listener.
 type Send struct {
-	// Profile is the profile to send as: ProfileKourierV1 or ProfileGitHub.
+	// Profile is the profile to send as: ProfileKourierV1.
 	Profile string `json:"profile"`
 	// Path is the route of the connection on the chat listener, /chat/web/<namespace>/<name>.
 	Path string `json:"path"`
@@ -71,12 +43,9 @@ type Send struct {
 	Body string `json:"body"`
 	// Signing is how it is signed: SignValid (the default), SignNone or SignBad.
 	Signing string `json:"signing,omitempty"`
-	// Timestamp is, for kourier-v1, the Unix seconds it is signed at; 0 is now. A Send with the Timestamp of an earlier Sent and the same
-	// body is that request again, byte for byte.
+	// Timestamp is the Unix seconds it is signed at; 0 is now. A Send with the Timestamp of an earlier Sent and the same body is that
+	// request again, byte for byte.
 	Timestamp int64 `json:"timestamp,omitempty"`
-	// Event is, for github, the X-GitHub-Event; Delivery is its X-GitHub-Delivery, a new GUID if empty.
-	Event    string `json:"event,omitempty"`
-	Delivery string `json:"delivery,omitempty"`
 }
 
 // Sent is how one request was answered.
@@ -86,9 +55,8 @@ type Sent struct {
 	Error  string `json:"error,omitempty"`
 	// RetryAfter is the answer's Retry-After.
 	RetryAfter string `json:"retryAfter,omitempty"`
-	// Timestamp is, for kourier-v1, the timestamp it was signed at, and Delivery, for github, the X-GitHub-Delivery it carried.
-	Timestamp int64  `json:"timestamp,omitempty"`
-	Delivery  string `json:"delivery,omitempty"`
+	// Timestamp is the timestamp it was signed at.
+	Timestamp int64 `json:"timestamp,omitempty"`
 }
 
 // serveSend sends one request as the test says, and answers how it was answered. A Send the sender cannot make is answered 400.
@@ -148,27 +116,8 @@ func (s *Server) request(in Send) (*http.Request, Sent, error) {
 			req.Header.Set(HeaderTimestamp, ts)
 			req.Header.Set(HeaderSignature, "v1="+hex.EncodeToString(kourierMAC(key, ts, body)))
 		}
-	case ProfileGitHub:
-		if in.Event == "" {
-			return nil, Sent{}, errors.New("fakeweb: a github send names its event")
-		}
-		sent.Delivery = in.Delivery
-		if sent.Delivery == "" {
-			sent.Delivery = newGUID()
-		}
-		req.Header.Set("User-Agent", gitHubUserAgent)
-		req.Header.Set(HeaderGitHubEvent, in.Event)
-		req.Header.Set(HeaderGitHubDelivery, sent.Delivery)
-		req.Header.Set(HeaderGitHubHookID, gitHubHookID)
-		req.Header.Set(HeaderGitHubTargetType, gitHubTargetType)
-		req.Header.Set(HeaderGitHubTargetID, gitHubTargetID)
-		if in.Signing != SignNone {
-			key := s.key(s.github, in.Signing)
-			req.Header.Set(HeaderGitHubSignature, "sha256="+hex.EncodeToString(mac(sha256.New, key, body)))
-			req.Header.Set(HeaderGitHubSignature1, "sha1="+hex.EncodeToString(mac(sha1.New, key, body)))
-		}
 	default:
-		return nil, Sent{}, fmt.Errorf("fakeweb: the profile %q is not %s or %s", in.Profile, ProfileKourierV1, ProfileGitHub)
+		return nil, Sent{}, fmt.Errorf("fakeweb: the profile %q is not %s", in.Profile, ProfileKourierV1)
 	}
 	return req, sent, nil
 }
@@ -179,20 +128,4 @@ func (s *Server) key(secret []byte, signing string) []byte {
 		return append(bytes.Clone(secret), wrongSecretSuffix...)
 	}
 	return secret
-}
-
-// mac is the HMAC of body under key with the hash h.
-func mac(h func() hash.Hash, key, body []byte) []byte {
-	m := hmac.New(h, key)
-	m.Write(body)
-	return m.Sum(nil)
-}
-
-// newGUID is a random GUID, as X-GitHub-Delivery holds one.
-func newGUID() string {
-	b := make([]byte, 16)
-	_, _ = rand.Read(b) // crypto/rand.Read never fails
-	b[6], b[8] = b[6]&0x0f|0x40, b[8]&0x3f|0x80
-	h := hex.EncodeToString(b)
-	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:]
 }

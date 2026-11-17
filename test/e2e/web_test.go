@@ -27,7 +27,7 @@ func newWebFake(t *testing.T) (*Web, string) {
 	t.Helper()
 	chatSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) }))
 	t.Cleanup(chatSrv.Close)
-	fake, err := fakeweb.New(fakeweb.Config{ChatURL: chatSrv.URL, KourierV1Secret: []byte(webTestSecret), GitHubSecret: []byte(webTestSecret)})
+	fake, err := fakeweb.New(fakeweb.Config{ChatURL: chatSrv.URL, KourierV1Secret: []byte(webTestSecret)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,16 +110,17 @@ func TestWebSendsAndReadsTheThreadsReplies(t *testing.T) {
 	}
 }
 
-// TestWebAgentTokenIsTheOneTheStubOwnsTheTasksBy: the token the scenarios list the web Bindings' tasks with names WebAgentEmail, which is
+// TestWebAgentTokenIsTheOneTheStubOwnsTheTasksBy: the token the scenarios list the web Binding's tasks with names WebAgentEmail, which is
 // who the stub says owns them; Tasks reads each task's context and the text it was started with, across pages, and another identity sees none.
 func TestWebAgentTokenIsTheOneTheStubOwnsTheTasksBy(t *testing.T) {
+	const agent = "test-agent" // one of stubagent.SpikeAgents
 	s := stubagent.New(stubagent.WithRequiredAuth())
 	t.Cleanup(s.Close)
 	stubagent.SpikeAgents(s)
 	for i := range listPage + 2 { // more than a page
 		body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": "1", "method": "SendMessage", "params": map[string]any{
 			"message": map[string]any{"messageId": fmt.Sprint("m", i), "role": "ROLE_USER", "parts": []map[string]any{{"text": fmt.Sprint("prompt ", i)}}}}})
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, s.AgentURL("kagent", AgentWebGitHub), bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, s.AgentURL("kagent", agent), bytes.NewReader(body))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -135,7 +136,7 @@ func TestWebAgentTokenIsTheOneTheStubOwnsTheTasksBy(t *testing.T) {
 		}
 	}
 	stub := NewStub(s.URL())
-	tasks, err := stub.Tasks(t.Context(), "kagent", AgentWebGitHub, WebAgentToken())
+	tasks, err := stub.Tasks(t.Context(), "kagent", agent, WebAgentToken())
 	if err != nil || len(tasks) != listPage+2 {
 		t.Fatalf("Tasks = %d tasks, %v; want %d", len(tasks), err, listPage+2)
 	}
@@ -144,7 +145,7 @@ func TestWebAgentTokenIsTheOneTheStubOwnsTheTasksBy(t *testing.T) {
 	}
 	enc := base64.RawURLEncoding
 	other := enc.EncodeToString([]byte(`{"alg":"none"}`)) + "." + enc.EncodeToString([]byte(`{"email":"someone-else@example.test"}`)) + "."
-	if mine, err := stub.Tasks(t.Context(), "kagent", AgentWebGitHub, other); err != nil || len(mine) != 0 {
+	if mine, err := stub.Tasks(t.Context(), "kagent", agent, other); err != nil || len(mine) != 0 {
 		t.Errorf("another identity lists %d tasks (%v); want none", len(mine), err)
 	}
 	if _, err := stub.Tasks(t.Context(), "kagent", "no-such-agent", WebAgentToken()); err == nil {

@@ -83,32 +83,32 @@ func Run(t *testing.T, f Factory, opts Options) {
 	}
 }
 
-// Web returns a corpus of a web connection of the github profile, with the spec corpus' backend and a Binding of a repository that
-// names no output: both sources serve it, and resolution serves it with the profile's default output, none.
+// Web returns a corpus of a web connection of the kourier-v1 profile, with the spec corpus' backend and a Binding of one of its
+// channels that names no output: both sources serve it, with the default output, live.
 func Web(t *testing.T) Corpus {
 	const conn = `apiVersion: agentkourier.dev/v1alpha1
 kind: ChatConnection
-metadata: { name: github-prs, namespace: agent-kourier-system }
+metadata: { name: web-main, namespace: agent-kourier-system }
 spec:
   platform: web
-  web: { profile: github, identity: pr-reviewer }
-  credentialsSecretRef: { name: github-prs }   # key webhookSecret
+  web: { profile: kourier-v1, url: "https://receiver.example.com/replies" }
+  credentialsSecretRef: { name: web-main }   # key signingSecret
   allowedNamespaces: ["sre"]
 `
 	const binding = `apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
-metadata: { name: pr-review, namespace: sre }
+metadata: { name: web-review, namespace: sre }
 spec:
   agent:
     backendRef: { namespace: agent-kourier-system, name: kagent-pilot }
     name: k8s-agent
     namespace: kagent
-  identity: { userId: agent-kourier-pr-review }
+  identity: { userId: agent-kourier-web-review }
   chat:
-    connectionRef: { namespace: agent-kourier-system, name: github-prs }
-    channel: octo-org/hello-world
+    connectionRef: { namespace: agent-kourier-system, name: web-main }
+    channel: ch-1
 `
-	return Corpus{Name: "web", Docs: []string{Valid(t)[0], conn, binding}, Connection: v1alpha1.ObjectRef{Namespace: ConnectionNamespace, Name: "github-prs"}}
+	return Corpus{Name: "web", Docs: []string{Valid(t)[0], conn, binding}, Connection: v1alpha1.ObjectRef{Namespace: ConnectionNamespace, Name: "web-main"}}
 }
 
 // Spec returns the corpus of the API's examples: one backend, one connection and two Bindings, which refer to each other. The
@@ -294,8 +294,8 @@ func sameObjects(t *testing.T, f Factory, c Corpus) {
 		t.Errorf("strict routing table:\n%s\nwant the same as Load's, which is:\n%s", got, want)
 	}
 	if c.Name == "web" {
-		// The Binding names no output, and is served with the github profile's, none, strictly and object by object.
-		const route = "sre/pr-review -> agent-kourier-system/kagent-pilot on agent-kourier-system/github-prs channel octo-org/hello-world output none\n"
+		// The Binding names no output, and is served with the default, live, strictly and object by object.
+		const route = "sre/web-review -> agent-kourier-system/kagent-pilot on agent-kourier-system/web-main channel ch-1 output live\n"
 		if partial := routing(set); partial != route || got != route {
 			t.Errorf("routing table:\n%s\nstrictly:\n%s\nwant each:\n%s", partial, got, route)
 		}
@@ -310,7 +310,7 @@ func sameObjects(t *testing.T, f Factory, c Corpus) {
 			t.Fatalf("objects = %v; want four, the %dth starting %q", got, i, w)
 		}
 	}
-	// chat-only names no output, and is served with Slack's default, live; sre-alerts names live, as a Binding stored by an earlier
+	// chat-only names no output, and is served with the default, live; sre-alerts names live, as a Binding stored by an earlier
 	// version does, and keeps it.
 	if got := routing(set); !strings.Contains(got, chatOnlyRoute) || !strings.Contains(got, " channel C0123456789 output live\n") || strings.Contains(got, "rejected") {
 		t.Errorf("routing table:\n%s\nwant sre/chat-only and sre/sre-alerts routed with output live, and nothing rejected", got)
@@ -428,7 +428,7 @@ var crossCases = []crossCase{
 		"is already bound by Binding sre/"},
 }
 
-// chatOnlyRoute is the routing line of the spec corpus' Binding sre/chat-only, which names no output and is served with Slack's.
+// chatOnlyRoute is the routing line of the spec corpus' Binding sre/chat-only, which names no output and is served with the default.
 const chatOnlyRoute = "sre/chat-only -> agent-kourier-system/kagent-pilot on agent-kourier-system/slack-main channel G0123456789 output live\n"
 
 // platformCase is a change to a Binding of a corpus that the load takes and its connection's platform does not, with the reason and
@@ -463,27 +463,12 @@ var platformCases = []platformCase{
 		served:  func(rb config.ResolvedBinding) string { return rb.Binding.Spec.Chat.Channel }, before: "C0123456789",
 	},
 	{
-		name: "an output that the connection's platform does not serve", corpus: Spec, doc: 2, binding: "sre-alerts", rest: chatOnlyRoute,
-		from: "output: live ", to: "output: none ",
+		// The kourier-v1 profile has no buttons: a Binding that asks for the feedback buttons is refused, and the edit does not take.
+		name: "a feature that a web profile does not serve", corpus: Web, doc: 2, binding: "web-review",
+		from: "    channel: ch-1\n", to: "    channel: ch-1\n  feedback: { enabled: true }\n",
 		reason:  config.ReasonUnsupportedOnPlatform,
-		problem: `spec.chat.output: "none" is not supported on Slack, the platform of ChatConnection agent-kourier-system/slack-main`,
-		served:  func(rb config.ResolvedBinding) string { return string(rb.Binding.Spec.Chat.Output) }, before: string(v1alpha1.OutputLive),
-	},
-	{
-		// The github profile posts nothing: a Binding that leaves its output out is served with none, and an edit to live does not take.
-		name: "an output that a web profile does not serve", corpus: Web, doc: 2, binding: "pr-review",
-		from: "    channel: octo-org/hello-world\n", to: "    channel: octo-org/hello-world\n    output: live\n",
-		reason:  config.ReasonUnsupportedOnPlatform,
-		problem: `spec.chat.output: "live" is not supported on web (github profile), the platform of ChatConnection agent-kourier-system/github-prs`,
-		served:  func(rb config.ResolvedBinding) string { return string(rb.Binding.Spec.Chat.Output) }, before: string(v1alpha1.OutputNone),
-	},
-	{
-		// The github profile posts nothing, so it notifies nobody: a mention, whose user a GitHub login would be, is refused.
-		name: "a mention on a web profile that posts nothing", corpus: Web, doc: 2, binding: "pr-review",
-		from: "    channel: octo-org/hello-world\n", to: "    channel: octo-org/hello-world\n    mentions: [{ name: maintainer, user: octocat }]\n",
-		reason:  config.ReasonUnsupportedOnPlatform,
-		problem: `spec.chat.mentions: mentions are not supported on web (github profile), the platform of ChatConnection agent-kourier-system/github-prs`,
-		served:  func(rb config.ResolvedBinding) string { return fmt.Sprint(len(rb.Binding.Spec.Chat.Mentions)) }, before: "0",
+		problem: `spec.feedback.enabled: feedback buttons are not supported on web (kourier-v1 profile), the platform of ChatConnection agent-kourier-system/web-main`,
+		served:  func(rb config.ResolvedBinding) string { return fmt.Sprint(rb.Binding.Spec.Feedback.Enabled) }, before: "false",
 	},
 }
 

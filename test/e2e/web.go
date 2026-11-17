@@ -9,33 +9,24 @@ import (
 	"github.com/agentkourier/agent-kourier/test/fakeweb"
 )
 
-// The fast tier's web ChatConnections, on custom resources (hack/kind/fast/web/web.yaml, served when hack/kind/web-values.yaml admits their namespace):
-// a kourier-v1 connection, whose replies go to the fake receiver, and a github one, which posts nothing. test/kindmanifests pins that the manifests
-// and lib.sh's deploy_web agree with these.
+// The fast tier's web ChatConnection, on custom resources (hack/kind/fast/web/web.yaml, served when hack/kind/web-values.yaml admits its namespace):
+// a kourier-v1 connection, whose replies go to the fake receiver. test/kindmanifests pins that the manifests and lib.sh's deploy_web agree with these.
 const (
-	// WebNamespace holds both connections, their Secrets, AgentBackend and Bindings.
+	// WebNamespace holds the connection, its Secrets, AgentBackend and Binding.
 	WebNamespace = "e2e-web"
-	// ConnWebKourier and ConnWebGitHub are the connections, as the broker's series name them; each has a Binding of the same name.
+	// ConnWebKourier is the connection, as the broker's series name it; its Binding has the same name.
 	ConnWebKourier = WebNamespace + "/kourier"
-	ConnWebGitHub  = WebNamespace + "/github"
-	// RouteWebKourier and RouteWebGitHub are their routes on the chat listener, which the fake sender POSTs to.
+	// RouteWebKourier is its route on the chat listener, which the fake sender POSTs to.
 	RouteWebKourier = "/chat/web/" + ConnWebKourier
-	RouteWebGitHub  = "/chat/web/" + ConnWebGitHub
 	// ChannelWebKourier is the kourier-v1 Binding's channel, answered by the stub's AgentWebKourier, with final output.
 	ChannelWebKourier = "web-turns-1"
 	AgentWebKourier   = "scenario-memory"
-	// GitHubRepo is the github Binding's channel, the repository its pull requests are of, answered by the stub's AgentWebGitHub, with
-	// output none.
-	GitHubRepo     = "agentkourier/e2e-web"
-	AgentWebGitHub = "test-agent"
-	// GitHubLogin is the account the agent posts as on GitHub, which the github connection's spec names: its own events start nothing.
-	GitHubLogin = "pr-reviewer"
-	// WebAgentEmail is the email of the agent token both Bindings send (lib.sh's deploy_web), which the stub agent owns their tasks by.
+	// WebAgentEmail is the email of the agent token the Binding sends (lib.sh's deploy_web), which the stub agent owns its tasks by.
 	WebAgentEmail = "e2e-web@example.test"
 )
 
-// WebAgentToken is the agent token of the web Bindings: an unsigned JWT with WebAgentEmail, as lib.sh's unsigned_jwt makes it. A
-// scenario sends it to list the Bindings' tasks at the stub agent (Stub.Tasks).
+// WebAgentToken is the agent token of the web Binding: an unsigned JWT with WebAgentEmail, as lib.sh's unsigned_jwt makes it. A
+// scenario sends it to list the Binding's tasks at the stub agent (Stub.Tasks).
 func WebAgentToken() string {
 	enc := base64.RawURLEncoding
 	return enc.EncodeToString([]byte(`{"alg":"none"}`)) + "." + enc.EncodeToString([]byte(`{"email":"`+WebAgentEmail+`"}`)) + "."

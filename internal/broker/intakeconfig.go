@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/session"
@@ -14,8 +15,7 @@ import (
 
 // intakeParts is what Run puts the chat Intake together from.
 type intakeParts struct {
-	// conn is the connection the Intake serves: its reference scopes the keys, and its platform says whether it has replies.
-	conn         Connection
+	conn         v1alpha1.ObjectRef
 	snapshot     func() *config.Snapshot
 	submitter    trigger.Submitter
 	interactions func(context.Context, chat.Interaction) error
@@ -40,7 +40,7 @@ type intakeParts struct {
 // acknowledged. The broker's own wiring has none of those choices, so this refuses a part that is left out, and names it.
 func newIntakeConfig(p intakeParts) (trigger.IntakeConfig, error) {
 	switch {
-	case p.conn.Ref.Name == "":
+	case p.conn.Name == "":
 		return trigger.IntakeConfig{}, errors.New("broker: conn is required for the intake")
 	case p.snapshot == nil:
 		return trigger.IntakeConfig{}, errors.New("broker: snapshot is required for the intake: it is the routing table")
@@ -62,8 +62,8 @@ func newIntakeConfig(p intakeParts) (trigger.IntakeConfig, error) {
 		return trigger.IntakeConfig{}, errors.New("broker: log is required for the intake")
 	}
 	return trigger.IntakeConfig{
-		Connection: p.conn.Ref, Snapshot: p.snapshot, Submitter: p.submitter, Logger: p.log,
-		Interactions: p.interactions, Notice: p.notice, NoReplies: !p.conn.hasReplies(),
+		Connection: p.conn, Snapshot: p.snapshot, Submitter: p.submitter, Logger: p.log,
+		Interactions: p.interactions, Notice: p.notice,
 		TriggerThreads: p.threads, TriggerRuns: p.runs, OnStart: p.starter.OnStart, OnLimited: p.starter.Limited, TakesBotMention: p.starter.TakesBotMention, TurnQueued: p.replies.HasReply,
 	}, nil
 }

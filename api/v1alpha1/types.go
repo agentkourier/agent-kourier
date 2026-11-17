@@ -28,8 +28,8 @@ type (
 	BotMentions string
 	// SlackMode selects how a Slack connection receives its events and button presses (spec D16).
 	SlackMode string
-	// WebProfile selects the integration a web connection speaks: how its requests are verified and decoded, and whether
-	// Agent Kourier sends replies (spec D42).
+	// WebProfile selects the integration a web connection speaks: how its requests are verified and decoded, and how its
+	// replies are sent (spec D42).
 	WebProfile string
 )
 
@@ -40,7 +40,6 @@ const (
 
 	OutputLive  OutputMode = "live"
 	OutputFinal OutputMode = "final"
-	OutputNone  OutputMode = "none"
 
 	ProgressSteps            ProgressMode = "steps"
 	ProgressStepsAndActivity ProgressMode = "steps-and-activity"
@@ -56,7 +55,6 @@ const (
 	SlackModeHTTP   SlackMode = "http"
 
 	WebProfileKourierV1 WebProfile = "kourier-v1"
-	WebProfileGitHub    WebProfile = "github"
 
 	PlatformSlack = "slack"
 	PlatformWeb   = "web"
@@ -282,7 +280,7 @@ type ChatConnectionSpec struct {
 	Platform string `json:"platform"`
 	// CredentialsSecretRef names one Secret whose keys are fixed by the platform and its mode or profile. A Slack connection in Socket
 	// Mode needs botToken and appToken; one in HTTP mode needs botToken and signingSecret. A web connection of the kourier-v1 profile
-	// needs signingSecret, and one of the github profile webhookSecret.
+	// needs signingSecret.
 	CredentialsSecretRef SecretRef `json:"credentialsSecretRef"`
 	// AllowedNamespaces lists the other namespaces whose Bindings may reference this connection. Each is a DNS-1123 label.
 	// An empty list permits references only from the connection's own namespace. At most 256.
@@ -322,23 +320,13 @@ type SlackConnectionSpec struct {
 	Mode SlackMode `json:"mode,omitempty"`
 }
 
-// The rules on url and identity list the profiles that take each, as ChatPlatformOf has them (Replies, and a shape of Identity), and
-// TestTheWebRulesFollowThePlatformTable holds each list to the table, so that a profile is one more name in a list and not a rule of
-// its own. The shape of an identity is each profile's, in a rule of its own. (Not in the doc comment below, which the reference pages
-// print.)
-
 // WebConnectionSpec is the settings of a web connection: the profile that its requests and replies follow.
 //
-// +kubebuilder:validation:XValidation:rule="!(self.profile in ['kourier-v1']) || (has(self.url) && size(self.url) > 0)",message="is required: the profile sends replies, and posts them to it",fieldPath=".url"
-// +kubebuilder:validation:XValidation:rule="self.profile in ['kourier-v1'] || !has(self.url) || size(self.url) == 0",message="is set, but the profile sends no replies",fieldPath=".url"
-// +kubebuilder:validation:XValidation:rule="!(self.profile in ['github']) || (has(self.identity) && size(self.identity) > 0)",message="is required: the profile finds the agent's mentions, and drops the agent's own events, by it",fieldPath=".identity"
-// +kubebuilder:validation:XValidation:rule="self.profile in ['github'] || !has(self.identity) || size(self.identity) == 0",message="is set, but the profile takes none",fieldPath=".identity"
-// +kubebuilder:validation:XValidation:rule=`self.profile != 'github' || !has(self.identity) || (size(self.identity) <= 44 && self.identity.matches(r'^[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}(?:\[bot\])?$'))`,message="must be a GitHub login of at most 44 bytes: a user's, such as pr-reviewer, or a GitHub App's, such as pr-reviewer[bot]",fieldPath=".identity"
+// +kubebuilder:validation:XValidation:rule="has(self.url) && size(self.url) > 0",message="is required: Agent Kourier posts the agent's replies to it",fieldPath=".url"
 type WebConnectionSpec struct {
 	// Profile is the integration the connection speaks. kourier-v1 is Agent Kourier's own signed JSON contract: it takes signed
-	// requests and posts the agent's replies, signed, to url. github takes GitHub's webhooks and sends no replies: the agent
-	// posts on GitHub itself, so its Bindings take output none alone.
-	// +kubebuilder:validation:Enum=kourier-v1;github
+	// requests and posts the agent's replies, signed, to url.
+	// +kubebuilder:validation:Enum=kourier-v1
 	Profile WebProfile `json:"profile"`
 
 	// The URL rules below are those of AgentBackendSpec.URL, which copy only what the broker's parse is certain to refuse (each
@@ -346,10 +334,10 @@ type WebConnectionSpec struct {
 	// to, so that the two agree on it by construction (TestSchemaPatternsEqualTheGoLiterals reads the rule). Validate refuses
 	// what url.Parse refuses besides, which the rules let through. (Not in the doc comment below, which the reference pages print.)
 
-	// URL is where a profile that sends replies posts them: it is required by such a profile (kourier-v1) and refused by one that
-	// sends none (github). It is an https URL, or an http one only to localhost, a loopback address (127.x.x.x or [::1]) or a Service
-	// in the cluster (a host that ends in .svc or .svc.cluster.local), since a reply carries what the agent wrote. At most 2048
-	// bytes, with no credentials, query or fragment: the replies are signed with the credentials Secret's signingSecret.
+	// URL is where Agent Kourier posts the agent's replies, and is required. It is an https URL, or an http one only to localhost, a
+	// loopback address (127.x.x.x or [::1]) or a Service in the cluster (a host that ends in .svc or .svc.cluster.local), since a
+	// reply carries what the agent wrote. At most 2048 bytes, with no credentials, query or fragment: the replies are signed with the
+	// credentials Secret's signingSecret.
 	// +kubebuilder:validation:MaxLength=2048
 	// +kubebuilder:validation:XValidation:rule=`self == '' || self.matches('(?i)^https?://[^/?#]')`,message="must be an http or https URL with a host"
 	// +kubebuilder:validation:XValidation:rule=`!self.matches('(?i)^https?://[^/?#]*@')`,message="must not contain credentials; the replies are signed with the Secret's signingSecret"
@@ -359,21 +347,6 @@ type WebConnectionSpec struct {
 	// +kubebuilder:validation:XValidation:rule=`!self.matches('(?i)^http://') || self.matches(r'(?i)^http://(?:localhost|127(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}|\[::1\]|(?:[a-z0-9-]+\.)+svc(?:\.cluster\.local)?)(?::[0-9]{1,5})?(?:[/?#]|$)')`,message="http is allowed only to localhost, a loopback address or a Service in the cluster (a host that ends in .svc or .svc.cluster.local); use https"
 	// +optional
 	URL string `json:"url,omitempty"`
-
-	// The cap is maxWebIdentityLen, and the github rule above copies githubLogin and maxGitHubLoginLen (platforms.go):
-	// TestSchemaCapsEqualTheBrokersCaps and TestTheIdentityRuleCopiesGitHubsShape hold the schema to them. (Not in the doc comment
-	// below, which the reference pages print.)
-
-	// Identity is the account the agent works as on the profile's service. A profile that finds the agent's mentions, or drops the
-	// agent's own events, by it requires it (github), and every other refuses it (kourier-v1, whose sender sends only what is meant
-	// for Agent Kourier). Each profile holds it to its own shape. On github it is the GitHub login the agent posts as: a user's, such
-	// as pr-reviewer, or a GitHub App's, such as pr-reviewer[bot], of at most 39 letters and digits with single hyphens between them,
-	// then an optional [bot], at most 44 bytes. A comment on a pull request, or a review comment, starts a turn only when it mentions
-	// the login (an app's login without its [bot]), and no event that the login sent starts one, such as its own push to a pull
-	// request, nor a comment whose author it is. At most 128 bytes on any profile.
-	// +kubebuilder:validation:MaxLength=128
-	// +optional
-	Identity string `json:"identity,omitempty"`
 }
 
 // Binding connects one agent to one chat channel.
@@ -463,22 +436,17 @@ type ChatBinding struct {
 	ConnectionRef ObjectRef `json:"connectionRef"`
 	// Channel is the platform's channel ID, not its name (Slack: `C…` or `G…`). At most 140 bytes of printable ASCII with no space
 	// and no ':', as the schema checks. The broker holds the channel to the shape of its connection's platform when it reads the
-	// Binding with its connection (on Slack: `C` or `G`, then capitals and digits, at most 32 bytes; on the web platform's github
-	// profile a repository's `owner/name`), and refuses a Binding whose channel has another shape, such as a Slack channel's name
-	// `general`, as it refuses an invalid one: with custom resources its Accepted condition is False with the reason
-	// InvalidPlatformID and its last good generation, if it has one, stays served; on the files route the whole config fails.
-	// agent-kourier dry-run holds it to Slack's shape.
+	// Binding with its connection (on Slack: `C` or `G`, then capitals and digits, at most 32 bytes), and refuses a Binding whose
+	// channel has another shape, such as a Slack channel's name `general`, as it refuses an invalid one: with custom resources its
+	// Accepted condition is False with the reason InvalidPlatformID and its last good generation, if it has one, stays served; on the
+	// files route the whole config fails. agent-kourier dry-run holds it to Slack's shape.
 	// +kubebuilder:validation:MaxLength=140
 	// +kubebuilder:validation:Pattern=`^[!-9;-~]+$`
 	Channel string `json:"channel"`
-	// Output says what Agent Kourier posts of the agent's work: live, the reply as it is written; final, the finished reply
-	// alone; or none, nothing, on a platform where the agent replies itself. A platform takes only the outputs it serves: Slack
-	// and the web platform's kourier-v1 profile take live and final, and the github profile none alone. Another is refused when
-	// the broker reads the Binding with its connection, with the reason UnsupportedOnPlatform. Left out, it is the platform's
-	// default, which the broker fills in then (live, or none on github). The API server stores no default, so that a stored
-	// Binding does not carry one platform's default. A Binding stored with output live by an earlier version keeps it.
-	// +kubebuilder:validation:Enum=live;final;none;""
-	// +doc:default=live (none on the github profile)
+	// Output says what Agent Kourier posts of the agent's work: live, the reply as it is written, or final, the finished reply
+	// alone. Defaults to live.
+	// +kubebuilder:validation:Enum=live;final;""
+	// +kubebuilder:default=live
 	// +optional
 	Output OutputMode `json:"output"`
 	// Progress chooses what a live reply shows of the agent's work before its text arrives. steps shows a card for each
@@ -487,7 +455,7 @@ type ChatBinding struct {
 	// that first post) whenever 3 seconds pass with nothing new, titled or stood in for by the agent's own progress line.
 	// activity shows one Working… card (a line in an alert thread) that counts the steps, or the agent's working updates
 	// until the first step is counted, and names no tool, no argument and nothing the agent said. A Binding that sets none
-	// gets steps-and-activity. Output final and output none ignore it.
+	// gets steps-and-activity. Output final ignores it.
 	// +kubebuilder:validation:Enum=steps;steps-and-activity;activity;""
 	// +kubebuilder:default=steps-and-activity
 	// +optional
@@ -553,9 +521,7 @@ type ChatMention struct {
 	Name string `json:"name"`
 	// User is the platform's user ID of the person (Slack: `U…` or `W…`). It comes only from here, never from the agent. At most 64
 	// bytes of printable ASCII with no space and no ':', as the schema checks; the broker holds it to the shape of its connection's
-	// platform as it does spec.chat.channel (on Slack: `U` or `W`, then 2 to 20 capitals and digits). A platform without replies
-	// (the web platform's github profile) refuses spec.chat.mentions with the reason UnsupportedOnPlatform, as Agent Kourier posts
-	// nothing there.
+	// platform as it does spec.chat.channel (on Slack: `U` or `W`, then 2 to 20 capitals and digits).
 	// +kubebuilder:validation:MaxLength=64
 	// +kubebuilder:validation:Pattern=`^[!-9;-~]+$`
 	User string `json:"user"`
@@ -607,8 +573,7 @@ type Interactions struct {
 	// An empty list allows any non-bot channel member. At most 10 groups may be named, each at most 140 bytes of printable ASCII with
 	// no space and no ':'; duplicates and empty entries are refused. The broker holds each to the shape of its connection's platform
 	// as it does spec.chat.channel (on Slack: `S`, then capitals and digits, at most 32 bytes). A platform that cannot ask for tool
-	// approvals refuses toolApprovals: true in the same way, with the reason UnsupportedOnPlatform, and one without replies (the web
-	// platform's github profile) refuses approverGroups too; Slack can.
+	// approvals refuses toolApprovals: true in the same way, with the reason UnsupportedOnPlatform; Slack can.
 	// +kubebuilder:validation:MaxItems=10
 	// +kubebuilder:validation:items:MaxLength=140
 	// +kubebuilder:validation:items:Pattern=`^[!-9;-~]+$`
@@ -670,9 +635,11 @@ const (
 // every kind loaded from files has.
 func (c *ChatConnection) Default() {}
 
-// Default fills the fields left empty. Call it before Validate. It leaves spec.chat.output unset, whose default depends on the
-// platform of the Binding's connection: resolution fills it in (BindingSpec.DefaultOn).
+// Default fills the fields left empty. Call it before Validate.
 func (b *Binding) Default() {
+	if b.Spec.Chat.Output == "" {
+		b.Spec.Chat.Output = OutputLive
+	}
 	if b.Spec.Chat.Progress == "" {
 		b.Spec.Chat.Progress = ProgressStepsAndActivity
 	}

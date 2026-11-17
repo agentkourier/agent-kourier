@@ -1,9 +1,9 @@
-# The fast tier's web ChatConnections (custom resources only, E2E_CONFIG_SOURCE=crds; lib.sh's deploy_web applies this file): one of each profile, in the
-# namespace e2e-web, which hack/kind/web-values.yaml puts on the platform's admission list, so that the broker serves them beside its own connection, on
-# the chat listener that the same file turns on. The ConfigMap route serves the one ChatConnection of its directory, so the web connections have no place
-# there, and test/e2e's WEB_ tests skip on it. The fake sender and receiver (test/fakeweb, the Deployment fakeweb of fast/doubles.yaml) are the far side
-# of both, with the same fake secrets, which deploy_web puts in the Secrets this file names (never committed as Secrets); test/kindmanifests pins that
-# the two agree, and that the channels, connections and names are the ones test/e2e's web.go uses.
+# The fast tier's web ChatConnection (custom resources only, E2E_CONFIG_SOURCE=crds; lib.sh's deploy_web applies this file): one of the kourier-v1 profile,
+# in the namespace e2e-web, which hack/kind/web-values.yaml puts on the platform's admission list, so that the broker serves it beside its own connection,
+# on the chat listener that the same file turns on. The ConfigMap route serves the one ChatConnection of its directory, so the web connection has no place
+# there, and test/e2e's WEB_ tests skip on it. The fake sender and receiver (test/fakeweb, the Deployment fakeweb of fast/doubles.yaml) are its far side,
+# with the same fake secret, which deploy_web puts in the Secret this file names (never committed as a Secret); test/kindmanifests pins that the two
+# agree, and that the channel, connection and names are the ones test/e2e's web.go uses.
 #
 # What the broker must be granted to read the Secrets, as a team grants it: a Role in the namespace that names them, bound to its ServiceAccount.
 apiVersion: rbac.authorization.k8s.io/v1
@@ -12,7 +12,7 @@ metadata: {name: agent-kourier-reads-e2e-web, namespace: e2e-web}
 rules:
   - apiGroups: [""]
     resources: [secrets]
-    resourceNames: [web-kourier, web-github, web-agent-token]
+    resourceNames: [web-kourier, web-agent-token]
     verbs: [list, watch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -31,18 +31,6 @@ spec:
   web:
     profile: kourier-v1
     url: http://fakeweb.e2e.svc.cluster.local:8080/replies
----
-# The github connection: the fake sends it deliveries signed as GitHub signs them, and it posts nothing (the agent replies on GitHub itself). Its
-# identity is the login of the account the agent posts as, whose own events start nothing; it is written here alone (test/e2e's GitHubLogin is its value).
-apiVersion: agentkourier.dev/v1alpha1
-kind: ChatConnection
-metadata: {name: github, namespace: e2e-web}
-spec:
-  platform: web
-  credentialsSecretRef: {name: web-github}
-  web:
-    profile: github
-    identity: pr-reviewer
 ---
 apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend
@@ -68,21 +56,3 @@ spec:
     connectionRef: {name: kourier}
     channel: web-turns-1
     output: final
----
-# The github Binding: the pull requests of one repository, answered by the stub's test-agent; output none, the only output of the profile. Its triggers
-# are left out, which is the mention trigger: every event the profile hands on is a mention in the thread of its pull request.
-apiVersion: agentkourier.dev/v1alpha1
-kind: Binding
-metadata: {name: github, namespace: e2e-web}
-spec:
-  agent:
-    backendRef: {name: agents}
-    namespace: kagent
-    name: test-agent
-  identity:
-    userId: e2e-web
-    tokenSecretRef: {name: web-agent-token}
-  chat:
-    connectionRef: {name: github}
-    channel: agentkourier/e2e-web
-    output: none

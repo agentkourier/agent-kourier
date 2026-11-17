@@ -146,9 +146,7 @@ type BotSource struct {
 	// matches nothing, and the Slack adapter logs one warning, the first time one of its posts arrives.
 	// At most 140 bytes of printable ASCII with no space and no ':', as the schema checks; the broker holds it to the shape of its
 	// connection's platform as it does spec.chat.channel (on Slack: `B`, then capitals and digits, at most 32 bytes). A bot's name,
-	// such as `alertmanager`, is refused there, with the reason InvalidPlatformID, and not by the API server. A platform without
-	// replies (the web platform's github profile) hands on no bot's message, and refuses a botMessage trigger with the reason
-	// UnsupportedOnPlatform.
+	// such as `alertmanager`, is refused there, with the reason InvalidPlatformID, and not by the API server.
 	// +kubebuilder:validation:MaxLength=140
 	// +kubebuilder:validation:Pattern=`^[!-9;-~]+$`
 	ID string `json:"id"`

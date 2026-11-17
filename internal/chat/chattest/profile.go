@@ -36,8 +36,7 @@ type ProfileSubject struct {
 	// each header it returns away in turn, and expects the request refused without it.
 	Sign func(secret string, body []byte, at time.Time) http.Header
 	// MaxSkew is how far from the receiver's clock the time of a signature may be, either way, or 0 for a profile whose signature
-	// carries no time: such a profile has no replay window, and a replayed request is dropped by its event's ID alone (web.Event.ID,
-	// which on the github profile is the hash of the body, and not GitHub's delivery ID).
+	// carries no time: such a profile has no replay window, and a replayed request is dropped by its event's ID alone (web.Event.ID).
 	MaxSkew time.Duration
 	// MaxBody is the most bytes of a body the profile takes; a longer one is refused 413. The suite makes a body of the bound, and one
 	// past it, by padding the first event that has something to take with trailing spaces, which a JSON profile reads as the same
@@ -51,15 +50,14 @@ type ProfileSubject struct {
 	// CheckReply says whether a request of the profile's replies is one its receiver takes, and carries want: signed with Secret, in the
 	// profile's envelope, with want's kind, connection, channel, thread, ID and message. want.Key is the outbox's tag for a post, and ""
 	// for an update, whose key the platform makes. It returns the idempotency key the receiver reads from the request, which the suite
-	// holds to the same for every try of a post and new for each update. It is required of a profile that sends replies.
+	// holds to the same for every try of a post and new for each update. It is required.
 	CheckReply func(want web.Reply, h http.Header, body []byte) (key string, err error)
 }
 
 // ProfileEvent is one documented event of a profile.
 type ProfileEvent struct {
 	Name string
-	// Header holds what the sender sends beside the signature (GitHub's event name, and its delivery ID, which the profile does not
-	// read), and Body the body.
+	// Header holds what the sender sends beside the signature, and Body the body.
 	Header http.Header
 	Body   []byte
 	// Want is what the event decodes to, or nil for an event that carries nothing to take, such as a ping.
@@ -94,8 +92,7 @@ func ProfileConformance(t *testing.T, s ProfileSubject) {
 //     either way, while one within it is taken;
 //   - that a body that is empty, not JSON, cut short or of the subject's own malformed cases is refused 400, one past the bound 413 and
 //     one of the bound taken, and a method other than POST 405;
-//   - that a profile without replies makes no request, and Post, Update, Ephemeral and Fits say web.ErrNoReplies, and that a profile
-//     with replies sends posts and updates to the connection's URL, each one its receiver takes and carrying what was sent
+//   - that the profile sends posts and updates to the connection's URL, each one its receiver takes and carrying what was sent
 //     (CheckReply), with an idempotency key that is the same on each try of a post and differs between posts and between updates.
 func CheckProfile(ctx context.Context, s ProfileSubject) []Violation {
 	first, ok := s.firstEvent()
@@ -103,11 +100,8 @@ func CheckProfile(ctx context.Context, s ProfileSubject) []Violation {
 		return []Violation{v}
 	}
 	c := &profileChecker{ctx: ctx, s: s, first: first, sink: &recordingSink{}, sent: &recordingTransport{}}
-	cfg := web.Config{Connection: profileConn, Profile: s.Profile, Platform: s.Platform, Transport: c.sent,
+	cfg := web.Config{Connection: profileConn, Profile: s.Profile, Platform: s.Platform, URL: profileURL, Transport: c.sent,
 		Now: func() time.Time { return profileNow }, Logger: slog.New(slog.DiscardHandler)}
-	if s.Profile.Encoder() != nil {
-		cfg.URL = profileURL
-	}
 	p, err := web.New(cfg)
 	if err != nil {
 		return []Violation{{Rule: RuleContract, Method: "New", Case: "config", Detail: fmt.Sprintf("the platform refused the profile: %v", err)}}
@@ -167,8 +161,8 @@ func (s ProfileSubject) setup(first ProfileEvent, ok bool) (Violation, bool) {
 		return bad("no event has something to take: the checks have nothing to send")
 	case len(first.Body) > s.MaxBody:
 		return bad("the first event to take is over MaxBody: the bound is made by padding it")
-	case s.Profile.Encoder() != nil && s.CheckReply == nil:
-		return bad("CheckReply is required of a profile that sends replies")
+	case s.CheckReply == nil:
+		return bad("CheckReply is required")
 	}
 	for _, e := range s.Events {
 		if e.Name == "" {
@@ -243,8 +237,7 @@ func (c *profileChecker) inbound(ev web.Event) chat.Inbound {
 }
 
 // events checks that every documented event decodes to what it says, of the shapes of the subject's Platform, and reaches the Sink
-// as that. A platform that takes no user ID, such as the github profile's, has no Binding field that names a user, so an event's user
-// is held to no shape there.
+// as that. A platform that takes no user ID has no Binding field that names a user, so an event's user is held to no shape there.
 func (c *profileChecker) events() {
 	if _, known := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb,
 		Web: &v1alpha1.WebConnectionSpec{Profile: c.s.Profile.Name()}}); !known {
@@ -371,29 +364,13 @@ func (c *profileChecker) bounds() {
 	c.refused("ServeHTTP", "GET", c.send(http.MethodGet, e.Header, e.Body, c.s.Sign(c.s.Secret, e.Body, profileNow)), http.StatusMethodNotAllowed)
 }
 
-// replies checks that a profile without replies sends nothing, and that one with replies sends what its receiver takes, to the
-// connection's URL.
+// replies checks that the profile sends what its receiver takes, to the connection's URL.
 func (c *profileChecker) replies(ctx context.Context) {
 	ev := *c.first.Want
 	t := chat.Target{Conn: profileConn, Channel: ev.Channel, Thread: ev.ID}
 	ref := c.p.RefAt(ev.Channel, ev.ID, "tag-conformance")
 	msg := chat.Say(chat.Message{Fallback: "conformance", Parts: []chat.Part{chat.Body{Markdown: "a reply"}}})
 	c.sent.take()
-	if c.s.Profile.Encoder() == nil {
-		_, post := c.p.Post(ctx, t, msg, "tag-conformance")
-		for method, err := range map[string]error{
-			"Post": post, "Update": c.p.Update(ctx, ref, msg), "Ephemeral": c.p.Ephemeral(ctx, t, ev.User, *msg.Message),
-			"Fits": c.p.Fits(chat.Prompt{ID: "ix-conformance", Questions: []chat.Question{{Text: "q"}}}),
-		} {
-			if !errors.Is(err, web.ErrNoReplies) {
-				c.add(method, "no replies", "gave %v, want web.ErrNoReplies", err)
-			}
-		}
-		if n := len(c.sent.take()); n > 0 {
-			c.add("Post", "no replies", "a profile without replies made %d requests, want none", n)
-		}
-		return
-	}
 	post := func(tag string) func() error {
 		return func() error { _, err := c.p.Post(ctx, t, msg, tag); return err }
 	}

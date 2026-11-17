@@ -35,18 +35,9 @@ type Connection struct {
 	Ref v1alpha1.ObjectRef
 	// Platform is ChatConnection.spec.platform, which chooses the adapter (newPlatform).
 	Platform string
-	// Web is ChatConnection.spec.web, a copy, on a web connection: its profile, the URL of its replies and the github profile's login.
-	// Nil on any other platform.
+	// Web is ChatConnection.spec.web, a copy, on a web connection: its profile and the URL of its replies. Nil on any other platform.
 	Web         *v1alpha1.WebConnectionSpec
 	Credentials map[string]secret.Value
-}
-
-// hasReplies says whether Agent Kourier posts the agent's replies on the connection's platform (v1alpha1.ChatPlatform.Replies): false
-// on a web connection of the github profile, where the agent replies itself. A platform the API does not know has them, as before
-// there were platforms without.
-func (c Connection) hasReplies() bool {
-	p, ok := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: c.Platform, Web: c.Web})
-	return !ok || p.Replies
 }
 
 // platformSpec is what the broker knows of a platform: the call that tells whose bot a connection's credentials are. The name it is
@@ -71,15 +62,15 @@ func platformFor(name string) (platformSpec, bool) {
 	case v1alpha1.PlatformWeb:
 		// No identity call: a web connection has no bot that the platform could name, and no app that two connections could share, so
 		// its connections have the zero identity. The bot guard has no bot of a web connection to tell from a person, and needs none:
-		// a web profile hands on no bot's message (web.Platform.IsBot), and the github profile drops what its own login sent.
+		// a web profile hands on no bot's message (web.Platform.IsBot).
 		return platformSpec{}, true
 	}
 	return platformSpec{}, false
 }
 
 // actorPlatform is the platform a ChatConnection's users are on, as the dialects attribute a turn to them: the ID is
-// spec.platform, and the display name is the API's (v1alpha1.ChatPlatform.ActorName), such as GitHub for a web connection of the
-// github profile, which the agent reads as "[GitHub: octocat]". A platform or a profile the API does not know has an ID alone.
+// spec.platform, and the display name is the API's (v1alpha1.ChatPlatform.ActorName), such as Slack. A platform or a profile the API
+// does not know has an ID alone.
 func actorPlatform(spec v1alpha1.ChatConnectionSpec) dialect.Platform {
 	p, _ := v1alpha1.ChatPlatformOf(spec)
 	return dialect.Platform{ID: spec.Platform, Name: p.ActorName}

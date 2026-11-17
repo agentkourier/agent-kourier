@@ -15,18 +15,13 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/web"
-	"github.com/agentkourier/agent-kourier/internal/chat/web/github"
 	"github.com/agentkourier/agent-kourier/internal/chat/web/kourierv1"
 	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/test/fakeweb"
 )
 
-// The tests' secrets and login: fake constants.
-const (
-	kourierKey = "fake-web-kourier-secret"
-	githubKey  = "fake-web-github-secret"
-	login      = "pr-reviewer"
-)
+// The tests' secret: a fake constant.
+const kourierKey = "fake-web-kourier-secret"
 
 var epoch = time.Unix(1_800_000_000, 0)
 
@@ -67,7 +62,7 @@ func newFake(t *testing.T) (string, *listener) {
 	l := &listener{}
 	chat := httptest.NewServer(l)
 	t.Cleanup(chat.Close)
-	srv, err := fakeweb.New(fakeweb.Config{ChatURL: chat.URL, KourierV1Secret: []byte(kourierKey), GitHubSecret: []byte(githubKey), Now: func() time.Time { return epoch }})
+	srv, err := fakeweb.New(fakeweb.Config{ChatURL: chat.URL, KourierV1Secret: []byte(kourierKey), Now: func() time.Time { return epoch }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,15 +138,6 @@ func kourierProfile(t *testing.T) *kourierv1.Profile {
 	return p
 }
 
-func githubProfile(t *testing.T) *github.Profile {
-	t.Helper()
-	p, err := github.New(secret.New(githubKey), login, platformOf(t, v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileGitHub, Identity: login}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return p
-}
-
 // TestTheSenderSignsAKourierV1MessageTheProfileTakes: what the sender sends as kourier-v1 is a message the profile verifies and decodes,
 // at the route the test named; the same timestamp again is the same request byte for byte; and a bad or no signature is one the
 // profile refuses.
@@ -198,70 +184,6 @@ func TestTheSenderSignsAKourierV1MessageTheProfileTakes(t *testing.T) {
 	}
 }
 
-// TestTheSenderSignsAGitHubDeliveryTheProfileTakes: what the sender sends as github is a delivery the profile verifies, with GitHub's
-// headers, and an opened pull request decodes as the event of its thread; a bad or no signature is refused; a ping is answered and
-// carries nothing.
-func TestTheSenderSignsAGitHubDeliveryTheProfileTakes(t *testing.T) {
-	fake, l := newFake(t)
-	pr := fakeweb.PullRequest{Action: "opened", Repo: "agentkourier/e2e-web", Number: 7, Title: "Fix the flaky test", Sender: "octocat"}
-	sent := send(t, fake, fakeweb.Send{Profile: fakeweb.ProfileGitHub, Path: "/chat/web/e2e-web/github", Body: pr.Body(), Event: "pull_request"})
-	if sent.Status != http.StatusAccepted || sent.Delivery == "" {
-		t.Fatalf("Sent = %+v; want 202 and the delivery's GUID", sent)
-	}
-	req, body := l.last(t)
-	for _, h := range []string{fakeweb.HeaderGitHubDelivery, fakeweb.HeaderGitHubHookID, fakeweb.HeaderGitHubTargetType, fakeweb.HeaderGitHubTargetID, fakeweb.HeaderGitHubSignature1} {
-		if req.Header.Get(h) == "" {
-			t.Errorf("the delivery has no %s", h)
-		}
-	}
-	if req.Header.Get(fakeweb.HeaderGitHubDelivery) != sent.Delivery || !strings.HasPrefix(req.Header.Get("User-Agent"), "GitHub-Hookshot/") {
-		t.Errorf("the delivery's headers are %v; want the GUID it reports and GitHub's user agent", req.Header)
-	}
-	p := githubProfile(t)
-	if err := p.Verify(req.Header, body, epoch); err != nil {
-		t.Fatalf("the profile does not verify the sender's signature: %v", err)
-	}
-	ev, ok, err := p.Decode(req.Header, body)
-	if err != nil || !ok || ev.Channel != pr.Repo || ev.Thread != "pr-7" || ev.User != "octocat" || !strings.Contains(ev.Text, pr.Title) || !ev.Mentioned {
-		t.Fatalf("Decode = %+v, %v, %v; want the opened pull request in the thread pr-7, its title in the text", ev, ok, err)
-	}
-
-	c := fakeweb.IssueComment{Repo: pr.Repo, Number: 7, Title: pr.Title, Sender: "octocat", Text: "@" + login + " please look again", CommentID: 99}
-	send(t, fake, fakeweb.Send{Profile: fakeweb.ProfileGitHub, Path: "/chat/web/e2e-web/github", Body: c.Body(), Event: "issue_comment"})
-	req, body = l.last(t)
-	if ev, ok, err := p.Decode(req.Header, body); err != nil || !ok || ev.Thread != "pr-7" || !strings.Contains(ev.Text, "please look again") {
-		t.Errorf("a comment that mentions the login decodes as %+v, %v, %v; want it in the thread pr-7", ev, ok, err)
-	}
-
-	self := pr
-	self.Sender = login
-	send(t, fake, fakeweb.Send{Profile: fakeweb.ProfileGitHub, Path: "/chat/web/e2e-web/github", Body: self.Body(), Event: "pull_request"})
-	req, body = l.last(t)
-	if _, ok, err := p.Decode(req.Header, body); err != nil || ok {
-		t.Errorf("a pull request the login opened decodes as an event to take (%v, %v); want it dropped", ok, err)
-	}
-
-	send(t, fake, fakeweb.Send{Profile: fakeweb.ProfileGitHub, Path: "/chat/web/e2e-web/github", Body: fakeweb.Ping(pr.Repo), Event: "ping"})
-	req, body = l.last(t)
-	if err := p.Verify(req.Header, body, epoch); err != nil {
-		t.Errorf("a ping: %v", err)
-	}
-	if _, ok, err := p.Decode(req.Header, body); err != nil || ok {
-		t.Errorf("a ping decodes as %v, %v; want nothing to take", ok, err)
-	}
-
-	for _, signing := range []string{fakeweb.SignBad, fakeweb.SignNone} {
-		send(t, fake, fakeweb.Send{Profile: fakeweb.ProfileGitHub, Path: "/chat/web/e2e-web/github", Body: pr.Body(), Event: "pull_request", Signing: signing})
-		req, body := l.last(t)
-		if err := p.Verify(req.Header, body, epoch); err == nil {
-			t.Errorf("signing %q: the profile verified it", signing)
-		}
-		if signing == fakeweb.SignNone && (req.Header.Get(fakeweb.HeaderGitHubSignature) != "" || req.Header.Get(fakeweb.HeaderGitHubSignature1) != "") {
-			t.Errorf("an unsigned delivery carries a signature: %v", req.Header)
-		}
-	}
-}
-
 // TestTheSenderReportsHowItWasAnswered: the status and Retry-After of the answer, and the transport's error when there is no answer.
 func TestTheSenderReportsHowItWasAnswered(t *testing.T) {
 	fake, l := newFake(t)
@@ -276,7 +198,7 @@ func TestTheSenderReportsHowItWasAnswered(t *testing.T) {
 
 	gone := httptest.NewServer(http.NotFoundHandler())
 	gone.Close()
-	srv, err := fakeweb.New(fakeweb.Config{ChatURL: gone.URL, KourierV1Secret: []byte(kourierKey), GitHubSecret: []byte(githubKey)})
+	srv, err := fakeweb.New(fakeweb.Config{ChatURL: gone.URL, KourierV1Secret: []byte(kourierKey)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,8 +209,8 @@ func TestTheSenderReportsHowItWasAnswered(t *testing.T) {
 	}
 }
 
-// TestTheSenderRefusesWhatItCannotSend: a path outside the chat listener's web routes, a profile, a signing it does not know, a github
-// send with no event, and a body that is not a Send are refused, and nothing is sent.
+// TestTheSenderRefusesWhatItCannotSend: a path outside the chat listener's web routes, a profile, a signing it does not know, and a body
+// that is not a Send are refused, and nothing is sent.
 func TestTheSenderRefusesWhatItCannotSend(t *testing.T) {
 	fake, l := newFake(t)
 	body := fakeweb.Message{Channel: "web-1", ID: "m-1", User: "u", Text: "t"}.Body()
@@ -298,14 +220,13 @@ func TestTheSenderRefusesWhatItCannotSend(t *testing.T) {
 		"a path with more": {Profile: fakeweb.ProfileKourierV1, Path: "/chat/web/e2e-web/kourier/x", Body: body},
 		"another profile":  {Profile: "jira", Path: "/chat/web/e2e-web/kourier", Body: body},
 		"another signing":  {Profile: fakeweb.ProfileKourierV1, Path: "/chat/web/e2e-web/kourier", Body: body, Signing: "later"},
-		"no github event":  {Profile: fakeweb.ProfileGitHub, Path: "/chat/web/e2e-web/github", Body: body},
 	} {
 		b, _ := json.Marshal(in)
 		if status, _ := post(t, fake+fakeweb.ControlSendPath, nil, b); status != http.StatusBadRequest {
 			t.Errorf("%s: status %d; want 400", name, status)
 		}
 	}
-	if status, _ := post(t, fake+fakeweb.ControlSendPath, nil, []byte(`{"profile":"github","bogus":1}`)); status != http.StatusBadRequest {
+	if status, _ := post(t, fake+fakeweb.ControlSendPath, nil, []byte(`{"profile":"kourier-v1","bogus":1}`)); status != http.StatusBadRequest {
 		t.Errorf("a body that is not a Send: status %d; want 400", status)
 	}
 	if len(l.reqs) != 0 {
@@ -475,19 +396,18 @@ func signed(body []byte) http.Header {
 // TestNewRefusesAConfigItCannotRunWith: a chat URL that is not absolute, or has a path, and an empty secret.
 func TestNewRefusesAConfigItCannotRunWith(t *testing.T) {
 	for name, cfg := range map[string]fakeweb.Config{
-		"no URL":            {KourierV1Secret: []byte(kourierKey), GitHubSecret: []byte(githubKey)},
-		"a relative URL":    {ChatURL: "/chat", KourierV1Secret: []byte(kourierKey), GitHubSecret: []byte(githubKey)},
-		"a path":            {ChatURL: "http://chat.test/chat/web", KourierV1Secret: []byte(kourierKey), GitHubSecret: []byte(githubKey)},
-		"no kourier secret": {ChatURL: "http://chat.test", GitHubSecret: []byte(githubKey)},
-		"no github secret":  {ChatURL: "http://chat.test", KourierV1Secret: []byte(kourierKey)},
+		"no URL":            {KourierV1Secret: []byte(kourierKey)},
+		"a relative URL":    {ChatURL: "/chat", KourierV1Secret: []byte(kourierKey)},
+		"a path":            {ChatURL: "http://chat.test/chat/web", KourierV1Secret: []byte(kourierKey)},
+		"no kourier secret": {ChatURL: "http://chat.test"},
 	} {
 		if _, err := fakeweb.New(cfg); err == nil {
 			t.Errorf("%s: New succeeded", name)
-		} else if strings.Contains(err.Error(), kourierKey) || strings.Contains(err.Error(), githubKey) {
+		} else if strings.Contains(err.Error(), kourierKey) {
 			t.Errorf("%s: the error %q names a secret", name, err)
 		}
 	}
-	if _, err := fakeweb.New(fakeweb.Config{ChatURL: "http://chat.test:8081/", KourierV1Secret: []byte(kourierKey), GitHubSecret: []byte(githubKey)}); err != nil {
+	if _, err := fakeweb.New(fakeweb.Config{ChatURL: "http://chat.test:8081/", KourierV1Secret: []byte(kourierKey)}); err != nil {
 		t.Errorf("a host with a port and a trailing slash: %v", err)
 	}
 }

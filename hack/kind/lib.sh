@@ -533,25 +533,21 @@ deploy_two_apps() {
   echo "ok: team-a's Slack app is connected to the fake Slack"
 }
 
-# The fast tier's web ChatConnections (hack/kind/fast/web, custom resources only): the fake secrets of their Secrets, the same that the fake web sender
-# and receiver (fast/doubles.yaml, the Deployment fakeweb) sign and check with, and the email of the Bindings' agent token, which test/e2e's web.go
+# The fast tier's web ChatConnection (hack/kind/fast/web, custom resources only): the fake secret of its Secret, the same that the fake web sender
+# and receiver (fast/doubles.yaml, the Deployment fakeweb) sign and check with, and the email of the Binding's agent token, which test/e2e's web.go
 # names too (test/kindmanifests pins that they agree). Fake constants, made into Secrets here and never committed.
 FAKE_WEB_KOURIER_V1_SECRET=fake-web-kourier-signing-secret
-FAKE_WEB_GITHUB_SECRET=fake-web-github-webhook-secret
 WEB_AGENT_EMAIL=e2e-web@example.test
 
-# deploy_web: the web ChatConnections of the tier on custom resources: the namespace e2e-web, its Secrets (the kourier-v1 connection's signingSecret,
-# the github connection's webhookSecret and the Bindings' agent token), and hack/kind/fast/web/web.yaml: the Role that grants them to the broker, the
-# two ChatConnections, their AgentBackend and a Binding on each. The broker serves them when hack/kind/web-values.yaml admits e2e-web. It returns once
-# the broker says both connections are up (agentkourier_chat_connected, read from its metrics Service by a probe pod), and dies if they are not in
-# three minutes. The Secrets are made with apply from a pipe, as deploy_agentkourier makes the tier's. Needs HERE, K, CURL_IMAGE, and the CRDs served
+# deploy_web: the web ChatConnection of the tier on custom resources: the namespace e2e-web, its Secrets (the kourier-v1 connection's signingSecret
+# and the Binding's agent token), and hack/kind/fast/web/web.yaml: the Role that grants them to the broker, the ChatConnection, its AgentBackend and
+# its Binding. The broker serves them when hack/kind/web-values.yaml admits e2e-web. It returns once the broker says the connection is up
+# (agentkourier_chat_connected, read from its metrics Service by a probe pod), and dies if it is not in three minutes. The Secrets are made with apply from a pipe, as deploy_agentkourier makes the tier's. Needs HERE, K, CURL_IMAGE, and the CRDs served
 # (deploy_agentkourier with crds).
 deploy_web() {
   local pod=probe-web-${RANDOM} metrics=http://agent-kourier.agent-kourier.svc.cluster.local:8080/metrics
   "${K[@]}" create namespace e2e-web --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
   "${K[@]}" -n e2e-web create secret generic web-kourier --from-literal=signingSecret="${FAKE_WEB_KOURIER_V1_SECRET}" \
-    --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
-  "${K[@]}" -n e2e-web create secret generic web-github --from-literal=webhookSecret="${FAKE_WEB_GITHUB_SECRET}" \
     --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
   "${K[@]}" -n e2e-web create secret generic web-agent-token --from-literal=token="$(unsigned_jwt "${WEB_AGENT_EMAIL}")" \
     --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
@@ -563,14 +559,14 @@ deploy_web() {
     end=$(( $(date +%s) + 180 ))
     while [ "$(date +%s)" -lt "${end}" ]; do
       m=$(curl -s -m 5 "$1")
-      if up e2e-web/kourier "$m" && up e2e-web/github "$m"; then exit 0; fi
+      if up e2e-web/kourier "$m"; then exit 0; fi
       sleep 2
     done
     exit 1' sh "${metrics}" >/dev/null || {
     "${K[@]}" -n agent-kourier logs deploy/agent-kourier --tail=40 >&2 || true
-    die "the broker never said its web connections e2e-web/kourier and e2e-web/github are up; is e2e-web in config.connectionNamespaces, with the chat listener on (hack/kind/web-values.yaml)?"
+    die "the broker never said its web connection e2e-web/kourier is up; is e2e-web in config.connectionNamespaces, with the chat listener on (hack/kind/web-values.yaml)?"
   }
-  echo "ok: the web connections e2e-web/kourier and e2e-web/github are up"
+  echo "ok: the web connection e2e-web/kourier is up"
 }
 
 # runner_admission DIR: the broker's admission (spec D54) for the E2E runner, as the Deployment agent-kourier has it: its AGENTKOURIER_CHAT_CONNECTION,

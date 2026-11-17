@@ -43,9 +43,8 @@ type profileLeaks struct {
 
 // hmacProfile is a profile of the suite's tests: HMAC-SHA256 of the timestamp and the body, in two headers, over a small JSON schema.
 type hmacProfile struct {
-	leaks   profileLeaks
-	replies bool
-	n       atomic.Int64
+	leaks profileLeaks
+	n     atomic.Int64
 }
 
 type hmacEvent struct {
@@ -127,12 +126,7 @@ func (p *hmacProfile) Decode(_ http.Header, body []byte) (web.Event, bool, error
 
 func (p *hmacProfile) Caps() chat.Caps { return chat.Caps{MaxText: 1000} }
 
-func (p *hmacProfile) Encoder() web.Encoder {
-	if !p.replies {
-		return nil
-	}
-	return p
-}
+func (p *hmacProfile) Encoder() web.Encoder { return p }
 
 // hmacKeyHeader carries a reply's idempotency key.
 const hmacKeyHeader = "X-Test-Key"
@@ -158,19 +152,17 @@ func (p *hmacProfile) Encode(r web.Reply, now time.Time) (web.Request, error) {
 	return web.Request{Header: h, Body: body}, nil
 }
 
-// hmacPlatform is the platform the test's profile runs on: the API's for kourier-v1, the profile's name, with replies as the
-// profile has them.
-func hmacPlatform(replies bool) v1alpha1.ChatPlatform {
+// hmacPlatform is the platform the test's profile runs on: the API's for kourier-v1, the profile's name.
+func hmacPlatform() v1alpha1.ChatPlatform {
 	p, _ := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb,
 		Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileKourierV1}})
-	p.Replies = replies
 	return p
 }
 
 func hmacSubject(p *hmacProfile) ProfileSubject {
 	s := ProfileSubject{
 		Profile:  p,
-		Platform: hmacPlatform(p.replies),
+		Platform: hmacPlatform(),
 		Secret:   suiteSecret,
 		Sign:     hmacSign,
 		MaxSkew:  hmacSkew,
@@ -187,25 +179,23 @@ func hmacSubject(p *hmacProfile) ProfileSubject {
 			{Name: "no user", Body: []byte(`{"channel":"ch-1","id":"m-1","text":"hi"}`)},
 		},
 	}
-	if p.replies {
-		s.CheckReply = func(want web.Reply, h http.Header, body []byte) (string, error) {
-			sec, err := strconv.ParseInt(h.Get("X-Test-Timestamp"), 10, 64)
-			if err != nil {
-				return "", errors.New("no timestamp")
-			}
-			if hmacSign(suiteSecret, body, time.Unix(sec, 0)).Get("X-Test-Signature") != h.Get("X-Test-Signature") {
-				return "", errors.New("bad signature")
-			}
-			var got web.Reply
-			if err := json.Unmarshal(body, &got); err != nil {
-				return "", err
-			}
-			got.Key, want.Key = "", ""
-			if !reflect.DeepEqual(got, want) {
-				return "", fmt.Errorf("the reply is %+v, want %+v", got, want)
-			}
-			return h.Get(hmacKeyHeader), nil
+	s.CheckReply = func(want web.Reply, h http.Header, body []byte) (string, error) {
+		sec, err := strconv.ParseInt(h.Get("X-Test-Timestamp"), 10, 64)
+		if err != nil {
+			return "", errors.New("no timestamp")
 		}
+		if hmacSign(suiteSecret, body, time.Unix(sec, 0)).Get("X-Test-Signature") != h.Get("X-Test-Signature") {
+			return "", errors.New("bad signature")
+		}
+		var got web.Reply
+		if err := json.Unmarshal(body, &got); err != nil {
+			return "", err
+		}
+		got.Key, want.Key = "", ""
+		if !reflect.DeepEqual(got, want) {
+			return "", fmt.Errorf("the reply is %+v, want %+v", got, want)
+		}
+		return h.Get(hmacKeyHeader), nil
 	}
 	if p.leaks.offShape {
 		for i, e := range s.Events {
@@ -222,17 +212,14 @@ func hmacSubject(p *hmacProfile) ProfileSubject {
 
 func TestAProfileThatKeepsTheContractPasses(t *testing.T) {
 	t.Parallel()
-	for _, replies := range []bool{false, true} {
-		ProfileConformance(t, hmacSubject(&hmacProfile{replies: replies}))
-	}
+	ProfileConformance(t, hmacSubject(&hmacProfile{}))
 }
 
 func TestEveryWayAProfileCanFailIsCaught(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		leaks   profileLeaks
-		replies bool
-		want    []string // a case each, among the violations found
+		leaks profileLeaks
+		want  []string // a case each, among the violations found
 	}{
 		"verifies nothing":  {leaks: profileLeaks{verifiesNothing: true}, want: []string{"unsigned", "another secret", "another body"}},
 		"ignores the time":  {leaks: profileLeaks{ignoresTime: true}, want: []string{"stale", "from the future"}},
@@ -241,14 +228,14 @@ func TestEveryWayAProfileCanFailIsCaught(t *testing.T) {
 		"one ID for all":    {leaks: profileLeaks{constantID: true}, want: []string{"distinct IDs"}},
 		"an ID per try":     {leaks: profileLeaks{freshID: true}, want: []string{"repeat: a message that opens a thread", "repeat: a reply in a thread"}},
 		"the wrong mention": {leaks: profileLeaks{wrongMention: true}, want: []string{"a message that opens a thread", "a reply in a thread"}},
-		"unsigned replies":  {leaks: profileLeaks{unsignedReplies: true}, replies: true, want: []string{"reply"}},
-		"no reply key":      {leaks: profileLeaks{dropsKey: true}, replies: true, want: []string{"reply", "update"}},
-		"one reply key":     {leaks: profileLeaks{constantKey: true}, replies: true, want: []string{"another reply", "update again"}},
-		"a mangled reply":   {leaks: profileLeaks{mangledID: true}, replies: true, want: []string{"reply", "update"}},
+		"unsigned replies":  {leaks: profileLeaks{unsignedReplies: true}, want: []string{"reply"}},
+		"no reply key":      {leaks: profileLeaks{dropsKey: true}, want: []string{"reply", "update"}},
+		"one reply key":     {leaks: profileLeaks{constantKey: true}, want: []string{"another reply", "update again"}},
+		"a mangled reply":   {leaks: profileLeaks{mangledID: true}, want: []string{"reply", "update"}},
 		"an off-shape ID":   {leaks: profileLeaks{offShape: true}, want: []string{"shape: a message that opens a thread", "shape: a reply in a thread"}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			vs := CheckProfile(t.Context(), hmacSubject(&hmacProfile{leaks: tc.leaks, replies: tc.replies}))
+			vs := CheckProfile(t.Context(), hmacSubject(&hmacProfile{leaks: tc.leaks}))
 			var found []string
 			for _, v := range vs {
 				if v.Rule != RuleContract {
@@ -274,7 +261,7 @@ func TestTheProfileSuiteRefusesAnIncompleteSubject(t *testing.T) {
 		"no platform":               func(s *ProfileSubject) { s.Platform = v1alpha1.ChatPlatform{} },
 		"no bound":                  func(s *ProfileSubject) { s.MaxBody = 0 },
 		"no event to take":          func(s *ProfileSubject) { s.Events = s.Events[2:] },
-		"replies with no check":     func(s *ProfileSubject) { s.Profile = &hmacProfile{replies: true} },
+		"no CheckReply":             func(s *ProfileSubject) { s.CheckReply = nil },
 		"an event with no name":     func(s *ProfileSubject) { s.Events[0].Name = "" },
 		"a malformed case unnamed":  func(s *ProfileSubject) { s.Malformed[0].Name = "" },
 		"a first event over bounds": func(s *ProfileSubject) { s.MaxBody = 10 },

@@ -2770,30 +2770,3 @@ spec:
         match: {text: "("}
         limits: {rateLimit: {maxRuns: 6, per: 30m, maxConcurrent: 2}, maxRunsPerDay: 50}
         promptTemplate: "A person reported something in {{ .Channel }}."
----
-# rule: trigger/spec.chat.triggers[].from.id: on the github profile, which hands on no bot's message
-# want: spec.chat.triggers[1].from.id: a bot's message is not supported on web (github profile)
-# schema: accepts
-# broker-only: what a platform serves is its connection's, which the schema of a Binding cannot read: the broker refuses it when it resolves the Binding with its connection
-# connection: web/github
-apiVersion: agentkourier.dev/v1alpha1
-kind: Binding
-metadata:
-  name: reviews
-  namespace: sre
-spec:
-  agent:
-    backendRef: {name: kagent}
-    name: k8s-agent
-    namespace: kagent
-  identity:
-    userId: agent-kourier-sre
-  chat:
-    connectionRef: {name: github}
-    channel: octo-org/hello-world
-    triggers:
-      - {type: mention}
-      - type: botMessage
-        from: {id: "dependabot[bot]"}
-        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
-        promptTemplate: "A bot wrote."

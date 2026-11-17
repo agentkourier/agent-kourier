@@ -69,9 +69,6 @@ type Inbound struct {
 	// Origin identifies the bounded source and subject the thread is started for. Like Binding it is used only to
 	// create a session; a follow-up never replaces the session's origin.
 	Origin store.Origin
-	// NoReplies says the connection's platform has no replies of Agent Kourier's, so no notice can reach the thread: a turn that
-	// may create the session replaces one that has expired or whose Binding is gone (ReplyFacts.NoReplies), and is Created.
-	NoReplies bool
 }
 
 // Result is the outcome of a Submit. Queued means the turn has to wait for a task that is
@@ -95,10 +92,7 @@ type Result struct {
 // MessageID), all before it wakes the runner, so a crash loses nothing and the redelivered
 // event repeats what is left. It does not wait for the agent. An expired session is
 // returned as Expired and left as it was, and a reply that a mention-only Binding does not
-// take as Unmentioned, with nothing written. On a platform with no replies (Inbound.NoReplies)
-// a turn that may create the session replaces an expired one, or one whose Binding is gone,
-// that has no task and no undelivered reply, unless its message was queued before, and is
-// Created.
+// take as Unmentioned, with nothing written.
 func (m *Manager) Submit(ctx context.Context, in Inbound) (Result, error) {
 	if in.Key.Connection == "" || in.Key.Channel == "" || in.Key.Thread == "" || in.MessageID == "" || in.MessageRef == "" || in.Text == "" || in.UserID == SystemUser || strings.HasPrefix(in.MessageID, recoveredPrefix) || (in.Create && in.Binding == "") {
 		return Result{}, fmt.Errorf("submit %q: the key, MessageID, MessageRef and Text are required, and a Binding to create; UserID is never %q, and MessageID never starts %q: %w", in.MessageID, SystemUser, recoveredPrefix, store.ErrInvalid)
@@ -205,7 +199,7 @@ func (m *Manager) Takes(ctx context.Context, in Inbound) (bool, error) {
 // replyFacts gathers the facts of the reply: the session, its Binding and expiry and, if the decision needs it, the pending question.
 // It returns the session's Binding too, empty where no session is. It only reads.
 func (m *Manager) replyFacts(ctx context.Context, in Inbound, now time.Time) (ReplyFacts, string, error) {
-	f := ReplyFacts{Create: in.Create, Mentioned: in.Mentioned, ChannelMode: in.ChannelThreadReplies, NoReplies: in.NoReplies}
+	f := ReplyFacts{Create: in.Create, Mentioned: in.Mentioned, ChannelMode: in.ChannelThreadReplies}
 	binding := ""
 	sess, err := m.cfg.Store.GetSession(ctx, in.Key, store.AnyAge, now)
 	switch {
@@ -233,14 +227,6 @@ func (m *Manager) replyFacts(ctx context.Context, in Inbound, now time.Time) (Re
 			return ReplyFacts{}, "", fmt.Errorf("read session %+v: %w", in.Key, err)
 		}
 	}
-	if f.MayReplace() {
-		// Read under the intake lock, with the facts above, so that no turn is queued between the reads and the decision.
-		unsettled, err := m.unsettled(ctx, in)
-		if err != nil {
-			return ReplyFacts{}, "", err
-		}
-		f.Unsettled = unsettled
-	}
 	if f.NeedsQuestion() {
 		switch q, err := m.cfg.Questions.PendingTextQuestion(ctx, in.Key); {
 		case errors.Is(err, store.ErrNotFound):
@@ -251,34 +237,6 @@ func (m *Manager) replyFacts(ctx context.Context, in Inbound, now time.Time) (Re
 		}
 	}
 	return f, binding, nil
-}
-
-// unsettled says whether the thread of in still has a reply that is not delivered, or in's message was queued before
-// (ReplyFacts.Unsettled).
-func (m *Manager) unsettled(ctx context.Context, in Inbound) (bool, error) {
-	switch _, err := m.cfg.Store.NextReply(ctx, in.Key); {
-	case err == nil:
-		return true, nil
-	case !errors.Is(err, store.ErrNotFound):
-		return false, fmt.Errorf("read the reply queue of %+v: %w", in.Key, err)
-	}
-	// The session is read again, after the queue: the runner records a turn's task before it marks the turn's reply delivered, and
-	// takes no intake lock to do so, so a reply delivered between the first read of the session and the queue's left a task that
-	// the first read did not see. Once the queue is empty, any task of the replies it held is recorded, and no reply is queued while
-	// the intake lock is held: this read sees it. The queue is not read before the session instead, which would close the window
-	// too, because whether it is read at all (MayReplace) depends on the session: read first, it would be read for every turn.
-	switch sess, err := m.cfg.Store.GetSession(ctx, in.Key, store.AnyAge, m.cfg.Now()); {
-	case errors.Is(err, store.ErrNotFound):
-	case err != nil:
-		return false, fmt.Errorf("read session %+v: %w", in.Key, err)
-	case sess.TaskID != "":
-		return true, nil
-	}
-	taken, err := m.cfg.Store.HasReply(ctx, in.MessageID)
-	if err != nil {
-		return false, fmt.Errorf("read reply %s: %w", in.MessageID, err)
-	}
-	return taken, nil
 }
 
 // sessionBackend is the Backend that a session goes by: its Binding's, but a session that a bot's mention or a person's message
@@ -299,8 +257,7 @@ func takesOnlyMentions(sess store.Session) bool {
 	return sess.Origin.Source == store.OriginBotMention || sess.Origin.Source == store.OriginPersonMessage
 }
 
-// carryOut does what the admission decided: for a turn it writes the row of a new thread, or of a fresh session in place of the
-// thread's (Admission.Replaces), or touches a live one; for an
+// carryOut does what the admission decided: for a turn it writes the row of a new thread or touches a live one; for an
 // answer it touches the thread and returns pin, the question the reply is enqueued pinned to (D38); for anything else
 // it writes nothing and the session is not touched. binding is the session's Binding, which an unmentioned reply is
 // counted for. A kind or reason it does not know is an error and writes nothing.
@@ -336,7 +293,7 @@ func (m *Manager) carryOut(ctx context.Context, in Inbound, owned bool, binding 
 	default:
 		return Result{}, "", fmt.Errorf("reply admission %+v: unknown kind", adm)
 	}
-	if !owned || adm.Replaces {
+	if !owned {
 		backend, err := m.cfg.Bindings.Backend(in.Binding)
 		if err != nil {
 			return Result{}, "", fmt.Errorf("create session %+v under Binding %q: %w", in.Key, in.Binding, err)

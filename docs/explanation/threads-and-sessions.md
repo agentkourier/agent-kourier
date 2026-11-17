@@ -188,9 +188,7 @@ point in that window resumes the same context. The agent platform suspends and r
 Agent Kourier has no idle timeout.
 
 After the TTL, the thread has expired: a reply that the Binding would take gets a notice that the conversation has expired and that a new mention
-starts a new one. A `github` connection posts no notices, so there an event that would start a turn, in a pull request whose session has expired
-or whose Binding is gone, starts a fresh session instead: nothing is said, and the agent has none of the old session's context. The event is
-dropped instead while the old session records a task or holds a reply not yet delivered, and when its body is one the broker took before. 90 days after expiry the session is deleted with everything that belongs to it, and the thread
+starts a new one. 90 days after expiry the session is deleted with everything that belongs to it, and the thread
 becomes one Agent Kourier never owned. If the agent reports that a session no longer exists, Agent Kourier says so in
 the thread, and the next message starts a fresh context.
 

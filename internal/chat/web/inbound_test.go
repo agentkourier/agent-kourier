@@ -71,7 +71,6 @@ func newPlatform(t *testing.T, p web.Profile, url string, log *slog.Logger) *web
 	}
 	rules, _ := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb,
 		Web: &v1alpha1.WebConnectionSpec{Profile: p.Name()}})
-	rules.Replies = p.Encoder() != nil
 	pl, err := web.New(web.Config{Connection: "ns/web", Profile: p, Platform: rules, URL: url, Now: func() time.Time { return epoch }, Logger: log})
 	if err != nil {
 		t.Fatal(err)
@@ -117,7 +116,7 @@ func serve(t *testing.T, p *web.Platform, req *http.Request) *httptest.ResponseR
 const event = `{"Channel":"ch-1","Thread":"m-0","ID":"m-1","User":"u-1","Text":"hello <!channel>","Mentioned":true}`
 
 func TestTheHandlerTakesAVerifiedEventToTheSink(t *testing.T) {
-	p := newPlatform(t, newTestProfile(false), "", nil)
+	p := newPlatform(t, newTestProfile(), receiverURL, nil)
 	sk := &sink{}
 	running(t, p, sk)
 
@@ -133,9 +132,9 @@ func TestTheHandlerTakesAVerifiedEventToTheSink(t *testing.T) {
 }
 
 func TestTheHandlerRefusesWhatItCannotTake(t *testing.T) {
-	prof := newTestProfile(false)
+	prof := newTestProfile()
 	prof.maxBody = 256
-	p := newPlatform(t, prof, "", nil)
+	p := newPlatform(t, prof, receiverURL, nil)
 	sk := &sink{}
 	running(t, p, sk)
 
@@ -165,7 +164,7 @@ func TestTheHandlerRefusesWhatItCannotTake(t *testing.T) {
 
 // A request that carries nothing to take, such as a sender's ping, is acknowledged, and nothing reaches the sink.
 func TestAnEventWithNothingToTakeIsAcknowledged(t *testing.T) {
-	p := newPlatform(t, newTestProfile(false), "", nil)
+	p := newPlatform(t, newTestProfile(), receiverURL, nil)
 	sk := &sink{}
 	running(t, p, sk)
 
@@ -180,7 +179,7 @@ func TestAnEventWithNothingToTakeIsAcknowledged(t *testing.T) {
 // An event that cannot be taken now, because the connection is not running here or the sink did not take it, is answered 503 with
 // a Retry-After: the sender sends it again.
 func TestTheHandlerAnswers503WhenItCannotTakeTheEventNow(t *testing.T) {
-	p := newPlatform(t, newTestProfile(false), "", nil)
+	p := newPlatform(t, newTestProfile(), receiverURL, nil)
 	unavailable := func(name string, w *httptest.ResponseRecorder) {
 		t.Helper()
 		if want := strconv.Itoa(int(web.BusyRetryAfter / time.Second)); w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") != want {
@@ -213,7 +212,7 @@ func TestTheHandlerAnswers503WhenItCannotTakeTheEventNow(t *testing.T) {
 // The sink is called on a context of Run's, which carries what the broker put there (its telemetry), and not on the request's
 // alone, which carries none of it.
 func TestTheSinkIsCalledOnRunsContext(t *testing.T) {
-	p := newPlatform(t, newTestProfile(false), "", nil)
+	p := newPlatform(t, newTestProfile(), receiverURL, nil)
 	sk := &sink{}
 	stop := running(t, p, sk)
 
@@ -237,7 +236,7 @@ func TestTheSinkIsCalledOnRunsContext(t *testing.T) {
 // A sink that has not taken the event within the wait is answered 503, and the sink's context ends with the answer, so that it does
 // not take the event after the sender was told to send it again.
 func TestTheHandlerAnswers503WhenTheSinkDoesNotAnswerInTime(t *testing.T) {
-	p := newPlatform(t, newTestProfile(false), "", nil)
+	p := newPlatform(t, newTestProfile(), receiverURL, nil)
 	p.SetAckWait(20 * time.Millisecond)
 	sk := &sink{block: true}
 	running(t, p, sk)
@@ -260,7 +259,7 @@ func TestTheHandlerAnswers503WhenTheSinkDoesNotAnswerInTime(t *testing.T) {
 
 // The events of a connection reach the sink one at a time, in the order the handler takes them (chat.Sink).
 func TestOneEventAtATimeReachesTheSink(t *testing.T) {
-	p := newPlatform(t, newTestProfile(false), "", nil)
+	p := newPlatform(t, newTestProfile(), receiverURL, nil)
 	sk := &sink{}
 	running(t, p, sk)
 
@@ -284,7 +283,7 @@ func TestOneEventAtATimeReachesTheSink(t *testing.T) {
 
 // Every delivery of an event is handed on, each with the event's own ID: the reply queue drops a repeat by its chat.MessageID, durably.
 func TestARepeatedDeliveryKeepsItsMessageID(t *testing.T) {
-	p := newPlatform(t, newTestProfile(false), "", nil)
+	p := newPlatform(t, newTestProfile(), receiverURL, nil)
 	sk := &sink{}
 	running(t, p, sk)
 
@@ -301,7 +300,7 @@ func TestARepeatedDeliveryKeepsItsMessageID(t *testing.T) {
 func TestTheHandlerLogsNoBodyAndNoSignature(t *testing.T) {
 	var buf syncBuffer
 	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	p := newPlatform(t, newTestProfile(false), "", log)
+	p := newPlatform(t, newTestProfile(), receiverURL, log)
 	sk := &sink{}
 	running(t, p, sk)
 
@@ -349,7 +348,7 @@ func (s *syncBuffer) String() string {
 // the check the handler reaches the Sink only when its wait for the order loses to the Run's ended context, about half the time.
 func TestAHandlerHandsNoEventToARunThatEnded(t *testing.T) {
 	for i := range 32 {
-		p := newPlatform(t, newTestProfile(false), "", nil)
+		p := newPlatform(t, newTestProfile(), receiverURL, nil)
 		h, _ := p.HTTPHandler()
 		loaded, release := make(chan struct{}), make(chan struct{})
 		p.SetAfterLoad(func() { close(loaded); <-release })
