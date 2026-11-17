@@ -4,9 +4,11 @@ A Binding names its chat platform through its ChatConnection, whose `spec.platfo
 `spec.web.profile` names the integration it speaks, `kourier-v1` or `github`. This page lists, for Slack and for each web profile,
 the shape of the chat IDs a Binding names and the features of a Binding that it serves.
 
-No broker runs a web connection yet. The API server takes a web ChatConnection and its Bindings, and the broker checks those Bindings
-against the profile as this page says, but it does not start the connection: as the broker's own connection it stops the broker's
-start, and a team's connection is not started.
+A web connection runs on the broker's chat listener: its sender sends each request to `POST /chat/web/<namespace>/<name>` on the
+port that `AGENTKOURIER_CHAT_LISTEN` opens (the chart's `chatListener`), which only the replica that leads serves. A broker with no
+chat listener does not run one: as the broker's own connection it stops the start (exit code 2), and a team's connection is not
+started. On the files route the directory holds exactly one ChatConnection, the broker's own, so such a broker runs one connection,
+Slack or web; to run several side by side, use custom resources, where the others are team connections.
 
 A Binding is checked against its platform when the broker reads it with its ChatConnection: the API server and the broker's load
 check only that each ID has the shape of some platform's ID. A Binding that names an ID of another shape, or asks for a feature that its
@@ -61,7 +63,7 @@ refused by the broker, as above, and not when it is applied. The length caps of 
 | Questions to a person: `interactions.askUser` | Works: Agent Kourier asks in the thread with buttons. | Refused: `UnsupportedOnPlatform`. Set it to `false`. | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
 | Tool approvals: `interactions.toolApprovals`, and `interactions.approverGroups`, which requires it | Works: Agent Kourier asks in the thread with buttons. | Refused: `UnsupportedOnPlatform`. Set `toolApprovals` to `false` and remove `approverGroups`. | Refused: `UnsupportedOnPlatform`. Set `toolApprovals` to `false` and remove `approverGroups`. |
 | The useful and not-useful buttons: `feedback.enabled` | Works. | Refused: `UnsupportedOnPlatform`. Set it to `false`. | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
-| The acknowledgment reaction: `chat.acknowledgment` | Works. With no `emoji` the reaction is `hourglass_flowing_sand`. | Taken. No broker runs the profile yet, so nothing is shown. | Taken. No broker runs the profile yet, so nothing is shown. |
+| The acknowledgment reaction: `chat.acknowledgment` | Works. With no `emoji` the reaction is `hourglass_flowing_sand`. | Taken, and nothing is shown: the profile has no reactions. With custom resources, a Binding that names an `emoji` has the condition `AcknowledgmentShown` `False` ([Binding status](binding-status.md#acknowledgmentshown)). | Taken, and nothing is shown: the profile has no reactions. With custom resources, a Binding that names an `emoji` has the condition `AcknowledgmentShown` `False` ([Binding status](binding-status.md#acknowledgmentshown)). |
 
 The API server does not fill in `output`: the broker fills in the platform's default when it reads the Binding with its
 ChatConnection. A Binding stored by an earlier version, whose API server filled in `live`, keeps it, and on Slack it is served as

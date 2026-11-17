@@ -275,8 +275,9 @@ type ChatConnectionList struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.web) || self.platform == 'web'",message="is set, but only a web connection has one",fieldPath=".web"
 // +kubebuilder:validation:XValidation:rule="self.platform != 'web' || has(self.web)",message="is required on a web connection: it names the profile",fieldPath=".web"
 type ChatConnectionSpec struct {
-	// Platform is the chat platform: slack, or web, whose integration spec.web.profile names. No broker runs a web connection
-	// yet: one that is the broker's own connection stops its start, and a team one is not started.
+	// Platform is the chat platform: slack, or web, whose integration spec.web.profile names. A web connection takes its sender's
+	// requests on the broker's chat listener (AGENTKOURIER_CHAT_LISTEN) at POST /chat/web/<namespace>/<name>. A broker with no chat
+	// listener does not run one: its own fails the start, and a team connection is not started.
 	// +kubebuilder:validation:Enum=slack;web
 	Platform string `json:"platform"`
 	// CredentialsSecretRef names one Secret whose keys are fixed by the platform and its mode or profile. A Slack connection in Socket

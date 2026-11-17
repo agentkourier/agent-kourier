@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    agentkourier.dev/schema-sha256: 7f968a51dca644a374d8162f7cedf3f0d3df9af1f0d99ce52b6f73e6839848c6
+    agentkourier.dev/schema-sha256: b393406db12aba445e13edd2683beddd01ccfb80297ae35e27d1880265b54e17
     controller-gen.kubebuilder.io/version: v0.23.0
   name: chatconnections.agentkourier.dev
 spec:
@@ -84,8 +84,9 @@ spec:
                 type: object
               platform:
                 description: |-
-                  Platform is the chat platform: slack, or web, whose integration spec.web.profile names. No broker runs a web connection
-                  yet: one that is the broker's own connection stops its start, and a team one is not started.
+                  Platform is the chat platform: slack, or web, whose integration spec.web.profile names. A web connection takes its sender's
+                  requests on the broker's chat listener (AGENTKOURIER_CHAT_LISTEN) at POST /chat/web/<namespace>/<name>. A broker with no chat
+                  listener does not run one: its own fails the start, and a team connection is not started.
                 enum:
                 - slack
                 - web

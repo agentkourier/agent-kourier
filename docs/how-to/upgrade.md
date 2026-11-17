@@ -1009,9 +1009,10 @@ a stored object that breaks them depends on its version, so fix the IDs in the s
 ## Upgrade to the release that adds the web platform
 
 The API takes a ChatConnection whose `spec.platform` is `web`, with `spec.web.profile` (`kourier-v1` or `github`), and a Binding's
-`chat.output` takes `none` ([What each platform supports](../reference/platforms.md)). No broker runs a web connection yet: one that is
-the broker's own connection stops the start (exit code 2), and a team's is not started. Every object stored before the upgrade loads as
-it did, and a Slack Binding behaves as before.
+`chat.output` takes `none` ([What each platform supports](../reference/platforms.md)). A web connection runs on the chat listener
+(`chatListener` in the chart): a broker with none does not run one, and then one that is the broker's own connection stops the start
+(exit code 2), and a team's is not started. Every object stored before the upgrade loads as it did, and a Slack Binding behaves as
+before.
 
 - **`chat.output` has no default in the CRD.** The broker fills in the platform's default when it reads the Binding with its
   ChatConnection: `live` on Slack. A Binding stored before the upgrade keeps the `live` that the API server wrote; one applied after it
