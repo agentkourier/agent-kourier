@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"maps"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -149,74 +148,6 @@ func TestAChatConnectionOnAPlatformWithNoAdapterIsAWiringError(t *testing.T) {
 		t.Errorf("connectionOf = %v; want ErrWiring", err)
 	}
 }
-
-// A web ChatConnection is chosen with the key of its profile's Secret and its spec.web, whatever its profile: as the broker's own
-// connection, and as a team connection beside a Slack one. A Secret that lacks the profile's key is a wiring error that names it, as a
-// Slack connection's is.
-func TestAWebChatConnectionIsChosenWithItsProfilesKey(t *testing.T) {
-	for _, web := range []*v1alpha1.WebConnectionSpec{
-		{Profile: v1alpha1.WebProfileKourierV1, URL: "https://receiver.example.com/replies"},
-	} {
-		t.Run(string(web.Profile), func(t *testing.T) {
-			conn := func(ns string) v1alpha1.ChatConnection {
-				return v1alpha1.ChatConnection{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "web", CreationTimestamp: metav1.NewTime(time.Unix(2, 0))},
-					Spec: v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb, Web: web, CredentialsSecretRef: v1alpha1.SecretRef{Name: "creds-web"}}}
-			}
-			slack := v1alpha1.ChatConnection{ObjectMeta: metav1.ObjectMeta{Namespace: "platform", Name: "slack", CreationTimestamp: metav1.NewTime(time.Unix(1, 0))},
-				Spec: v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformSlack, CredentialsSecretRef: v1alpha1.SecretRef{Name: "creds-slack"}}}
-			for _, c := range []v1alpha1.ChatConnection{conn("platform"), slack} {
-				if err := c.Validate(); err != nil {
-					t.Fatalf("the connection does not validate: %v", err)
-				}
-			}
-			key := v1alpha1.CredentialKeys(conn("x").Spec)[0]
-			r := &reader{vals: map[string]string{
-				"platform/creds-web/" + key: "fake-web-secret", "team-a/creds-web/" + key: "fake-web-secret",
-				"platform/creds-slack/botToken": "xoxb-own", "platform/creds-slack/appToken": "xapp-own",
-			}}
-			resolved := func(conns ...v1alpha1.ChatConnection) *config.Snapshot {
-				snap, err := config.Resolve(t.Context(), &config.Set{ChatConnections: conns}, keysOf{key, "botToken", "appToken"})
-				if err != nil {
-					t.Fatal(err)
-				}
-				return snap
-			}
-
-			own, err := ChooseConnections(t.Context(), resolved(conn("platform")), v1alpha1.ObjectRef{Namespace: "platform", Name: "web"}, r)
-			if err != nil {
-				t.Fatalf("own web connection: ChooseConnections = %v; want it served", err)
-			}
-			if c := own.Own; c.Platform != v1alpha1.PlatformWeb || !reflect.DeepEqual(c.Web, web) || len(c.Credentials) != 1 || c.Credentials[key].Reveal() != "fake-web-secret" {
-				t.Errorf("own web connection = %+v; want its platform, its spec.web and the key of its profile alone", c)
-			}
-			if c := own.Own; c.Web == web {
-				t.Error("the connection shares spec.web with the snapshot; want a copy")
-			}
-
-			got, err := ChooseConnections(t.Context(), resolved(slack, conn("team-a")), ownRef, r)
-			if err != nil {
-				t.Fatalf("own Slack connection beside a team web one: ChooseConnections = %v; want it served", err)
-			}
-			if len(got.Team) != 1 || got.Team[0].Err != nil || got.Team[0].Credentials[key].Reveal() != "fake-web-secret" || got.Team[0].Web == nil {
-				t.Errorf("team web connection = %+v; want it with its key and its spec.web", got.Team)
-			}
-
-			delete(r.vals, "team-a/creds-web/"+key)
-			got, err = ChooseConnections(t.Context(), resolved(slack, conn("team-a")), ownRef, r)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(got.Team) != 1 || !errors.Is(got.Team[0].Err, ErrWiring) || !strings.Contains(got.Team[0].Err.Error(), "read "+key+" of Secret team-a/creds-web") {
-				t.Errorf("team web connection with no %s = %+v; want a wiring error naming the key", key, got.Team)
-			}
-		})
-	}
-}
-
-// keysOf says every Secret has the keys given, as the snapshot builder only checks that they exist.
-type keysOf []string
-
-func (k keysOf) Keys(context.Context, string, string) ([]string, error) { return k, nil }
 
 // A Slack connection in HTTP mode is served with the keys of its mode, the bot token and the signing secret, and no app token is read; a
 // connection in Socket Mode beside it keeps its own keys. A Secret of HTTP mode that has no signingSecret is a wiring error that names the key.

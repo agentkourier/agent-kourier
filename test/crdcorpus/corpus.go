@@ -19,7 +19,7 @@
 //	                                                text of want before its first ": "
 //	# cluster: skip because ...                     optional: not sent to an apiserver, with the reason
 //	# connection: slack                             a Binding's only, and optional: the platform it is resolved on
-//	                                                (slack or web/kourier-v1)
+//	                                                (slack)
 //
 // A chat ID's shape is the platform's: the schema and Validate take any platform's IDs, and the broker refuses one that is not of
 // its connection's platform's shape when it resolves the Binding with the connection. An entry with a "# connection:" line is
@@ -91,8 +91,7 @@ type Entry struct {
 // connectionPlatforms are the platforms that an entry's "# connection:" line may name, each with the ChatConnection spec that
 // Broker resolves the entry's Binding against.
 var connectionPlatforms = map[string]v1alpha1.ChatConnectionSpec{
-	"slack":          {Platform: v1alpha1.PlatformSlack},
-	"web/kourier-v1": {Platform: v1alpha1.PlatformWeb, Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileKourierV1, URL: "https://receiver.example.com/replies"}},
+	"slack": {Platform: v1alpha1.PlatformSlack},
 }
 
 // YAML returns the entry as the YAML document the file loader would read.
@@ -195,7 +194,7 @@ func Root() (string, error) {
 
 // InvalidEntries is how many entries the invalid half has. Both tests hold the corpus to it, so an entry cannot be
 // dropped, or added, without this changing in the same commit.
-const InvalidEntries = 239
+const InvalidEntries = 222
 
 // MinValidEntries is the fewest valid entries the valid half may have: the repository's resources change, so this is a
 // floor and not a count. It is under what the roots hold today (see TestEveryValidEntryIsAcceptedByTheBroker), and
@@ -428,7 +427,7 @@ func parseInvalid(doc []byte) (Entry, error) {
 	}
 	e.BrokerOnly = brokerOnly
 	if _, ok := connectionPlatforms[connection]; connection != "" && (!ok || e.Kind != config.KindBinding) {
-		return Entry{}, fmt.Errorf("%s: '# connection:' is for a Binding, and must be one of slack and web/kourier-v1, got %q", rule, connection)
+		return Entry{}, fmt.Errorf("%s: '# connection:' is for a Binding, and must be slack, got %q", rule, connection)
 	}
 	e.Connection = connection
 	if wantReason := !e.SchemaRefuses && e.SkipCluster == ""; wantReason && brokerOnly == "" {

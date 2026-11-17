@@ -28,9 +28,6 @@ type (
 	BotMentions string
 	// SlackMode selects how a Slack connection receives its events and button presses (spec D16).
 	SlackMode string
-	// WebProfile selects the integration a web connection speaks: how its requests are verified and decoded, and how its
-	// replies are sent (spec D42).
-	WebProfile string
 )
 
 // Values of the enumerations, plus the platforms.
@@ -54,10 +51,7 @@ const (
 	SlackModeSocket SlackMode = "socket"
 	SlackModeHTTP   SlackMode = "http"
 
-	WebProfileKourierV1 WebProfile = "kourier-v1"
-
 	PlatformSlack = "slack"
-	PlatformWeb   = "web"
 )
 
 // ObjectRef names a resource in a namespace. An empty namespace means the namespace of the
@@ -248,7 +242,6 @@ type Header struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Namespaced,shortName=akconnection,categories=agentkourier
 // +kubebuilder:printcolumn:name="Platform",type=string,JSONPath=`.spec.platform`
-// +kubebuilder:printcolumn:name="Profile",type=string,JSONPath=`.spec.web.profile`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type ChatConnection struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -270,17 +263,11 @@ type ChatConnectionList struct {
 // ChatConnectionSpec is the desired state of a ChatConnection.
 //
 // +kubebuilder:validation:XValidation:rule="!has(self.slack) || self.platform == 'slack'",message="is set, but only a slack connection has one",fieldPath=".slack"
-// +kubebuilder:validation:XValidation:rule="!has(self.web) || self.platform == 'web'",message="is set, but only a web connection has one",fieldPath=".web"
-// +kubebuilder:validation:XValidation:rule="self.platform != 'web' || has(self.web)",message="is required on a web connection: it names the profile",fieldPath=".web"
 type ChatConnectionSpec struct {
-	// Platform is the chat platform: slack, or web, whose integration spec.web.profile names. A web connection takes its sender's
-	// requests on the broker's chat listener (AGENTKOURIER_CHAT_LISTEN) at POST /chat/web/<namespace>/<name>. A broker with no chat
-	// listener does not run one: its own fails the start, and a team connection is not started.
-	// +kubebuilder:validation:Enum=slack;web
+	// +kubebuilder:validation:Enum=slack
 	Platform string `json:"platform"`
-	// CredentialsSecretRef names one Secret whose keys are fixed by the platform and its mode or profile. A Slack connection in Socket
-	// Mode needs botToken and appToken; one in HTTP mode needs botToken and signingSecret. A web connection of the kourier-v1 profile
-	// needs signingSecret.
+	// CredentialsSecretRef names one Secret whose keys are fixed by the platform and its mode. A Slack connection in Socket Mode needs
+	// botToken and appToken; one in HTTP mode needs botToken and signingSecret.
 	CredentialsSecretRef SecretRef `json:"credentialsSecretRef"`
 	// AllowedNamespaces lists the other namespaces whose Bindings may reference this connection. Each is a DNS-1123 label.
 	// An empty list permits references only from the connection's own namespace. At most 256.
@@ -293,9 +280,6 @@ type ChatConnectionSpec struct {
 	// uses Socket Mode.
 	// +optional
 	Slack *SlackConnectionSpec `json:"slack,omitempty"`
-	// Web holds the settings of a web connection. A connection whose platform is web must set it, and no other may.
-	// +optional
-	Web *WebConnectionSpec `json:"web,omitempty"`
 }
 
 // SlackMode returns the mode of a Slack connection: spec.slack.mode, or socket when it is unset. The API fills in no default (spec
@@ -318,35 +302,6 @@ type SlackConnectionSpec struct {
 	// +doc:default=socket
 	// +optional
 	Mode SlackMode `json:"mode,omitempty"`
-}
-
-// WebConnectionSpec is the settings of a web connection: the profile that its requests and replies follow.
-//
-// +kubebuilder:validation:XValidation:rule="has(self.url) && size(self.url) > 0",message="is required: Agent Kourier posts the agent's replies to it",fieldPath=".url"
-type WebConnectionSpec struct {
-	// Profile is the integration the connection speaks. kourier-v1 is Agent Kourier's own signed JSON contract: it takes signed
-	// requests and posts the agent's replies, signed, to url.
-	// +kubebuilder:validation:Enum=kourier-v1
-	Profile WebProfile `json:"profile"`
-
-	// The URL rules below are those of AgentBackendSpec.URL, which copy only what the broker's parse is certain to refuse (each
-	// stops at the first "#"), and one more: an http URL must match webHTTPURL, the Go literal that Validate holds an http URL
-	// to, so that the two agree on it by construction (TestSchemaPatternsEqualTheGoLiterals reads the rule). Validate refuses
-	// what url.Parse refuses besides, which the rules let through. (Not in the doc comment below, which the reference pages print.)
-
-	// URL is where Agent Kourier posts the agent's replies, and is required. It is an https URL, or an http one only to localhost, a
-	// loopback address (127.x.x.x or [::1]) or a Service in the cluster (a host that ends in .svc or .svc.cluster.local), since a
-	// reply carries what the agent wrote. At most 2048 bytes, with no credentials, query or fragment: the replies are signed with the
-	// credentials Secret's signingSecret.
-	// +kubebuilder:validation:MaxLength=2048
-	// +kubebuilder:validation:XValidation:rule=`self == '' || self.matches('(?i)^https?://[^/?#]')`,message="must be an http or https URL with a host"
-	// +kubebuilder:validation:XValidation:rule=`!self.matches('(?i)^https?://[^/?#]*@')`,message="must not contain credentials; the replies are signed with the Secret's signingSecret"
-	// +kubebuilder:validation:XValidation:rule=`!self.matches(r'^[^#]*[\x00-\x1f\x7f]')`,message="invalid URL: must not contain control characters"
-	// +kubebuilder:validation:XValidation:rule=`!self.matches(r'(?i)^https?://[^/?#]*[ \\^\x60{|}]')`,message="invalid URL: the host must not contain a space, backslash, caret, backtick, brace or bar"
-	// +kubebuilder:validation:XValidation:rule=`!self.matches('[?#]')`,message="must not have a query or fragment"
-	// +kubebuilder:validation:XValidation:rule=`!self.matches('(?i)^http://') || self.matches(r'(?i)^http://(?:localhost|127(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}|\[::1\]|(?:[a-z0-9-]+\.)+svc(?:\.cluster\.local)?)(?::[0-9]{1,5})?(?:[/?#]|$)')`,message="http is allowed only to localhost, a loopback address or a Service in the cluster (a host that ends in .svc or .svc.cluster.local); use https"
-	// +optional
-	URL string `json:"url,omitempty"`
 }
 
 // Binding connects one agent to one chat channel.

@@ -191,28 +191,6 @@ func urls() func(*rand.Rand) any {
 	}
 }
 
-// webURLs is a pool of a kourier-v1 connection's reply URLs: the AgentBackend's pool, whose http URLs a reply URL mostly may not
-// use, and the hosts that an http reply URL may and may not name (a Service, localhost and loopback, and hosts that only look
-// like them), in odd cases and with ports and paths.
-func webURLs() func(*rand.Rand) any {
-	backend := urls()
-	hosts := []string{"localhost", "LocalHost", "127.0.0.1", "127.1.2.3", "127.0.0.1.nip.io", "127.0.0", "127.255.255.255", "127.999.0.1", "127.0.0.256", "127.0.0.01", "[::1]", "[::2]", "r.ns.svc", "r.ns.SVC",
-		"r.ns.svc.cluster.local", "r.ns.svc.cluster.local.", "r.svc.example.com", "svc", ".svc", "r..svc", "r_ns.svc", "localhost.example.com",
-		"%6cocalhost", "r.example.com", "r.ns.svc.cluster", "xlocalhost"}
-	tails := []string{"", "/", "/replies", ":8080", ":8080/replies", ":", ":99999", ":80:80", "?q", "#f", "/a b", "@x", "\\x"}
-	return func(r *rand.Rand) any {
-		switch r.IntN(4) {
-		case 0:
-			return backend(r)
-		case 1:
-			return []any{absent{}, "", nil, "http://" + strings.Repeat("a", 2048-7), "http://localhost/" + strings.Repeat("a", 2048-17),
-				"http://localhost/" + strings.Repeat("a", 2048-16), "https://u:p@r.example.com/", "https://@r.example.com/"}[r.IntN(8)]
-		}
-		scheme := []string{"http://", "https://", "HTTP://", "hTtP://"}[r.IntN(4)]
-		return scheme + hosts[r.IntN(len(hosts))] + tails[r.IntN(len(tails))]
-	}
-}
-
 // headerNames is a pool of header names: each reserved one in random case, with a space, a suffix or a prefix, and names
 // of multibyte characters that are near 256 bytes.
 func headerNames() func(*rand.Rand) any {
@@ -289,15 +267,6 @@ func variationTemplates() []template {
 		}},
 		{kind: "Binding", doc: bindingDoc, mutations: bindingMutations(dur, messageFields, extractNames)},
 		{kind: "Binding", doc: bindingDoc, mutations: bindingMutations(dur, messageFields, extractNames)},
-		{kind: "ChatConnection", doc: webConnectionDoc, mutations: []mutation{
-			{"spec.platform", of("web", "web", "slack", "", "Web")},
-			{"spec.web", of(absent{}, nil, map[string]any{}, map[string]any{"profile": "github"}, map[string]any{"profile": "kourier-v1", "url": ""},
-				map[string]any{"profile": "kourier-v1"}, map[string]any{"profile": "kourier-v1", "url": nil})},
-			{"spec.web.profile", of("kourier-v1", "kourier-v1", "github", "", "Kourier-v1", "kourier-v2", absent{})},
-			{"spec.web.url", webURLs()},
-			{"spec.web.url", webURLs()},
-			{"spec.slack", of(absent{}, absent{}, nil, map[string]any{}, map[string]any{"mode": "http"})},
-		}},
 		{kind: "Binding", doc: mentionBindingDoc, mutations: []mutation{
 			{"spec.chat.triggers.0.from", of(absent{}, map[string]any{"id": "B0123456789"}, map[string]any{})},
 			{"spec.chat.triggers.0.match", of(absent{}, map[string]any{}, map[string]any{"title": "x"}, map[string]any{"title": ""})},
@@ -335,7 +304,7 @@ func bindingMutations(dur, messageFields, extractNames func(*rand.Rand) any) []m
 		{"spec.chat.channel", of("C0123456789", "C"+strings.Repeat("0", 31), "C"+strings.Repeat("0", 32), "G"+strings.Repeat("A", 31), "#"+strings.Repeat("x", 32), "C"+strings.Repeat("é", 20),
 			"C"+strings.Repeat("0", 139), "C"+strings.Repeat("0", 140), "general", "octo/repo", strings.Repeat("o", 39)+"/"+strings.Repeat("r", 100),
 			strings.Repeat("o", 39)+"/"+strings.Repeat("r", 101), "o-/r", "o/r/s", "o/"+strings.Repeat("é", 20),
-			// The kourier-v1 shape: an opaque ID, at the cap of every platform and past it, and the characters it leaves out.
+			// Opaque IDs of no Slack shape, at the cap and past it, and the characters near the edges of the set.
 			"1", "ch-1", "a.b_c-2", "general1", strings.Repeat("c", 139)+"1", strings.Repeat("c", 140)+"1", "ch:1", "-1", "_1", "ch-é1", "ch 1",
 			// The characters no platform's ID has: a space, a tab, a control character, a colon, DEL and the non-ASCII.
 			"#sre-alerts", "sre\talerts", "sre\x00", "sre\x7f", ":", "sre\u00a0alerts", "sre\u202ealerts")},
@@ -470,16 +439,6 @@ spec:
         promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
   interactions: {toolApprovals: true, approverGroups: [S0123456789], timeout: 30m}
   session: {threadTTL: 90h}
-`
-
-const webConnectionDoc = `
-apiVersion: agentkourier.dev/v1alpha1
-kind: ChatConnection
-metadata: {name: variation, namespace: sre}
-spec:
-  platform: web
-  credentialsSecretRef: {name: s}
-  web: {profile: kourier-v1, url: "https://receiver.example.com/replies"}
 `
 
 const mentionBindingDoc = `

@@ -238,7 +238,7 @@ func TestAgentBackendValidate(t *testing.T) {
 
 func TestChatConnectionValidate(t *testing.T) {
 	runMutations[ChatConnection](t, "chatconnection.yaml", []mutation[ChatConnection]{
-		{"bad platform", func(o *ChatConnection) { o.Spec.Platform = "teams" }, `spec.platform: unsupported value "teams", must be one of slack, web`},
+		{"bad platform", func(o *ChatConnection) { o.Spec.Platform = "teams" }, `spec.platform: unsupported value "teams", must be one of slack`},
 		{"credentials without name", func(o *ChatConnection) { o.Spec.CredentialsSecretRef = SecretRef{} }, "spec.credentialsSecretRef.name: required"},
 		{"credentials with bad name", func(o *ChatConnection) { o.Spec.CredentialsSecretRef.Name = "Slack_Main" },
 			badName("spec.credentialsSecretRef.name", "Slack_Main")},
@@ -257,12 +257,12 @@ func TestChatConnectionValidate(t *testing.T) {
 }
 
 // A slack block on a connection of another platform is refused, besides the platform, so that no other platform's connection carries
-// Slack's settings (TestWebConnectionValidate has a web connection's).
+// Slack's settings.
 func TestChatConnectionRefusesASlackBlockOnAnotherPlatform(t *testing.T) {
 	c := load[ChatConnection](t, "chatconnection.yaml")
 	c.Spec.Platform = "teams"
 	c.Spec.Slack = &SlackConnectionSpec{Mode: SlackModeSocket}
-	want := []string{`spec.platform: unsupported value "teams", must be one of slack, web`, "spec.slack: is set, but only a slack connection has one"}
+	want := []string{`spec.platform: unsupported value "teams", must be one of slack`, "spec.slack: is set, but only a slack connection has one"}
 	if got := problemsOf(c.Validate()); !slices.Equal(got, want) {
 		t.Errorf("Validate() problems = %q, want %q", got, want)
 	}
@@ -463,4 +463,18 @@ func TestBindingValidate(t *testing.T) {
 		{"threadTTL of the largest Duration", func(o *Binding) { o.Spec.Session.ThreadTTL.Duration = math.MaxInt64 },
 			"spec.session.threadTTL: 2562047h47m16.854775807s is out of range, must be at most 8760h0m0s"},
 	})
+}
+
+// Output is live or final, and Default fills in live where it is left out, so that a Binding that names none runs live.
+func TestBindingOutputValues(t *testing.T) {
+	runMutations[Binding](t, "binding.yaml", []mutation[Binding]{
+		{"output final ok", func(o *Binding) { o.Spec.Chat.Output = OutputFinal }, ""},
+		{"output none", func(o *Binding) { o.Spec.Chat.Output = "none" }, `spec.chat.output: unsupported value "none", must be one of live, final`},
+		{"output in the wrong case", func(o *Binding) { o.Spec.Chat.Output = "Live" },
+			`spec.chat.output: unsupported value "Live", must be one of live, final`},
+	})
+	b := load[Binding](t, "binding-minimal.yaml")
+	if b.Spec.Chat.Output != OutputLive {
+		t.Errorf("output after Default = %q; want live", b.Spec.Chat.Output)
+	}
 }

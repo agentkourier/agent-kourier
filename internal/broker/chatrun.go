@@ -191,16 +191,7 @@ func connectionOf(ctx context.Context, c *v1alpha1.ChatConnection, secrets ident
 		}
 		creds[key] = v
 	}
-	return Connection{Ref: v1alpha1.ObjectRef{Namespace: c.Namespace, Name: c.Name}, Platform: c.Spec.Platform, Web: copyWeb(c.Spec.Web), Credentials: creds}, nil
-}
-
-// copyWeb is a copy of s that shares nothing with it, so that a Connection keeps what the ChatConnection said when it was read, or nil.
-func copyWeb(s *v1alpha1.WebConnectionSpec) *v1alpha1.WebConnectionSpec {
-	if s == nil {
-		return nil
-	}
-	c := *s // its fields are values: the copy shares nothing
-	return &c
+	return Connection{Ref: v1alpha1.ObjectRef{Namespace: c.Namespace, Name: c.Name}, Platform: c.Spec.Platform, Credentials: creds}, nil
 }
 
 // Connections are the ChatConnections a broker runs: its own, if it has one, and the team connections it serves besides (spec D52, D53).

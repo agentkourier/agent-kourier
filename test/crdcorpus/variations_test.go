@@ -43,7 +43,7 @@ func TestVariationsAreStableAndOftenAccepted(t *testing.T) {
 		}
 	}
 	t.Logf("broker accepts %v and refuses %v of the first %d variations", accepted, refused, len(sample))
-	for _, kind := range []string{"AgentBackend", "Binding", "ChatConnection"} {
+	for _, kind := range []string{"AgentBackend", "Binding"} {
 		n := accepted[kind] + refused[kind]
 		if n == 0 {
 			t.Fatalf("no %s variations", kind)

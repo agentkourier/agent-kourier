@@ -217,8 +217,8 @@ type problem struct {
 	rejection *Rejection
 }
 
-// platformRules returns the rules of the chat platform of a ChatConnection's spec (its platform, and on web its profile), and false
-// for one that has none: v1alpha1.ChatPlatformOf, or a test's own table.
+// platformRules returns the rules of the chat platform of a ChatConnection's spec, and false for one that has none:
+// v1alpha1.ChatPlatformOf, or a test's own table.
 type platformRules func(spec v1alpha1.ChatConnectionSpec) (v1alpha1.ChatPlatform, bool)
 
 // PlatformsPage is the reference page that says what each platform supports, which the message of a rejection for the platform
@@ -344,8 +344,8 @@ func (r *resolver) binding(b *v1alpha1.Binding) {
 
 // fitsPlatform rejects b for each chat ID it names and each feature it asks for that the platform of conn does not take, and
 // reports whether there was none. It is asked only once conn admits b, so that a Binding the connection does not admit learns
-// nothing of its platform. A platform with no rules is not checked: ChatConnection's Validate refuses every platform and profile
-// that v1alpha1.ChatPlatformOf has no rules for, so a Set holds no connection of one (a connection that a test builds by hand may).
+// nothing of its platform. A platform with no rules is not checked: ChatConnection's Validate refuses every platform that
+// v1alpha1.ChatPlatformOf has no rules for, so a Set holds no connection of one (a connection that a test builds by hand may).
 func (r *resolver) fitsPlatform(from identity, b *v1alpha1.Binding, conn *v1alpha1.ChatConnection) bool {
 	problems := platformProblems(b, conn, r.platforms)
 	for _, p := range problems {

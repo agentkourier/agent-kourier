@@ -7,7 +7,7 @@ import (
 
 // The chat IDs of a Binding (spec D42) are checked in two places. The schema and Validate hold each ID field to a length cap and
 // to chatIDChars, a character set that every platform's IDs are written in, and nothing more: which shape an ID must have depends on
-// the platform of the ChatConnection it names, and on a web connection on its profile, which neither the schema nor Validate reads.
+// the platform of the ChatConnection it names, which neither the schema nor Validate reads.
 // The broker checks the shape (PlatformMismatches, with the ChatPlatform of the connection's spec) in two places where it has the
 // connection: when the custom resource source reads the Binding (config.RefusedOnPlatform, which refuses that generation as a failed
 // Validate does), and when it resolves the Binding. A Slack channel's name, such as general, is refused there, with
@@ -36,16 +36,9 @@ var (
 	slackGroupID   = regexp.MustCompile(`^S[A-Z0-9]+$`)
 )
 
-// The kourier-v1 profile's shape, of every ID it carries: an opaque ID, which the sender chooses and Agent Kourier reads as it is, of
-// letters, digits, '.', '_' and '-', that starts with a letter or a digit. ':' is left out, as chatIDChars leaves it out.
-// maxKourierV1IDLen is its cap: 64 bytes holds a UUID (36), a ULID (26) or a SHA-256 in hex (64),
-// and keeps an ID short enough for the messages that quote it.
-var kourierV1ID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
-
 const (
 	maxSlackIDLen     = 32
 	maxSlackUserIDLen = 21
-	maxKourierV1IDLen = 64
 )
 
 // IDShape is the form that one kind of chat ID has on one platform: a pattern, a length cap in bytes, and what to write instead. The
@@ -72,10 +65,10 @@ func (s IDShape) Taken() bool { return s.pattern != nil }
 // the platform serves. ChatPlatformOf returns it. A feature is a field that is false here when the platform cannot serve it, and an ID
 // a shape that is zero when the platform takes none, so that a platform added without a word on either does not serve it.
 type ChatPlatform struct {
-	// Name is the platform's display name, as a message writes it: Slack, or web (kourier-v1 profile).
+	// Name is the platform's display name, as a message writes it: Slack.
 	Name string
 	// ActorName is the name of the platform that the people who write in its conversations are on, as the agent reads it in front of
-	// each message (the dialects' attribution): Slack, or web.
+	// each message (the dialects' attribution): Slack.
 	ActorName string
 	// Channel is the shape of spec.chat.channel, Sender of a botMessage trigger's from.id, User of a mention's user, and Group of an
 	// entry of spec.interactions.approverGroups. Every platform takes a channel.
@@ -90,16 +83,11 @@ type ChatPlatform struct {
 	Feedback bool
 }
 
-// webProfiles returns the profiles of the web platform, in the order of the Enum marker of spec.web.profile, which
-// TestWebProfilesFollowTheEnum holds it to.
-func webProfiles() []WebProfile { return []WebProfile{WebProfileKourierV1} }
-
-// ChatPlatformOf returns what a Binding may name and use on the platform of a ChatConnection with spec, and what the connection names:
-// spec.platform, and on a web connection spec.web.profile. It returns false for a platform or a profile that ChatConnection's Validate
-// refuses. It is the one table of what each platform takes: a platform or a profile is one more case here. It is a func and not a map,
-// so that there is no state to change.
+// ChatPlatformOf returns what a Binding may name and use on the platform of a ChatConnection with spec, which spec.platform names. It
+// returns false for a platform that ChatConnection's Validate refuses. It is the one table of what each platform takes: a platform is
+// one more case here. It is a func and not a map, so that there is no state to change.
 func ChatPlatformOf(spec ChatConnectionSpec) (ChatPlatform, bool) {
-	switch spec.Platform {
+	switch spec.Platform { //nolint:gocritic // one case for each platform: another platform is one more case
 	case PlatformSlack:
 		return ChatPlatform{
 			Name: "Slack", ActorName: "Slack",
@@ -113,27 +101,6 @@ func ChatPlatformOf(spec ChatConnectionSpec) (ChatPlatform, bool) {
 				Fix: "use the user group's ID, such as S0123456789"},
 			AskUser: true, ToolApprovals: true, Feedback: true,
 		}, true
-	case PlatformWeb:
-		if spec.Web == nil {
-			return ChatPlatform{}, false
-		}
-		switch spec.Web.Profile { //nolint:gocritic // one case for each web profile: another profile is one more case
-		case WebProfileKourierV1:
-			// The profile posts the replies, and has no buttons and no way to take an answer: questions, tool approvals and
-			// feedback are not served. Each can be loosened later, which no stored Binding notices.
-			const opaque = "letters, digits, '.', '_' and '-', starting with a letter or a digit"
-			return ChatPlatform{
-				Name: "web (kourier-v1 profile)", ActorName: "web",
-				Channel: IDShape{pattern: kourierV1ID, maxLen: maxKourierV1IDLen, What: "a channel ID",
-					Fix: "use the channel's ID as the sender sends it: " + opaque + ", such as ch-1"},
-				Sender: IDShape{pattern: kourierV1ID, maxLen: maxKourierV1IDLen, What: "a sender ID",
-					Fix: "use the sender's ID as the sender sends it: " + opaque},
-				User: IDShape{pattern: kourierV1ID, maxLen: maxKourierV1IDLen, What: "a user ID",
-					Fix: "use the person's ID as the sender sends it: " + opaque},
-				Group: IDShape{pattern: kourierV1ID, maxLen: maxKourierV1IDLen, What: "a group ID",
-					Fix: "use the group's ID as the sender sends it: " + opaque},
-			}, true
-		}
 	}
 	return ChatPlatform{}, false
 }

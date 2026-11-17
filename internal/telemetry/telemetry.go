@@ -79,7 +79,6 @@ func New(reg prometheus.Registerer, provider trace.TracerProvider) (*Observer, e
 		{"agentkourier_slack_events_shed_total", "Slack events left unacknowledged, so that Slack sends them again, because the adapter already held as many as it may: channel_backlog (one channel's lane was full) or adapter_backlog (all lanes were).", []string{"reason", ConnectionLabel}},
 		{"agentkourier_slack_http_requests_total", "Requests Slack sent to a connection in HTTP mode, by what they were answered: acknowledged, challenge, bad_signature, stale, malformed, not_running, shed, withheld or timeout.", []string{"outcome", ConnectionLabel}},
 		{"agentkourier_slack_http_retries_total", "Signed requests to a connection in HTTP mode that Slack marked as a retry (X-Slack-Retry-Num): a request it sent again because an earlier one was not answered 200 in time.", []string{ConnectionLabel}},
-		{"agentkourier_web_requests_total", "Requests to a web connection, by its profile and by what they were answered: accepted, ignored, unverified, malformed, too_large, not_running, withheld or timeout.", []string{"outcome", "profile", ConnectionLabel}},
 	} {
 		c := prometheus.NewCounterVec(prometheus.CounterOpts{Name: d.name, Help: d.help}, d.labels)
 		if err := reg.Register(c); err != nil {

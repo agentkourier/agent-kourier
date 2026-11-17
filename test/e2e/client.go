@@ -37,12 +37,10 @@ type client struct {
 	base  string
 	hc    *http.Client
 	limit int64 // the most of an answer do reads; maxBody unless a helper needs more
-	// header is sent with every request, beside the Content-Type: the bearer of a double that asks for one. None unless a helper sets it.
-	header http.Header
 }
 
 func newClient(base string) *client {
-	return &client{base: strings.TrimRight(base, "/"), hc: &http.Client{Timeout: httpTimeout}, limit: maxBody}
+	return &client{strings.TrimRight(base, "/"), &http.Client{Timeout: httpTimeout}, maxBody}
 }
 
 // do sends in (nil for no body) as JSON and decodes a 2xx answer into out (nil to ignore it). Any
@@ -78,9 +76,6 @@ func (c *client) exchange(ctx context.Context, method, path string, body io.Read
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, body)
 	if err != nil {
 		return nil, fmt.Errorf("e2e: %w", err)
-	}
-	for k, v := range c.header {
-		req.Header[k] = v
 	}
 	if asJSON {
 		req.Header.Set("Content-Type", "application/json")

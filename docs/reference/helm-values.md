@@ -261,7 +261,7 @@ A ClusterIP Service on the metrics port (/metrics, and the health paths), which 
 
 ## chatListener
 
-The chat listener (AGENTKOURIER_CHAT_LISTEN): a port of its own, apart from the metrics port, that a chat platform sends its requests to, POST /chat/&lt;platform&gt;/&lt;namespace&gt;/&lt;name&gt;. A Slack ChatConnection with spec.slack.mode http needs it, and so does every web ChatConnection (spec.platform web); Socket Mode does not. Off by default, and then the broker opens no such port.
+The chat listener (AGENTKOURIER_CHAT_LISTEN): a port of its own, apart from the metrics port, that a chat platform sends its requests to, POST /chat/&lt;platform&gt;/&lt;namespace&gt;/&lt;name&gt;. A Slack ChatConnection with spec.slack.mode http needs it; Socket Mode does not. Off by default, and then the broker opens no such port.
 
 Switched on, the chart passes the pod's name and namespace from the downward API (AGENTKOURIER_POD_NAME, AGENTKOURIER_POD_NAMESPACE). Every replica takes the label agentkourier.dev/role=leader off its own pod as it starts, and is not Ready until a write of the label has succeeded, that removal or the label put on (so a replica whose patches of its pod keep failing, while the API server answers its reads, is out of every Service until one succeeds); the leader puts it on once it leads, and takes it off at shutdown. With SQLite the one replica leads, and carries it. podLabels may not set it. The chat Service, &lt;fullname&gt;-chat, selects the Deployment's pods that carry the label, so it sends requests to the leader alone; while no replica leads (a takeover) it has no endpoint, and the platform's requests fail until one does.
 
