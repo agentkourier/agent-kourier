@@ -80,7 +80,7 @@ func webIntake(t *testing.T, spec v1alpha1.ChatConnectionSpec, profile web.Profi
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- p.Run(ctx, in) }()
-	t.Cleanup(func() { cancel(); <-done })
+	t.Cleanup(func() { cancel(); _ = <-done })
 	<-up // the platform takes requests
 	h, _ := p.HTTPHandler()
 	return func(req *http.Request) int {
