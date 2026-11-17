@@ -8,7 +8,8 @@
 //
 // A reply's text is inert for a receiver that keeps the contract: every field of the message is plain text, cleaned and cut to its
 // limit, but a body part's markdown, which is CommonMark in which every character that could open a link, an image, an autolink, raw
-// HTML or a mention is escaped. The profile has no buttons, presses or reactions: a Binding on it takes no questions, tool approvals
+// HTML or a mention is escaped outside code, and code, in blocks and spans that Agent Kourier writes itself, holds the agent's text as
+// it is (internal/chat/commonmark). The profile has no buttons, presses or reactions: a Binding on it takes no questions, tool approvals
 // or feedback (v1alpha1.ChatPlatformOf).
 package kourierv1
 
@@ -36,7 +37,7 @@ const (
 	// agent's prompt.
 	maxBody = 64 << 10
 	// maxText is the most UTF-16 units of text in each field of a reply (chat.Caps.MaxText): a longer one is cut, and ends in
-	// chat.Truncated.
+	// chat.Truncated. A body's markdown is counted as it is sent, its escapes and fences with it.
 	maxText = 40000
 	// maxReplyBody is the most bytes of a reply's body. A reply past it is refused as too large, which no field's cut can cause alone:
 	// a prompt of many questions, each within maxText, can.
@@ -66,8 +67,7 @@ const (
 // document, or a version other than InboundVersion is refused.
 type Inbound struct {
 	V int `json:"v"`
-	// Channel is the conversation: the kourier-v1 shape of a channel ID (letters, digits, '.', '_' and '-', with a digit, at most 64
-	// bytes), which the Binding's spec.chat.channel names.
+	// Channel is the conversation, which the Binding's spec.chat.channel names. It has the kourier-v1 shape of every ID below.
 	Channel string `json:"channel"`
 	// Thread is the ID of the message that opened the thread, for a reply in one, and empty for a message that opens one: the message's
 	// own ID is then the thread's. A thread that is the message's own ID is refused.
@@ -111,17 +111,17 @@ var (
 	_ web.Encoder = (*Profile)(nil)
 )
 
-// New returns the profile that checks and signs with signingSecret (the credentials Secret's signingSecret), or an error for none.
-func New(signingSecret secret.Value) (*Profile, error) {
+// New returns the profile that checks and signs with signingSecret (the credentials Secret's signingSecret), and holds what it decodes
+// to the shapes of platform, what the API says the connection's platform takes (v1alpha1.ChatPlatformOf of its spec). It returns an
+// error for no secret, or a platform that takes no channel or no user ID.
+func New(signingSecret secret.Value, platform v1alpha1.ChatPlatform) (*Profile, error) {
 	if signingSecret.IsEmpty() {
 		return nil, errors.New("kourier-v1: no signing secret")
 	}
-	shapes, ok := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb,
-		Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileKourierV1}})
-	if !ok {
-		return nil, errors.New("kourier-v1: the API has no kourier-v1 profile")
+	if !platform.Channel.Taken() || !platform.User.Taken() {
+		return nil, fmt.Errorf("kourier-v1: the platform %q takes no channel or no user ID", platform.Name)
 	}
-	return &Profile{key: signingSecret, shapes: shapes, ids: shapes.User}, nil
+	return &Profile{key: signingSecret, shapes: platform, ids: platform.User}, nil
 }
 
 // Name implements web.Profile.

@@ -66,10 +66,9 @@ func TestLoadSpecExamples(t *testing.T) {
 		t.Fatalf("got %d backends, %d connections, %d bindings; want 1, 1, 2",
 			len(set.AgentBackends), len(set.ChatConnections), len(set.Bindings))
 	}
-	// Files load in lexical order: binding-minimal.yaml before binding.yaml. The output is left for resolution, whose default depends
-	// on the platform (TestResolutionFillsTheOutputOfTheSlackPlatform).
+	// Files load in lexical order: binding-minimal.yaml before binding.yaml.
 	minimal := set.Bindings[0]
-	if minimal.Name != "chat-only" || minimal.Spec.Chat.Output != "" ||
+	if minimal.Name != "chat-only" || minimal.Spec.Chat.Output != v1alpha1.OutputLive ||
 		minimal.Spec.Interactions.Timeout.Duration != 30*time.Minute || minimal.Spec.Interactions.ToolApprovals || len(minimal.Spec.Interactions.ApproverGroups) != 0 {
 		t.Errorf("defaults not applied to %s: %+v", minimal.Name, minimal.Spec)
 	}
@@ -458,11 +457,11 @@ func TestLoadRejects(t *testing.T) {
 		{
 			name: "problems from several files are all reported",
 			files: map[string]string{
-				"a.yaml": strings.Replace(bindingDoc, "C0123456789", "general", 1),
+				"a.yaml": strings.Replace(bindingDoc, "C0123456789", "sre alerts", 1),
 				"b.yaml": strings.Replace(backendDoc, "kagent-v1", "grpc", 1),
 			},
 			want: []string{
-				`a.yaml#1 Binding sre/sre-alerts: spec.chat.channel: invalid channel "general": must be a channel ID such as C0123456789, not a name`,
+				`a.yaml#1 Binding sre/sre-alerts: spec.chat.channel: invalid channel "sre alerts": a chat ID is printable ASCII with no space and no ':'`,
 				`b.yaml#1 AgentBackend agent-kourier-system/kagent-pilot: spec.dialect: unsupported value "grpc", must be one of a2a, kagent-v1`,
 			},
 		},

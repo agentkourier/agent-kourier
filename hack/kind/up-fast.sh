@@ -47,6 +47,11 @@
 # (hack/kind/fast/two-apps). The fake Slack hosts the second app and a third (team-b's) in every tier (fast/doubles.yaml). On E2E_STORE=postgres with
 # E2E_REPLICAS=2 the failover scenarios of that suite run too. Bringing the tier up again without it takes the admission list away, and the team's
 # objects stay in the cluster, not served. hack/kind/two-apps.sh (make e2e-two-apps) runs the scenarios that change the admission list with Helm.
+#
+# On custom resources the tier also serves a web ChatConnection of the kourier-v1 profile, in the namespace e2e-web (hack/kind/fast/web, lib.sh's
+# deploy_web; the WEB_ tests of test/e2e drive it through the fake web sender and receiver, test/fakeweb): hack/kind/web-values.yaml admits the namespace
+# and turns on the chat listener. The ConfigMap route serves one ChatConnection, so it has no web connection, and the WEB_ tests skip there. With
+# E2E_TWO_APPS=1 the admission list is the MC_ tests' own, so the web connection stays in the cluster, not served, and the WEB_ tests skip too.
 set -eEuo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -146,8 +151,12 @@ if [ "${E2E_REPLICAS}" = 2 ]; then
 fi
 
 AGENTKOURIER_CRDS_ARGS=()
+WEB=0
 if [ "${E2E_TWO_APPS}" = 1 ]; then
   AGENTKOURIER_CRDS_ARGS=(-f "${HERE}/two-apps-values.yaml")
+elif [ "${E2E_CONFIG_SOURCE}" = crds ]; then
+  WEB=1
+  AGENTKOURIER_CRDS_ARGS=(-f "${HERE}/web-values.yaml")
 fi
 
 step "agent-kourier: namespace, config, Secrets, chart"
@@ -167,6 +176,11 @@ if [ "${E2E_TWO_APPS}" = 1 ]; then
   deploy_two_apps
 fi
 
+if [ "${WEB}" = 1 ]; then
+  step "e2e-web: the web ChatConnection (kourier-v1), its Secrets and Binding"
+  deploy_web
+fi
+
 step "verify"
 "${FAST}/verify.sh"
-echo "fast tier up in ${SECONDS}s (context ${CTX}, store ${E2E_STORE}, ${E2E_REPLICAS} Agent Kourier replica(s), config source ${E2E_CONFIG_SOURCE}, Slack mode ${E2E_SLACK_MODE}, two apps ${E2E_TWO_APPS})"
+echo "fast tier up in ${SECONDS}s (context ${CTX}, store ${E2E_STORE}, ${E2E_REPLICAS} Agent Kourier replica(s), config source ${E2E_CONFIG_SOURCE}, Slack mode ${E2E_SLACK_MODE}, two apps ${E2E_TWO_APPS}, web connections ${WEB})"

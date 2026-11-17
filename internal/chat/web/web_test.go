@@ -13,38 +13,52 @@ import (
 
 func TestNewRefusesAConfigItCannotRunWith(t *testing.T) {
 	withCaps := func(f func(*chat.Caps)) *testProfile {
-		p := newTestProfile(true)
+		p := newTestProfile()
 		f(&p.caps)
 		return p
 	}
+	noEncoder := newTestProfile()
+	noEncoder.noEncoder = true
 	for name, cfg := range map[string]web.Config{
-		"no connection":                       {Profile: newTestProfile(false)},
-		"no profile":                          {Connection: "ns/web"},
-		"a profile that replies, with no URL": {Connection: "ns/web", Profile: newTestProfile(true)},
-		"a relative URL":                      {Connection: "ns/web", Profile: newTestProfile(true), URL: "/hook"},
-		"another scheme":                      {Connection: "ns/web", Profile: newTestProfile(true), URL: "file:///etc/passwd"},
-		"a URL with no host":                  {Connection: "ns/web", Profile: newTestProfile(true), URL: "https:///hook"},
-		"a URL for a profile with no replies": {Connection: "ns/web", Profile: newTestProfile(false), URL: "https://receiver.example/"},
-		"streams":                             {Connection: "ns/web", URL: "https://r.example/", Profile: withCaps(func(c *chat.Caps) { c.Streams = true })},
-		"steps":                               {Connection: "ns/web", URL: "https://r.example/", Profile: withCaps(func(c *chat.Caps) { c.Steps = true })},
-		"ephemeral messages":                  {Connection: "ns/web", URL: "https://r.example/", Profile: withCaps(func(c *chat.Caps) { c.Ephemeral = true })},
-		"busy marks":                          {Connection: "ns/web", URL: "https://r.example/", Profile: withCaps(func(c *chat.Caps) { c.Busy = true })},
-		"reactions":                           {Connection: "ns/web", URL: "https://r.example/", Profile: withCaps(func(c *chat.Caps) { c.AckReaction = "eyes" })},
-		"a limit too small to hold the mark":  {Connection: "ns/web", URL: "https://r.example/", Profile: withCaps(func(c *chat.Caps) { c.MaxText = 1 })},
+		"no connection":                      {Profile: newTestProfile(), URL: receiverURL},
+		"no profile":                         {Connection: "ns/web", URL: receiverURL},
+		"a profile with no encoder":          {Connection: "ns/web", Profile: noEncoder, URL: receiverURL},
+		"no URL":                             {Connection: "ns/web", Profile: newTestProfile()},
+		"a relative URL":                     {Connection: "ns/web", Profile: newTestProfile(), URL: "/hook"},
+		"another scheme":                     {Connection: "ns/web", Profile: newTestProfile(), URL: "file:///etc/passwd"},
+		"a URL with no host":                 {Connection: "ns/web", Profile: newTestProfile(), URL: "https:///hook"},
+		"streams":                            {Connection: "ns/web", URL: receiverURL, Profile: withCaps(func(c *chat.Caps) { c.Streams = true })},
+		"steps":                              {Connection: "ns/web", URL: receiverURL, Profile: withCaps(func(c *chat.Caps) { c.Steps = true })},
+		"ephemeral messages":                 {Connection: "ns/web", URL: receiverURL, Profile: withCaps(func(c *chat.Caps) { c.Ephemeral = true })},
+		"busy marks":                         {Connection: "ns/web", URL: receiverURL, Profile: withCaps(func(c *chat.Caps) { c.Busy = true })},
+		"reactions":                          {Connection: "ns/web", URL: receiverURL, Profile: withCaps(func(c *chat.Caps) { c.AckReaction = "eyes" })},
+		"a limit too small to hold the mark": {Connection: "ns/web", URL: receiverURL, Profile: withCaps(func(c *chat.Caps) { c.MaxText = 1 })},
 	} {
+		// Each case is made with its profile's own platform, so that what it lacks is what its name says.
+		if p, ok := cfg.Profile.(*testProfile); ok {
+			cfg.Platform = p.platform()
+		}
 		if _, err := web.New(cfg); err == nil {
 			t.Errorf("%s: built", name)
 		}
 	}
-	if _, err := web.New(web.Config{Connection: "ns/web", Profile: newTestProfile(false)}); err != nil {
-		t.Errorf("a profile with no replies and no URL: %v", err)
+	prof := newTestProfile()
+	if _, err := web.New(web.Config{Connection: "ns/web", Profile: prof, Platform: prof.platform(), URL: receiverURL}); err != nil {
+		t.Errorf("a profile with an encoder and a URL: %v", err)
+	}
+}
+
+// The platform is made with what the API says the connection's platform takes, and refuses none.
+func TestNewRefusesNoPlatform(t *testing.T) {
+	if _, err := web.New(web.Config{Connection: "ns/web", Profile: newTestProfile(), URL: receiverURL}); err == nil {
+		t.Error("no platform: built")
 	}
 }
 
 func TestCapabilitiesAreTheProfiles(t *testing.T) {
-	prof := newTestProfile(true)
+	prof := newTestProfile()
 	prof.caps.Limits = map[chat.Where]int{chat.WhereHeader: 100}
-	p := newPlatform(t, prof, "https://receiver.example/", nil)
+	p := newPlatform(t, prof, receiverURL, nil)
 	got := p.Capabilities()
 	if got.MaxText != 1000 || got.Limit(chat.WhereHeader) != 100 || got.Streams || got.AckReaction != "" {
 		t.Errorf("Capabilities is %+v, want the profile's", got)
@@ -53,7 +67,7 @@ func TestCapabilitiesAreTheProfiles(t *testing.T) {
 
 // What the platform has none of, each method says in the way its contract allows.
 func TestTheMethodsSayWhatThePlatformLacks(t *testing.T) {
-	p := newPlatform(t, newTestProfile(true), "https://receiver.example/", nil)
+	p := newPlatform(t, newTestProfile(), receiverURL, nil)
 	ctx := t.Context()
 	ref := p.RefAt("ch-1", "m-1", "m-2")
 	check := func(name string, err, want error) {
@@ -111,12 +125,12 @@ func TestTheMethodsSayWhatThePlatformLacks(t *testing.T) {
 
 // ChannelAccess has no platform to ask: a channel of the profile's shape is one Agent Kourier is in, and any other is not found.
 func TestChannelAccessReadsTheProfilesShape(t *testing.T) {
-	p := newPlatform(t, newTestProfile(true), "https://receiver.example/", nil)
+	p := newPlatform(t, newTestProfile(), receiverURL, nil)
 	ctx := t.Context()
 	if a, err := p.ChannelAccess(ctx, "ch-1"); err != nil || a != (chat.Access{Member: true}) {
 		t.Errorf("a channel of the shape: %+v, %v; want a member", a, err)
 	}
-	for _, ch := range []string{"", "general", "octo/repo", strings.Repeat("c1", 40)} {
+	for _, ch := range []string{"", "ch:1", "#general", "octo/repo", strings.Repeat("c1", 40)} {
 		a, err := p.ChannelAccess(ctx, ch)
 		if !errors.Is(err, chat.ErrChannelNotFound) || a != (chat.Access{}) {
 			t.Errorf("%q: %+v, %v; want chat.ErrChannelNotFound", ch, a, err)

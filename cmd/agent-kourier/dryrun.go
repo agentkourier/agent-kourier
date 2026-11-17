@@ -138,11 +138,10 @@ func execDryRun(ctx context.Context, o dryRunOptions, getenv func(string) string
 	return exitOK
 }
 
-// slackIDs refuses a Binding whose chat IDs are not Slack's, or that asks for what Slack does not serve (output none), as the broker
-// rejects it at resolution on a Slack connection. The load takes any platform's IDs and outputs, and only the connection says which
-// platform's the Binding needs; dry-run reads only Slack, and its directory may hold the Binding alone (no ChatConnection), so it
-// holds the Binding to Slack's rules itself. Without it a bot's name as a botMessage trigger's from.id, which has a login's shape,
-// would load and match no message.
+// slackIDs refuses a Binding whose chat IDs are not Slack's, as the broker rejects it at resolution on a Slack connection. The load
+// takes any platform's IDs, and only the connection says which platform's the Binding needs; dry-run reads only Slack, and its
+// directory may hold the Binding alone (no ChatConnection), so it holds the Binding to Slack's rules itself. Without it a bot's
+// name as a botMessage trigger's from.id, which has a login's shape, would load and match no message.
 func slackIDs(b *v1alpha1.Binding) error {
 	slackRules, _ := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformSlack})
 	mismatches := b.Spec.PlatformMismatches(slackRules)

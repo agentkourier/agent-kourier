@@ -673,9 +673,6 @@ func TestDryRunRefusesChatIDsThatAreNotSlacks(t *testing.T) {
 			`Binding agent-kourier/trial: spec.chat.triggers[1].from.id: "alertmanager" is not a bot ID on Slack: use the bot's ID, such as B0123456789, not its name` + page},
 		{"a user group ID as a mention's user", strings.Replace(slackIDs, "    channel: C0123456789\n", "    channel: C0123456789\n    mentions: [{name: oncall, user: S0123456789}]\n", 1),
 			`Binding agent-kourier/trial: spec.chat.mentions[0].user: "S0123456789" is not a user ID on Slack: use the person's user ID, such as U0123456789` + page},
-		// Slack posts the replies, so output none, which the load takes for a platform where the agent replies itself, is refused too.
-		{"output none", strings.Replace(slackIDs, "    channel: C0123456789\n", "    channel: C0123456789\n    output: none\n", 1),
-			`Binding agent-kourier/trial: spec.chat.output: "none" is not supported on Slack: set it to live or final, or leave it out for live` + page},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.file == slackIDs && tc.name != "Slack's own IDs" {

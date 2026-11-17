@@ -397,9 +397,11 @@ spec:
     connectionRef: {name: slack}
     channel: ""
 ---
-# rule: binding/spec.chat.channel: a name, not an ID
-# want: spec.chat.channel: invalid channel "#sre-alerts"
-# schema: refuses
+# rule: binding/spec.chat.channel: a name, not an ID, on Slack
+# want: spec.chat.channel: "#sre-alerts" is not a channel ID on Slack
+# schema: accepts
+# broker-only: a chat ID's shape is its connection's platform's, which the schema of a Binding cannot read: the broker holds the ID to it when it resolves the Binding with its connection
+# connection: slack
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata:
@@ -676,9 +678,11 @@ spec:
     channel: C0123456789
     mentions: [{name: sam}]
 ---
-# rule: binding/spec.chat.mentions[].user: an e-mail address
-# want: spec.chat.mentions[0].user: invalid user ID "sam@example.com"
-# schema: refuses
+# rule: binding/spec.chat.mentions[].user: an e-mail address, on Slack
+# want: spec.chat.mentions[0].user: "sam@example.com" is not a user ID on Slack
+# schema: accepts
+# broker-only: a chat ID's shape is its connection's platform's, which the schema of a Binding cannot read: the broker holds the ID to it when it resolves the Binding with its connection
+# connection: slack
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata:
@@ -821,9 +825,11 @@ spec:
     toolApprovals: true
     approverGroups: [""]
 ---
-# rule: binding/spec.interactions.approverGroups[]: a word with no digit, which no platform's group is
-# want: spec.interactions.approverGroups[0]: invalid group ID "sre"
-# schema: refuses
+# rule: binding/spec.interactions.approverGroups[]: a group's name, on Slack
+# want: spec.interactions.approverGroups[0]: "sre" is not a user group ID on Slack
+# schema: accepts
+# broker-only: a chat ID's shape is its connection's platform's, which the schema of a Binding cannot read: the broker holds the ID to it when it resolves the Binding with its connection
+# connection: slack
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata:
@@ -1468,9 +1474,11 @@ spec:
         promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
   session: {threadTTL: "0000000000000000000000000000000000000000000000000000000000002160h"}
 ---
-# rule: binding/spec.chat.channel: a word with no digit, which no platform's channel is
-# want: spec.chat.channel: invalid channel "general"
-# schema: refuses
+# rule: binding/spec.chat.channel: a name without its #, on Slack
+# want: spec.chat.channel: "general" is not a channel ID on Slack
+# schema: accepts
+# broker-only: a chat ID's shape is its connection's platform's, which the schema of a Binding cannot read: the broker holds the ID to it when it resolves the Binding with its connection
+# connection: slack
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata:
@@ -1506,9 +1514,11 @@ spec:
     connectionRef: {name: slack}
     channel: "ch:1"
 ---
-# rule: binding/spec.chat.mentions[].user: starts with a dot
-# want: spec.chat.mentions[0].user: invalid user ID ".octocat"
-# schema: refuses
+# rule: binding/spec.chat.mentions[].user: starts with a dot, on Slack
+# want: spec.chat.mentions[0].user: ".octocat" is not a user ID on Slack
+# schema: accepts
+# broker-only: a chat ID's shape is its connection's platform's, which the schema of a Binding cannot read: the broker holds the ID to it when it resolves the Binding with its connection
+# connection: slack
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata:
@@ -1525,3 +1535,24 @@ spec:
     connectionRef: {name: slack}
     channel: C0123456789
     mentions: [{name: oncall, user: .octocat}]
+---
+# rule: binding/spec.chat.channel: a repository, on the kourier-v1 profile
+# want: spec.chat.channel: "octo-org/hello-world" is not a channel ID on web (kourier-v1 profile)
+# schema: accepts
+# broker-only: a chat ID's shape is its connection's platform's, which the schema of a Binding cannot read: the broker holds the ID to it when it resolves the Binding with its connection
+# connection: web/kourier-v1
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: web}
+    channel: octo-org/hello-world

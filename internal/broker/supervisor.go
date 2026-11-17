@@ -218,7 +218,11 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 				refused[name] = refusedMessage
 			}
 			if st == nil || st.rt == nil {
-				s.say(ctx, name, "the ChatConnection is not started yet: its credentials cannot be used", t.Err)
+				msg := "the ChatConnection is not started yet: its credentials cannot be used"
+				if errors.Is(t.Err, errNoAdapter) { // no Secret is at fault, and none that is mended starts it
+					msg = "the ChatConnection is not started: this broker has no adapter for its platform"
+				}
+				s.say(ctx, name, msg, t.Err)
 				if st == nil || !st.refused { // a refused connection is not served, and its series is not for this branch to bring back
 					s.host.metrics.ChatConnected(name, false) // served and not connected: the series says so from the first look
 				}

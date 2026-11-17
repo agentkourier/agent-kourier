@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    agentkourier.dev/schema-sha256: 4b70998eea2f2f2959a670fc5c84f3fd717560155b21b4dcab3382f5d06b8cd7
+    agentkourier.dev/schema-sha256: 3eca432ad7151e4e1e52daf09ce99044f31a336e85882dd42dbd4cc5705c4715
     controller-gen.kubebuilder.io/version: v0.23.0
   name: chatconnections.agentkourier.dev
 spec:
@@ -70,7 +70,7 @@ spec:
                 description: |-
                   CredentialsSecretRef names one Secret whose keys are fixed by the platform and its mode or profile. A Slack connection in Socket
                   Mode needs botToken and appToken; one in HTTP mode needs botToken and signingSecret. A web connection of the kourier-v1 profile
-                  needs signingSecret, and one of the github profile webhookSecret.
+                  needs signingSecret.
                 properties:
                   name:
                     description: |-
@@ -84,8 +84,9 @@ spec:
                 type: object
               platform:
                 description: |-
-                  Platform is the chat platform: slack, or web, whose integration spec.web.profile names. No broker runs a web connection
-                  yet: one that is the broker's own connection stops its start, and a team one is not started.
+                  Platform is the chat platform: slack, or web, whose integration spec.web.profile names. A web connection takes its sender's
+                  requests on the broker's chat listener (AGENTKOURIER_CHAT_LISTEN) at POST /chat/web/<namespace>/<name>. A broker with no chat
+                  listener does not run one: its own fails the start, and a team connection is not started.
                 enum:
                 - slack
                 - web
@@ -115,18 +116,16 @@ spec:
                   profile:
                     description: |-
                       Profile is the integration the connection speaks. kourier-v1 is Agent Kourier's own signed JSON contract: it takes signed
-                      requests and posts the agent's replies, signed, to url. github takes GitHub's webhooks and sends no replies: the agent
-                      posts on GitHub itself, so its Bindings take output none alone.
+                      requests and posts the agent's replies, signed, to url.
                     enum:
                     - kourier-v1
-                    - github
                     type: string
                   url:
                     description: |-
-                      URL is where the kourier-v1 profile posts the agent's replies. It is required for kourier-v1 and refused for github, which
-                      sends none. It is an https URL, or an http one only to localhost, a loopback address (127.x.x.x or [::1]) or a Service in
-                      the cluster (a host that ends in .svc or .svc.cluster.local), since a reply carries what the agent wrote. At most 2048
-                      bytes, with no credentials, query or fragment: the replies are signed with the credentials Secret's signingSecret.
+                      URL is where Agent Kourier posts the agent's replies, and is required. It is an https URL, or an http one only to localhost, a
+                      loopback address (127.x.x.x or [::1]) or a Service in the cluster (a host that ends in .svc or .svc.cluster.local), since a
+                      reply carries what the agent wrote. At most 2048 bytes, with no credentials, query or fragment: the replies are signed with the
+                      credentials Secret's signingSecret.
                     maxLength: 2048
                     type: string
                     x-kubernetes-validations:
@@ -151,14 +150,9 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - fieldPath: .url
-                  message: is required by the kourier-v1 profile, which posts the
-                    replies to it
-                  rule: self.profile != 'kourier-v1' || (has(self.url) && size(self.url)
-                    > 0)
-                - fieldPath: .url
-                  message: is set, but the github profile sends no replies
-                  rule: self.profile != 'github' || !has(self.url) || size(self.url)
-                    == 0
+                  message: 'is required: Agent Kourier posts the agent''s replies
+                    to it'
+                  rule: has(self.url) && size(self.url) > 0
             required:
             - credentialsSecretRef
             - platform

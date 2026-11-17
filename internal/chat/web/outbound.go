@@ -56,11 +56,8 @@ func (p *Platform) Fits(pr chat.Prompt) error {
 	return err
 }
 
-// sendable says whether o can be sent: the profile sends replies, o is valid, and it holds no prompt of tools.
+// sendable says whether o can be sent: o is valid, and it holds no prompt of tools.
 func (p *Platform) sendable(o chat.Outgoing) error {
-	if p.enc == nil {
-		return ErrNoReplies
-	}
 	if err := o.Validate(); err != nil {
 		return err
 	}
@@ -129,8 +126,6 @@ func retryAfter(v string, now time.Time) time.Duration {
 // refuses the signature fails the replies, and stops nothing else of the connection.
 func (p *Platform) Classify(_ chat.Op, err error) chat.Verdict {
 	switch {
-	case errors.Is(err, ErrNoReplies):
-		return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonOther, Code: "no_replies"}
 	case errors.Is(err, chat.ErrInvalid), errors.Is(err, chat.ErrTooLarge):
 		return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonInvalidContent, Code: "invalid"}
 	case errors.Is(err, chat.ErrChannelNotFound):

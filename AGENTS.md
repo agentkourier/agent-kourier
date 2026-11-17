@@ -28,6 +28,7 @@ internal/identity       Binding token source and credentials for the agent pool
 internal/secret         redacting Secret value type
 internal/chat           chat-neutral model and chat.Platform; imports no session, config or store (chattest: conformance suite, fake platform, the Alertmanager trigger the tests share)
 internal/chat/slack     Slack adapter (Block Kit, Socket Mode); the only code, with the broker, that may import Slack or slack-go
+internal/chat/commonmark CommonMark writer for a receiver that reads CommonMark: code as written, prose defused (kourier-v1)
 internal/trigger        message intake: chat.triggers matched (spec 8.2), trigger threads and limits, bot mentions, Submit to the session manager, the dry run's Replay
 internal/store          SQLite and Postgres persistence, leader fencing
 internal/outbox         durable outbound posting (the versioned neutral message)

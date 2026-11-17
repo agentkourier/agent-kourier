@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
 // errNotRunning says that no Run takes the event: none has started, or the one that took it has ended.
@@ -34,52 +35,87 @@ func (p *Platform) HTTPHandler() (http.Handler, bool) { return http.HandlerFunc(
 // The Sink is called on a context of Run's, not the request's, since the broker's telemetry is in Run's, and the context ends when the
 // answer goes: an event is not taken after its sender was told to send it again. What a request holds (its body, its signature) is
 // never logged.
+//
+// Every answer but the 405, which the chat listener gives before a request reaches here, is counted as agentkourier_web_requests_total
+// by its outcome, on the latest Run's context, which carries the broker's instruments: a request that comes before the first Run is
+// not counted.
 func (p *Platform) serve(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
+	tctx := req.Context()
+	if r := p.last.Load(); r != nil {
+		tctx = r.ctx //nolint:contextcheck // the run's context carries the broker's instruments, and the request's does not
+	}
+	answer := func(outcome string, code int) {
+		telemetry.Count(tctx, "agentkourier_web_requests_total", outcome, string(p.profile.Name()), p.conn)
+		switch code {
+		case http.StatusAccepted:
+			w.WriteHeader(code)
+			return
+		case http.StatusServiceUnavailable:
+			w.Header().Set("Retry-After", strconv.Itoa(int(busyRetryAfter/time.Second)))
+		}
+		http.Error(w, http.StatusText(code), code)
+	}
 	body, err := io.ReadAll(req.Body) // the chat listener has read it whole and capped it: this reads memory
 	if err != nil {
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		answer(outcomeMalformed, http.StatusBadRequest)
 		return
 	}
 	if err := p.profile.Verify(req.Header, body, p.now()); err != nil {
 		p.log.DebugContext(req.Context(), "web: a request was refused: the profile did not verify it", "connection", p.conn, "reason", err.Error())
-		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		answer(outcomeUnverified, http.StatusUnauthorized)
 		return
 	}
 	ev, ok, err := p.profile.Decode(req.Header, body)
 	switch {
 	case errors.Is(err, ErrTooLarge):
 		p.log.WarnContext(req.Context(), "web: a signed request was refused: its body is over the profile's bound", "connection", p.conn, "bytes", len(body))
-		http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+		answer(outcomeTooLarge, http.StatusRequestEntityTooLarge)
 		return
 	case err != nil:
 		// The body is the sender's, signed, and may hold what people wrote: the log says how much there was and why it was refused.
 		p.log.WarnContext(req.Context(), "web: a signed request was refused: it is not the profile's schema", "connection", p.conn, "bytes", len(body), "reason", err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		answer(outcomeMalformed, http.StatusBadRequest)
 		return
 	case !ok:
-		w.WriteHeader(http.StatusAccepted)
+		answer(outcomeIgnored, http.StatusAccepted)
 		return
 	case !takeable(ev):
 		p.log.ErrorContext(req.Context(), "web: the profile decoded an event with no channel or ID, or a ':' in one or in the thread; refused", "connection", p.conn)
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		answer(outcomeMalformed, http.StatusBadRequest)
 		return
 	}
 	m := chat.Inbound{At: p.RefAt(ev.Channel, ev.Thread, ev.ID), User: ev.User, Text: ev.Text, Mentioned: ev.Mentioned}
-	if err := p.take(req.Context(), m); err != nil {
-		if !errors.Is(err, errNotRunning) {
-			p.log.WarnContext(req.Context(), "web: an event was not taken; the sender is told to send it again", "connection", p.conn, "channel", ev.Channel, "event", ev.ID, "err", err)
+	switch err := p.take(req.Context(), m); {
+	case errors.Is(err, errNotRunning):
+		answer(outcomeNotRunning, http.StatusServiceUnavailable)
+	case err != nil:
+		p.log.WarnContext(req.Context(), "web: an event was not taken; the sender is told to send it again", "connection", p.conn, "channel", ev.Channel, "event", ev.ID, "err", err)
+		outcome := outcomeWithheld
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			outcome = outcomeTimeout
 		}
-		w.Header().Set("Retry-After", strconv.Itoa(int(busyRetryAfter/time.Second)))
-		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
-		return
+		answer(outcome, http.StatusServiceUnavailable)
+	default:
+		answer(outcomeAccepted, http.StatusAccepted)
 	}
-	w.WriteHeader(http.StatusAccepted)
 }
+
+// The outcomes of a request to a web connection, the label outcome of agentkourier_web_requests_total: a closed set.
+const (
+	outcomeAccepted   = "accepted"    // 202: the Sink took the event, or dropped it as a repeat
+	outcomeIgnored    = "ignored"     // 202: the request carries nothing to take, such as a sender's ping
+	outcomeUnverified = "unverified"  // 401: the profile did not verify it
+	outcomeMalformed  = "malformed"   // 400: not the profile's schema, or an event the platform cannot take, or a body that could not be read
+	outcomeTooLarge   = "too_large"   // 413: the body is over the profile's bound
+	outcomeNotRunning = "not_running" // 503: no Run takes events (it ended, or none has started since the route was served)
+	outcomeWithheld   = "withheld"    // 503: the Sink did not take the event
+	outcomeTimeout    = "timeout"     // 503: the Sink had not answered within ackWait, or the request ended first
+)
 
 // takeable says whether the platform can hand ev on. chat.MessageID joins the channel and the ID with ':', and the session's notice
 // keys join the channel and the thread with it, so that two events whose parts held a ':' could be one key, and the second dropped as

@@ -55,11 +55,14 @@ func (r *receiver) take() []kourierv1.Outbound {
 
 // subject is the web platform with the kourier-v1 profile, as a receiver that keeps the wire contract shows what it is sent: the body's
 // markdown read as CommonMark, by a renderer that may make a bare URL a link (GitHub's flavour does), and every other field shown as
-// the text it is.
+// the text it is. CommonMark shows code as it is written, and so the body is read with code taken for literal
+// (ScanCommonMarkLiteralCode): a link, a URL or HTML in a code span or block makes nothing. That reader still reports a Slack token
+// ("<!", "<@", "<#") in code, which the profile writes as the agent did; kourier-v1 has no such token, and the corpus puts none in
+// code. A case that does needs a concession for the body, whose reason is that a CommonMark receiver has no token to act on.
 func subject(t *testing.T) chattest.Subject {
 	t.Helper()
 	r := &receiver{t: t}
-	p, err := web.New(web.Config{Connection: "conformance/web", Profile: newProfile(t), URL: "https://receiver.conformance.test/replies",
+	p, err := web.New(web.Config{Connection: "conformance/web", Profile: newProfile(t), Platform: platform(t), URL: "https://receiver.conformance.test/replies",
 		Transport: r, Now: func() time.Time { return epoch }, Logger: testutil.DiscardLogger()})
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +78,7 @@ func subject(t *testing.T) chattest.Subject {
 					switch {
 					case f.Text == "":
 					case f.Where.Rich():
-						shown = append(shown, chattest.ScanCommonMark(f.Text))
+						shown = append(shown, chattest.ScanCommonMarkLiteralCode(f.Text))
 					default:
 						shown = append(shown, chattest.Shown{Displayed: f.Text})
 					}
@@ -90,7 +93,7 @@ func subject(t *testing.T) chattest.Subject {
 			if st == chattest.ChannelJoined {
 				return "ch-1"
 			}
-			return "general" // not a kourier-v1 channel ID
+			return "#general" // not a kourier-v1 channel ID
 		},
 		Groups: func(chattest.GroupState) string { return "grp-1" },
 		AbsentChannels: map[chattest.ChannelState]string{

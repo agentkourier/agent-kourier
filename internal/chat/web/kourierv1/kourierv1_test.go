@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/chat/web"
@@ -23,9 +24,20 @@ const fakeKey = "fake-kourier-signing-secret"
 
 var epoch = time.Unix(1_800_000_000, 0)
 
+// platform is what the API says a connection of the kourier-v1 profile takes, which the broker hands the profile.
+func platform(t *testing.T) v1alpha1.ChatPlatform {
+	t.Helper()
+	p, ok := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb,
+		Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileKourierV1}})
+	if !ok {
+		t.Fatal("the API has no kourier-v1 profile")
+	}
+	return p
+}
+
 func newProfile(t *testing.T) *kourierv1.Profile {
 	t.Helper()
-	p, err := kourierv1.New(secret.New(fakeKey))
+	p, err := kourierv1.New(secret.New(fakeKey), platform(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,8 +45,19 @@ func newProfile(t *testing.T) *kourierv1.Profile {
 }
 
 func TestNewRefusesNoSecret(t *testing.T) {
-	if _, err := kourierv1.New(secret.Value{}); err == nil {
+	if _, err := kourierv1.New(secret.Value{}, platform(t)); err == nil {
 		t.Error("a profile with no signing secret was made")
+	}
+}
+
+// The profile holds what it decodes to the platform it is handed, so it refuses one that takes no channel or no user ID.
+func TestNewRefusesAPlatformWithNoChannelOrNoUser(t *testing.T) {
+	noUser := platform(t)
+	noUser.User = v1alpha1.IDShape{}
+	for name, rules := range map[string]v1alpha1.ChatPlatform{"none": {}, "with no user ID": noUser} {
+		if _, err := kourierv1.New(secret.New(fakeKey), rules); err == nil {
+			t.Errorf("a profile on the platform %s was made", name)
+		}
 	}
 }
 
@@ -120,7 +143,8 @@ func TestDecodeRefusesWhatIsNotTheSchema(t *testing.T) {
 		"no channel":                  `{"v":1,"id":"m-1","user":"u-1","text":"hi"}`,
 		"no id":                       `{"v":1,"channel":"ch-1","user":"u-1","text":"hi"}`,
 		"no user":                     `{"v":1,"channel":"ch-1","id":"m-1","text":"hi"}`,
-		"a channel with no digit":     `{"v":1,"channel":"general","id":"m-1","user":"u-1","text":"hi"}`,
+		"a channel with a colon":      `{"v":1,"channel":"ch:1","id":"m-1","user":"u-1","text":"hi"}`,
+		"a channel's name with a #":   `{"v":1,"channel":"#general","id":"m-1","user":"u-1","text":"hi"}`,
 		"a repository's name":         `{"v":1,"channel":"octo/repo1","id":"m-1","user":"u-1","text":"hi"}`,
 		"a colon in the id":           `{"v":1,"channel":"ch-1","id":"a:b","user":"u-1","text":"hi"}`,
 		"an id too long":              `{"v":1,"channel":"ch-1","id":"` + long + `","user":"u-1","text":"hi"}`,
@@ -163,11 +187,12 @@ func TestTheProfilePassesTheProfileSuite(t *testing.T) {
 		return h
 	}
 	chattest.ProfileConformance(t, chattest.ProfileSubject{
-		Profile: newProfile(t),
-		Secret:  fakeKey,
-		Sign:    sign,
-		MaxSkew: kourierv1.MaxSkew,
-		MaxBody: kourierv1.MaxBody,
+		Profile:  newProfile(t),
+		Platform: platform(t),
+		Secret:   fakeKey,
+		Sign:     sign,
+		MaxSkew:  kourierv1.MaxSkew,
+		MaxBody:  kourierv1.MaxBody,
 		Events: []chattest.ProfileEvent{
 			{Name: "a message that opens a thread", Body: []byte(`{"v":1,"channel":"ch-1","id":"m-1","user":"u-1","text":"hello <!channel>"}`),
 				Want: &web.Event{Channel: "ch-1", ID: "m-1", User: "u-1", Text: "hello <!channel>", Mentioned: true}},
@@ -179,7 +204,7 @@ func TestTheProfilePassesTheProfileSuite(t *testing.T) {
 		Malformed: []chattest.ProfileCase{
 			{Name: "an unknown field", Body: []byte(`{"v":1,"channel":"ch-1","id":"m-1","user":"u-1","text":"hi","url":"http://evil.example/"}`)},
 			{Name: "another version", Body: []byte(`{"v":2,"channel":"ch-1","id":"m-1","user":"u-1","text":"hi"}`)},
-			{Name: "a channel of another form", Body: []byte(`{"v":1,"channel":"general","id":"m-1","user":"u-1","text":"hi"}`)},
+			{Name: "a channel of another form", Body: []byte(`{"v":1,"channel":"#general","id":"m-1","user":"u-1","text":"hi"}`)},
 			{Name: "a colon in the id", Body: []byte(`{"v":1,"channel":"ch-1","id":"a:b","user":"u-1","text":"hi"}`)},
 		},
 		CheckReply: func(want web.Reply, h http.Header, body []byte) (string, error) {
@@ -260,7 +285,7 @@ func TestEncodeMakesTheTextInert(t *testing.T) {
 	}
 	want := chat.Message{Fallback: "done <!channel>", Parts: []chat.Part{
 		chat.Header{Text: "a b"},
-		chat.Body{Markdown: `\[x\](http://evil.example) !\[i\](http://evil.example/i.png) \<b>hi\</b> \<!channel> \\\[ok\]`},
+		chat.Body{Markdown: `\[x\](http://evil.example) !\[i\](http://evil.example/i.png) &lt;b>hi&lt;/b> &lt;!channel> \\\[ok\]`},
 		chat.Context{Text: "c d"},
 		chat.ToolLine{Name: "rm -rf", Summary: "/"},
 		chat.Mention{Text: "answered"},
@@ -291,9 +316,36 @@ func TestEncodeCutsATextToTheLimit(t *testing.T) {
 	if n := chat.Units(m.Fallback); n != kourierv1.MaxText || !strings.HasSuffix(m.Fallback, chat.Truncated) {
 		t.Errorf("the fallback is %d units, want %d ending in the marker", n, kourierv1.MaxText)
 	}
+	// The body is counted as it is sent, its escapes included: each "[" is sent as two units, "\[", and is not split.
 	body := m.Parts[0].(chat.Body).Markdown
-	if shown := strings.ReplaceAll(body, `\[`, "["); chat.Units(shown) != kourierv1.MaxText || !strings.HasSuffix(shown, chat.Truncated) {
-		t.Errorf("the body shows %d units, want %d ending in the marker", chat.Units(shown), kourierv1.MaxText)
+	if n := chat.Units(body); n > kourierv1.MaxText || n < kourierv1.MaxText-1 || !strings.HasSuffix(body, chat.Truncated) {
+		t.Errorf("the body is %d units, want %d or one fewer, ending in the marker", n, kourierv1.MaxText)
+	}
+}
+
+// The code in a body reaches the receiver as the agent wrote it, and a cut in a block closes it before the marker, which the
+// receiver shows as text.
+func TestEncodeSendsCodeAsWritten(t *testing.T) {
+	p := newProfile(t)
+	for _, tc := range []struct{ name, md, want string }{
+		{"a block and a span", "Pods <x>:\n```\nweb-0   <none>   [ready]\n```\nRun `C:\\x\\[a]`.",
+			"Pods &lt;x>:\n```\nweb-0   <none>   [ready]\n```\nRun `C:\\x\\[a]`."},
+		{"a block cut", "```\n" + strings.Repeat("<", kourierv1.MaxText) + "\n```",
+			"```\n" + strings.Repeat("<", kourierv1.MaxText-4-5-chat.Units(chat.Truncated)) + "\n```\n" + chat.Truncated},
+	} {
+		r := reply
+		r.Message = chat.Say(chat.Message{Fallback: "f", Parts: []chat.Part{chat.Body{Markdown: tc.md}}})
+		req, err := p.Encode(r, epoch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var env kourierv1.Outbound
+		if err := json.Unmarshal(req.Body, &env); err != nil {
+			t.Fatal(err)
+		}
+		if got := env.Message.Message.Parts[0].(chat.Body).Markdown; got != tc.want {
+			t.Errorf("%s: the body sent is %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 

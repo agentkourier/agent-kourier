@@ -47,8 +47,6 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Count(t, "slackChatID", maxSlackIDLen)
 	limitsdoc.Count(t, "slackUserLen", maxSlackUserIDLen)
 	limitsdoc.Count(t, "webOpaqueID", maxKourierV1IDLen)
-	limitsdoc.Count(t, "githubRepoLen", maxGitHubRepoLen)
-	limitsdoc.Count(t, "githubLoginLen", maxGitHubLoginLen)
 	limitsdoc.Count(t, "webURL", maxURLLen)
 	limitsdoc.Count(t, "emoji", maxEmojiLen)
 	limitsdoc.Count(t, "backendURL", maxURLLen)

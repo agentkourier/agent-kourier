@@ -19,25 +19,46 @@ func TestWebConnectionValidate(t *testing.T) {
 	const reply = "https://receiver.example.com/replies"
 	runMutations[ChatConnection](t, "chatconnection.yaml", []mutation[ChatConnection]{
 		{"kourier-v1 ok", func(o *ChatConnection) { web(o, WebProfileKourierV1, reply) }, ""},
-		{"github ok", func(o *ChatConnection) { web(o, WebProfileGitHub, "") }, ""},
 		{"web with no web block", func(o *ChatConnection) { o.Spec.Platform = PlatformWeb },
 			"spec.web: is required on a web connection: it names the profile"},
 		{"no profile", func(o *ChatConnection) { web(o, "", reply) }, "spec.web.profile: required"},
-		{"a profile that is not supported", func(o *ChatConnection) { web(o, "gitlab", "") },
-			`spec.web.profile: unsupported value "gitlab", must be one of kourier-v1, github`},
-		{"a profile in the wrong case", func(o *ChatConnection) { web(o, "GitHub", "") },
-			`spec.web.profile: unsupported value "GitHub", must be one of kourier-v1, github`},
+		{"a profile that is not supported", func(o *ChatConnection) { web(o, "gitlab", reply) },
+			`spec.web.profile: unsupported value "gitlab", must be one of kourier-v1`},
+		{"github, a profile the API does not have", func(o *ChatConnection) { web(o, "github", reply) },
+			`spec.web.profile: unsupported value "github", must be one of kourier-v1`},
+		{"a profile in the wrong case", func(o *ChatConnection) { web(o, "Kourier-v1", reply) },
+			`spec.web.profile: unsupported value "Kourier-v1", must be one of kourier-v1`},
 		{"kourier-v1 with no url", func(o *ChatConnection) { web(o, WebProfileKourierV1, "") },
-			"spec.web.url: is required by the kourier-v1 profile, which posts the replies to it"},
-		{"github with a url", func(o *ChatConnection) { web(o, WebProfileGitHub, reply) },
-			"spec.web.url: is set, but the github profile sends no replies"},
-		{"a web block on a slack connection", func(o *ChatConnection) { o.Spec.Web = &WebConnectionSpec{Profile: WebProfileGitHub} },
-			"spec.web: is set, but only a web connection has one"},
+			"spec.web.url: is required: Agent Kourier posts the agent's replies to it"},
+		{"a web block on a slack connection", func(o *ChatConnection) {
+			o.Spec.Web = &WebConnectionSpec{Profile: WebProfileKourierV1, URL: reply}
+		}, "spec.web: is set, but only a web connection has one"},
 		{"a slack block on a web connection", func(o *ChatConnection) {
-			web(o, WebProfileGitHub, "")
+			web(o, WebProfileKourierV1, reply)
 			o.Spec.Slack = &SlackConnectionSpec{Mode: SlackModeHTTP}
 		}, "spec.slack: is set, but only a slack connection has one"},
 	})
+}
+
+// On a connection with no profile, or one that is not supported, the url is still required and held to its rules.
+func TestTheURLIsCheckedWhateverTheProfile(t *testing.T) {
+	for _, tc := range []struct {
+		profile WebProfile
+		url     string
+		want    []string
+	}{
+		{"", "https://receiver.example.com/replies", []string{"spec.web.profile: required"}},
+		{"gitlab", "", []string{`spec.web.profile: unsupported value "gitlab", must be one of kourier-v1`,
+			"spec.web.url: is required: Agent Kourier posts the agent's replies to it"}},
+		{"gitlab", "https://receiver.example.com/replies?x=1", []string{`spec.web.profile: unsupported value "gitlab", must be one of kourier-v1`,
+			"spec.web.url: must not have a query or fragment"}},
+	} {
+		c := load[ChatConnection](t, "chatconnection.yaml")
+		web(c, tc.profile, tc.url)
+		if got := problemsOf(c.Validate()); !slices.Equal(got, tc.want) {
+			t.Errorf("profile %q, url %q: Validate() problems = %q, want %q", tc.profile, tc.url, got, tc.want)
+		}
+	}
 }
 
 // The reply URL of a kourier-v1 connection: https, or http to a host that does not leave the pod or the cluster; never credentials,
@@ -105,25 +126,25 @@ func TestWebReplyURL(t *testing.T) {
 // is told everything at once.
 func TestAWebBlockOnASlackConnectionIsCheckedToo(t *testing.T) {
 	c := load[ChatConnection](t, "chatconnection.yaml")
-	c.Spec.Web = &WebConnectionSpec{Profile: "gitlab"}
-	want := []string{"spec.web: is set, but only a web connection has one", `spec.web.profile: unsupported value "gitlab", must be one of kourier-v1, github`}
+	c.Spec.Web = &WebConnectionSpec{Profile: "gitlab", URL: "https://receiver.example.com/replies"}
+	want := []string{"spec.web: is set, but only a web connection has one", `spec.web.profile: unsupported value "gitlab", must be one of kourier-v1`}
 	if got := problemsOf(c.Validate()); !slices.Equal(got, want) {
 		t.Errorf("Validate() problems = %q, want %q", got, want)
 	}
 }
 
-// Output takes none, which the platform's check refuses where Agent Kourier posts the replies, and may be left out, which
-// resolution fills in with the platform's default: Validate refuses neither, and Default does not fill it.
+// Output is live or final, and Default fills in live where it is left out, so that a Binding that names none runs live on every
+// platform.
 func TestBindingOutputValues(t *testing.T) {
 	runMutations[Binding](t, "binding.yaml", []mutation[Binding]{
-		{"output none ok", func(o *Binding) { o.Spec.Chat.Output = OutputNone }, ""},
-		{"output left out ok", func(o *Binding) { o.Spec.Chat.Output = "" }, ""},
-		{"output in the wrong case", func(o *Binding) { o.Spec.Chat.Output = "None" },
-			`spec.chat.output: unsupported value "None", must be one of live, final, none`},
+		{"output final ok", func(o *Binding) { o.Spec.Chat.Output = OutputFinal }, ""},
+		{"output none", func(o *Binding) { o.Spec.Chat.Output = "none" }, `spec.chat.output: unsupported value "none", must be one of live, final`},
+		{"output in the wrong case", func(o *Binding) { o.Spec.Chat.Output = "Live" },
+			`spec.chat.output: unsupported value "Live", must be one of live, final`},
 	})
 	b := load[Binding](t, "binding-minimal.yaml")
-	if b.Spec.Chat.Output != "" {
-		t.Errorf("output after Default = %q; want it left for resolution", b.Spec.Chat.Output)
+	if b.Spec.Chat.Output != OutputLive {
+		t.Errorf("output after Default = %q; want live", b.Spec.Chat.Output)
 	}
 }
 

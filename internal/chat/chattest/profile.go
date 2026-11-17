@@ -25,15 +25,18 @@ import (
 // ProfileSubject is a profile of the web platform under test (web.Profile), and what its sender does. Every profile's tests call
 // ProfileConformance with one: it holds the profile to what the web platform counts on, through the platform's own handler.
 type ProfileSubject struct {
-	// Profile is the profile, made with Secret.
+	// Profile is the profile, made with Secret and Platform.
 	Profile web.Profile
+	// Platform is what the API says a connection of the profile takes (v1alpha1.ChatPlatformOf of its spec), which the profile was
+	// made with and the web platform is made with. The suite holds every documented event's channel and user to its shapes.
+	Platform v1alpha1.ChatPlatform
 	// Secret is the secret the profile was made with: a fake constant. The suite signs with it, and with another to forge.
 	Secret string
 	// Sign returns the headers that sign body at the time at with secret, as the profile's sender signs a request. The suite takes
 	// each header it returns away in turn, and expects the request refused without it.
 	Sign func(secret string, body []byte, at time.Time) http.Header
 	// MaxSkew is how far from the receiver's clock the time of a signature may be, either way, or 0 for a profile whose signature
-	// carries no time: such a profile has no replay window, and a replayed delivery is dropped by its ID alone.
+	// carries no time: such a profile has no replay window, and a replayed request is dropped by its event's ID alone (web.Event.ID).
 	MaxSkew time.Duration
 	// MaxBody is the most bytes of a body the profile takes; a longer one is refused 413. The suite makes a body of the bound, and one
 	// past it, by padding the first event that has something to take with trailing spaces, which a JSON profile reads as the same
@@ -47,14 +50,14 @@ type ProfileSubject struct {
 	// CheckReply says whether a request of the profile's replies is one its receiver takes, and carries want: signed with Secret, in the
 	// profile's envelope, with want's kind, connection, channel, thread, ID and message. want.Key is the outbox's tag for a post, and ""
 	// for an update, whose key the platform makes. It returns the idempotency key the receiver reads from the request, which the suite
-	// holds to the same for every try of a post and new for each update. It is required of a profile that sends replies.
+	// holds to the same for every try of a post and new for each update. It is required.
 	CheckReply func(want web.Reply, h http.Header, body []byte) (key string, err error)
 }
 
 // ProfileEvent is one documented event of a profile.
 type ProfileEvent struct {
 	Name string
-	// Header holds what the sender sends beside the signature (GitHub's event name and delivery ID), and Body the body.
+	// Header holds what the sender sends beside the signature, and Body the body.
 	Header http.Header
 	Body   []byte
 	// Want is what the event decodes to, or nil for an event that carries nothing to take, such as a ping.
@@ -80,8 +83,8 @@ func ProfileConformance(t *testing.T, s ProfileSubject) {
 // CheckProfile runs the whole of ProfileConformance and returns what it found, without failing anything. It checks, through the web
 // platform's handler with the profile:
 //
-//   - that every documented event decodes to what it says, its channel and user of the shapes of the profile's IDs
-//     (v1alpha1.ChatPlatformOf), and reaches the Sink as that, or that nothing does;
+//   - that every documented event decodes to what it says, its channel and its user of the shapes of the subject's Platform (its user
+//     only when the platform takes a user ID), and reaches the Sink as that, or that nothing does;
 //   - that a repeat of an event reaches the Sink with the same chat.MessageID, which the reply queue drops, and that no two events share
 //     one;
 //   - that a request is refused 401, with nothing handed on, when it is not signed, when any one of its signature's headers is missing,
@@ -89,8 +92,7 @@ func ProfileConformance(t *testing.T, s ProfileSubject) {
 //     either way, while one within it is taken;
 //   - that a body that is empty, not JSON, cut short or of the subject's own malformed cases is refused 400, one past the bound 413 and
 //     one of the bound taken, and a method other than POST 405;
-//   - that a profile without replies makes no request, and Post, Update, Ephemeral and Fits say web.ErrNoReplies, and that a profile
-//     with replies sends posts and updates to the connection's URL, each one its receiver takes and carrying what was sent
+//   - that the profile sends posts and updates to the connection's URL, each one its receiver takes and carrying what was sent
 //     (CheckReply), with an idempotency key that is the same on each try of a post and differs between posts and between updates.
 func CheckProfile(ctx context.Context, s ProfileSubject) []Violation {
 	first, ok := s.firstEvent()
@@ -98,11 +100,8 @@ func CheckProfile(ctx context.Context, s ProfileSubject) []Violation {
 		return []Violation{v}
 	}
 	c := &profileChecker{ctx: ctx, s: s, first: first, sink: &recordingSink{}, sent: &recordingTransport{}}
-	cfg := web.Config{Connection: profileConn, Profile: s.Profile, Transport: c.sent, Now: func() time.Time { return profileNow },
-		Logger: slog.New(slog.DiscardHandler)}
-	if s.Profile.Encoder() != nil {
-		cfg.URL = profileURL
-	}
+	cfg := web.Config{Connection: profileConn, Profile: s.Profile, Platform: s.Platform, URL: profileURL, Transport: c.sent,
+		Now: func() time.Time { return profileNow }, Logger: slog.New(slog.DiscardHandler)}
 	p, err := web.New(cfg)
 	if err != nil {
 		return []Violation{{Rule: RuleContract, Method: "New", Case: "config", Detail: fmt.Sprintf("the platform refused the profile: %v", err)}}
@@ -154,14 +153,16 @@ func (s ProfileSubject) setup(first ProfileEvent, ok bool) (Violation, bool) {
 	switch {
 	case s.Profile == nil || s.Sign == nil || s.Secret == "":
 		return bad("Profile, Sign and Secret are all required")
+	case !s.Platform.Channel.Taken():
+		return bad("Platform is required: the API's for the profile")
 	case s.MaxBody <= 0:
 		return bad("MaxBody is required")
 	case !ok:
 		return bad("no event has something to take: the checks have nothing to send")
 	case len(first.Body) > s.MaxBody:
 		return bad("the first event to take is over MaxBody: the bound is made by padding it")
-	case s.Profile.Encoder() != nil && s.CheckReply == nil:
-		return bad("CheckReply is required of a profile that sends replies")
+	case s.CheckReply == nil:
+		return bad("CheckReply is required")
 	}
 	for _, e := range s.Events {
 		if e.Name == "" {
@@ -235,15 +236,16 @@ func (c *profileChecker) inbound(ev web.Event) chat.Inbound {
 	return chat.Inbound{At: c.p.RefAt(ev.Channel, ev.Thread, ev.ID), User: ev.User, Text: ev.Text, Mentioned: ev.Mentioned}
 }
 
-// events checks that every documented event decodes to what it says, of the shapes of the profile's IDs, and reaches the Sink as that.
+// events checks that every documented event decodes to what it says, of the shapes of the subject's Platform, and reaches the Sink
+// as that. A platform that takes no user ID has no Binding field that names a user, so an event's user is held to no shape there.
 func (c *profileChecker) events() {
-	shapes, known := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb,
-		Web: &v1alpha1.WebConnectionSpec{Profile: c.s.Profile.Name()}})
-	if !known {
+	if _, known := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb,
+		Web: &v1alpha1.WebConnectionSpec{Profile: c.s.Profile.Name()}}); !known {
 		c.add("Name", "shape", "the API has no web profile %q", c.s.Profile.Name())
 	}
+	shapes := c.s.Platform
 	for _, e := range c.s.Events {
-		if known && e.Want != nil && (!shapes.Channel.Matches(e.Want.Channel) || !shapes.User.Matches(e.Want.User)) {
+		if e.Want != nil && (!shapes.Channel.Matches(e.Want.Channel) || shapes.User.Taken() && !shapes.User.Matches(e.Want.User)) {
 			c.add("Decode", "shape: "+e.Name, "the channel %q or the user %q is not of the shape of %s's IDs: a Binding cannot name it",
 				e.Want.Channel, e.Want.User, c.s.Profile.Name())
 		}
@@ -362,29 +364,13 @@ func (c *profileChecker) bounds() {
 	c.refused("ServeHTTP", "GET", c.send(http.MethodGet, e.Header, e.Body, c.s.Sign(c.s.Secret, e.Body, profileNow)), http.StatusMethodNotAllowed)
 }
 
-// replies checks that a profile without replies sends nothing, and that one with replies sends what its receiver takes, to the
-// connection's URL.
+// replies checks that the profile sends what its receiver takes, to the connection's URL.
 func (c *profileChecker) replies(ctx context.Context) {
 	ev := *c.first.Want
 	t := chat.Target{Conn: profileConn, Channel: ev.Channel, Thread: ev.ID}
 	ref := c.p.RefAt(ev.Channel, ev.ID, "tag-conformance")
 	msg := chat.Say(chat.Message{Fallback: "conformance", Parts: []chat.Part{chat.Body{Markdown: "a reply"}}})
 	c.sent.take()
-	if c.s.Profile.Encoder() == nil {
-		_, post := c.p.Post(ctx, t, msg, "tag-conformance")
-		for method, err := range map[string]error{
-			"Post": post, "Update": c.p.Update(ctx, ref, msg), "Ephemeral": c.p.Ephemeral(ctx, t, ev.User, *msg.Message),
-			"Fits": c.p.Fits(chat.Prompt{ID: "ix-conformance", Questions: []chat.Question{{Text: "q"}}}),
-		} {
-			if !errors.Is(err, web.ErrNoReplies) {
-				c.add(method, "no replies", "gave %v, want web.ErrNoReplies", err)
-			}
-		}
-		if n := len(c.sent.take()); n > 0 {
-			c.add("Post", "no replies", "a profile without replies made %d requests, want none", n)
-		}
-		return
-	}
 	post := func(tag string) func() error {
 		return func() error { _, err := c.p.Post(ctx, t, msg, tag); return err }
 	}

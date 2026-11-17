@@ -9,11 +9,9 @@ const (
 )
 
 // The fixed keys of the credentials Secret of a web ChatConnection, one for each profile (spec section 7): the kourier-v1 profile
-// checks its requests and signs its replies with the signing secret, and the github profile checks GitHub's webhooks with the
-// webhook's secret.
+// checks its requests and signs its replies with the signing secret.
 const (
 	KourierV1SigningSecretKey = "signingSecret"
-	GitHubWebhookSecretKey    = "webhookSecret"
 )
 
 // CredentialKeys returns the keys that the credentials Secret of a ChatConnection with spec must hold, in the order they are read and
@@ -34,11 +32,9 @@ func CredentialKeys(spec ChatConnectionSpec) []string {
 		if spec.Web == nil {
 			return nil
 		}
-		switch spec.Web.Profile {
+		switch spec.Web.Profile { //nolint:gocritic // one case for each web profile: another profile is one more case
 		case WebProfileKourierV1:
 			return []string{KourierV1SigningSecretKey}
-		case WebProfileGitHub:
-			return []string{GitHubWebhookSecretKey}
 		}
 	}
 	return nil

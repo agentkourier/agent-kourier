@@ -20,12 +20,15 @@ const fakeKey = "fake-web-secret"
 // platform, which only asks the profile whether a request passes.
 const headerKey = "X-Test-Key"
 
+// receiverURL is where the tests' platforms post their replies when the test sends none: a URL that New takes and nothing serves.
+const receiverURL = "https://receiver.example/"
+
 // testProfile is a profile of the platform's tests: a request passes Verify when it carries the secret in headerKey, and its body is
-// a testEvent in JSON. It sends replies when it has an encoder.
+// a testEvent in JSON, and Encode sends a reply as JSON. noEncoder makes Encoder return nil, which New refuses.
 type testProfile struct {
-	caps    chat.Caps
-	replies bool
-	maxBody int
+	caps      chat.Caps
+	noEncoder bool
+	maxBody   int
 
 	mu      sync.Mutex
 	encoded []web.Reply // what Encode was given
@@ -38,11 +41,18 @@ type testEvent struct {
 	Mentioned, Ignore               bool
 }
 
-func newTestProfile(replies bool) *testProfile {
-	return &testProfile{caps: chat.Caps{MaxText: 1000}, replies: replies, maxBody: 4096}
+func newTestProfile() *testProfile {
+	return &testProfile{caps: chat.Caps{MaxText: 1000}, maxBody: 4096}
 }
 
 func (p *testProfile) Name() v1alpha1.WebProfile { return v1alpha1.WebProfileKourierV1 }
+
+// platform is what the web platform is made with for p: the API's for kourier-v1, the profile's name.
+func (p *testProfile) platform() v1alpha1.ChatPlatform {
+	rules, _ := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb,
+		Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileKourierV1}})
+	return rules
+}
 
 func (p *testProfile) Verify(h http.Header, _ []byte, _ time.Time) error {
 	if h.Get(headerKey) != fakeKey {
@@ -70,7 +80,7 @@ func (p *testProfile) Decode(_ http.Header, body []byte) (web.Event, bool, error
 func (p *testProfile) Caps() chat.Caps { return p.caps }
 
 func (p *testProfile) Encoder() web.Encoder {
-	if !p.replies {
+	if p.noEncoder {
 		return nil
 	}
 	return p

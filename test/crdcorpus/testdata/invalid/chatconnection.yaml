@@ -433,7 +433,8 @@ spec:
   credentialsSecretRef:
     name: slack
   web:
-    profile: github
+    profile: kourier-v1
+    url: https://receiver.example.com/replies
 ---
 # rule: chatconnection/spec.slack: set on a web connection
 # want: spec.slack: is set, but only a slack connection has one
@@ -448,7 +449,8 @@ spec:
   credentialsSecretRef:
     name: web
   web:
-    profile: github
+    profile: kourier-v1
+    url: https://receiver.example.com/replies
   slack:
     mode: http
 ---
@@ -464,7 +466,8 @@ spec:
   platform: web
   credentialsSecretRef:
     name: web
-  web: {}
+  web:
+    url: https://receiver.example.com/replies
 ---
 # rule: chatconnection/spec.web.profile: unsupported
 # want: spec.web.profile: unsupported value "gitlab"
@@ -480,9 +483,26 @@ spec:
     name: web
   web:
     profile: gitlab
+    url: https://receiver.example.com/replies
+---
+# rule: chatconnection/spec.web.profile: github, a profile the API does not have
+# want: spec.web.profile: unsupported value "github"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: web
+  namespace: sre
+spec:
+  platform: web
+  credentialsSecretRef:
+    name: web
+  web:
+    profile: github
+    url: https://receiver.example.com/replies
 ---
 # rule: chatconnection/spec.web.url: missing on the kourier-v1 profile
-# want: spec.web.url: is required by the kourier-v1 profile, which posts the replies to it
+# want: spec.web.url: is required: Agent Kourier posts the agent's replies to it
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: ChatConnection
@@ -497,7 +517,7 @@ spec:
     profile: kourier-v1
 ---
 # rule: chatconnection/spec.web.url: empty on the kourier-v1 profile
-# want: spec.web.url: is required by the kourier-v1 profile, which posts the replies to it
+# want: spec.web.url: is required: Agent Kourier posts the agent's replies to it
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: ChatConnection
@@ -511,22 +531,6 @@ spec:
   web:
     profile: kourier-v1
     url: ""
----
-# rule: chatconnection/spec.web.url: set on the github profile
-# want: spec.web.url: is set, but the github profile sends no replies
-# schema: refuses
-apiVersion: agentkourier.dev/v1alpha1
-kind: ChatConnection
-metadata:
-  name: web
-  namespace: sre
-spec:
-  platform: web
-  credentialsSecretRef:
-    name: web
-  web:
-    profile: github
-    url: https://receiver.example.com/replies
 ---
 # rule: chatconnection/spec.web.url: http to a host outside the cluster
 # want: spec.web.url: invalid URL "http://receiver.example.com": http is allowed only to localhost

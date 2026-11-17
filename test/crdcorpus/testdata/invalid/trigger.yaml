@@ -437,9 +437,11 @@ spec:
         limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
         promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
 ---
-# rule: trigger/spec.chat.triggers[].from.id: mention markup, not an ID
-# want: spec.chat.triggers[1].from.id: invalid sender ID "<@B0123456789>"
-# schema: refuses
+# rule: trigger/spec.chat.triggers[].from.id: mention markup, not an ID, on Slack
+# want: spec.chat.triggers[1].from.id: "<@B0123456789>" is not a bot ID on Slack
+# schema: accepts
+# broker-only: a chat ID's shape is its connection's platform's, which the schema of a Binding cannot read: the broker holds the ID to it when it resolves the Binding with its connection
+# connection: slack
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata:

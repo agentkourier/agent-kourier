@@ -1,5 +1,5 @@
 // Package web is the web chat platform (ChatConnection spec.platform web). A connection takes signed HTTP requests on the broker's
-// chat listener (chat.HTTPReceiver) and, when its profile sends replies, POSTs them to the one URL of its spec (spec.web.url).
+// chat listener (chat.HTTPReceiver) and POSTs the replies to the one URL of its spec (spec.web.url).
 //
 // What a request and a reply are is the connection's profile's (spec.web.profile): a Profile verifies and decodes the requests, and
 // encodes the replies. The platform does the rest, the same for every profile: it refuses a request the profile does not verify before
@@ -67,15 +67,15 @@ type Profile interface {
 	// Caps says what the platform shows of the profile's replies: their limits. A profile sets nothing else of chat.Caps, since the
 	// platform has no streams, steps, ephemeral messages, busy marks or reactions, and New refuses one that does.
 	Caps() chat.Caps
-	// Encoder returns how the profile sends replies, or nil for a profile that sends none: Agent Kourier then posts nothing on the
-	// connection (the agent replies itself), and Post, Update, Ephemeral and Fits say ErrNoReplies.
+	// Encoder returns how the profile sends replies. New refuses a profile whose Encoder is nil.
 	Encoder() Encoder
 }
 
 // Event is what one request carries, as its profile decodes it: a message written in a conversation.
 type Event struct {
-	// Channel is the conversation, and Thread the message that opened the thread the event is in, or "" for an event that opens one.
-	// Each has the profile's shape (v1alpha1.ChatPlatformOf), and neither holds ':'.
+	// Channel is the conversation, and Thread the thread the event is in, or "" for an event that opens one: the ID of the message that
+	// opened it, or a name the profile gives a thread that no message of its own opens, which every event of that thread carries.
+	// Channel has the profile's shape (v1alpha1.ChatPlatformOf), and neither holds ':'.
 	Channel, Thread string
 	// ID is the event's own: the same for every delivery of the same event, and different for every other, since the reply queue keeps
 	// the IDs it has taken (chat.MessageID) and drops a delivery of one it has, across restarts. It is not empty and holds no ':'.
@@ -127,9 +127,6 @@ type Request struct {
 var (
 	// ErrTooLarge is wrapped by the error of a Profile's Decode for a body over the profile's bound.
 	ErrTooLarge = errors.New("web: the body is larger than the profile takes")
-	// ErrNoReplies is the error of Post, Update, Ephemeral and Fits on a connection whose profile sends no replies. It wraps
-	// chat.ErrInvalid, so that a pause is refused as unusable, and no retry mends it.
-	ErrNoReplies = fmt.Errorf("web: the profile sends no replies: %w", chat.ErrInvalid)
 	// errNotStreaming is what a StreamAt's methods say: there are no streams.
 	errNotStreaming = fmt.Errorf("web: %w", chat.ErrNotStreaming)
 )
@@ -140,15 +137,20 @@ type Config struct {
 	Connection string
 	// Profile is the connection's profile (spec.web.profile), made with the connection's credentials.
 	Profile Profile
-	// URL is where the replies go (spec.web.url): an absolute http or https URL, required for a profile that sends replies and refused
-	// for one that does not.
+	// Platform is what the API says the connection's platform takes: v1alpha1.ChatPlatformOf of the connection's spec, which the
+	// broker reads once and hands to the profile too. The platform holds a channel to its shape.
+	Platform v1alpha1.ChatPlatform
+	// URL is where the replies go (spec.web.url): an absolute http or https URL, required.
 	URL string
 	// Transport makes the replies' requests; http.DefaultTransport if nil. The client around it is the platform's own, bounded by
 	// replyTimeout, and follows no redirect, so that a receiver cannot send the signed body on to another address.
 	Transport http.RoundTripper
 	// Now is the clock of the signatures; time.Now if nil.
-	Now    func() time.Time
-	Logger *slog.Logger
+	Now func() time.Time
+	// OnConnection, if set, is told true when a Run starts to take requests and false when it stops: the connection is up while a
+	// Run takes them, as a Slack connection in HTTP mode is.
+	OnConnection func(connected bool)
+	Logger       *slog.Logger
 }
 
 // Platform is a web connection. It implements chat.Platform and chat.HTTPReceiver. Every method is safe for concurrent use.
@@ -160,10 +162,14 @@ type Platform struct {
 	url     string
 	client  *http.Client
 	now     func() time.Time
+	onConn  func(connected bool)
 	log     *slog.Logger
 	ackWait time.Duration
 	// run is the Run that takes requests, or nil: the handler answers 503 then, and the sender sends the request again.
 	run atomic.Pointer[run]
+	// last is the latest Run, kept once it ends: its context carries the broker's instruments, which count a request that comes between
+	// two Runs or after the last. Nil until the first Run.
+	last atomic.Pointer[run]
 	// order holds one event at a time to the Sink, which keeps the events of a channel in order (chat.Sink). It is one place for the
 	// whole connection, which is coarser than the contract asks: the Sink takes an event in milliseconds, and a connection's senders
 	// are few.
@@ -186,23 +192,19 @@ func New(cfg Config) (*Platform, error) {
 	if cfg.Profile == nil {
 		return nil, fmt.Errorf("web: connection %s: no profile", cfg.Connection)
 	}
-	name := cfg.Profile.Name()
-	shapes, ok := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: Name, Web: &v1alpha1.WebConnectionSpec{Profile: name}})
-	if !ok {
-		return nil, fmt.Errorf("web: connection %s: the profile %q is not one the API knows", cfg.Connection, name)
+	name, shapes := cfg.Profile.Name(), cfg.Platform
+	if !shapes.Channel.Taken() {
+		return nil, fmt.Errorf("web: connection %s: no platform, the API's for the profile %q, that takes a channel", cfg.Connection, name)
 	}
 	enc := cfg.Profile.Encoder()
-	if err := checkCaps(cfg.Profile.Caps(), enc != nil); err != nil {
+	if enc == nil {
+		return nil, fmt.Errorf("web: connection %s: the profile %s has no encoder of its replies", cfg.Connection, name)
+	}
+	if err := checkCaps(cfg.Profile.Caps()); err != nil {
 		return nil, fmt.Errorf("web: connection %s: profile %s: %w", cfg.Connection, name, err)
 	}
-	switch {
-	case enc == nil && cfg.URL != "":
-		return nil, fmt.Errorf("web: connection %s: the profile %s sends no replies, and takes no URL", cfg.Connection, name)
-	case enc != nil:
-		u, err := url.Parse(cfg.URL)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			return nil, fmt.Errorf("web: connection %s: the URL of the replies is not an absolute http or https URL", cfg.Connection)
-		}
+	if u, err := url.Parse(cfg.URL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return nil, fmt.Errorf("web: connection %s: the URL of the replies is not an absolute http or https URL", cfg.Connection)
 	}
 	client := &http.Client{
 		Transport:     cfg.Transport,
@@ -215,18 +217,16 @@ func New(cfg Config) (*Platform, error) {
 	}
 	return &Platform{
 		conn: cfg.Connection, profile: cfg.Profile, enc: enc, shapes: shapes, url: cfg.URL, client: client,
-		now: now, log: cmp.Or(cfg.Logger, slog.Default()), ackWait: ackWait, order: make(chan struct{}, 1),
+		now: now, onConn: cfg.OnConnection, log: cmp.Or(cfg.Logger, slog.Default()), ackWait: ackWait, order: make(chan struct{}, 1),
 	}, nil
 }
 
 // checkCaps says whether a profile's caps are ones the platform keeps: limits alone, and a limit that holds the truncation marker
 // wherever text is shown.
-func checkCaps(c chat.Caps, replies bool) error {
+func checkCaps(c chat.Caps) error {
 	switch {
 	case c.Streams, c.Steps, c.Ephemeral, c.Busy, c.AckReaction != "":
 		return errors.New("the caps name a feature the web platform does not have (streams, steps, ephemeral messages, busy marks or reactions)")
-	case !replies:
-		return nil
 	case c.MaxText <= chat.Units(chat.Truncated):
 		return fmt.Errorf("MaxText is %d, which cannot hold the truncation marker", c.MaxText)
 	}
@@ -251,16 +251,23 @@ type run struct {
 
 // Run takes the requests of the connection to sink until ctx ends. The listener is the broker's, which routes to the handler of
 // HTTPHandler, so Run opens nothing: it makes the handler hand events to sink, and a request that comes before or after it is answered
-// 503.
+// 503. It tells Config.OnConnection that the connection is up once it takes requests, and down once it no longer does.
 func (p *Platform) Run(ctx context.Context, sink chat.Sink) error {
 	r := &run{sink: sink, ctx: ctx}
 	p.run.Store(r)
+	p.last.Store(r)
+	if p.onConn != nil {
+		p.onConn(true)
+	}
 	p.log.InfoContext(ctx, "web: taking requests", "connection", p.conn, "profile", p.profile.Name())
 	<-ctx.Done()
 	p.run.CompareAndSwap(r, nil)
 	r.mu.Lock()
 	r.closed = true
 	r.mu.Unlock()
+	if p.onConn != nil {
+		p.onConn(false)
+	}
 	return fmt.Errorf("web: %w", ctx.Err())
 }
 
@@ -287,12 +294,8 @@ func (s noStream) Append(context.Context, string) error                     { re
 func (s noStream) Step(context.Context, chat.Step) error                    { return errNotStreaming }
 func (s noStream) Stop(context.Context, string, chat.Message, string) error { return errNotStreaming }
 
-// Ephemeral implements chat.Platform: there are no messages to one person alone, so it says chat.ErrNoEphemeral (ErrNoReplies on a
-// profile that sends no replies) and sends nothing.
+// Ephemeral implements chat.Platform: there are no messages to one person alone, so it says chat.ErrNoEphemeral and sends nothing.
 func (p *Platform) Ephemeral(context.Context, chat.Target, string, chat.Message) error {
-	if p.enc == nil {
-		return ErrNoReplies
-	}
 	return chat.ErrNoEphemeral
 }
 

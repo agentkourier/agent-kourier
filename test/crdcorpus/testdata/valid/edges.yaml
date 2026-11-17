@@ -1094,9 +1094,9 @@ spec:
     toolApprovals: true
     approverGroups: [S0000000000000000000000000000000]
 ---
-# The longest GitHub identifiers that the load takes: a repository of a 39-character owner and a 100-character name as the
-# channel (140, the cap), a login of 39 with an app's [bot] as a mention's user (44, the github profile's cap), and a team of
-# the same length as an approver group. The resolution of a Slack connection refuses them; the load and the schema take them.
+# The longest IDs that the load and the schema take: an owner/name of a 39-character owner and a 100-character name as the
+# channel and as an approver group (140, the cap), and a name of 39 with a [bot] as a mention's user and as a sender. Each is
+# printable ASCII with no space and no ':'; the resolution of a Slack or a kourier-v1 connection refuses them.
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata:
@@ -1127,13 +1127,44 @@ spec:
     toolApprovals: true
     approverGroups: [ooooooooooooooooooooooooooooooooooooooo/rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr]
 ---
-# Slack's longest IDs at the union's caps, which the load and the schema take and the resolution of a Slack connection refuses:
-# a channel, a sender and an approver group of 140, and the IDs of the wrong kind that have a login's shape: a user ID as a
-# sender, and a user group ID and a bot's name as a mention's user.
+# A channel's name and a person's name where Slack takes only IDs, and ASCII punctuation in each ID: the load and the schema take
+# any platform's IDs, and the resolution of a Slack connection refuses these, with the reason InvalidPlatformID.
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata:
-  name: edges-slack-shaped-at-the-union-caps
+  name: edges-names-for-ids
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: general
+    mentions:
+      - {name: email, user: sam@example.com}
+      - {name: markup, user: "<@U0123456789>"}
+      - {name: punctuation, user: "!\"#$%&'()*+,-./;<=>?@[\\]^_`{|}~"}
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: alertmanager}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert."
+  interactions:
+    toolApprovals: true
+    approverGroups: [sre, "#sre-team"]
+---
+# Slack's shapes at the caps of every platform, which the load and the schema take and the resolution of a Slack connection
+# refuses: a channel, a sender and an approver group of 140, and IDs of the wrong kind: a user ID as a sender, and a user group
+# ID and a bot's name as a mention's user.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: edges-slack-shaped-at-the-caps
   namespace: sre
 spec:
   agent:
@@ -1536,33 +1567,6 @@ spec:
   credentialsSecretRef: {name: slack-main}
   slack: {}
 ---
-# A web connection of the github profile, which has no url.
-apiVersion: agentkourier.dev/v1alpha1
-kind: ChatConnection
-metadata:
-  name: edges-web-github
-  namespace: sre
-spec:
-  platform: web
-  credentialsSecretRef:
-    name: github-webhook
-  web:
-    profile: github
----
-# A github connection that writes its url out empty, which the broker reads as unset.
-apiVersion: agentkourier.dev/v1alpha1
-kind: ChatConnection
-metadata:
-  name: edges-web-github-empty-url
-  namespace: sre
-spec:
-  platform: web
-  credentialsSecretRef:
-    name: github-webhook
-  web:
-    profile: github
-    url: ""
----
 # A web connection of the kourier-v1 profile with an https url, a port and a path.
 apiVersion: agentkourier.dev/v1alpha1
 kind: ChatConnection
@@ -1644,27 +1648,8 @@ spec:
     profile: kourier-v1
     url: http://[::1]:9000/replies
 ---
-# A Binding with output none, which the load and the schema take; only a platform where the agent replies itself (the github
-# profile) serves it, and the resolution of a Slack connection refuses it.
-apiVersion: agentkourier.dev/v1alpha1
-kind: Binding
-metadata:
-  name: edges-output-none
-  namespace: sre
-spec:
-  agent:
-    backendRef: {name: kagent}
-    name: k8s-agent
-    namespace: kagent
-  identity:
-    userId: agent-kourier-sre
-  chat:
-    connectionRef: {name: edges-web-github}
-    channel: octo-org/hello-world
-    output: none
----
-# The kourier-v1 profile's IDs at their edges: a channel of one digit, a channel of 64 that has its digit last, a sender and a
-# user of 64 with no digit, the ID characters '.', '_' and '-', and a UUID. The load and the schema take
+# The kourier-v1 profile's IDs at their edges: a channel of one digit, a channel of 64, a sender and a user of 64 with no
+# digit, the ID characters '.', '_' and '-', and a UUID. The load and the schema take
 # them, and so does the resolution of a kourier-v1 connection; the resolution of a Slack connection refuses them.
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding

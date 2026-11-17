@@ -291,9 +291,9 @@ func variationTemplates() []template {
 		{kind: "Binding", doc: bindingDoc, mutations: bindingMutations(dur, messageFields, extractNames)},
 		{kind: "ChatConnection", doc: webConnectionDoc, mutations: []mutation{
 			{"spec.platform", of("web", "web", "slack", "", "Web")},
-			{"spec.web", of(absent{}, nil, map[string]any{}, map[string]any{"profile": "github"}, map[string]any{"profile": "github", "url": ""},
+			{"spec.web", of(absent{}, nil, map[string]any{}, map[string]any{"profile": "github"}, map[string]any{"profile": "kourier-v1", "url": ""},
 				map[string]any{"profile": "kourier-v1"}, map[string]any{"profile": "kourier-v1", "url": nil})},
-			{"spec.web.profile", of("kourier-v1", "kourier-v1", "github", "", "GitHub", "kourier-v2", absent{})},
+			{"spec.web.profile", of("kourier-v1", "kourier-v1", "github", "", "Kourier-v1", "kourier-v2", absent{})},
 			{"spec.web.url", webURLs()},
 			{"spec.web.url", webURLs()},
 			{"spec.slack", of(absent{}, absent{}, nil, map[string]any{}, map[string]any{"mode": "http"})},
@@ -335,8 +335,10 @@ func bindingMutations(dur, messageFields, extractNames func(*rand.Rand) any) []m
 		{"spec.chat.channel", of("C0123456789", "C"+strings.Repeat("0", 31), "C"+strings.Repeat("0", 32), "G"+strings.Repeat("A", 31), "#"+strings.Repeat("x", 32), "C"+strings.Repeat("é", 20),
 			"C"+strings.Repeat("0", 139), "C"+strings.Repeat("0", 140), "general", "octo/repo", strings.Repeat("o", 39)+"/"+strings.Repeat("r", 100),
 			strings.Repeat("o", 39)+"/"+strings.Repeat("r", 101), "o-/r", "o/r/s", "o/"+strings.Repeat("é", 20),
-			// The kourier-v1 shape: an opaque ID with a digit, at the union's cap and past it, and the characters it leaves out.
-			"1", "ch-1", "a.b_c-2", "general1", strings.Repeat("c", 139)+"1", strings.Repeat("c", 140)+"1", "ch:1", "-1", "_1", "ch-é1", "ch 1")},
+			// The kourier-v1 shape: an opaque ID, at the cap of every platform and past it, and the characters it leaves out.
+			"1", "ch-1", "a.b_c-2", "general1", strings.Repeat("c", 139)+"1", strings.Repeat("c", 140)+"1", "ch:1", "-1", "_1", "ch-é1", "ch 1",
+			// The characters no platform's ID has: a space, a tab, a control character, a colon, DEL and the non-ASCII.
+			"#sre-alerts", "sre\talerts", "sre\x00", "sre\x7f", ":", "sre\u00a0alerts", "sre\u202ealerts")},
 		{"spec.chat.output", of("live", "final", "none", "", absent{}, nil, "None", "off")},
 		{"spec.chat.acknowledgment.emoji", of("eyes", "+1", "-1", strings.Repeat("a", 100), strings.Repeat("a", 101), strings.Repeat("é", 60), absent{})},
 		{"spec.identity.tokenSecretRef", of(absent{}, map[string]any{"name": "s"}, map[string]any{"name": "s", "key": ""})},

@@ -18,6 +18,13 @@
 //	# field: spec.chat.channel                      optional: the field the schema's refusal must name; by default the
 //	                                                text of want before its first ": "
 //	# cluster: skip because ...                     optional: not sent to an apiserver, with the reason
+//	# connection: slack                             a Binding's only, and optional: the platform it is resolved on
+//	                                                (slack or web/kourier-v1)
+//
+// A chat ID's shape is the platform's: the schema and Validate take any platform's IDs, and the broker refuses one that is not of
+// its connection's platform's shape when it resolves the Binding with the connection. An entry with a "# connection:" line is
+// resolved too (Broker), against a ChatConnection of that platform and an AgentBackend that its refs name, so that an ID the
+// platform does not take, or a feature it does not serve, is refused there, for the reason it names.
 //
 // The invariant is about the fields of a resource's spec, which the markers copy. An apiserver validates an object's metadata
 // as well (a label or annotation it does not like, an ownerReference), and may refuse what the broker, which reads only
@@ -43,6 +50,7 @@ import (
 	"slices"
 	"strings"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/yaml"
 
@@ -75,6 +83,16 @@ type Entry struct {
 	Field string
 	// SkipCluster, if set, is why the entry is not sent to an apiserver.
 	SkipCluster string
+	// Connection is the platform a Binding is resolved on, the entry's "# connection:" line (connectionPlatforms), or empty
+	// for an entry that is only loaded.
+	Connection string
+}
+
+// connectionPlatforms are the platforms that an entry's "# connection:" line may name, each with the ChatConnection spec that
+// Broker resolves the entry's Binding against.
+var connectionPlatforms = map[string]v1alpha1.ChatConnectionSpec{
+	"slack":          {Platform: v1alpha1.PlatformSlack},
+	"web/kourier-v1": {Platform: v1alpha1.PlatformWeb, Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileKourierV1, URL: "https://receiver.example.com/replies"}},
 }
 
 // YAML returns the entry as the YAML document the file loader would read.
@@ -88,7 +106,9 @@ func (e Entry) YAML() ([]byte, error) {
 
 // Broker runs the entry through the broker's own loader (config.Load, as a file route broker starts) and returns the
 // refusal, or nil if the broker accepts it. The loader decodes strictly, defaults, validates and checks the
-// apiVersion and kind, so what it accepts is what a broker serves.
+// apiVersion and kind, so what it accepts is what a broker serves. An entry with a connection (Entry.Connection) that
+// loads is then resolved as the broker resolves it (config.ResolvePartial), with the ChatConnection and the AgentBackend
+// that its Binding's refs name, and each of the rejections is a problem of the refusal.
 func Broker(ctx context.Context, e Entry) error {
 	doc, err := e.YAML()
 	if err != nil {
@@ -102,8 +122,57 @@ func Broker(ctx context.Context, e Entry) error {
 	if err := os.WriteFile(filepath.Join(dir, "entry.yaml"), doc, 0o600); err != nil {
 		return fmt.Errorf("crdcorpus: %w", err)
 	}
-	_, err = config.Load(ctx, dir)
-	return err
+	set, err := config.Load(ctx, dir)
+	if err != nil || e.Connection == "" {
+		return err
+	}
+	if err := writeCompanions(dir, set, e); err != nil {
+		return err
+	}
+	if set, err = config.Load(ctx, dir); err != nil {
+		return fmt.Errorf("crdcorpus: %s: the entry and its companions do not load: %w", e.Name, err)
+	}
+	_, rejected := config.ResolvePartial(set)
+	var errs []error
+	for _, r := range rejected {
+		errs = append(errs, fmt.Errorf("resolution of Binding %s: %s (%s)", v1alpha1.NamespacedName(r.Namespace, r.Name), r.Message, r.Reason))
+	}
+	return errors.Join(errs...)
+}
+
+// writeCompanions writes, beside the entry in dir, the ChatConnection of the entry's connection and the AgentBackend that the
+// Binding of set, the entry loaded, names, each in the Binding's namespace's reach.
+func writeCompanions(dir string, set *config.Set, e Entry) error {
+	spec, ok := connectionPlatforms[e.Connection]
+	if !ok || len(set.Bindings) != 1 {
+		return fmt.Errorf("crdcorpus: %s: a connection is for one Binding, on a platform of connectionPlatforms", e.Name)
+	}
+	b := set.Bindings[0]
+	backend, conn := b.Spec.Agent.BackendRef, b.Spec.Chat.ConnectionRef
+	spec.CredentialsSecretRef, spec.AllowedNamespaces = v1alpha1.SecretRef{Name: "creds"}, []string{b.Namespace}
+	companions := []any{
+		v1alpha1.AgentBackend{TypeMeta: typeMeta(config.KindAgentBackend), ObjectMeta: objectMeta(backend.NamespaceOr(b.Namespace), backend.Name),
+			Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectKagentV1, URL: "http://kagent-controller.kagent:8083", AllowedNamespaces: []string{b.Namespace}}},
+		v1alpha1.ChatConnection{TypeMeta: typeMeta(config.KindChatConnection), ObjectMeta: objectMeta(conn.NamespaceOr(b.Namespace), conn.Name), Spec: spec},
+	}
+	for i, c := range companions {
+		out, err := yaml.Marshal(c)
+		if err != nil {
+			return fmt.Errorf("crdcorpus: %s: %w", e.Name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("companion-%d.yaml", i)), out, 0o600); err != nil {
+			return fmt.Errorf("crdcorpus: %w", err)
+		}
+	}
+	return nil
+}
+
+func typeMeta(kind string) metav1.TypeMeta {
+	return metav1.TypeMeta{APIVersion: v1alpha1.APIVersion, Kind: kind}
+}
+
+func objectMeta(namespace, name string) metav1.ObjectMeta {
+	return metav1.ObjectMeta{Namespace: namespace, Name: name}
 }
 
 // Root returns the repository's root, found from the working directory by its go.mod.
@@ -126,7 +195,7 @@ func Root() (string, error) {
 
 // InvalidEntries is how many entries the invalid half has. Both tests hold the corpus to it, so an entry cannot be
 // dropped, or added, without this changing in the same commit.
-const InvalidEntries = 238
+const InvalidEntries = 239
 
 // MinValidEntries is the fewest valid entries the valid half may have: the repository's resources change, so this is a
 // floor and not a count. It is under what the roots hold today (see TestEveryValidEntryIsAcceptedByTheBroker), and
@@ -312,7 +381,7 @@ func newEntry(name string, obj map[string]any) Entry {
 
 // parseInvalid reads one document of an invalid file: the comment header, then the object.
 func parseInvalid(doc []byte) (Entry, error) {
-	var rule, want, schema, skip, field, brokerOnly string
+	var rule, want, schema, skip, field, brokerOnly, connection string
 	for line := range strings.SplitSeq(string(doc), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -321,7 +390,7 @@ func parseInvalid(doc []byte) (Entry, error) {
 		if !strings.HasPrefix(line, "#") {
 			break
 		}
-		for key, dst := range map[string]*string{"# rule: ": &rule, "# want: ": &want, "# schema: ": &schema, "# cluster: ": &skip, "# field: ": &field, "# broker-only: ": &brokerOnly} {
+		for key, dst := range map[string]*string{"# rule: ": &rule, "# want: ": &want, "# schema: ": &schema, "# cluster: ": &skip, "# field: ": &field, "# broker-only: ": &brokerOnly, "# connection: ": &connection} {
 			if v, ok := strings.CutPrefix(line, key); ok {
 				*dst = v
 			}
@@ -358,6 +427,10 @@ func parseInvalid(doc []byte) (Entry, error) {
 		return Entry{}, fmt.Errorf("%s: '# schema:' must be refuses or accepts, got %q", rule, schema)
 	}
 	e.BrokerOnly = brokerOnly
+	if _, ok := connectionPlatforms[connection]; connection != "" && (!ok || e.Kind != config.KindBinding) {
+		return Entry{}, fmt.Errorf("%s: '# connection:' is for a Binding, and must be one of slack and web/kourier-v1, got %q", rule, connection)
+	}
+	e.Connection = connection
 	if wantReason := !e.SchemaRefuses && e.SkipCluster == ""; wantReason && brokerOnly == "" {
 		return Entry{}, fmt.Errorf("%s: the schema accepts it, so a '# broker-only:' line must say why the CRD leaves it to the broker", rule)
 	} else if !wantReason && brokerOnly != "" {

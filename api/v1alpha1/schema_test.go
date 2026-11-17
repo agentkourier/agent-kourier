@@ -228,9 +228,9 @@ func TestSchemaEmojiMatchesTheBrokersRule(t *testing.T) {
 // TestSchemaEnumsListTheEmptyValueExactlyWhereTheBrokerAcceptsIt holds the enums to the invariant for a field written as
 // "": where the broker accepts it, the schema must too, and where it refuses it, the enum must not list it, or a
 // fast-fail is lost. The broker is asked: each row sets the field to "" in a valid object and runs Default and
-// Validate, so the answer is the code's and not a column kept by hand. Default fills four of these from "" (progress,
-// threadReplies, botMentions, from.kind); Validate reads an empty thread.by as unset, and an empty output as the platform's
-// default, which resolution fills in. Every enum of the spec has a row, so a new one must be put in the table.
+// Validate, so the answer is the code's and not a column kept by hand. Default fills five of these from "" (output,
+// progress, threadReplies, botMentions, from.kind); Validate reads an empty thread.by as unset. Every enum of the spec has a
+// row, so a new one must be put in the table.
 func TestSchemaEnumsListTheEmptyValueExactlyWhereTheBrokerAcceptsIt(t *testing.T) {
 	bindings, backends, conns := crdSchema(t, "bindings"), crdSchema(t, "agentbackends"), crdSchema(t, "chatconnections")
 	trigger := "spec.chat.triggers[]"
@@ -334,11 +334,11 @@ func TestSchemaPatternsEqualTheGoLiterals(t *testing.T) {
 		plural, path string
 		re           *regexp.Regexp
 	}{
-		{"bindings", "spec.chat.channel", channelID},
-		{"bindings", "spec.chat.triggers[].from.id", senderID},
+		{"bindings", "spec.chat.channel", chatIDChars},
+		{"bindings", "spec.chat.triggers[].from.id", chatIDChars},
 		{"bindings", "spec.chat.mentions[].name", mentionName},
-		{"bindings", "spec.chat.mentions[].user", mentionUser},
-		{"bindings", "spec.interactions.approverGroups[]", approverGroupID},
+		{"bindings", "spec.chat.mentions[].user", chatIDChars},
+		{"bindings", "spec.interactions.approverGroups[]", chatIDChars},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			if got := crdSchema(t, tc.plural).at(t, tc.path).str("pattern"); got != tc.re.String() {

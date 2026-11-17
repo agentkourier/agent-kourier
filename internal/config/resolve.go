@@ -14,9 +14,7 @@ import (
 // ResolvedBinding is a Binding with the backend and connection its references name. Treat it as read-only. The Binding and
 // the backend are copies of the structs of the Set that Resolve or ResolvePartial took over, which share with the Set what
 // those hold (strings, slices, maps), so that a Snapshot keeps alive only the objects it serves and not the slices of the Set
-// they came from. The connection points into the Set. The Binding has the defaults of its connection's platform filled in, which
-// Default leaves out (v1alpha1.BindingSpec.DefaultOn): an output left out is the platform's, live on Slack. The Set's Binding keeps
-// them out.
+// they came from. The connection points into the Set.
 type ResolvedBinding struct {
 	Binding    *v1alpha1.Binding
 	Backend    *v1alpha1.AgentBackend
@@ -333,11 +331,6 @@ func (r *resolver) binding(b *v1alpha1.Binding) {
 		r.served[backend] = &be
 	}
 	nb := *b
-	// The defaults that depend on the platform are filled in on the copy that is served, and not in the Set: the Binding as stored
-	// (and as a source compares it) leaves them out.
-	if p, ok := r.platforms(conn.Spec); ok {
-		nb.Spec.DefaultOn(p)
-	}
 	rb := ResolvedBinding{&nb, r.served[backend], conn}
 	key := channelKey{identity{"ChatConnection", conn.Namespace, conn.Name}, b.Spec.Chat.Channel}
 	if first, taken := r.snap.byChannel[key]; taken {

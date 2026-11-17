@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -79,7 +78,7 @@ var (
 
 func TestPostSendsTheEncodedReplyToTheFixedURL(t *testing.T) {
 	r := newReceiver(t)
-	prof := newTestProfile(true)
+	prof := newTestProfile()
 	p := newPlatform(t, prof, r.srv.URL+"/hook", nil)
 
 	ref, err := p.Post(t.Context(), target, hello, "outbox-42")
@@ -114,7 +113,7 @@ func TestPostSendsTheEncodedReplyToTheFixedURL(t *testing.T) {
 // one that drops the second of two updates with the same content would show an older one after an A, B, A.
 func TestUpdateSendsAReplyWithANewKeyEachTime(t *testing.T) {
 	r := newReceiver(t)
-	prof := newTestProfile(true)
+	prof := newTestProfile()
 	p := newPlatform(t, prof, r.srv.URL, nil)
 	ref := p.RefAt("ch-1", "m-1", "outbox-42")
 
@@ -143,7 +142,7 @@ func TestUpdateSendsAReplyWithANewKeyEachTime(t *testing.T) {
 
 func TestPostRefusesWhatItCannotSend(t *testing.T) {
 	r := newReceiver(t)
-	prof := newTestProfile(true)
+	prof := newTestProfile()
 	p := newPlatform(t, prof, r.srv.URL, nil)
 	tools := chat.Prompt{ID: "ix", Tools: []chat.Tool{{Name: "rm", Args: "-rf"}}}
 
@@ -173,50 +172,11 @@ func TestPostRefusesWhatItCannotSend(t *testing.T) {
 	}
 }
 
-// countingTransport counts the requests it is given, and sends none.
-type countingTransport struct{ n atomic.Int32 }
-
-func (c *countingTransport) RoundTrip(*http.Request) (*http.Response, error) {
-	c.n.Add(1)
-	return nil, errors.New("test: no request may be sent")
-}
-
-// A profile with no encoder sends nothing: every method that would send says ErrNoReplies, which is permanent and also chat.ErrInvalid
-// (so that a pause is refused cleanly), and no request is made.
-func TestAProfileWithoutRepliesSendsNothing(t *testing.T) {
-	tr := &countingTransport{}
-	p, err := web.New(web.Config{Connection: "ns/web", Profile: newTestProfile(false), Transport: tr})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := t.Context()
-	_, postErr := p.Post(ctx, target, hello, "t")
-	for name, err := range map[string]error{
-		"Post":      postErr,
-		"Update":    p.Update(ctx, p.RefAt("ch-1", "", "m"), hello),
-		"Ephemeral": p.Ephemeral(ctx, target, "u-1", chat.Message{Fallback: "x"}),
-		"Fits":      p.Fits(chat.Prompt{ID: "ix", Questions: []chat.Question{{Text: "q"}}}),
-	} {
-		if !errors.Is(err, web.ErrNoReplies) || !errors.Is(err, chat.ErrInvalid) {
-			t.Errorf("%s: %v, want web.ErrNoReplies", name, err)
-		}
-		if v := p.Classify(chat.OpPost, err); v.Class != chat.Permanent {
-			t.Errorf("%s: Classify is %+v, want Permanent", name, v)
-		}
-	}
-	if _, found, err := p.Find(ctx, target, "t", epoch); found || err != nil {
-		t.Errorf("Find: found %t, %v; want not found", found, err)
-	}
-	if n := tr.n.Load(); n != 0 {
-		t.Errorf("%d requests were made, want none", n)
-	}
-}
-
 // Find says not found without asking: the receiver has no lookup, and a post that the outbox sends again carries the same
 // Idempotency-Key, which the receiver drops.
 func TestFindAsksNothing(t *testing.T) {
 	r := newReceiver(t)
-	p := newPlatform(t, newTestProfile(true), r.srv.URL, nil)
+	p := newPlatform(t, newTestProfile(), r.srv.URL, nil)
 	if _, found, err := p.Find(t.Context(), target, "outbox-42", epoch); found || err != nil {
 		t.Errorf("Find: found %t, %v; want not found", found, err)
 	}
@@ -230,7 +190,7 @@ func TestARedirectIsNotFollowed(t *testing.T) {
 	elsewhere := newReceiver(t)
 	r := newReceiver(t)
 	r.code, r.location = http.StatusTemporaryRedirect, elsewhere.srv.URL
-	p := newPlatform(t, newTestProfile(true), r.srv.URL, nil)
+	p := newPlatform(t, newTestProfile(), r.srv.URL, nil)
 
 	_, err := p.Post(t.Context(), target, hello, "t")
 
@@ -248,7 +208,7 @@ func TestAReplyThatTakesTooLongIsTransient(t *testing.T) {
 	r := newReceiver(t)
 	r.hold = make(chan struct{})
 	t.Cleanup(func() { close(r.hold) })
-	p := newPlatform(t, newTestProfile(true), r.srv.URL, nil)
+	p := newPlatform(t, newTestProfile(), r.srv.URL, nil)
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
 
@@ -263,7 +223,7 @@ func TestAReplyThatTakesTooLongIsTransient(t *testing.T) {
 }
 
 func TestTheClientIsBounded(t *testing.T) {
-	p := newPlatform(t, newTestProfile(true), "https://receiver.example/", nil)
+	p := newPlatform(t, newTestProfile(), receiverURL, nil)
 	if got := p.ClientTimeout(); got != web.ReplyTimeout {
 		t.Errorf("the client's timeout is %s, want ReplyTimeout (%s)", got, web.ReplyTimeout)
 	}
@@ -271,7 +231,7 @@ func TestTheClientIsBounded(t *testing.T) {
 
 func TestClassifySortsTheReceiversAnswers(t *testing.T) {
 	r := newReceiver(t)
-	p := newPlatform(t, newTestProfile(true), r.srv.URL, nil)
+	p := newPlatform(t, newTestProfile(), r.srv.URL, nil)
 	inAMinute := epoch.Add(30 * time.Second).UTC().Format(http.TimeFormat)
 	for _, tc := range []struct {
 		code       int
@@ -322,8 +282,8 @@ func TestClassifySortsTheReceiversAnswers(t *testing.T) {
 // Fits asks the encoder: a prompt is too large when the encoder says so, and a prompt of tools is invalid, since the platform has no
 // presses to approve one with.
 func TestFitsAsksTheEncoder(t *testing.T) {
-	prof := newTestProfile(true)
-	p := newPlatform(t, prof, "https://receiver.example/", nil)
+	prof := newTestProfile()
+	p := newPlatform(t, prof, receiverURL, nil)
 	q := chat.Prompt{ID: "ix", Questions: []chat.Question{{Text: "which"}}}
 	if err := p.Fits(q); err != nil {
 		t.Errorf("a small prompt: %v", err)
