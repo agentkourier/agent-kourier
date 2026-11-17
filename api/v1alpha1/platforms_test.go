@@ -279,21 +279,23 @@ func TestChatPlatformOfAnswersThePlatformsValidateAccepts(t *testing.T) {
 }
 
 // What each platform serves of a Binding: Slack everything; the kourier-v1 profile posts replies, and has no buttons and no way to
-// take an answer; the github profile posts nothing, so none is its only output and its default.
+// take an answer; the github profile posts nothing, so none is its only output and its default, and hands on mentions alone.
 func TestWhatEachPlatformServes(t *testing.T) {
 	for _, tc := range []struct {
-		spec                                      ChatConnectionSpec
-		name                                      string
-		replies, askUser, toolApprovals, feedback bool
-		output                                    OutputMode
+		spec                                                    ChatConnectionSpec
+		name                                                    string
+		replies, askUser, toolApprovals, feedback, mentionsOnly bool
+		output                                                  OutputMode
 	}{
-		{slackSpec, "Slack", true, true, true, true, OutputLive},
-		{kourierV1Spec, "web (kourier-v1 profile)", true, false, false, false, OutputLive},
-		{githubSpec, "web (github profile)", false, false, false, false, OutputNone},
+		{slackSpec, "Slack", true, true, true, true, false, OutputLive},
+		{kourierV1Spec, "web (kourier-v1 profile)", true, false, false, false, false, OutputLive},
+		{githubSpec, "web (github profile)", false, false, false, false, true, OutputNone},
 	} {
 		p := platformOf(t, tc.spec)
-		if p.Name != tc.name || p.Replies != tc.replies || p.AskUser != tc.askUser || p.ToolApprovals != tc.toolApprovals || p.Feedback != tc.feedback {
-			t.Errorf("%s: %+v; want replies %v, askUser %v, toolApprovals %v, feedback %v", tc.name, p, tc.replies, tc.askUser, tc.toolApprovals, tc.feedback)
+		if p.Name != tc.name || p.Replies != tc.replies || p.AskUser != tc.askUser || p.ToolApprovals != tc.toolApprovals || p.Feedback != tc.feedback ||
+			p.MentionsOnly != tc.mentionsOnly {
+			t.Errorf("%s: %+v; want replies %v, askUser %v, toolApprovals %v, feedback %v, mentionsOnly %v", tc.name, p, tc.replies, tc.askUser,
+				tc.toolApprovals, tc.feedback, tc.mentionsOnly)
 		}
 		if got := p.DefaultOutput(); got != tc.output {
 			t.Errorf("%s: DefaultOutput() = %q, want %q", tc.name, got, tc.output)
@@ -453,6 +455,23 @@ func TestPlatformMismatches(t *testing.T) {
 		}, []PlatformMismatch{
 			{Path: "spec.chat.output", Unsupported: true, Problem: `"final" is not supported`, Fix: "set it to none, or leave it out: the agent replies itself, and Agent Kourier posts nothing"},
 		}},
+		{"a github Binding whose triggers have no mention trigger", platformOf(t, githubSpec), func(b *Binding) {
+			b.Spec.Chat.Channel = "octo-org/hello-world"
+			b.Spec.Chat.Output = ""
+			bot(b).From.ID = "dependabot[bot]"
+			b.Spec.Chat.Triggers = b.Spec.Chat.Triggers[1:] // the botMessage trigger alone
+			b.Spec.Interactions.AskUser, b.Spec.Feedback.Enabled = false, false
+		}, []PlatformMismatch{
+			{Path: "spec.chat.triggers", Unsupported: true, Problem: "a list with no mention trigger is not supported",
+				Fix: "add {type: mention} to it, or leave it out, which is [{type: mention}]: every event the platform hands on is a mention, and no other trigger starts a turn"},
+		}},
+		{"a github Binding whose triggers are left out", platformOf(t, githubSpec), func(b *Binding) {
+			b.Spec.Chat.Channel = "octo-org/hello-world"
+			b.Spec.Chat.Output = ""
+			b.Spec.Chat.Triggers = nil
+			b.Spec.Interactions.AskUser, b.Spec.Feedback.Enabled = false, false
+		}, nil},
+		{"a Slack Binding whose triggers have no mention trigger", slack(t), func(b *Binding) { b.Spec.Chat.Triggers = b.Spec.Chat.Triggers[1:] }, nil},
 		{"GitHub IDs of the wrong kind", platformOf(t, githubSpec), func(b *Binding) {
 			b.Spec.Chat.Channel = "octo-org/hello-world"
 			b.Spec.Chat.Output = ""

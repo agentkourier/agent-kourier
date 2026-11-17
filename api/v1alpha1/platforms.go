@@ -3,6 +3,7 @@ package v1alpha1
 import (
 	"fmt"
 	"regexp"
+	"slices"
 )
 
 // The chat IDs of a Binding (spec D42) are checked in two places. The schema and Validate hold each ID field to the union of the
@@ -113,6 +114,10 @@ type ChatPlatform struct {
 	ToolApprovals bool
 	// Feedback says whether the platform can show the useful and not-useful buttons and take a press (spec.feedback.enabled).
 	Feedback bool
+	// MentionsOnly says that every message the platform hands on is a mention of Agent Kourier in a thread, and none is a bot's
+	// message or opens a thread: only the mention trigger starts a turn, so a Binding that lists its triggers lists it
+	// (spec.chat.triggers). The other triggers are taken, and match nothing there.
+	MentionsOnly bool
 }
 
 // DefaultOutput is the output of a Binding that names none: live where Agent Kourier posts the replies, and none where the agent
@@ -190,6 +195,8 @@ func ChatPlatformOf(spec ChatConnectionSpec) (ChatPlatform, bool) {
 					Fix: "use the person's login, such as octocat"},
 				Group: IDShape{pattern: githubRepo, maxLen: maxGitHubRepoLen, What: "a team",
 					Fix: "use the team's org/team-slug, such as octo-org/sre"},
+				// Every event the profile hands on is a pull request's, in the pull request's thread, and is a mention.
+				MentionsOnly: true,
 			}, true
 		}
 	}
@@ -245,6 +252,10 @@ func (s *BindingSpec) PlatformMismatches(p ChatPlatform) []PlatformMismatch {
 			fix = "set it to live or final, or leave it out for live"
 		}
 		unsupported("spec.chat.output", fmt.Sprintf("%q is not supported", o), fix)
+	}
+	if p.MentionsOnly && len(s.Chat.Triggers) > 0 && !slices.ContainsFunc(s.Chat.Triggers, func(t Trigger) bool { return t.Type == TriggerMention }) {
+		unsupported("spec.chat.triggers", "a list with no mention trigger is not supported",
+			"add {type: mention} to it, or leave it out, which is [{type: mention}]: every event the platform hands on is a mention, and no other trigger starts a turn")
 	}
 	for i, t := range s.Chat.Triggers {
 		if t.Type == TriggerBotMessage && t.From != nil {
