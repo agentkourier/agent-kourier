@@ -260,7 +260,7 @@ func TestEncodeMakesTheTextInert(t *testing.T) {
 	}
 	want := chat.Message{Fallback: "done <!channel>", Parts: []chat.Part{
 		chat.Header{Text: "a b"},
-		chat.Body{Markdown: `\[x\](http://evil.example) !\[i\](http://evil.example/i.png) \<b>hi\</b> \<!channel> \\\[ok\]`},
+		chat.Body{Markdown: `\[x\](http://evil.example) !\[i\](http://evil.example/i.png) &lt;b>hi&lt;/b> &lt;!channel> \\\[ok\]`},
 		chat.Context{Text: "c d"},
 		chat.ToolLine{Name: "rm -rf", Summary: "/"},
 		chat.Mention{Text: "answered"},
@@ -291,9 +291,36 @@ func TestEncodeCutsATextToTheLimit(t *testing.T) {
 	if n := chat.Units(m.Fallback); n != kourierv1.MaxText || !strings.HasSuffix(m.Fallback, chat.Truncated) {
 		t.Errorf("the fallback is %d units, want %d ending in the marker", n, kourierv1.MaxText)
 	}
+	// The body is counted as it is sent, its escapes included: each "[" is sent as two units, "\[", and is not split.
 	body := m.Parts[0].(chat.Body).Markdown
-	if shown := strings.ReplaceAll(body, `\[`, "["); chat.Units(shown) != kourierv1.MaxText || !strings.HasSuffix(shown, chat.Truncated) {
-		t.Errorf("the body shows %d units, want %d ending in the marker", chat.Units(shown), kourierv1.MaxText)
+	if n := chat.Units(body); n > kourierv1.MaxText || n < kourierv1.MaxText-1 || !strings.HasSuffix(body, chat.Truncated) {
+		t.Errorf("the body is %d units, want %d or one fewer, ending in the marker", n, kourierv1.MaxText)
+	}
+}
+
+// The code in a body reaches the receiver as the agent wrote it, and a cut in a block closes it before the marker, which the
+// receiver shows as text.
+func TestEncodeSendsCodeAsWritten(t *testing.T) {
+	p := newProfile(t)
+	for _, tc := range []struct{ name, md, want string }{
+		{"a block and a span", "Pods <x>:\n```\nweb-0   <none>   [ready]\n```\nRun `C:\\x\\[a]`.",
+			"Pods &lt;x>:\n```\nweb-0   <none>   [ready]\n```\nRun `C:\\x\\[a]`."},
+		{"a block cut", "```\n" + strings.Repeat("<", kourierv1.MaxText) + "\n```",
+			"```\n" + strings.Repeat("<", kourierv1.MaxText-4-5-chat.Units(chat.Truncated)) + "\n```\n" + chat.Truncated},
+	} {
+		r := reply
+		r.Message = chat.Say(chat.Message{Fallback: "f", Parts: []chat.Part{chat.Body{Markdown: tc.md}}})
+		req, err := p.Encode(r, epoch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var env kourierv1.Outbound
+		if err := json.Unmarshal(req.Body, &env); err != nil {
+			t.Fatal(err)
+		}
+		if got := env.Message.Message.Parts[0].(chat.Body).Markdown; got != tc.want {
+			t.Errorf("%s: the body sent is %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 
