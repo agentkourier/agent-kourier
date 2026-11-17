@@ -410,7 +410,8 @@ func (d *Decider) countApproval(pd PressDecision) {
 	d.cfg.OnApprovalOutcome(pd.BindingName, outcome)
 }
 
-// tell shows m to the person alone. It is told once and kept nowhere, so a failure is only logged.
+// tell shows m to the person alone. It is told once and kept nowhere, so a failure is only logged (at debug on a platform
+// that has no ephemeral messages: see untoldLevel).
 func (d *Decider) tell(ctx context.Context, row store.Interaction, user string, m chat.Message) {
 	to := chat.Target{Conn: row.Key.Connection, Channel: row.Key.Channel, Thread: row.Key.Thread}
 	e, err := d.cfg.Ephemerals.Platform(row.Key.Connection)
@@ -418,7 +419,7 @@ func (d *Decider) tell(ctx context.Context, row store.Interaction, user string, 
 		err = e.Ephemeral(ctx, to, user, m)
 	}
 	if err != nil {
-		d.cfg.Logger.WarnContext(ctx, "interact: a person could not be told the outcome of their press", "interaction", row.ID, "err", err)
+		d.cfg.Logger.Log(ctx, untoldLevel(err), "interact: a person could not be told the outcome of their press", "interaction", row.ID, "err", err)
 	}
 }
 

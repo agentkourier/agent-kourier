@@ -221,7 +221,7 @@ func newDecideRig(t *testing.T) *decideRig {
 	r.aud = &orderedAudit{audits: &audits{}, log: r.calls, all: r.flow}
 	var err error
 	r.d, err = interact.NewDecider(decideCfg(interact.DecideConfig{
-		Store: r.st, Auditor: r.aud, Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Session: r.sess, Sessions: r.st, Replacer: r.rep, Outbox: r.out, Logger: slog.New(slog.NewTextHandler(r.logs, nil)),
+		Store: r.st, Auditor: r.aud, Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Session: r.sess, Sessions: r.st, Replacer: r.rep, Outbox: r.out, Logger: slog.New(slog.NewTextHandler(r.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		OnDecision: func(result string) { r.mu.Lock(); r.hooks = append(r.hooks, result); r.mu.Unlock() },
 		OnApprovalOutcome: func(binding string, o interact.Outcome) {
 			r.mu.Lock()
@@ -471,6 +471,49 @@ func TestAnEphemeralThatFailsDoesNotFailTheDecision(t *testing.T) {
 	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", deadline, "req-1")); err != nil {
 		t.Fatalf("Decide = %v; want a refused late press to be done even if it could not be told", err)
 	}
+}
+
+// TestAPlatformWithNoEphemeralMessagesIsNotAFault: a platform that shows no message to one person alone says
+// chat.ErrNoEphemeral, which is logged at debug and not as a warning: the person is not told, by design, and nothing is
+// posted for all to see in its place. Any other failure still warns.
+func TestAPlatformWithNoEphemeralMessagesIsNotAFault(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err       error
+		wantLevel string
+	}{
+		"no ephemeral messages": {fmt.Errorf("web: %w", chat.ErrNoEphemeral), "level=DEBUG"},
+		"another failure":       {errBoom, "level=WARN"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newDecideRig(t)
+			r.pending(t)
+			r.eph.err = tc.err
+			if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", deadline, "req-1")); err != nil {
+				t.Fatalf("Decide = %v; want the press done", err)
+			}
+			if len(r.eph.list()) != 1 || len(r.out.list()) != 0 {
+				t.Errorf("ephemerals %q, posts %d; want the one ephemeral tried and nothing posted in its place", r.eph.list(), len(r.out.list()))
+			}
+			out := r.logs.String()
+			line := logLine(out, "could not be told")
+			if !strings.Contains(line, tc.wantLevel) || !strings.Contains(line, "ix-1") {
+				t.Errorf("log %q; want %s that the person was not told, naming ix-1", out, tc.wantLevel)
+			}
+			if tc.wantLevel == "level=DEBUG" && strings.Contains(out, "level=WARN") {
+				t.Errorf("log %q; want no warning for a platform that has no ephemeral messages", out)
+			}
+		})
+	}
+}
+
+// logLine is the first line of out that holds text, or "".
+func logLine(out, text string) string {
+	for line := range strings.Lines(out) {
+		if strings.Contains(line, text) {
+			return line
+		}
+	}
+	return ""
 }
 
 func TestNewDeciderNeedsItsParts(t *testing.T) {

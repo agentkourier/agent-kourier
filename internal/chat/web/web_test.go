@@ -92,8 +92,8 @@ func TestTheMethodsSayWhatThePlatformLacks(t *testing.T) {
 	check("ThreadBetween", err, chat.ErrNoThreadReads)
 	_, _, err = p.ThreadFromStart(ctx, target, "", 10)
 	check("ThreadFromStart", err, chat.ErrNoThreadReads)
-	if err := p.Ephemeral(ctx, target, "u-1", chat.Message{Fallback: "x"}); err == nil || p.Classify(chat.OpPost, err).Class != chat.Permanent {
-		t.Errorf("Ephemeral: %v, want a permanent error", err)
+	if err := p.Ephemeral(ctx, target, "u-1", chat.Message{Fallback: "x"}); !errors.Is(err, chat.ErrNoEphemeral) || p.Classify(chat.OpPost, err).Class != chat.Permanent {
+		t.Errorf("Ephemeral: %v, want chat.ErrNoEphemeral, which is permanent", err)
 	}
 	if link, ok := p.Permalink(ref); ok || link != "" {
 		t.Errorf("Permalink: %q, %t; want none", link, ok)

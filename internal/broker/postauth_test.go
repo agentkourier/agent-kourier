@@ -12,6 +12,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 )
 
@@ -188,6 +189,24 @@ func TestWatchAuthReportsOnlyFatalAuthAndPassesEverythingThrough(t *testing.T) {
 				t.Errorf("%s/%s: reported %v, want %q", tc.name, call, reported, tc.want)
 			}
 		}
+	}
+}
+
+// A platform with no ephemeral messages says chat.ErrNoEphemeral, which is what it is and not a rejected credential: WatchAuth passes it
+// through untouched and reports nothing.
+func TestWatchAuthPassesNoEphemeralThroughAndReportsNothing(t *testing.T) {
+	f := chattest.NewFake()
+	caps := f.Capabilities()
+	caps.Ephemeral = false
+	f.SetCaps(caps)
+	var reported []string
+	w := WatchAuth(f, func(code string) { reported = append(reported, code) })
+	err := w.Ephemeral(t.Context(), chat.Target{Conn: "ns/conn", Channel: "C1"}, "U1", chat.Message{Fallback: "only you"})
+	if !errors.Is(err, chat.ErrNoEphemeral) {
+		t.Errorf("Ephemeral = %v, want chat.ErrNoEphemeral untouched", err)
+	}
+	if len(reported) != 0 {
+		t.Errorf("reported %v, want nothing: a platform without ephemeral messages has not rejected its credentials", reported)
 	}
 }
 

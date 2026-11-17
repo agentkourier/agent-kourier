@@ -349,11 +349,47 @@ func (r *pressRig) loggedPipeline(t *testing.T) (*interact.Pipeline, *logBuf) {
 	logs := &logBuf{}
 	b := interact.Binding{Dialect: kagentv1.New(time.Second), AskUser: true, Timeout: time.Minute, Identity: "secret:ns/tok"}
 	pl, err := interact.NewPipeline(pressCfg(interact.PressConfig{Store: r.st, Sessions: r.st, Lookup: lookup{b}, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Decider: r.d, Auditor: r.aud,
-		Logger: slog.New(slog.NewTextHandler(logs, nil)), Now: func() time.Time { return r.now }}))
+		Logger: slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})), Now: func() time.Time { return r.now }}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return pl, logs
+}
+
+// TestAPressOnAPlatformWithNoEphemeralMessagesIsNotAFault: a platform that shows no message to one person alone says
+// chat.ErrNoEphemeral, which is logged at debug and not as a warning: the person is not told, by design. Any other failure
+// to tell the person still warns. Either way the press is done.
+func TestAPressOnAPlatformWithNoEphemeralMessagesIsNotAFault(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err       error
+		wantLevel string
+	}{
+		"no ephemeral messages": {fmt.Errorf("web: %w", chat.ErrNoEphemeral), "level=DEBUG"},
+		"another failure":       {errBoom, "level=WARN"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newPressRig(t)
+			r.open(t)
+			var logs *logBuf
+			r.pl, logs = r.loggedPipeline(t)
+			r.eph.err = tc.err
+			delete(r.az.members, "UBOB22") // told: not a member
+			if res, err := r.process(t, r.submit(t, "UBOB22", 0)); err != nil || res != interact.Done || r.waiting(t) != 0 {
+				t.Fatalf("Process = %v, %v, %d waiting; want the press done", res, err, r.waiting(t))
+			}
+			if len(r.eph.list()) != 1 || len(r.sess.answers()) != 0 {
+				t.Errorf("ephemerals %q, %d sends; want the one ephemeral tried and nothing sent", r.eph.list(), len(r.sess.answers()))
+			}
+			out := logs.String()
+			line := logLine(out, "could not be told")
+			if !strings.Contains(line, tc.wantLevel) || !strings.Contains(line, "ix-1") {
+				t.Errorf("log %q; want %s that the person was not told, naming ix-1", out, tc.wantLevel)
+			}
+			if tc.wantLevel == "level=DEBUG" && strings.Contains(out, "level=WARN") {
+				t.Errorf("log %q; want no warning for a platform that has no ephemeral messages", out)
+			}
+		})
+	}
 }
 
 // TestAPressRecordedByAnOlderVersionIsToldAndLoggedAsSuchNotAsCorruption: a press recorded before an upgrade holds

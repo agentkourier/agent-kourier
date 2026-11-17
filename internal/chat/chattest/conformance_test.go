@@ -61,6 +61,10 @@ type leaks struct {
 	noReactionsRetried                          bool // has no reactions, and Classify calls ErrNoReactions Transient
 	noReactionsShows                            bool // has no reactions, says ErrNoReactions, and shows a text in place of the reaction
 	colonReaction                               bool // names its own reaction with the colons around it
+	noEphemeral                                 bool // has no ephemeral messages (Caps.Ephemeral false), and says ErrNoEphemeral as it should
+	ephemeralAnyway                             bool // has no ephemeral messages, and shows one with no error
+	noEphemeralOther                            bool // has no ephemeral messages, and says so with an error of its own, not ErrNoEphemeral
+	noEphemeralRetried                          bool // has no ephemeral messages, and Classify calls ErrNoEphemeral Transient
 
 	// Escaping that does not work for the platform's dialect, the way the suite once passed them.
 	backslashAll      bool // a backslash before every ASCII punctuation: Slack honours none, and the "<" is a token
@@ -279,7 +283,7 @@ func (m *markupPlatform) Unreact(ctx context.Context, r chat.Ref, name string) e
 
 // Classify is the fake's, but for the leak that would have the outbox retry a reaction that can never be made.
 func (m *markupPlatform) Classify(op chat.Op, err error) chat.Verdict {
-	if m.leaks.noReactionsRetried && errors.Is(err, chat.ErrNoReactions) {
+	if m.leaks.noReactionsRetried && errors.Is(err, chat.ErrNoReactions) || m.leaks.noEphemeralRetried && errors.Is(err, chat.ErrNoEphemeral) {
 		return chat.Verdict{Class: chat.Transient}
 	}
 	return m.FakePlatform.Classify(op, err)
@@ -309,7 +313,15 @@ func (m *markupPlatform) Update(ctx context.Context, r chat.Ref, o chat.Outgoing
 	return err
 }
 
+// Ephemeral is the fake's, but for the leaks of a platform with no ephemeral messages that shows one, or says so in its own words.
 func (m *markupPlatform) Ephemeral(ctx context.Context, t chat.Target, user string, msg chat.Message) error {
+	switch {
+	case m.leaks.ephemeralAnyway:
+		m.record("Ephemeral", MessageFields(msg))
+		return nil
+	case m.leaks.noEphemeralOther:
+		return errors.New("this platform shows no message to one person alone")
+	}
 	err := m.FakePlatform.Ephemeral(ctx, t, user, msg)
 	if err == nil {
 		m.record("Ephemeral", MessageFields(msg))
@@ -428,6 +440,11 @@ func (m *markupPlatform) subject() Subject {
 		c.AckReaction = ":hourglass:"
 		m.SetCaps(c)
 	}
+	if m.leaks.noEphemeral || m.leaks.ephemeralAnyway || m.leaks.noEphemeralOther || m.leaks.noEphemeralRetried {
+		c := m.Capabilities()
+		c.Ephemeral = false
+		m.SetCaps(c)
+	}
 	return s
 }
 
@@ -436,6 +453,7 @@ func TestAnEscapingMarkupAdapterPassesInBothDialects(t *testing.T) {
 		t.Run(name, func(t *testing.T) { t.Parallel(); Conformance(t, newMarkup(d, leaks{}).subject()) })
 		t.Run(name+" with mentions", func(t *testing.T) { t.Parallel(); Conformance(t, newMarkup(d, leaks{mentions: true}).subject()) })
 		t.Run(name+" with no reactions", func(t *testing.T) { t.Parallel(); Conformance(t, newMarkup(d, leaks{noReactions: true}).subject()) })
+		t.Run(name+" with no ephemeral messages", func(t *testing.T) { t.Parallel(); Conformance(t, newMarkup(d, leaks{noEphemeral: true}).subject()) })
 	}
 }
 
@@ -468,6 +486,9 @@ func TestEveryWayAnAdapterCanBeUnsafeIsCaught(t *testing.T) {
 		{"a platform with no reactions that calls ErrNoReactions transient", slackPlainText, leaks{noReactionsRetried: true}, RuleContract, ""},
 		{"a platform with no reactions that shows a text instead", slackPlainText, leaks{noReactionsShows: true}, RuleContract, ""},
 		{"a platform that names its reaction with colons", slackPlainText, leaks{colonReaction: true}, RuleContract, ""},
+		{"a platform with no ephemeral messages that shows one", slackPlainText, leaks{ephemeralAnyway: true}, RuleContract, ""},
+		{"a platform with no ephemeral messages that says so in its own words", slackPlainText, leaks{noEphemeralOther: true}, RuleContract, ""},
+		{"a platform with no ephemeral messages that calls ErrNoEphemeral transient", slackPlainText, leaks{noEphemeralRetried: true}, RuleContract, ""},
 		{"a busy mark that is refused", slackPlainText, leaks{busyRefused: true}, RuleContract, ""},
 		{"a busy mark of a target with no thread that is taken", slackPlainText, leaks{busyNoThread: true}, RuleContract, ""},
 		{"a platform with no busy mark that takes one", slackPlainText, leaks{busyUnsaid: true}, RuleContract, ""},

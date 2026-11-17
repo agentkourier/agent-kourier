@@ -127,8 +127,6 @@ type Request struct {
 var (
 	// ErrTooLarge is wrapped by the error of a Profile's Decode for a body over the profile's bound.
 	ErrTooLarge = errors.New("web: the body is larger than the profile takes")
-	// errNoEphemeral is what Ephemeral says: there is no message to one person alone.
-	errNoEphemeral = errors.New("web: the platform has no ephemeral messages")
 	// errNotStreaming is what a StreamAt's methods say: there are no streams.
 	errNotStreaming = fmt.Errorf("web: %w", chat.ErrNotStreaming)
 )
@@ -296,9 +294,9 @@ func (s noStream) Append(context.Context, string) error                     { re
 func (s noStream) Step(context.Context, chat.Step) error                    { return errNotStreaming }
 func (s noStream) Stop(context.Context, string, chat.Message, string) error { return errNotStreaming }
 
-// Ephemeral implements chat.Platform: there are no messages to one person alone.
+// Ephemeral implements chat.Platform: there are no messages to one person alone, so it says chat.ErrNoEphemeral and sends nothing.
 func (p *Platform) Ephemeral(context.Context, chat.Target, string, chat.Message) error {
-	return errNoEphemeral
+	return chat.ErrNoEphemeral
 }
 
 // React implements chat.Platform: there are no reactions (Caps.AckReaction is empty).
