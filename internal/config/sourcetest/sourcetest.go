@@ -91,7 +91,7 @@ kind: ChatConnection
 metadata: { name: github-prs, namespace: agent-kourier-system }
 spec:
   platform: web
-  web: { profile: github }
+  web: { profile: github, github: { login: pr-reviewer } }
   credentialsSecretRef: { name: github-prs }   # key webhookSecret
   allowedNamespaces: ["sre"]
 `

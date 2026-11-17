@@ -325,6 +325,8 @@ type SlackConnectionSpec struct {
 //
 // +kubebuilder:validation:XValidation:rule="self.profile != 'kourier-v1' || (has(self.url) && size(self.url) > 0)",message="is required by the kourier-v1 profile, which posts the replies to it",fieldPath=".url"
 // +kubebuilder:validation:XValidation:rule="self.profile != 'github' || !has(self.url) || size(self.url) == 0",message="is set, but the github profile sends no replies",fieldPath=".url"
+// +kubebuilder:validation:XValidation:rule="!has(self.github) || self.profile == 'github'",message="is set, but only the github profile has one",fieldPath=".github"
+// +kubebuilder:validation:XValidation:rule="self.profile != 'github' || has(self.github)",message="is required by the github profile: it names the login the agent posts as",fieldPath=".github"
 type WebConnectionSpec struct {
 	// Profile is the integration the connection speaks. kourier-v1 is Agent Kourier's own signed JSON contract: it takes signed
 	// requests and posts the agent's replies, signed, to url. github takes GitHub's webhooks and sends no replies: the agent
@@ -350,6 +352,26 @@ type WebConnectionSpec struct {
 	// +kubebuilder:validation:XValidation:rule=`!self.matches('(?i)^http://') || self.matches(r'(?i)^http://(?:localhost|127(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}|\[::1\]|(?:[a-z0-9-]+\.)+svc(?:\.cluster\.local)?)(?::[0-9]{1,5})?(?:[/?#]|$)')`,message="http is allowed only to localhost, a loopback address or a Service in the cluster (a host that ends in .svc or .svc.cluster.local); use https"
 	// +optional
 	URL string `json:"url,omitempty"`
+
+	// GitHub holds the settings of the github profile. A connection of the github profile must set it, and no other may.
+	// +optional
+	GitHub *GitHubWebSpec `json:"github,omitempty"`
+}
+
+// GitHubWebSpec is the settings of a web connection of the github profile.
+type GitHubWebSpec struct {
+	// The pattern and the cap are those of a GitHub login in a Binding (githubLogin and maxGitHubLoginLen in platforms.go), which
+	// TestSchemaPatternsEqualTheGoLiterals and TestSchemaCapsEqualTheBrokersCaps hold the markers to. (Not in the doc comment below,
+	// which the reference pages print.)
+
+	// Login is the GitHub login the agent posts as: a user's, such as pr-reviewer, or a GitHub App's, such as
+	// pr-reviewer[bot]. A comment on a pull request, or a review comment, starts a turn only when it mentions the login (an
+	// app's login without its [bot]). No event that the login sent starts one, such as its own push to a pull request, nor a
+	// comment whose author it is. At most 39 letters and digits with single hyphens between them, then an optional [bot], at most
+	// 44 bytes.
+	// +kubebuilder:validation:MaxLength=44
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}(?:\[bot\])?$`
+	Login string `json:"login"`
 }
 
 // Binding connects one agent to one chat channel.
