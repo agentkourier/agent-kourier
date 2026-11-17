@@ -154,7 +154,8 @@ func TestAChatConnectionOnAPlatformWithNoAdapterIsAWiringError(t *testing.T) {
 // stops the start, and as a team connection it is its Err, which leaves it not started beside a Slack connection that is.
 func TestAWebChatConnectionIsRefusedAtConnectionStart(t *testing.T) {
 	for _, web := range []*v1alpha1.WebConnectionSpec{
-		{Profile: v1alpha1.WebProfileKourierV1, URL: "https://receiver.example.com/replies"}, {Profile: v1alpha1.WebProfileGitHub},
+		{Profile: v1alpha1.WebProfileKourierV1, URL: "https://receiver.example.com/replies"},
+		{Profile: v1alpha1.WebProfileGitHub, GitHub: &v1alpha1.GitHubWebSpec{Login: "pr-reviewer"}},
 	} {
 		t.Run(string(web.Profile), func(t *testing.T) {
 			conn := func(ns string) v1alpha1.ChatConnection {

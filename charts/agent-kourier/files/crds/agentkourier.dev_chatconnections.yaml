@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    agentkourier.dev/schema-sha256: 4b70998eea2f2f2959a670fc5c84f3fd717560155b21b4dcab3382f5d06b8cd7
+    agentkourier.dev/schema-sha256: 7f968a51dca644a374d8162f7cedf3f0d3df9af1f0d99ce52b6f73e6839848c6
     controller-gen.kubebuilder.io/version: v0.23.0
   name: chatconnections.agentkourier.dev
 spec:
@@ -112,6 +112,24 @@ spec:
                 description: Web holds the settings of a web connection. A connection
                   whose platform is web must set it, and no other may.
                 properties:
+                  github:
+                    description: GitHub holds the settings of the github profile.
+                      A connection of the github profile must set it, and no other
+                      may.
+                    properties:
+                      login:
+                        description: |-
+                          Login is the GitHub login the agent posts as: a user's, such as pr-reviewer, or a GitHub App's, such as
+                          pr-reviewer[bot]. A comment on a pull request, or a review comment, starts a turn only when it mentions the login (an
+                          app's login without its [bot]). No event that the login sent starts one, such as its own push to a pull request, nor a
+                          comment whose author it is. At most 39 letters and digits with single hyphens between them, then an optional [bot], at most
+                          44 bytes.
+                        maxLength: 44
+                        pattern: ^[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}(?:\[bot\])?$
+                        type: string
+                    required:
+                    - login
+                    type: object
                   profile:
                     description: |-
                       Profile is the integration the connection speaks. kourier-v1 is Agent Kourier's own signed JSON contract: it takes signed
@@ -159,6 +177,13 @@ spec:
                   message: is set, but the github profile sends no replies
                   rule: self.profile != 'github' || !has(self.url) || size(self.url)
                     == 0
+                - fieldPath: .github
+                  message: is set, but only the github profile has one
+                  rule: '!has(self.github) || self.profile == ''github'''
+                - fieldPath: .github
+                  message: 'is required by the github profile: it names the login
+                    the agent posts as'
+                  rule: self.profile != 'github' || has(self.github)
             required:
             - credentialsSecretRef
             - platform

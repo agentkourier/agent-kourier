@@ -327,8 +327,8 @@ func (c *ChatConnection) Validate() error {
 	return errors.Join(p...)
 }
 
-// web checks the settings of a web connection: a profile, and the reply URL that a profile with replies needs and one without
-// refuses.
+// web checks the settings of a web connection: a profile, the reply URL that a profile with replies needs and one without refuses,
+// and the github block that the github profile needs and every other refuses.
 func (p *problems) web(w *WebConnectionSpec) {
 	switch w.Profile {
 	case "":
@@ -345,6 +345,28 @@ func (p *problems) web(w *WebConnectionSpec) {
 		}
 	default:
 		p.oneOf("spec.web.profile", string(w.Profile), string(WebProfileKourierV1), string(WebProfileGitHub))
+	}
+	switch {
+	case w.GitHub == nil && w.Profile == WebProfileGitHub:
+		p.add("spec.web.github", "is required by the github profile: it names the login the agent posts as")
+	case w.GitHub != nil && w.Profile != WebProfileGitHub:
+		p.add("spec.web.github", "is set, but only the github profile has one")
+	}
+	if w.GitHub != nil {
+		p.githubLogin("spec.web.github.login", w.GitHub.Login)
+	}
+}
+
+// githubLogin checks the login of a github connection: the shape and the cap of a GitHub login in a Binding (githubLogin,
+// maxGitHubLoginLen), which the schema copies.
+func (p *problems) githubLogin(path, login string) {
+	switch {
+	case login == "":
+		p.add(path, "required")
+	case len(login) > maxGitHubLoginLen:
+		p.maxBytes(path, login, maxGitHubLoginLen)
+	case !githubLogin.MatchString(login):
+		p.add(path, "invalid login %q: must be a GitHub login, such as octocat, or an app's, such as pr-reviewer[bot]", login)
 	}
 }
 
