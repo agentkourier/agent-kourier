@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/web"
 	"github.com/agentkourier/agent-kourier/internal/chat/web/kourierv1"
@@ -38,7 +39,12 @@ func newWebFake(t *testing.T) (*Web, string) {
 // postReply sends the fake receiver the reply r as the kourier-v1 profile encodes it, and fails the test unless it answers want.
 func postReply(t *testing.T, base string, r web.Reply, want int) {
 	t.Helper()
-	p, err := kourierv1.New(secret.New(webTestSecret))
+	platform, ok := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb,
+		Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileKourierV1}})
+	if !ok {
+		t.Fatal("the API has no kourier-v1 profile")
+	}
+	p, err := kourierv1.New(secret.New(webTestSecret), platform)
 	if err != nil {
 		t.Fatal(err)
 	}

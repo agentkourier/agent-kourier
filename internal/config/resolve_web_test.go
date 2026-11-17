@@ -87,7 +87,8 @@ func TestOutputNoneIsUnsupportedOnSlack(t *testing.T) {
 }
 
 // onWeb makes the spec set's connection a web connection with the profile, and sre-alerts a Binding that the profile takes: a
-// channel and a sender of its shapes, and none of what it does not serve. The secret is the profile's.
+// channel and a sender of its shapes, and none of what it does not serve. The github profile takes no sender, so there its botMessage
+// trigger becomes a person's message. The secret is the profile's.
 func onWeb(t *testing.T, profile v1alpha1.WebProfile) (*Set, fakeSecrets) {
 	t.Helper()
 	set := specSet(t)
@@ -100,8 +101,10 @@ func onWeb(t *testing.T, profile v1alpha1.WebProfile) (*Set, fakeSecrets) {
 	chatOnly := &set.Bindings[slices.IndexFunc(set.Bindings, func(b v1alpha1.Binding) bool { return b.Name == "chat-only" })]
 	switch profile {
 	case v1alpha1.WebProfileGitHub:
-		conn.Spec.Web.GitHub = &v1alpha1.GitHubWebSpec{Login: "pr-reviewer"}
-		b.Spec.Chat.Channel, b.Spec.Chat.Triggers[1].From.ID = "octo-org/hello-world", "dependabot[bot]"
+		conn.Spec.Web.Identity = "pr-reviewer"
+		b.Spec.Chat.Channel = "octo-org/hello-world"
+		b.Spec.Chat.Triggers[1] = v1alpha1.Trigger{Type: v1alpha1.TriggerPersonMessage, PromptTemplate: "A person wrote in {{ .Channel }}.",
+			Limits: b.Spec.Chat.Triggers[1].Limits}
 		chatOnly.Spec.Chat.Channel = "octo-org/chat"
 	case v1alpha1.WebProfileKourierV1:
 		conn.Spec.Web.URL = "https://receiver.example.com/replies"
@@ -118,11 +121,12 @@ func onWeb(t *testing.T, profile v1alpha1.WebProfile) (*Set, fakeSecrets) {
 
 // On the github profile, where the agent replies itself, a Binding that leaves its output out is served with none, and one that
 // names none too; live and final, questions, tool approvals and feedback are refused with UnsupportedOnPlatform, each in the order
-// of the fields. Its IDs are held to GitHub's shapes.
+// of the fields, and so is a bot's message, since the profile hands on none and takes no sender. Its IDs are held to GitHub's shapes.
 func TestResolutionOnTheGitHubProfile(t *testing.T) {
 	const on = " on web (github profile), the platform of ChatConnection agent-kourier-system/slack-main: "
 	page := " (see " + PlatformsPage + ")"
 	noOutput := "set it to none, or leave it out: the agent replies itself, and Agent Kourier posts nothing"
+	bot := sreAlerts(specSet(t)).Spec.Chat.Triggers[1]
 	tests := []struct {
 		name     string
 		mutate   func(*v1alpha1.Binding)
@@ -148,6 +152,20 @@ func TestResolutionOnTheGitHubProfile(t *testing.T) {
 			rejected("sre-alerts", ReasonUnsupportedOnPlatform, "spec.chat.triggers: a list with no mention trigger is not supported"+on+
 				"add {type: mention} to it, or leave it out, which is [{type: mention}]: every event the platform hands on is a mention, and no other trigger starts a turn"+page)}},
 		{"its triggers left out, which is the mention trigger", func(b *v1alpha1.Binding) { b.Spec.Chat.Triggers = nil }, v1alpha1.OutputNone, nil},
+		{"a bot's message, from a GitHub App", func(b *v1alpha1.Binding) {
+			b.Spec.Chat.Triggers[1] = bot
+			b.Spec.Chat.Triggers[1].From = &v1alpha1.BotSource{Kind: bot.From.Kind, ID: "dependabot[bot]"}
+		}, "", []Rejection{
+			rejected("sre-alerts", ReasonUnsupportedOnPlatform, "spec.chat.triggers[1].from.id: a bot's message is not supported"+on+
+				"remove the botMessage trigger: the platform hands on no bot's message"+page)}},
+		{"a mention and an approver group, which name a user and a group", func(b *v1alpha1.Binding) {
+			b.Spec.Chat.Mentions = []v1alpha1.ChatMention{{Name: "oncall", User: "octocat"}}
+			b.Spec.Interactions.ApproverGroups = []string{"octo-org/sre"}
+		}, "", []Rejection{
+			rejected("sre-alerts", ReasonUnsupportedOnPlatform, "spec.chat.mentions: mentions are not supported"+on+
+				"remove it: Agent Kourier posts nothing on the platform, so it notifies nobody"+page),
+			rejected("sre-alerts", ReasonUnsupportedOnPlatform, "spec.interactions.approverGroups: approver groups are not supported"+on+
+				"remove it: the platform asks for no tool approvals"+page)}},
 		{"a Slack channel", func(b *v1alpha1.Binding) { b.Spec.Chat.Channel = "C0123456789" }, "", []Rejection{
 			rejected("sre-alerts", ReasonInvalidPlatformID, `spec.chat.channel: "C0123456789" is not a repository`+on+
 				"use the repository's owner/name, such as octo-org/hello-world"+page)}},
@@ -210,7 +228,7 @@ func TestResolutionOnTheKourierV1Profile(t *testing.T) {
 	_, got := ResolvePartial(set)
 	want := []Rejection{
 		rejected("sre-alerts", ReasonInvalidPlatformID, `spec.chat.channel: "octo-org/hello-world" is not a channel ID`+on+
-			"use the channel's ID as the sender sends it: letters, digits, '.', '_' and '-', with a digit, such as ch-1"+page),
+			"use the channel's ID as the sender sends it: letters, digits, '.', '_' and '-', starting with a letter or a digit, such as ch-1"+page),
 		rejected("sre-alerts", ReasonUnsupportedOnPlatform, `spec.chat.output: "none" is not supported`+on+"set it to live or final, or leave it out for live"+page),
 		rejected("sre-alerts", ReasonUnsupportedOnPlatform, "spec.interactions.askUser: questions to a person are not supported"+on+"set it to false"+page),
 		rejected("sre-alerts", ReasonUnsupportedOnPlatform, "spec.feedback.enabled: feedback buttons are not supported"+on+"set it to false"+page),

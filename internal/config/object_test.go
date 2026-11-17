@@ -138,14 +138,14 @@ func TestDecodeObjectStillRefusesWhatIsWrong(t *testing.T) {
 		}
 	})
 	t.Run("a spec that fails validation", func(t *testing.T) {
-		doc := strings.Replace(bindingDoc, "channel: C0123456789 }", "channel: not-a-channel }", 1)
+		doc := strings.Replace(bindingDoc, "channel: C0123456789 }", "channel: not a channel }", 1)
 		b, unknown, errs := DecodeObject[v1alpha1.Binding](asJSON(t, doc))
 		if b != nil || len(errs) == 0 || len(unknown) != 0 {
 			t.Errorf("got %v, %v, %v; want errors and no object", b, unknown, errs)
 		}
 	})
 	t.Run("a spec that fails validation beside an unknown field", func(t *testing.T) {
-		doc := strings.Replace(bindingDoc, "channel: C0123456789 }", "channel: not-a-channel, futureField: x }", 1)
+		doc := strings.Replace(bindingDoc, "channel: C0123456789 }", "channel: not a channel, futureField: x }", 1)
 		b, unknown, errs := DecodeObject[v1alpha1.Binding](asJSON(t, doc))
 		if b != nil || len(errs) == 0 || !slices.Equal(unknown, []string{"spec.chat.futureField"}) {
 			t.Errorf("got %v, %v, %v", b, unknown, errs)

@@ -191,13 +191,14 @@ func urls() func(*rand.Rand) any {
 	}
 }
 
-// githubLogins is a pool of logins for spec.web.github.login: a user's and an app's, at the 44-byte cap and past it with hyphens, past
-// the 39 letters and digits of the pattern, and the shapes the pattern refuses.
-func githubLogins() func(*rand.Rand) any {
+// identities is a pool of a web connection's spec.web.identity, which the github profile needs as a GitHub login and the kourier-v1
+// profile refuses: a user's and an app's login, at the 44-byte cap and past it with hyphens, past the 39 letters and digits of the
+// pattern, the shapes the pattern refuses, and values at and past the 128-byte cap of every profile.
+func identities() func(*rand.Rand) any {
 	hyphenated := func(n int) string { return strings.TrimSuffix(strings.Repeat("a-", n), "-") }
 	return of("octocat", "pr-reviewer[bot]", "a", strings.Repeat("a", 39)+"[bot]", hyphenated(22)+"x", hyphenated(23), strings.Repeat("a", 40),
-		strings.Repeat("a", 39), "", nil, absent{}, "@octocat", "octo--cat", "-octocat", "octocat-", "octo.cat", "octo_cat", "octocat[app]", "[bot]",
-		"octo-org/sre", "octocat[bot][bot]", "octocát")
+		strings.Repeat("a", 39), "", nil, absent{}, absent{}, absent{}, "@octocat", "octo--cat", "-octocat", "octocat-", "octo.cat", "octo_cat", "octocat[app]", "[bot]",
+		"octo-org/sre", "octocat[bot][bot]", "octocát", strings.Repeat("a", 128), strings.Repeat("a", 129))
 }
 
 // webURLs is a pool of a kourier-v1 connection's reply URLs: the AgentBackend's pool, whose http URLs a reply URL mostly may not
@@ -302,16 +303,15 @@ func variationTemplates() []template {
 			{"spec.platform", of("web", "web", "slack", "", "Web")},
 			{"spec.web", of(absent{}, nil, map[string]any{}, map[string]any{"profile": "github"}, map[string]any{"profile": "github", "url": ""},
 				map[string]any{"profile": "kourier-v1"}, map[string]any{"profile": "kourier-v1", "url": nil},
-				map[string]any{"profile": "github", "github": map[string]any{"login": "pr-reviewer[bot]"}},
-				map[string]any{"profile": "github", "url": "", "github": map[string]any{"login": "octocat"}})},
+				map[string]any{"profile": "github", "identity": "pr-reviewer[bot]"},
+				map[string]any{"profile": "github", "url": "", "identity": "octocat"},
+				map[string]any{"profile": "kourier-v1", "url": "https://receiver.example.com/replies", "identity": ""})},
 			{"spec.web.profile", of("kourier-v1", "kourier-v1", "github", "", "GitHub", "kourier-v2", absent{})},
 			{"spec.web.url", webURLs()},
 			{"spec.web.url", webURLs()},
-			// The github block, which only the github profile has and which it must have, and its login: a GitHub login of 44 bytes at
-			// most, an app's with [bot].
-			{"spec.web.github", of(absent{}, nil, map[string]any{}, map[string]any{"login": nil}, map[string]any{"login": "octocat"},
-				map[string]any{"login": "pr-reviewer[bot]"})},
-			{"spec.web.github.login", githubLogins()},
+			// The identity, which only the github profile takes and which it must have: a GitHub login of 44 bytes at most, an app's
+			// with [bot].
+			{"spec.web.identity", identities()},
 			{"spec.slack", of(absent{}, absent{}, nil, map[string]any{}, map[string]any{"mode": "http"})},
 		}},
 		{kind: "Binding", doc: mentionBindingDoc, mutations: []mutation{
@@ -351,8 +351,10 @@ func bindingMutations(dur, messageFields, extractNames func(*rand.Rand) any) []m
 		{"spec.chat.channel", of("C0123456789", "C"+strings.Repeat("0", 31), "C"+strings.Repeat("0", 32), "G"+strings.Repeat("A", 31), "#"+strings.Repeat("x", 32), "C"+strings.Repeat("é", 20),
 			"C"+strings.Repeat("0", 139), "C"+strings.Repeat("0", 140), "general", "octo/repo", strings.Repeat("o", 39)+"/"+strings.Repeat("r", 100),
 			strings.Repeat("o", 39)+"/"+strings.Repeat("r", 101), "o-/r", "o/r/s", "o/"+strings.Repeat("é", 20),
-			// The kourier-v1 shape: an opaque ID with a digit, at the union's cap and past it, and the characters it leaves out.
-			"1", "ch-1", "a.b_c-2", "general1", strings.Repeat("c", 139)+"1", strings.Repeat("c", 140)+"1", "ch:1", "-1", "_1", "ch-é1", "ch 1")},
+			// The kourier-v1 shape: an opaque ID, at the cap of every platform and past it, and the characters it leaves out.
+			"1", "ch-1", "a.b_c-2", "general1", strings.Repeat("c", 139)+"1", strings.Repeat("c", 140)+"1", "ch:1", "-1", "_1", "ch-é1", "ch 1",
+			// The characters no platform's ID has: a space, a tab, a control character, a colon, DEL and the non-ASCII.
+			"#sre-alerts", "sre\talerts", "sre\x00", "sre\x7f", ":", "sre\u00a0alerts", "sre\u202ealerts")},
 		{"spec.chat.output", of("live", "final", "none", "", absent{}, nil, "None", "off")},
 		{"spec.chat.acknowledgment.emoji", of("eyes", "+1", "-1", strings.Repeat("a", 100), strings.Repeat("a", 101), strings.Repeat("é", 60), absent{})},
 		{"spec.identity.tokenSecretRef", of(absent{}, map[string]any{"name": "s"}, map[string]any{"name": "s", "key": ""})},

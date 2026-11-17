@@ -38,9 +38,20 @@ func idOf(body []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// platform is what the API says a connection of the github profile takes, which the broker hands the profile.
+func platform(t *testing.T) v1alpha1.ChatPlatform {
+	t.Helper()
+	p, ok := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb,
+		Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileGitHub, Identity: login}})
+	if !ok {
+		t.Fatal("the API has no github profile")
+	}
+	return p
+}
+
 func newProfile(t *testing.T) *github.Profile {
 	t.Helper()
-	p, err := github.New(secret.New(fakeSecret), login)
+	p, err := github.New(secret.New(fakeSecret), login, platform(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,17 +132,35 @@ The comment follows, to the end of this message:
 )
 
 func TestNewRefusesNoSecretAndWhatIsNoLogin(t *testing.T) {
-	if _, err := github.New(secret.Value{}, login); err == nil {
+	rules := platform(t)
+	if _, err := github.New(secret.Value{}, login, rules); err == nil {
 		t.Error("a profile with no webhook secret was made")
 	}
 	for _, l := range []string{"", "@pr-reviewer", "pr--reviewer", "octo-org/sre", strings.Repeat("a", 40), strings.Repeat("a-", 22) + "a"} {
-		if _, err := github.New(secret.New(fakeSecret), l); err == nil {
+		if _, err := github.New(secret.New(fakeSecret), l, rules); err == nil {
 			t.Errorf("a profile with the login %q was made", l)
 		}
 	}
 	for _, l := range []string{"octocat", "pr-reviewer[bot]", strings.Repeat("a", 39) + "[bot]"} {
-		if _, err := github.New(secret.New(fakeSecret), l); err != nil {
+		if _, err := github.New(secret.New(fakeSecret), l, rules); err != nil {
 			t.Errorf("the login %q: %v", l, err)
+		}
+	}
+}
+
+// The profile holds what it decodes to the platform it is handed, so it refuses one that takes no repository or no login: another
+// profile's, or none.
+func TestNewRefusesAPlatformWithNoRepositoryOrNoLogin(t *testing.T) {
+	kourierV1, ok := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb,
+		Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileKourierV1}})
+	if !ok {
+		t.Fatal("the API has no kourier-v1 profile")
+	}
+	noChannel := platform(t)
+	noChannel.Channel = v1alpha1.IDShape{}
+	for name, rules := range map[string]v1alpha1.ChatPlatform{"none": {}, "kourier-v1": kourierV1, "no channel": noChannel} {
+		if _, err := github.New(secret.New(fakeSecret), login, rules); err == nil {
+			t.Errorf("a profile on the platform %s was made", name)
 		}
 	}
 }
@@ -537,7 +566,7 @@ func TestTheTextOfTheLargestEventIsWithinItsBound(t *testing.T) {
 func TestTheProfileSendsNoRepliesAsTheAPISays(t *testing.T) {
 	p := newProfile(t)
 	shapes, ok := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb,
-		Web: &v1alpha1.WebConnectionSpec{Profile: p.Name(), GitHub: &v1alpha1.GitHubWebSpec{Login: login}}})
+		Web: &v1alpha1.WebConnectionSpec{Profile: p.Name(), Identity: login}})
 	if !ok || p.Name() != v1alpha1.WebProfileGitHub {
 		t.Fatalf("the API has no profile %q", p.Name())
 	}

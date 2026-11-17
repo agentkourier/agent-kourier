@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/web"
 	"github.com/agentkourier/agent-kourier/internal/testutil"
@@ -68,7 +69,10 @@ func newPlatform(t *testing.T, p web.Profile, url string, log *slog.Logger) *web
 	if log == nil {
 		log = testutil.DiscardLogger()
 	}
-	pl, err := web.New(web.Config{Connection: "ns/web", Profile: p, URL: url, Now: func() time.Time { return epoch }, Logger: log})
+	rules, _ := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb,
+		Web: &v1alpha1.WebConnectionSpec{Profile: p.Name()}})
+	rules.Replies = p.Encoder() != nil
+	pl, err := web.New(web.Config{Connection: "ns/web", Profile: p, Platform: rules, URL: url, Now: func() time.Time { return epoch }, Logger: log})
 	if err != nil {
 		t.Fatal(err)
 	}

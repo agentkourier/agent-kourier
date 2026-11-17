@@ -78,11 +78,13 @@ const (
 //   - maxAllowedNamespaces 256: one namespace in every example (a namespace is at most 63 characters, so the list is at most 16 KiB).
 //   - maxChatIDLen 140: a channel, a sender and a user group are 11 characters in every example, and Slack's IDs are 9 to 11
 //     (unverified: not readable in this repository). The cap fits a GitHub repository, owner/name, of a 39-character owner and
-//     a 100-character name (GitHub's own limits, unverified here); a Slack connection holds its IDs to Slack's 32 when the
-//     broker resolves the Binding (maxSlackIDLen). A mention's name is already bounded by its pattern, to 63, and
-//     maxMentionNameLen says so as a cap, so that the schema has a maxLength for it and a value over one is refused without
-//     being shown. maxMentionUserLen 64 fits a kourier-v1 ID (maxKourierV1IDLen) and a GitHub login of 39 characters with the
-//     "[bot]" of an app; a Slack user ID is 21 at most, by its pattern.
+//     a 100-character name (GitHub's own limits, unverified here); each platform holds its IDs to its own cap when the broker
+//     resolves the Binding (a Slack connection to 32, maxSlackIDLen). A mention's name is already bounded by its pattern, to 63,
+//     and maxMentionNameLen says so as a cap, so that the schema has a maxLength for it and a value over one is refused without
+//     being shown. maxMentionUserLen 64 fits a kourier-v1 ID (maxKourierV1IDLen); a Slack user ID is 21 at most, by its pattern.
+//   - maxWebIdentityLen 128, for a web connection's identity, which each profile holds to its own shape and cap besides: it fits
+//     a GitHub login (maxGitHubLoginLen, 44), and an Atlassian account ID, which Atlassian documents as at most 128 characters
+//     (unverified: not readable in this repository), for the profiles that are planned.
 //   - maxEmojiLen 100: the default reaction, hourglass_flowing_sand, is 21. Slack's own limit on a custom emoji name is
 //     100 characters (unverified: not readable in this repository).
 //   - maxURLLen 2048, for an AgentBackend's url and a web connection's: the longest URL in an example or a test fixture is under
@@ -96,6 +98,7 @@ const (
 	maxChatIDLen         = 140
 	maxMentionNameLen    = 63
 	maxMentionUserLen    = 64
+	maxWebIdentityLen    = 128
 	maxEmojiLen          = 100
 	maxURLLen            = 2048
 	maxHeaderValueLen    = 4096
@@ -103,8 +106,8 @@ const (
 	maxCloseWhenValueLen = 256
 )
 
-// mentionName is what an agent writes after an "@"; its literal must equal ChatMention.Name's Pattern marker. (The shape of
-// the user it names, mentionUser, is in platforms.go with the other chat IDs.)
+// mentionName is what an agent writes after an "@"; its literal must equal ChatMention.Name's Pattern marker. (The characters of
+// the user it names, chatIDChars, are in platforms.go with the other chat IDs.)
 var mentionName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 
 // broadcastNames are the words a platform reads as a mention of everyone. None may be declared, so that no reply that names
@@ -327,46 +330,48 @@ func (c *ChatConnection) Validate() error {
 	return errors.Join(p...)
 }
 
-// web checks the settings of a web connection: a profile, the reply URL that a profile with replies needs and one without refuses,
-// and the github block that the github profile needs and every other refuses.
+// web checks the settings of a web connection against what its profile takes (ChatPlatformOf): a profile, the reply URL that a
+// profile with replies needs and one without refuses, and the identity that a profile with an identity's shape needs, of that shape,
+// and every other refuses. A profile that is not one the API knows is refused, and nothing is checked against it.
 func (p *problems) web(w *WebConnectionSpec) {
-	switch w.Profile {
-	case "":
+	var (
+		profile ChatPlatform
+		known   bool
+	)
+	if w.Profile == "" {
 		p.add("spec.web.profile", "required")
-	case WebProfileKourierV1:
-		if w.URL == "" {
-			p.add("spec.web.url", "is required by the kourier-v1 profile, which posts the replies to it")
-		} else {
-			p.webURL(w.URL)
+	} else if profile, known = ChatPlatformOf(ChatConnectionSpec{Platform: PlatformWeb, Web: w}); !known {
+		names := make([]string, 0, len(webProfiles()))
+		for _, n := range webProfiles() {
+			names = append(names, string(n))
 		}
-	case WebProfileGitHub:
-		if w.URL != "" {
-			p.add("spec.web.url", "is set, but the github profile sends no replies")
+		p.oneOf("spec.web.profile", string(w.Profile), names...)
+	}
+	switch {
+	case w.URL == "":
+		if known && profile.Replies {
+			p.add("spec.web.url", "is required: the profile sends replies, and posts them to it")
 		}
+	case known && !profile.Replies:
+		p.add("spec.web.url", "is set, but the profile sends no replies")
 	default:
-		p.oneOf("spec.web.profile", string(w.Profile), string(WebProfileKourierV1), string(WebProfileGitHub))
+		p.webURL(w.URL)
 	}
-	switch {
-	case w.GitHub == nil && w.Profile == WebProfileGitHub:
-		p.add("spec.web.github", "is required by the github profile: it names the login the agent posts as")
-	case w.GitHub != nil && w.Profile != WebProfileGitHub:
-		p.add("spec.web.github", "is set, but only the github profile has one")
-	}
-	if w.GitHub != nil {
-		p.githubLogin("spec.web.github.login", w.GitHub.Login)
-	}
-}
-
-// githubLogin checks the login of a github connection: the shape and the cap of a GitHub login in a Binding (githubLogin,
-// maxGitHubLoginLen), which the schema copies.
-func (p *problems) githubLogin(path, login string) {
-	switch {
-	case login == "":
-		p.add(path, "required")
-	case len(login) > maxGitHubLoginLen:
-		p.maxBytes(path, login, maxGitHubLoginLen)
-	case !githubLogin.MatchString(login):
-		p.add(path, "invalid login %q: must be a GitHub login, such as octocat, or an app's, such as pr-reviewer[bot]", login)
+	const identity = "spec.web.identity"
+	switch shape := profile.Identity; {
+	case w.Identity == "":
+		if shape.Taken() {
+			p.add(identity, "is required: the profile finds the agent's mentions, and drops the agent's own events, by it")
+		}
+	case len(w.Identity) > maxWebIdentityLen:
+		p.maxBytes(identity, w.Identity, maxWebIdentityLen)
+	case !known:
+	case !shape.Taken():
+		p.add(identity, "is set, but the profile takes none")
+	case len(w.Identity) > shape.maxLen:
+		p.maxBytes(identity, w.Identity, shape.maxLen)
+	case !shape.Matches(w.Identity):
+		p.add(identity, "invalid identity %q: is not %s: %s", w.Identity, shape.What, shape.Fix)
 	}
 }
 
@@ -422,10 +427,8 @@ func (b *Binding) Validate() error {
 	p.objectRef("spec.chat.connectionRef", &s.Chat.ConnectionRef)
 	if c := s.Chat.Channel; c == "" {
 		p.add("spec.chat.channel", "required")
-	} else if len(c) > maxChatIDLen {
-		p.maxBytes("spec.chat.channel", c, maxChatIDLen) // not shown: the channel is in the messages that name a conflict
-	} else if !channelID.MatchString(c) {
-		p.add("spec.chat.channel", "invalid channel %q: must be a channel ID such as C0123456789, not a name", c)
+	} else {
+		p.chatID("spec.chat.channel", "channel", c, maxChatIDLen) // past the cap not shown: the channel is in the messages that name a conflict
 	}
 	if s.Chat.Output != "" { // left out, it is the platform's default, which resolution fills in (BindingSpec.DefaultOn)
 		p.oneOf("spec.chat.output", string(s.Chat.Output), string(OutputLive), string(OutputFinal), string(OutputNone))
@@ -456,6 +459,17 @@ func (b *Binding) Validate() error {
 	return errors.Join(p...)
 }
 
+// chatID checks a chat ID that is set: at most limit bytes, and of chatIDChars. Its shape is the platform's, which resolution checks
+// (PlatformMismatches). A value past the cap is not shown.
+func (p *problems) chatID(path, what, id string, limit int) {
+	switch {
+	case len(id) > limit:
+		p.maxBytes(path, id, limit)
+	case !chatIDChars.MatchString(id):
+		p.add(path, "invalid %s %q: a chat ID is printable ASCII with no space and no ':'", what, id)
+	}
+}
+
 func (p *problems) mentions(path string, mentions []ChatMention) {
 	if len(mentions) > maxMentions {
 		p.add(path, "has %d items, maximum is %d", len(mentions), maxMentions)
@@ -478,13 +492,10 @@ func (p *problems) mentions(path string, mentions []ChatMention) {
 		} else {
 			seen[m.Name] = idx
 		}
-		switch {
-		case m.User == "":
+		if m.User == "" {
 			p.add(at+".user", "required")
-		case len(m.User) > maxMentionUserLen:
-			p.maxBytes(at+".user", m.User, maxMentionUserLen)
-		case !mentionUser.MatchString(m.User):
-			p.add(at+".user", "invalid user ID %q: must be a user ID such as U0123456789", m.User)
+		} else {
+			p.chatID(at+".user", "user ID", m.User, maxMentionUserLen)
 		}
 	}
 }
@@ -499,13 +510,10 @@ func (p *problems) interactions(path string, in Interactions) {
 	seen := make(map[string]int, len(in.ApproverGroups))
 	for idx, group := range in.ApproverGroups {
 		at := fmt.Sprintf("%s.approverGroups[%d]", path, idx)
-		switch {
-		case group == "":
+		if group == "" {
 			p.add(at, "must not be empty")
-		case len(group) > maxChatIDLen:
-			p.maxBytes(at, group, maxChatIDLen)
-		case !approverGroupID.MatchString(group):
-			p.add(at, "invalid group ID %q: must be a user group ID (Slack: S0123456789)", group)
+		} else {
+			p.chatID(at, "group ID", group, maxChatIDLen)
 		}
 		if previous, ok := seen[group]; ok {
 			p.add(at, "duplicate of index %d", previous)
@@ -670,13 +678,10 @@ func (p *problems) personMessageTrigger(path string, t *Trigger, b *regexBudget)
 }
 
 func (p *problems) botMessageTrigger(path string, t *Trigger, b *regexBudget) {
-	switch {
-	case t.From == nil || t.From.ID == "":
+	if t.From == nil || t.From.ID == "" {
 		p.add(path+".from.id", "required")
-	case len(t.From.ID) > maxChatIDLen:
-		p.maxBytes(path+".from.id", t.From.ID, maxChatIDLen)
-	case !senderID.MatchString(t.From.ID):
-		p.add(path+".from.id", "invalid sender ID %q: must be the sender's ID (Slack: a bot ID such as B0123456789), not a name", t.From.ID)
+	} else {
+		p.chatID(path+".from.id", "sender ID", t.From.ID, maxChatIDLen)
 	}
 	if t.From != nil {
 		if t.From.Kind == "" {

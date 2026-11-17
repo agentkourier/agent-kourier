@@ -32,8 +32,9 @@ func TestTheGitHubProfilePassesTheProfileSuite(t *testing.T) {
 		return chattest.ProfileEvent{Name: name, Header: headers(kind), Body: body}
 	}
 	chattest.ProfileConformance(t, chattest.ProfileSubject{
-		Profile: newProfile(t),
-		Secret:  fakeSecret,
+		Profile:  newProfile(t),
+		Platform: platform(t),
+		Secret:   fakeSecret,
 		Sign: func(secret string, body []byte, _ time.Time) http.Header {
 			h := http.Header{}
 			h.Set(github.HeaderSignature, github.Sign([]byte(secret), body))

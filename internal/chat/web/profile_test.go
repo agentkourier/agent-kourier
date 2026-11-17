@@ -44,6 +44,14 @@ func newTestProfile(replies bool) *testProfile {
 
 func (p *testProfile) Name() v1alpha1.WebProfile { return v1alpha1.WebProfileKourierV1 }
 
+// platform is what the web platform is made with for p: the API's for kourier-v1, the profile's name, with replies as p has them.
+func (p *testProfile) platform() v1alpha1.ChatPlatform {
+	rules, _ := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb,
+		Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileKourierV1}})
+	rules.Replies = p.replies
+	return rules
+}
+
 func (p *testProfile) Verify(h http.Header, _ []byte, _ time.Time) error {
 	if h.Get(headerKey) != fakeKey {
 		return errors.New("test: no key")

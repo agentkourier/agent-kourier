@@ -67,8 +67,7 @@ const (
 // document, or a version other than InboundVersion is refused.
 type Inbound struct {
 	V int `json:"v"`
-	// Channel is the conversation: the kourier-v1 shape of a channel ID (letters, digits, '.', '_' and '-', with a digit, at most 64
-	// bytes), which the Binding's spec.chat.channel names.
+	// Channel is the conversation, which the Binding's spec.chat.channel names. It has the kourier-v1 shape of every ID below.
 	Channel string `json:"channel"`
 	// Thread is the ID of the message that opened the thread, for a reply in one, and empty for a message that opens one: the message's
 	// own ID is then the thread's. A thread that is the message's own ID is refused.
@@ -112,17 +111,17 @@ var (
 	_ web.Encoder = (*Profile)(nil)
 )
 
-// New returns the profile that checks and signs with signingSecret (the credentials Secret's signingSecret), or an error for none.
-func New(signingSecret secret.Value) (*Profile, error) {
+// New returns the profile that checks and signs with signingSecret (the credentials Secret's signingSecret), and holds what it decodes
+// to the shapes of platform, what the API says the connection's platform takes (v1alpha1.ChatPlatformOf of its spec). It returns an
+// error for no secret, or a platform that takes no channel or no user ID.
+func New(signingSecret secret.Value, platform v1alpha1.ChatPlatform) (*Profile, error) {
 	if signingSecret.IsEmpty() {
 		return nil, errors.New("kourier-v1: no signing secret")
 	}
-	shapes, ok := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb,
-		Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileKourierV1}})
-	if !ok {
-		return nil, errors.New("kourier-v1: the API has no kourier-v1 profile")
+	if !platform.Channel.Taken() || !platform.User.Taken() {
+		return nil, fmt.Errorf("kourier-v1: the platform %q takes no channel or no user ID", platform.Name)
 	}
-	return &Profile{key: signingSecret, shapes: shapes, ids: shapes.User}, nil
+	return &Profile{key: signingSecret, shapes: platform, ids: platform.User}, nil
 }
 
 // Name implements web.Profile.

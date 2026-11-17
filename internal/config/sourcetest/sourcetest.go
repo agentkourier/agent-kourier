@@ -91,7 +91,7 @@ kind: ChatConnection
 metadata: { name: github-prs, namespace: agent-kourier-system }
 spec:
   platform: web
-  web: { profile: github, github: { login: pr-reviewer } }
+  web: { profile: github, identity: pr-reviewer }
   credentialsSecretRef: { name: github-prs }   # key webhookSecret
   allowedNamespaces: ["sre"]
 `
@@ -107,7 +107,6 @@ spec:
   chat:
     connectionRef: { namespace: agent-kourier-system, name: github-prs }
     channel: octo-org/hello-world
-    mentions: [{ name: maintainer, user: octocat }]
 `
 	return Corpus{Name: "web", Docs: []string{Valid(t)[0], conn, binding}, Connection: v1alpha1.ObjectRef{Namespace: ConnectionNamespace, Name: "github-prs"}}
 }
@@ -191,7 +190,7 @@ type invalidCase struct {
 }
 
 var invalidCases = []invalidCase{
-	{"a channel that is a name", "binding-minimal.yaml", "channel: G0123456789", `channel: "#general"`, "spec.chat.channel: invalid channel"},
+	{"a channel with a space", "binding-minimal.yaml", "channel: G0123456789", `channel: "sre alerts"`, "spec.chat.channel: invalid channel"},
 	{"a field the type does not have", "binding.yaml", "  chat:\n", "  chat:\n    chanel: C0123456789\n", "chanel: unknown field"},
 	{"a URL with no scheme", "agentbackend.yaml", "url: http://kagent-controller.kagent-pilot:8083", "url: kagent-controller", "spec.url: invalid URL"},
 	{"a platform that is not supported", "chatconnection.yaml", "platform: slack", "platform: teams", "spec.platform: unsupported value"},
@@ -456,6 +455,14 @@ var platformCases = []platformCase{
 		served:  func(rb config.ResolvedBinding) string { return rb.Binding.Spec.Chat.Triggers[1].From.ID }, before: "B0123456789",
 	},
 	{
+		// A channel's name passes Validate, which takes any platform's IDs, and the connection's platform refuses it.
+		name: "a channel's name on Slack", corpus: Spec, doc: 2, binding: "sre-alerts", rest: chatOnlyRoute,
+		from: "channel: C0123456789 ", to: "channel: general ",
+		reason:  config.ReasonInvalidPlatformID,
+		problem: `spec.chat.channel: "general" is not a channel ID on Slack, the platform of ChatConnection agent-kourier-system/slack-main`,
+		served:  func(rb config.ResolvedBinding) string { return rb.Binding.Spec.Chat.Channel }, before: "C0123456789",
+	},
+	{
 		name: "an output that the connection's platform does not serve", corpus: Spec, doc: 2, binding: "sre-alerts", rest: chatOnlyRoute,
 		from: "output: live ", to: "output: none ",
 		reason:  config.ReasonUnsupportedOnPlatform,
@@ -469,6 +476,14 @@ var platformCases = []platformCase{
 		reason:  config.ReasonUnsupportedOnPlatform,
 		problem: `spec.chat.output: "live" is not supported on web (github profile), the platform of ChatConnection agent-kourier-system/github-prs`,
 		served:  func(rb config.ResolvedBinding) string { return string(rb.Binding.Spec.Chat.Output) }, before: string(v1alpha1.OutputNone),
+	},
+	{
+		// The github profile posts nothing, so it notifies nobody: a mention, whose user a GitHub login would be, is refused.
+		name: "a mention on a web profile that posts nothing", corpus: Web, doc: 2, binding: "pr-review",
+		from: "    channel: octo-org/hello-world\n", to: "    channel: octo-org/hello-world\n    mentions: [{ name: maintainer, user: octocat }]\n",
+		reason:  config.ReasonUnsupportedOnPlatform,
+		problem: `spec.chat.mentions: mentions are not supported on web (github profile), the platform of ChatConnection agent-kourier-system/github-prs`,
+		served:  func(rb config.ResolvedBinding) string { return fmt.Sprint(len(rb.Binding.Spec.Chat.Mentions)) }, before: "0",
 	},
 }
 

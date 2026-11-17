@@ -32,12 +32,35 @@ func TestNewRefusesAConfigItCannotRunWith(t *testing.T) {
 		"reactions":                           {Connection: "ns/web", URL: "https://r.example/", Profile: withCaps(func(c *chat.Caps) { c.AckReaction = "eyes" })},
 		"a limit too small to hold the mark":  {Connection: "ns/web", URL: "https://r.example/", Profile: withCaps(func(c *chat.Caps) { c.MaxText = 1 })},
 	} {
+		// Each case is made with its profile's own platform, so that what it lacks is what its name says.
+		if p, ok := cfg.Profile.(*testProfile); ok {
+			cfg.Platform = p.platform()
+		}
 		if _, err := web.New(cfg); err == nil {
 			t.Errorf("%s: built", name)
 		}
 	}
-	if _, err := web.New(web.Config{Connection: "ns/web", Profile: newTestProfile(false)}); err != nil {
+	prof := newTestProfile(false)
+	if _, err := web.New(web.Config{Connection: "ns/web", Profile: prof, Platform: prof.platform()}); err != nil {
 		t.Errorf("a profile with no replies and no URL: %v", err)
+	}
+}
+
+// The platform is made with what the API says the connection's platform takes, and refuses none, or one whose replies are not the
+// profile's: the profile and the API must agree on whether a Binding on it may have output.
+func TestNewRefusesAPlatformThatIsNotTheProfiles(t *testing.T) {
+	replies, none := newTestProfile(true), newTestProfile(false)
+	for name, cfg := range map[string]web.Config{
+		"no platform": {Connection: "ns/web", Profile: none},
+		"a platform with replies, a profile without": {Connection: "ns/web", Profile: none, Platform: replies.platform()},
+		"a platform without replies, a profile with": {Connection: "ns/web", Profile: replies, Platform: none.platform(), URL: "https://r.example/"},
+	} {
+		if _, err := web.New(cfg); err == nil {
+			t.Errorf("%s: built", name)
+		}
+	}
+	if _, err := web.New(web.Config{Connection: "ns/web", Profile: replies, Platform: replies.platform(), URL: "https://r.example/"}); err != nil {
+		t.Errorf("a platform and a profile that agree: %v", err)
 	}
 }
 
@@ -116,7 +139,7 @@ func TestChannelAccessReadsTheProfilesShape(t *testing.T) {
 	if a, err := p.ChannelAccess(ctx, "ch-1"); err != nil || a != (chat.Access{Member: true}) {
 		t.Errorf("a channel of the shape: %+v, %v; want a member", a, err)
 	}
-	for _, ch := range []string{"", "general", "octo/repo", strings.Repeat("c1", 40)} {
+	for _, ch := range []string{"", "ch:1", "#general", "octo/repo", strings.Repeat("c1", 40)} {
 		a, err := p.ChannelAccess(ctx, ch)
 		if !errors.Is(err, chat.ErrChannelNotFound) || a != (chat.Access{}) {
 			t.Errorf("%q: %+v, %v; want chat.ErrChannelNotFound", ch, a, err)

@@ -337,7 +337,7 @@ func TestAnInvalidUpdateKeepsTheLastGoodGeneration(t *testing.T) {
 
 	bad := find(objs, "sre-alerts")
 	bad.SetGeneration(2)
-	_ = unstructured.SetNestedField(bad.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(bad.Object, "#general alerts", "spec", "chat", "channel")
 	until(t, func() { c.apply(bad) }, func() bool { return src.Fingerprint(t.Context()) != fp })
 	s, _ := set(t, src)
 	if len(s.Invalid) != 1 {
@@ -408,7 +408,7 @@ func TestAnInvalidNewObjectIsNotServedAndARecreatedOneDoesNotBorrow(t *testing.T
 	fresh := find(objs, "chat-only")
 	fresh.SetName("brand-new")
 	fresh.SetUID("uid-new")
-	_ = unstructured.SetNestedField(fresh.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(fresh.Object, "#general alerts", "spec", "chat", "channel")
 	until(t, func() { c.apply(fresh) }, func() bool { return src.Fingerprint(t.Context()) != fp })
 	s, _ := set(t, src)
 	if len(s.Invalid) != 1 || s.Invalid[0].Served != 0 || s.Invalid[0].Name != "brand-new" {
@@ -423,7 +423,7 @@ func TestAnInvalidNewObjectIsNotServedAndARecreatedOneDoesNotBorrow(t *testing.T
 	reborn := find(objs, "sre-alerts")
 	reborn.SetUID("uid-reborn")
 	reborn.SetGeneration(1)
-	_ = unstructured.SetNestedField(reborn.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(reborn.Object, "#general alerts", "spec", "chat", "channel")
 	until(t, func() { c.remove(reborn); c.apply(reborn) }, func() bool { return src.Fingerprint(t.Context()) != fp })
 	s, _ = set(t, src)
 	if slices.Contains(bindingNames(s), "sre/sre-alerts") {
@@ -474,7 +474,7 @@ func TestOnlyTheBrokersOwnConnectionAndItsBindingsAreRead(t *testing.T) {
 	brokenForeign.SetName("broken-foreign")
 	brokenForeign.SetUID("uid-broken-foreign")
 	_ = unstructured.SetNestedField(brokenForeign.Object, "slack-other", "spec", "chat", "connectionRef", "name")
-	_ = unstructured.SetNestedField(brokenForeign.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(brokenForeign.Object, "#general alerts", "spec", "chat", "channel")
 	brokenOther := find(objs, "slack-main")
 	brokenOther.SetName("slack-broken")
 	brokenOther.SetUID("uid-slack-broken")

@@ -86,19 +86,21 @@ func TestTheWebManifestsAreTheConnectionsTheTestsUse(t *testing.T) {
 	conns, bindings, backends := webObjects(t)
 	receiver := e2e.NewEnv(func(string) string { return "" }).WebURL + fakeweb.RepliesPath
 	for key, want := range map[string]struct {
-		profile v1alpha1.WebProfile
-		url     string
-		secret  string
+		profile  v1alpha1.WebProfile
+		url      string
+		identity string
+		secret   string
 	}{
-		e2e.ConnWebKourier: {v1alpha1.WebProfileKourierV1, receiver, "web-kourier"},
-		e2e.ConnWebGitHub:  {v1alpha1.WebProfileGitHub, "", "web-github"},
+		e2e.ConnWebKourier: {v1alpha1.WebProfileKourierV1, receiver, "", "web-kourier"},
+		e2e.ConnWebGitHub:  {v1alpha1.WebProfileGitHub, "", e2e.GitHubLogin, "web-github"},
 	} {
 		c, ok := conns[key]
 		switch {
 		case !ok:
 			t.Errorf("%s has no ChatConnection %s; it has %v", webFile, key, slices.Sorted(maps.Keys(conns)))
-		case c.Spec.Platform != v1alpha1.PlatformWeb || c.Spec.Web == nil || c.Spec.Web.Profile != want.profile || c.Spec.Web.URL != want.url:
-			t.Errorf("the ChatConnection %s is %+v; want platform web, profile %s and reply URL %q", key, c.Spec, want.profile, want.url)
+		case c.Spec.Platform != v1alpha1.PlatformWeb || c.Spec.Web == nil || c.Spec.Web.Profile != want.profile || c.Spec.Web.URL != want.url ||
+			c.Spec.Web.Identity != want.identity:
+			t.Errorf("the ChatConnection %s is %+v; want platform web, profile %s, reply URL %q and identity %q", key, c.Spec, want.profile, want.url, want.identity)
 		case c.Spec.CredentialsSecretRef.Name != want.secret:
 			t.Errorf("the ChatConnection %s reads the Secret %q; want %q, which deploy_web makes", key, c.Spec.CredentialsSecretRef.Name, want.secret)
 		}

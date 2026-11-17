@@ -271,7 +271,7 @@ func TestBootstrapCRDsFollowsTheClusterWhileRunning(t *testing.T) {
 	// registered: repeat the update until the Reloader has seen it.
 	bad := crObject(t, "binding.yaml")
 	bad.SetGeneration(2)
-	_ = unstructured.SetNestedField(bad.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(bad.Object, "#general alerts", "spec", "chat", "channel")
 	waitFor("the invalid update to be reported", func() bool {
 		update(crBindings, bad)
 		return len(c.Reloader.Report().Invalid) == 1

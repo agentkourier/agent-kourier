@@ -158,13 +158,23 @@ func (p *hmacProfile) Encode(r web.Reply, now time.Time) (web.Request, error) {
 	return web.Request{Header: h, Body: body}, nil
 }
 
+// hmacPlatform is the platform the test's profile runs on: the API's for kourier-v1, the profile's name, with replies as the
+// profile has them.
+func hmacPlatform(replies bool) v1alpha1.ChatPlatform {
+	p, _ := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb,
+		Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileKourierV1}})
+	p.Replies = replies
+	return p
+}
+
 func hmacSubject(p *hmacProfile) ProfileSubject {
 	s := ProfileSubject{
-		Profile: p,
-		Secret:  suiteSecret,
-		Sign:    hmacSign,
-		MaxSkew: hmacSkew,
-		MaxBody: hmacMaxBody,
+		Profile:  p,
+		Platform: hmacPlatform(p.replies),
+		Secret:   suiteSecret,
+		Sign:     hmacSign,
+		MaxSkew:  hmacSkew,
+		MaxBody:  hmacMaxBody,
 		Events: []ProfileEvent{
 			{Name: "a message that opens a thread", Body: []byte(`{"channel":"ch-1","id":"m-1","user":"u-1","text":"hello"}`),
 				Want: &web.Event{Channel: "ch-1", ID: "m-1", User: "u-1", Text: "hello", Mentioned: true}},
@@ -199,10 +209,10 @@ func hmacSubject(p *hmacProfile) ProfileSubject {
 	}
 	if p.leaks.offShape {
 		for i, e := range s.Events {
-			s.Events[i].Body = bytes.ReplaceAll(e.Body, []byte(`"ch-1"`), []byte(`"general"`))
+			s.Events[i].Body = bytes.ReplaceAll(e.Body, []byte(`"ch-1"`), []byte(`"ch:1"`))
 			if e.Want != nil {
 				w := *e.Want
-				w.Channel = "general"
+				w.Channel = "ch:1"
 				s.Events[i].Want = &w
 			}
 		}
@@ -261,6 +271,7 @@ func TestTheProfileSuiteRefusesAnIncompleteSubject(t *testing.T) {
 		"no profile":                func(s *ProfileSubject) { s.Profile = nil },
 		"no Sign":                   func(s *ProfileSubject) { s.Sign = nil },
 		"no secret":                 func(s *ProfileSubject) { s.Secret = "" },
+		"no platform":               func(s *ProfileSubject) { s.Platform = v1alpha1.ChatPlatform{} },
 		"no bound":                  func(s *ProfileSubject) { s.MaxBody = 0 },
 		"no event to take":          func(s *ProfileSubject) { s.Events = s.Events[2:] },
 		"replies with no check":     func(s *ProfileSubject) { s.Profile = &hmacProfile{replies: true} },

@@ -41,7 +41,7 @@ func kourierV1Conn(name, url string) Connection {
 // githubConn is the web connection ns/name of the github profile, for the agent that posts as pr-reviewer.
 func githubConn(name string) Connection {
 	return Connection{Ref: v1alpha1.ObjectRef{Namespace: "ns", Name: name}, Platform: v1alpha1.PlatformWeb,
-		Web:         &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileGitHub, GitHub: &v1alpha1.GitHubWebSpec{Login: "pr-reviewer"}},
+		Web:         &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileGitHub, Identity: "pr-reviewer"},
 		Credentials: map[string]secret.Value{v1alpha1.GitHubWebhookSecretKey: secret.New(fakeWebhook)}}
 }
 
@@ -84,7 +84,7 @@ func TestNewPlatformBuildsAWebConnectionOfEachProfile(t *testing.T) {
 
 	for name, conn := range map[string]Connection{
 		"no spec.web":            {Ref: v1alpha1.ObjectRef{Namespace: "ns", Name: "w"}, Platform: v1alpha1.PlatformWeb},
-		"github with no login":   func() Connection { c := githubConn("gh"); c.Web.GitHub = nil; return c }(),
+		"github with no login":   func() Connection { c := githubConn("gh"); c.Web.Identity = ""; return c }(),
 		"kourier-v1 with no URL": kourierV1Conn("v1", ""),
 		"no signing secret":      func() Connection { c := kourierV1Conn("v1", "https://r.example/"); c.Credentials = nil; return c }(),
 		"an unknown profile":     func() Connection { c := githubConn("gh"); c.Web.Profile = "gitlab"; return c }(),

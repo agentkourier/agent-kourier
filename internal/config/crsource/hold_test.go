@@ -391,7 +391,7 @@ func TestABindingMadeAgainWhileItsDeletionIsDeferredIsTheNewOne(t *testing.T) {
 	_ = unstructured.SetNestedField(fresh.Object, "C0999999991", "spec", "chat", "channel")
 	bad := find(objs, "sre-alerts")
 	bad.SetUID("uid-bad")
-	_ = unstructured.SetNestedField(bad.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(bad.Object, "#general alerts", "spec", "chat", "channel")
 	until(t, func() { c.apply(fresh); c.apply(bad) }, func() bool {
 		return src.CachedGenerationForTest("Binding", "sre", "chat-only") >= 0 && src.CachedGenerationForTest("Binding", "sre", "sre-alerts") >= 0
 	})
@@ -432,7 +432,7 @@ func TestADeferredObjectThatComesBackRefusedIsDeferredAgainWhenItGoesAgain(t *te
 	clock.advance(20 * time.Second)
 	back := find(objs, "sre-alerts") // the same uid, as a list that missed it gives, and now refused
 	back.SetGeneration(2)
-	_ = unstructured.SetNestedField(back.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(back.Object, "#general alerts", "spec", "chat", "channel")
 	until(t, func() { c.apply(back) }, func() bool { return src.CachedGenerationForTest("Binding", "sre", "sre-alerts") == 2 })
 	if s, _ := read(t, src); len(s.Bindings) != 2 || len(s.Invalid) != 1 || s.Invalid[0].Served != 1 {
 		t.Fatalf("Bindings %v, Invalid %+v; want it served from its last good generation and refused", bindingNames(s), s.Invalid)
@@ -457,7 +457,7 @@ func TestADeferredGenerationOfAnotherObjectIsNotServedWhenTheNewOneGoes(t *testi
 	read(t, src)
 	bad := find(objs, "sre-alerts")
 	bad.SetUID("uid-bad")
-	_ = unstructured.SetNestedField(bad.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(bad.Object, "#general alerts", "spec", "chat", "channel")
 	until(t, func() { c.apply(bad) }, func() bool { return src.CachedGenerationForTest("Binding", "sre", "sre-alerts") >= 0 })
 	read(t, src)
 	c.seenGone(t, src, "Binding", []*unstructured.Unstructured{bad}, "sre-alerts")
@@ -699,7 +699,7 @@ func TestABindingMadeAgainDuringTheHoldIsNotTheHeldOne(t *testing.T) {
 	_ = unstructured.SetNestedField(fresh.Object, "C0999999991", "spec", "chat", "channel")
 	bad := find(objs, "sre-alerts")
 	bad.SetUID("uid-bad")
-	_ = unstructured.SetNestedField(bad.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(bad.Object, "#general alerts", "spec", "chat", "channel")
 	until(t, func() { c.apply(fresh); c.apply(bad) }, func() bool {
 		return src.CachedGenerationForTest("Binding", "sre", "chat-only") == 1 && src.CachedGenerationForTest("Binding", "sre", "sre-alerts") == 1
 	})
@@ -818,7 +818,7 @@ func TestAMovedBindingMadeInvalidBackOnTheOwnConnectionHasNoLastGood(t *testing.
 	}
 	back := find(objs, "sre-alerts")
 	back.SetGeneration(3)
-	_ = unstructured.SetNestedField(back.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(back.Object, "#general alerts", "spec", "chat", "channel")
 	until(t, func() { c.apply(back) }, func() bool { return src.CachedGenerationForTest("Binding", "sre", "sre-alerts") == 3 })
 	s, _ := set(t, src)
 	if slices.Contains(bindingNames(s), "sre/sre-alerts") {

@@ -9,15 +9,16 @@ import (
 	"testing"
 )
 
-// testLogin is the login of the tests' github connections.
+// testLogin is the identity of the tests' github connections: a GitHub App's login.
 const testLogin = "pr-reviewer[bot]"
 
-// web makes the fixture's connection a web connection of the profile, with url, and with the login testLogin on the github profile.
+// web makes the fixture's connection a web connection of the profile, with url, and with the identity testLogin on the github
+// profile.
 func web(o *ChatConnection, profile WebProfile, url string) {
 	o.Spec.Platform = PlatformWeb
 	o.Spec.Web = &WebConnectionSpec{Profile: profile, URL: url}
 	if profile == WebProfileGitHub {
-		o.Spec.Web.GitHub = &GitHubWebSpec{Login: testLogin}
+		o.Spec.Web.Identity = testLogin
 	}
 }
 
@@ -34,11 +35,11 @@ func TestWebConnectionValidate(t *testing.T) {
 		{"a profile in the wrong case", func(o *ChatConnection) { web(o, "GitHub", "") },
 			`spec.web.profile: unsupported value "GitHub", must be one of kourier-v1, github`},
 		{"kourier-v1 with no url", func(o *ChatConnection) { web(o, WebProfileKourierV1, "") },
-			"spec.web.url: is required by the kourier-v1 profile, which posts the replies to it"},
+			"spec.web.url: is required: the profile sends replies, and posts them to it"},
 		{"github with a url", func(o *ChatConnection) { web(o, WebProfileGitHub, reply) },
-			"spec.web.url: is set, but the github profile sends no replies"},
+			"spec.web.url: is set, but the profile sends no replies"},
 		{"a web block on a slack connection", func(o *ChatConnection) {
-			o.Spec.Web = &WebConnectionSpec{Profile: WebProfileGitHub, GitHub: &GitHubWebSpec{Login: testLogin}}
+			o.Spec.Web = &WebConnectionSpec{Profile: WebProfileGitHub, Identity: testLogin}
 		}, "spec.web: is set, but only a web connection has one"},
 		{"a slack block on a web connection", func(o *ChatConnection) {
 			web(o, WebProfileGitHub, "")
@@ -47,14 +48,16 @@ func TestWebConnectionValidate(t *testing.T) {
 	})
 }
 
-// The github profile names the login the agent posts as, in spec.web.github, which only that profile has (issue #347): a login of
-// a Binding's GitHub shape and cap.
-func TestWebGitHubLogin(t *testing.T) {
-	login := func(l string) func(*ChatConnection) {
-		return func(o *ChatConnection) { web(o, WebProfileGitHub, ""); o.Spec.Web.GitHub.Login = l }
+// The github profile names the account the agent works as, its login, in spec.web.identity, which a profile that finds mentions or
+// drops the agent's own events by it requires and every other refuses (issue #357): on github, a GitHub login of 44 bytes at most.
+func TestWebIdentity(t *testing.T) {
+	identity := func(profile WebProfile, url, id string) func(*ChatConnection) {
+		return func(o *ChatConnection) { web(o, profile, url); o.Spec.Web.Identity = id }
 	}
+	login := func(l string) func(*ChatConnection) { return identity(WebProfileGitHub, "", l) }
 	invalid := func(l string) string {
-		return fmt.Sprintf("spec.web.github.login: invalid login %q: must be a GitHub login, such as octocat, or an app's, such as pr-reviewer[bot]", l)
+		return fmt.Sprintf("spec.web.identity: invalid identity %q: is not a GitHub login: use the login the agent posts as: a user's, "+
+			"such as pr-reviewer, or a GitHub App's, such as pr-reviewer[bot]", l)
 	}
 	runMutations[ChatConnection](t, "chatconnection.yaml", []mutation[ChatConnection]{
 		{"a user's login", login("octocat"), ""},
@@ -62,9 +65,10 @@ func TestWebGitHubLogin(t *testing.T) {
 		{"a login of one character", login("a"), ""},
 		{"39 characters with [bot], at the cap", login(strings.Repeat("a", 39) + "[bot]"), ""},
 		{"a hyphenated login at the cap", login(hyphenated(22) + "x"), ""},
-		{"a hyphenated login past the cap", login(hyphenated(23)), "spec.web.github.login: is 45 bytes, longer than the 44 byte limit"},
+		{"a hyphenated login past the cap", login(hyphenated(23)), "spec.web.identity: is 45 bytes, longer than the 44 byte limit"},
+		{"past the cap of every profile", login(strings.Repeat("a", maxWebIdentityLen+1)), "spec.web.identity: is 129 bytes, longer than the 128 byte limit"},
 		{"40 letters", login(strings.Repeat("a", 40)), invalid(strings.Repeat("a", 40))},
-		{"an empty login", login(""), "spec.web.github.login: required"},
+		{"no identity on github", login(""), "spec.web.identity: is required: the profile finds the agent's mentions, and drops the agent's own events, by it"},
 		{"a login with an @", login("@octocat"), invalid("@octocat")},
 		{"two hyphens in a row", login("octo--cat"), invalid("octo--cat")},
 		{"a login that ends in a hyphen", login("octocat-"), invalid("octocat-")},
@@ -72,29 +76,28 @@ func TestWebGitHubLogin(t *testing.T) {
 		{"another suffix", login("octocat[app]"), invalid("octocat[app]")},
 		{"[bot] alone", login("[bot]"), invalid("[bot]")},
 		{"a team, not a login", login("octo-org/sre"), invalid("octo-org/sre")},
-		{"github with no github block", func(o *ChatConnection) { web(o, WebProfileGitHub, ""); o.Spec.Web.GitHub = nil },
-			"spec.web.github: is required by the github profile: it names the login the agent posts as"},
-		{"a github block on kourier-v1", func(o *ChatConnection) {
-			web(o, WebProfileKourierV1, "https://receiver.example.com/replies")
-			o.Spec.Web.GitHub = &GitHubWebSpec{Login: testLogin}
-		}, "spec.web.github: is set, but only the github profile has one"},
+		{"an identity on kourier-v1", identity(WebProfileKourierV1, "https://receiver.example.com/replies", testLogin),
+			"spec.web.identity: is set, but the profile takes none"},
+		{"no identity on kourier-v1", identity(WebProfileKourierV1, "https://receiver.example.com/replies", ""), ""},
 	})
 }
 
-// A github block on a connection with no profile, or one that is not supported, is refused with the profile, and its login is
-// checked too, so that everything is told at once.
-func TestAGitHubBlockWithoutTheGitHubProfileIsCheckedToo(t *testing.T) {
+// On a connection with no profile, or one that is not supported, nothing is checked against a profile: the url and the identity are
+// held only to what every profile holds them to.
+func TestNothingIsCheckedAgainstAProfileThatIsNotOne(t *testing.T) {
 	for _, tc := range []struct {
-		profile WebProfile
-		want    []string
+		profile  WebProfile
+		identity string
+		want     []string
 	}{
-		{"", []string{"spec.web.profile: required", "spec.web.github: is set, but only the github profile has one", "spec.web.github.login: required"}},
-		{"gitlab", []string{`spec.web.profile: unsupported value "gitlab", must be one of kourier-v1, github`,
-			"spec.web.github: is set, but only the github profile has one", "spec.web.github.login: required"}},
+		{"", testLogin, []string{"spec.web.profile: required"}},
+		{"gitlab", testLogin, []string{`spec.web.profile: unsupported value "gitlab", must be one of kourier-v1, github`}},
+		{"gitlab", strings.Repeat("a", maxWebIdentityLen+1), []string{`spec.web.profile: unsupported value "gitlab", must be one of kourier-v1, github`,
+			"spec.web.identity: is 129 bytes, longer than the 128 byte limit"}},
 	} {
 		c := load[ChatConnection](t, "chatconnection.yaml")
 		c.Spec.Platform = PlatformWeb
-		c.Spec.Web = &WebConnectionSpec{Profile: tc.profile, GitHub: &GitHubWebSpec{}}
+		c.Spec.Web = &WebConnectionSpec{Profile: tc.profile, Identity: tc.identity}
 		if got := problemsOf(c.Validate()); !slices.Equal(got, tc.want) {
 			t.Errorf("profile %q: Validate() problems = %q, want %q", tc.profile, got, tc.want)
 		}

@@ -49,7 +49,7 @@ func TestRunServesTheCustomResources(t *testing.T) {
 // is invalid when the broker starts is left out, and the others are served.
 func TestRunDoesNotStopForOneInvalidObject(t *testing.T) {
 	c := crStartConfig(t, func(objs []*unstructured.Unstructured) {
-		_ = unstructured.SetNestedField(objs[2].Object, "#general", "spec", "chat", "channel") // sre-alerts
+		_ = unstructured.SetNestedField(objs[2].Object, "#general alerts", "spec", "chat", "channel") // sre-alerts
 	})
 	r := start(t, c)
 	r.until("/readyz", http.StatusOK)
@@ -102,7 +102,7 @@ func grep(text, sub string) string {
 // are the same age. Without the skip both fall to the same horizon and both go.
 func TestRunKeepsTheSessionsOfAnUnservedBinding(t *testing.T) {
 	c := crStartConfig(t, func(objs []*unstructured.Unstructured) {
-		_ = unstructured.SetNestedField(objs[2].Object, "#general", "spec", "chat", "channel") // sre-alerts is invalid, and new
+		_ = unstructured.SetNestedField(objs[2].Object, "#general alerts", "spec", "chat", "channel") // sre-alerts is invalid, and new
 	})
 	c.retentionEvery = 10 * time.Millisecond
 	seed, err := sqlite.Open(t.Context(), c.DBPath)

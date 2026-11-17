@@ -50,16 +50,8 @@ WebConnectionSpec is the settings of a web connection: the profile that its requ
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `profile` | string | Yes | None | Profile is the integration the connection speaks. kourier-v1 is Agent Kourier's own signed JSON contract: it takes signed requests and posts the agent's replies, signed, to url. github takes GitHub's webhooks and sends no replies: the agent posts on GitHub itself, so its Bindings take output none alone. One of `kourier-v1`, `github`. |
-| `url` | string | No | None | URL is where the kourier-v1 profile posts the agent's replies. It is required for kourier-v1 and refused for github, which sends none. It is an https URL, or an http one only to localhost, a loopback address (127.x.x.x or [::1]) or a Service in the cluster (a host that ends in .svc or .svc.cluster.local), since a reply carries what the agent wrote. At most 2048 bytes, with no credentials, query or fragment: the replies are signed with the credentials Secret's signingSecret. At most 2048 characters. |
-| `github` | [GitHubWebSpec](#githubwebspec) | No | None | GitHub holds the settings of the github profile. A connection of the github profile must set it, and no other may. |
-
-## GitHubWebSpec
-
-GitHubWebSpec is the settings of a web connection of the github profile.
-
-| Field | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `login` | string | Yes | None | Login is the GitHub login the agent posts as: a user's, such as pr-reviewer, or a GitHub App's, such as pr-reviewer[bot]. A comment on a pull request, or a review comment, starts a turn only when it mentions the login (an app's login without its [bot]). No event that the login sent starts one, such as its own push to a pull request, nor a comment whose author it is. At most 39 letters and digits with single hyphens between them, then an optional [bot], at most 44 bytes. Pattern `^[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}(?:\[bot\])?$`. At most 44 characters. |
+| `url` | string | No | None | URL is where a profile that sends replies posts them: it is required by such a profile (kourier-v1) and refused by one that sends none (github). It is an https URL, or an http one only to localhost, a loopback address (127.x.x.x or [::1]) or a Service in the cluster (a host that ends in .svc or .svc.cluster.local), since a reply carries what the agent wrote. At most 2048 bytes, with no credentials, query or fragment: the replies are signed with the credentials Secret's signingSecret. At most 2048 characters. |
+| `identity` | string | No | None | Identity is the account the agent works as on the profile's service. A profile that finds the agent's mentions, or drops the agent's own events, by it requires it (github), and every other refuses it (kourier-v1, whose sender sends only what is meant for Agent Kourier). Each profile holds it to its own shape. On github it is the GitHub login the agent posts as: a user's, such as pr-reviewer, or a GitHub App's, such as pr-reviewer[bot], of at most 39 letters and digits with single hyphens between them, then an optional [bot], at most 44 bytes. A comment on a pull request, or a review comment, starts a turn only when it mentions the login (an app's login without its [bot]), and no event that the login sent starts one, such as its own push to a pull request, nor a comment whose author it is. At most 128 bytes on any profile. At most 128 characters. |
 
 ---
 

@@ -26,7 +26,7 @@ import (
 // Binding that is invalid says why, and neither is probed yet or has a reason to be ready.
 func TestRunWritesTheStatusOfTheBindingsItServes(t *testing.T) {
 	c := crStartConfig(t, func(objs []*unstructured.Unstructured) {
-		_ = unstructured.SetNestedField(objs[3].Object, "#general", "spec", "chat", "channel") // chat-only is invalid
+		_ = unstructured.SetNestedField(objs[3].Object, "#general alerts", "spec", "chat", "channel") // chat-only is invalid
 	})
 	cluster := newStatusClusterOn(c.Dynamic.(*dynamicfake.FakeDynamicClient))
 	c.StatusClient = cluster.dyn

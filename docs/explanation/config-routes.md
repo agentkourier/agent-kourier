@@ -104,7 +104,7 @@ nothing is accepted on the file route that the schema refuses.
 ```text
 $ kubectl apply -f bad.yaml
 The Binding "bad" is invalid:
-* spec.chat.channel: Invalid value: "general": spec.chat.channel in body should match '^(?:[CG][A-Z0-9]+|[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}/[A-Za-z0-9._-]{1,100})$'
+* spec.chat.channel: Invalid value: "#sre alerts": spec.chat.channel in body should match '^[!-9;-~]+$'
 * spec.identity: Invalid value: "object": set userId, tokenSecretRef, or both
 ```
 
@@ -116,10 +116,10 @@ does not compile, or compiles to more than 2000 instructions, or takes the regex
 parts of a URL that only Go's parser refuses (a bad percent escape, port or bracket); a `match` or `exclude` value of 512 characters or fewer that is
 over 512 bytes; and every rule that spans objects: that the AgentBackend and ChatConnection exist and allow the namespace, that the AgentBackend's `agents` field allows the agent namespace, that the dialect has an adapter, that
 one Binding holds the channel, that a Secret has its key, and that each chat ID has the shape of the IDs of the ChatConnection's platform
-and the platform serves what the Binding asks for. The schema takes the shape of any known platform's ID, so `general` as a channel is
-refused at apply, and a Slack connection's Binding with a repository `owner/name` as its channel, or a bot's name such as `alertmanager` as
-a sender, is stored and then refused by the broker: a new one is not served, and an edit of a served one does not take
-([What each platform supports](../reference/platforms.md)).
+and the platform serves what the Binding asks for. The schema takes any chat ID of printable ASCII with no space and no `:`, so a chat
+ID with a space is refused at apply, and a Slack connection's Binding with a channel's name such as `general` as its channel, a
+repository `owner/name`, or a bot's name such as `alertmanager` as a sender, is stored and then refused by the broker: a new one is not
+served, and an edit of a served one does not take ([What each platform supports](../reference/platforms.md)).
 
 The caps (50 triggers in a Binding, 32 `extract` entries in a trigger, 32 headers and 256 bytes of a header's name in an AgentBackend) apply on
 both routes, because the schema and the broker's own validation both have them. [Upgrade](../how-to/upgrade.md#upgrade-to-the-release-that-bounds-triggers-extract-entries-and-headers) says how to find a config over one before you upgrade.
