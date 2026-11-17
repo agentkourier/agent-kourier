@@ -147,14 +147,14 @@ build_doubles_image() {
     *) die "unsupported Docker architecture" ;;
   esac
   BUILD=$(mktemp -d)
-  for double in fakeslack stubagent sink signaler hitlagent; do
+  for double in fakeslack stubagent sink signaler hitlagent fakeweb; do
     GOOS=linux GOARCH=${goarch} CGO_ENABLED=0 go build -C "${ROOT}" -o "${BUILD}/${double}" "./test/${double}/cmd/${double}"
   done
   docker build -q -f "${HERE}/fast/Dockerfile" --build-arg "RUNTIME_IMAGE=${RUNTIME_IMAGE}" -t "${DOUBLES_IMAGE}" "${BUILD}" >/dev/null
   kind load docker-image "${DOUBLES_IMAGE}" --name "${CLUSTER}"
 }
 
-# apply_doubles: the fake Slack, stub agent and sink in namespace e2e, and Alertmanager (with its
+# apply_doubles: the fake Slack, stub agent, sink and fake web sender and receiver in namespace e2e, and Alertmanager (with its
 # route to the sink) in monitoring; needs install_operator first. None is published: the fake
 # Slack's /_control/ has no authentication. E2E_SLACK_MODE says how the fake Slack sends its default app's events and presses (fake_slack_mode_patch).
 apply_doubles() {
@@ -162,8 +162,8 @@ apply_doubles() {
   "${K[@]}" apply -f "${HERE}/fast/doubles.yaml" >/dev/null
   "${K[@]}" -n e2e patch deploy/fakeslack --type=strategic -p "$(fake_slack_mode_patch)" >/dev/null
   # Restart so a rebuilt image (same tag) is picked up.
-  "${K[@]}" -n e2e rollout restart deploy/fakeslack deploy/stubagent deploy/hitlagent deploy/sink >/dev/null
-  "${K[@]}" -n e2e rollout status deploy/fakeslack deploy/stubagent deploy/hitlagent deploy/sink --timeout=180s
+  "${K[@]}" -n e2e rollout restart deploy/fakeslack deploy/stubagent deploy/hitlagent deploy/sink deploy/fakeweb >/dev/null
+  "${K[@]}" -n e2e rollout status deploy/fakeslack deploy/stubagent deploy/hitlagent deploy/sink deploy/fakeweb --timeout=180s
   "${K[@]}" apply -f "${HERE}/fast/alertmanager.yaml" >/dev/null
   "${K[@]}" -n monitoring wait --for=condition=Available alertmanager/agent-kourier --timeout=180s
 }
@@ -242,8 +242,8 @@ assert_app_unpublished() {
 
 assert_never_published() {
   local app ingresses ports hostports apiserver='^6443/tcp -> 127\.0\.0\.1:[0-9]+$'
-  echo "== never published: the fake Slack's /_control/ and the stub agent's /_control/release/ have no authentication, nor has hitlagent"
-  for app in fakeslack stubagent hitlagent; do
+  echo "== never published: the fake Slack's /_control/, the stub agent's /_control/release/ and the fake web sender's /_control/ have no authentication, nor has hitlagent"
+  for app in fakeslack stubagent hitlagent fakeweb; do
     assert_app_unpublished e2e "${app}"
   done
   ingresses=$("${K[@]}" -n e2e get ingress -o name)
@@ -531,6 +531,45 @@ deploy_two_apps() {
     die "the broker never connected team-a's Slack app to the fake Slack; is team-a in config.connectionNamespaces, and does team-a's Role name its Secret?"
   }
   echo "ok: team-a's Slack app is connected to the fake Slack"
+}
+
+# The fast tier's web ChatConnections (hack/kind/fast/web, custom resources only): the fake secrets of their Secrets, the same that the fake web sender
+# and receiver (fast/doubles.yaml, the Deployment fakeweb) sign and check with, and the email of the Bindings' agent token, which test/e2e's web.go
+# names too (test/kindmanifests pins that they agree). Fake constants, made into Secrets here and never committed.
+FAKE_WEB_KOURIER_V1_SECRET=fake-web-kourier-signing-secret
+FAKE_WEB_GITHUB_SECRET=fake-web-github-webhook-secret
+WEB_AGENT_EMAIL=e2e-web@example.test
+
+# deploy_web: the web ChatConnections of the tier on custom resources: the namespace e2e-web, its Secrets (the kourier-v1 connection's signingSecret,
+# the github connection's webhookSecret and the Bindings' agent token), and hack/kind/fast/web/web.yaml: the Role that grants them to the broker, the
+# two ChatConnections, their AgentBackend and a Binding on each. The broker serves them when hack/kind/web-values.yaml admits e2e-web. It returns once
+# the broker says both connections are up (agentkourier_chat_connected, read from its metrics Service by a probe pod), and dies if they are not in
+# three minutes. The Secrets are made with apply from a pipe, as deploy_agentkourier makes the tier's. Needs HERE, K, CURL_IMAGE, and the CRDs served
+# (deploy_agentkourier with crds).
+deploy_web() {
+  local pod=probe-web-${RANDOM} metrics=http://agent-kourier.agent-kourier.svc.cluster.local:8080/metrics
+  "${K[@]}" create namespace e2e-web --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" -n e2e-web create secret generic web-kourier --from-literal=signingSecret="${FAKE_WEB_KOURIER_V1_SECRET}" \
+    --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" -n e2e-web create secret generic web-github --from-literal=webhookSecret="${FAKE_WEB_GITHUB_SECRET}" \
+    --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" -n e2e-web create secret generic web-agent-token --from-literal=token="$(unsigned_jwt "${WEB_AGENT_EMAIL}")" \
+    --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" apply --dry-run=server -f "${HERE}/fast/web/web.yaml" >/dev/null
+  "${K[@]}" apply -f "${HERE}/fast/web/web.yaml" >/dev/null
+  # shellcheck disable=SC2016 # the script runs in the pod
+  "${K[@]}" -n e2e run "${pod}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" --command -- sh -c '
+    up() { printf %s "$2" | grep -q "^agentkourier_chat_connected{connection=\"$1\"} 1$"; }
+    for _ in $(seq 90); do
+      m=$(curl -s -m 5 "$1")
+      if up e2e-web/kourier "$m" && up e2e-web/github "$m"; then exit 0; fi
+      sleep 2
+    done
+    exit 1' sh "${metrics}" >/dev/null || {
+    "${K[@]}" -n agent-kourier logs deploy/agent-kourier --tail=40 >&2 || true
+    die "the broker never said its web connections e2e-web/kourier and e2e-web/github are up; is e2e-web in config.connectionNamespaces, with the chat listener on (hack/kind/web-values.yaml)?"
+  }
+  echo "ok: the web connections e2e-web/kourier and e2e-web/github are up"
 }
 
 # runner_admission DIR: the broker's admission (spec D54) for the E2E runner, as the Deployment agent-kourier has it: its AGENTKOURIER_CHAT_CONNECTION,
