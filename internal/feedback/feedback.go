@@ -421,7 +421,8 @@ func (h *Handler) GiveUp(ctx context.Context, press store.Press) error {
 }
 
 // finish tells the person text, if there is any, in the thread of to, and deletes the press. Telling is best-effort: a
-// person who is not told can press again, and a failure is only logged.
+// person who is not told can press again, and a failure is only logged. On a platform that has no ephemeral messages
+// (chat.ErrNoEphemeral) the person is not told by design, and that is logged at debug, not as a warning.
 func (h *Handler) finish(ctx context.Context, press store.Press, to chat.Target, text string) (interact.Result, error) {
 	if text != "" {
 		e, err := h.cfg.Ephemerals.Platform(to.Conn)
@@ -429,7 +430,11 @@ func (h *Handler) finish(ctx context.Context, press store.Press, to chat.Target,
 			err = e.Ephemeral(ctx, to, press.User, chat.Message{Fallback: text})
 		}
 		if err != nil {
-			h.cfg.Logger.WarnContext(ctx, "feedback: a person could not be told the outcome of their press", "channel", press.Channel, "err", err)
+			level := slog.LevelWarn
+			if errors.Is(err, chat.ErrNoEphemeral) {
+				level = slog.LevelDebug
+			}
+			h.cfg.Logger.Log(ctx, level, "feedback: a person could not be told the outcome of their press", "channel", press.Channel, "err", err)
 		}
 	}
 	if err := h.cfg.Store.DeletePress(ctx, press.Seq); err != nil {

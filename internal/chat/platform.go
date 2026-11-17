@@ -170,6 +170,10 @@ var (
 	// ErrNoReactions is returned by React and Unreact on a platform without reactions (an empty Caps.AckReaction). No retry
 	// mends it, so Classify(OpReact) of it is Permanent.
 	ErrNoReactions = errors.New("chat: the platform has no reactions")
+	// ErrNoEphemeral is wrapped by the error of Ephemeral on a platform without ephemeral messages (Caps.Ephemeral false),
+	// which shows nothing. No retry mends it, so Classify(OpPost) of it is Permanent. A caller that tells a person something
+	// alone checks it with errors.Is: the person was not told, by design, and that is no fault.
+	ErrNoEphemeral = errors.New("chat: the platform has no ephemeral messages")
 	// ErrNotStreaming is wrapped by the error of an Append or a Stop of a message that is not streaming: it ended,
 	// or it never was a stream. The caller that is finishing a stream it did not start tolerates it.
 	ErrNotStreaming = errors.New("chat: the message is not streaming")
@@ -268,7 +272,8 @@ type Platform interface {
 	// StreamAt is the stream that is the message at r, which another run started and a recovery has the Ref of: it
 	// makes no call, and its Append and Stop say ErrNotStreaming if the message is not streaming.
 	StreamAt(r Ref) Stream
-	// Ephemeral shows m to user alone, in t. Nothing keeps it.
+	// Ephemeral shows m to user alone, in t. Nothing keeps it. A platform without ephemeral messages (Caps.Ephemeral false)
+	// says ErrNoEphemeral and shows nothing.
 	Ephemeral(ctx context.Context, t Target, user string, m Message) error
 	// React puts the reaction name on the message at r. A reaction that is there already is success. A platform with no
 	// reactions (an empty Caps.AckReaction) says ErrNoReactions and shows nothing.

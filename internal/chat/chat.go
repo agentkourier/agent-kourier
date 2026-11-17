@@ -115,7 +115,7 @@ func (w Where) String() string {
 type Caps struct {
 	Streams   bool // Stream works
 	Steps     bool // Stream.Step shows progress steps in a stream, and a message shows its Steps part; needs Streams
-	Ephemeral bool // Ephemeral shows a message to one person alone
+	Ephemeral bool // Ephemeral shows a message to one person alone; otherwise it says ErrNoEphemeral and shows nothing
 	Busy      bool // MarkBusy shows a thread as busy; otherwise it says ErrNoBusy, as a platform may later even when this is set
 	// AckReaction is the reaction name, without colons, that Agent Kourier puts on an accepted message while it works, when a
 	// Binding's acknowledgment names none, and on a reply that waits behind a task. The API names no reaction, so each platform

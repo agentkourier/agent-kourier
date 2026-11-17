@@ -323,6 +323,9 @@ func (c *checker) contract() {
 	if c.caps.AckReaction == "" {
 		c.noReactions()
 	}
+	if !c.caps.Ephemeral {
+		c.noEphemeral()
+	}
 	for w, n := range c.caps.Limits {
 		if n <= len(chat.Truncated) {
 			c.add(RuleContract, w, "Capabilities", "limits", "the limit is %d, which cannot hold even the truncation marker", n)
@@ -577,6 +580,24 @@ func (c *checker) noReactions() {
 	}
 	if shown := c.s.Sent(); len(shown) > 0 {
 		c.add(RuleContract, 0, "React", "no reactions", "a platform with no reactions showed %d texts, want none", len(shown))
+	}
+	_ = c.s.Inert()
+}
+
+// noEphemeral checks a platform with no ephemeral messages (Caps.Ephemeral false): Ephemeral says chat.ErrNoEphemeral, which
+// Classify(OpPost) calls Permanent, and nothing is shown. Without it a caller could not tell a platform that has none from one that
+// failed, and would warn of every press on it; or a platform could leave the cap unset and still show a message to one person.
+func (c *checker) noEphemeral() {
+	p := c.s.Platform
+	c.s.Sent()
+	err := p.Ephemeral(c.ctx, c.target, "U1", chat.Message{Fallback: "only you"})
+	if !errors.Is(err, chat.ErrNoEphemeral) {
+		c.add(RuleContract, 0, "Ephemeral", "no ephemeral messages", "a platform with Ephemeral false gave %v, want an error wrapping chat.ErrNoEphemeral", err)
+	} else if v := p.Classify(chat.OpPost, err); v.Class != chat.Permanent {
+		c.add(RuleContract, 0, "Classify", "no ephemeral messages", "chat.ErrNoEphemeral is %+v, want Permanent: no retry shows a message the platform has no way to show", v)
+	}
+	if shown := c.s.Sent(); len(shown) > 0 {
+		c.add(RuleContract, 0, "Ephemeral", "no ephemeral messages", "a platform with no ephemeral messages showed %d texts, want none", len(shown))
 	}
 	_ = c.s.Inert()
 }

@@ -130,7 +130,7 @@ func newRig(t *testing.T) *rig {
 	var err error
 	r.h, err = feedback.New(feedback.Config{
 		Store: st, Sessions: st, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Auditor: r.aud,
-		Limits: store.PressLimits{Total: 10, PerUser: 3}, Logger: slog.New(slog.NewTextHandler(&r.logs, nil)),
+		Limits: store.PressLimits{Total: 10, PerUser: 3}, Logger: slog.New(slog.NewTextHandler(&r.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		Now: func() time.Time { return r.now }, Notify: func(p store.Press) { r.seen = append(r.seen, p) },
 	})
 	if err != nil {
@@ -742,6 +742,41 @@ func TestAFailedAuditOrTellingDoesNotCostTheVote(t *testing.T) {
 	}
 	if !strings.Contains(r.logs.String(), "level=WARN") || !strings.Contains(r.logs.String(), "not audited") {
 		t.Errorf("logged %q; want a warning that the vote was not audited", r.logs.String())
+	}
+}
+
+// A platform that shows no message to one person alone says chat.ErrNoEphemeral: the vote counts, and the person not being told
+// is logged at debug and not as a warning. Any other failure to tell them still warns.
+func TestAVoteOnAPlatformWithNoEphemeralMessagesIsNotAFault(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err       error
+		wantLevel string
+	}{
+		"no ephemeral messages": {fmt.Errorf("other: %w", chat.ErrNoEphemeral), "level=DEBUG"},
+		"another failure":       {errors.New("slack down"), "level=WARN"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t)
+			r.eph.err = tc.err
+			res, err := r.vote(t, press("UALICE1", store.FeedbackInvestigation, store.VerdictUseful))
+			if err != nil || res != interact.Done || len(r.votes(t)) != 1 || r.waiting(t) != 0 || len(r.eph.list()) != 1 {
+				t.Fatalf("Process = %v, %v, %d votes, %d waiting, %d told; want Done, the vote and the one ephemeral tried", res, err, len(r.votes(t)), r.waiting(t), len(r.eph.list()))
+			}
+			out := r.logs.String()
+			var line string
+			for l := range strings.Lines(out) {
+				if strings.Contains(l, "could not be told") {
+					line = l
+					break
+				}
+			}
+			if !strings.Contains(line, tc.wantLevel) || !strings.Contains(line, "C1") {
+				t.Errorf("logged %q; want %s that the person was not told, naming the channel", out, tc.wantLevel)
+			}
+			if tc.wantLevel == "level=DEBUG" && strings.Contains(out, "level=WARN") {
+				t.Errorf("logged %q; want no warning for a platform that has no ephemeral messages", out)
+			}
+		})
 	}
 }
 
