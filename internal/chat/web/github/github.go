@@ -197,6 +197,8 @@ func (p *Profile) check(pl payload) error {
 		return fmt.Errorf("%w: no action", errSchema)
 	case pl.Repository == nil || !p.shapes.Channel.Matches(pl.Repository.FullName):
 		return fmt.Errorf("%w: the repository's full_name is not owner/name", errSchema)
+	// The sender's login is held to the identity's shape on purpose: the identity is a GitHub login too, and the profile takes no
+	// user ID of its own (the platform's User is the zero shape), as Agent Kourier names nobody on GitHub.
 	case pl.Sender == nil || !p.shapes.Identity.Matches(pl.Sender.Login):
 		return fmt.Errorf("%w: the sender's login is not a GitHub login", errSchema)
 	}

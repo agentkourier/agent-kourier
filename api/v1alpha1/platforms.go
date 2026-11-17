@@ -17,9 +17,12 @@ import (
 // chatIDChars is printable ASCII but the space and ':'. ':' is left out because chat.MessageID joins the parts of a message's ID
 // with it; white space and control characters because no platform's ID holds one and a person cannot see one; and every character
 // outside ASCII, so that no ID holds an invisible character, a character that turns the direction of the text, or a letter that
-// looks like an ASCII one, which a pattern of white space and control characters would let through. The punctuation of ASCII is
-// kept, '/' of a repository and '[' and ']' of a GitHub App's login among it, so that a platform added later needs no change here
-// for its IDs: each platform's shape is checked at resolution. Its literal must equal the Pattern marker of each of the four fields
+// looks like an ASCII one, which a pattern of white space and control characters would let through. The rest of ASCII's punctuation
+// is kept, '/' of a repository and '[' and ']' of a GitHub App's login among it, since each platform's shape is checked at
+// resolution. ':' is kept out for now, and Teams will need it: its channel IDs look like 19:…@thread.tacv2 and its Bot Framework
+// user IDs like 29:… (Microsoft's documentation, unverified here). Taking it then needs the part of a message's ID that the ID
+// gives to stay free of ':', or chat.MessageID to escape it; and widening the set then is a loosening, which D42 does not count as
+// breaking. Its literal must equal the Pattern marker of each of the four fields
 // (TestSchemaPatternsEqualTheGoLiterals), and each platform's shape takes only IDs that it takes
 // (TestEveryPlatformsShapesAreWithinTheSchema).
 var chatIDChars = regexp.MustCompile(`^[!-9;-~]+$`)
@@ -233,6 +236,9 @@ func (s *BindingSpec) PlatformMismatches(p ChatPlatform) []PlatformMismatch {
 	var out []PlatformMismatch
 	id := func(path, value string, shape IDShape) {
 		switch {
+		case !shape.Taken():
+			out = append(out, PlatformMismatch{Path: path, Unsupported: true, Problem: "an ID of this kind is not supported",
+				Fix: "remove it: the platform takes no such ID"})
 		case !shape.pattern.MatchString(value):
 			out = append(out, PlatformMismatch{Path: path, Problem: fmt.Sprintf("%q is not %s", value, shape.What), Fix: shape.Fix})
 		case len(value) > shape.maxLen:

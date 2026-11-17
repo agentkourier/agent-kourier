@@ -335,6 +335,8 @@ func TestDefaultOnFillsTheOutputOfThePlatform(t *testing.T) {
 func TestPlatformMismatches(t *testing.T) {
 	noApprovals := slack(t)
 	noApprovals.ToolApprovals = false
+	noChannels := slack(t)
+	noChannels.Channel = IDShape{}
 	for _, tc := range []struct {
 		name     string
 		platform ChatPlatform
@@ -389,6 +391,9 @@ func TestPlatformMismatches(t *testing.T) {
 				Fix: "set it to false and remove spec.interactions.approverGroups, which requires it"},
 		}},
 		{"no tool approvals on a platform without them", noApprovals, func(*Binding) {}, nil},
+		{"a channel on a platform that takes no channel ID: unsupported, and no panic", noChannels, func(*Binding) {}, []PlatformMismatch{
+			{Path: "spec.chat.channel", Unsupported: true, Problem: "an ID of this kind is not supported", Fix: "remove it: the platform takes no such ID"},
+		}},
 		{"output none on Slack, which posts the replies", slack(t), func(b *Binding) { b.Spec.Chat.Output = OutputNone }, []PlatformMismatch{
 			{Path: "spec.chat.output", Unsupported: true, Problem: `"none" is not supported`, Fix: "set it to live or final, or leave it out for live"},
 		}},
