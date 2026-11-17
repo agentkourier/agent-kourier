@@ -1547,3 +1547,28 @@ func TestSupervisorWithNoOwnPublishesTheTeamConnectionsAlone(t *testing.T) {
 		t.Errorf("published = %v; want team-a alone", got)
 	}
 }
+
+// A served connection of a platform the broker has no adapter for is not started, and the supervisor says so as that, not as credentials to
+// mend, which would start nothing; one whose Secret cannot be read yet is told the credentials cannot be used.
+func TestSupervisorSaysAConnectionOfAPlatformWithNoAdapterIsNotStarted(t *testing.T) {
+	w := newSupWorld(t)
+	unknown := teamOn("teams", "team-a/teams", 1, "tok-teams", 1)
+	c := &v1alpha1.ChatConnection{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "teams"}, Spec: v1alpha1.ChatConnectionSpec{Platform: "teams"}}
+	if _, unknown.Err = connectionOf(t.Context(), c, &reader{}); !errors.Is(unknown.Err, errNoAdapter) {
+		t.Fatalf("connectionOf of a platform with no adapter = %v; want errNoAdapter", unknown.Err)
+	}
+	unknown.Credentials = nil
+	w.reconcile(unknown, unready("team-b/slack", 1, 2))
+	if got := w.running(); !slices.Equal(got, []string{ownName}) {
+		t.Errorf("running = %v; want neither connection started", got)
+	}
+	logs := w.logs.String()
+	for _, want := range []string{
+		`msg="the ChatConnection is not started: this broker has no adapter for its platform" connection=team-a/teams`,
+		`msg="the ChatConnection is not started yet: its credentials cannot be used" connection=team-b/slack`,
+	} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("the logs do not say %s:\n%s", want, logs)
+		}
+	}
+}
