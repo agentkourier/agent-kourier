@@ -20,6 +20,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/stubagent"
 )
 
@@ -168,9 +169,11 @@ spec:
 	r := start(t, c)
 	r.until("/readyz", http.StatusOK)
 	base := "http://" + c.ChatListener.Addr().String()
-	if code := statusOf(t, http.DefaultClient, signedGitHub(t, base, "gh", "pull_request", githubFixture(t, "pull_request.opened.json"), true)); code != http.StatusAccepted {
-		t.Fatalf("the webhook = %d; want 202", code)
-	}
+	// Ready is not the connection running: until it runs the route answers 503, and GitHub's sender would be told to send again, as this does.
+	body := githubFixture(t, "pull_request.opened.json")
+	testutil.Eventually(t, "the webhook was never taken", func() bool {
+		return statusOf(t, http.DefaultClient, signedGitHub(t, base, "gh", "pull_request", body, true)) == http.StatusAccepted
+	}, testutil.Within(10*time.Second), testutil.Every(20*time.Millisecond))
 	select {
 	case <-prompted:
 	case <-time.After(10 * time.Second):
