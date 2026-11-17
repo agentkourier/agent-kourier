@@ -357,19 +357,17 @@ func TestTriggersValidate(t *testing.T) {
 			"spec.chat.triggers[0].thread: not allowed with type: mention"},
 		{"no source", func(o *Binding) { bot(o).From = nil }, at + ".from.id: required"},
 		{"empty bot ID", func(o *Binding) { bot(o).From.ID = "" }, at + ".from.id: required"},
-		// A bot's name has the shape of a GitHub login: it is refused when the Binding is resolved on Slack.
-		{"a bot name loads: another platform's login has its shape", func(o *Binding) { bot(o).From.ID = "alertmanager" }, ""},
+		// A bot's name loads: resolution holds the sender to its connection's platform, and on Slack refuses it.
+		{"a bot name loads", func(o *Binding) { bot(o).From.ID = "alertmanager" }, ""},
 		{"a display name with a space instead of ID", func(o *Binding) { bot(o).From.ID = "Alert Manager" },
-			at + `.from.id: invalid sender ID "Alert Manager": must be the sender's ID (Slack: a bot ID such as B0123456789), not a name`},
-		{"an app's login ok", func(o *Binding) { bot(o).From.ID = "dependabot[bot]" }, ""},
-		// Not a login, but a kourier-v1 sender's ID has its shape: it is refused when the Binding is resolved on Slack or GitHub.
-		{"a login that ends in a hyphen loads: a kourier-v1 ID has its shape", func(o *Binding) { bot(o).From.ID = "octocat-" }, ""},
-		{"an ID that starts with a hyphen", func(o *Binding) { bot(o).From.ID = "-octocat" },
-			at + `.from.id: invalid sender ID "-octocat": must be the sender's ID (Slack: a bot ID such as B0123456789), not a name`},
+			at + `.from.id: invalid sender ID "Alert Manager": a chat ID is printable ASCII with no space and no ':'`},
+		{"an app's login loads", func(o *Binding) { bot(o).From.ID = "dependabot[bot]" }, ""},
+		{"an ID that starts with a hyphen loads", func(o *Binding) { bot(o).From.ID = "-octocat" }, ""},
+		{"an ID with a colon", func(o *Binding) { bot(o).From.ID = "bot:1" }, at + `.from.id: invalid sender ID "bot:1": a chat ID is printable ASCII with no space and no ':'`},
 		{"a bot ID at the length cap ok", func(o *Binding) { bot(o).From.ID = "B" + strings.Repeat("0", maxChatIDLen-1) }, ""},
 		{"a bot ID over the length cap", func(o *Binding) { bot(o).From.ID = "B" + strings.Repeat("0", maxChatIDLen) },
 			at + fmt.Sprintf(".from.id: is %d bytes, longer than the %d byte limit", maxChatIDLen+1, maxChatIDLen)},
-		{"a Slack user ID loads: another platform's login has its shape", func(o *Binding) { bot(o).From.ID = "U0123456789" }, ""},
+		{"a Slack user ID as a sender loads", func(o *Binding) { bot(o).From.ID = "U0123456789" }, ""},
 		{"kind other than bot", func(o *Binding) { bot(o).From.Kind = "webhook" },
 			at + `.from.kind: unsupported value "webhook", must be one of bot`},
 		{"kind unset on a Binding that was not defaulted", func(o *Binding) { bot(o).From.Kind = "" },
@@ -663,7 +661,7 @@ func TestTriggersValidateReportsEveryProblem(t *testing.T) {
 	bot(b).Match[FieldTitle] = "("
 	bot(b).Thread.Cooldown = metav1.Duration{}
 	want := []string{
-		`spec.chat.triggers[1].from.id: invalid sender ID "no pe": must be the sender's ID (Slack: a bot ID such as B0123456789), not a name`,
+		`spec.chat.triggers[1].from.id: invalid sender ID "no pe": a chat ID is printable ASCII with no space and no ':'`,
 		"spec.chat.triggers[1].match.title: invalid regular expression: error parsing regexp: missing closing ): `(`",
 		"spec.chat.triggers[1].thread.cooldown: required with thread.by",
 	}

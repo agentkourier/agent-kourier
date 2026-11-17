@@ -49,12 +49,11 @@ func (c Connection) hasReplies() bool {
 	return !ok || p.Replies
 }
 
-// platformSpec is what the broker knows of a platform: the name it is called in the text an agent reads ("Slack"), and the call that tells
-// whose bot a connection's credentials are. The keys of its credentials Secret depend on the connection's mode as well, so they are not
+// platformSpec is what the broker knows of a platform: the call that tells whose bot a connection's credentials are. The name it is
+// called in the text an agent reads is the API's (actorPlatform). The keys of its credentials Secret depend on the connection's mode as well, so they are not
 // here: v1alpha1.CredentialKeys gives them for a connection's spec. Its adapter is built by RunConfig.newPlatform, which
 // leaderHalf.openPlatform calls.
 type platformSpec struct {
-	Name string
 	// Identify asks the platform which app, workspace, bot and bot user conn's credentials are (appIdentity, whose Platform it leaves
 	// unset), each call within identifyTimeout. Nil is a platform with no such call: its connections have the zero identity, which takes part in
 	// no comparison, and nothing is asked (RunConfig.identityOf). An error that the platform refused the credentials wraps
@@ -68,25 +67,22 @@ type platformSpec struct {
 func platformFor(name string) (platformSpec, bool) {
 	switch name {
 	case v1alpha1.PlatformSlack:
-		return platformSpec{Name: "Slack", Identify: slackIdentityOf}, true
+		return platformSpec{Identify: slackIdentityOf}, true
 	case v1alpha1.PlatformWeb:
 		// No identity call: a web connection has no bot that the platform could name, and no app that two connections could share, so
 		// its connections have the zero identity. The bot guard has no bot of a web connection to tell from a person, and needs none:
 		// a web profile hands on no bot's message (web.Platform.IsBot), and the github profile drops what its own login sent.
-		return platformSpec{Name: "web"}, true
+		return platformSpec{}, true
 	}
 	return platformSpec{}, false
 }
 
 // actorPlatform is the platform a ChatConnection's users are on, as the dialects attribute a turn to them: the ID is
-// spec.platform, and the display name is the one platformFor knows. A platform it does not know has an ID alone. The users of a web
-// connection of the github profile are GitHub's, which is the name the agent reads ("[GitHub: octocat]").
+// spec.platform, and the display name is the API's (v1alpha1.ChatPlatform.ActorName), such as GitHub for a web connection of the
+// github profile, which the agent reads as "[GitHub: octocat]". A platform or a profile the API does not know has an ID alone.
 func actorPlatform(spec v1alpha1.ChatConnectionSpec) dialect.Platform {
-	p, _ := platformFor(spec.Platform)
-	if spec.Platform == v1alpha1.PlatformWeb && spec.Web != nil && spec.Web.Profile == v1alpha1.WebProfileGitHub {
-		p.Name = "GitHub"
-	}
-	return dialect.Platform{ID: spec.Platform, Name: p.Name}
+	p, _ := v1alpha1.ChatPlatformOf(spec)
+	return dialect.Platform{ID: spec.Platform, Name: p.ActorName}
 }
 
 // slackAPI is the Slack client as the Slack adapter takes it, which is the seam of RunConfig.newSlack.

@@ -69,7 +69,7 @@ func TestAConnectionWithNoRepliesHasNothingRenderedOrQueued(t *testing.T) {
 	set := &config.Set{ChatConnections: []v1alpha1.ChatConnection{
 		conn("slack", v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformSlack}),
 		conn("github", v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb,
-			Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileGitHub, GitHub: &v1alpha1.GitHubWebSpec{Login: "pr-reviewer"}}}),
+			Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileGitHub, Identity: "pr-reviewer"}}),
 		conn("v1", v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb,
 			Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileKourierV1, URL: "https://receiver.example/kourier"}}),
 	}}
@@ -132,7 +132,7 @@ spec:
   platform: web
   credentialsSecretRef: { name: gh }
   allowedNamespaces: ["sre"]
-  web: { profile: github, github: { login: pr-reviewer } }
+  web: { profile: github, identity: pr-reviewer }
 `
 	binding := `apiVersion: agentkourier.dev/v1alpha1
 kind: Binding

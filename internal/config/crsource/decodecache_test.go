@@ -74,7 +74,7 @@ func TestARefusedObjectIsNotDecodedAgainAtEveryRead(t *testing.T) {
 	leakCheck(t)
 	objs := corpus(t)
 	bad := find(objs, "sre-alerts")
-	_ = unstructured.SetNestedField(bad.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(bad.Object, "#general alerts", "spec", "chat", "channel")
 	objs[slices.IndexFunc(objs, func(u *unstructured.Unstructured) bool { return u.GetName() == "sre-alerts" })] = bad
 	c := newCluster(t, objs...)
 	src := c.start(t)

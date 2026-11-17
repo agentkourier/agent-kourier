@@ -185,7 +185,8 @@ func (c *countingTransport) RoundTrip(*http.Request) (*http.Response, error) {
 // (so that a pause is refused cleanly), and no request is made.
 func TestAProfileWithoutRepliesSendsNothing(t *testing.T) {
 	tr := &countingTransport{}
-	p, err := web.New(web.Config{Connection: "ns/web", Profile: newTestProfile(false), Transport: tr})
+	prof := newTestProfile(false)
+	p, err := web.New(web.Config{Connection: "ns/web", Profile: prof, Platform: prof.platform(), Transport: tr})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -322,12 +322,18 @@ type SlackConnectionSpec struct {
 	Mode SlackMode `json:"mode,omitempty"`
 }
 
+// The rules on url and identity list the profiles that take each, as ChatPlatformOf has them (Replies, and a shape of Identity), and
+// TestTheWebRulesFollowThePlatformTable holds each list to the table, so that a profile is one more name in a list and not a rule of
+// its own. The shape of an identity is each profile's, in a rule of its own. (Not in the doc comment below, which the reference pages
+// print.)
+
 // WebConnectionSpec is the settings of a web connection: the profile that its requests and replies follow.
 //
-// +kubebuilder:validation:XValidation:rule="self.profile != 'kourier-v1' || (has(self.url) && size(self.url) > 0)",message="is required by the kourier-v1 profile, which posts the replies to it",fieldPath=".url"
-// +kubebuilder:validation:XValidation:rule="self.profile != 'github' || !has(self.url) || size(self.url) == 0",message="is set, but the github profile sends no replies",fieldPath=".url"
-// +kubebuilder:validation:XValidation:rule="!has(self.github) || self.profile == 'github'",message="is set, but only the github profile has one",fieldPath=".github"
-// +kubebuilder:validation:XValidation:rule="self.profile != 'github' || has(self.github)",message="is required by the github profile: it names the login the agent posts as",fieldPath=".github"
+// +kubebuilder:validation:XValidation:rule="!(self.profile in ['kourier-v1']) || (has(self.url) && size(self.url) > 0)",message="is required: the profile sends replies, and posts them to it",fieldPath=".url"
+// +kubebuilder:validation:XValidation:rule="self.profile in ['kourier-v1'] || !has(self.url) || size(self.url) == 0",message="is set, but the profile sends no replies",fieldPath=".url"
+// +kubebuilder:validation:XValidation:rule="!(self.profile in ['github']) || (has(self.identity) && size(self.identity) > 0)",message="is required: the profile finds the agent's mentions, and drops the agent's own events, by it",fieldPath=".identity"
+// +kubebuilder:validation:XValidation:rule="self.profile in ['github'] || !has(self.identity) || size(self.identity) == 0",message="is set, but the profile takes none",fieldPath=".identity"
+// +kubebuilder:validation:XValidation:rule=`self.profile != 'github' || !has(self.identity) || (size(self.identity) <= 44 && self.identity.matches(r'^[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}(?:\[bot\])?$'))`,message="must be a GitHub login of at most 44 bytes: a user's, such as pr-reviewer, or a GitHub App's, such as pr-reviewer[bot]",fieldPath=".identity"
 type WebConnectionSpec struct {
 	// Profile is the integration the connection speaks. kourier-v1 is Agent Kourier's own signed JSON contract: it takes signed
 	// requests and posts the agent's replies, signed, to url. github takes GitHub's webhooks and sends no replies: the agent
@@ -340,9 +346,9 @@ type WebConnectionSpec struct {
 	// to, so that the two agree on it by construction (TestSchemaPatternsEqualTheGoLiterals reads the rule). Validate refuses
 	// what url.Parse refuses besides, which the rules let through. (Not in the doc comment below, which the reference pages print.)
 
-	// URL is where the kourier-v1 profile posts the agent's replies. It is required for kourier-v1 and refused for github, which
-	// sends none. It is an https URL, or an http one only to localhost, a loopback address (127.x.x.x or [::1]) or a Service in
-	// the cluster (a host that ends in .svc or .svc.cluster.local), since a reply carries what the agent wrote. At most 2048
+	// URL is where a profile that sends replies posts them: it is required by such a profile (kourier-v1) and refused by one that
+	// sends none (github). It is an https URL, or an http one only to localhost, a loopback address (127.x.x.x or [::1]) or a Service
+	// in the cluster (a host that ends in .svc or .svc.cluster.local), since a reply carries what the agent wrote. At most 2048
 	// bytes, with no credentials, query or fragment: the replies are signed with the credentials Secret's signingSecret.
 	// +kubebuilder:validation:MaxLength=2048
 	// +kubebuilder:validation:XValidation:rule=`self == '' || self.matches('(?i)^https?://[^/?#]')`,message="must be an http or https URL with a host"
@@ -354,25 +360,20 @@ type WebConnectionSpec struct {
 	// +optional
 	URL string `json:"url,omitempty"`
 
-	// GitHub holds the settings of the github profile. A connection of the github profile must set it, and no other may.
+	// The cap is maxWebIdentityLen, and the github rule above copies githubLogin and maxGitHubLoginLen (platforms.go):
+	// TestSchemaCapsEqualTheBrokersCaps and TestTheIdentityRuleCopiesGitHubsShape hold the schema to them. (Not in the doc comment
+	// below, which the reference pages print.)
+
+	// Identity is the account the agent works as on the profile's service. A profile that finds the agent's mentions, or drops the
+	// agent's own events, by it requires it (github), and every other refuses it (kourier-v1, whose sender sends only what is meant
+	// for Agent Kourier). Each profile holds it to its own shape. On github it is the GitHub login the agent posts as: a user's, such
+	// as pr-reviewer, or a GitHub App's, such as pr-reviewer[bot], of at most 39 letters and digits with single hyphens between them,
+	// then an optional [bot], at most 44 bytes. A comment on a pull request, or a review comment, starts a turn only when it mentions
+	// the login (an app's login without its [bot]), and no event that the login sent starts one, such as its own push to a pull
+	// request, nor a comment whose author it is. At most 128 bytes on any profile.
+	// +kubebuilder:validation:MaxLength=128
 	// +optional
-	GitHub *GitHubWebSpec `json:"github,omitempty"`
-}
-
-// GitHubWebSpec is the settings of a web connection of the github profile.
-type GitHubWebSpec struct {
-	// The pattern and the cap are those of a GitHub login in a Binding (githubLogin and maxGitHubLoginLen in platforms.go), which
-	// TestSchemaPatternsEqualTheGoLiterals and TestSchemaCapsEqualTheBrokersCaps hold the markers to. (Not in the doc comment below,
-	// which the reference pages print.)
-
-	// Login is the GitHub login the agent posts as: a user's, such as pr-reviewer, or a GitHub App's, such as
-	// pr-reviewer[bot]. A comment on a pull request, or a review comment, starts a turn only when it mentions the login (an
-	// app's login without its [bot]). No event that the login sent starts one, such as its own push to a pull request, nor a
-	// comment whose author it is. At most 39 letters and digits with single hyphens between them, then an optional [bot], at most
-	// 44 bytes.
-	// +kubebuilder:validation:MaxLength=44
-	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}(?:\[bot\])?$`
-	Login string `json:"login"`
+	Identity string `json:"identity,omitempty"`
 }
 
 // Binding connects one agent to one chat channel.
@@ -460,16 +461,15 @@ type Identity struct {
 // ChatBinding places the Binding in a channel.
 type ChatBinding struct {
 	ConnectionRef ObjectRef `json:"connectionRef"`
-	// Channel is the platform's channel ID, not its name (Slack: `C…` or `G…`). At most 140 bytes. The schema takes the shape of
-	// any platform's channel ID: Slack's, a repository's `owner/name` (the web platform's github profile), or an opaque ID of
-	// letters, digits, '.', '_' and '-' that has a digit (its kourier-v1 profile). A name such as `general` has no platform's
-	// shape, and is refused. The broker holds the channel to the shape of its connection's platform when it reads the Binding with
-	// its connection (on Slack: `C` or `G`, then capitals and digits, at most 32 bytes), and refuses a Binding whose channel has
-	// another shape as it refuses an invalid one: with custom resources its Accepted condition is False with the reason
+	// Channel is the platform's channel ID, not its name (Slack: `C…` or `G…`). At most 140 bytes of printable ASCII with no space
+	// and no ':', as the schema checks. The broker holds the channel to the shape of its connection's platform when it reads the
+	// Binding with its connection (on Slack: `C` or `G`, then capitals and digits, at most 32 bytes; on the web platform's github
+	// profile a repository's `owner/name`), and refuses a Binding whose channel has another shape, such as a Slack channel's name
+	// `general`, as it refuses an invalid one: with custom resources its Accepted condition is False with the reason
 	// InvalidPlatformID and its last good generation, if it has one, stays served; on the files route the whole config fails.
 	// agent-kourier dry-run holds it to Slack's shape.
 	// +kubebuilder:validation:MaxLength=140
-	// +kubebuilder:validation:Pattern=`^(?:[CG][A-Z0-9]+|[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}/[A-Za-z0-9._-]{1,100}|(?:[0-9]|[A-Za-z][A-Za-z._-]*[0-9])[A-Za-z0-9._-]*)$`
+	// +kubebuilder:validation:Pattern=`^[!-9;-~]+$`
 	Channel string `json:"channel"`
 	// Output says what Agent Kourier posts of the agent's work: live, the reply as it is written; final, the finished reply
 	// alone; or none, nothing, on a platform where the agent replies itself. A platform takes only the outputs it serves: Slack
@@ -552,11 +552,12 @@ type ChatMention struct {
 	// +kubebuilder:validation:XValidation:rule="!(self in ['here', 'channel', 'everyone'])",message="a broadcast name (here, channel or everyone) is reserved and cannot be declared"
 	Name string `json:"name"`
 	// User is the platform's user ID of the person (Slack: `U…` or `W…`). It comes only from here, never from the agent. At most 64
-	// bytes. The schema takes the shape of any platform's user ID, Slack's, a login such as `octocat`, or an opaque ID of letters,
-	// digits, '.', '_' and '-' (the kourier-v1 profile), and the broker holds it to the shape of its connection's platform as it
-	// does spec.chat.channel (on Slack: `U` or `W`, then 2 to 20 capitals and digits).
+	// bytes of printable ASCII with no space and no ':', as the schema checks; the broker holds it to the shape of its connection's
+	// platform as it does spec.chat.channel (on Slack: `U` or `W`, then 2 to 20 capitals and digits). A platform without replies
+	// (the web platform's github profile) refuses spec.chat.mentions with the reason UnsupportedOnPlatform, as Agent Kourier posts
+	// nothing there.
 	// +kubebuilder:validation:MaxLength=64
-	// +kubebuilder:validation:Pattern=`^(?:[UW][A-Z0-9]{2,20}|[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}(?:\[bot\])?|[A-Za-z0-9][A-Za-z0-9._-]*)$`
+	// +kubebuilder:validation:Pattern=`^[!-9;-~]+$`
 	User string `json:"user"`
 }
 
@@ -603,14 +604,14 @@ type Interactions struct {
 	// +optional
 	ToolApprovals bool `json:"toolApprovals,omitempty"`
 	// ApproverGroups names the platform's user groups whose members may decide a tool approval, by the platform's ID (Slack: `S…`).
-	// An empty list allows any non-bot channel member. At most 10 groups may be named, each at most 140 bytes; duplicates and empty
-	// entries are refused. The schema takes the shape of any platform's group ID, Slack's, a team's `org/team-slug`, or the opaque
-	// ID of spec.chat.channel's kourier-v1 shape, and the broker holds each to the shape of its connection's platform as it does
-	// spec.chat.channel (on Slack: `S`, then capitals and digits, at most 32 bytes). A platform that cannot ask for tool approvals
-	// refuses toolApprovals: true in the same way, with the reason UnsupportedOnPlatform; Slack can.
+	// An empty list allows any non-bot channel member. At most 10 groups may be named, each at most 140 bytes of printable ASCII with
+	// no space and no ':'; duplicates and empty entries are refused. The broker holds each to the shape of its connection's platform
+	// as it does spec.chat.channel (on Slack: `S`, then capitals and digits, at most 32 bytes). A platform that cannot ask for tool
+	// approvals refuses toolApprovals: true in the same way, with the reason UnsupportedOnPlatform, and one without replies (the web
+	// platform's github profile) refuses approverGroups too; Slack can.
 	// +kubebuilder:validation:MaxItems=10
 	// +kubebuilder:validation:items:MaxLength=140
-	// +kubebuilder:validation:items:Pattern=`^(?:S[A-Z0-9]+|[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}/[A-Za-z0-9._-]{1,100}|(?:[0-9]|[A-Za-z][A-Za-z._-]*[0-9])[A-Za-z0-9._-]*)$`
+	// +kubebuilder:validation:items:Pattern=`^[!-9;-~]+$`
 	// +listType=set
 	// +optional
 	ApproverGroups []string `json:"approverGroups,omitempty"`

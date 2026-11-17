@@ -105,7 +105,7 @@ func canceled(t *testing.T) context.Context {
 }
 
 // A turn is attributed to a person on a platform: the ID is the ChatConnection's spec.platform and the name is the one the
-// broker holds for it, GitHub's for a web connection of the github profile. A platform the broker does not know keeps its ID, with no
+// API holds for it (ActorName), GitHub for a web connection of the github profile. A platform the API does not know keeps its ID, with no
 // name, so that a prefix still reads true.
 func TestActorPlatformNamesThePlatformOfTheConnection(t *testing.T) {
 	for _, tc := range []struct {

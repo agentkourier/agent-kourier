@@ -143,6 +143,10 @@ type Config struct {
 	Connection string
 	// Profile is the connection's profile (spec.web.profile), made with the connection's credentials.
 	Profile Profile
+	// Platform is what the API says the connection's platform takes: v1alpha1.ChatPlatformOf of the connection's spec, which the
+	// broker reads once and hands to the profile too. The platform holds a channel to its shape, and its Replies must agree with the
+	// profile's Encoder.
+	Platform v1alpha1.ChatPlatform
 	// URL is where the replies go (spec.web.url): an absolute http or https URL, required for a profile that sends replies and refused
 	// for one that does not.
 	URL string
@@ -196,12 +200,15 @@ func New(cfg Config) (*Platform, error) {
 	if cfg.Profile == nil {
 		return nil, fmt.Errorf("web: connection %s: no profile", cfg.Connection)
 	}
-	name := cfg.Profile.Name()
-	shapes, ok := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: Name, Web: &v1alpha1.WebConnectionSpec{Profile: name}})
-	if !ok {
-		return nil, fmt.Errorf("web: connection %s: the profile %q is not one the API knows", cfg.Connection, name)
+	name, shapes := cfg.Profile.Name(), cfg.Platform
+	if !shapes.Channel.Taken() {
+		return nil, fmt.Errorf("web: connection %s: no platform, the API's for the profile %q, that takes a channel", cfg.Connection, name)
 	}
 	enc := cfg.Profile.Encoder()
+	if (enc != nil) != shapes.Replies {
+		return nil, fmt.Errorf("web: connection %s: the profile %s sends replies: %t, and its platform, %s, says %t", cfg.Connection, name,
+			enc != nil, shapes.Name, shapes.Replies)
+	}
 	if err := checkCaps(cfg.Profile.Caps(), enc != nil); err != nil {
 		return nil, fmt.Errorf("web: connection %s: profile %s: %w", cfg.Connection, name, err)
 	}

@@ -62,7 +62,7 @@ func (r *receiver) take() []kourierv1.Outbound {
 func subject(t *testing.T) chattest.Subject {
 	t.Helper()
 	r := &receiver{t: t}
-	p, err := web.New(web.Config{Connection: "conformance/web", Profile: newProfile(t), URL: "https://receiver.conformance.test/replies",
+	p, err := web.New(web.Config{Connection: "conformance/web", Profile: newProfile(t), Platform: platform(t), URL: "https://receiver.conformance.test/replies",
 		Transport: r, Now: func() time.Time { return epoch }, Logger: testutil.DiscardLogger()})
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +93,7 @@ func subject(t *testing.T) chattest.Subject {
 			if st == chattest.ChannelJoined {
 				return "ch-1"
 			}
-			return "general" // not a kourier-v1 channel ID
+			return "#general" // not a kourier-v1 channel ID
 		},
 		Groups: func(chattest.GroupState) string { return "grp-1" },
 		AbsentChannels: map[chattest.ChannelState]string{

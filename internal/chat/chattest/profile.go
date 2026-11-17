@@ -25,8 +25,11 @@ import (
 // ProfileSubject is a profile of the web platform under test (web.Profile), and what its sender does. Every profile's tests call
 // ProfileConformance with one: it holds the profile to what the web platform counts on, through the platform's own handler.
 type ProfileSubject struct {
-	// Profile is the profile, made with Secret.
+	// Profile is the profile, made with Secret and Platform.
 	Profile web.Profile
+	// Platform is what the API says a connection of the profile takes (v1alpha1.ChatPlatformOf of its spec), which the profile was
+	// made with and the web platform is made with. The suite holds every documented event's channel and user to its shapes.
+	Platform v1alpha1.ChatPlatform
 	// Secret is the secret the profile was made with: a fake constant. The suite signs with it, and with another to forge.
 	Secret string
 	// Sign returns the headers that sign body at the time at with secret, as the profile's sender signs a request. The suite takes
@@ -82,8 +85,8 @@ func ProfileConformance(t *testing.T, s ProfileSubject) {
 // CheckProfile runs the whole of ProfileConformance and returns what it found, without failing anything. It checks, through the web
 // platform's handler with the profile:
 //
-//   - that every documented event decodes to what it says, its channel and user of the shapes of the profile's IDs
-//     (v1alpha1.ChatPlatformOf), and reaches the Sink as that, or that nothing does;
+//   - that every documented event decodes to what it says, its channel and its user of the shapes of the subject's Platform (its user
+//     only when the platform takes a user ID), and reaches the Sink as that, or that nothing does;
 //   - that a repeat of an event reaches the Sink with the same chat.MessageID, which the reply queue drops, and that no two events share
 //     one;
 //   - that a request is refused 401, with nothing handed on, when it is not signed, when any one of its signature's headers is missing,
@@ -100,8 +103,8 @@ func CheckProfile(ctx context.Context, s ProfileSubject) []Violation {
 		return []Violation{v}
 	}
 	c := &profileChecker{ctx: ctx, s: s, first: first, sink: &recordingSink{}, sent: &recordingTransport{}}
-	cfg := web.Config{Connection: profileConn, Profile: s.Profile, Transport: c.sent, Now: func() time.Time { return profileNow },
-		Logger: slog.New(slog.DiscardHandler)}
+	cfg := web.Config{Connection: profileConn, Profile: s.Profile, Platform: s.Platform, Transport: c.sent,
+		Now: func() time.Time { return profileNow }, Logger: slog.New(slog.DiscardHandler)}
 	if s.Profile.Encoder() != nil {
 		cfg.URL = profileURL
 	}
@@ -156,6 +159,8 @@ func (s ProfileSubject) setup(first ProfileEvent, ok bool) (Violation, bool) {
 	switch {
 	case s.Profile == nil || s.Sign == nil || s.Secret == "":
 		return bad("Profile, Sign and Secret are all required")
+	case !s.Platform.Channel.Taken():
+		return bad("Platform is required: the API's for the profile")
 	case s.MaxBody <= 0:
 		return bad("MaxBody is required")
 	case !ok:
@@ -237,15 +242,17 @@ func (c *profileChecker) inbound(ev web.Event) chat.Inbound {
 	return chat.Inbound{At: c.p.RefAt(ev.Channel, ev.Thread, ev.ID), User: ev.User, Text: ev.Text, Mentioned: ev.Mentioned}
 }
 
-// events checks that every documented event decodes to what it says, of the shapes of the profile's IDs, and reaches the Sink as that.
+// events checks that every documented event decodes to what it says, of the shapes of the subject's Platform, and reaches the Sink
+// as that. A platform that takes no user ID, such as the github profile's, has no Binding field that names a user, so an event's user
+// is held to no shape there.
 func (c *profileChecker) events() {
-	shapes, known := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb,
-		Web: &v1alpha1.WebConnectionSpec{Profile: c.s.Profile.Name()}})
-	if !known {
+	if _, known := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb,
+		Web: &v1alpha1.WebConnectionSpec{Profile: c.s.Profile.Name()}}); !known {
 		c.add("Name", "shape", "the API has no web profile %q", c.s.Profile.Name())
 	}
+	shapes := c.s.Platform
 	for _, e := range c.s.Events {
-		if known && e.Want != nil && (!shapes.Channel.Matches(e.Want.Channel) || !shapes.User.Matches(e.Want.User)) {
+		if e.Want != nil && (!shapes.Channel.Matches(e.Want.Channel) || shapes.User.Taken() && !shapes.User.Matches(e.Want.User)) {
 			c.add("Decode", "shape: "+e.Name, "the channel %q or the user %q is not of the shape of %s's IDs: a Binding cannot name it",
 				e.Want.Channel, e.Want.User, c.s.Profile.Name())
 		}

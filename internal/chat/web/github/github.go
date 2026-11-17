@@ -7,7 +7,7 @@
 //
 // The events that start a turn are a pull request opened, reopened, made ready for review, or pushed to (synchronize), unless it is
 // a draft; and a comment on a pull request (issue_comment) or a review comment (pull_request_review_comment), when it is new and
-// mentions the connection's login (spec.web.github.login). No event that the login sent starts a turn, nor any comment it wrote: the
+// mentions the connection's login (spec.web.identity). No event that the login sent starts a turn, nor any comment it wrote: the
 // agent does not answer what it does itself, such as a push it makes to a pull request. Every other event, and every other action,
 // is answered and handed on to nothing.
 //
@@ -90,20 +90,20 @@ type Profile struct {
 var _ web.Profile = (*Profile)(nil)
 
 // New returns the profile that checks deliveries with webhookSecret (the credentials Secret's webhookSecret) for the agent that posts as
-// login (spec.web.github.login), or an error for no secret, or a login that is not one.
-func New(webhookSecret secret.Value, login string) (*Profile, error) {
+// login (spec.web.identity), and holds what it decodes to the shapes of platform, what the API says the connection's platform takes
+// (v1alpha1.ChatPlatformOf of its spec): a repository to its channel's, and a login to its identity's. It returns an error for no
+// secret, a platform that takes no channel or no identity, or a login that is not of the identity's shape.
+func New(webhookSecret secret.Value, login string, platform v1alpha1.ChatPlatform) (*Profile, error) {
 	if webhookSecret.IsEmpty() {
 		return nil, errors.New("github: no webhook secret")
 	}
-	shapes, ok := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb,
-		Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileGitHub}})
-	if !ok {
-		return nil, errors.New("github: the API has no github profile")
+	if !platform.Channel.Taken() || !platform.Identity.Taken() {
+		return nil, fmt.Errorf("github: the platform %q takes no channel or no identity", platform.Name)
 	}
-	if !shapes.User.Matches(login) {
-		return nil, fmt.Errorf("github: the login %q is not a GitHub login", login)
+	if !platform.Identity.Matches(login) {
+		return nil, fmt.Errorf("github: the login %q is not %s", login, platform.Identity.What)
 	}
-	return &Profile{key: webhookSecret, login: login, handle: strings.TrimSuffix(login, "[bot]"), shapes: shapes}, nil
+	return &Profile{key: webhookSecret, login: login, handle: strings.TrimSuffix(login, "[bot]"), shapes: platform}, nil
 }
 
 // Name implements web.Profile.
@@ -197,7 +197,7 @@ func (p *Profile) check(pl payload) error {
 		return fmt.Errorf("%w: no action", errSchema)
 	case pl.Repository == nil || !p.shapes.Channel.Matches(pl.Repository.FullName):
 		return fmt.Errorf("%w: the repository's full_name is not owner/name", errSchema)
-	case pl.Sender == nil || !p.shapes.User.Matches(pl.Sender.Login):
+	case pl.Sender == nil || !p.shapes.Identity.Matches(pl.Sender.Login):
 		return fmt.Errorf("%w: the sender's login is not a GitHub login", errSchema)
 	}
 	return nil

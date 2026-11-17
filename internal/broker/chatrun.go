@@ -199,11 +199,7 @@ func copyWeb(s *v1alpha1.WebConnectionSpec) *v1alpha1.WebConnectionSpec {
 	if s == nil {
 		return nil
 	}
-	c := *s
-	if s.GitHub != nil {
-		g := *s.GitHub
-		c.GitHub = &g
-	}
+	c := *s // its fields are values: the copy shares nothing
 	return &c
 }
 

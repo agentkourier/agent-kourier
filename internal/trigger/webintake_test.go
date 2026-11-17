@@ -56,10 +56,7 @@ func webIntake(t *testing.T, spec v1alpha1.ChatConnectionSpec, profile web.Profi
 	if err != nil {
 		t.Fatal(err)
 	}
-	plat, ok := v1alpha1.ChatPlatformOf(spec)
-	if !ok {
-		t.Fatalf("ChatPlatformOf(%+v) = false", spec)
-	}
+	plat := platformOf(t, spec)
 	sub = &submitter{}
 	in := trigger.NewIntake(trigger.IntakeConfig{Connection: ref, Snapshot: func() *config.Snapshot { return snap }, Submitter: sub,
 		NoReplies: !plat.Replies, Logger: testutil.DiscardLogger()})
@@ -68,7 +65,7 @@ func webIntake(t *testing.T, spec v1alpha1.ChatConnectionSpec, profile web.Profi
 		url = "https://receiver.example/kourier"
 	}
 	up := make(chan struct{}, 1)
-	p, err := web.New(web.Config{Connection: "agent-kourier-system/web", Profile: profile, URL: url, Logger: testutil.DiscardLogger(),
+	p, err := web.New(web.Config{Connection: "agent-kourier-system/web", Profile: profile, Platform: plat, URL: url, Logger: testutil.DiscardLogger(),
 		OnConnection: func(connected bool) {
 			if connected {
 				up <- struct{}{}
@@ -108,17 +105,27 @@ func gitHubFixture(t *testing.T, name string) string {
 	return string(b)
 }
 
+// platformOf is what the API says a connection of spec takes, which the broker hands its profile and its web platform.
+func platformOf(t *testing.T, spec v1alpha1.ChatConnectionSpec) v1alpha1.ChatPlatform {
+	t.Helper()
+	plat, ok := v1alpha1.ChatPlatformOf(spec)
+	if !ok {
+		t.Fatalf("ChatPlatformOf(%+v) = false", spec)
+	}
+	return plat
+}
+
 // Every event of one pull request is a turn of one session: its opening, a comment that mentions the login and a push to it are
 // submitted under one key (the repository, and pr- and the number), each with a MessageID of its own, each allowed to create the session
 // and each saying the platform has no replies, so that a turn that comes after the session expired starts a fresh one. GitHub's
 // redelivery of a body the intake took is dropped there, before the session manager is asked.
 func TestTheEventsOfAPullRequestAreTurnsOfOneSession(t *testing.T) {
-	prof, err := github.New(secret.New(fakeGitHubWebhook), "pr-reviewer")
+	spec := v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb, CredentialsSecretRef: v1alpha1.SecretRef{Name: "creds"},
+		Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileGitHub, Identity: "pr-reviewer"}}
+	prof, err := github.New(secret.New(fakeGitHubWebhook), spec.Web.Identity, platformOf(t, spec))
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec := v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb, CredentialsSecretRef: v1alpha1.SecretRef{Name: "creds"},
-		Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileGitHub, GitHub: &v1alpha1.GitHubWebSpec{Login: "pr-reviewer"}}}
 	send, sub := webIntake(t, spec, prof, "octo-org/hello-world")
 
 	opened := gitHubFixture(t, "pull_request.opened.json")
@@ -167,12 +174,12 @@ func kourierV1Message(t *testing.T, body string) *http.Request {
 // has its own MessageID, and a message sent again with the same id is dropped at the intake. The profile posts replies, so the turns do
 // not say otherwise: an ended session there is told so, as on Slack.
 func TestTheMessagesOfAKourierV1ThreadAreTurnsOfOneSession(t *testing.T) {
-	prof, err := kourierv1.New(secret.New(fakeKourierSigning))
+	spec := v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb, CredentialsSecretRef: v1alpha1.SecretRef{Name: "creds"},
+		Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileKourierV1, URL: "https://receiver.example/kourier"}}
+	prof, err := kourierv1.New(secret.New(fakeKourierSigning), platformOf(t, spec))
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec := v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb, CredentialsSecretRef: v1alpha1.SecretRef{Name: "creds"},
-		Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileKourierV1, URL: "https://receiver.example/kourier"}}
 	send, sub := webIntake(t, spec, prof, "ch-1")
 
 	first := `{"v":1,"channel":"ch-1","id":"m-1","user":"u-1","text":"hello"}`

@@ -118,7 +118,8 @@ func TestEveryAnswerIsCountedByItsOutcome(t *testing.T) {
 func TestOnConnectionFollowsTheRun(t *testing.T) {
 	var mu sync.Mutex
 	var told []bool
-	p, err := web.New(web.Config{Connection: "ns/web", Profile: newTestProfile(false), Logger: testutil.DiscardLogger(),
+	prof := newTestProfile(false)
+	p, err := web.New(web.Config{Connection: "ns/web", Profile: prof, Platform: prof.platform(), Logger: testutil.DiscardLogger(),
 		OnConnection: func(up bool) { mu.Lock(); told = append(told, up); mu.Unlock() }})
 	if err != nil {
 		t.Fatal(err)

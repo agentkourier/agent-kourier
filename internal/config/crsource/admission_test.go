@@ -210,7 +210,7 @@ func TestTheOldestTeamConnectionsAreServedUpToTheCap(t *testing.T) {
 	// are the connection's, whatever they hold.
 	extra = append(extra, bindingOn(objs, "sre", "on-c01", "teams", "c01"))
 	broken := bindingOn(objs, "payments", "broken-on-c01", "teams", "c01")
-	_ = unstructured.SetNestedField(broken.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(broken.Object, "#general alerts", "spec", "chat", "channel")
 	extra = append(extra, broken)
 	src, logs := newCluster(t, append(objs, extra...)...).startAdmitted(t, nil, "teams")
 
@@ -501,7 +501,7 @@ func TestConnectionBindingsNamesTheBindingsOfAnyConnection(t *testing.T) {
 	leakCheck(t)
 	objs := corpus(t)
 	broken := bindingOn(objs, "payments", "broken-on-c", "team-c", "slack")
-	_ = unstructured.SetNestedField(broken.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(broken.Object, "#general alerts", "spec", "chat", "channel")
 	extra := []*unstructured.Unstructured{
 		teamConnection(objs, "team-a", "slack", created),
 		teamConnection(objs, "team-c", "slack", created, "sre"), // not admitted to the broker, and allows sre only

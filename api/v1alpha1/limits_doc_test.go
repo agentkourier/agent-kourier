@@ -50,6 +50,7 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Count(t, "githubRepoLen", maxGitHubRepoLen)
 	limitsdoc.Count(t, "githubLoginLen", maxGitHubLoginLen)
 	limitsdoc.Count(t, "webURL", maxURLLen)
+	limitsdoc.Count(t, "webIdentity", maxWebIdentityLen)
 	limitsdoc.Count(t, "emoji", maxEmojiLen)
 	limitsdoc.Count(t, "backendURL", maxURLLen)
 	limitsdoc.Count(t, "headerValue", maxHeaderValueLen)
