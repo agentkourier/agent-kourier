@@ -11,6 +11,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
 // Decision is what a matched bot message does to the thread of its key (spec 8.2). It is the decision
@@ -27,7 +28,8 @@ const (
 	// itself: the Intake reserves the thread, asks for the turn (OnStart), and, once that is taken, marks the
 	// thread started, which is when its cooldown begins. A redelivery that finds the thread its own message
 	// reserved, and not started because an earlier attempt failed, asks for the turn again, and is this too: it
-	// is the start, and the failed attempt counted nothing. So it is counted once for each turn that started.
+	// is the start, and the failed attempt counted nothing. So is a turn that was queued and whose mark was lost,
+	// counted when a later fire adopts it (adoptQueuedTurn). So it is counted once for each turn that started.
 	DecisionStarted Decision = "started"
 	// DecisionRepeat: a fire, and the key has a thread that is open or inside its cooldown. A note in that
 	// thread says it fired again, a closed thread is open again, and no turn starts.
@@ -168,9 +170,11 @@ func (in *Intake) fireThread(ctx context.Context, m Match, hash string, out deci
 // beside the first. So, before a fire may take over a reservation of another message that is stale and not started,
 // it asks (IntakeConfig.TurnQueued) whether that reservation's turn was taken, and if so marks that thread started,
 // as the lost write would have, with the cooldown running from its own message. OpenTriggerThread then finds a
-// started open thread, and the fire is a repeat in it. A reservation whose turn was not taken (the start failed or
-// was refused) is left for the takeover. Marking is idempotent, and a thread that someone else marked or took
-// over in the meantime is not this fire's to mend.
+// started open thread, and the fire is a repeat in it. The adopted turn is counted as a started decision here: the
+// attempt that queued it failed on the mark and counted nothing, and any later delivery of its message finds the
+// thread started (dedup), so this is the one count of that start. A reservation whose turn was not taken (the start
+// failed or was refused) is left for the takeover. Marking is idempotent, and a thread that someone else marked or
+// took over in the meantime is not this fire's to mend, nor to count.
 func (in *Intake) adoptQueuedTurn(ctx context.Context, m Match, hash string) error {
 	if in.cfg.TurnQueued == nil {
 		return nil
@@ -196,6 +200,7 @@ func (in *Intake) adoptQueuedTurn(ctx context.Context, m Match, hash string) err
 	}
 	switch err := in.cfg.TriggerThreads.MarkTriggerStarted(ctx, m.Binding, hash, th.Thread, th.Opened.Add(m.Thread.Cooldown.Duration)); {
 	case err == nil:
+		telemetry.Count(ctx, "agentkourier_trigger_decisions_total", m.Binding, string(DecisionStarted))
 		in.log.WarnContext(ctx, "chat: a thread's turn was queued but its mark was lost; marked it started instead of taking the key over",
 			"binding", m.Binding, "keyHash", hash[:8], "thread", th.Thread, "channel", m.Message.At.Channel)
 	case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrConflict):

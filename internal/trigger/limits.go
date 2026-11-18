@@ -56,14 +56,13 @@ func (in *Intake) admit(ctx context.Context, m Match) (store.TriggerAdmission, e
 	return adm, nil
 }
 
-// stopThread is what a limit does to a fire that reserved a thread: it gives the reservation back and counts the
-// decision. The key is as if it had not fired, so the next fire of it may start when there is capacity; and nothing
-// is posted, since a note per alert is what a storm must not do (D26). If the release fails the decision is left
-// unset and the error returned: the redelivery finds its own reservation and is checked again. A message stopped before is
-// a redelivery, and was counted then.
+// stopThread is what a limit does to a fire that reserved a thread: it gives the reservation back, counts the stopped
+// start (agentkourier_trigger_limited_total) and makes the decision limited. The key is as if it had not fired, so the
+// next fire of it may start when there is capacity; and nothing is posted, since a note per alert is what a storm must
+// not do (D26). If the release fails the error is returned, and nothing is counted: the redelivery finds its own
+// reservation and is checked again. A message stopped before is a redelivery, and was counted then.
 func (in *Intake) stopThread(ctx context.Context, m Match, hash string, out decided, adm store.TriggerAdmission) (decided, error) {
 	if _, err := in.cfg.TriggerThreads.ReleaseTriggerThread(ctx, m.Binding, hash, m.Message.At.ID); err != nil {
-		out.decision = ""
 		return out, fmt.Errorf("release the thread of key %s: %w", out.keyHash, err)
 	}
 	if !adm.Again {
