@@ -28,7 +28,8 @@ Microsoft's global route, `https://smba.trafficmanager.net/teams/`.
 A message on Microsoft Teams shows the agent's reply in Teams' markdown, with what the agent, a person or an alert wrote shown as
 text: no `<at>` in it becomes a mention, and no HTML or markdown link in it is acted on (a bare URL still links). A mention that Agent Kourier makes names a person by
 their Microsoft Entra object ID and shows as `@someone`, since the broker does not read people's names on Teams yet. There are no live
-progress streams, ephemeral messages or reactions, and nothing is pressed: buttons are shown as their labels.
+progress streams, ephemeral messages or reactions. Questions, tool approvals and the useful and not-useful buttons are Adaptive
+Cards, which a person presses ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)).
 
 A Binding is checked against its platform when the broker reads it with its ChatConnection: the API server and the broker's load
 check only that each ID has the shape of some platform's ID and is within the field's cap, which is the largest of the platforms'. A
@@ -64,8 +65,8 @@ the text so far and then, under it, the tool calls as a list in a quote, one lin
 result` for one with no result when the turn ended. The list holds the latest 20 steps, its `Working…` lines among them, under a
 line such as `5 earlier steps are not shown.` With `chat.progress: steps-and-activity`, the default, a gap with nothing new
 also adds a line, `Working…`, which the next tool call takes over, or which ends as `Wrote the answer`, `Wrote an update`, `Finished`, `Waiting for your answer` or `Stopped`.
-The final edit keeps the list under the answer and, when `feedback.enabled` is set, the labels of the useful and not-useful buttons,
-as a record of what the agent did. With `chat.progress: activity` there is no list: the message shows
+The final edit keeps the list under the answer, as a record of what the agent did, and, when `feedback.enabled` is set, a card of
+the useful and not-useful buttons under it. With `chat.progress: activity` there is no list: the message shows
 one `Working…` line that counts the steps. An edit that Teams' budget for a message cannot hold with its list is sent again
 without it, and the reply lists no steps from then on.
 
@@ -78,6 +79,35 @@ Teams drops every span in braces from a message's prose: in a live check (Novemb
 on Teams, other than the agent's reply, sends `{` and `}` as the character references `&#123;` and `&#125;`, and the agent's
 reply sends them with a backslash, `\{` and `\}`, in its prose. Teams showed both as braces in the same check. In the reply's
 code, inline or in a block, braces are sent as the agent wrote them, which Teams shows raw.
+
+## Buttons on Microsoft Teams
+
+A question or a tool approval is a message of one Adaptive Card, version 1.5. A question's card has its heading, the sub-agent
+that asked if one did, each question with a text box or its choices (radio buttons or checkboxes up to 10 choices, a menu past
+them), the time it closes, and Submit. An approval of one tool shows its name and arguments, with Approve and Deny; of several, each
+tool numbered with its arguments and a choice of Approve or Deny under them, then Submit, Approve all and Deny all. When the question
+or approval ends, Agent Kourier replaces the card with one that has no controls: who answered or cancelled it, or that nobody
+answered in time, then what was asked with each answer, or each tool with `Approved` or `Denied` and its arguments. With
+`feedback.enabled` set, the useful and not-useful buttons are a card of buttons under the reply.
+
+In a card, what the agent, a person or an alert wrote is the text of a `TextRun` or the title of a choice, which the Adaptive Cards
+schema shows as the characters they hold, with no markdown, so Agent Kourier does not escape it (that Teams shows them so was not
+checked yet). A tool whose name or arguments are longer than their cap is refused and never shown cut, and so is a card over the
+budget of a message: the pause is refused as one that cannot be shown. An ending's texts are cut until its card fits
+([Limits](limits.md#what-a-thread-shows)).
+
+Teams sends a press to the broker in a request, and waits about 14 seconds for the answer. Agent Kourier records the press and
+answers at once, with a line for Teams to show the person who pressed: that it received the press (and, for a question's card, that
+the card changes when the press is decided, and that a card that does not change means the press was not accepted), that it could not
+record it and to press again, or that it cannot take the press, which names no button of Agent Kourier's. Where and to whom
+Teams shows the line was not measured. Who may press, and whether the question is still open, are checked after that answer, by the
+worker that decides recorded presses; Teams has no ephemeral messages, so a press refused there is told nothing more, and its card
+does not change.
+
+The broker does not read a channel's members on Microsoft Teams yet, so it cannot check who pressed: no press is decided. Each
+is tried again until the worker gives up on it, an hour after it was recorded ([Limits](limits.md)), and logs that at ERROR. A
+question or an approval ends when it times out, which a recorded press holds off until the worker gives up on it, and a vote is not
+counted.
 
 ## Chat IDs
 
@@ -103,8 +133,8 @@ bounds it at 21, and neither can an approver group, whose field's cap is Slack's
 
 | Feature | Slack | Microsoft Teams | On a platform without it |
 |---|---|---|---|
-| Questions to a person: `interactions.askUser` | Works: Agent Kourier asks in the thread with buttons. | Taken, not answered yet: the question is shown as text, with a line that says it cannot be answered in Microsoft Teams yet, and it times out as an unanswered question does. | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
-| Tool approvals: `interactions.toolApprovals`, and `interactions.approverGroups`, which requires it | Works: Agent Kourier asks in the thread with buttons. | `toolApprovals` is taken, and no approval is asked yet: a turn that asks for one is refused as a pause that cannot be shown, and its task is cancelled. `approverGroups` is refused: `UnsupportedOnPlatform`. Remove it. | Refused: `UnsupportedOnPlatform`. Set `toolApprovals` to `false` and remove `approverGroups`. |
-| The useful and not-useful buttons: `feedback.enabled` | Works. | Taken, not pressed yet: the buttons are shown as their labels. | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
+| Questions to a person: `interactions.askUser` | Works: Agent Kourier asks in the thread with buttons. | Taken, not decided yet: the question is a card that a person can press, and no press is decided, so it times out as an unanswered question does ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
+| Tool approvals: `interactions.toolApprovals`, and `interactions.approverGroups`, which requires it | Works: Agent Kourier asks in the thread with buttons. | `toolApprovals` is taken, and not decided yet: the approval is a card that a person can press, and no press is decided, so it times out as an approval nobody answered does ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). `approverGroups` is refused: `UnsupportedOnPlatform`. Remove it. | Refused: `UnsupportedOnPlatform`. Set `toolApprovals` to `false` and remove `approverGroups`. |
+| The useful and not-useful buttons: `feedback.enabled` | Works. | Taken, not counted yet: the buttons are a card under the reply that a person can press, and no vote is counted ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
 | Alert triggers: a `botMessage` trigger in `chat.triggers` | Works. | Taken, in either `spec.teams.mode` and with or without `spec.teams.notificationURL`, and not served yet: Microsoft Teams does not send a bot the posts of another app (measured on a test tenant in November 2026), and the broker does not read them through Microsoft Graph yet, so no alert starts a turn. | Refused: `UnsupportedOnPlatform`. Remove the trigger. |
 | The acknowledgment reaction: `chat.acknowledgment` | Works. With no `emoji` the reaction is `hourglass_flowing_sand`. | Taken, and no reaction is shown, as on a platform without it. | Served, and no reaction is shown. A Binding whose acknowledgment is enabled and names an `emoji` has the condition `AcknowledgmentShown`, `False` with the reason `NoReactions` ([Binding status](binding-status.md#acknowledgmentshown)). |

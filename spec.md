@@ -573,9 +573,12 @@ Rules:
   connection (`InvalidPlatformID`, D42). The broker runs a teams connection in `http` mode only, and only with a chat listener: the
   leader takes Teams' requests on the connection's route, and posts, replies and edits through the Bot Connector with a token that
   Microsoft Entra issues for `clientSecret`. In `socket` mode ("Socket mode is not supported yet"), or with no chat listener, the
-  broker's own teams connection is a wiring error at start and a team's is not started. Until the adapter does them, a question is
-  shown as text that cannot be answered, a tool approval is refused as a pause that cannot be shown, buttons show as their labels,
-  and there are no streams, reactions or ephemeral messages.
+  broker's own teams connection is a wiring error at start and a team's is not started. A question, a tool approval and a message's
+  buttons are Adaptive Cards 1.5 whose `Action.Execute` Teams sends as an `adaptiveCard/action` invoke; the adapter hands the press
+  to the sink in the request and answers it at once with a message response for the presser (received, not recorded, or not a
+  press of Agent Kourier's), since Teams waits about 14 s and does not send it again. Refusals decided by the press worker after the
+  answer (not a member, not ready, gone, invalid) reach nobody, as there are no ephemeral messages. Until the adapter reads
+  membership, no press is decided, and a question or approval times out. There are no streams, reactions or ephemeral messages.
 - An empty namespace in a reference means the referring resource's namespace.
 - **One bearer token per request.** The Binding identity (D14) owns the `Authorization`
   header. `AgentBackend` has no credentials of its own; a gateway in front of the
