@@ -110,6 +110,8 @@ func (f failingTeamsStore) GetTeamsConversation(context.Context, string, string)
 	return store.TeamsConversation{}, f.err
 }
 
+func (f failingTeamsStore) DeleteTeamsConversations(context.Context, string) error { return f.err }
+
 // TestTeamsConversationsPassTheStoresErrorsOn: a write the store refuses, a deposed leader's among them, fails the call with the
 // store's error, and so does a read that fails for any reason but a missing record.
 func TestTeamsConversationsPassTheStoresErrorsOn(t *testing.T) {

@@ -28,13 +28,16 @@ import (
 // The record in the store holds the connections served now and those served before that still exist in the cluster. A connection that the
 // record has and the Snapshot has not, and that still exists, is stopped: it stays in the record, so that every later start finds it
 // stopped too and a Binding made on it afterwards is told, until it is served again (it is then served and stays in the record) or its
-// ChatConnection is deleted (it is then pruned; its Bindings are everyone's to report as ConnectionNotFound).
+// ChatConnection is deleted (it is then pruned; its Bindings are everyone's to report as ConnectionNotFound). The prune deletes what the
+// store keeps of the connection's Microsoft Teams channels first (store.TeamsConversations), whatever its platform was; while that fails,
+// the connection stays in the record, so that the next write, after a restart too, tries again. A connection that is stopped keeps them,
+// as it keeps its sessions, and so does one whose platform changes: only the Teams adapter of that connection reads them.
 //
 // The leader makes one and the status writer and the retention of sessions both read it, so both see the same stopped connections: the
 // writer tells their Bindings, and the retention gives their sessions the horizon of an unserved Binding. The connections that the cap
 // leaves out are in the report already, and are not told twice. It is safe for use from several goroutines.
 type servedRecord struct {
-	store  store.ConnectionServing
+	store  servedStore
 	naming func(namespace, name string) (crsource.ConnectionBindings, error)
 	now    func() time.Time
 
@@ -44,12 +47,19 @@ type servedRecord struct {
 	gone  map[string]bool // the connections recorded as served that the Snapshot does not have and that exist, "namespace/name"
 }
 
+// servedStore is the store as the record of the served connections uses it: the record, and the delete of what the store keeps of the
+// Microsoft Teams channels of a connection whose ChatConnection is deleted.
+type servedStore interface {
+	store.ConnectionServing
+	DeleteTeamsConversations(ctx context.Context, connection string) error
+}
+
 // stoppedMessage is the Message of the UnservedConnection of a connection that the broker served and does not now.
 const stoppedMessage = "this broker served it before and does not serve it now"
 
 // newServedRecord returns a record kept in s, which finds the Bindings of a connection with naming
 // ((*crsource.Source).ConnectionBindings) and dates what it records with now (time.Now if nil).
-func newServedRecord(s store.ConnectionServing, naming func(namespace, name string) (crsource.ConnectionBindings, error), now func() time.Time) *servedRecord {
+func newServedRecord(s servedStore, naming func(namespace, name string) (crsource.ConnectionBindings, error), now func() time.Time) *servedRecord {
 	if now == nil {
 		now = time.Now
 	}
@@ -57,9 +67,10 @@ func newServedRecord(s store.ConnectionServing, naming func(namespace, name stri
 }
 
 // compare returns the connections that were recorded as served and are not served by the Snapshot of rep, that still exist, with
-// their Bindings, and the names of those that are served. The caller holds r.mu. A failure to read the record, or to find the Bindings of
-// one connection, comes back with what was found for the rest; a connection whose Bindings could not be found is kept.
-func (r *servedRecord) compare(ctx context.Context, rep config.Report) (stopped []config.UnservedConnection, current []string, err error) {
+// their Bindings, the names of those that are served, and those of the recorded connections that are not served and whose ChatConnection
+// is deleted. The caller holds r.mu. A failure to read the record, or to find the Bindings of one connection, comes back with what was
+// found for the rest; a connection whose Bindings could not be found is kept.
+func (r *servedRecord) compare(ctx context.Context, rep config.Report) (stopped []config.UnservedConnection, current, deleted []string, err error) {
 	for _, c := range rep.Snapshot.ChatConnections() {
 		current = append(current, c.Namespace+"/"+c.Name)
 	}
@@ -67,7 +78,7 @@ func (r *servedRecord) compare(ctx context.Context, rep config.Report) (stopped 
 	if !r.read {
 		known, err := r.store.ServedConnections(ctx)
 		if err != nil {
-			return nil, current, fmt.Errorf("read the record of the served connections: %w", err)
+			return nil, current, nil, fmt.Errorf("read the record of the served connections: %w", err)
 		}
 		r.known, r.read = known, true
 	}
@@ -95,28 +106,36 @@ func (r *servedRecord) compare(ctx context.Context, rep config.Report) (stopped 
 			continue
 		}
 		if !found.Exists {
-			delete(r.gone, k) // deleted: it leaves the record at the next write
+			delete(r.gone, k) // deleted: it leaves the record at the next write, once update has pruned it
+			deleted = append(deleted, k)
 			continue
 		}
 		stopped = append(stopped, config.UnservedConnection{Namespace: namespace, Name: name, Reason: config.UnservedStopped, Message: stoppedMessage,
 			Bindings: found.Bindings, Admitted: found.Admitted})
 	}
-	return stopped, current, errors.Join(errs...)
+	return stopped, current, deleted, errors.Join(errs...)
 }
 
 // update compares the connections the Snapshot of rep serves with the record, and returns the stopped ones with their Bindings. It then
-// records the connections served now and those stopped that still exist, if that differs from the record. Both steps are tried at every
-// call: an error from one is returned with what the other found, and the call after it tries again.
+// deletes the Microsoft Teams conversations of each recorded connection whose ChatConnection is deleted, and records the connections served
+// now, those stopped that still exist, and the deleted ones whose delete failed, if that differs from the record. Each step is tried at every
+// call: an error from one is returned with what the others found, and the call after it tries again.
 func (r *servedRecord) update(ctx context.Context, rep config.Report) ([]config.UnservedConnection, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	stopped, current, err := r.compare(ctx, rep)
+	stopped, current, deleted, err := r.compare(ctx, rep)
 	if !r.read {
 		return stopped, err
 	}
 	want := slices.Clone(current)
 	for k := range r.gone {
 		want = append(want, k)
+	}
+	for _, k := range deleted {
+		if perr := r.store.DeleteTeamsConversations(ctx, k); perr != nil {
+			err = errors.Join(err, fmt.Errorf("delete the Microsoft Teams conversations of the deleted ChatConnection %s: %w", k, perr))
+			want = append(want, k) // kept, so that the delete is tried again
+		}
 	}
 	slices.Sort(want)
 	if !slices.Equal(want, r.known) {
@@ -134,7 +153,7 @@ func (r *servedRecord) update(ctx context.Context, rep config.Report) ([]config.
 func (r *servedRecord) stopped(ctx context.Context, rep config.Report) ([]config.UnservedConnection, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	stopped, _, err := r.compare(ctx, rep)
+	stopped, _, _, err := r.compare(ctx, rep)
 	return stopped, err
 }
 

@@ -3,12 +3,15 @@ package broker
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -16,8 +19,12 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/teams"
 	"github.com/agentkourier/agent-kourier/internal/secret"
+	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // The stand-ins of a Microsoft Teams connection's tenant and app; no tenant has them.
@@ -73,7 +80,7 @@ func TestNewPlatformBuildsTheTeamsAdapter(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = ln.Close() })
 	cfg := RunConfig{ChatListener: ln}
-	built, err := cfg.newPlatform(teamsConn("team-a", "teams"), nil, nil)
+	built, err := cfg.newPlatform(teamsConn("team-a", "teams"), nil, nil, nil)
 	if err != nil || built.Platform == nil || built.closeIdle == nil {
 		t.Fatalf("newPlatform(teams) = %+v, %v; want the Teams adapter, and a way to close its connections", built, err)
 	}
@@ -88,7 +95,7 @@ func TestNewPlatformBuildsTheTeamsAdapter(t *testing.T) {
 	}
 
 	var none RunConfig
-	if _, err := none.newPlatform(teamsConn("team-a", "teams"), nil, nil); !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), "AGENTKOURIER_CHAT_LISTEN") {
+	if _, err := none.newPlatform(teamsConn("team-a", "teams"), nil, nil, nil); !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), "AGENTKOURIER_CHAT_LISTEN") {
 		t.Errorf("a teams connection on a broker with no chat listener: %v; want a wiring error that names AGENTKOURIER_CHAT_LISTEN", err)
 	}
 	if err := none.needsChatListener(teamsConn("team-a", "teams")); !errors.Is(err, ErrWiring) {
@@ -101,7 +108,7 @@ func TestNewPlatformBuildsTheTeamsAdapter(t *testing.T) {
 	} {
 		c := teamsConn("team-a", "teams")
 		edit(&c)
-		if built, err := cfg.newPlatform(c, nil, nil); !errors.Is(err, ErrWiring) || built.Platform != nil {
+		if built, err := cfg.newPlatform(c, nil, nil, nil); !errors.Is(err, ErrWiring) || built.Platform != nil {
 			t.Errorf("%s: newPlatform = %+v, %v; want a wiring error and no platform", name, built, err)
 		}
 	}
@@ -162,4 +169,73 @@ func TestARunServesATeamsConnectionInHTTPModeAndNotOneInSocketMode(t *testing.T)
 		return strings.Contains(w.logs.String(), `msg="the ChatConnection is not started: Socket mode is not supported yet for Microsoft Teams" connection=team-b/teams`)
 	})
 	r.waitMetric(`agentkourier_chat_connected{connection="team-b/teams"} 0`)
+}
+
+// connectorCalls is, for a Teams client in a test, Microsoft Entra and the Bot Connector at every URL: it answers a token for the token
+// URL and a posted message for any other, records each URL it was asked for, and dials nothing.
+type connectorCalls struct {
+	mu   sync.Mutex
+	urls []string
+}
+
+func (c *connectorCalls) RoundTrip(r *http.Request) (*http.Response, error) {
+	c.mu.Lock()
+	c.urls = append(c.urls, r.URL.String())
+	c.mu.Unlock()
+	body := `{"id":"1794965000201"}`
+	if r.URL.Host == "login.example.test" {
+		body = `{"token_type":"Bearer","expires_in":3599,"access_token":"fake-bot-token"}`
+	}
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}, Request: r}, nil
+}
+
+// posts are the URLs of the calls that were not for a token.
+func (c *connectorCalls) posts() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []string
+	for _, u := range c.urls {
+		if !strings.HasPrefix(u, "https://login.example.test/") {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
+// The leader builds a Microsoft Teams platform over the broker's store: a channel that an earlier leader recorded, before a restart or a
+// takeover, is posted to through the service URL it recorded, and a channel with no record through Microsoft's global route.
+func TestOpenPlatformKeepsTheTeamsConversationsInTheStore(t *testing.T) {
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	const (
+		recorded = "19:KourierStandInChannelForTestsOnly0000000000a@thread.tacv2"
+		unheard  = "19:KourierStandInUnheardChannel0000000000000a@thread.tacv2"
+		conn     = "team-a/teams"
+	)
+	st := sqlitetest.Open(t)
+	if err := st.RememberTeamsConversation(t.Context(), store.TeamsConversation{Connection: conn, Channel: recorded,
+		ServiceURL: "https://smba.example.test/amer/" + teamsTestTenant + "/", TenantID: teamsTestTenant, UpdatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	calls := &connectorCalls{}
+	h := &leaderHalf{log: testutil.DiscardLogger(), st: st, cfg: RunConfig{ChatListener: ln, teamsFakes: func(tc *teams.Config) {
+		tc.TokenURL, tc.HTTPClient = "https://login.example.test/token", &http.Client{Transport: calls}
+	}}}
+	built, err := h.openPlatform(teamsConn("team-a", "teams"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, channel := range []string{recorded, unheard} {
+		if _, err := built.Post(t.Context(), chat.Target{Conn: conn, Channel: channel}, chat.Say(chat.Message{Fallback: "x"}), "tag"); err != nil {
+			t.Fatalf("Post to %s: %v", channel, err)
+		}
+	}
+	got := calls.posts()
+	if len(got) != 2 || !strings.HasPrefix(got[0], "https://smba.example.test/amer/"+teamsTestTenant+"/v3/conversations/") ||
+		!strings.HasPrefix(got[1], teams.DefaultServiceURL+"v3/conversations/") {
+		t.Errorf("the posts went to %v; want the recorded channel's service URL, then the global route", got)
+	}
 }
