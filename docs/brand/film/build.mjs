@@ -30,7 +30,7 @@ const reuse = (id, file) => REDO && !REDO.has(id) && existsSync(file);
 const FORMATS = { '16x9': [1920, 1080], '9x16': [1080, 1920], '1x1': [1080, 1080] };
 // Where footage sits in each format.
 // 9:16 stops at y 1680 so nothing sits under a phone app's own controls.
-const ZONES = { '16x9': [860, 72, 1000, 936], '9x16': [60, 480, 960, 1200], '1x1': [40, 240, 1000, 760] };
+const ZONES = { '16x9': [860, 60, 1000, 900], '9x16': [60, 480, 960, 1200], '1x1': [40, 240, 1000, 760] };
 // The recordings are 2880 x 1864 captures of a 1440-point screen; Slack's page starts 344 px down while the
 // extension's "debugging this browser" bar is showing, which it is in every stretch used here.
 const SRC = { scale: 2, oy: 344 };
@@ -92,11 +92,11 @@ function layoutFor(ar, framing) {
   const [zx, zy, zw, zh] = ZONES[ar], [, , fw, fh] = FRAMINGS[framing];
   const k = Math.min(zw / fw, zh / fh), w = even(fw * k), h = even(fh * k);
   // The caption, lockup and note never move between shots; only the card's size follows the framing.
-  if (ar === '16x9') return { card: [zx, even(zy + (zh - h) / 2), w, h], capx: 360, capy: 520, capw: 440, capalign: 'start', capvc: 1, lock: [360, 984], note: [zx, 1042, 'start'] };
+  if (ar === '16x9') return { card: [zx, even(zy + (zh - h) / 2), w, h], capx: 360, capy: 510, capw: 440, capalign: 'start', capvc: 1, lock: [360, 1010], note: [zx, 1016, 'start'] };
   const card = [even(zx + (zw - w) / 2), zy, w, h];
   return ar === '1x1'
-    ? { card, capx: 540, capy: 110, capw: 990, capalign: 'middle', lock: [44, 1040], note: [1036, 1046, 'end'] }
-    : { card, capx: 70, capy: 240, capw: 940, capalign: 'start', lock: [60, 1750], note: [1020, 1756, 'end'] };
+    ? { card, capx: 540, capy: 110, capw: 990, capalign: 'middle', lock: [54, 1040], note: [1026, 1046, 'end'] }
+    : { card, capx: 540, capy: 240, capw: 940, capalign: 'middle', lock: [540, 1748, 'middle'], note: [540, 1826, 'middle'] };
 }
 
 async function openPage(browser, ar, query) {
