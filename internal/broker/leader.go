@@ -230,7 +230,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	var served *servedRecord
 	retentionKnows := bindings.ThreadTTLsAndUnserved
 	if h.status != nil && boot.Source != nil {
-		served = newServedRecord(st, boot.Source.ConnectionBindings, nil)
+		served = leaderServedRecord(st, boot.Source.ConnectionBindings, table)
 		retentionKnows = served.retentionKnows(runCtx, boot.Reloader.Report, log, retentionKnows)
 	}
 	retain, err := retention.New(retention.Config{Store: st, Interval: cfg.retentionEvery, AuditRetention: cfg.AuditRetention, ThreadTTLsAndUnserved: retentionKnows,

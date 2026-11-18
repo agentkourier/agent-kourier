@@ -30,7 +30,9 @@ import (
 // stopped too and a Binding made on it afterwards is told, until it is served again (it is then served and stays in the record) or its
 // ChatConnection is deleted (it is then pruned; its Bindings are everyone's to report as ConnectionNotFound). The prune deletes what the
 // store keeps of the connection's Microsoft Teams channels first (store.TeamsConversations), whatever its platform was; while that fails,
-// the connection stays in the record, so that the next write, after a restart too, tries again. A connection that is stopped keeps them,
+// the connection stays in the record, so that the next write, after a restart too, tries again. A deleted connection whose run has not
+// stopped yet (the supervisor sees a deletion at its next look, and a run that stops drains what it took) may still write them, so it
+// stays in the record, unpruned, until running says its run has stopped. A connection that is stopped keeps them,
 // as it keeps its sessions, and so does one whose platform changes: only the Teams adapter of that connection reads them.
 //
 // The leader makes one and the status writer and the retention of sessions both read it, so both see the same stopped connections: the
@@ -39,7 +41,9 @@ import (
 type servedRecord struct {
 	store  servedStore
 	naming func(namespace, name string) (crsource.ConnectionBindings, error)
-	now    func() time.Time
+	// running says whether a run of the connection may still be going ((*runtimeTable).running); nil is none.
+	running func(conn string) bool
+	now     func() time.Time
 
 	mu    sync.Mutex
 	known []string        // what the store holds, once it has been read or written
@@ -58,12 +62,19 @@ type servedStore interface {
 const stoppedMessage = "this broker served it before and does not serve it now"
 
 // newServedRecord returns a record kept in s, which finds the Bindings of a connection with naming
-// ((*crsource.Source).ConnectionBindings) and dates what it records with now (time.Now if nil).
-func newServedRecord(s servedStore, naming func(namespace, name string) (crsource.ConnectionBindings, error), now func() time.Time) *servedRecord {
+// ((*crsource.Source).ConnectionBindings), keeps a deleted connection unpruned while running says its run may still be going (nil: none
+// runs), and dates what it records with now (time.Now if nil).
+func newServedRecord(s servedStore, naming func(namespace, name string) (crsource.ConnectionBindings, error), running func(conn string) bool,
+	now func() time.Time) *servedRecord {
 	if now == nil {
 		now = time.Now
 	}
-	return &servedRecord{store: s, naming: naming, now: now, gone: map[string]bool{}}
+	return &servedRecord{store: s, naming: naming, running: running, now: now, gone: map[string]bool{}}
+}
+
+// leaderServedRecord is the leader's record, over its store: a deleted connection stays unpruned while table says its run may still be going.
+func leaderServedRecord(s servedStore, naming func(namespace, name string) (crsource.ConnectionBindings, error), table *runtimeTable) *servedRecord {
+	return newServedRecord(s, naming, table.running, nil)
 }
 
 // compare returns the connections that were recorded as served and are not served by the Snapshot of rep, that still exist, with
@@ -106,6 +117,9 @@ func (r *servedRecord) compare(ctx context.Context, rep config.Report) (stopped 
 			continue
 		}
 		if !found.Exists {
+			if r.running != nil && r.running(k) {
+				continue // deleted, and its run may still write: it stays in the record, and a later pass prunes it
+			}
 			delete(r.gone, k) // deleted: it leaves the record at the next write, once update has pruned it
 			deleted = append(deleted, k)
 			continue
