@@ -461,7 +461,8 @@ func TestRunTakesActivitiesWhileItWaitsForTheToken(t *testing.T) {
 }
 
 // What Teams does not do in this release is said with the contract's errors, and nothing is called. It shows a message's steps,
-// with no stream. (Membership, bots and names are read: members_test.go.)
+// with no stream. (Membership, bots and names are read: members_test.go; a thread is read through Graph: threadread_test.go.) Find
+// finds nothing, with no call: no read can tell which of the bot's posts carries a tag.
 func TestTheSeamsTeamsDoesNotFillYet(t *testing.T) {
 	t.Parallel()
 	ct := newClientTest(t)
@@ -490,13 +491,10 @@ func TestTheSeamsTeamsDoesNotFillYet(t *testing.T) {
 	if in, err := c.IsInAnyGroup(ctx, []string{"S0X"}, testUser); in || !errors.Is(err, chat.ErrGroupsMisconfigured) {
 		t.Errorf("IsInAnyGroup: %t, %v", in, err)
 	}
-	if _, _, err := c.ThreadBetween(ctx, target, "", "", 10); !errors.Is(err, chat.ErrNoThreadReads) {
-		t.Errorf("ThreadBetween: %v", err)
-	}
 	if err := c.MarkBusy(ctx, target, true); !errors.Is(err, chat.ErrNoBusy) {
 		t.Errorf("MarkBusy: %v", err)
 	}
-	if n := len(ct.f.take()); n != 0 {
+	if n := len(ct.f.take()) + len(ct.f.graphTaken()); n != 0 {
 		t.Errorf("%d calls were made", n)
 	}
 }

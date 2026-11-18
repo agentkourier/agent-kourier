@@ -36,13 +36,19 @@ func gone403(ae *APIError) bool { return ae.Status == http.StatusForbidden && go
 //   - the errors of the Client itself: chat.ErrInvalid, chat.ErrTooLarge, chat.ErrWouldDropText, chat.ErrNoEphemeral,
 //     chat.ErrNoReactions, and for ChannelAccess chat.ErrChannelNotFound.
 //
+// Microsoft Graph's refusals of a read of a thread (*GraphError) are classified apart from the Bot Connector's: a 401 is FatalAuth (the
+// app's Graph token is rejected); a 403 is Permanent, ReasonOther, an app that may not read the channel's messages (the error says how
+// to grant it the permission; Microsoft documents no other 403 for the read, and the body of this one was not seen); a 404 is Permanent,
+// ReasonChannelGone (the team, the channel or the thread is gone); any other 400 is Permanent, ReasonOther.
+//
 // Anything else may pass on another try and is Transient: a 429, with its Retry-After (at least a second) as RetryAfter; a 412, a
-// 5xx, a timeout, a network failure, a cancelled context. The caller's own backoff paces the retry (the outbox's doubles, with
+// 5xx, a timeout, a network failure, a cancelled context, and a read of a channel whose team is not known yet. The caller's own backoff paces the retry (the outbox's doubles, with
 // jitter where the caller adds it); the Client does not retry inside a call.
 func (c *Client) Classify(_ chat.Op, err error) chat.Verdict {
 	var (
 		te *TokenRequestError
 		ae *APIError
+		ge *GraphError
 	)
 	switch {
 	case errors.As(err, &te):
@@ -70,6 +76,16 @@ func (c *Client) Classify(_ chat.Op, err error) chat.Verdict {
 			return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonInvalidContent, Code: ae.Code}
 		}
 		return transient(ae.Status, ae.RetryAfter)
+	case errors.As(err, &ge):
+		switch ge.Status {
+		case http.StatusUnauthorized:
+			return chat.Verdict{Class: chat.FatalAuth, Code: ge.Code}
+		case http.StatusNotFound:
+			return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonChannelGone, Code: ge.Code}
+		case http.StatusForbidden, http.StatusBadRequest:
+			return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonOther, Code: ge.Code}
+		}
+		return transient(ge.Status, ge.RetryAfter)
 	case errors.Is(err, chat.ErrTooLarge):
 		return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonTooLong}
 	case errors.Is(err, chat.ErrInvalid), errors.Is(err, chat.ErrWouldDropText):
@@ -89,7 +105,7 @@ func transient(status int, wait time.Duration) chat.Verdict {
 }
 
 // outcome is the label of a call's result in agentkourier_chat_api_calls_total: success, rate_limited, auth_rejected, channel_gone,
-// too_long, api_error (another answer of Entra or the Bot Connector), invalid (content the Client refused before any call), or
+// too_long, api_error (another answer of Entra, the Bot Connector or Microsoft Graph), invalid (content the Client refused before any call), or
 // the class of a transport error (timeout, cancelled, error).
 func (c *Client) outcome(err error) string {
 	if err == nil {
@@ -98,6 +114,7 @@ func (c *Client) outcome(err error) string {
 	var (
 		te *TokenRequestError
 		ae *APIError
+		ge *GraphError
 	)
 	v := c.Classify(chat.OpPost, err)
 	switch {
@@ -109,7 +126,7 @@ func (c *Client) outcome(err error) string {
 		return "channel_gone"
 	case v.Reason == chat.ReasonTooLong:
 		return "too_long"
-	case errors.As(err, &te), errors.As(err, &ae):
+	case errors.As(err, &te), errors.As(err, &ae), errors.As(err, &ge):
 		return "api_error"
 	case errors.Is(err, chat.ErrInvalid), errors.Is(err, chat.ErrWouldDropText):
 		return "invalid"

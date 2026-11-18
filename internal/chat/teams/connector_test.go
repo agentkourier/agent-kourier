@@ -27,9 +27,10 @@ type connRequest struct {
 	raw          map[string]any
 }
 
-// fakeConnector is the Bot Connector and Entra's token endpoint on one TLS server. It records each call, answers a post with a new
-// activity ID, an update with 200, a team's channels from teams, and a conversation's members from rosters, in pages of the size
-// asked for and at most pageMax; fail, if set, answers a call instead.
+// fakeConnector is the Bot Connector, Microsoft Graph (under /v1.0/, graph_test.go) and Entra's token endpoint on one TLS server. It
+// records each call, answers a post with a new activity ID, an update with 200, a team's channels from teams, and a conversation's
+// members from rosters, in pages of the size asked for and at most pageMax; fail, if set, answers a call instead. A token for Graph's
+// scope is "fake-graph-token-N", and one for any other scope "fake-bot-token-N".
 type fakeConnector struct {
 	srv *httptest.Server
 
@@ -41,11 +42,12 @@ type fakeConnector struct {
 	fail    func(r *http.Request) (status int, body string, ok bool) // guarded by mu
 	nextID  int                                                      // guarded by mu
 	tokens  int                                                      // guarded by mu: the token grants taken
+	graph   fakeGraph                                                // guarded by mu
 }
 
 func newFakeConnector(t testing.TB) *fakeConnector {
 	t.Helper()
-	f := &fakeConnector{teams: map[string][]string{}, rosters: map[string][]account{}, nextID: 1700000000000}
+	f := &fakeConnector{teams: map[string][]string{}, rosters: map[string][]account{}, nextID: 1700000000000, graph: newFakeGraph()}
 	f.srv = httptest.NewTLSServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -58,10 +60,16 @@ func (f *fakeConnector) serve(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	fail := f.fail
 	f.mu.Unlock()
+	if strings.HasPrefix(r.URL.Path, graphPrefix) {
+		f.serveGraph(w, r)
+		return
+	}
 	if r.URL.Path == "/token" {
+		_ = r.ParseForm()
 		f.mu.Lock()
 		f.tokens++
 		n := f.tokens
+		f.graph.scopes = append(f.graph.scopes, r.PostForm.Get("scope"))
 		f.mu.Unlock()
 		if fail != nil {
 			if status, body, ok := fail(r); ok {
@@ -70,7 +78,11 @@ func (f *fakeConnector) serve(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		_, _ = fmt.Fprintf(w, `{"token_type":"Bearer","expires_in":3599,"access_token":"fake-bot-token-%d"}`, n)
+		kind := "bot"
+		if r.PostForm.Get("scope") == graphScope {
+			kind = "graph"
+		}
+		_, _ = fmt.Fprintf(w, `{"token_type":"Bearer","expires_in":3599,"access_token":"fake-%s-token-%d"}`, kind, n)
 		return
 	}
 	body, _ := io.ReadAll(r.Body)
@@ -215,19 +227,19 @@ func newClientTest(t testing.TB) *clientTest {
 	bf := newFakeBotFramework(t, key)
 	convs := NewMemoryConversations()
 	c, err := New(Config{Connection: testConn, TenantID: testTenant, AppID: testAppID, ClientSecret: secret.New(testClientSecret),
-		TokenURL: f.srv.URL + "/token", MetadataURL: bf.metadataURL(), HTTPClient: f.srv.Client(), Conversations: convs,
-		Logger: testutil.DiscardLogger()})
+		TokenURL: f.srv.URL + "/token", MetadataURL: bf.metadataURL(), GraphURL: f.graphURL(), HTTPClient: f.srv.Client(),
+		Conversations: convs, Logger: testutil.DiscardLogger()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return &clientTest{c: c, f: f, convs: convs, key: key}
 }
 
-// record gives channel a record at the fake's service URL, in team.
+// record gives channel a record at the fake's service URL, in team, whose Microsoft Entra group is testGroup.
 func (ct *clientTest) record(t testing.TB, channel, team string) {
 	t.Helper()
 	if err := ct.convs.Remember(t.Context(), testConn, Conversation{Channel: channel, ServiceURL: ct.f.serviceURL(), TeamID: team,
-		TenantID: testTenant}); err != nil {
+		AADGroupID: testGroup, TenantID: testTenant}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -461,7 +473,7 @@ var (
 	absentChannels = map[chattest.ChannelState]string{
 		chattest.ChannelNotJoined: "the Bot Connector lists the team's channels for the bot, and has no channel that is there and that " +
 			"the bot is not in: one it does not list is not found",
-		chattest.ChannelArchived:     "the Bot Connector says nothing of an archive, and no Microsoft Graph read is made yet",
+		chattest.ChannelArchived:     "the Bot Connector says nothing of an archive, and ChannelAccess makes no Microsoft Graph read",
 		chattest.ChannelScopeMissing: "the bot's token has no permission of its own for the read: there is no missing scope to report",
 	}
 	absentGroups = map[chattest.GroupState]string{

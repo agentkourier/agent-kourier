@@ -72,7 +72,7 @@ func (f *fakeEntra) failWith(fn func(w http.ResponseWriter) bool) {
 func (f *fakeEntra) tokenURL() string { return f.srv.URL + "/" + testTenant + "/oauth2/v2.0/token" }
 
 func (f *fakeEntra) source(clock *fakeClock) *tokenSource {
-	return newTokenSource(f.tokenURL(), testAppID, secret.New(testClientSecret), noRedirects(f.srv.Client()), clock.now)
+	return newTokenSource(f.tokenURL(), testAppID, botFrameworkScope, secret.New(testClientSecret), noRedirects(f.srv.Client()), clock.now)
 }
 
 func mustToken(t *testing.T, s *tokenSource) string {

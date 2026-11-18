@@ -16,8 +16,15 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/secret"
 )
 
-// botFrameworkScope is the scope of the token that the Bot Connector takes: the bot's own token for the Bot Framework.
-const botFrameworkScope = "https://api.botframework.com/.default"
+// botFrameworkScope is the scope of the token that the Bot Connector takes: the bot's own token for the Bot Framework. graphScope is
+// the scope of the token that Microsoft Graph takes, which the same app gets with the same secret: its permissions are the app's
+// resource-specific ones in the teams it is installed in (ChannelMessage.Read.Group), which need no tenant admin's consent. Both
+// tokens were issued so on a test tenant in November 2026, the Graph token with the role Group.Selected, and a Graph read of a
+// channel's messages under that permission alone answered 200.
+const (
+	botFrameworkScope = "https://api.botframework.com/.default"
+	graphScope        = "https://graph.microsoft.com/.default"
+)
 
 // tokenRefreshMargin is how long before a token expires the next is fetched, in the background, while callers go on using the one
 // they have; tokenStaleMargin is how long before it expires a token is no longer used, and a caller waits for a new one instead.
@@ -76,13 +83,15 @@ func (e *TokenRequestError) rejected() bool {
 	return e.Status == http.StatusBadRequest || e.Status == http.StatusUnauthorized
 }
 
-// tokenSource gets the bot's token for the Bot Connector from Microsoft Entra, by the client credentials grant, and keeps it until
+// tokenSource gets one of the app's tokens from Microsoft Entra, for one scope (the Bot Connector's or Microsoft Graph's), by the client
+// credentials grant, and keeps it until
 // it is near its expiry. It is safe for concurrent use: callers that need a token while none is usable wait for one fetch, which a
 // caller's context does not end; a caller that has a usable token is never made to wait, and the token is fetched again in the
 // background before it is stale.
 type tokenSource struct {
 	url      string
 	clientID string
+	scope    string
 	secret   secret.Value
 	client   *http.Client
 	now      func() time.Time
@@ -103,10 +112,10 @@ type tokenFetch struct {
 	err  error
 }
 
-// newTokenSource returns the token source of the app clientID, whose secret is clientSecret, at Entra's endpoint tokenURL. The
-// client must not follow redirects (noRedirects), so that the secret goes to tokenURL alone.
-func newTokenSource(tokenURL, clientID string, clientSecret secret.Value, client *http.Client, now func() time.Time) *tokenSource {
-	return &tokenSource{url: tokenURL, clientID: clientID, secret: clientSecret, client: client, now: now}
+// newTokenSource returns the token source of the app clientID, whose secret is clientSecret, at Entra's endpoint tokenURL, for scope.
+// The client must not follow redirects (noRedirects), so that the secret goes to tokenURL alone.
+func newTokenSource(tokenURL, clientID, scope string, clientSecret secret.Value, client *http.Client, now func() time.Time) *tokenSource {
+	return &tokenSource{url: tokenURL, clientID: clientID, scope: scope, secret: clientSecret, client: client, now: now}
 }
 
 // token returns a usable token: the one kept, if it is not stale, and otherwise the result of a fetch, which it waits for until ctx
@@ -183,7 +192,7 @@ func (s *tokenSource) request(ctx context.Context) (secret.Value, time.Duration,
 		"grant_type":    {"client_credentials"},
 		"client_id":     {s.clientID},
 		"client_secret": {s.secret.Reveal()},
-		"scope":         {botFrameworkScope},
+		"scope":         {s.scope},
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.url, strings.NewReader(form.Encode()))
 	if err != nil {

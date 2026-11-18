@@ -30,7 +30,9 @@ type Config struct {
 	TokenURL string
 	// MetadataURL is the Bot Framework's OpenID metadata (ReceiverConfig.MetadataURL).
 	MetadataURL string
-	// HTTPClient makes every call: Entra's, the Bot Connector's and the key fetches; http.DefaultClient if nil. The Client makes
+	// GraphURL is Microsoft Graph's endpoint, which a thread is read from; DefaultGraphURL if empty. A test sets a fake's.
+	GraphURL string
+	// HTTPClient makes every call: Entra's, the Bot Connector's, Graph's and the key fetches; http.DefaultClient if nil. The Client makes
 	// its own copy that follows no redirect for the calls that carry the secret or the token. Its Timeout bounds each call.
 	HTTPClient *http.Client
 	// Conversations keeps each channel's service URL and team, which the receiver records and the posts read; a
@@ -52,17 +54,21 @@ type Config struct {
 // A message's progress steps are a list under the rest of the message (Caps.Steps), which each update of a live reply shows anew.
 // A prompt, a prompt of tools among them, is an Adaptive Card, and so are a message's buttons; the Client is the Receiver's
 // InvokeHandler, which takes their presses (Invoke). What it does not do yet, and says so: streams (ErrNoStreams), ephemeral
-// messages (ErrNoEphemeral), reactions (ErrNoReactions), the busy mark (ErrNoBusy), reading a thread (ErrNoThreadReads) and finding a
-// post by its tag (Find says not found). It reads people from the Bot Connector's rosters (members.go): who is in a channel's team,
-// whether a user is a bot, and a person's name, which the ending of a prompt shows for its decider.
+// messages (ErrNoEphemeral), reactions (ErrNoReactions), the busy mark (ErrNoBusy) and finding a post by its tag (Find says not found).
+// It reads people from the Bot Connector's rosters (members.go): who is in a channel's team, whether a user is a bot, and a person's
+// name, which the ending of a prompt shows for its decider; and a thread's messages from Microsoft Graph (threadread.go), with the
+// app's Graph token.
 type Client struct {
 	conn, tenant  string
+	app           string // the bot's application ID
 	recv          *Receiver
 	api           *connector
+	graph         *graphClient
 	convs         ConversationStore
 	names         *nameCache
 	rosterTimeout time.Duration // rosterTimeout; a test shortens it
 	pressWait     time.Duration // pressWait; a test shortens it
+	threadTimeout time.Duration // threadTimeout; a test shortens it
 	log           *slog.Logger
 	onConnection  func(bool)
 }
@@ -89,10 +95,16 @@ func New(cfg Config) (*Client, error) {
 		log = slog.Default()
 	}
 	direct := noRedirects(client)
-	tokens := newTokenSource(cmp.Or(cfg.TokenURL, DefaultTokenURL(cfg.TenantID)), cfg.AppID, cfg.ClientSecret, direct, now)
-	c := &Client{conn: cfg.Connection, tenant: cfg.TenantID, convs: convs, log: log, onConnection: cfg.OnConnection,
-		api: &connector{client: direct, tokens: tokens, now: now}, names: newNameCache(now), rosterTimeout: rosterTimeout,
-		pressWait: pressWait}
+	tokenURL := cmp.Or(cfg.TokenURL, DefaultTokenURL(cfg.TenantID))
+	tokens := newTokenSource(tokenURL, cfg.AppID, botFrameworkScope, cfg.ClientSecret, direct, now)
+	graph, err := newGraphClient(cmp.Or(cfg.GraphURL, DefaultGraphURL), direct,
+		newTokenSource(tokenURL, cfg.AppID, graphScope, cfg.ClientSecret, direct, now), now)
+	if err != nil {
+		return nil, err
+	}
+	c := &Client{conn: cfg.Connection, tenant: cfg.TenantID, app: cfg.AppID, convs: convs, log: log, onConnection: cfg.OnConnection,
+		api: &connector{client: direct, tokens: tokens, now: now}, graph: graph, names: newNameCache(now), rosterTimeout: rosterTimeout,
+		pressWait: pressWait, threadTimeout: threadTimeout}
 	recv, err := NewReceiver(ReceiverConfig{Connection: cfg.Connection, TenantID: cfg.TenantID, AppID: cfg.AppID,
 		MetadataURL: cfg.MetadataURL, HTTPClient: client, Conversations: convs, Logger: log, Now: now, Invokes: c})
 	if err != nil {
@@ -202,8 +214,10 @@ func (c *Client) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) (err e
 	return c.api.update(ctx, c.serviceURL(ctx, r.Channel), conversation(r.Channel, cmp.Or(r.Thread, r.ID)), r.ID, a)
 }
 
-// Find implements chat.Platform: Teams' posts cannot be read back yet (that needs Microsoft Graph), so nothing is found, and a
-// post that the outbox made before a crash, and did not record, is made again.
+// Find implements chat.Platform: nothing is found, with no call, and a post that the outbox made before a crash, and did not record, is
+// made again. Graph can read the bot's posts back (threadread.go), but Post keeps its tag nowhere: Slack keeps it as the message's
+// metadata, which people do not see, and no part of an activity that Teams keeps, that Graph gives back and that people do not see,
+// is known (none was measured; what Graph gave of the bot's posts on a test tenant was their body and attachments, which people see).
 func (c *Client) Find(context.Context, chat.Target, string, time.Time) (chat.Ref, bool, error) {
 	return chat.Ref{}, false, nil
 }
@@ -330,16 +344,6 @@ func (c *Client) Permalink(r chat.Ref) (string, bool) {
 	}
 	q := url.Values{"tenantId": {c.tenant}, "groupId": {rec.AADGroupID}, "parentMessageId": {cmp.Or(r.Thread, r.ID)}}
 	return "https://teams.microsoft.com/l/message/" + url.PathEscape(r.Channel) + "/" + url.PathEscape(r.ID) + "?" + q.Encode(), true
-}
-
-// ThreadBetween implements chat.ThreadReader: a thread cannot be read on Teams yet.
-func (c *Client) ThreadBetween(context.Context, chat.Target, string, string, int) ([]chat.HistoryMessage, int, error) {
-	return nil, 0, chat.ErrNoThreadReads
-}
-
-// ThreadFromStart implements chat.ThreadReader: a thread cannot be read on Teams yet.
-func (c *Client) ThreadFromStart(context.Context, chat.Target, string, int) ([]chat.HistoryMessage, int, error) {
-	return nil, 0, chat.ErrNoThreadReads
 }
 
 // MarkBusy implements chat.BusyMarker: Teams shows no busy mark in a channel.
