@@ -23,10 +23,12 @@ const actionInvoke = "adaptiveCard/action"
 const messageAnswer = "application/vnd.microsoft.activity.message"
 
 // pressWait is how long a press's invoke waits for the press to be decided (chat.InlineDecider), so that the presser is told what it came
-// to in the answer. It ends inside the invoke's deadline (invokeTimeout) with time left to answer: Teams gives up on an invoke after
-// about 14 seconds (13.9 measured on a test tenant on 2026-11-18). A press not decided by then is answered as received, and the press
-// worker decides it after, as it would have.
-const pressWait = 8 * time.Second
+// to in the answer. It ends inside the invoke's deadline (invokeTimeout) with time left to answer: the Teams client gives up on an
+// invoke whose answer comes between 12.5 and 13 seconds after it arrived, measured on a test tenant on 2026-11-18, well before Teams'
+// service closes the request at about 13.9 (see invokeTimeout). A press not decided by then is answered as received, and the press
+// worker decides it after, as it would have; the read of the channel's members that decides it is bounded at rosterTimeout on the
+// worker's own context, so a slower read lands there.
+const pressWait = 6 * time.Second
 
 // What a press is answered with, in its request, when it is not decided within pressWait, or the sink does not wait for its decision:
 // before it is decided, which the press worker does after the answer.

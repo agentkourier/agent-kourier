@@ -28,8 +28,8 @@ type HTTPReceiver interface {
 
 // HTTPDeadline is an optional interface of the handler that HTTPReceiver.HTTPHandler returns, for a platform that waits longer for an
 // answer than the chat listener gives a handler by default (Slack's wait of about 3 seconds), and whose handler uses that time:
-// Microsoft Teams waits about 14 seconds for the answer to a press of a card, and its handler waits in the request for the press to be
-// decided (InlineDecider). The listener gives such a handler a context that ends HandlerTimeout after the body was read, in place of
+// the Microsoft Teams client shows the answer to a press of a card for up to about 12.5 seconds, and its handler waits in the request
+// for the press to be decided (InlineDecider). The listener gives such a handler a context that ends HandlerTimeout after the body was read, in place of
 // its default, and the same time as any handler to write the answer after that. A value no longer than the default changes nothing.
 // The deadline is the route's, for every request of the connection, so a handler that answers some requests at once must not wait on
 // anything for them that its deadline would not cut.

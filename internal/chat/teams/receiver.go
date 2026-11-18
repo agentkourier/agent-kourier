@@ -34,11 +34,18 @@ const (
 )
 
 // invokeTimeout is the deadline of a request's context that the receiver asks the chat listener for (chat.HTTPDeadline), in place of its
-// 3 seconds, so that a press can wait for its decision (pressWait) and be answered with it. Teams gives up on an invoke after about 14
-// seconds (13.9 measured on a test tenant on 2026-11-18); the listener's 2 seconds to read the request and its second to write the
-// answer, with this, come to 13. A message activity is answered at once, and only the fetch of the signing keys that its token may
-// start, bounded by keysFetchTimeout, can use the time.
-const invokeTimeout = 10 * time.Second
+// 3 seconds, so that a press can wait for its decision (pressWait) and be answered with it. Measured on a test tenant on 2026-11-18,
+// from the invoke's arrival to the answer: the Teams client showed an answer given at 12.5 seconds and gave up on one given at 13
+// ("Something went wrong"), while Teams' service holds the request until about 13.9 seconds. The listener's 2 seconds to read the
+// request and its second to write the answer, with this, come to 11, which leaves the network a margin. A message activity is answered
+// at once, and a token waits for the signing keys no longer than verifyWait, so only a press uses the time.
+const invokeTimeout = 8 * time.Second
+
+// verifyWait bounds how long a request's token waits for the signing keys to be fetched, as the chat listener's default deadline did
+// before the receiver asked for a longer one: a slow fetch must not hold the listener's places, which Slack's requests share, for the
+// whole of invokeTimeout. A token that the wait cuts is answered 503, as one whose keys cannot be read; the fetch goes on to its own
+// bound, keysFetchTimeout, and fills the cache for the next.
+const verifyWait = 3 * time.Second
 
 // refusalLogEvery paces the WARN line of a refusal of a token the Bot Framework signed, for each reason: the first at once, and then one
 // line for each interval, which says how many were refused since the last. A connection whose app ID or clock is wrong refuses every
@@ -118,7 +125,8 @@ type ReceiverConfig struct {
 // (/chat/teams/<namespace>/<name>), and hands it on: a person's post to the Sink of the live Serve, an invoke to the InvokeHandler, and
 // what an activity says of its channel to the ConversationStore. It is safe for concurrent use.
 //
-// Teams waits about 25 seconds for the answer to a message activity and about 14 for an invoke, while the chat listener gives a handler
+// Teams waits about 25 seconds for the answer to a message activity; for an invoke its service holds the request about 14 seconds, and
+// its client gives up between 12.5 and 13 (see invokeTimeout). The chat listener gives a handler
 // 3 seconds unless it asks for longer, as the receiver does (HandlerTimeout: invokeTimeout). A message's request does only what is
 // quick: the token, the tenant, the dedup and a place on its channel's lane, and it answers then; the sink and the store are called
 // after, on the lane, one activity of a channel at a time and in the order the requests were taken, with the lanes of different channels
@@ -137,6 +145,7 @@ type Receiver struct {
 	log                 *slog.Logger
 	seen                *recent
 	sinkRetryBase       time.Duration // sinkRetryBase; a test shortens it
+	verifyWait          time.Duration // verifyWait; a test shortens it
 	keysCheckEvery      time.Duration // keysCheckEvery; a test shortens it
 	now                 func() time.Time
 	refusals            refusalLog
@@ -186,7 +195,7 @@ func NewReceiver(cfg ReceiverConfig) (*Receiver, error) {
 	}
 	r := &Receiver{conn: cfg.Connection, tenant: cfg.TenantID, appID: cfg.AppID, convs: cfg.Conversations, invokes: cfg.Invokes,
 		log: cfg.Logger, recorded: map[string]Conversation{}, sinkRetryBase: sinkRetryBase,
-		keysCheckEvery: keysCheckEvery}
+		keysCheckEvery: keysCheckEvery, verifyWait: verifyWait}
 	if r.convs == nil {
 		r.convs = NewMemoryConversations()
 	}
@@ -339,7 +348,7 @@ func (s *serving) submit(channel string, fn func()) (shed string, open bool) {
 }
 
 // ServeHTTP answers one request Teams sends the connection. In order: the token is verified (401, or 503 when the keys cannot be
-// read), the body read as an activity of Teams (400), the token's service URL checked against the activity's (401), and the tenant
+// read within verifyWait), the body read as an activity of Teams (400), the token's service URL checked against the activity's (401), and the tenant
 // against the connection's (403); none of these work on the activity. With no Serve live it is 503, and nothing is claimed for the
 // dedup. Then:
 //   - A message puts its post, if it is a person's, and its conversation on its channel's lane, and is answered 200 at once; an ID
@@ -353,7 +362,9 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	ctx := req.Context()
 	tctx := r.telemetryContext(ctx)
 	answered := func(outcome string) { r.count(tctx, "agentkourier_teams_requests_total", outcome) }
-	tok, err := r.verifier.verify(ctx, req.Header.Get("Authorization"))
+	vctx, cancel := context.WithTimeout(ctx, r.verifyWait)
+	tok, err := r.verifier.verify(vctx, req.Header.Get("Authorization"))
+	cancel()
 	if err != nil {
 		answered(r.refuseToken(ctx, tctx, w, err))
 		return

@@ -137,6 +137,9 @@ type interactionRuntime struct {
 	// reopened is told by the session manager of the denials it took and did not deliver (session.Config.AnswerWatcher) and is
 	// read by the sweeper, which cancels their tasks: the one value, so build makes it and the manager and the sweeper get it.
 	reopened *interact.Reopened
+	// outcomes is what the worker finds each press came to, for a platform that waits for it in the press's request; the chat
+	// listener closes it as its drain begins.
+	outcomes *interact.Outcomes
 	ready    chan struct{}
 }
 
@@ -195,7 +198,7 @@ func (d interactionDeps) build(inner session.Sink) (*interactionRuntime, error) 
 	if err != nil {
 		return nil, fmt.Errorf("interactions: text replies: %w", err)
 	}
-	return &interactionRuntime{tap: tap, late: late, replies: replies, pipeline: pipeline, votes: votes, replacer: replacer, worker: worker, reopened: interact.NewReopened(d.st), ready: ready}, nil
+	return &interactionRuntime{tap: tap, late: late, replies: replies, pipeline: pipeline, votes: votes, replacer: replacer, worker: worker, reopened: interact.NewReopened(d.st), outcomes: outcomes, ready: ready}, nil
 }
 
 // newSweeper builds the timeout sweeper over the session manager mgr and the interactions r.

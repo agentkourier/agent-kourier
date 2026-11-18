@@ -9,7 +9,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
 
-// waits is how many waits o holds.
+// waitCount is how many waits o holds.
 func (o *Outcomes) waitCount() int {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -113,4 +113,70 @@ func TestWaitsPastTheCapAndANilOutcomesDoNotWait(t *testing.T) {
 		t.Errorf("a nil Outcomes: %+v, notified %d times; want no decision, notified once", got, notified)
 	}
 	none.Publish(3, Done, "") // must not panic
+}
+
+// A wait gives its place back when it ends, whether its context ran out or the outcome was published: at a cap of one, the next press
+// is still waited for and gets its own outcome. Otherwise the cap would fill for good, and every press would go unwaited for.
+func TestAWaitGivesItsPlaceBack(t *testing.T) {
+	t.Parallel()
+	o := NewOutcomes(1)
+	short, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	if got := o.Wait(short, store.Press{Seq: 1}, func(store.Press) {}); got != (chat.PressOutcome{}) {
+		t.Fatalf("the wait that ran out: %+v", got)
+	}
+	waitedFor := func(seq int64) chat.PressOutcome {
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+		return o.Wait(ctx, store.Press{Seq: seq}, func(p store.Press) {
+			go func() { time.Sleep(10 * time.Millisecond); o.Publish(p.Seq, Done, textGone) }() // the worker, a little later
+		})
+	}
+	want := chat.PressOutcome{Decided: true, Text: textGone}
+	if got := waitedFor(2); got != want {
+		t.Errorf("the press after a wait that ran out: %+v; want %+v, waited for", got, want)
+	}
+	if got := waitedFor(3); got != want {
+		t.Errorf("the press after a wait that was published to: %+v; want %+v, waited for", got, want)
+	}
+	if n := o.waitCount(); n != 0 {
+		t.Errorf("%d waits kept", n)
+	}
+}
+
+// Close ends every wait with no decision, at once, and a wait after it is not waited for: the broker closes the waits as it stops, so
+// that each press still waiting is answered within the chat listener's drain.
+func TestCloseEndsTheWaits(t *testing.T) {
+	t.Parallel()
+	o := NewOutcomes(4)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	held := make(chan struct{})
+	done := make(chan chat.PressOutcome, 1)
+	go func() { done <- o.Wait(ctx, store.Press{Seq: 1}, func(store.Press) { close(held) }) }()
+	<-held
+	start := time.Now()
+	o.Close()
+	if got := <-done; got != (chat.PressOutcome{}) || time.Since(start) > time.Second {
+		t.Errorf("a wait at Close: %+v after %v; want no decision at once", got, time.Since(start))
+	}
+	notified := 0
+	start = time.Now()
+	if got := o.Wait(ctx, store.Press{Seq: 2}, func(store.Press) { notified++ }); got != (chat.PressOutcome{}) || notified != 1 || time.Since(start) > time.Second {
+		t.Errorf("a wait after Close: %+v, notified %d times, after %v; want no decision at once, notified once", got, notified, time.Since(start))
+	}
+	o.Publish(1, Done, textGone) // nobody waits: it must not block
+	if n := o.waitCount(); n != 0 {
+		t.Errorf("%d waits kept after Close", n)
+	}
+	var none *Outcomes
+	none.Close() // must not panic
+}
+
+// Limit is the cap the Outcomes was made with.
+func TestLimitIsTheCap(t *testing.T) {
+	t.Parallel()
+	if got := NewOutcomes(3).Limit(); got != 3 {
+		t.Errorf("Limit = %d; want 3", got)
+	}
 }

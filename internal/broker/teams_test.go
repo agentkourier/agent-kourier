@@ -243,13 +243,17 @@ func TestOpenPlatformKeepsTheTeamsConversationsInTheStore(t *testing.T) {
 	}
 }
 
-// teamsInvokeWait is how long Microsoft Teams waited for the answer to an invoke before it gave up, measured on a test tenant on
-// 2026-11-18.
-const teamsInvokeWait = 13900 * time.Millisecond
+// What was measured on a test tenant on 2026-11-18, from an invoke's arrival to its answer: the Teams client showed an answer given at
+// 12.5 seconds, and gave up on one given at 13 (Teams' service held the request until about 13.9). The measurement's clock started
+// when the invoke reached the server, so it did not see the network's share; teamsNetworkMargin is kept for it.
+const (
+	teamsClientShows   = 12500 * time.Millisecond
+	teamsNetworkMargin = 1500 * time.Millisecond
+)
 
 // The chat listener gives a Microsoft Teams connection's route the longer deadline its receiver asks for, and the request's whole bound
-// there (its read, that deadline and the answer's write) ends before Teams gives up on an invoke, so that a press answered at the
-// deadline is still heard.
+// there (its read, that deadline and the answer's write) ends inside what the Teams client still shows, less a margin for the network,
+// so that a press answered at the deadline is still shown to the person who pressed.
 func TestTheTeamsRouteIsAnsweredBeforeTeamsGivesUpOnAnInvoke(t *testing.T) {
 	recv, err := teams.NewReceiver(teams.ReceiverConfig{Connection: "ns/teams", TenantID: teamsTestTenant, AppID: teamsTestApp,
 		Logger: testutil.DiscardLogger()})
@@ -262,7 +266,8 @@ func TestTheTeamsRouteIsAnsweredBeforeTeamsGivesUpOnAnInvoke(t *testing.T) {
 	if route.timeout <= chatHandlerTimeout {
 		t.Errorf("the Teams route's deadline is %v, no longer than the default %v", route.timeout, chatHandlerTimeout)
 	}
-	if bound := chatReadTimeout + route.timeout + chatAnswerTimeout; bound >= teamsInvokeWait {
-		t.Errorf("a Teams request is bounded at %v, not before Teams gives up at %v", bound, teamsInvokeWait)
+	if bound := chatReadTimeout + route.timeout + chatAnswerTimeout; bound > teamsClientShows-teamsNetworkMargin {
+		t.Errorf("a Teams request is bounded at %v; the client shows an answer up to %v, and %v of that is kept for the network",
+			bound, teamsClientShows, teamsNetworkMargin)
 	}
 }

@@ -1,8 +1,11 @@
 package teams
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -118,5 +121,39 @@ func TestTheInvokeDeadlineHoldsTheWait(t *testing.T) {
 	}
 	if ct.c.pressWait >= invokeTimeout {
 		t.Errorf("the wait for a decision, %v, does not end inside the invoke's deadline, %v", ct.c.pressWait, invokeTimeout)
+	}
+}
+
+// A request's token waits for the signing keys at most verifyWait, whatever the longer deadline the receiver's requests are given: a
+// fetch of the keys that is slow does not hold a place of the chat listener for the whole of it. The request is answered 503.
+func TestATokenWaitsForTheKeysNoLongerThanBefore(t *testing.T) {
+	key := newSigningKey(t, "k", "msteams")
+	f := newFakeBotFramework(t, key)
+	release := make(chan struct{})
+	defer close(release)
+	f.mux.HandleFunc("GET /slow", func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	})
+	f.mu.Lock()
+	f.jwksPath = "/slow"
+	f.mu.Unlock()
+	r, err := NewReceiver(ReceiverConfig{Connection: testConn, TenantID: testTenant, AppID: testAppID, MetadataURL: f.metadataURL(),
+		HTTPClient: f.srv.Client(), Logger: testutil.DiscardLogger()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.verifyWait = 50 * time.Millisecond
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second) // the route's longer deadline
+	defer cancel()
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/chat/teams/"+testConn, bytes.NewReader(editFixture(t, "invoke_action", func(map[string]any) {})))
+	req.Header.Set("Authorization", bearer(t, key, claimsAt(time.Now())))
+	rec := httptest.NewRecorder()
+	start := time.Now()
+	r.ServeHTTP(rec, req)
+	if took := time.Since(start); rec.Code != http.StatusServiceUnavailable || took > time.Second {
+		t.Errorf("answered %d after %v; want 503 once the 50ms wait for the keys ends", rec.Code, took)
 	}
 }

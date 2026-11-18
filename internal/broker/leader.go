@@ -182,6 +182,13 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	if err != nil {
 		return nil, err
 	}
+	if cfg.outcomesBuilt != nil {
+		cfg.outcomesBuilt(ix.outcomes)
+	}
+	// A press that waits for its decision in its request is let go as the chat listener begins its drain, and answered inside it.
+	if h.routes != nil {
+		h.routes.onDrain(ix.outcomes.Close)
+	}
 	// A mentioned turn of a mention-only Binding carries the replies since the previous turn, which are read through the
 	// platform as it is built here (fenced with an election: the read is not a write, so the fence passes it).
 	threads, err := newThreadContext(threadContextConfig{Platforms: platforms, Replies: st, Logger: log})

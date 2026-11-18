@@ -70,9 +70,10 @@ const (
 	// connections that are mid-body, for as long as chatReadTimeout lets them, or by 32 MiB actually sent: starving the listener takes
 	// 8192 concurrent connections, not 32. The number of connections, and what net/http holds for each, is outside the budget.
 	chatBodyBudget = 32 << 20
-	// chatDrainTimeout bounds the wait, at shutdown, for the requests in flight; past it they are cut, unanswered, and the platform sends
-	// them again. It is the first part of the intake step, whose bound is 4 s, and is kept to half of it, so that the intakes, which stop
-	// after it in the same step, always keep at least 2 s.
+	// chatDrainTimeout bounds the wait, at shutdown, for the requests in flight; past it they are cut, unanswered. Slack sends such a
+	// request again; Microsoft Teams does not send an invoke again, so a press that waits for its decision is let go as the drain begins
+	// (chatRoutes.onDrain) and answered inside it. It is the first part of the intake step, whose bound is 4 s, and is kept to half of
+	// it, so that the intakes, which stop after it in the same step, always keep at least 2 s.
 	chatDrainTimeout = 2 * time.Second
 )
 
@@ -103,6 +104,9 @@ type chatRoutes struct {
 	mu     sync.RWMutex
 	routes map[string]*chatRoute
 	closed bool
+	// drains is what runs as the listener begins its drain at shutdown (draining): what holds a request waiting lets it go, so that
+	// the request is answered inside the drain. Guarded by mu.
+	drains []func()
 	// count is told the outcome of each request (Metrics.ChatListenerRequest).
 	count func(outcome string)
 	log   *slog.Logger
@@ -194,6 +198,26 @@ func (t *chatRoutes) close() {
 	defer t.mu.Unlock()
 	t.closed = true
 	clear(t.routes)
+}
+
+// onDrain has fn run as the listener begins its drain at shutdown (draining), before it waits for the requests in flight: fn makes a
+// handler that waits answer now. It must not block.
+func (t *chatRoutes) onDrain(fn func()) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.drains = append(t.drains, fn)
+}
+
+// draining runs what onDrain registered, once: the listener's stop calls it before it stops taking requests and waits for those in
+// flight.
+func (t *chatRoutes) draining() {
+	t.mu.Lock()
+	drains := t.drains
+	t.drains = nil
+	t.mu.Unlock()
+	for _, fn := range drains {
+		fn()
+	}
 }
 
 // lookup returns the route of key, or nil.

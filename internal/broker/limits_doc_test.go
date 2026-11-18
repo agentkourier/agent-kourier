@@ -63,7 +63,6 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Duration(t, "chatAnswer", chatAnswerTimeout)
 	routes := newChatRoutes(nil, nil)
 	limitsdoc.Count(t, "chatInFlight", cap(routes.slots))
-	limitsdoc.Count(t, "pressWaitsMax", pressWaitsMax)
 	limitsdoc.Bytes(t, "chatBodyBudget", routes.budget.left)
 	limitsdoc.Bytes(t, "chatBodyChunk", chatBodyChunk)
 	limitsdoc.Duration(t, "chatDrain", chatDrainTimeout)

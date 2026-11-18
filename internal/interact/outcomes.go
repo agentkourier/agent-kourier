@@ -15,9 +15,10 @@ import (
 type Outcomes struct {
 	max int
 
-	mu    sync.Mutex
-	waits map[int64][]chan chat.PressOutcome // by press Seq; guarded by mu
-	held  int                                // the waits in waits; guarded by mu
+	mu     sync.Mutex
+	waits  map[int64][]chan chat.PressOutcome // by press Seq; guarded by mu
+	held   int                                // the waits in waits; guarded by mu
+	closed bool                               // Close was called: no wait is registered; guarded by mu
 }
 
 // NewOutcomes returns an Outcomes that holds at most limit waits at once. Each wait holds the request of the platform that waits, so
@@ -27,10 +28,10 @@ func NewOutcomes(limit int) *Outcomes {
 }
 
 // Wait hands press, which is recorded, to notify (the worker's Submit), and waits until ctx ends for what its processing publishes.
-// It returns no decision when ctx ends first, when the processing found the press could not be decided yet (Retry), and, without
-// waiting, when max waits are held already or o is nil. The wait is registered before notify is called, so a press processed at once
-// is not missed. A press handed over and processed before (a delivery of it again, which the worker skips) is not published again,
-// and its wait runs out.
+// It returns no decision when ctx ends first, when the processing found the press could not be decided yet (Retry), when o is closed
+// while it waits, and, without waiting, when max waits are held already, o is closed, or o is nil. The wait is registered before
+// notify is called, so a press processed at once is not missed. A press handed over and processed before (a delivery of it again,
+// which the worker skips) is not published again, and its wait runs out.
 func (o *Outcomes) Wait(ctx context.Context, press store.Press, notify func(store.Press)) chat.PressOutcome {
 	ch, ok := o.await(press.Seq)
 	if !ok {
@@ -66,14 +67,36 @@ func (o *Outcomes) Publish(seq int64, res Result, text string) {
 	delete(o.waits, seq)
 }
 
-// await registers a wait for the press seq, and says false when o is nil or holds max waits already.
+// Limit is the most waits o holds at once.
+func (o *Outcomes) Limit() int { return o.max }
+
+// Close ends every wait with no decision, at once, and makes every later Wait hand its press on and return at once: the broker closes
+// its Outcomes as its chat listener begins to drain at shutdown, so that a press still waiting is answered, as not decided, before the
+// drain cuts its request. The presses are still the worker's to decide. Close on a nil Outcomes does nothing.
+func (o *Outcomes) Close() {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.closed = true
+	for seq, chs := range o.waits {
+		for _, ch := range chs {
+			ch <- chat.PressOutcome{} // each has room for one, and leaves the map here
+		}
+		delete(o.waits, seq)
+	}
+	o.held = 0
+}
+
+// await registers a wait for the press seq, and says false when o is nil, is closed, or holds max waits already.
 func (o *Outcomes) await(seq int64) (chan chat.PressOutcome, bool) {
 	if o == nil {
 		return nil, false
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if o.held >= o.max {
+	if o.closed || o.held >= o.max {
 		return nil, false
 	}
 	ch := make(chan chat.PressOutcome, 1)

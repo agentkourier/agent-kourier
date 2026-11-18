@@ -199,7 +199,8 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 			chatServed <- serveServer(chatCtx, cfg.ChatListener, newChatServer(routes), chatDrainTimeout)
 			close(chatDone)
 		}()
-		sd.add(stepIntake, func(c context.Context) { stopChat(); waitFor(c, chatDone) })
+		// What holds a request waiting lets it go first (chatRoutes.onDrain), so that the drain answers it.
+		sd.add(stepIntake, func(c context.Context) { routes.draining(); stopChat(); waitFor(c, chatDone) })
 		log.InfoContext(ctx, "chat listener", "address", cfg.ChatListener.Addr().String())
 	}
 

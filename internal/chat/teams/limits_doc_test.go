@@ -22,6 +22,7 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Duration(t, "teamsKeysRefresh", keysRefreshAfter)
 	limitsdoc.Duration(t, "teamsKeysCheck", r.keysCheckEvery)
 	limitsdoc.Duration(t, "teamsInvokeDeadline", r.HandlerTimeout())
+	limitsdoc.Duration(t, "teamsVerifyWait", r.verifyWait)
 	limitsdoc.Duration(t, "teamsKeysRetry", keysRetryBase)
 	limitsdoc.Duration(t, "teamsKeysRefetch", keysMinRefetch)
 	limitsdoc.Duration(t, "teamsKeysFetch", keysFetchTimeout)
