@@ -25,7 +25,8 @@ type TeamsConversation struct {
 // TeamsConversations keeps one TeamsConversation for each channel of each Microsoft Teams connection. Only the leader receives a
 // connection's activities, and a write of a fenced store that is not the leader is ErrDeposed, as every write is. No retention loop
 // deletes a record: there is one for each channel the bot has heard from, and a channel's last service URL does no harm once it is
-// quiet.
+// quiet. Nothing deletes a connection's records either: they stay after its ChatConnection is deleted. A record holds IDs, a URL and a time,
+// no message content.
 type TeamsConversations interface {
 	// RememberTeamsConversation merges c into the record of c.Connection and c.Channel, and makes the record if there is none: a field
 	// that c leaves empty keeps the value it had (an activity that leaves a field out says nothing of it), one that c sets replaces it,

@@ -13,7 +13,8 @@ import (
 // teamsConversations is the teams.ConversationStore of the Microsoft Teams receivers over the store, so that what Teams tells the
 // receiver of a channel outlives a restart and moves with the leader: an alert read from Graph may come before any activity. Only the
 // leader receives activities, and the store refuses a write of a replica that is not the leader (store.ErrDeposed), which Remember
-// returns. Unlike teams.MemoryConversations, it refuses an empty connection or channel in Lookup as well as in Remember.
+// returns. MemoryConversations refuses only an empty channel, and only in Remember; this store also refuses an empty connection, and
+// refuses both in Lookup.
 type teamsConversations struct {
 	s store.TeamsConversations
 	// now is the time a record is remembered at.
@@ -35,7 +36,7 @@ func (t *teamsConversations) Remember(ctx context.Context, conn string, c teams.
 		UpdatedAt: t.now(),
 	})
 	if err != nil {
-		return fmt.Errorf("teams conversation store: remember %s of %s: %w", c.Channel, conn, err)
+		return fmt.Errorf("teams conversation store: %w", err)
 	}
 	return nil
 }
@@ -47,7 +48,7 @@ func (t *teamsConversations) Lookup(ctx context.Context, conn, channel string) (
 		return teams.Conversation{}, false, nil
 	}
 	if err != nil {
-		return teams.Conversation{}, false, fmt.Errorf("teams conversation store: look up %s of %s: %w", channel, conn, err)
+		return teams.Conversation{}, false, fmt.Errorf("teams conversation store: %w", err)
 	}
 	return teams.Conversation{Channel: r.Channel, ServiceURL: r.ServiceURL, TeamID: r.TeamID, AADGroupID: r.AADGroupID, TenantID: r.TenantID}, true, nil
 }
