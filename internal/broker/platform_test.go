@@ -112,8 +112,6 @@ func TestActorPlatformNamesThePlatformOfTheConnection(t *testing.T) {
 		want dialect.Platform
 	}{
 		{v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformSlack}, dialect.Platform{ID: "slack", Name: "Slack"}},
-		{v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformWeb, Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileKourierV1}},
-			dialect.Platform{ID: "web", Name: "web"}},
 		{v1alpha1.ChatConnectionSpec{Platform: "teams"}, dialect.Platform{ID: "teams"}},
 		{v1alpha1.ChatConnectionSpec{}, dialect.Platform{}},
 	} {

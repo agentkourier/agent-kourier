@@ -472,49 +472,6 @@ func TestSupervisorRestartsATeamConnectionSwitchedToAnotherMode(t *testing.T) {
 	}
 }
 
-// onWeb is the team connection name as teamConnections gives it once its ChatConnection, at generation gen, is a web connection of the
-// kourier-v1 profile whose Secret holds the signing secret signing: the key of the profile, read from its Secret by connectionOf.
-func onWeb(t *testing.T, name string, gen int64, signing string, age int) TeamConnection {
-	t.Helper()
-	ns, n, _ := strings.Cut(name, "/")
-	c := &v1alpha1.ChatConnection{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: n}, Spec: v1alpha1.ChatConnectionSpec{
-		Platform: v1alpha1.PlatformWeb, CredentialsSecretRef: v1alpha1.SecretRef{Name: "creds"},
-		Web: &v1alpha1.WebConnectionSpec{Profile: v1alpha1.WebProfileKourierV1, URL: "https://receiver.example/kourier"}}}
-	conn, err := connectionOf(t.Context(), c, &reader{vals: map[string]string{ns + "/creds/" + v1alpha1.KourierV1SigningSecretKey: signing}})
-	if err != nil {
-		t.Fatalf("connectionOf on web = %v; want its key read", err)
-	}
-	tc := team(name, gen, "", age)
-	tc.Connection = conn
-	return tc
-}
-
-// A team web connection is served beside the Slack ones: its identity is the zero one (no app to hold), so two of them both run. Its
-// Secret rotated to another signing secret restarts it on the new one, as a rotated Slack token does, and a Secret that loses the key leaves the
-// runtime of the old secret running until the key is back.
-func TestSupervisorServesTeamWebConnectionsAndRestartsThemOnRotation(t *testing.T) {
-	w := newSupWorld(t)
-	w.reconcile(onWeb(t, "team-w/web", 1, "fake-signing-1", 1), onWeb(t, "team-x/web", 1, "fake-signing-x", 2))
-	if got := w.running(); !slices.Equal(got, []string{ownName, "team-w/web", "team-x/web"}) {
-		t.Fatalf("running = %v; want both web connections served, neither holding an app against the other", got)
-	}
-	built := len(w.tokens())
-
-	w.reconcile(onWeb(t, "team-w/web", 1, "fake-signing-2", 1), onWeb(t, "team-x/web", 1, "fake-signing-x", 2))
-	w.mu.Lock()
-	closed := slices.Clone(w.closed)
-	w.mu.Unlock()
-	if got := len(w.tokens()); got != built+1 || !slices.Equal(closed, []string{"team-w/web"}) {
-		t.Errorf("after team-w's signing secret rotated: %d platforms built (want %d), transports closed %v (want team-w's); want team-w restarted, alone",
-			got, built+1, closed)
-	}
-
-	w.reconcile(unready("team-w/web", 1, 1), onWeb(t, "team-x/web", 1, "fake-signing-x", 2))
-	if got := w.running(); !slices.Equal(got, []string{ownName, "team-w/web", "team-x/web"}) || len(w.tokens()) != built+1 {
-		t.Errorf("running = %v, %d platforms built, once team-w's key cannot be read; want it left running on the secret it had", got, len(w.tokens()))
-	}
-}
-
 // Two connections of one Slack app are not both served: the older is, the own connection first. The younger says so to its Bindings (the
 // refusals), and is served once the older goes. A younger one that runs is stopped when an older of its app turns up.
 func TestSupervisorServesTheOlderConnectionOfASlackApp(t *testing.T) {
@@ -642,15 +599,15 @@ func TestSupervisorServesAnAppInstalledInTwoWorkspacesOnce(t *testing.T) {
 func TestSupervisorTellsTheAppsOfTwoPlatformsApart(t *testing.T) {
 	w := newSupWorld(t)
 	w.ids["tok-slack"] = appIdentity{App: "AAPP", Team: "T1", User: "UAPP", Bot: "BAPP"}
-	w.ids["tok-web"] = appIdentity{App: "AAPP", Team: "T1", User: "UAPP", Bot: "BAPP"}
-	w.ids["tok-web-own"] = appIdentity{App: "AOWN", Team: "T1", User: "UOWN", Bot: "BOWN"}
+	w.ids["tok-other"] = appIdentity{App: "AAPP", Team: "T1", User: "UAPP", Bot: "BAPP"}
+	w.ids["tok-other-own"] = appIdentity{App: "AOWN", Team: "T1", User: "UOWN", Bot: "BOWN"}
 	w.ids["tok-slack-twin"] = appIdentity{App: "AAPP", Team: "T2", User: "UTWIN", Bot: "BTWIN"}
 	slackTeam := team("team-a/slack", 1, "tok-slack", 1)
-	webTeam := teamOn("web", "team-b/web", 1, "tok-web", 2)
-	webOwn := teamOn("web", "team-c/web", 1, "tok-web-own", 3)
+	otherTeam := teamOn("other", "team-b/other", 1, "tok-other", 2)
+	otherOwn := teamOn("other", "team-c/other", 1, "tok-other-own", 3)
 
-	w.reconcileChecked(slackTeam, webTeam, webOwn) // oldest first, as teamConnections gives it
-	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack", "team-b/web", "team-c/web"}) {
+	w.reconcileChecked(slackTeam, otherTeam, otherOwn) // oldest first, as teamConnections gives it
+	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack", "team-b/other", "team-c/other"}) {
 		t.Fatalf("running = %v; want every connection, since no two are of one platform's app", got)
 	}
 	if got := w.sup.refusals.names(); len(got) != 0 {
@@ -658,9 +615,9 @@ func TestSupervisorTellsTheAppsOfTwoPlatformsApart(t *testing.T) {
 	}
 	for _, c := range []struct{ platform, bot, user, conn string }{
 		{v1alpha1.PlatformSlack, "BAPP", "UAPP", "team-a/slack"},
-		{"web", "BAPP", "UAPP", "team-b/web"},
+		{"other", "BAPP", "UAPP", "team-b/other"},
 		{v1alpha1.PlatformSlack, "BOWN", "UOWN", ownName},
-		{"web", "BOWN", "UOWN", "team-c/web"},
+		{"other", "BOWN", "UOWN", "team-c/other"},
 	} {
 		if got, _ := w.table.botOwner(c.platform, c.bot); got != c.conn {
 			t.Errorf("botOwner(%s, %s) = %q; want %q", c.platform, c.bot, got, c.conn)
@@ -673,9 +630,9 @@ func TestSupervisorTellsTheAppsOfTwoPlatformsApart(t *testing.T) {
 		t.Error("botOwner(github, BAPP) names a connection; want no bot of a platform the broker serves nothing on")
 	}
 
-	// The younger Slack connection of the Slack app is refused, as before; the web connection of an app with the same ID is left alone.
-	w.reconcileChecked(slackTeam, webTeam, webOwn, team("team-d/slack", 1, "tok-slack-twin", 4))
-	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack", "team-b/web", "team-c/web"}) {
+	// The younger Slack connection of the Slack app is refused, as before; the other platform's connection of an app with the same ID is left alone.
+	w.reconcileChecked(slackTeam, otherTeam, otherOwn, team("team-d/slack", 1, "tok-slack-twin", 4))
+	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack", "team-b/other", "team-c/other"}) {
 		t.Errorf("running = %v; want the second Slack connection of the app not run", got)
 	}
 	if got := w.sup.refusals.names(); !slices.Equal(got, []string{"team-d/slack"}) {

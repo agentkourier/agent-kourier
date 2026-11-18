@@ -6,11 +6,8 @@ import (
 	"testing"
 )
 
-// The specs of a connection on each platform and profile that Validate accepts.
-var (
-	slackSpec     = ChatConnectionSpec{Platform: PlatformSlack}
-	kourierV1Spec = ChatConnectionSpec{Platform: PlatformWeb, Web: &WebConnectionSpec{Profile: WebProfileKourierV1, URL: "https://receiver.example.com/replies"}}
-)
+// The spec of a connection on each platform that Validate accepts.
+var slackSpec = ChatConnectionSpec{Platform: PlatformSlack}
 
 // platformOf is the rules of the connection with spec, which the tests below cannot do without.
 func platformOf(t *testing.T, spec ChatConnectionSpec) ChatPlatform {
@@ -47,8 +44,7 @@ func shapes(p ChatPlatform) map[string]struct {
 
 // An ID of each kind that each platform takes, from which TestEveryPlatformsShapesAreWithinTheSchema makes others.
 var exampleIDs = map[string]map[string]string{
-	"Slack":                    {"channel": "C0123456789", "sender": "B0123456789", "user": "U0123456789", "group": "S0123456789"},
-	"web (kourier-v1 profile)": {"channel": "ch-1", "sender": "billing-bot", "user": "alice", "group": "team-7"},
+	"Slack": {"channel": "C0123456789", "sender": "B0123456789", "user": "U0123456789", "group": "S0123456789"},
 }
 
 // Every ID that a platform takes, the schema and Validate take too, so that no ID that resolution takes on its platform is refused
@@ -61,7 +57,7 @@ func TestEveryPlatformsShapesAreWithinTheSchema(t *testing.T) {
 		chars = append(chars, string(rune(c)))
 	}
 	chars = append(chars, "é", "\u00a0", "\u202e", "\u200b", "\u0430")
-	for _, spec := range []ChatConnectionSpec{slackSpec, kourierV1Spec} {
+	for _, spec := range []ChatConnectionSpec{slackSpec} {
 		p := platformOf(t, spec)
 		for field, f := range shapes(p) {
 			if f.shape.maxLen > f.cap {
@@ -144,74 +140,20 @@ func TestSlackIDShapes(t *testing.T) {
 	}
 }
 
-// The kourier-v1 profile's shape, of every kind of ID: an opaque ID of letters, digits, '.', '_' and '-', starting with a letter or a
-// digit, at most maxKourierV1IDLen bytes. A channel or a group needs no digit: a name such as general is one.
-func TestKourierV1IDShapes(t *testing.T) {
-	p := platformOf(t, kourierV1Spec)
-	for _, tc := range []struct {
-		name  string
-		shape IDShape
-		in    string
-		want  bool
-	}{
-		{"channel", p.Channel, "ch-1", true},
-		{"channel", p.Channel, "0b4a6f2e-6a1f-4c1e-9d1a-2f1c3b4d5e6f", true},
-		{"channel", p.Channel, "01HZX3Y4ABCDEF", true},
-		{"channel", p.Channel, "C0123456789", true},
-		{"channel", p.Channel, "7", true},
-		{"channel", p.Channel, "a" + strings.Repeat("1", maxKourierV1IDLen-1), true},
-		{"channel", p.Channel, "a" + strings.Repeat("1", maxKourierV1IDLen), false},
-		{"channel", p.Channel, "general", true},
-		{"channel", p.Channel, "ops.alerts_x-y", true},
-		{"channel", p.Channel, "-1", false},
-		{"channel", p.Channel, ".1", false},
-		{"channel", p.Channel, "a:1", false},
-		{"channel", p.Channel, "octo-org/repo1", false},
-		{"channel", p.Channel, "a 1", false},
-		{"channel", p.Channel, "", false},
-		{"sender", p.Sender, "billing-bot", true},
-		{"sender", p.Sender, "svc.ci_runner-2", true},
-		{"sender", p.Sender, "dependabot[bot]", false},
-		{"sender", p.Sender, strings.Repeat("b", maxKourierV1IDLen+1), false},
-		{"user", p.User, "alice", true},
-		{"user", p.User, "u_42", true},
-		{"user", p.User, strings.Repeat("u", maxKourierV1IDLen), true},
-		{"user", p.User, strings.Repeat("u", maxKourierV1IDLen+1), false},
-		{"user", p.User, "_alice", false},
-		{"user", p.User, "alice@example.com", false},
-		{"group", p.Group, "team-7", true},
-		{"group", p.Group, "sre", true},
-		{"group", p.Group, "octo-org/sre", false},
-	} {
-		if got := tc.shape.Matches(tc.in); got != tc.want {
-			t.Errorf("kourier-v1's %s shape Matches(%q) = %v, want %v", tc.name, tc.in, got, tc.want)
-		}
-	}
-}
-
-// Every platform and profile that a ChatConnection may name has rules for its Bindings, and no other has: a platform or profile
-// added to Validate without a case in ChatPlatformOf fails here, before resolution can meet a connection whose Bindings it cannot
-// check.
+// Every platform that a ChatConnection may name has rules for its Bindings, and no other has: a platform added to Validate without
+// a case in ChatPlatformOf fails here, before resolution can meet a connection whose Bindings it cannot check.
 func TestChatPlatformOfAnswersThePlatformsValidateAccepts(t *testing.T) {
-	webs := []*WebConnectionSpec{nil, {}, {Profile: WebProfileKourierV1, URL: "https://r.example.com"}, {Profile: "github", URL: "https://r.example.com"},
-		{Profile: "gitlab"}, {Profile: "Kourier-v1", URL: "https://r.example.com"}}
-	for _, platform := range []string{PlatformSlack, PlatformWeb, "github", "teams", "Slack", ""} {
-		for _, web := range webs {
-			if web != nil && platform != PlatformWeb {
-				continue // refused for the block, which TestChatConnectionValidate covers, and not for the platform
-			}
-			c := load[ChatConnection](t, "chatconnection.yaml")
-			c.Spec.Platform, c.Spec.Web = platform, web
-			accepted := c.Validate() == nil
-			if _, ok := ChatPlatformOf(c.Spec); ok != accepted {
-				t.Errorf("platform %q, web %+v: ChatPlatformOf answers %v, and Validate accepts the connection: %v", platform, web, ok, accepted)
-			}
+	for _, platform := range []string{PlatformSlack, "web", "github", "teams", "Slack", ""} {
+		c := load[ChatConnection](t, "chatconnection.yaml")
+		c.Spec.Platform = platform
+		accepted := c.Validate() == nil
+		if _, ok := ChatPlatformOf(c.Spec); ok != accepted {
+			t.Errorf("platform %q: ChatPlatformOf answers %v, and Validate accepts the connection: %v", platform, ok, accepted)
 		}
 	}
 }
 
-// What each platform serves of a Binding: Slack everything; the kourier-v1 profile posts replies, and has no buttons and no way to
-// take an answer.
+// What each platform serves of a Binding: Slack everything.
 func TestWhatEachPlatformServes(t *testing.T) {
 	for _, tc := range []struct {
 		spec                             ChatConnectionSpec
@@ -219,7 +161,6 @@ func TestWhatEachPlatformServes(t *testing.T) {
 		askUser, toolApprovals, feedback bool
 	}{
 		{slackSpec, "Slack", "Slack", true, true, true},
-		{kourierV1Spec, "web (kourier-v1 profile)", "web", false, false, false},
 	} {
 		p := platformOf(t, tc.spec)
 		if !p.Channel.Taken() || !p.Sender.Taken() || !p.User.Taken() || !p.Group.Taken() {
@@ -236,6 +177,8 @@ func TestPlatformMismatches(t *testing.T) {
 	noApprovals.ToolApprovals = false
 	noChannels := slack(t)
 	noChannels.Channel = IDShape{}
+	noButtons := slack(t)
+	noButtons.AskUser, noButtons.ToolApprovals, noButtons.Feedback = false, false, false
 	for _, tc := range []struct {
 		name     string
 		platform ChatPlatform
@@ -293,43 +236,17 @@ func TestPlatformMismatches(t *testing.T) {
 		{"a channel on a platform that takes no channel ID: unsupported, and no panic", noChannels, func(*Binding) {}, []PlatformMismatch{
 			{Path: "spec.chat.channel", Unsupported: true, Problem: "an ID of this kind is not supported", Fix: "remove it: the platform takes no such ID"},
 		}},
-		{"output final on Slack", slack(t), func(b *Binding) { b.Spec.Chat.Output = OutputFinal }, nil},
-		{"a kourier-v1 Binding on kourier-v1", platformOf(t, kourierV1Spec), func(b *Binding) {
-			b.Spec.Chat.Channel = "ch-7"
-			bot(b).From.ID = "billing-bot"
-			b.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "alice"}}
-			b.Spec.Interactions.AskUser, b.Spec.Feedback.Enabled = false, false
-		}, nil},
-		{"what kourier-v1 does not serve, in the order of the fields", platformOf(t, kourierV1Spec), func(b *Binding) {
-			b.Spec.Chat.Channel = "C0123456789"
-			b.Spec.Interactions.ToolApprovals = true
+		{"questions, tool approvals and feedback on a platform without them, in the order of the fields", noButtons, func(b *Binding) {
+			b.Spec.Interactions.AskUser, b.Spec.Interactions.ToolApprovals, b.Spec.Feedback.Enabled = true, true, true
 		}, []PlatformMismatch{
 			{Path: "spec.interactions.askUser", Unsupported: true, Problem: "questions to a person are not supported", Fix: "set it to false"},
 			{Path: "spec.interactions.toolApprovals", Unsupported: true, Problem: "tool approvals are not supported", Fix: "set it to false"},
 			{Path: "spec.feedback.enabled", Unsupported: true, Problem: "feedback buttons are not supported", Fix: "set it to false"},
 		}},
-		{"IDs with '/' and '[', which kourier-v1 leaves out", platformOf(t, kourierV1Spec), func(b *Binding) {
-			b.Spec.Chat.Channel = "octo-org/hello-world"
-			bot(b).From.ID = "dependabot[bot]"
-			b.Spec.Interactions.AskUser, b.Spec.Feedback.Enabled = false, false
-		}, []PlatformMismatch{
-			{Path: "spec.chat.channel", Problem: `"octo-org/hello-world" is not a channel ID`, Fix: "use the channel's ID as the sender sends it: letters, digits, '.', '_' and '-', starting with a letter or a digit, such as ch-1"},
-			{Path: "spec.chat.triggers[1].from.id", Problem: `"dependabot[bot]" is not a sender ID`, Fix: "use the sender's ID as the sender sends it: letters, digits, '.', '_' and '-', starting with a letter or a digit"},
-		}},
-		{"a kourier-v1 ID over its length", platformOf(t, kourierV1Spec), func(b *Binding) {
-			b.Spec.Chat.Channel = "c" + strings.Repeat("1", maxKourierV1IDLen)
-			b.Spec.Interactions.AskUser, b.Spec.Feedback.Enabled = false, false
-		}, []PlatformMismatch{
-			{Path: "spec.chat.channel", Problem: "is 65 bytes, longer than the 64 byte limit of a channel ID",
-				Fix: "use the channel's ID as the sender sends it: letters, digits, '.', '_' and '-', starting with a letter or a digit, such as ch-1"},
-		}},
+		{"output final on Slack", slack(t), func(b *Binding) { b.Spec.Chat.Output = OutputFinal }, nil},
 		{"a Slack channel's name on Slack, which the schema takes", slack(t), func(b *Binding) { b.Spec.Chat.Channel = "general" }, []PlatformMismatch{
 			{Path: "spec.chat.channel", Problem: `"general" is not a channel ID`, Fix: "use the channel's ID, such as C0123456789 (G… for an older private channel), not its name"},
 		}},
-		{"a channel's name on kourier-v1, which needs no digit", platformOf(t, kourierV1Spec), func(b *Binding) {
-			b.Spec.Chat.Channel = "general"
-			b.Spec.Interactions.AskUser, b.Spec.Feedback.Enabled = false, false
-		}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := load[Binding](t, "binding.yaml")

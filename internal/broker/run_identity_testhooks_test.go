@@ -110,16 +110,16 @@ func TestTheIdentityOfAConnectionIsAskedOfItsOwnPlatform(t *testing.T) {
 	c := RunConfig{}
 	c.hooks.SlackAPIURL = f.url()
 
-	web := connWithBotToken("xoxb-w1")
-	web.Platform = "web"
-	if id, err := c.identityOf(t.Context(), web); err != nil || id != (appIdentity{}) {
-		t.Errorf("identityOf(a web connection) = %+v, %v; want the zero identity and no error", id, err)
+	other := connWithBotToken("xoxb-w1")
+	other.Platform = "other"
+	if id, err := c.identityOf(t.Context(), other); err != nil || id != (appIdentity{}) {
+		t.Errorf("identityOf(a connection of another platform) = %+v, %v; want the zero identity and no error", id, err)
 	}
 	f.mu.Lock()
 	calls := slices.Clone(f.calls)
 	f.mu.Unlock()
 	if len(calls) != 0 {
-		t.Fatalf("Slack was called %v for a web connection; want no call", calls)
+		t.Fatalf("Slack was called %v for a connection of another platform; want no call", calls)
 	}
 
 	id, err := c.identityOf(t.Context(), connWithBotToken("xoxb-w1"))

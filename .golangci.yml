@@ -46,25 +46,16 @@ linters:
             - pkg: github.com/slack-go/slack
               desc: "every package but the adapter, the broker and cmd is platform-neutral (spec 13): slack-go belongs to the Slack adapter"
         chat-is-the-model-alone:
-          files: ["**/internal/chat/*.go", "**/internal/chat/chattest/**", "**/internal/chat/commonmark/**", "!$test"]
+          files: ["**/internal/chat/*.go", "**/internal/chat/chattest/**", "!$test"]
           deny:
             - pkg: github.com/agentkourier/agent-kourier/internal/session
-              desc: "package chat is the chat-neutral model and the Platform contract, chattest tests it and commonmark writes its markdown: what feeds the session manager is the intake's, in internal/trigger"
+              desc: "package chat is the chat-neutral model and the Platform contract, and chattest tests it: what feeds the session manager is the intake's, in internal/trigger"
             - pkg: github.com/agentkourier/agent-kourier/internal/config
-              desc: "package chat is the chat-neutral model and the Platform contract, chattest tests it and commonmark writes its markdown: what reads the routing table is the intake's, in internal/trigger"
+              desc: "package chat is the chat-neutral model and the Platform contract, and chattest tests it: what reads the routing table is the intake's, in internal/trigger"
             - pkg: github.com/agentkourier/agent-kourier/internal/store
-              desc: "package chat is the chat-neutral model and the Platform contract, chattest tests it and commonmark writes its markdown: what keeps trigger threads and limits is the intake's, in internal/trigger"
+              desc: "package chat is the chat-neutral model and the Platform contract, and chattest tests it: what keeps trigger threads and limits is the intake's, in internal/trigger"
             - pkg: github.com/agentkourier/agent-kourier/internal/telemetry
-              desc: "package chat is the chat-neutral model and the Platform contract, chattest tests it and commonmark writes its markdown: what counts and traces the intake is the intake's, in internal/trigger"
-        web-is-a-platform-alone:
-          files: ["**/internal/chat/web/**", "!$test"]
-          deny:
-            - pkg: github.com/agentkourier/agent-kourier/internal/session
-              desc: "the web platform and its profiles speak chat.Platform and hand events to a chat.Sink: what feeds the session manager is the intake's, in internal/trigger"
-            - pkg: github.com/agentkourier/agent-kourier/internal/config
-              desc: "the web platform and its profiles are given their connection, profile and URL by the broker: they read no config"
-            - pkg: github.com/agentkourier/agent-kourier/internal/store
-              desc: "the web platform and its profiles keep nothing: a repeat is dropped by the intake, and the outbox keeps the replies"
+              desc: "package chat is the chat-neutral model and the Platform contract, and chattest tests it: what counts and traces the intake is the intake's, in internal/trigger"
     nolintlint:
       require-explanation: true
       require-specific: true

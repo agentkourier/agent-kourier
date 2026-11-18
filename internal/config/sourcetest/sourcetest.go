@@ -70,7 +70,7 @@ func Run(t *testing.T, f Factory, opts Options) {
 		t.Fatal("Options.Edit is nil: the cases of an edit need it")
 	}
 	spec := Spec(t)
-	for _, c := range append([]Corpus{spec, Web(t)}, Recipes(t)...) {
+	for _, c := range append([]Corpus{spec}, Recipes(t)...) {
 		t.Run("corpus "+c.Name+" reads as the same objects and the same routing table as Load's", func(t *testing.T) { sameObjects(t, f, c) })
 	}
 	t.Run("the fingerprint is the state that Set read, and holds still", func(t *testing.T) { fingerprintHolds(t, f, spec) })
@@ -81,34 +81,6 @@ func Run(t *testing.T, f Factory, opts Options) {
 		t.Run(c.name+" is refused as the route refuses a bad object", func(t *testing.T) { refusedOnPlatform(t, f, opts, c) })
 		t.Run("an edit to "+c.name+" leaves the Binding as it was", func(t *testing.T) { refusedEdit(t, opts, c) })
 	}
-}
-
-// Web returns a corpus of a web connection of the kourier-v1 profile, with the spec corpus' backend and a Binding of one of its
-// channels that names no output: both sources serve it, with the default output, live.
-func Web(t *testing.T) Corpus {
-	const conn = `apiVersion: agentkourier.dev/v1alpha1
-kind: ChatConnection
-metadata: { name: web-main, namespace: agent-kourier-system }
-spec:
-  platform: web
-  web: { profile: kourier-v1, url: "https://receiver.example.com/replies" }
-  credentialsSecretRef: { name: web-main }   # key signingSecret
-  allowedNamespaces: ["sre"]
-`
-	const binding = `apiVersion: agentkourier.dev/v1alpha1
-kind: Binding
-metadata: { name: web-review, namespace: sre }
-spec:
-  agent:
-    backendRef: { namespace: agent-kourier-system, name: kagent-pilot }
-    name: k8s-agent
-    namespace: kagent
-  identity: { userId: agent-kourier-web-review }
-  chat:
-    connectionRef: { namespace: agent-kourier-system, name: web-main }
-    channel: ch-1
-`
-	return Corpus{Name: "web", Docs: []string{Valid(t)[0], conn, binding}, Connection: v1alpha1.ObjectRef{Namespace: ConnectionNamespace, Name: "web-main"}}
 }
 
 // Spec returns the corpus of the API's examples: one backend, one connection and two Bindings, which refer to each other. The
@@ -293,13 +265,6 @@ func sameObjects(t *testing.T, f Factory, c Corpus) {
 	if got != want || strings.HasPrefix(got, "error:") {
 		t.Errorf("strict routing table:\n%s\nwant the same as Load's, which is:\n%s", got, want)
 	}
-	if c.Name == "web" {
-		// The Binding names no output, and is served with the default, live, strictly and object by object.
-		const route = "sre/web-review -> agent-kourier-system/kagent-pilot on agent-kourier-system/web-main channel ch-1 output live\n"
-		if partial := routing(set); partial != route || got != route {
-			t.Errorf("routing table:\n%s\nstrictly:\n%s\nwant each:\n%s", partial, got, route)
-		}
-	}
 	if c.Name != "spec" {
 		return
 	}
@@ -431,11 +396,12 @@ var crossCases = []crossCase{
 // chatOnlyRoute is the routing line of the spec corpus' Binding sre/chat-only, which names no output and is served with the default.
 const chatOnlyRoute = "sre/chat-only -> agent-kourier-system/kagent-pilot on agent-kourier-system/slack-main channel G0123456789 output live\n"
 
-// platformCase is a change to a Binding of a corpus that the load takes and its connection's platform does not, with the reason and
-// the problem that resolution gives; how a Snapshot serves the field, before the change; and the routing table of the rest.
+// platformCase is a change to a Binding of the spec corpus that the load takes and its connection's platform does not, with the
+// reason and the problem that resolution gives; how a Snapshot serves the field, before the change; and the routing table of the
+// rest. Each case is a chat ID: Slack, the one platform, serves every feature, so no source can be given a Binding that asks for one
+// it does not; TestUnsupportedOnPlatform and TestRefusedOnPlatform in internal/config cover that refusal with a table of their own.
 type platformCase struct {
 	name     string
-	corpus   func(*testing.T) Corpus
 	doc      int    // the Binding's document in the corpus
 	binding  string // the Binding's name, in namespace sre
 	from, to string
@@ -448,7 +414,7 @@ type platformCase struct {
 
 var platformCases = []platformCase{
 	{
-		name: "a chat ID that the connection's platform does not take", corpus: Spec, doc: 2, binding: "sre-alerts", rest: chatOnlyRoute,
+		name: "a chat ID that the connection's platform does not take", doc: 2, binding: "sre-alerts", rest: chatOnlyRoute,
 		from: "from: { id: B0123456789 }", to: "from: { id: alertmanager }",
 		reason:  config.ReasonInvalidPlatformID,
 		problem: `spec.chat.triggers[1].from.id: "alertmanager" is not a bot ID on Slack, the platform of ChatConnection agent-kourier-system/slack-main`,
@@ -456,19 +422,11 @@ var platformCases = []platformCase{
 	},
 	{
 		// A channel's name passes Validate, which takes any platform's IDs, and the connection's platform refuses it.
-		name: "a channel's name on Slack", corpus: Spec, doc: 2, binding: "sre-alerts", rest: chatOnlyRoute,
+		name: "a channel's name on Slack", doc: 2, binding: "sre-alerts", rest: chatOnlyRoute,
 		from: "channel: C0123456789 ", to: "channel: general ",
 		reason:  config.ReasonInvalidPlatformID,
 		problem: `spec.chat.channel: "general" is not a channel ID on Slack, the platform of ChatConnection agent-kourier-system/slack-main`,
 		served:  func(rb config.ResolvedBinding) string { return rb.Binding.Spec.Chat.Channel }, before: "C0123456789",
-	},
-	{
-		// The kourier-v1 profile has no buttons: a Binding that asks for the feedback buttons is refused, and the edit does not take.
-		name: "a feature that a web profile does not serve", corpus: Web, doc: 2, binding: "web-review",
-		from: "    channel: ch-1\n", to: "    channel: ch-1\n  feedback: { enabled: true }\n",
-		reason:  config.ReasonUnsupportedOnPlatform,
-		problem: `spec.feedback.enabled: feedback buttons are not supported on web (kourier-v1 profile), the platform of ChatConnection agent-kourier-system/web-main`,
-		served:  func(rb config.ResolvedBinding) string { return fmt.Sprint(rb.Binding.Spec.Feedback.Enabled) }, before: "false",
 	},
 }
 
@@ -483,12 +441,12 @@ func (c platformCase) changed(t *testing.T, docs []string) []string {
 	return docs
 }
 
-// refusedOnPlatform: a Binding that names a chat ID or asks for a feature that its connection's platform does not take passes
+// refusedOnPlatform: a Binding that names a chat ID that its connection's platform does not take passes
 // Default and Validate, and the platform refuses it, in the same words on either route. The files fail resolution, and so the
 // whole load. The custom resources refuse that Binding as they refuse one that fails Validate, with the platform's reason: it is
 // listed in Set.Invalid, with nothing served in its place, and the rest is read and served.
 func refusedOnPlatform(t *testing.T, f Factory, opts Options, c platformCase) {
-	base := c.corpus(t)
+	base := Spec(t)
 	src := f(t, Corpus{Name: base.Name, Docs: c.changed(t, base.Docs), Connection: base.Connection})
 	set, _ := read(t, src)
 	if !opts.PerObject {
@@ -509,12 +467,12 @@ func refusedOnPlatform(t *testing.T, f Factory, opts Options, c platformCase) {
 	}
 }
 
-// refusedEdit: an edit that gives a serving Binding what its platform does not take does not take, on either route, as an edit
+// refusedEdit: an edit that gives a serving Binding a chat ID that its platform does not take does not take, on either route, as an edit
 // that fails Validate does not. The files fail the reload with the problem, and the Reloader keeps the config it serves. The custom
 // resources keep serving the Binding's last good generation, and the Report says why the new one is refused, with the platform's
 // reason, which the Binding's status carries.
 func refusedEdit(t *testing.T, opts Options, c platformCase) {
-	base := c.corpus(t)
+	base := Spec(t)
 	docs := base.Docs
 	src, change := opts.Edit(t, Corpus{Name: base.Name, Docs: docs, Connection: base.Connection})
 	first, _ := read(t, src)

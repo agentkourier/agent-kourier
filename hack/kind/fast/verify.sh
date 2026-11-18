@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Prove, against a running agent-kourier-fast cluster, that each component answers from inside it and
-# that the unauthenticated /_control/ surfaces, the fake Slack's, the fake web sender's and the stub agent's release
+# that the unauthenticated /_control/ surfaces, the fake Slack's and the stub agent's release
 # endpoint, are published nowhere (spec 12.1).
 # Every check prints "ok: ..." or "FAIL: ..." (exit 1). Two groups:
 #  1. host side, lib.sh's assert_never_published (full/verify.sh runs it too): every Service that
-#     selects the pods of the fake Slack, the stub agent, hitlagent or the fake web is ClusterIP with no nodePort, external IP
+#     selects the pods of the fake Slack, the stub agent or hitlagent is ClusterIP with no nodePort, external IP
 #     or load-balancer ingress; no Ingress in e2e; none of those pods has a hostPort or
 #     hostNetwork; the kind node publishes only the API server, on loopback;
 #  2. Agent Kourier: its pods (one, or two with E2E_REPLICAS=2), ready (the Deployment's rollout has finished and the API server can reach

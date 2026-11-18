@@ -190,30 +190,30 @@ func TestTheGuardReadsOnlyTheBotsOfItsOwnPlatform(t *testing.T) {
 			MaxRunsPerDay: new(int32(0)),
 		}}
 	g := newGuardRig(t, v1alpha1.Trigger{Type: v1alpha1.TriggerMention}, trigger)
-	g.table.identify("team-c/web", appIdentity{Platform: "web", Bot: "BWEB", User: "UWEB"})
+	g.table.identify("team-c/other", appIdentity{Platform: "other", Bot: "BOTHER", User: "UOTHER"})
 
-	if !g.guard.AcceptsBotMention("C1", "BWEB") {
-		t.Error("AcceptsBotMention(BWEB) = false; want the ID of a bot of another platform to be the Intake's here")
+	if !g.guard.AcceptsBotMention("C1", "BOTHER") {
+		t.Error("AcceptsBotMention(BOTHER) = false; want the ID of a bot of another platform to be the Intake's here")
 	}
-	if err := g.guard.Message(t.Context(), mention("BWEB", "100.1")); err != nil {
+	if err := g.guard.Message(t.Context(), mention("BOTHER", "100.1")); err != nil {
 		t.Fatal(err)
 	}
-	post := chat.Inbound{At: chat.Ref{Platform: "slack", Conn: "team-a/slack", Channel: "C1", ID: "101.1"}, User: "UWEB", Text: "checkout is down"}
+	post := chat.Inbound{At: chat.Ref{Platform: "slack", Conn: "team-a/slack", Channel: "C1", ID: "101.1"}, User: "UOTHER", Text: "checkout is down"}
 	if err := g.guard.Message(t.Context(), post); err != nil {
 		t.Fatal(err)
 	}
-	if got := g.started(); len(got) != 2 || got[0] != "BWEB" || got[1] != "UWEB" {
-		t.Errorf("started by %v; want the mention by BWEB and the post by UWEB, which are no bots of this broker on Slack", got)
+	if got := g.started(); len(got) != 2 || got[0] != "BOTHER" || got[1] != "UOTHER" {
+		t.Errorf("started by %v; want the mention by BOTHER and the post by UOTHER, which are no bots of this broker on Slack", got)
 	}
 
-	web := botGuard{self: "team-c/web", platform: "web", bots: g.table}
+	elsewhere := botGuard{self: "team-c/other", platform: "other", bots: g.table}
 	for _, bot := range []string{"BOWN", "BTEAMA", "BTEAMB"} {
-		if web.other(bot) {
-			t.Errorf("the guard of the web connection reads the Slack bot %s as another connection's of this broker", bot)
+		if elsewhere.other(bot) {
+			t.Errorf("the guard of the other platform's connection reads the Slack bot %s as another connection's of this broker", bot)
 		}
 	}
-	if web.otherUser("UOWN") {
-		t.Error("the guard of the web connection reads the user of the own Slack bot as another connection's bot")
+	if elsewhere.otherUser("UOWN") {
+		t.Error("the guard of the other platform's connection reads the user of the own Slack bot as another connection's bot")
 	}
 	if !g.guard.other("BTEAMB") || !g.guard.otherUser("UTEAMB") {
 		t.Error("the guard of team-a no longer reads team-b's Slack bot as another connection's; want Slack's guard unchanged")

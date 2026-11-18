@@ -394,8 +394,7 @@ do for you, and `podDisruptionBudget.enabled` with `minAvailable: 1` so a drain 
 ## Chat listener
 
 `chatListener.enabled` opens the chat listener (`AGENTKOURIER_CHAT_LISTEN`, on `chatListener.port`, 8081 by default), the port a chat
-platform sends its requests to: `POST /chat/<platform>/<namespace>/<name>`. A Slack ChatConnection with `spec.slack.mode: http` needs it,
-and so does every web ChatConnection (`spec.platform: web`), whose sender sends to `/chat/web/<namespace>/<name>`.
+platform sends its requests to: `POST /chat/<platform>/<namespace>/<name>`. A Slack ChatConnection with `spec.slack.mode: http` needs it.
 It is apart from the metrics port, so `/metrics` is never on it. Off, the default, the broker opens no such port.
 
 Only the leader serves the chat routes; a standby answers 503 to each. So the chat Service, `<fullname>-chat`, selects the Deployment's

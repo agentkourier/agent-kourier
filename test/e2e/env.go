@@ -33,8 +33,6 @@ type Env struct {
 	// SignalerURL is the container signaler (test/signaler), which the fast tier brings up with two Agent Kourier replicas
 	// and the failover scenario uses to freeze or kill a replica's process.
 	SignalerURL string
-	// WebURL is the fake web sender and receiver (test/fakeweb), the far side of the web ChatConnections of the tier on custom resources.
-	WebURL string
 	// Tier is the tier the runner is in, "fast" or "full", from E2E_TIER (hack/kind/e2e-run.sh sets it). It
 	// has no default: a test that needs it must fail when it is missing, not guess.
 	Tier string
@@ -154,7 +152,7 @@ func (e Env) labelsOf(namespace string) (labels.Set, error) {
 }
 
 // NewEnv reads E2E_SLACK_URL, E2E_SINK_URL, E2E_STUB_URL, E2E_ALERTMANAGER_URL and
-// E2E_AGENTKOURIER_URL, E2E_SIGNALER_URL, E2E_WEB_URL, E2E_TIER, E2E_CONFIG_SOURCE, E2E_PHASE, E2E_SLACK_MODE, E2E_CHAT_CONNECTION, E2E_CONNECTION_NAMESPACES,
+// E2E_AGENTKOURIER_URL, E2E_SIGNALER_URL, E2E_TIER, E2E_CONFIG_SOURCE, E2E_PHASE, E2E_SLACK_MODE, E2E_CHAT_CONNECTION, E2E_CONNECTION_NAMESPACES,
 // E2E_CONNECTION_NAMESPACE_SELECTOR and E2E_NAMESPACES through getenv (os.Getenv in a runner); an unset or empty variable takes its
 // default.
 func NewEnv(getenv func(string) string) Env {
@@ -172,7 +170,6 @@ func NewEnv(getenv func(string) string) Env {
 		ScenarioMCPURL:              get("E2E_SCENARIO_MCP_URL", "http://scenariomcp.kagent.svc.cluster.local:8082"),
 		AgentKourierURL:             get("E2E_AGENTKOURIER_URL", "http://agent-kourier.agent-kourier.svc.cluster.local:8080"),
 		SignalerURL:                 get("E2E_SIGNALER_URL", "http://signaler.e2e.svc.cluster.local:8080"),
-		WebURL:                      get("E2E_WEB_URL", "http://fakeweb.e2e.svc.cluster.local:8080"),
 		Tier:                        getenv("E2E_TIER"),
 		ConfigSource:                get("E2E_CONFIG_SOURCE", "files"),
 		Phase:                       getenv("E2E_PHASE"),

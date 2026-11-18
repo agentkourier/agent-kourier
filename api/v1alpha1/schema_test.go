@@ -266,12 +266,6 @@ func TestSchemaEnumsListTheEmptyValueExactlyWhereTheBrokerAcceptsIt(t *testing.T
 			o.Default()
 			return o.Validate()
 		}},
-		{conns.at(t, "spec.web.profile"), "web profile", func(t *testing.T) error {
-			o := load[ChatConnection](t, "chatconnection.yaml")
-			o.Spec.Platform, o.Spec.Web = PlatformWeb, &WebConnectionSpec{Profile: ""}
-			o.Default()
-			return o.Validate()
-		}},
 		{conns.at(t, "spec.slack.mode"), "slack mode", func(t *testing.T) error {
 			o := load[ChatConnection](t, "chatconnection.yaml")
 			o.Spec.Slack = &SlackConnectionSpec{Mode: ""}
@@ -364,7 +358,6 @@ func TestSchemaCapsEqualTheBrokersCaps(t *testing.T) {
 		{"connection allowedNamespaces", connections.at(t, "spec.allowedNamespaces"), "maxItems", maxAllowedNamespaces},
 		// The broker counts bytes and the schema characters, so the schema is never the stricter of the two.
 		{"backend url", backends.at(t, "spec.url"), "maxLength", maxURLLen},
-		{"web reply url", connections.at(t, "spec.web.url"), "maxLength", maxURLLen},
 		{"header value", backends.at(t, "spec.headers[].value"), "maxLength", maxHeaderValueLen},
 		{"channel", bindings.at(t, "spec.chat.channel"), "maxLength", maxChatIDLen},
 		{"sender ID", bindings.at(t, trigger+".from.id"), "maxLength", maxChatIDLen},

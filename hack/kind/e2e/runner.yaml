@@ -211,7 +211,7 @@ spec:
         - name: e2e
           image: agent-kourier-e2e/runner:dev
           imagePullPolicy: Never
-          args: ["-test.v", "-test.run=^Test(Smoke|Fault.*|S[0-9]+_.*|AX_.*|A2A_.*|Verify_.*|CR_.*|WEB_.*)$", "-test.timeout=20m"]
+          args: ["-test.v", "-test.run=^Test(Smoke|Fault.*|S[0-9]+_.*|AX_.*|A2A_.*|Verify_.*|CR_.*)$", "-test.timeout=20m"]
           # The tier the Job runs in: e2e-run.sh puts fast or full here, so that a test can tell a tier
           # that has Agent Kourier from one that does not yet.
           # E2E_CONFIG_SOURCE is where the tier's Agent Kourier reads its config from, files (the ConfigMap) or crds (custom resources): e2e-run.sh

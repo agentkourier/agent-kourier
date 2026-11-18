@@ -752,7 +752,7 @@ func TestAVoteOnAPlatformWithNoEphemeralMessagesIsNotAFault(t *testing.T) {
 		err       error
 		wantLevel string
 	}{
-		"no ephemeral messages": {fmt.Errorf("web: %w", chat.ErrNoEphemeral), "level=DEBUG"},
+		"no ephemeral messages": {fmt.Errorf("other: %w", chat.ErrNoEphemeral), "level=DEBUG"},
 		"another failure":       {errors.New("slack down"), "level=WARN"},
 	} {
 		t.Run(name, func(t *testing.T) {

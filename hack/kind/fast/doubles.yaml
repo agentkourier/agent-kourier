@@ -1,11 +1,10 @@
 # The fast tier's test doubles, from the one image up-fast.sh builds and loads. Every Service is
 # ClusterIP and stays that way: the fake Slack's /_control/ and the stub agent's
 # /_control/release/ have no authentication, so their ports are never published (no NodePort,
-# Ingress, LoadBalancer or hostPort). verify.sh checks that for both, for the fake web sender's /_control/, and for hitlagent, which checks no credential.
+# Ingress, LoadBalancer or hostPort). verify.sh checks that for both, and for hitlagent, which checks no credential.
 # Agent Kourier reaches them at fakeslack.e2e.svc.cluster.local:8080 (slack-go API URL plus "/"),
 # stubagent.e2e.svc.cluster.local:8080/agents/kagent/<agent>, hitlagent.e2e.svc.cluster.local:8080/ (an A2A agent
-# written from the agent contract alone, test/hitlagent), sink.e2e.svc.cluster.local:8080 and fakeweb.e2e.svc.cluster.local:8080/replies (the
-# kourier-v1 connection's replies).
+# written from the agent contract alone, test/hitlagent) and sink.e2e.svc.cluster.local:8080.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -162,49 +161,4 @@ metadata:
 spec:
   type: ClusterIP
   selector: {app: sink}
-  ports: [{port: 8080, targetPort: 8080}]
----
-# The far side of the web ChatConnection (test/fakeweb; hack/kind/fast/web, which only the tier on custom resources serves): the sender POSTs the
-# requests the WEB_ tests ask for, signed as kourier-v1, to the broker's chat Service, and the receiver is the kourier-v1 connection's spec.web.url,
-# which checks and keeps the replies. Its /_control/ has no authentication, so its port is never published (verify.sh checks it). The secret is a fake
-# constant, the same that lib.sh's deploy_web puts in the connection's Secret (test/kindmanifests pins that they agree).
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: fakeweb
-  namespace: e2e
-spec:
-  replicas: 1
-  selector:
-    matchLabels: {app: fakeweb}
-  template:
-    metadata:
-      labels: {app: fakeweb}
-    spec:
-      automountServiceAccountToken: false
-      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
-      containers:
-        - name: fakeweb
-          image: agent-kourier-e2e/fast-doubles:dev
-          imagePullPolicy: Never
-          command:
-            - /fakeweb
-            - -addr
-            - 0.0.0.0:8080
-            - -chat-url
-            - http://agent-kourier-chat.agent-kourier.svc.cluster.local:8081
-            - -kourier-v1-secret
-            - fake-web-kourier-signing-secret
-          ports: [{containerPort: 8080}]
-          readinessProbe: {tcpSocket: {port: 8080}}
-          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: fakeweb
-  namespace: e2e
-spec:
-  type: ClusterIP
-  selector: {app: fakeweb}
   ports: [{port: 8080, targetPort: 8080}]

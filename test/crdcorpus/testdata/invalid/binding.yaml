@@ -1495,7 +1495,7 @@ spec:
     connectionRef: {name: slack}
     channel: general
 ---
-# rule: binding/spec.chat.channel: a colon, which a kourier-v1 ID leaves out
+# rule: binding/spec.chat.channel: a colon, which a message's ID joins its parts with
 # want: spec.chat.channel: invalid channel "ch:1"
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
@@ -1535,24 +1535,3 @@ spec:
     connectionRef: {name: slack}
     channel: C0123456789
     mentions: [{name: oncall, user: .octocat}]
----
-# rule: binding/spec.chat.channel: a repository, on the kourier-v1 profile
-# want: spec.chat.channel: "octo-org/hello-world" is not a channel ID on web (kourier-v1 profile)
-# schema: accepts
-# broker-only: a chat ID's shape is its connection's platform's, which the schema of a Binding cannot read: the broker holds the ID to it when it resolves the Binding with its connection
-# connection: web/kourier-v1
-apiVersion: agentkourier.dev/v1alpha1
-kind: Binding
-metadata:
-  name: alerts
-  namespace: sre
-spec:
-  agent:
-    backendRef: {name: kagent}
-    name: k8s-agent
-    namespace: kagent
-  identity:
-    userId: agent-kourier-sre
-  chat:
-    connectionRef: {name: web}
-    channel: octo-org/hello-world

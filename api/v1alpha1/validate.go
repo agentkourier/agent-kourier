@@ -81,11 +81,10 @@ const (
 //     a 100-character name (GitHub's own limits, unverified here); each platform holds its IDs to its own cap when the broker
 //     resolves the Binding (a Slack connection to 32, maxSlackIDLen). A mention's name is already bounded by its pattern, to 63,
 //     and maxMentionNameLen says so as a cap, so that the schema has a maxLength for it and a value over one is refused without
-//     being shown. maxMentionUserLen 64 fits a kourier-v1 ID (maxKourierV1IDLen); a Slack user ID is 21 at most, by its pattern.
+//     being shown. maxMentionUserLen 64 is above every platform served today: a Slack user ID is 21 at most, by its pattern.
 //   - maxEmojiLen 100: the default reaction, hourglass_flowing_sand, is 21. Slack's own limit on a custom emoji name is
 //     100 characters (unverified: not readable in this repository).
-//   - maxURLLen 2048, for an AgentBackend's url and a web connection's: the longest URL in an example or a test fixture is under
-//     100 characters.
+//   - maxURLLen 2048: the longest URL in an example or a test fixture is under 100 characters.
 //   - maxHeaderValueLen 4096: a static header value in an example is under 50 bytes, and a secret goes in valueSecretRef.
 //   - maxExtractNameLen 63, as a mention name: the longest extract name in an example is 9 characters. A closeWhen key
 //     must be an extract name, so it is bounded too.
@@ -303,7 +302,7 @@ func (c *ChatConnection) Validate() error {
 	var p problems
 	p.meta(c.ObjectMeta)
 	s := &c.Spec
-	p.oneOf("spec.platform", s.Platform, PlatformSlack, PlatformWeb)
+	p.oneOf("spec.platform", s.Platform, PlatformSlack)
 	p.name("spec.credentialsSecretRef.name", s.CredentialsSecretRef.Name)
 	p.namespaces("spec.allowedNamespaces", s.AllowedNamespaces)
 	if s.Slack != nil {
@@ -314,68 +313,7 @@ func (c *ChatConnection) Validate() error {
 			p.oneOf("spec.slack.mode", string(s.Slack.Mode), string(SlackModeSocket), string(SlackModeHTTP))
 		}
 	}
-	switch {
-	case s.Web != nil:
-		if s.Platform != PlatformWeb {
-			p.add("spec.web", "is set, but only a web connection has one")
-		}
-		p.web(s.Web)
-	case s.Platform == PlatformWeb:
-		p.add("spec.web", "is required on a web connection: it names the profile")
-	}
 	return errors.Join(p...)
-}
-
-// web checks the settings of a web connection: a profile the API knows (ChatPlatformOf), and the URL that Agent Kourier posts the
-// agent's replies to.
-func (p *problems) web(w *WebConnectionSpec) {
-	if w.Profile == "" {
-		p.add("spec.web.profile", "required")
-	} else if _, known := ChatPlatformOf(ChatConnectionSpec{Platform: PlatformWeb, Web: w}); !known {
-		names := make([]string, 0, len(webProfiles()))
-		for _, n := range webProfiles() {
-			names = append(names, string(n))
-		}
-		p.oneOf("spec.web.profile", string(w.Profile), names...)
-	}
-	if w.URL == "" {
-		p.add("spec.web.url", "is required: Agent Kourier posts the agent's replies to it")
-	} else {
-		p.webURL(w.URL)
-	}
-}
-
-// webHTTPURL is the only form of an http reply URL: to localhost, a loopback address or a Service in the cluster (a host that ends
-// in .svc or .svc.cluster.local, the default cluster domain), with an optional port. A reply carries what the agent wrote, and its
-// signature does not hide it, so plain http may go only where the request does not leave the pod or the cluster. It reads the URL
-// as written, not as url.Parse reads it, so that the schema's rule, whose regex is this literal, refuses no URL that Validate
-// accepts (TestTheWebHTTPRuleIsValidatesRegex): a host that url.Parse decodes from %XX, say, matches neither.
-var webHTTPURL = regexp.MustCompile(`(?i)^http://(?:localhost|127(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}|\[::1\]|(?:[a-z0-9-]+\.)+svc(?:\.cluster\.local)?)(?::[0-9]{1,5})?(?:[/?#]|$)`)
-
-// webURL checks the reply URL of a web connection, as backendURL does an AgentBackend's, and holds an http one to webHTTPURL.
-func (p *problems) webURL(raw string) {
-	const path = "spec.web.url"
-	if len(raw) > maxURLLen {
-		// Not parsed, and no verdict below is given: each shows the host, which is as long as the URL may be.
-		p.maxBytes(path, raw, maxURLLen)
-		return
-	}
-	u, err := url.Parse(raw)
-	// A message shows the scheme and the host at most, as backendURL's do: not a path or a query, where a token may ride.
-	shown := func() string { return (&url.URL{Scheme: u.Scheme, Host: u.Host}).String() }
-	switch {
-	case err != nil:
-		p.add(path, "must be an http or https URL with a host")
-	case u.User != nil:
-		p.add(path, "must not contain credentials; the replies are signed with the Secret's signingSecret")
-	case (u.Scheme != "http" && u.Scheme != "https") || u.Host == "":
-		p.add(path, "invalid URL %q: must be an http or https URL with a host", shown())
-	case strings.ContainsAny(raw, "?#"):
-		p.add(path, "must not have a query or fragment")
-	case u.Scheme == "http" && !webHTTPURL.MatchString(raw):
-		p.add(path, "invalid URL %q: http is allowed only to localhost, a loopback address or a Service in the cluster "+
-			"(a host that ends in .svc or .svc.cluster.local); use https", shown())
-	}
 }
 
 // Validate reports every per-object rule the object breaks, joined, each naming the field
