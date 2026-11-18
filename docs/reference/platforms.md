@@ -111,9 +111,15 @@ never edited after keeps its text without them. A text whose ID is longer than 6
 remembers which buttons it posted under which text, so that an edit with the same buttons does not post them again, and an edit with
 other buttons edits their card; if that card is gone (someone deleted it), the broker posts the buttons anew, and if that post fails
 for this try only, the edit fails and is tried again. It forgets the oldest past
-4096, and remembers nothing across a restart or between replicas, where such an edit posts them a second time ([Limits](limits.md)). The
-two posts were not checked on a test tenant: that Teams answers each with its ID, as it did for every card posted alone, and that a
-press of the card names the card's message, as it did for a question's card, follow from the checks above.
+4096, and remembers nothing across a restart or between replicas, where such an edit posts them a second time ([Limits](limits.md)).
+
+On a test tenant in November 2026, with the web client, a reply that opened a thread was posted this way: Teams gave the text and the
+card each its own ID, put the card in as the text's reply, and showed the text and then the card. A press of the card came with the
+card's ID as the message pressed, in the text's thread, and with the card's data whole (the button, its value, the text's ID and the
+MAC); the broker took it as a press of the text, and refused the same press with another text's ID. The answer to the press showed as
+a banner under the card. The client showed the reply under the text only after the page was reloaded. Not checked: a reply posted
+into a thread that was already open, an edit that posts or edits the card, a rate limit on the card's post, and Teams' mobile and
+desktop clients.
 
 The ending names who decided with a mention, which Teams styles and which notifies the person. Teams shows the text that Agent
 Kourier writes in the mention, not the person's name, so when it edits the card the broker reads the name from the Bot Connector's
@@ -226,8 +232,8 @@ opened a thread, and so did the `id` of the two kinds of card element that the b
 little space under the text. The span was tried only at the end of a text. Teams' mobile and desktop clients, screen readers, Teams'
 search and notifications, and the order in which Graph lists a channel's messages were not checked.
 
-A reply with buttons is posted as its text and then a card of its buttons, two messages that each should get their own ID (not
-measured: Teams answered every card posted alone with its ID). Teams answered one message of text and a card with no ID in November
+A reply with buttons is posted as its text and then a card of its buttons, two messages that each get their own ID (seen on a test
+tenant in November 2026, for a reply that opened a thread). Teams answered one message of text and a card with no ID in November
 2026, on a test tenant, and showed it as two messages, the text with the span and a card of the buttons with no tag. If the broker stops between the two posts, the outbox's lookup finds the text by its tag and
 records it, and the buttons are posted only if the reply is edited with them after.
 

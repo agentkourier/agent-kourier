@@ -647,8 +647,12 @@ Rules:
   Teams answers 404 forgets the card and posts it anew; if Teams refuses that for good, the update logs it at WARN and succeeds, since
   the text was edited, and a failure for this try only fails the update, whose retry posts the card. After a restart, on another replica or past the bound, an update with buttons posts them again. A message has one writer at
   a time (the turn's live run), so the cards' record takes no lock per message. No edit follows a button's press (the presser's words are the invoke's answer), and nothing takes buttons off.
-  Not measured: that the two posts each get 201 and an ID, and that the card's press names the card's message (both as measured for
-  a prompt's card).
+  Measured on a test tenant (web client, November 2026) for a post that opens a thread: the text and the card each got an ID, the
+  card went in as the text's reply, and the client showed the text, then the card (the reply only after a page reload). The card's
+  press came with replyToId the card's ID, the conversation naming the text's thread, and the data whole (button, value, of, mac);
+  the press check took it as the text's and refused it with `of` changed; the invoke's answer showed as a banner under the card.
+  Not measured: a post into a thread already open, an Update that posts or PUTs the card, a 429 on the card, mobile and desktop
+  clients.
   No `<` of the agent's, a person's or an alert's text reaches Teams raw, so only the adapter writes a span. Find reads the thread's
   replies with the same bounds, or for a post with no thread the channel's messages (`GET …/channels/{channel}/messages`, at most 4
   pages, the first that Graph gives: Microsoft documents them as sorted by each thread's last change, not in which direction, and the

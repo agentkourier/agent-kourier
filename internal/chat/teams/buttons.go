@@ -21,8 +21,9 @@ import (
 // This file posts a message's buttons under its text, as a card of their own. Teams answered one activity of text and a card 202 with
 // no ID, and showed it as two messages, the text and a card of the buttons alone (measured on a test tenant, web client, 2026-11-18):
 // so the text is posted alone, and is the message that Post returns and the outbox records, and the buttons follow it as a card
-// alone, which Teams answered 201 with an ID for every card alone that was posted (a question's and a tool approval's). That the card
-// of buttons gets one too was not measured.
+// alone, which Teams answered with an ID for every card alone that was posted: a question's, a tool approval's, and the card of
+// buttons under a text that opened a thread, put in as the text's reply (measured on the same tenant and client, November 2026; a
+// post into a thread already open, an edit of the card and a 429 on it were not).
 //
 // The card names the text (buttonsCard's "of"), so that a press of it is a press of the message that Post returned (press). A press's
 // data comes from the presser's client, so the text is bound to the card: each action carries an HMAC-SHA256 of the connection, the
