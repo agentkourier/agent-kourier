@@ -34,7 +34,9 @@ post twice. Agent Kourier prevents that with an outbox:
 A queued post, such as a notice, is looked up the same way before it is posted, unless the leader queued it itself
 and has not tried to post it yet: nothing can have posted it, so it is posted at once, with no lookup. Once an attempt
 has begun, the row is looked up before the next, so a post that failed or timed out, and may have landed all the same,
-is not repeated. Which rows are untried is kept in memory, so after a restart or a takeover every row is looked up first.
+is adopted if the lookup finds it rather than sent again (on Microsoft Teams a lookup can miss a post, which is then sent
+and may show twice: see [Finding a post again on Microsoft Teams](../reference/platforms.md#finding-a-post-again-on-microsoft-teams)).
+Which rows are untried is kept in memory, so after a restart or a takeover every row queued before it is looked up first.
 
 Edits are naturally idempotent. Reactions also go through the outbox; adding a reaction that is already there counts
 as delivered. The agent's questions are posts too, and go through the outbox under the interaction's ID.

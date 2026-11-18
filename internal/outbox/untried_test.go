@@ -207,13 +207,18 @@ func TestARowWhoseConnectionIsDownStaysUntried(t *testing.T) {
 	}
 }
 
-// createHook is a store whose CreateOutbox calls after once the row is written, before it returns.
+// createHook is a store whose CreateOutbox calls after once the row is written, before it returns; or, with err, writes nothing
+// and fails with err.
 type createHook struct {
 	store.Outbox
 	after func()
+	err   error
 }
 
 func (s *createHook) CreateOutbox(ctx context.Context, row store.OutboxEntry) (bool, error) {
+	if s.err != nil {
+		return false, s.err
+	}
 	created, err := s.Outbox.CreateOutbox(ctx, row)
 	if err == nil && s.after != nil {
 		after := s.after
@@ -226,8 +231,19 @@ func (s *createHook) CreateOutbox(ctx context.Context, row store.OutboxEntry) (b
 // TestEveryWayOutOfTheBacklogLeavesTheSet: the set holds only rows that are queued and untried, so it is bounded by the backlog.
 // A row that leaves the backlog by any path leaves the set too: posted by the drain, posted by a Send of the same ID, abandoned
 // past Retention, cancelled by the removal of its reaction, and tried by a drain while its Enqueue was still writing it (which
-// must not then mark it untried, or it would stay for good).
+// must not then mark it untried, or it would stay for good). A write that fails leaves nothing in it either.
 func TestEveryWayOutOfTheBacklogLeavesTheSet(t *testing.T) {
+	t.Run("a write that fails", func(t *testing.T) {
+		boom := errors.New("disk I/O error")
+		st := &createHook{Outbox: sqlitetest.Open(t), err: boom}
+		o := mustNew(t, outbox.Config{Store: st, Platforms: chattest.Same[outbox.Platform](&poster{}), Now: func() time.Time { return t0 }, CallTimeout: time.Second, Logger: testutil.DiscardLogger()})
+		if _, err := o.Enqueue(t.Context(), notice("n1")); !errors.Is(err, boom) {
+			t.Fatalf("Enqueue = %v; want the store's error", err)
+		}
+		if n := o.Untried(); n != 0 {
+			t.Fatalf("Untried = %d after a write that failed; want 0", n)
+		}
+	})
 	t.Run("a Send of the same ID", func(t *testing.T) {
 		st := sqlitetest.Open(t)
 		p := &poster{}

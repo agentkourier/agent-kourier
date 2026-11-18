@@ -1485,7 +1485,7 @@ this with an outbox:
    a lookup can find a message only after an attempt, or after another process delivered the row,
    so such a row is posted at once. The row stops being one when its first attempt begins, so a
    row whose attempt failed or timed out is looked up before the next. Which rows are untried is
-   kept in memory, so after a crash or a takeover every row is looked up.
+   kept in memory, so after a crash or a takeover every row queued before it is looked up.
 4. Edits (`chat.update`) are naturally idempotent and need no reconciliation. Reactions
    (role `reaction`, e.g. the acknowledgment marker of 8.2) also go through the outbox for
    durability but need no reconciliation: `reactions.add` on a message that already has
