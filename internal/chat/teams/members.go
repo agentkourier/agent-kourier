@@ -31,6 +31,10 @@ const (
 	rosterTimeout = 10 * time.Second
 	// rosterPage is the members a roster read asks for in one page, the most that Microsoft documents.
 	rosterPage = 500
+	// rosterMaxPages is the most pages one read of people asks for, across every team it reads: 25,000 members at rosterPage, the
+	// largest team that Microsoft documents (not measured). A read that needs more is an error, so that a roster whose continuation
+	// tokens never end costs a bounded number of calls of the tenant's budget at each try of a press.
+	rosterMaxPages = 50
 	// namesMax is the most accounts the Client keeps, and namesTTL how long it gives one: a person's name and Teams ID, for
 	// ResolveUser, IsBot and the decider of an ending. Membership is never cached.
 	namesMax = 1000
@@ -41,6 +45,9 @@ const (
 
 // errUnknownPerson is the error of a read that found no account for the ID in the rosters it read.
 var errUnknownPerson = errors.New("teams: no roster that the bot can read lists the person")
+
+// errRosterTooLong is the error of a read of people that would ask for more than rosterMaxPages pages.
+var errRosterTooLong = fmt.Errorf("teams: the rosters are longer than %d pages", rosterMaxPages)
 
 // rosterPath is the path of a page of the roster of conv; token is the continuation token of the page, "" for the first.
 func rosterPath(conv, token string) string {
@@ -58,11 +65,17 @@ type rosterPageOf struct {
 }
 
 // findIn reads the roster of the conversation conv at serviceURL, page by page, until an account whose aadObjectId is aad, which it
-// keeps (names) and returns; false when the last page has none. A page that names as its next the page it was is an error, as is any
-// failure of a page: the read fails closed, whatever a later page would have held. ctx bounds it.
-func (c *Client) findIn(ctx context.Context, serviceURL, conv, aad string) (account, bool, error) {
+// keeps (names) and returns; false when the last page has none. Each page takes one of *pages, which the caller shares across the
+// rosters of one read: a page past them is errRosterTooLong, and no call. A page whose next names a page this roster already gave
+// (a cycle) is an error, as is any failure of a page: the read fails closed, whatever a later page would have held. ctx bounds it.
+func (c *Client) findIn(ctx context.Context, pages *int, serviceURL, conv, aad string) (account, bool, error) {
 	token := ""
+	seen := map[string]bool{"": true}
 	for {
+		if *pages <= 0 {
+			return account{}, false, errRosterTooLong
+		}
+		*pages--
 		var page rosterPageOf
 		if err := c.api.call(ctx, http.MethodGet, serviceURL, rosterPath(conv, token), nil, &page); err != nil {
 			return account{}, false, err
@@ -71,20 +84,21 @@ func (c *Client) findIn(ctx context.Context, serviceURL, conv, aad string) (acco
 			c.names.put(page.Members[i])
 			return page.Members[i], true, nil
 		}
-		switch page.ContinuationToken {
-		case "":
+		switch {
+		case page.ContinuationToken == "":
 			return account{}, false, nil
-		case token:
-			return account{}, false, errors.New("teams: a page of the roster names itself as the next")
+		case seen[page.ContinuationToken]:
+			return account{}, false, errors.New("teams: a page of the roster names as its next a page that the roster already gave")
 		}
 		token = page.ContinuationToken
+		seen[token] = true
 	}
 }
 
 // IsMember implements chat.Platform by the roster of the channel's conversation, the team's members, read at the channel's service URL
 // (DefaultServiceURL for a channel no activity has come from) at each call: nothing of it is cached, so a person who left the team is
 // refused at the next press. user is the person's Microsoft Entra object ID, the aadObjectId of the roster's accounts; a user ID of
-// any other shape is no member, with no call. The read stops at the person, and is bounded by rosterTimeout.
+// any other shape is no member, with no call. The read stops at the person, and is bounded by rosterTimeout and rosterMaxPages.
 //
 // It fails closed: an error is never "yes", and is false with the error. Classify says what the error is: Transient for a rate limit
 // (with its wait), a 5xx, a timeout or the bound; Permanent ReasonChannelGone for a conversation that is gone (404) or a bot removed
@@ -101,7 +115,8 @@ func (c *Client) IsMember(ctx context.Context, channel, user string) (member boo
 	defer func() { c.finish(ctx, op, "IsMember", err) }()
 	ctx, cancel := context.WithTimeout(ctx, c.rosterTimeout)
 	defer cancel()
-	_, found, err := c.findIn(ctx, c.serviceURL(ctx, channel), channel, user)
+	pages := rosterMaxPages
+	_, found, err := c.findIn(ctx, &pages, c.serviceURL(ctx, channel), channel, user)
 	if err != nil {
 		return false, fmt.Errorf("teams: reading the channel's roster: %w", err)
 	}
@@ -130,7 +145,7 @@ func (c *Client) IsBot(ctx context.Context, user string) (bot bool, err error) {
 
 // ResolveUser implements chat.Platform: the name of the person whose Microsoft Entra object ID is id, the account's name in the roster
 // of a team the bot has heard from in this run (the teams of the channels the receiver recorded), each read in turn, in the order of
-// their IDs, until one lists the person, within rosterTimeout in all. The account is kept for namesTTL (namesMax of them), and a kept
+// their IDs, until one lists the person, within rosterTimeout and rosterMaxPages in all. The account is kept for namesTTL (namesMax of them), and a kept
 // one is given with no call. A team whose roster cannot be read does not end the call: the next is read, and the first error is
 // returned only if none lists the person. An ID of another shape, a person no roster lists, and a connection that has heard from no
 // team yet (a broker that has just started, before any activity) are errors: the caller shows the ID alone.
@@ -160,8 +175,9 @@ func (c *Client) account(ctx context.Context, aad string) (account, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.rosterTimeout)
 	defer cancel()
 	var first error
+	pages := rosterMaxPages
 	for _, t := range teams {
-		a, found, err := c.findIn(ctx, t.ServiceURL, t.TeamID, aad)
+		a, found, err := c.findIn(ctx, &pages, t.ServiceURL, t.TeamID, aad)
 		switch {
 		case found:
 			return a, nil
@@ -172,27 +188,32 @@ func (c *Client) account(ctx context.Context, aad string) (account, error) {
 	return account{}, cmp.Or(first, errUnknownPerson)
 }
 
-// knownTeams are the teams of the channels that the receiver recorded in this run, one each, with the service URL of one of its
-// channels (DefaultServiceURL for none), in the order of their IDs.
+// knownTeams are the teams of the channels that the receiver recorded in this run, one each, in the order of their IDs, with the
+// service URL that its channels' records name, the least of them in byte order when they differ (DefaultServiceURL for none). The
+// channels of one team are expected to name one service URL (the tenant's region; not measured), and the choice only has to be the
+// same at every call, which the records, a map, do not give by their order.
 func (c *Client) knownTeams() []Conversation {
 	c.recv.recMu.Lock()
-	byTeam := map[string]Conversation{}
+	byTeam := map[string]string{}
 	for _, rec := range c.recv.recorded {
-		if rec.TeamID != "" {
-			byTeam[rec.TeamID] = Conversation{TeamID: rec.TeamID, ServiceURL: cmp.Or(byTeam[rec.TeamID].ServiceURL, rec.ServiceURL)}
+		if rec.TeamID == "" {
+			continue
+		}
+		if cur, ok := byTeam[rec.TeamID]; !ok || cur == "" || (rec.ServiceURL != "" && rec.ServiceURL < cur) {
+			byTeam[rec.TeamID] = rec.ServiceURL
 		}
 	}
 	c.recv.recMu.Unlock()
 	out := make([]Conversation, 0, len(byTeam))
-	for _, t := range byTeam {
-		out = append(out, Conversation{TeamID: t.TeamID, ServiceURL: cmp.Or(t.ServiceURL, DefaultServiceURL)})
+	for team, service := range byTeam {
+		out = append(out, Conversation{TeamID: team, ServiceURL: cmp.Or(service, DefaultServiceURL)})
 	}
 	slices.SortFunc(out, func(a, b Conversation) int { return strings.Compare(a.TeamID, b.TeamID) })
 	return out
 }
 
 // deciderName is the name of the person aad, who decided a prompt in channel, for the mention of the prompt's ending: the kept
-// account's, or the one in the channel's roster, read within rosterTimeout; "" when it cannot be had, which the ending shows as
+// account's, or the one in the channel's roster, read within rosterTimeout and rosterMaxPages; "" when it cannot be had, which the ending shows as
 // someone, keeping the mention. A failed read is logged, and does not fail the edit.
 func (c *Client) deciderName(ctx context.Context, channel, aad string) string {
 	if a, ok := c.names.get(aad); ok {
@@ -203,7 +224,8 @@ func (c *Client) deciderName(ctx context.Context, channel, aad string) string {
 	defer func() { c.finish(ctx, op, "ResolveUser", err) }()
 	rctx, cancel := context.WithTimeout(ctx, c.rosterTimeout)
 	defer cancel()
-	a, found, err := c.findIn(rctx, c.serviceURL(ctx, channel), channel, aad)
+	pages := rosterMaxPages
+	a, found, err := c.findIn(rctx, &pages, c.serviceURL(ctx, channel), channel, aad)
 	switch {
 	case err != nil:
 		c.log.WarnContext(ctx, "teams: the name of who decided a prompt could not be read; its ending names them as someone",

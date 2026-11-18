@@ -181,6 +181,37 @@ func TestIsMemberFailsClosed(t *testing.T) {
 		}
 	})
 
+	for _, tc := range []struct {
+		name string
+		next func(token string) string // the continuation token of the page after the one of token
+		want []string                  // the pages read
+		err  error                     // the error the read ends with, or nil for any
+	}{
+		{"a cycle of two pages", func(tok string) string { return map[string]string{"": "a", "a": "b", "b": "a"}[tok] }, []string{"", "a", "b"}, nil},
+		{"tokens that never end", func(tok string) string { return tok + "x" }, nil, errRosterTooLong},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ct := newClientTest(t)
+			ct.record(t, testChannel, testChannel)
+			ct.f.setFail(endlessRoster(tc.next))
+			member, err := ct.c.IsMember(t.Context(), testChannel, alexID)
+			if member || err == nil || (tc.err != nil && !errors.Is(err, tc.err)) {
+				t.Errorf("IsMember: %t, %v; want no member and an error", member, err)
+			}
+			got := rosterReads(t, ct.f.take(), testChannel)
+			want := tc.want
+			if want == nil {
+				for tok := ""; len(want) < rosterMaxPages; tok = tc.next(tok) {
+					want = append(want, tok)
+				}
+			}
+			if fmt.Sprint(got) != fmt.Sprint(want) {
+				t.Errorf("%d pages read, %q; want %d, %q", len(got), got, len(want), want)
+			}
+		})
+	}
+
 	t.Run("a page that is not JSON", func(t *testing.T) {
 		t.Parallel()
 		ct := newClientTest(t)
@@ -219,6 +250,15 @@ func TestIsMemberFailsClosed(t *testing.T) {
 			t.Errorf("verdict %+v, want Transient", v)
 		}
 	})
+}
+
+// endlessRoster answers every roster read with a page that lists no one sought, and whose next page is next of its own token.
+func endlessRoster(next func(token string) string) func(r *http.Request) (int, string, bool) {
+	return func(r *http.Request) (int, string, bool) {
+		n := next(r.URL.Query().Get("continuationToken"))
+		return http.StatusOK, `{"members":[{"id":"29:1stand-in-sam","aadObjectId":"` + samID + `"}],"continuationToken":"` + n + `"}`,
+			strings.HasSuffix(r.URL.Path, "/pagedmembers")
+	}
 }
 
 // The error of a roster read names no conversation and no person: it says only which kind of call failed.
@@ -330,6 +370,57 @@ func TestResolveUserReadsTheRostersOfTheTeams(t *testing.T) {
 	for _, id := range []string{stranger, "28:" + testAppID, sam.ID, ""} {
 		if u, err := c.ResolveUser(ctx, id); err == nil {
 			t.Errorf("ResolveUser(%q): %+v and no error", id, u)
+		}
+	}
+}
+
+// ResolveUser reads the teams in the order of their IDs, whatever the order they were heard from, and the read of one ID asks for
+// at most rosterMaxPages pages in all, across every team: a roster whose tokens never end leaves none for the next team.
+func TestResolveUserReadsTheTeamsInOrderWithinThePages(t *testing.T) {
+	t.Parallel()
+	teams := []string{
+		"19:KourierStandInTeamC00000000000000000000000a@thread.tacv2",
+		"19:KourierStandInTeamA00000000000000000000000a@thread.tacv2",
+		"19:KourierStandInTeamB00000000000000000000000a@thread.tacv2",
+	}
+	ct := newClientTest(t)
+	for _, team := range teams {
+		ct.heardFrom(t, team, team)
+		ct.f.setRoster(team, sam)
+	}
+	if _, err := ct.c.ResolveUser(t.Context(), stranger); !errors.Is(err, errUnknownPerson) {
+		t.Errorf("a person no team lists: %v", err)
+	}
+	var order []string
+	for _, r := range ct.f.take() {
+		if conv, ok := strings.CutSuffix(strings.TrimPrefix(r.path, "/amer/"+testTenant+"/v3/conversations/"), "/pagedmembers"); ok {
+			order = append(order, conv)
+		}
+	}
+	if want := []string{escapeID(teams[1]), escapeID(teams[2]), escapeID(teams[0])}; fmt.Sprint(order) != fmt.Sprint(want) {
+		t.Errorf("the teams were read in the order %q, want %q", order, want)
+	}
+
+	ct.f.setFail(endlessRoster(func(tok string) string { return tok + "x" }))
+	if _, err := ct.c.ResolveUser(t.Context(), stranger); !errors.Is(err, errRosterTooLong) {
+		t.Errorf("rosters that never end: %v", err)
+	}
+	if n := len(ct.f.take()); n != rosterMaxPages {
+		t.Errorf("%d pages read across the teams, want %d", n, rosterMaxPages)
+	}
+}
+
+// A team's service URL is the same at every call when its channels' records name more than one: the least of them.
+func TestAKnownTeamHasOneServiceURL(t *testing.T) {
+	t.Parallel()
+	ct := newClientTest(t)
+	other := "19:KourierStandInOtherTeamChannel00000000000a@thread.tacv2"
+	ct.heardFrom(t, testChannel, testChannel)
+	ct.c.recv.remember(t.Context(), Conversation{Channel: other, ServiceURL: "https://zz.example.test/", TeamID: testChannel, TenantID: testTenant})
+	ct.c.recv.remember(t.Context(), Conversation{Channel: "19:KourierStandInNoServiceChannel000000000a@thread.tacv2", TeamID: testChannel})
+	for range 20 {
+		if got := ct.c.knownTeams(); len(got) != 1 || got[0].ServiceURL != ct.f.serviceURL() || got[0].TeamID != testChannel {
+			t.Fatalf("knownTeams: %+v, want the one team at %s", got, ct.f.serviceURL())
 		}
 	}
 }

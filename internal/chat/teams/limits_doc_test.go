@@ -58,6 +58,7 @@ func TestLimitsPage(t *testing.T) {
 	}
 	limitsdoc.Duration(t, "teamsRosterTimeout", c.rosterTimeout)
 	limitsdoc.Count(t, "teamsRosterPage", rosterPage)
+	limitsdoc.Count(t, "teamsRosterMaxPages", rosterMaxPages)
 	limitsdoc.Count(t, "teamsNamesMax", namesMax)
 	limitsdoc.Duration(t, "teamsNamesTTL", namesTTL)
 	limitsdoc.Count(t, "teamsNameUnits", nameUnits)
