@@ -580,13 +580,18 @@ Rules:
   authentication) and answered in its reply frame within the envelope's `deadlineMs`, an invoke's body in the frame. A socket is
   replaced a minute before its token expires (600 s measured) by one that names it in `x-ms-socket-replaces-connection-id`, and the
   old is closed once its envelopes are answered. Connects back off 1, 2, 4, 8, then 15 s with jitter; a 429 waits its `Retry-After`;
-  a 401 is a rejected credential; a 403 (measured: `apac` on the test tenant) is retried every 5 minutes and is fatal only when every
-  region answers it and none is ready, and then the run is retried as any transient failure. A region's socket is closed when the
+  a 401 is a rejected credential; a 403 (measured: `apac` on the test tenant) is retried every 5 minutes, and ends the run only when every
+  region's last answer is a 403 and none is ready; the run is then retried as any transient failure. A region's socket is closed when the
   run's context ends, so a leader that loses its Lease (the process exits) or stops stops its sockets. What Teams sends while no
   region's socket is ready is lost (measured, 2026-11-18: the newest socket takes all traffic, and nothing is queued for later); each
-  such interval is logged with its start and end, observed in `agentkourier_teams_socket_gap_seconds`, and given to
+  such interval is logged (the first, from the run's start, as the time to the first ready socket; each later one with its start and
+  end), observed in `agentkourier_teams_socket_gap_seconds`, and given to
   `teams.Config.OnSocketGap`, the seam for a Graph backfill (TEAMS-7P), which is not built. A change of mode is an edit of the
-  ChatConnection, which restarts the connection. A question, a tool approval and a message's
+  ChatConnection: a team's connection is restarted in the new mode, and the broker's own takes it when the broker restarts (as any
+  edit of it). A run told to stop closes a socket still in its handshake at once, so a stopped run's socket never becomes ready after
+  the next run's and takes its traffic. A failed replacement waits as a connect does after the same failure (a 429's Retry-After, a
+  403's slow wait), and a connect that answers no positive `expiresIn` is a failure. An envelope past the 32 being handled is answered
+  503 and counted in `agentkourier_teams_activities_shed_total` as `socket_busy`. A question, a tool approval and a message's
   buttons are Adaptive Cards 1.5 whose `Action.Execute` Teams sends as an `adaptiveCard/action` invoke, which Teams does not send
   again (measured on a test tenant, November 2026). Its service holds the invoke's request about 13.9 s, but the client shows an
   answer only up to 12.5–13 s after the invoke reached the server, and past that shows the presser "Something went wrong" (test
