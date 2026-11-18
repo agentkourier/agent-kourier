@@ -11,7 +11,7 @@ import (
 // and is the place where the Graph intake will meet the activities.
 //
 // It is the second set of keys in two generations, after the chat intake's (internal/trigger/intake.go); a shared package replaces
-// both, as it does the lanes (lanes.go).
+// both, as internal/chat/lanes did the lanes.
 const (
 	// dedupWindow is how long an activity is remembered: at least this long, and less than twice it.
 	dedupWindow = 10 * time.Minute

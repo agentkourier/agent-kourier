@@ -13,6 +13,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/backoff"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/lanes"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
@@ -71,8 +72,8 @@ const (
 )
 
 // The reasons an activity answered 503 was not taken, the label of agentkourier_teams_activities_shed_total: a closed set. Teams sends
-// such an activity again once, so it is not lost yet. The two reasons of a shed (lanes.go), channel_backlog and adapter_backlog, are
-// labels too.
+// such an activity again once, so it is not lost yet. The two reasons of a shed (internal/chat/lanes), channel_backlog and adapter_backlog,
+// are labels too.
 const shedNotRunning = "not_running" // no Serve took activities, or it was stopping
 
 // The reasons an activity answered 200 was lost, the label of agentkourier_teams_activities_lost_total: a closed set. Teams does not
@@ -143,12 +144,14 @@ type Receiver struct {
 }
 
 // serving is one Serve, as the handler finds it. The handler submits under mu held for reading, and Serve sets closed under mu held
-// for writing as it stops, before it waits for the lanes, so that nothing is submitted while it waits.
+// for writing as it stops, before it waits for the lanes, so that nothing is submitted while it waits. An activity the lanes shed
+// (internal/chat/lanes) is answered 503 and its dedup key released (see Receiver): the one time Teams sends a message again, it is
+// taken if its lane has room by then, and lost if not.
 type serving struct {
 	// ctx is the context of the work on the lanes: Serve's values, and an end of its own, after the drain.
 	ctx   context.Context
 	sink  chat.Sink
-	lanes *lanes
+	lanes *lanes.Lanes
 
 	mu     sync.RWMutex
 	closed bool // guarded by mu
@@ -201,7 +204,7 @@ func NewReceiver(cfg ReceiverConfig) (*Receiver, error) {
 func (r *Receiver) Serve(ctx context.Context, sink chat.Sink) error {
 	wctx, stopWork := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopWork()
-	s := &serving{ctx: wctx, sink: sink, lanes: newLanes(channelBacklog, pendingActivities)}
+	s := &serving{ctx: wctx, sink: sink, lanes: lanes.New()}
 	r.tctx.Store(&wctx)
 	r.live.Store(s)
 	r.verifier.warm(ctx)
@@ -222,7 +225,7 @@ func (r *Receiver) Serve(ctx context.Context, sink chat.Sink) error {
 	r.live.CompareAndSwap(s, nil)
 	drained := make(chan struct{})
 	go func() {
-		s.lanes.wait()
+		s.lanes.Wait()
 		close(drained)
 	}()
 	timer := time.NewTimer(stopDrain)
@@ -230,7 +233,7 @@ func (r *Receiver) Serve(ctx context.Context, sink chat.Sink) error {
 	select {
 	case <-drained:
 	case <-timer.C:
-		n := s.lanes.held()
+		n := s.lanes.Held()
 		stopWork() // what is still on the lanes sees the end and is not handed on
 		<-drained  // nothing calls the sink or the store after Serve returns
 		r.log.WarnContext(wctx, "teams: activities answered 200 were dropped as the connection stopped, and Teams does not send them again", "count", n)
@@ -324,7 +327,7 @@ func (s *serving) submit(channel string, fn func()) (shed string, open bool) {
 	if s.closed {
 		return "", false
 	}
-	return s.lanes.submit(channel, fn), true
+	return s.lanes.Submit(channel, fn), true
 }
 
 // ServeHTTP answers one request Teams sends the connection. In order: the token is verified (401, or 503 when the keys cannot be

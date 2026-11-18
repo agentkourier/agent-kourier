@@ -12,6 +12,7 @@ import (
 	promtest "github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/lanes"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
@@ -105,7 +106,7 @@ func TestReceiverCountsWhatItAnswers(t *testing.T) {
 	}
 
 	for outcome, want := range map[string]float64{
-		requestAccepted: 1 + channelBacklog, requestDuplicate: 1, requestBadToken: 1, requestMalformed: 1, requestWrongTenant: 1,
+		requestAccepted: 1 + lanes.PerChannel, requestDuplicate: 1, requestBadToken: 1, requestMalformed: 1, requestWrongTenant: 1,
 		requestShed: 1,
 	} {
 		if got := o.value(t, "agentkourier_teams_requests_total", outcome); got != want {
@@ -118,10 +119,10 @@ func TestReceiverCountsWhatItAnswers(t *testing.T) {
 	if got := o.value(t, "agentkourier_teams_tokens_refused_total", string(ReasonMalformed)); got != 1 {
 		t.Errorf("tokens refused malformed = %v, want 1", got)
 	}
-	if got := o.value(t, "agentkourier_teams_activities_shed_total", shedChannelBacklog); got != 1 {
+	if got := o.value(t, "agentkourier_teams_activities_shed_total", lanes.ShedChannelBacklog); got != 1 {
 		t.Errorf("shed channel_backlog = %v, want 1", got)
 	}
-	if got := o.value(t, "agentkourier_teams_activities_lost_total", shedChannelBacklog); got != 0 {
+	if got := o.value(t, "agentkourier_teams_activities_lost_total", lanes.ShedChannelBacklog); got != 0 {
 		t.Errorf("lost channel_backlog = %v: Teams sends an activity answered 503 again, so it is not lost", got)
 	}
 }

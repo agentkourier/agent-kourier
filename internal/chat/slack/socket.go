@@ -49,7 +49,7 @@ func (c *Client) runSocket(ctx context.Context, cancel context.CancelFunc, r *ru
 			d, _ := deliveryOf(ev)
 			channel := d.channel(r.me)
 			received := time.Now()
-			if reason := r.lanes.submit(channel, func() { c.handle(ctx, r, smc, ev, received) }); reason != "" {
+			if reason := r.lanes.Submit(channel, func() { c.handle(ctx, r, smc, ev, received) }); reason != "" {
 				c.shed(ctx, r.shed, reason, channel, string(ev.Type))
 			}
 		case err := <-done:

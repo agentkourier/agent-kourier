@@ -26,8 +26,6 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Bytes(t, "teamsKeysBody", keysMaxBody)
 	limitsdoc.Duration(t, "teamsDedupWindow", dedupWindow)
 	limitsdoc.Count(t, "teamsDedupMax", dedupMax)
-	limitsdoc.Count(t, "teamsChannelBacklog", channelBacklog)
-	limitsdoc.Count(t, "teamsPending", pendingActivities)
 	limitsdoc.Duration(t, "teamsStopDrain", stopDrain)
 	limitsdoc.Count(t, "teamsSinkAttempts", sinkAttempts)
 	limitsdoc.Duration(t, "teamsSinkRetry", r.sinkRetryBase)

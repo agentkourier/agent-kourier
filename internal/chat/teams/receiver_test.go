@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/lanes"
 	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
@@ -507,7 +508,7 @@ func TestReceiverStopsDrainingAtItsBound(t *testing.T) {
 	if took := time.Since(start); took < stopDrain+rt.sink.unwind || took > stopDrain+2*time.Second {
 		t.Errorf("Serve returned %s after its context ended, want about %s and the sink's unwind", took, stopDrain)
 	}
-	if n := s.lanes.held(); n != 0 {
+	if n := s.lanes.Held(); n != 0 {
 		t.Errorf("Serve returned with %d activities still on the lanes", n)
 	}
 	if got := rt.sink.got(); len(got) != 0 {
@@ -724,15 +725,15 @@ func TestReceiverAnswersAnInvokeThroughItsSeam(t *testing.T) {
 // fillLane posts messages in channel, held by the sink, until its lane is full, and returns the next ID.
 func (rt *receiverTest) fillLane(t *testing.T, channel string, first int) int {
 	t.Helper()
-	for i := range channelBacklog {
+	for i := range lanes.PerChannel {
 		if rec := rt.post(t, inChannel(t, "message_plain", channel, fmt.Sprint(first+i)), ""); rec.Code != http.StatusOK {
 			t.Fatalf("message %d of %s: status %d", i, channel, rec.Code)
 		}
 	}
-	return first + channelBacklog
+	return first + lanes.PerChannel
 }
 
-// TestReceiverShedsPastAChannelsLane: a channel's lane takes channelBacklog activities while its sink is held, and the next is answered
+// TestReceiverShedsPastAChannelsLane: a channel's lane takes lanes.PerChannel activities while its sink is held, and the next is answered
 // 503 and not remembered as taken, so that the same activity is taken when it comes again.
 func TestReceiverShedsPastAChannelsLane(t *testing.T) {
 	rt := newReceiverTest(t, false, nil)
@@ -744,21 +745,21 @@ func TestReceiverShedsPastAChannelsLane(t *testing.T) {
 		t.Fatalf("past the lane: status %d, want 503", rec.Code)
 	}
 	close(rt.sink.block)
-	testutil.Eventually(t, "the sink takes what the lane held", func() bool { return len(rt.sink.got()) == channelBacklog })
+	testutil.Eventually(t, "the sink takes what the lane held", func() bool { return len(rt.sink.got()) == lanes.PerChannel })
 	if rec := rt.post(t, shedBody, ""); rec.Code != http.StatusOK {
 		t.Fatalf("the shed message again: status %d, want 200", rec.Code)
 	}
 	testutil.Eventually(t, "the sink takes the shed message", func() bool { return rt.sink.has(fmt.Sprint(next)) })
 }
 
-// TestReceiverShedsPastAllLanes: once the lanes hold pendingActivities, a channel that has one held is refused another, and a channel
+// TestReceiverShedsPastAllLanes: once the lanes hold lanes.Total, a channel that has one held is refused another, and a channel
 // with none still takes its first.
 func TestReceiverShedsPastAllLanes(t *testing.T) {
 	rt := newReceiverTest(t, false, nil)
 	rt.sink.block = make(chan struct{})
 	rt.serve(t)
 	id := 1794960000000
-	for c := range pendingActivities / channelBacklog {
+	for c := range lanes.Total / lanes.PerChannel {
 		id = rt.fillLane(t, fmt.Sprintf("19:busy%d@thread.tacv2", c), id)
 	}
 	const fresh = "19:fresh@thread.tacv2"
@@ -935,12 +936,12 @@ func TestReceiverAnswers503WhenTheKeysCannotBeRead(t *testing.T) {
 // TestServingRefusesWorkOnceClosed: a request that found the Serve live, and submits after it began to stop, is not put on a lane that
 // Serve no longer waits for.
 func TestServingRefusesWorkOnceClosed(t *testing.T) {
-	s := &serving{lanes: newLanes(channelBacklog, pendingActivities), closed: true}
+	s := &serving{lanes: lanes.New(), closed: true}
 	ran := false
 	if _, open := s.submit(testChannel, func() { ran = true }); open {
 		t.Error("a closed Serve took work")
 	}
-	s.lanes.wait()
+	s.lanes.Wait()
 	if ran {
 		t.Error("a closed Serve ran work")
 	}
