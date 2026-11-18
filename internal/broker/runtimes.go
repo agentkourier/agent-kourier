@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -191,30 +192,25 @@ func (t *runtimeTable) runs(conn string) bool {
 }
 
 // running says whether a run of the connection conn may still be going: a runtime of it is in the table (rejected or not), or one that was
-// taken out (remove) ran and has not returned. A runtime that never ran has nothing going. It forgets the runtimes whose run has returned.
+// taken out (remove) while its run went and whose run has not told the table it ended (ended).
 func (t *runtimeTable) running(conn string) bool {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if _, ok := t.rts[conn]; ok {
-		return true
-	}
-	return t.stillEnding(conn)
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	_, ok := t.rts[conn]
+	return ok || len(t.ending[conn]) > 0
 }
 
-// stillEnding drops from t.ending the runtimes of conn whose run has returned, and says whether any is left. The caller holds t.mu.
-func (t *runtimeTable) stillEnding(conn string) bool {
-	going := t.ending[conn][:0]
-	for _, rt := range t.ending[conn] {
-		if !isClosed(rt.done) {
-			going = append(going, rt)
-		}
-	}
+// ended forgets rt among the runtimes taken out whose run goes: its run's goroutine calls it once it has closed rt.done. remove reads done
+// under t.mu, so a runtime taken out after the close is never kept, and one taken out before it is dropped here.
+func (t *runtimeTable) ended(rt *connRuntime) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	going := slices.DeleteFunc(t.ending[rt.name], func(e *connRuntime) bool { return e == rt })
 	if len(going) == 0 {
-		delete(t.ending, conn)
-		return false
+		delete(t.ending, rt.name)
+		return
 	}
-	t.ending[conn] = going
-	return true
+	t.ending[rt.name] = going
 }
 
 // downError is the error of a connection that nothing runs.
@@ -301,16 +297,14 @@ func (t *runtimeTable) seal() []*connRuntime {
 }
 
 // remove takes rt out of the table, if it is the connection's runtime still: a runtime that was replaced is not in it to take. Either way rt,
-// if it ran, is running until its run returns (running); the runtimes of the connection whose run has returned are forgotten here, so that
-// restarts do not pile them up.
+// if its run goes, is running until the run returns and says so (ended); one that never ran, or whose run has returned, is not kept.
 func (t *runtimeTable) remove(rt *connRuntime) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.rts[rt.name] == rt {
 		delete(t.rts, rt.name)
 	}
-	t.stillEnding(rt.name)
-	if rt.ran.Load() {
+	if rt.ran.Load() && !isClosed(rt.done) {
 		t.ending[rt.name] = append(t.ending[rt.name], rt)
 	}
 }
@@ -422,6 +416,7 @@ func (h *runtimeHost) run(rt *connRuntime, sink chat.Sink, onEnd func(rt *connRu
 			h.closeTransport(rt) // nothing posts through it from here: the connection is down
 		}
 		close(rt.done)
+		h.table.ended(rt)
 		if onEnd != nil {
 			onEnd(rt, err)
 		}

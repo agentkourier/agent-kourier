@@ -4,11 +4,14 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // A connection is running while its runtime is in the table, and after the runtime is taken out until its run has returned, since a run
-// that is stopping may still write (a Microsoft Teams receiver drains what it answered). One taken out that never ran is not running.
+// that is stopping may still write (a Microsoft Teams receiver drains what it answered). One taken out that never ran, or whose run had
+// returned already, is not running, and the table keeps nothing of it.
 func TestARuntimeTakenOutIsRunningUntilItsRunReturns(t *testing.T) {
 	table := newRuntimeTable()
 	if table.running(teamConn) {
@@ -24,32 +27,45 @@ func TestARuntimeTakenOutIsRunningUntilItsRunReturns(t *testing.T) {
 	if !table.running(teamConn) {
 		t.Error("a runtime taken out whose run has not returned is not running")
 	}
-	close(rt.done)
-	if table.running(teamConn) {
-		t.Error("a runtime whose run has returned is still running")
+	close(rt.done) // as the run's goroutine does, and then tells the table
+	table.ended(rt)
+	if table.running(teamConn) || endingOf(table, teamConn) != 0 {
+		t.Errorf("a runtime whose run has returned is running, or kept (%d)", endingOf(table, teamConn))
 	}
 
 	never := &connRuntime{name: teamConn, done: make(chan struct{})}
 	table.add(never)
 	table.remove(never)
-	if table.running(teamConn) {
-		t.Error("a runtime taken out that never ran is running")
+	if table.running(teamConn) || endingOf(table, teamConn) != 0 {
+		t.Error("a runtime taken out that never ran is running, or kept")
 	}
 
-	// Restarts do not pile up the runtimes taken out: one whose run has returned is forgotten at the next remove.
-	for range 3 {
-		old := &connRuntime{name: teamConn, done: make(chan struct{})}
-		old.ran.Store(true)
-		table.add(old)
-		table.remove(old)
-		close(old.done)
+	// A run that ended by itself (the table's fail took it out) and is taken out later is not kept: nothing would tell the table again.
+	over := &connRuntime{name: teamConn, done: make(chan struct{})}
+	over.ran.Store(true)
+	table.add(over)
+	close(over.done)
+	table.ended(over)
+	table.remove(over)
+	if table.running(teamConn) || endingOf(table, teamConn) != 0 {
+		t.Errorf("a runtime taken out after its run returned is running, or kept (%d)", endingOf(table, teamConn))
 	}
+}
+
+// A connection that the supervisor stops and that still exists, whose deletion would never be asked about, leaves nothing in the table once
+// its run has returned: a runtime taken out holds its credentials and its platform.
+func TestAStoppedRuntimeLeavesNothingBehindOnceItsRunReturns(t *testing.T) {
+	r := newHostRig(t, false)
+	rt := r.start("stopped", chattest.NewFake(), false)
+	r.host.stopRuntime(t.Context(), rt)
+	testutil.Eventually(t, "the table forgets the stopped runtime", func() bool { return endingOf(r.host.table, rt.name) == 0 })
+}
+
+// endingOf is the number of runtimes taken out of table whose run it still counts as going.
+func endingOf(table *runtimeTable, conn string) int {
 	table.mu.Lock()
-	kept := len(table.ending[teamConn])
-	table.mu.Unlock()
-	if kept > 1 {
-		t.Errorf("%d runtimes whose run has returned are kept; want at most the last", kept)
-	}
+	defer table.mu.Unlock()
+	return len(table.ending[conn])
 }
 
 // The leader's record asks the runtime table: a deleted connection whose runtime the supervisor has not stopped, or whose run is still
@@ -69,7 +85,7 @@ func TestTheLeadersRecordHoldsADeletedConnectionWhileItsRunGoes(t *testing.T) {
 	}{
 		{"in the table", func() {}, []string{ownConn, teamConn}},
 		{"taken out, its run draining", func() { table.remove(rt) }, []string{ownConn, teamConn}},
-		{"its run returned", func() { close(rt.done) }, []string{ownConn}},
+		{"its run returned", func() { close(rt.done); table.ended(rt) }, []string{ownConn}},
 	} {
 		step.do()
 		if _, err := served.update(t.Context(), rep); err != nil {
