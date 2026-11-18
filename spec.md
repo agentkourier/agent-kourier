@@ -741,7 +741,8 @@ equal `closeWhen`; any other match is a *fire*. The time is when Agent Kourier t
 |---|---|---|---|
 | fire | no thread, or a closed one whose cooldown has ended, or one whose turn never started and is over a minute old, or an open one idle past `maxIdle` | `started` | Reserve the thread, anchored to this message. Render the first prompt and queue it as a turn of a session anchored to this message (below); once that is taken, mark the thread started, which is when the cooldown begins. |
 | fire | an open thread that is not idle past `maxIdle`, or a closed one inside its cooldown | `repeat` | Note "Fired again at `<time>`." in that thread, and reopen it. No turn. |
-| fire | this very message as its thread (a redelivery) | `dedup` | Nothing if its turn started; otherwise ask for the start again, since the first ask failed. |
+| fire | this very message as its thread (a redelivery), and its turn started | `dedup` | Nothing. |
+| fire | this very message as its thread, and its turn never started (an earlier attempt failed) | `started` | Ask for the start again: the limits are checked again, and a run admitted before passes, as it is the same start. Once the turn is taken, mark the thread started. |
 | fire, key empty | (no thread: the key came out empty) | `empty_key` | An investigation of its own, with no cooldown and no note. A warning, once for the trigger. |
 | close | an open thread whose turn started | `closed` | Note "Resolved at `<time>`." in that thread, and close it. No turn. The cooldown goes on. |
 | close | no thread, a closed one, or one whose turn never started | `close_unknown` | Ignored and counted. |
@@ -775,7 +776,14 @@ A sweep deletes the rows that no longer do anything once an hour: a closed threa
 cooldown, and an open one with no message of its key for 720h, which is the longest any `maxIdle`
 can be, so it never deletes a thread that some trigger still counts as live. A key whose row is
 gone starts afresh, as one with no row does.
-Every decision is counted as `agentkourier_trigger_decisions_total{binding,decision}`.
+Every decision is counted as `agentkourier_trigger_decisions_total{binding,decision}` once it is
+taken: an attempt that returns an error counts nothing (the intake counts the error), and its
+redelivery is decided and counted then. So `started` counts the turns that started, and the
+redelivery of a start that failed, which finds its own unstarted reservation and starts the turn,
+is `started`; `dedup` is a redelivery of a message whose decision was taken, which does nothing.
+A turn that was queued but whose thread was never marked started, and whose event no redelivery
+mended, is counted `started` when a later fire of its key adopts it (marks its thread started
+instead of taking the key over).
 
 **Limits of a trigger (D26, D31).** `limits` holds a start to the trigger's `rateLimit.maxRuns` in
 any `rateLimit.per`, `rateLimit.maxConcurrent` investigations running at once and `maxRunsPerDay`

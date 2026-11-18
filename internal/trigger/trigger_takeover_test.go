@@ -11,6 +11,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 
 	"github.com/agentkourier/agent-kourier/internal/session"
+	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
@@ -76,6 +77,116 @@ func newTakeoverMarking(t *testing.T, failMark bool) (*triggered, *queuedTurns) 
 	return h, q
 }
 
+// sendCounted delivers m as message id of C1 and returns the decisions whose counts rose, sorted: a fire that adopts a
+// queued turn counts that start as well as its own decision.
+func (h *triggered) sendCounted(t *testing.T, id string, m chat.BotMessage) []string {
+	t.Helper()
+	before := h.decisions(t)
+	if err := h.in.Message(h.ctx, botInbound("C1", id, m)); err != nil {
+		t.Fatalf("message %s: %v", id, err)
+	}
+	var rose []string
+	for d, n := range h.decisions(t) {
+		for range int(n - before[d]) {
+			rose = append(rose, d)
+		}
+	}
+	slices.Sort(rose)
+	return rose
+}
+
+// The start of a turn that was queued, and whose mark was lost with no redelivery to mend it, is counted when a later
+// fire adopts it: once, as started, beside the fire's own decision. A delivery of the first message after that finds the
+// thread started, and is a dedup.
+func TestAnAdoptedTurnIsCountedAsStartedOnce(t *testing.T) {
+	h, _ := newTakeover(t)
+	if err := h.in.Message(h.ctx, botInbound("C1", "100.1", kindFiring)); err == nil {
+		t.Fatal("Message = nil; want the mark's error")
+	}
+	if d := h.decisions(t); len(d) != 0 {
+		t.Fatalf("decisions after the queued start whose mark failed = %v; want none", d)
+	}
+	h.clk.advance(2 * time.Minute)
+	if got := h.sendCounted(t, "101.1", kindFiring); !slices.Equal(got, []string{"repeat", "started"}) {
+		t.Errorf("the fire that adopts the turn counted %v; want the adopted start and its own repeat", got)
+	}
+	if got := h.send(t, "100.1", kindFiring); got != "dedup" {
+		t.Errorf("a late delivery of the adopted turn's message: %q; want dedup", got)
+	}
+	h.clk.advance(time.Minute)
+	if got := h.send(t, "102.1", kindFiring); got != "repeat" {
+		t.Errorf("the next fire: %q; want repeat, with no second adoption", got)
+	}
+	if d := h.decisions(t); d["started"] != 1 || d["repeat"] != 2 || d["dedup"] != 1 || len(d) != 3 {
+		t.Errorf("decisions = %v; want 1 started, 2 repeat and 1 dedup", d)
+	}
+	if got := h.started(); !slices.Equal(got, []string{"100.1"}) {
+		t.Errorf("turns started for %v; want only the first", got)
+	}
+}
+
+// markErrs is a TriggerThreads whose next calls of MarkTriggerStarted return errs in order, a nil entry passing the call
+// on; past them every call is passed on.
+type markErrs struct {
+	store.TriggerThreads
+	mu   sync.Mutex
+	errs []error
+}
+
+func (m *markErrs) MarkTriggerStarted(ctx context.Context, binding, keyHash, thread string, until time.Time) error {
+	m.mu.Lock()
+	var err error
+	if len(m.errs) > 0 {
+		err, m.errs = m.errs[0], m.errs[1:]
+	}
+	m.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return m.TriggerThreads.MarkTriggerStarted(ctx, binding, keyHash, thread, until)
+}
+
+// An adoption whose mark does not land counts nothing: the start is counted when a mark of the adoption lands, and only
+// then. A mark that fails is the fire's error, and its redelivery adopts the turn and counts it once. A mark that finds the
+// key another message's (ErrConflict) adopts nothing, and the fire counts only its own decision.
+func TestAnAdoptionWhoseMarkFailsCountsNothing(t *testing.T) {
+	tests := []struct {
+		name      string
+		adopt     error    // what the adopting fire's mark returns
+		redeliver bool     // whether the fire fails and is delivered again
+		want      []string // the decisions the fire, or its redelivery, counts
+	}{
+		{"the mark fails", errors.New("disk full"), true, []string{"repeat", "started"}},
+		{"the key is another message's", store.ErrConflict, false, []string{"started"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h, _ := newTakeoverMarking(t, false)
+			cfg := h.cfg
+			cfg.TriggerThreads = &markErrs{TriggerThreads: h.st, errs: []error{errors.New("disk full"), tt.adopt}} // the start's mark, then the adoption's
+			h.cfg, h.in = cfg, trigger.NewIntake(cfg)
+			if err := h.in.Message(h.ctx, botInbound("C1", "100.1", kindFiring)); err == nil {
+				t.Fatal("Message = nil; want the mark's error")
+			}
+			h.clk.advance(2 * time.Minute)
+			if tt.redeliver {
+				if err := h.in.Message(h.ctx, botInbound("C1", "101.1", kindFiring)); !errors.Is(err, tt.adopt) {
+					t.Fatalf("the adopting fire: %v; want the mark's error", err)
+				}
+				if d := h.decisions(t); len(d) != 0 {
+					t.Errorf("decisions after an adoption whose mark failed = %v; want none", d)
+				}
+			}
+			if got := h.sendCounted(t, "101.1", kindFiring); !slices.Equal(got, tt.want) {
+				t.Errorf("the fire counted %v; want %v", got, tt.want)
+			}
+			if d := h.decisions(t); d["started"] != 1 {
+				t.Errorf("decisions = %v; want started once", d)
+			}
+		})
+	}
+}
+
 // A turn that was queued, and whose mark was lost, is the key's investigation: a later fire that finds the reservation
 // stale does not take the key over and start a second turn. It marks the first thread started, as the lost write
 // would have, and is a repeat in it; the cooldown runs from the first message, and the resolve closes that thread.
@@ -89,8 +200,8 @@ func TestAFireDoesNotTakeOverAThreadWhoseTurnWasQueued(t *testing.T) {
 	}
 
 	h.clk.advance(2 * time.Minute) // past the grace: the reservation is stale, and nobody redelivered the first event
-	if got := h.send(t, "101.1", kindFiring); got != "repeat" {
-		t.Fatalf("a fire past the grace: %q; want repeat in the first thread, not a second investigation", got)
+	if got := h.sendCounted(t, "101.1", kindFiring); !slices.Equal(got, []string{"repeat", "started"}) {
+		t.Fatalf("a fire past the grace counted %v; want repeat in the first thread, not a second investigation, and the adopted start", got)
 	}
 	if got := h.started(); !slices.Equal(got, []string{"100.1"}) {
 		t.Errorf("turns started for %v; want only the first", got)
@@ -151,8 +262,8 @@ func TestTheQueuedTurnIsOnlyAskedAboutAStaleReservation(t *testing.T) {
 
 	h2, q2 := newTakeover(t)
 	_ = h2.in.Message(h2.ctx, botInbound("C1", "200.1", kindFiring)) // the mark fails once...
-	if got := h2.send(t, "200.1", kindFiring); got != "dedup" {      // ...and the redelivery of the event marks the thread
-		t.Fatalf("redelivery: %q; want dedup", got)
+	if got := h2.send(t, "200.1", kindFiring); got != "started" {    // ...and the redelivery of the event starts and marks the thread
+		t.Fatalf("redelivery: %q; want started", got)
 	}
 	h2.clk.advance(2 * time.Minute)
 	if got := h2.send(t, "201.1", kindFiring); got != "repeat" {
@@ -176,9 +287,12 @@ func TestAQueueThatCannotAnswerLeavesTheEventToBeRedelivered(t *testing.T) {
 	if got := h.started(); !slices.Equal(got, []string{"100.1"}) {
 		t.Errorf("turns started for %v after a failed check; want no second turn", got)
 	}
+	if d := h.decisions(t); len(d) != 0 {
+		t.Errorf("decisions after the failed check = %v; want none", d)
+	}
 	q.err = nil
-	if got := h.send(t, "101.1", kindFiring); got != "repeat" {
-		t.Errorf("redelivery: %q; want repeat once the queue answers", got)
+	if got := h.sendCounted(t, "101.1", kindFiring); !slices.Equal(got, []string{"repeat", "started"}) {
+		t.Errorf("redelivery counted %v; want repeat once the queue answers, and the adopted start", got)
 	}
 }
 

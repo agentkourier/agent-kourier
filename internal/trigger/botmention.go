@@ -88,13 +88,13 @@ func (in *Intake) botMention(ctx context.Context, m chat.Inbound) (disposition s
 	match := Match{Binding: name, Index: index, Limits: botMentionLimits(), PromptTemplate: BotMentionPrompt, MessageID: in.messageID(m), Received: in.now(), Message: m, Mention: true}
 	in.log.InfoContext(ctx, "chat: a bot mentioned Agent Kourier", "binding", name, "channel", m.At.Channel, "message", m.At.ID, "thread", m.At.Thread, "bot", m.Bot.ID, "kind", m.Bot.Kind)
 	out, err := in.decideMention(ctx, match)
-	if out.decision != "" {
-		telemetry.Count(ctx, "agentkourier_trigger_decisions_total", name, string(out.decision))
-		in.log.InfoContext(ctx, "chat: bot mention decided", "binding", name, "decision", out.decision, "channel", m.At.Channel, "message", m.At.ID, "thread", m.At.Thread)
-	}
-	if err != nil {
+	attrs := []any{"binding", name, "decision", out.decision, "channel", m.At.Channel, "message", m.At.ID, "thread", m.At.Thread}
+	if err != nil { // counted as matchTriggers does: nothing for an attempt that failed, and the redelivery decides again
+		in.log.WarnContext(ctx, "chat: bot mention decision not taken; its redelivery decides again", attrs...)
 		return "", fmt.Errorf("bot mention of %s for %s: %w", name, in.messageID(m), err)
 	}
+	telemetry.Count(ctx, "agentkourier_trigger_decisions_total", name, string(out.decision))
+	in.log.InfoContext(ctx, "chat: bot mention decided", attrs...)
 	telemetry.Count(ctx, "agentkourier_trigger_matched_total", name)
 	return "trigger_matched", nil
 }

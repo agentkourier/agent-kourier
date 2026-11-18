@@ -151,7 +151,7 @@ match is a *fire*.
 
 | Message | The key has | Decision | What happens |
 |---|---|---|---|
-| fire | no thread, a closed one past its cooldown, one whose turn never started and is over a minute old, or an open one idle past `maxIdle` | `started` | A new investigation in a thread anchored to this message. The cooldown begins once its turn is taken. |
+| fire | no thread, a closed one past its cooldown, one whose turn never started and is over a minute old, an open one idle past `maxIdle`, or this very message's own reservation whose turn never started (a redelivery after a failed start) | `started` | A new investigation in a thread anchored to this message. The cooldown begins once its turn is taken. |
 | fire | an open thread that is not idle past `maxIdle`, or a closed one inside its cooldown | `repeat` | "Fired again at `<time>`." in that thread, which reopens. No turn. |
 | fire | this very message as its thread (a redelivery) | `dedup` | Nothing, if its turn started. |
 | fire, key empty | | `empty_key` | An investigation of its own, with no cooldown and no note. |
