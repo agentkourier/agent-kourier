@@ -348,7 +348,8 @@ func TestARedeliveryAfterARestartAsksForTheSameNoticeAndNoNewTurn(t *testing.T) 
 }
 
 // A start the hook could not take is not remembered, and its redelivery finds the thread already opened: it asks
-// for the start again rather than counting it as a repeat of itself.
+// for the start again rather than counting it as a repeat of itself. The failed attempt counts no decision: the
+// redelivery is the start, counted once, and a delivery after it is the dedup.
 func TestAFailedStartIsStartedAgainByItsRedelivery(t *testing.T) {
 	h := newTriggered(t, trialTrigger())
 	h.hookErr = errors.New("session store unavailable")
@@ -356,15 +357,18 @@ func TestAFailedStartIsStartedAgainByItsRedelivery(t *testing.T) {
 	if !errors.Is(err, h.hookErr) {
 		t.Fatalf("Message = %v; want the hook's error, so that Slack sends it again", err)
 	}
+	if d := h.decisions(t); len(d) != 0 {
+		t.Errorf("decisions after the failed attempt = %v; want none", d)
+	}
 	h.hookErr = nil
-	if got := h.send(t, "100.1", kindFiring); got != "dedup" {
-		t.Errorf("redelivery: %q; want dedup", got)
+	if got := h.send(t, "100.1", kindFiring); got != "started" {
+		t.Errorf("redelivery: %q; want started", got)
 	}
 	if got := h.started(); !slices.Equal(got, []string{"100.1", "100.1"}) {
 		t.Errorf("start hook given %v; want it asked twice for the one anchor", got)
 	}
-	if d := h.decisions(t); d["started"] != 1 || d["dedup"] != 1 {
-		t.Errorf("decisions = %v; want the start counted once, when the thread was opened, and the redelivery a dedup", d)
+	if d := h.decisions(t); d["started"] != 1 || d["dedup"] != 0 {
+		t.Errorf("decisions = %v; want the start counted once, when the redelivery started it, and no dedup", d)
 	}
 	if got := h.send(t, "100.1", kindFiring); got != "dedup" || len(h.got()) != 2 {
 		t.Errorf("third delivery: %q, hook given %v; want the Intake to remember it", got, h.started())
@@ -545,8 +549,8 @@ func TestAFailedMarkIsMendedByTheRedelivery(t *testing.T) {
 	if err := h.in.Message(h.ctx, botInbound("C1", "100.1", kindFiring)); err == nil {
 		t.Fatal("Message = nil; want the mark's error, so that Slack sends it again")
 	}
-	if got := h.send(t, "100.1", kindFiring); got != "dedup" {
-		t.Errorf("redelivery: %q; want dedup", got)
+	if got := h.send(t, "100.1", kindFiring); got != "started" {
+		t.Errorf("redelivery: %q; want started: the first attempt was not taken", got)
 	}
 	if got := h.started(); !slices.Equal(got, []string{"100.1", "100.1"}) {
 		t.Errorf("turns asked for %v; want the same anchor twice", got)

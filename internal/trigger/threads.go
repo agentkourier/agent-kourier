@@ -14,7 +14,8 @@ import (
 )
 
 // Decision is what a matched bot message does to the thread of its key (spec 8.2). It is the decision
-// label of agentkourier_trigger_decisions_total.
+// label of agentkourier_trigger_decisions_total, which counts a decision once it is taken: an attempt that fails
+// counts nothing, and its redelivery is decided again.
 type Decision string
 
 // The decisions. A fire is a message whose extracted fields do not satisfy the trigger's closeWhen; a close is
@@ -24,7 +25,9 @@ const (
 	// its turn never started and the reservation is stale, or it is open but has been idle past the trigger's
 	// maxIdle, which is a resolve that never came. The message starts a new investigation, anchored to
 	// itself: the Intake reserves the thread, asks for the turn (OnStart), and, once that is taken, marks the
-	// thread started, which is when its cooldown begins.
+	// thread started, which is when its cooldown begins. A redelivery that finds the thread its own message
+	// reserved, and not started because an earlier attempt failed, asks for the turn again, and is this too: it
+	// is the start, and the failed attempt counted nothing. So it is counted once for each turn that started.
 	DecisionStarted Decision = "started"
 	// DecisionRepeat: a fire, and the key has a thread that is open or inside its cooldown. A note in that
 	// thread says it fired again, a closed thread is open again, and no turn starts.
@@ -36,10 +39,10 @@ const (
 	// already, or its turn never started so there is no investigation to note. It is ignored. A redelivery of
 	// a close whose first delivery was taken, after a restart made the Intake forget it, is this too.
 	DecisionCloseUnknown Decision = "close_unknown"
-	// DecisionDedup: Slack delivered a message again that was taken already. An Intake that remembers it does
-	// nothing. One that does not, after a restart, finds in the store that the message reserved the thread:
-	// if its turn started that is all, and if not the start is asked for again (OnStart), since the first ask
-	// failed.
+	// DecisionDedup: Slack delivered a message again that was taken already, and nothing is done. An Intake
+	// that remembers it says so at once. One that does not, after a restart, finds in the store that the message
+	// reserved the thread and that its turn started. A redelivery whose reservation never started is not this:
+	// it asks for the start again (started, or limited or not_started as that ask goes).
 	DecisionDedup Decision = "dedup"
 	// DecisionEmptyKey: a fire of a trigger that threads by key whose key came out empty, which names no
 	// thread. It is an investigation of its own each time, with no cooldown and no note, as a trigger with no
@@ -90,7 +93,8 @@ type decided struct {
 //	  or a reservation that never started and is stale,
 //	  or an open thread idle past thread.maxIdle                     started: reserve, check the limits, OnStart, mark started
 //	  ... and a limit of the trigger is reached                      limited: give the reservation back
-//	fire, the message is the thread's own (a redelivery)             dedup: OnStart again if it never started
+//	fire, the message is the thread's own (a redelivery), started    dedup: nothing
+//	fire, the message is the thread's own, never started             started: OnStart again, mark started
 //	fire, any other thread of the key                                repeat: note, then reopen it
 //	close, the key has an open thread whose turn started             closed: note, then close it
 //	close, otherwise                                                 close_unknown: nothing
@@ -104,8 +108,9 @@ type decided struct {
 //
 // Each step is idempotent, and the note comes before the change it goes with, so an error at any point is
 // mended by the redelivery: a note is one row of the outbox whatever its asks, and a redelivered start finds its
-// own reservation. The decision is returned with the error when it was made already (the thread was reserved,
-// the OnStart failed). Everything here is a local write, since it runs on the platform's acknowledgement path.
+// own reservation. The decision may be returned with the error (the thread was reserved, the OnStart failed); it is
+// not counted then, since it was not carried out, and the redelivery decides again. Everything here is a local
+// write, since it runs on the platform's acknowledgement path.
 func (in *Intake) decide(ctx context.Context, m Match) (decided, error) {
 	key := m.Fields[threadKeyField]
 	closing := closes(m.Thread.CloseWhen, m.Fields)
@@ -140,11 +145,11 @@ func (in *Intake) fireThread(ctx context.Context, m Match, hash string, out deci
 	case opened:
 		out.decision = DecisionStarted
 		return in.startThread(ctx, m, hash, out)
-	case th.Thread == at:
+	case th.Thread == at && th.Started():
 		out.decision = DecisionDedup
-		if th.Started() {
-			return out, nil
-		}
+		return out, nil
+	case th.Thread == at: // an earlier attempt reserved the thread and its start failed: this is the start
+		out.decision = DecisionStarted
 		return in.startThread(ctx, m, hash, out)
 	}
 	if err := in.note(ctx, m, th.Thread, session.NoticeTriggerRepeat); err != nil {

@@ -151,8 +151,8 @@ func TestTheQueuedTurnIsOnlyAskedAboutAStaleReservation(t *testing.T) {
 
 	h2, q2 := newTakeover(t)
 	_ = h2.in.Message(h2.ctx, botInbound("C1", "200.1", kindFiring)) // the mark fails once...
-	if got := h2.send(t, "200.1", kindFiring); got != "dedup" {      // ...and the redelivery of the event marks the thread
-		t.Fatalf("redelivery: %q; want dedup", got)
+	if got := h2.send(t, "200.1", kindFiring); got != "started" {    // ...and the redelivery of the event starts and marks the thread
+		t.Fatalf("redelivery: %q; want started", got)
 	}
 	h2.clk.advance(2 * time.Minute)
 	if got := h2.send(t, "201.1", kindFiring); got != "repeat" {

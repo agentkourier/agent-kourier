@@ -333,9 +333,11 @@ func triedAsPerson(triggers []v1alpha1.Trigger, m chat.Inbound) bool {
 // the match. what names the message in logs, and sender is the attributes that say who sent it (never what it said).
 //   - A message that no trigger matches is counted as agentkourier_trigger_unmatched_total of the Binding, so that a
 //     changed template shows up as a rising count, and logged at DEBUG with where it was, and never what it said.
-//   - A match is counted and logged, and decided: what it does to the thread of its key (decide). The decision is
-//     counted as agentkourier_trigger_decisions_total once it is made, whether or not what follows it succeeds; an
-//     error returns, and the redelivery is decided again (a dedup, for a start that was already recorded).
+//   - A match is logged and decided: what it does to the thread of its key (decide). The decision is counted as
+//     agentkourier_trigger_decisions_total, and the match as agentkourier_trigger_matched_total, once it is taken, so a
+//     started decision is a turn that started. An attempt that fails counts neither: it is logged at WARN with the
+//     decision it was carrying out, and its error returns, for the platform to log and to deliver the event again
+//     (agentkourier_intake_total counts it as an error). The redelivery is decided again and counted then.
 func (in *Intake) matchTriggers(ctx context.Context, snap *config.Snapshot, rb config.ResolvedBinding, m chat.Inbound, what string, sender ...any) (disposition string, decision Decision, err error) {
 	name := v1alpha1.NamespacedName(rb.Binding.Namespace, rb.Binding.Name)
 	trace.SpanFromContext(ctx).SetAttributes(attribute.String("agentkourier.binding", name))
@@ -349,14 +351,14 @@ func (in *Intake) matchTriggers(ctx context.Context, snap *config.Snapshot, rb c
 	match := Match{Binding: name, Index: trigger.index, Fields: fields, Thread: trigger.thread, Limits: trigger.limits, PromptTemplate: trigger.prompt, MessageID: in.messageID(m), Received: in.now(), Message: m, Person: trigger.person}
 	in.log.InfoContext(ctx, "chat: "+what+" matched a trigger", append(where, "trigger", trigger.index)...)
 	out, err := in.decide(ctx, match)
-	if out.decision != "" {
-		telemetry.Count(ctx, "agentkourier_trigger_decisions_total", name, string(out.decision))
-		in.log.InfoContext(ctx, "chat: trigger decided", "binding", name, "trigger", trigger.index, "decision", out.decision, "keyHash", out.keyHash, "channel", m.At.Channel, "message", m.At.ID, "thread", out.thread)
-	}
+	attrs := []any{"binding", name, "trigger", trigger.index, "decision", out.decision, "keyHash", out.keyHash, "channel", m.At.Channel, "message", m.At.ID, "thread", out.thread}
 	if err != nil {
+		in.log.WarnContext(ctx, "chat: trigger decision not taken; its redelivery decides again", attrs...)
 		return "", "", fmt.Errorf("trigger %d of %s for %s: %w", trigger.index, name, in.messageID(m), err)
 	}
-	telemetry.Count(ctx, "agentkourier_trigger_matched_total", name) // only once the match was taken: a redelivery counts it then
+	telemetry.Count(ctx, "agentkourier_trigger_decisions_total", name, string(out.decision))
+	in.log.InfoContext(ctx, "chat: trigger decided", attrs...)
+	telemetry.Count(ctx, "agentkourier_trigger_matched_total", name)
 	return "trigger_matched", out.decision, nil
 }
 
