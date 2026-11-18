@@ -331,6 +331,8 @@ if (OVERLAY) {
     const t = el('text', { ...capAttrs, x: capX, y, 'text-anchor': anchor, fill: C.white }, svg); t.textContent = line; y += P.size * 1.16;
   }
   y += P.sub * 0.25;
+  // hidesub: the sub-caption or command box keeps its place but is not drawn (build.mjs fades it in).
+  const subOp = Q.get('hidesub') ? 0 : 1;
   const ran = Q.get('cmd');
   if (ran) {
     // What was run off screen during this shot, in place of the sub-caption and never over the footage.
@@ -349,10 +351,10 @@ if (OVERLAY) {
     for (const l of lines) { probe.textContent = l; bw = Math.max(bw, probe.getComputedTextLength()); }
     probe.remove(); bw += pad * 2;
     const bxx = anchor === 'middle' ? capX - bw / 2 : capX, byy = y - P.sub * 0.7;
-    el('rect', { x: bxx, y: byy, width: bw, height: bh, rx: 10, fill: C.night, stroke: C.alert, 'stroke-width': 2.5 }, svg);
-    lines.forEach((l, i) => { const t = el('text', { ...cmdAttrs, x: bxx + pad, y: byy + pad * 0.65 + lh * (i + 0.72), fill: C.white }, svg); t.textContent = l; });
+    el('rect', { x: bxx, y: byy, width: bw, height: bh, rx: 10, fill: C.night, stroke: C.alert, 'stroke-width': 2.5, opacity: subOp }, svg);
+    lines.forEach((l, i) => { const t = el('text', { ...cmdAttrs, x: bxx + pad, y: byy + pad * 0.65 + lh * (i + 0.72), fill: C.white, opacity: subOp }, svg); t.textContent = l; });
   } else for (const line of subLines) {
-    const t = el('text', { ...subAttrs, x: capX, y, 'text-anchor': anchor, fill: C.white, opacity: 0.8 }, svg); t.textContent = line; y += P.sub * 1.3;
+    const t = el('text', { ...subAttrs, x: capX, y, 'text-anchor': anchor, fill: C.white, opacity: 0.8 * subOp }, svg); t.textContent = line; y += P.sub * 1.3;
   }
   // Small lockup and the honesty note.
   const lock = Q.get('lock').split(',').map((v, i) => i < 2 ? Number(v) : v), noteAt = Q.get('note').split(',');
