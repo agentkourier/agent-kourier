@@ -89,7 +89,10 @@ const (
 // The reasons an activity answered 503 was not taken, the label of agentkourier_teams_activities_shed_total: a closed set. Teams sends
 // such an activity again once, so it is not lost yet. The two reasons of a shed (internal/chat/lanes), channel_backlog and adapter_backlog,
 // are labels too.
-const shedNotRunning = "not_running" // no Serve took activities, or it was stopping
+const (
+	shedNotRunning = "not_running" // no Serve took activities, or it was stopping
+	shedSocketBusy = "socket_busy" // socket mode: the connection's sockets were handling as many envelopes as they may (socketMaxInFlight)
+)
 
 // The reasons an activity answered 200 was lost, the label of agentkourier_teams_activities_lost_total: a closed set. Teams does not
 // send again an activity it was answered 200 for, so each is gone.

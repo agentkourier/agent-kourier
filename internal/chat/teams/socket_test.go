@@ -7,6 +7,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -217,8 +219,8 @@ func result(t *testing.T, sock *faketeams.Socket, id string) faketeams.Frame {
 	return fr
 }
 
-// A connection in socket mode offers the chat listener no handler; it connects with the bot's token from Entra, makes SignalR's
-// handshake through the negotiate's redirect, is up once the service calls SocketReady, and answers a message's envelope with a reply
+// A connection in socket mode offers the chat listener no handler; it connects with the bot's token from Entra, negotiates at the URL
+// the connect call answers (the service's own, as measured), makes SignalR's handshake, is up once the service calls SocketReady, and answers a message's envelope with a reply
 // frame of 200 at once, before the sink has taken the post, which it then does.
 func TestSocketModeTakesAMessageAndAcknowledgesItAtOnce(t *testing.T) {
 	st := newSocketTest(t)
@@ -322,7 +324,7 @@ func TestSocketModeAnswersAnInvokeWithinItsDeadline(t *testing.T) {
 	}
 }
 
-// Past socketMaxInFlight envelopes being handled, one more is answered 503 at once and counted busy.
+// Past socketMaxInFlight envelopes being handled, one more is answered 503 at once and counted busy, and shed.
 func TestSocketModeAnswersBusyPastItsPlaces(t *testing.T) {
 	st := newSocketTest(t)
 	st.c.sockets.slots = make(chan struct{}, 1)
@@ -337,6 +339,9 @@ func TestSocketModeAnswersBusyPastItsPlaces(t *testing.T) {
 	}
 	if got := st.series(t, "agentkourier_teams_socket_envelopes_total", "activity", "busy"); got != 1 {
 		t.Errorf("envelopes{activity,busy} = %v; want 1", got)
+	}
+	if got := st.series(t, "agentkourier_teams_activities_shed_total", shedSocketBusy); got != 1 {
+		t.Errorf("activities_shed_total{socket_busy} = %v; want 1: a 503 for lack of room is a shed, over a socket too", got)
 	}
 	close(st.invokes.release)
 	if fr := result(t, sock, held); fr.Status != http.StatusOK {
@@ -673,5 +678,198 @@ func TestHTTPModeHasNoSockets(t *testing.T) {
 	}
 	if h, ok := ct.c.HTTPHandler(); !ok || h == nil {
 		t.Error("a connection in http mode offers no handler")
+	}
+}
+
+// A negotiate that redirects, which SignalR's protocol allows and the service was not seen to answer, is followed to the service, whose
+// token the WebSocket then carries.
+func TestSocketModeFollowsANegotiateRedirect(t *testing.T) {
+	st := newSocketTest(t)
+	st.f.Redirect(true)
+	st.run(t)
+	st.f.WaitSocket(t, "amer", 0, 5*time.Second)
+	st.up(t, true)
+}
+
+// A run told to stop while a handshake waits for its answer returns at once, closes the connection, and keeps no socket: one that
+// the service would make ready after the stop would be the bot's newest and take the traffic of the run that follows.
+func TestSocketModeStopsDuringAHandshake(t *testing.T) {
+	st := newSocketTest(t)
+	hold := st.f.HoldHandshakes("amer")
+	st.run(t)
+	select {
+	case <-hold.Held:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no handshake reached the fake")
+	}
+	stopped := time.Now()
+	if err := st.stop(t); !errors.Is(err, context.Canceled) {
+		t.Errorf("Run = %v; want context.Canceled", err)
+	}
+	if took := time.Since(stopped); took > time.Second {
+		t.Errorf("Run returned %s after its context ended during a handshake; want within a second", took)
+	}
+	hold.Release()
+	time.Sleep(200 * time.Millisecond) // the fake answers the handshake, and calls SocketReady if it can
+	for _, sock := range st.f.RegionSockets("amer") {
+		select {
+		case <-sock.Closed():
+		case <-time.After(2 * time.Second):
+			t.Errorf("%s is open after the run stopped; want every socket of the run closed", sock)
+		}
+	}
+	if c, _ := st.told(); slices.Contains(c, true) {
+		t.Errorf("OnConnection was told %v; want never up", c)
+	}
+	if got := st.series(t, "agentkourier_teams_socket_ready", "amer"); got != 0 {
+		t.Errorf("agentkourier_teams_socket_ready{amer} = %v; want 0", got)
+	}
+}
+
+// Pings and the replies of several envelopes at once write to one socket concurrently; the race detector holds them to one writer at a
+// time.
+func TestSocketModeWritesOneFrameAtATime(t *testing.T) {
+	st := newSocketTest(t)
+	st.c.sockets.pingEvery = time.Millisecond
+	st.run(t)
+	sock := st.f.WaitSocket(t, "amer", 0, 5*time.Second)
+	st.up(t, true)
+	const n = 24
+	ids := make([]string, n)
+	for i := range ids {
+		ids[i] = sock.Activity(t, envelopeOf(t, "invoke", "env-"+strconv.Itoa(i), fixture(t, "invoke_action"), 0))
+	}
+	for _, id := range ids {
+		if fr := result(t, sock, id); fr.Status != http.StatusOK {
+			t.Errorf("the call %s was answered %d; want 200", id, fr.Status)
+		}
+	}
+	if sock.Pings() == 0 {
+		t.Error("the client sent no ping meanwhile")
+	}
+}
+
+// A 401 in one region while another's socket is ready ends Run with the 401, which Classify says is FatalAuth, and closes the ready
+// socket.
+func TestSocketModeStopsOnA401WhileAnotherRegionIsReady(t *testing.T) {
+	st := newSocketTest(t, "amer", "emea")
+	st.f.Answer("emea", faketeams.Answer{Status: http.StatusServiceUnavailable})
+	st.run(t)
+	sock := st.f.WaitSocket(t, "amer", 0, 5*time.Second)
+	st.up(t, true)
+	st.f.Answer("emea", faketeams.Answer{Status: http.StatusUnauthorized, Body: `{"error":"Unauthorized"}`})
+	err := st.ended(t)
+	var se *SocketError
+	if !errors.As(err, &se) || se.Status != http.StatusUnauthorized || se.Region != "emea" {
+		t.Fatalf("Run = %v; want emea's 401", err)
+	}
+	if v := st.c.Classify(chat.OpOther, err); v.Class != chat.FatalAuth {
+		t.Errorf("Classify = %+v; want FatalAuth", v)
+	}
+	select {
+	case <-sock.Closed():
+	case <-time.After(5 * time.Second):
+		t.Fatal("amer's socket is open after Run ended")
+	}
+	if !sock.ClosedByClient() {
+		t.Error("amer's socket was not closed by the client")
+	}
+}
+
+// An invoke whose envelope gives it 25 seconds is answered by invokeWait, the deadline a press has over https, if its handler is still
+// deciding.
+func TestSocketModeAnswersAnInvokeByTheDeadlineOfAPress(t *testing.T) {
+	st := newSocketTest(t)
+	st.c.sockets.invokeWait = 300 * time.Millisecond
+	st.invokes.release = make(chan struct{}) // never released
+	st.run(t)
+	sock := st.f.WaitSocket(t, "amer", 0, 5*time.Second)
+	sent := time.Now()
+	id := sock.Activity(t, envelopeOf(t, "invoke", "env-press", fixture(t, "invoke_action"), 25000))
+	if _, ok := sock.Result(id, 3*time.Second); !ok {
+		t.Fatalf("no frame %s after an invoke of 25 s; want it by invokeWait", time.Since(sent))
+	}
+	if took := time.Since(sent); took > time.Second {
+		t.Errorf("the frame came %s after the invoke; want about invokeWait (300ms)", took)
+	}
+}
+
+// A connect call that answers no positive expiresIn is a failure, tried again on the backoff: a socket with no life would be replaced
+// as soon as it was ready, in a loop.
+func TestSocketModeRefusesASocketWithNoLife(t *testing.T) {
+	st := newSocketTest(t)
+	st.c.sockets.retryBase, st.c.sockets.retryMax = 100*time.Millisecond, 100*time.Millisecond
+	st.f.ExpireAfter(0)
+	st.run(t)
+	connects := st.f.WaitConnects(t, "amer", 3, 5*time.Second)
+	for i := 1; i < len(connects); i++ {
+		if d := connects[i].At.Sub(connects[i-1].At); d < 80*time.Millisecond {
+			t.Errorf("connect %d came %s after the one before; want the backoff", i, d)
+		}
+	}
+	if n := len(st.f.RegionSockets("amer")); n != 0 {
+		t.Errorf("%d sockets opened with no life; want none", n)
+	}
+	if got := st.series(t, "agentkourier_teams_socket_reconnects_total", "amer", "failed"); got < 1 {
+		t.Errorf("reconnects{amer,failed} = %v; want at least 1", got)
+	}
+}
+
+// A replacement that fails waits as a connect would after the same failure: a 429's Retry-After, a 403's slow wait; the old socket
+// serves meanwhile.
+func TestSocketModeWaitsBeforeTryingAReplacementAgain(t *testing.T) {
+	tests := []struct {
+		name    string
+		answer  faketeams.Answer
+		atLeast time.Duration
+	}{
+		{"429", faketeams.Answer{Status: http.StatusTooManyRequests, RetryAfter: "1"}, 900 * time.Millisecond},
+		{"403", faketeams.Answer{Status: http.StatusForbidden, Body: `{"error":"Socket mode is not enabled for this bot."}`}, 250 * time.Millisecond},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newSocketTest(t)
+			st.c.sockets.refusedRetry = 300 * time.Millisecond
+			st.f.ExpireAfter(2) // replaced a second in
+			st.run(t)
+			old := st.f.WaitSocket(t, "amer", 0, 5*time.Second)
+			st.up(t, true)
+			st.f.Answer("amer", tc.answer)
+			st.f.WaitConnects(t, "amer", 2, 5*time.Second)
+			st.f.Answer("amer", faketeams.Answer{})
+			next := st.f.WaitSocket(t, "amer", 1, 5*time.Second)
+			if next.Replaces != old.ConnectionID {
+				t.Errorf("the replacement names %q; want %q", next.Replaces, old.ConnectionID)
+			}
+			connects := st.f.RegionConnects("amer")
+			if d := connects[2].At.Sub(connects[1].At); d < tc.atLeast {
+				t.Errorf("the replacement was tried again %s after its %s; want at least %s", d, tc.name, tc.atLeast)
+			}
+			if c, _ := st.told(); len(c) != 1 {
+				t.Errorf("OnConnection was told %v; want up once: the old socket serves while the replacement waits", c)
+			}
+		})
+	}
+}
+
+// A region whose 403 was followed by another failure is no longer counted refused: the run does not end when the other regions then
+// answer 403.
+func TestSocketModeCountsARegionRefusedOnlyWhileItsLastAnswerIs403(t *testing.T) {
+	st := newSocketTest(t, "amer", "apac")
+	st.c.sockets.refusedRetry = 100 * time.Millisecond
+	st.f.Answer("amer", faketeams.Answer{Status: http.StatusServiceUnavailable})
+	st.f.Answer("apac", faketeams.Answer{Status: http.StatusForbidden})
+	st.run(t)
+	st.f.WaitConnects(t, "apac", 1, 5*time.Second)
+	st.f.Answer("apac", faketeams.Answer{Status: http.StatusServiceUnavailable})
+	st.f.WaitConnects(t, "apac", 3, 5*time.Second) // the run has taken the 503 of the connect before the last
+	st.f.Answer("amer", faketeams.Answer{Status: http.StatusForbidden})
+	before := len(st.f.RegionConnects("amer"))
+	st.f.WaitConnects(t, "amer", before+1, 5*time.Second)
+	time.Sleep(300 * time.Millisecond)
+	select {
+	case err := <-st.done:
+		t.Fatalf("Run ended (%v) with apac's last answer a 503; want it running", err)
+	default:
 	}
 }

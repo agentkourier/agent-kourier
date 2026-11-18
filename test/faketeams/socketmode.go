@@ -1,8 +1,9 @@
 // Package faketeams fakes, for tests, the part of Microsoft's services that a Microsoft Teams connection in socket mode talks to:
-// the connect call of each region, Azure SignalR's negotiate (with one redirect, as the real service makes) and its WebSocket, and
-// enough of SignalR's JSON hub protocol to call SocketReady, Activity and SocketClosing on the client and take its completions. It
-// follows what was measured against the real service in November 2026 (connect, negotiate, handshake, the envelope and its reply
-// frame), not more: what the real service does past that is not here.
+// the connect call of each region, Azure SignalR's negotiate and its WebSocket, and enough of SignalR's JSON hub protocol to call
+// SocketReady, Activity and SocketClosing on the client and take its completions. It follows what was measured against the real
+// service in November 2026 (connect, negotiate, handshake, the envelope and its reply frame), not more: what the real service does past
+// that is not here. As measured, the connect call's URL is the SignalR service's own, whose negotiate answers a connection token at
+// once; Redirect makes it answer a redirect first instead, which SignalR's protocol has and the service was not seen to answer.
 package faketeams
 
 import (
@@ -25,7 +26,7 @@ import (
 const (
 	// ConnectToken is the access token that the connect call issues, which the first negotiate must carry.
 	ConnectToken = "fake-socket-connect-token"
-	// ServiceToken is the token that the negotiate's redirect issues, which the second negotiate and the WebSocket must carry.
+	// ServiceToken is the token that a negotiate's redirect issues (see Redirect), which the next negotiate and the WebSocket must carry.
 	ServiceToken = "fake-signalr-service-token" //nolint:gosec // G101: a fake's stand-in, no credential
 )
 
@@ -59,20 +60,40 @@ type SocketMode struct {
 	mu        sync.Mutex
 	answers   map[string]Answer // by region: what a connect is answered with; none means 200
 	silent    map[string]bool   // by region: its sockets never call SocketReady
+	held      map[string]*Hold  // by region: its handshakes wait for the Hold's release
+	redirect  bool              // the connect call's URL is a negotiate that redirects
 	expiresIn int
 	connects  []Connect
 	sockets   []*Socket
-	issued    map[string]bool // the connection tokens issued, and whether one was used for a WebSocket
+	issued    map[string]*issue // the connection tokens issued, by token
 	next      int
 	changed   chan struct{} // closed and made anew at every change of connects or sockets
 	wg        sync.WaitGroup
 }
 
+// issue is a connection token that a negotiate issued: the bearer token the negotiate carried, which its WebSocket must carry too, and
+// whether a WebSocket took it.
+type issue struct {
+	bearer string
+	used   bool
+}
+
+// Hold holds the handshakes of a region's sockets: each is read, and answered only once Release is called.
+type Hold struct {
+	// Held gets a value as each handshake is read and held.
+	Held    chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+// Release lets the held handshakes, and the later ones, be answered.
+func (h *Hold) Release() { h.once.Do(func() { close(h.release) }) }
+
 // New starts the fake, over TLS, until the test ends. Its sockets' tokens expire after 600 seconds, as the real service's did.
 func New(t testing.TB) *SocketMode {
 	t.Helper()
-	f := &SocketMode{answers: map[string]Answer{}, silent: map[string]bool{}, expiresIn: 600, issued: map[string]bool{},
-		changed: make(chan struct{})}
+	f := &SocketMode{answers: map[string]Answer{}, silent: map[string]bool{}, held: map[string]*Hold{}, expiresIn: 600,
+		issued: map[string]*issue{}, changed: make(chan struct{})}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /{region}/v3/websockets/connect", f.connect)
 	mux.HandleFunc("POST /client/negotiate", f.negotiateRedirect)
@@ -80,6 +101,11 @@ func New(t testing.TB) *SocketMode {
 	mux.HandleFunc("GET /hub/", f.hub)
 	f.srv = httptest.NewTLSServer(mux)
 	t.Cleanup(func() {
+		f.mu.Lock()
+		for _, h := range f.held {
+			h.Release()
+		}
+		f.mu.Unlock()
 		for _, s := range f.Sockets() {
 			s.Drop()
 		}
@@ -118,6 +144,23 @@ func (f *SocketMode) Silence(region string, silent bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.silent[region] = silent
+}
+
+// HoldHandshakes makes the later handshakes of region wait, read and unanswered, until the Hold it returns is released.
+func (f *SocketMode) HoldHandshakes(region string) *Hold {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	h := &Hold{Held: make(chan struct{}, 16), release: make(chan struct{})}
+	f.held[region] = h
+	return h
+}
+
+// Redirect makes the later connect calls answer a URL whose negotiate redirects to the service, with a token of its own (ServiceToken),
+// as SignalR's protocol allows; false, the default, answers the service's URL itself, as was measured.
+func (f *SocketMode) Redirect(on bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.redirect = on
 }
 
 // ExpireAfter makes the later connect calls say that their token expires after seconds.
@@ -224,7 +267,10 @@ func (f *SocketMode) connect(w http.ResponseWriter, r *http.Request) {
 	if !refused && (!strings.HasPrefix(c.Authorization, "Bearer ") || len(c.Authorization) == len("Bearer ")) {
 		c.Status = http.StatusUnauthorized
 	}
-	expires := f.expiresIn
+	expires, path := f.expiresIn, "/hub/"
+	if f.redirect {
+		path = "/client/"
+	}
 	f.connects = append(f.connects, c)
 	f.notify()
 	f.mu.Unlock()
@@ -238,12 +284,12 @@ func (f *SocketMode) connect(w http.ResponseWriter, r *http.Request) {
 	case c.Status == http.StatusUnauthorized:
 		http.Error(w, `{"error":"no bot token"}`, http.StatusUnauthorized)
 	default:
-		writeJSON(w, map[string]any{"url": f.srv.URL + "/client/?hub=bothub&region=" + region, "accessToken": ConnectToken,
+		writeJSON(w, map[string]any{"url": f.srv.URL + path + "?hub=bothub&region=" + region, "accessToken": ConnectToken,
 			"expiresIn": expires, "protocolVersion": 1})
 	}
 }
 
-// negotiateRedirect is the first negotiate, which Azure SignalR answers with the service's URL and a token for it.
+// negotiateRedirect is a negotiate that redirects (Redirect): it answers the service's URL and a token for it.
 func (f *SocketMode) negotiateRedirect(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Authorization") != "Bearer "+ConnectToken || r.URL.Query().Get("negotiateVersion") != "1" {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -252,9 +298,17 @@ func (f *SocketMode) negotiateRedirect(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"url": f.srv.URL + "/hub/?hub=bothub&region=" + r.URL.Query().Get("region"), "accessToken": ServiceToken})
 }
 
-// negotiate is the service's negotiate, which issues a connection token for one WebSocket.
+// negotiate is the service's negotiate, which issues a connection token for one WebSocket. It takes the connect call's token, or, after
+// a redirect, the redirect's.
 func (f *SocketMode) negotiate(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("Authorization") != "Bearer "+ServiceToken || r.URL.Query().Get("negotiateVersion") != "1" {
+	bearer := r.Header.Get("Authorization")
+	f.mu.Lock()
+	want := "Bearer " + ConnectToken
+	if f.redirect {
+		want = "Bearer " + ServiceToken
+	}
+	f.mu.Unlock()
+	if bearer != want || r.URL.Query().Get("negotiateVersion") != "1" {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -262,7 +316,7 @@ func (f *SocketMode) negotiate(w http.ResponseWriter, r *http.Request) {
 	f.next++
 	n := f.next
 	tok := "fake-connection-token-" + strconv.Itoa(n)
-	f.issued[tok] = false
+	f.issued[tok] = &issue{bearer: bearer}
 	f.mu.Unlock()
 	writeJSON(w, map[string]any{"negotiateVersion": 1, "connectionId": "fake-connection-" + strconv.Itoa(n), "connectionToken": tok,
 		"availableTransports": []any{map[string]any{"transport": "WebSockets", "transferFormats": []string{"Text"}}}})
@@ -278,13 +332,14 @@ func writeJSON(w http.ResponseWriter, v any) {
 func (f *SocketMode) hub(w http.ResponseWriter, r *http.Request) {
 	tok, region := r.URL.Query().Get("id"), r.URL.Query().Get("region")
 	f.mu.Lock()
-	used, ok := f.issued[tok]
-	if ok && !used {
-		f.issued[tok] = true
+	is := f.issued[tok]
+	fresh := is != nil && !is.used && r.Header.Get("Authorization") == is.bearer
+	if fresh {
+		is.used = true
 	}
-	silent := f.silent[region]
+	silent, hold := f.silent[region], f.held[region]
 	f.mu.Unlock()
-	if r.Header.Get("Authorization") != "Bearer "+ServiceToken || !ok || used {
+	if !fresh {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -297,6 +352,10 @@ func (f *SocketMode) hub(w http.ResponseWriter, r *http.Request) {
 	if err != nil || string(bytes.TrimSuffix(hs, []byte{recordSeparator})) != `{"protocol":"json","version":1}` {
 		_ = ws.Close()
 		return
+	}
+	if hold != nil {
+		hold.Held <- struct{}{}
+		<-hold.release
 	}
 	s := &Socket{Region: region, ws: ws, results: map[string]chan Frame{}, closed: make(chan struct{})}
 	if err := s.write([]byte("{}")); err != nil {
@@ -316,7 +375,11 @@ func (f *SocketMode) hub(w http.ResponseWriter, r *http.Request) {
 	f.notify()
 	f.mu.Unlock()
 	if !silent {
-		_ = s.invoke("SocketReady", "", map[string]any{"protocolVersion": 1, "botKey": "fake-bot", "connectionId": s.ConnectionID})
+		if err := s.invoke("SocketReady", "", map[string]any{"protocolVersion": 1, "botKey": "fake-bot", "connectionId": s.ConnectionID}); err == nil {
+			s.mu.Lock()
+			s.ready = true
+			s.mu.Unlock()
+		}
 	}
 	f.wg.Add(1)
 	go func() {
@@ -359,6 +422,7 @@ type Socket struct {
 	// results are the completions awaited, by invocation ID: an Activity call's channel gets its frame.
 	results map[string]chan Frame
 	pings   int
+	ready   bool // SocketReady was sent
 	// closedBy says whether the client's close frame ended the socket (and not the fake's Drop or a read error).
 	closedBy bool
 	closed   chan struct{}
@@ -484,6 +548,13 @@ func (s *Socket) ClosedByClient() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closedBy
+}
+
+// Ready says whether the fake sent the socket SocketReady.
+func (s *Socket) Ready() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ready
 }
 
 // Pings is how many SignalR pings the client has sent.

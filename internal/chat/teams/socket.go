@@ -25,9 +25,10 @@ import (
 // Socket mode, Microsoft's public preview of a delivery with no public endpoint ("Connect an agent without the SDK" and "Configure
 // delivery methods for agents" in Microsoft's documentation, read 2026-11-17), as it was measured on a test tenant on 2026-11-17 and
 // 2026-11-18: a POST to https://<region>.botapi.skype.com/v3/websockets/connect with the bot's token answers a SignalR client URL and an
-// access token for one socket, which expires after expiresIn seconds (600 measured); the client runs SignalR's negotiate (Azure SignalR
-// answers it with a redirect to the service and a token of its own), opens the WebSocket and makes the handshake of SignalR's JSON
-// protocol; the service calls SocketReady, then Activity with an envelope for each activity, whose completion is the reply frame, and
+// access token for one socket, which expires after expiresIn seconds (600 measured); the client runs SignalR's negotiate at that URL,
+// which was already the SignalR service's host and answered a connection token at once (a redirect to another host with a token of its
+// own, which the client follows, is in SignalR's protocol and was not seen), opens the WebSocket and makes the handshake of SignalR's
+// JSON protocol; the service calls SocketReady, then Activity with an envelope for each activity, whose completion is the reply frame, and
 // SocketClosing before it closes a socket on purpose. amer and emea were ready in under a second; apac answered 403 "Socket mode is
 // not enabled for this bot." while the others worked. A second socket of the bot in a region takes all of its traffic, newest first,
 // and the older gets nothing and no SocketClosing; so only the leader runs a connection's sockets (the broker runs Client.Run on the
@@ -59,7 +60,7 @@ const socketWriteWait = 10 * time.Second
 
 // socketReplaceLead is how long before a socket's token expires its region opens the next, which names the old as the one it
 // replaces; a socket whose token lives less than twice the lead (only a fake's does) is replaced at half its life. The old socket is
-// kept socketRetireAfter more, and then until the envelopes it is handling are answered, at most socketRetireMax in all, and closed:
+// kept socketRetireAfter more, and then until the envelopes it is handling are answered, at most socketRetireMax more, and closed:
 // Microsoft's documentation says to keep it a few seconds, and that the service closes it itself (Replaced) a minute after.
 const (
 	socketReplaceLead = time.Minute
@@ -91,7 +92,7 @@ const socketMaxFrame = 4 << 20
 // socketMaxBody is the most of an answer to the connect call or to a negotiate that is read; each is a small JSON object.
 const socketMaxBody = 64 << 10
 
-// socketMaxRedirects bounds the redirects of one negotiate, which Azure SignalR answers with one.
+// socketMaxRedirects bounds the redirects of one negotiate. SignalR's protocol lets a negotiate answer one; none was seen.
 const socketMaxRedirects = 5
 
 // socketMaxInFlight is how many envelopes a connection's sockets handle at once. One past it is answered 503 at once and not worked
@@ -180,11 +181,13 @@ type sockets struct {
 	log          *slog.Logger
 	onConnection func(bool)
 	onGap        func(Gap)
-	slots        chan struct{} // a place for each envelope being handled, socketMaxInFlight in all
+	slots        chan struct{}  // a place for each envelope being handled, socketMaxInFlight in all
+	handlers     sync.WaitGroup // the envelopes being handled, which run waits for before it returns
 	jitter       func() float64
 
 	readyWait, pingEvery, serverTimeout, retireAfter, retireMax, stopWait, reconnectNow time.Duration
 	retryBase, retryMax, refusedRetry                                                   time.Duration
+	invokeWait                                                                          time.Duration // invokeTimeout: an invoke's answer is sent by it at the latest
 }
 
 func newSockets(conn string, recv *Receiver, tokens *tokenSource, client *http.Client, cfg Config, log *slog.Logger) *sockets {
@@ -197,11 +200,11 @@ func newSockets(conn string, recv *Receiver, tokens *tokenSource, client *http.C
 		onConnection: cfg.OnConnection, onGap: cfg.OnSocketGap, slots: make(chan struct{}, socketMaxInFlight), jitter: rand.Float64,
 		readyWait: socketReadyWait, pingEvery: socketPingEvery, serverTimeout: socketServerTimeout, retireAfter: socketRetireAfter,
 		retireMax: socketRetireMax, stopWait: socketStopWait, reconnectNow: socketReconnectNow, retryBase: socketRetryBase,
-		retryMax: socketRetryMax, refusedRetry: socketRefusedRetry}
+		retryMax: socketRetryMax, refusedRetry: socketRefusedRetry, invokeWait: invokeTimeout}
 }
 
-// regionEvent is what a region tells the run: its socket is ready or is not, its connect was refused (403), or the bot's credentials
-// were rejected (401), which ends the run.
+// regionEvent is what a region tells the run: its socket is ready or is not, its connect was refused (403) or failed otherwise, or
+// the bot's credentials were rejected (401), which ends the run.
 type regionEvent struct {
 	region string
 	kind   int
@@ -212,6 +215,7 @@ const (
 	regionUp = iota
 	regionDown
 	regionRefused
+	regionFailed
 	regionRejected
 )
 
@@ -248,7 +252,8 @@ func (s *sockets) run(ctx context.Context) error {
 		}
 	}
 	cancel()
-	wg.Wait() // no region sends once rctx has ended
+	wg.Wait()         // no region sends once rctx has ended, and each has closed its sockets, so no envelope is taken after
+	s.handlers.Wait() // their contexts have ended, so each answers at once; none counts a series after run returns
 	for _, region := range s.regions {
 		telemetry.SetGauge(ctx, "agentkourier_teams_socket_ready", 0, region, s.conn)
 	}
@@ -265,7 +270,7 @@ func (s *sockets) run(ctx context.Context) error {
 // runState is what run knows of the regions.
 type runState struct {
 	ready    map[string]bool
-	refused  map[string]error // the regions whose last connect was answered 403, and the answer
+	refused  map[string]error // the regions whose last connect was answered 403, and the answer; a ready socket or another failure clears it
 	gapStart time.Time        // when the gap began, while no region is ready
 	initial  bool             // the gap began with the run
 }
@@ -297,6 +302,8 @@ func (s *sockets) apply(ctx context.Context, st *runState, ev regionEvent) error
 				s.onConnection(false)
 			}
 		}
+	case regionFailed:
+		delete(st.refused, ev.region)
 	case regionRefused:
 		st.refused[ev.region] = ev.err
 		if len(st.ready) == 0 && len(st.refused) == len(s.regions) {
@@ -380,29 +387,39 @@ func (s *sockets) region(ctx context.Context, region string, report func(regionE
 // the region stops (the credentials were rejected, or the run takes no more).
 func (s *sockets) failed(ctx context.Context, region string, err error, failures *int, report func(regionEvent) bool) (wait time.Duration, reason string, ok bool) {
 	*failures++
-	var se *SocketError
-	switch {
-	case credentialsRejected(err):
+	if credentialsRejected(err) {
 		s.log.ErrorContext(ctx, "teams: the bot's credentials were rejected for Socket mode", "region", region, "error", err.Error())
 		report(regionEvent{region: region, kind: regionRejected, err: err})
 		return 0, "", false
-	case errors.As(err, &se) && se.Status == http.StatusForbidden:
-		wait, reason = s.jittered(s.refusedRetry), reasonRefused
+	}
+	wait, reason = s.retryWait(err, *failures)
+	if reason == reasonRefused {
 		s.log.WarnContext(ctx, "teams: a region refused the bot's socket; the other regions take its activities if they are ready",
 			"region", region, "error", err.Error(), "after", wait)
 		return wait, reason, report(regionEvent{region: region, kind: regionRefused, err: err})
-	case errors.As(err, &se) && se.Status == http.StatusTooManyRequests:
-		wait = min(max(se.RetryAfter, s.jittered(backoff.Doubling(s.retryBase, s.retryMax, *failures))), socketRetryAfterMax)
-		reason = reasonRateLimited
-	case errors.As(err, &se) && se.Status >= 500:
-		wait, reason = s.jittered(backoff.Doubling(s.retryBase, s.retryMax, *failures)), reasonUnavailable
-	case errors.Is(err, errReadyTimeout):
-		wait, reason = s.jittered(backoff.Doubling(s.retryBase, s.retryMax, *failures)), reasonReadyTimeout
-	default:
-		wait, reason = s.jittered(backoff.Doubling(s.retryBase, s.retryMax, *failures)), reasonFailed
 	}
 	s.log.WarnContext(ctx, "teams: a socket could not be opened; connecting again", "region", region, "error", err.Error(), "after", wait)
-	return wait, reason, true
+	return wait, reason, report(regionEvent{region: region, kind: regionFailed, err: err})
+}
+
+// retryWait is how long a region waits after the failure err, the failures-th in a row, of a connect or a replacement, and the reason
+// of the next: a 403 waits refusedRetry, a 429 its Retry-After if that is longer than the backoff (up to socketRetryAfterMax), and the
+// rest the backoff.
+func (s *sockets) retryWait(err error, failures int) (time.Duration, string) {
+	backoffWait := s.jittered(backoff.Doubling(s.retryBase, s.retryMax, failures))
+	var se *SocketError
+	switch {
+	case errors.As(err, &se) && se.Status == http.StatusForbidden:
+		return s.jittered(s.refusedRetry), reasonRefused
+	case errors.As(err, &se) && se.Status == http.StatusTooManyRequests:
+		return min(max(se.RetryAfter, backoffWait), socketRetryAfterMax), reasonRateLimited
+	case errors.As(err, &se) && se.Status >= 500:
+		return backoffWait, reasonUnavailable
+	case errors.Is(err, errReadyTimeout):
+		return backoffWait, reasonReadyTimeout
+	default:
+		return backoffWait, reasonFailed
+	}
 }
 
 // hold keeps sk, the ready socket of region, and the ones that replace it, until one ends: it returns that socket (being retired in
@@ -443,9 +460,11 @@ func (s *sockets) hold(ctx context.Context, region string, sk *socket, retiring 
 				return nil, "", 0
 			}
 			tries++
-			// The old socket serves until its token expires; then the service closes it, and the region connects as after any end.
-			replaceAt = time.Now().Add(s.jittered(backoff.Doubling(s.retryBase, s.retryMax, tries)))
-			s.log.WarnContext(ctx, "teams: a socket could not be replaced; the old one serves until it ends", "region", region, "error", err.Error())
+			// The old socket serves until its token expires; then the service closes it, and the region connects as after any end. The
+			// next try waits as a connect would after the same failure: a 429's Retry-After, a 403's slow wait.
+			wait, _ := s.retryWait(err, tries)
+			replaceAt = time.Now().Add(wait)
+			s.log.WarnContext(ctx, "teams: a socket could not be replaced; the old one serves until it ends", "region", region, "error", err.Error(), "after", wait)
 			continue
 		}
 		old := sk
@@ -608,6 +627,9 @@ func (s *sockets) connect(ctx context.Context, region, replaces string) (session
 	if sess.AccessToken == "" || !isHTTPS(sess.URL) {
 		return sess, fmt.Errorf("teams socket mode: the connect call of %s answered no https URL or no token", region)
 	}
+	if sess.ExpiresIn <= 0 { // a socket with no life would be replaced as soon as it is ready, again and again
+		return sess, fmt.Errorf("teams socket mode: the connect call of %s answered an expiresIn of %d seconds", region, sess.ExpiresIn)
+	}
 	return sess, nil
 }
 
@@ -646,8 +668,8 @@ func negotiateURL(raw string) string {
 	return u + "negotiateVersion=1"
 }
 
-// negotiate runs SignalR's negotiate at raw with token, following the redirects that Azure SignalR answers with, and returns the
-// WebSocket's URL and the token it takes.
+// negotiate runs SignalR's negotiate at raw with token, following a redirect if one is answered (SignalR's protocol has them; the
+// service measured answered none), and returns the WebSocket's URL and the token it takes.
 func (s *sockets) negotiate(ctx context.Context, raw, token string) (string, string, error) {
 	for range socketMaxRedirects {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, negotiateURL(raw), http.NoBody)
@@ -745,14 +767,22 @@ func (s *sockets) open(ctx context.Context, region, replaces string) (*socket, e
 		}
 		return nil, fmt.Errorf("teams socket mode: the WebSocket of %s: %w", region, err)
 	}
+	// Until open returns, the end of ctx closes the connection, whatever it waits for: the handshake's write and read, and SocketReady.
+	// A run told to stop opens no socket after it, so none of a stopped run becomes the bot's newest and takes its traffic.
+	stop := context.AfterFunc(ctx, func() { _ = ws.Close() })
+	defer stop()
 	ws.SetReadLimit(socketMaxFrame)
 	_ = ws.SetReadDeadline(deadline)
+	_ = ws.SetWriteDeadline(deadline)
 	life := time.Duration(sess.ExpiresIn) * time.Second
 	sk := &socket{region: region, ws: ws, life: life, expires: issued.Add(life), ready: make(chan string, 1),
 		over: make(chan struct{}), done: make(chan struct{})}
 	pending, err := sk.handshake()
 	if err != nil {
 		_ = ws.Close()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, fmt.Errorf("teams socket mode: the handshake of %s: %w", region, err)
 	}
 	go s.read(ctx, sk, pending)
@@ -761,6 +791,11 @@ func (s *sockets) open(ctx context.Context, region, replaces string) (*socket, e
 	defer t.Stop()
 	select {
 	case id := <-sk.ready:
+		if ctx.Err() != nil { // the select may take ready over a ctx that ended too
+			sk.close()
+			<-sk.done
+			return nil, ctx.Err()
+		}
 		sk.id = id
 		return sk, nil
 	case <-sk.over:
@@ -929,12 +964,15 @@ func (s *sockets) dispatch(ctx context.Context, sk *socket, invocationID string,
 	default:
 		var env envelope
 		_ = json.Unmarshal(arg, &env)
+		s.recv.count(ctx, "agentkourier_teams_activities_shed_total", shedSocketBusy)
 		s.reply(ctx, sk, invocationID, envelopeType(env.Type), env.EnvelopeID, recvAt,
 			answer{status: http.StatusServiceUnavailable, outcome: envelopeBusy})
 		return
 	}
 	sk.inflight.Add(1)
+	s.handlers.Add(1)
 	go func() {
+		defer s.handlers.Done()
 		defer sk.inflight.Done()
 		defer func() { <-s.slots }()
 		s.handle(ctx, sk, invocationID, arg, recvAt)
@@ -949,7 +987,7 @@ func envelopeType(t string) string {
 	return "other"
 }
 
-// handle hands the envelope's activity to the receiver, within the envelope's deadline less socketReplyMargin (and invokeTimeout for
+// handle hands the envelope's activity to the receiver, within the envelope's deadline less socketReplyMargin (and invokeWait for
 // an invoke), and sends its answer as the reply frame.
 func (s *sockets) handle(ctx context.Context, sk *socket, invocationID string, arg json.RawMessage, recvAt time.Time) {
 	var env envelope
@@ -965,7 +1003,7 @@ func (s *sockets) handle(ctx context.Context, sk *socket, invocationID string, a
 	}
 	wait := deadline - socketReplyMargin
 	if env.Type == "invoke" {
-		wait = min(wait, invokeTimeout)
+		wait = min(wait, s.invokeWait)
 	}
 	ectx, cancel := context.WithDeadline(ctx, recvAt.Add(max(wait, 0)))
 	defer cancel()

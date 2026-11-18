@@ -107,4 +107,5 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Count(t, "teamsSocketInFlight", cap(s.slots))
 	limitsdoc.Duration(t, "teamsSocketDeadline", socketDefaultDeadline)
 	limitsdoc.Duration(t, "teamsSocketReplyMargin", socketReplyMargin)
+	limitsdoc.Duration(t, "teamsInvokeDeadline", s.invokeWait) // a press over a socket is answered by the deadline it has over https
 }
