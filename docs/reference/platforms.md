@@ -54,6 +54,25 @@ spec.chat.channel: "19:a1b2c3d4e5f6@thread.tacv2" is not a channel ID on Slack, 
 A Binding that its ChatConnection does not admit (in another namespace that `allowedNamespaces` does not list) is told
 `NamespaceNotAllowed` and nothing of the platform.
 
+## What Microsoft Teams shows while the agent works
+
+Teams has no streams, so a live reply (`chat.output: live`), a mention's as an alert's, is one message that Agent Kourier posts
+and then edits, at most once every 2 seconds ([Limits](limits.md#what-a-thread-shows)). Its first post shows the agent's text so far,
+with a status line for the latest tool call, such as `Calling get_pods(ns="prod")`, or `Working…` in a gap. Each edit after it shows
+the text so far and then, under it, the tool calls as a list in a quote, one line a call: `Calling name(arguments)` while it runs,
+`Ran name(arguments)` once its result came, `name(arguments) failed` when the result says so, and `name(arguments) ended with no
+result` for one with no result when the turn ended. The list holds the latest 20 steps, its `Working…` lines among them, under a
+line such as `5 earlier steps are not shown.` With `chat.progress: steps-and-activity`, the default, a gap with nothing new
+also adds a line, `Working…`, which the next tool call takes over, or which ends as `Wrote the answer`, `Wrote an update`, `Finished`, `Waiting for your answer` or `Stopped`.
+The final edit keeps the list under the answer and, when `feedback.enabled` is set, the labels of the useful and not-useful buttons,
+as a record of what the agent did. With `chat.progress: activity` there is no list: the message shows
+one `Working…` line that counts the steps. An edit that Teams' budget for a message cannot hold with its list is sent again
+without it, and the reply lists no steps from then on.
+
+In a channel's thread, Teams' web client shows the list as a quote, with a bar at its left, and a bullet before each step
+(seen in a live check, November 2026). Agent Kourier sets no busy mark on Teams: in the same check Teams showed no typing indicator
+for the bot in a channel's thread. A reply that waits on the agent shows its latest line, `Working…` or a step, until the next edit.
+
 ## Chat IDs
 
 | Field | Slack | Microsoft Teams |
