@@ -355,9 +355,10 @@ func (r *renderer) ending(e chat.Ending) {
 }
 
 // escapeLine writes one line of literal text so that CommonMark shows its characters and acts on none of them: "&", "<", ">", "["
-// and "]" as entities (so that no tag, mention, link or entity is made, whatever Teams does with a backslash), the characters of
-// emphasis, code and tables with a backslash, and a "#", "-", "+" or "=" at its start, or the "." or ")" after the digits it starts
-// with, with a backslash, so that it is no heading, list item or underline.
+// and "]" as entities (so that no tag, mention, link or entity is made, whatever Teams does with a backslash), "{" and "}" as
+// entities too (Teams dropped a "{…}" span of a step line in a live check, 2026-11-18; that the entities show as braces is
+// unverified), the characters of emphasis, code and tables with a backslash, and a "#", "-", "+" or "=" at its start, or the "."
+// or ")" after the digits it starts with, with a backslash, so that it is no heading, list item or underline.
 //
 // A bare URL is the one place where an escape may not be read: a reader that links bare URLs as they stand in the text (as the
 // conformance suite's reading does) runs the link on over a backslash or an entity, and shows it as written. So a URL that holds a
@@ -386,6 +387,10 @@ func escapeLine(s string) string {
 			b.WriteString("&#91;")
 		case ']':
 			b.WriteString("&#93;")
+		case '{':
+			b.WriteString("&#123;")
+		case '}':
+			b.WriteString("&#125;")
 		case '\\', '`', '*', '_', '~', '|':
 			b.WriteByte('\\')
 			b.WriteByte(c)
@@ -433,7 +438,7 @@ func escapedURLAt(s string, i int) bool {
 	if url == "" {
 		return false
 	}
-	if strings.ContainsAny(url, "&[]\\`*_~|") {
+	if strings.ContainsAny(url, "&[]{}\\`*_~|") {
 		return true
 	}
 	return len(url) < len(word) // it ends at a "<" or ">"

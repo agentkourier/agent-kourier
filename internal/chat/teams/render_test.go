@@ -89,6 +89,10 @@ func TestEscapeLine(t *testing.T) {
 		"see https://example.test/a now": "see https://example.test/a now",
 		"<https://evil.test/login>":      "&lt;&#104;ttps://evil.test/login&gt;",
 		"go to www.evil.test/a_b":        `go to &#119;ww.evil.test/a\_b`,
+		// Teams dropped a "{…}" span from a step line in a live check, so braces are written as entities too.
+		`rate(x{code=~"5.."}[5m])`:      `rate(x&#123;code=\~"5.."&#125;&#91;5m&#93;)`,
+		"{}":                            "&#123;&#125;",
+		"see https://evil.test/{a} now": "see &#104;ttps://evil.test/&#123;a&#125; now",
 	} {
 		if got := escapeLine(in); got != want {
 			t.Errorf("escapeLine(%q) = %q, want %q", in, got, want)
