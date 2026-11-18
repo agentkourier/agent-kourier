@@ -571,10 +571,22 @@ Rules:
   posting app's Microsoft Entra application ID; a mention's user, the person's Microsoft Entra object ID), with the union's caps: 140
   bytes for a channel, 36 for a sender and a user, 32 for an approver group, which keeps Slack's shape alone. GUIDs are lowercase hex
   only, since chat IDs are compared byte for byte. Which platform's shape an ID must have is checked where the broker has the
-  connection (`InvalidPlatformID`, D42). The broker runs a teams connection in `http` mode only, and only with a chat listener: the
-  leader takes Teams' requests on the connection's route, and posts, replies and edits through the Bot Connector with a token that
-  Microsoft Entra issues for `clientSecret`. In `socket` mode ("Socket mode is not supported yet"), or with no chat listener, the
-  broker's own teams connection is a wiring error at start and a team's is not started. A question, a tool approval and a message's
+  connection (`InvalidPlatformID`, D42). The broker runs a teams connection in either mode, and posts, replies and edits through the
+  Bot Connector with a token that Microsoft Entra issues for `clientSecret`. In `http` mode it needs a chat listener, and the leader
+  takes Teams' requests on the connection's route; with no chat listener the broker's own teams connection is a wiring error at start
+  and a team's is not started. In `socket` mode (TEAMS-2S, built 2026-11-18) the leader alone opens a socket in each region (`amer`,
+  `emea`, `apac`): the region's `/v3/websockets/connect` with the bot's token, Azure SignalR's negotiate and its JSON hub protocol,
+  SocketReady within 30 s, each `Activity` envelope handed to the same take as an HTTPS request (no JWT: the socket is the
+  authentication) and answered in its reply frame within the envelope's `deadlineMs`, an invoke's body in the frame. A socket is
+  replaced a minute before its token expires (600 s measured) by one that names it in `x-ms-socket-replaces-connection-id`, and the
+  old is closed once its envelopes are answered. Connects back off 1, 2, 4, 8, then 15 s with jitter; a 429 waits its `Retry-After`;
+  a 401 is a rejected credential; a 403 (measured: `apac` on the test tenant) is retried every 5 minutes and is fatal only when every
+  region answers it and none is ready, and then the run is retried as any transient failure. A region's socket is closed when the
+  run's context ends, so a leader that loses its Lease (the process exits) or stops stops its sockets. What Teams sends while no
+  region's socket is ready is lost (measured, 2026-11-18: the newest socket takes all traffic, and nothing is queued for later); each
+  such interval is logged with its start and end, observed in `agentkourier_teams_socket_gap_seconds`, and given to
+  `teams.Config.OnSocketGap`, the seam for a Graph backfill (TEAMS-7P), which is not built. A change of mode is an edit of the
+  ChatConnection, which restarts the connection. A question, a tool approval and a message's
   buttons are Adaptive Cards 1.5 whose `Action.Execute` Teams sends as an `adaptiveCard/action` invoke, which Teams does not send
   again (measured on a test tenant, November 2026). Its service holds the invoke's request about 13.9 s, but the client shows an
   answer only up to 12.5–13 s after the invoke reached the server, and past that shows the presser "Something went wrong" (test

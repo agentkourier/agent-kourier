@@ -348,8 +348,8 @@ type TeamsConnectionSpec struct {
 	// (AGENTKOURIER_CHAT_LISTEN) at POST /chat/teams/<namespace>/<name>, or socket, over an outbound WebSocket that Agent Kourier
 	// opens to Teams, with no public endpoint. Both use the same credentials, the Secret's clientSecret. Unlike Slack's, the default
 	// is http: Microsoft's documentation recommends an HTTPS messaging endpoint for agents in production, and says that Socket mode
-	// is in public preview. A broker runs http mode only, on a chat listener: socket mode is not supported yet, and a connection
-	// in it is not started.
+	// is in public preview. In http mode a broker needs its chat listener. In socket mode only the leader connects, with a socket
+	// in each region that accepts one, and what Teams sends while no socket is ready it does not deliver, then or later.
 	// +kubebuilder:validation:Enum=http;socket;""
 	// +doc:default=http
 	// +optional

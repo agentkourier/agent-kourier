@@ -79,4 +79,32 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Bytes(t, "teamsGraphBody", graphMaxBody)
 	limitsdoc.Count(t, "teamsCardDepth", cardMaxDepth)
 	limitsdoc.Bytes(t, "teamsGraphText", graphTextMax)
+
+	// Socket mode: the waits that a socket-mode Client keeps in fields, which a test may shorten, are read from one New built, and the
+	// rest from the constants it reads.
+	sc, err := New(Config{Connection: testConn, TenantID: testTenant, AppID: testAppID, ClientSecret: secret.New(testClientSecret), Socket: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := sc.sockets
+	limitsdoc.Text(t, "teamsSocketRegions", strings.Join(s.regions, ", "))
+	limitsdoc.Count(t, "teamsSocketRedirects", socketMaxRedirects)
+	limitsdoc.Bytes(t, "teamsSocketBody", socketMaxBody)
+	limitsdoc.Duration(t, "teamsSocketReadyWait", s.readyWait)
+	limitsdoc.Duration(t, "teamsSocketPing", s.pingEvery)
+	limitsdoc.Duration(t, "teamsSocketServerTimeout", s.serverTimeout)
+	limitsdoc.Duration(t, "teamsSocketWriteWait", socketWriteWait)
+	limitsdoc.Bytes(t, "teamsSocketFrame", socketMaxFrame)
+	limitsdoc.Duration(t, "teamsSocketReplaceLead", socketReplaceLead)
+	limitsdoc.Duration(t, "teamsSocketRetireAfter", s.retireAfter)
+	limitsdoc.Duration(t, "teamsSocketRetireMax", s.retireMax)
+	limitsdoc.Duration(t, "teamsSocketStopWait", s.stopWait)
+	limitsdoc.Duration(t, "teamsSocketRetryBase", s.retryBase)
+	limitsdoc.Duration(t, "teamsSocketRetryMax", s.retryMax)
+	limitsdoc.Duration(t, "teamsSocketReconnectNow", s.reconnectNow)
+	limitsdoc.Duration(t, "teamsSocketRetryAfterMax", socketRetryAfterMax)
+	limitsdoc.Duration(t, "teamsSocketRefusedRetry", s.refusedRetry)
+	limitsdoc.Count(t, "teamsSocketInFlight", cap(s.slots))
+	limitsdoc.Duration(t, "teamsSocketDeadline", socketDefaultDeadline)
+	limitsdoc.Duration(t, "teamsSocketReplyMargin", socketReplyMargin)
 }

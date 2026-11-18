@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    agentkourier.dev/schema-sha256: 9873f60e3acb4efb57256f502141c75e79f98a8f66055d45b7f9c3b31b35c104
+    agentkourier.dev/schema-sha256: bbe6841164047f3d5953500d29498b71e357f40a1da2d0018f2adbdd9d38f0b5
     controller-gen.kubebuilder.io/version: v0.23.0
   name: chatconnections.agentkourier.dev
 spec:
@@ -121,8 +121,8 @@ spec:
                       (AGENTKOURIER_CHAT_LISTEN) at POST /chat/teams/<namespace>/<name>, or socket, over an outbound WebSocket that Agent Kourier
                       opens to Teams, with no public endpoint. Both use the same credentials, the Secret's clientSecret. Unlike Slack's, the default
                       is http: Microsoft's documentation recommends an HTTPS messaging endpoint for agents in production, and says that Socket mode
-                      is in public preview. A broker runs http mode only, on a chat listener: socket mode is not supported yet, and a connection
-                      in it is not started.
+                      is in public preview. In http mode a broker needs its chat listener. In socket mode only the leader connects, with a socket
+                      in each region that accepts one, and what Teams sends while no socket is ready it does not deliver, then or later.
                     enum:
                     - http
                     - socket

@@ -4,18 +4,35 @@ A Binding names its chat platform through its ChatConnection, whose `spec.platfo
 Teams. This page lists, for each platform, the shape of the chat IDs a Binding names and the features of a Binding that the platform
 serves.
 
-The broker runs a teams connection ([ChatConnection](chatconnection.md)) in `http` mode, on its chat listener
+The broker runs a teams connection ([ChatConnection](chatconnection.md)) in `http` mode, the default, on its chat listener
 (`AGENTKOURIER_CHAT_LISTEN`): only the leader takes Teams' requests, at `POST /chat/teams/<namespace>/<name>`, and it posts, replies
 and edits through the Bot Connector with a token that Microsoft Entra issues for the connection's client secret. A broker with no
 chat listener does not run one: as its own connection it stops the broker's start with a wiring error that says to set
-`AGENTKOURIER_CHAT_LISTEN`, and a team's connection is not started. `socket` mode is not supported yet: the API server takes it, and
-the broker does not start the connection. As the broker's own connection it stops the start with a wiring error that says Socket
-mode is not supported yet; a team's is not started, and the broker logs `Socket mode is not supported yet for Microsoft Teams`. A
-team's connection that runs in `http` mode and is edited to `socket` is stopped, and the broker logs why. A Teams bot is its
+`AGENTKOURIER_CHAT_LISTEN`, and a team's connection is not started. A Teams bot is its
 Microsoft Entra app, so two teams connections with one `spec.teams.appID` are one app: the broker serves the older, as it serves the
 older of two connections of one Slack app, and the younger's Bindings say `ConnectionNotServed`.
 
-What Microsoft Teams sends again was measured on a test tenant in November 2026: a message answered 503 at once is sent once more,
+In `socket` mode (`spec.teams.mode: socket`) the connection needs no chat listener and no public endpoint: the leader opens an
+outbound WebSocket to Microsoft Teams in each of its regions, `amer`, `emea` and `apac`, and takes the activities that Teams sends over
+them as it takes the requests of `http` mode, answering each over its socket. Microsoft calls Socket mode a public preview and
+recommends an HTTPS endpoint in production; its documentation has the bot's delivery method set to Socket mode first. A region that
+refuses the bot's socket answers 403, which the broker logs and tries again every 5 minutes, give or take a fifth, while the other
+regions serve (on a test tenant in November 2026, `apac` answered 403, "Socket mode is not enabled for this bot.", while `amer` and
+`emea` worked). Only the leader opens sockets,
+because Teams sends a region's activities to the newest socket of the bot and nothing to the older; the sockets close when the
+leader's run ends, and a standby opens none. Each socket is replaced before its token expires, every 9 minutes with the 10-minute
+life measured, by one that takes over its region before the old one closes. A rejected client secret, or a 401 to the call that opens
+a socket, stops the connection's run as in `http` mode; if every region answers 403 and none has a socket, the run ends and the broker
+runs it again after a wait. Editing a ChatConnection from one mode to the other restarts it in the new mode.
+
+**What Teams sends while no socket is ready is lost.** Teams does not queue an activity for a bot with no socket, nor send it to an
+HTTPS endpoint: a message or a mention sent while the connection has no ready socket in any region (while the broker starts,
+between a socket that ended and the next, while leadership moves, or while the broker is down) never reaches the broker (measured on a
+test tenant in November 2026). The broker logs each such interval after the first with its start and end, and observes it in
+`agentkourier_teams_socket_gap_seconds`; `agentkourier_teams_socket_ready` says which regions have a socket, and
+`agentkourier_chat_connected` is 1 while one does ([Metrics](metrics.md)). The bounds and waits are on [Limits](limits.md#run-the-broker).
+
+What Microsoft Teams sends again was measured on a test tenant in November 2026, in `http` mode (over a socket it was not): a message answered 503 at once is sent once more,
 about 0.6 seconds later; an activity answered 200, or one whose request Teams held until it gave up, is not sent again. Other
 answers, and an invoke answered 503, were not measured. So a message that arrives while the connection is not taking them, or that
 its channel has no room for, is lost unless there is room when it comes again, and an activity that the broker took and then could
