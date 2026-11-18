@@ -106,18 +106,22 @@ Kourier does not escape them. Arguments shown in monospace keep their braces and
 budget of a message: the pause is refused as one that cannot be shown. An ending's texts are cut until its card fits
 ([Limits](limits.md#what-a-thread-shows)).
 
-Teams sends a press to the broker in a request, and waits about 14 seconds for the answer (measured on a test tenant in November
-2026). Agent Kourier records the press and waits up to 8 seconds in the request for the worker that decides recorded presses to
-decide it ([Limits](limits.md)), then answers with a line for Teams to show the person who pressed. A press decided in that wait is
-told what it came to: that it was recorded, or was already, or why it was refused (not a member of the channel, not an approver, a
-question that is gone or that someone else answered first, an answer that is not valid). A
-press not decided in the wait, or whose decision is to be tried again (a read of the members that failed, say), is told that it was
-received (and, for a question's or an approval's card, that the card changes for everyone when it is decided); the worker decides it
-after the answer, once, and since Teams has no ephemeral messages, a refusal then is told nothing more and its card does not change.
-A press whose recording failed is told that it may not have been recorded and to press again, and one that names no button of Agent
-Kourier's, or has no presser or no message, that it cannot be taken. Teams shows the line to the person who pressed, as a banner under
-the card, and clears the card's inputs. The card changes for everyone by its own update when the question is decided, not by this
-answer.
+Teams sends a press to the broker in a request. On a test tenant on 18 November 2026 (web client, a channel thread), timed from the
+press's arrival at the server to its answer, Teams showed the person who pressed an answer given at 12.5 seconds, and showed them an
+error, "Something went wrong. Please try again.", for one given at 13 seconds or later, although Teams' service held the request
+until about 14 seconds. Agent Kourier records the press and waits up to 6 seconds in the request for the worker that decides
+recorded presses to decide it, inside a deadline of 8 seconds for the request ([Limits](limits.md)), then answers with a line for
+Teams to show the person who pressed. A press decided in that wait is told what it came to: that it was recorded, or was already, or
+why it was refused (not a member of the channel, not an approver, a question that is gone or that someone else answered first, an
+answer that is not valid). A press not decided in the wait, or whose decision is to be tried again (a read of the members that
+failed, say), is told that it was received (and, for a question's or an approval's card, that the card changes for everyone when it
+is decided); the worker decides it after the answer, once, and since Teams has no ephemeral messages, a refusal then is told nothing
+more and its card does not change. So is a press that waits when the broker stops: it is answered that it was received, and decided
+by the worker. A press whose recording failed is told that it may not have been recorded and to press again, and one that names no
+button of Agent Kourier's, or has no presser or no message, that it cannot be taken. Teams shows the line to the person who pressed,
+as a banner under the card, and clears the card's inputs. The card changes for everyone by its own update when the question is
+decided, not by this answer. In the same check the banner showed whether that update came before the answer or after it, and a press
+whose answer came too late for the client, which showed the error, was still recorded and decided, and its card replaced.
 
 The worker decides a press as it does on Slack: the person who pressed must be a member of the channel and no bot. On Microsoft
 Teams the broker reads the Bot Connector's list of the members of the channel's conversation, which Microsoft documents as the

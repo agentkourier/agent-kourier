@@ -574,14 +574,20 @@ Rules:
   leader takes Teams' requests on the connection's route, and posts, replies and edits through the Bot Connector with a token that
   Microsoft Entra issues for `clientSecret`. In `socket` mode ("Socket mode is not supported yet"), or with no chat listener, the
   broker's own teams connection is a wiring error at start and a team's is not started. A question, a tool approval and a message's
-  buttons are Adaptive Cards 1.5 whose `Action.Execute` Teams sends as an `adaptiveCard/action` invoke, which Teams waits about
-  14 s for and does not send again (both measured on a test tenant, November 2026). The chat listener gives the Teams route a 10 s
-  handler deadline in place of 3 s (`chat.HTTPDeadline`). The adapter hands the press to the sink in the request, which records it
-  and waits up to 8 s for the press worker to decide it (`chat.InlineDecider`: the worker stays the only decider, and publishes each
-  press's outcome to the waits for it), and answers with a message response for the presser: what the press came to when it was
-  decided in the wait and the decision has words (recorded, already recorded, not a member, not an approver, gone, answered by
-  another, invalid, not recorded); received, when it was not decided in the wait or is to be tried again; may not be recorded; or
-  not a press of Agent Kourier's. The message response (`application/vnd.microsoft.activity.message`) shows the presser a banner under the card
+  buttons are Adaptive Cards 1.5 whose `Action.Execute` Teams sends as an `adaptiveCard/action` invoke, which Teams does not send
+  again (measured on a test tenant, November 2026). Its service holds the invoke's request about 13.9 s, but the client shows an
+  answer only up to 12.5–13 s after the invoke reached the server, and past that shows the presser "Something went wrong" (test
+  tenant, web client, 2026-11-18). The chat listener gives the Teams route an 8 s handler deadline in place of 3 s
+  (`chat.HTTPDeadline`): with its 2 s read and 1 s write, 11 s, a margin for the network; a token still waits for the signing keys at
+  most 3 s. The adapter hands the press to the sink in the request, which records it and waits up to 6 s for the press worker to
+  decide it (`chat.InlineDecider`: the worker stays the only decider, and publishes each press's outcome to the waits for it; at
+  most 16 wait at once, and all are let go, undecided, as the chat listener begins its drain at shutdown), and answers with a
+  message response for the presser: what the press came to when it was decided in the wait and the decision has words (recorded,
+  already recorded, not a member, not an approver, gone, answered by another, invalid, not recorded); received, when it was not
+  decided in the wait or is to be tried again; may not be recorded; or not a press of Agent Kourier's. The roster read that decides
+  membership keeps its 10 s bound on the worker's own context, so a slower read is decided after a "received" answer. The card's
+  replacement is the outbox's PUT, apart from the answer: the banner attached in either order, and a press whose answer came too
+  late for the client was still recorded and decided and its card replaced (test tenant, web client, 2026-11-18). The message response (`application/vnd.microsoft.activity.message`) shows the presser a banner under the card
   and resets its inputs; TextRuns and choice titles show literally (no mention, markdown or link); the input styles, the
   positive and destructive actions and the verb render or arrive as sent; a choice of several arrives comma-joined; the
   ending's PUT replaces the card ("Edited"); the decider's mention notifies the person and shows the entity's text, so the adapter
