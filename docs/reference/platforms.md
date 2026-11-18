@@ -169,9 +169,10 @@ bots' messages out of the replies it carries, as on Slack. A system event and a 
 The thread's first message is the exception. Teams sends a bot no other app's posts, so no trigger takes an alert's card, and a person who
 mentions Agent Kourier in the card's thread starts a session there. That session's first turn carries the message that opened the thread,
 whoever posted it, Workflows or a person, whatever `chat.threadReplies` says; it carries no reply of the thread. Agent Kourier's own post,
-a blank one and one that was already a turn are not carried. The broker reads the first message with the replies, from Graph's
-`GET /teams/{team}/channels/{channel}/messages/{thread}`, so a thread with too many replies still gives it, and the turn carries it with
-no line; a read that fails carries the line in its place. No later person's turn carries it again: it reads at most what came after
+a blank one and one that was already a turn are not carried. The broker reads the first message alone, with one request,
+`GET /teams/{team}/channels/{channel}/messages/{thread}`, and none of the replies, so a thread with too many replies still gives it,
+and the turn carries it with no line. A first message that Graph says is gone is not carried; a read that fails carries the line in
+its place. No later person's turn carries it again: it reads at most what came after
 the turn before it. On Slack an alert's post reaches its `botMessage` trigger, which starts the session with the post, and a person's
 first mention in a thread carries the person's message alone.
 
