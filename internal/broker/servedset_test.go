@@ -146,6 +146,9 @@ const (
 	teamBind = "team-a/on-a"
 )
 
+// noneRun is the running of a record whose broker runs no connection: a deleted one is pruned at once.
+func noneRun(string) bool { return false }
+
 func bothServed() map[string][]string {
 	return map[string][]string{ownConn: {sreAlerts}, teamConn: {teamBind}}
 }
@@ -168,7 +171,7 @@ type servedRig struct {
 func newServedRig(t *testing.T, c *statusCluster, served map[string][]string, record *recordedServed, named namedBindings) *servedRig {
 	t.Helper()
 	r := &servedRig{record: record, statusRig: newStatusRigWith(t, c, nil, func(cfg *statusConfig) {
-		cfg.Served = newServedRecord(record, named.of, nil, cfg.Now)
+		cfg.Served = newServedRecord(record, named.of, noneRun, cfg.Now)
 	})}
 	r.serving(t, served)
 	return r
@@ -456,7 +459,7 @@ func TestTheTeamsConversationsOfADeletedConnectionAreDeleted(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	record := newServedRecord(st, namedBindings{ownConn: {sreAlerts}, stoppedConn: nil}.of, nil, func() time.Time { return sweepNow })
+	record := newServedRecord(st, namedBindings{ownConn: {sreAlerts}, stoppedConn: nil}.of, noneRun, func() time.Time { return sweepNow })
 	if _, err := record.update(t.Context(), config.Report{Snapshot: servedSnapshot(t, ownServed())}); err != nil {
 		t.Fatal(err)
 	}
@@ -484,7 +487,7 @@ func TestABindingTheConnectionDoesNotAdmitIsToldNothing(t *testing.T) {
 		}
 		return crsource.ConnectionBindings{Exists: true}, nil
 	}
-	r := &servedRig{record: record, statusRig: newStatusRigWith(t, c, nil, func(cfg *statusConfig) { cfg.Served = newServedRecord(record, named, nil, cfg.Now) })}
+	r := &servedRig{record: record, statusRig: newStatusRigWith(t, c, nil, func(cfg *statusConfig) { cfg.Served = newServedRecord(record, named, noneRun, cfg.Now) })}
 	r.serving(t, ownServed())
 	r.reconcile()
 	if c.stored(t, teamBind)["Accepted"].Reason != "ConnectionNotServed" || appliesTo(c, outsider) != 0 {
@@ -543,7 +546,7 @@ func TestRetentionKeepsTheSessionsOfAStoppedConnectionsBindingAfterARestart(t *t
 	}
 	snap := servedSnapshot(t, ownServed())
 	report := func() config.Report { return config.Report{Snapshot: snap} }
-	record := newServedRecord(st, bothExist().of, nil, func() time.Time { return sweepNow })
+	record := newServedRecord(st, bothExist().of, noneRun, func() time.Time { return sweepNow })
 	known := record.retentionKnows(t.Context(), report, testutil.DiscardLogger(), func() (map[string]time.Duration, []string, bool) {
 		return map[string]time.Duration{sreAlerts: 24 * time.Hour}, nil, true
 	})
@@ -556,7 +559,7 @@ func TestRetentionKeepsTheSessionsOfAStoppedConnectionsBindingAfterARestart(t *t
 	}
 
 	// A record that cannot be read leaves the retention knowing nothing, so that it deletes nothing: the stopped connections are unknown.
-	broken := newServedRecord(&recordedServed{failRead: errors.New("store is down")}, bothExist().of, nil, nil)
+	broken := newServedRecord(&recordedServed{failRead: errors.New("store is down")}, bothExist().of, noneRun, nil)
 	if _, _, ok := broken.retentionKnows(t.Context(), report, testutil.DiscardLogger(),
 		func() (map[string]time.Duration, []string, bool) { return nil, nil, true })(); ok {
 		t.Error("the retention is told it knows the Bindings while the record cannot be read")
@@ -730,7 +733,7 @@ func TestAConnectionWhoseBindingsCannotBeFoundYetIsKeptAndNothingIsDeleted(t *te
 	}
 	var rec *servedRecord
 	r := &servedRig{record: record, statusRig: newStatusRigWith(t, c, nil, func(cfg *statusConfig) {
-		rec = newServedRecord(record, naming, nil, cfg.Now)
+		rec = newServedRecord(record, naming, noneRun, cfg.Now)
 		cfg.Served = rec
 	})}
 	// Another connection is served now, so the record is written while the lookup fails.
@@ -771,7 +774,7 @@ func TestAConnectionWhoseBindingsCannotBeFoundYetIsKeptAndNothingIsDeleted(t *te
 func TestRetentionKnowsReadsOneSnapshot(t *testing.T) {
 	stopped, serving := servedSnapshot(t, ownServed()), servedSnapshot(t, bothServed())
 	record := func() *servedRecord {
-		return newServedRecord(&recordedServed{set: []string{ownConn, teamConn}}, bothExist().of, nil, nil)
+		return newServedRecord(&recordedServed{set: []string{ownConn, teamConn}}, bothExist().of, noneRun, nil)
 	}
 	known := func(calls *int) func() (map[string]time.Duration, []string, bool) {
 		return func() (map[string]time.Duration, []string, bool) {
