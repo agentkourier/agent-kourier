@@ -1561,6 +1561,10 @@ func TestSupervisorStopsARunningConnectionEditedToWhatItCannotRun(t *testing.T) 
 			if got := w.running(); !slices.Equal(got, []string{ownName, "team-c/teams"}) {
 				t.Fatalf("running = %v; want the teams connection started", got)
 			}
+			bot := w.ids["tok-teams"].Bot
+			if got, _ := w.table.botOwner(v1alpha1.PlatformTeams, bot); got != "team-c/teams" {
+				t.Fatalf("the bot guard has %q for the running connection's bot; want team-c/teams", got)
+			}
 
 			unreadable := running
 			unreadable.Credentials, unreadable.Err = nil, errors.New("Secret not synced")
@@ -1574,6 +1578,9 @@ func TestSupervisorStopsARunningConnectionEditedToWhatItCannotRun(t *testing.T) 
 			w.reconcile(edited)
 			if got := w.running(); !slices.Equal(got, []string{ownName}) {
 				t.Errorf("running = %v after the edit; want the teams connection stopped", got)
+			}
+			if got, _ := w.table.botOwner(v1alpha1.PlatformTeams, bot); got != "" {
+				t.Errorf("the bot guard still has %q for the stopped connection's bot; want none", got)
 			}
 			logs := w.logs.String()
 			for _, want := range []string{
@@ -1605,7 +1612,13 @@ func TestSupervisorServesTheOlderConnectionOfATeamsApp(t *testing.T) {
 	}
 
 	w := newTeamOnlySupWorld(t)
-	w.sup.identify = func(ctx context.Context, c Connection) (appIdentity, error) { return RunConfig{}.identityOf(ctx, c) }
+	var lookupFails atomic.Bool // the younger's lookup fails in a way that may pass
+	w.sup.identify = func(ctx context.Context, c Connection) (appIdentity, error) {
+		if lookupFails.Load() && c.Ref.Namespace == "team-b" {
+			return appIdentity{}, mayPass("the lookup timed out")
+		}
+		return RunConfig{}.identityOf(ctx, c)
+	}
 	teamsOf := func(name, appID string, age int) TeamConnection {
 		c := teamOn(v1alpha1.PlatformTeams, name, 1, "secret-"+name, age)
 		c.Teams = v1alpha1.TeamsConnectionSpec{TenantID: "11111111-2222-4333-8444-555555555555", AppID: appID, Mode: v1alpha1.TeamsModeHTTP}
@@ -1622,4 +1635,25 @@ func TestSupervisorServesTheOlderConnectionOfATeamsApp(t *testing.T) {
 	if want := `msg="the ChatConnection is not served: it uses the same Microsoft Teams app as the older ChatConnection team-a/teams, and an app is served once" connection=team-b/teams`; !strings.Contains(w.logs.String(), want) {
 		t.Errorf("the logs do not say %s:\n%s", want, w.logs.String())
 	}
+	// What the younger's Bindings are told names the Teams app: when it is refused, while its Secret cannot be read, and while the lookup
+	// of its new credentials fails in a way that may pass.
+	wantTold := func(when string) {
+		t.Helper()
+		w.sup.refusals.mu.Lock()
+		got := w.sup.refusals.refused["team-b/teams"]
+		w.sup.refusals.mu.Unlock()
+		if want := refusedMessage(v1alpha1.PlatformTeams); got != want || !strings.Contains(got, "Microsoft Teams app") {
+			t.Errorf("%s: the younger's Bindings are told %q; want %q", when, got, want)
+		}
+	}
+	wantTold("refused")
+	unreadable := younger
+	unreadable.Credentials, unreadable.Err = nil, errors.New("Secret not synced")
+	w.reconcile(older, unreadable, another)
+	wantTold("its Secret unreadable")
+	changed := younger
+	changed.Generation = 2
+	lookupFails.Store(true)
+	w.reconcile(older, changed, another)
+	wantTold("its lookup failing")
 }

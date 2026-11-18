@@ -206,9 +206,10 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 			// Its Secret is not readable now, its platform has no adapter, or it is a Microsoft Teams connection in socket mode. What runs
 			// keeps running on the tokens it was started with when its Secret is at fault: a cache that is relisting is no reason to drop a
 			// connection. A ChatConnection that now asks for what this broker cannot run (one edited to socket mode) is stopped instead, as
-			// one that changed is, and not left running on the spec it no longer has; its entry goes, so that it starts afresh once it can.
-			// Otherwise it starts once it can.
+			// one that changed is, and not left running on the spec it no longer has; its entry goes, and its bot with it, so that it starts
+			// afresh once it can. Otherwise it starts once it can.
 			if st != nil && unrunnable(t.Err) {
+				s.host.table.forgetBot(name) // it posts nothing from here, and its identity is asked again when it can start
 				s.retire(name)
 				s.stop(ctx, name, st, "its ChatConnection changed to what this broker cannot run")
 				delete(s.teams, name)
