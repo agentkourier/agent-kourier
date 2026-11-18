@@ -51,9 +51,9 @@ func TestAtTagsInTextAreNeverSentRaw(t *testing.T) {
 					t.Errorf("%s of %q: the entity %+v in %q", name, h, e, a.Text)
 				}
 			}
-			// A card's text is in TextRuns and choice titles, which the schema gives no "<at>" (whether Teams matches a mention
-			// entity's text inside a TextRun is not measured): its one "<at>" of Agent Kourier's is the decider's line, a TextBlock of
-			// Agent Kourier's own words that its mention entity names.
+			// A card's text is in TextRuns and choice titles, which are literal: an "<at>" in a TextRun showed as written and formed no
+			// mention (a test tenant, web client, channel thread, November 2026). Its one "<at>" of Agent Kourier's is the decider's line, a TextBlock of Agent Kourier's own
+			// words that its mention entity names.
 			for _, at := range a.Attachments {
 				card := cardOf(t, outActivity{Attachments: []attachment{at}})
 				var blocks []string

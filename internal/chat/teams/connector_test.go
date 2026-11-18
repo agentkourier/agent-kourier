@@ -227,8 +227,7 @@ func shownBy(reqs []connRequest) []chattest.Shown {
 }
 
 // cardShown is what Teams shows of a card, one piece for each text in it: a TextRun's text, a choice's title and an action's title as
-// the characters they hold (the card schema gives a TextRun no markdown, and a title is plain text; how Teams shows them is
-// unmeasured); a TextBlock's text, which takes markdown, with the card's mention entities found in it as in a message's text, and read
+// the characters they hold (as Teams showed them on a test tenant, web client, channel thread, November 2026); a TextBlock's text, which takes markdown, with the card's mention entities found in it as in a message's text, and read
 // as CommonMark; and the fallbackText as CommonMark, since where Teams shows it is not known. inert holds a card to the elements and
 // keys read here.
 func cardShown(card map[string]any) []chattest.Shown {

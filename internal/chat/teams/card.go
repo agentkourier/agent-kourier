@@ -12,17 +12,23 @@ import (
 
 // This file is the Adaptive Card layout of the neutral model: a prompt, the ending that replaces it, and a message's buttons. A
 // button is an Action.Execute, which Teams sends back as an adaptiveCard/action invoke (press.go); Universal Actions need a card of
-// version 1.5 (Microsoft's "Work with Universal Actions for Adaptive Cards", updated 2026-07-27). What was measured, on a test tenant
-// on 2026-11-18, is a card of two TextBlocks and one Action.Execute with the verb "press", posted as a message's one attachment: it was
-// pressed, the invoke named the card's message in its replyToId, and it was answered with a card that replaced it. The cards here
-// (RichTextBlocks, inputs, several actions, the verb actionVerb) and the answer that press.go gives (a message, not a card) were not.
+// version 1.5 (Microsoft's "Work with Universal Actions for Adaptive Cards", updated 2026-07-27). The cards this file renders were
+// posted, pressed and replaced on a test tenant, web client, channel thread, November 2026:
+//   - a TextRun and a choice's title are literal: "<at>Someone</at> **bold** {braces} [link](url)" showed exactly as written, with no
+//     mention, markdown or link formed, and a monospace run kept its braces and its line breaks;
+//   - a RichTextBlock, a multi-line Input.Text, radio buttons, checkboxes for a choice of several and a menu past inlineChoices all
+//     showed, and so did the positive and destructive styles and several actions;
+//   - a press came as one adaptiveCard/action invoke with the verb actionVerb, naming the card's message in its replyToId, with the
+//     inputs merged into the data by their IDs and a choice of several joined with commas ("0,1");
+//   - the answer that press.go gives showed the presser a banner under the card, and the card's inputs were reset;
+//   - an Update with the ending replaced the card, and Teams marked the message "Edited";
+//   - a message of buttons alone showed its text (the message's Fallback) above the card.
 //
 // Every text that the agent, a person or an alert wrote is the text of a TextRun in a RichTextBlock, or the title of a choice, which
-// the Adaptive Cards schema shows as the characters they hold: a TextRun takes no markdown, unlike a TextBlock. So the text is
-// cleaned, put on one line where its place is one, and cut at its place's limit, and is not escaped: an escape would be shown. (How
-// Teams shows a TextRun's text and a choice's title is the schema's word, not measured yet.) The one TextBlock is the line that
-// names who decided, which holds only Agent Kourier's own words and the "<at>" of a mention, with its entity in the card's msteams
-// entities. The labels of the inputs are not set, and an action's title is a button's label, Agent Kourier's own.
+// shows the characters it holds. So the text is cleaned, put on one line where its place is one, and cut at its place's limit, and is
+// not escaped: an escape would be shown. The one TextBlock is the line that names who decided, which holds only Agent Kourier's own
+// words and the "<at>" of a mention, with its entity in the card's msteams entities. The labels of the inputs are not set, and an
+// action's title is a button's label, Agent Kourier's own.
 
 // The card's fixed parts.
 const (
@@ -274,7 +280,12 @@ func (b *cardBuilder) toolPrompt(p chat.Prompt) (map[string]any, error) {
 }
 
 // who adds the line that says who decided: a mention of by, beside the words, when it is a Microsoft Entra object ID; "someone" and the
-// words, as text, for any other; and alone, the line to say when no one is named.
+// words, as text, for any other; and alone, the line to say when no one is named. The mention works in a card (styled, and the person
+// notified, on a test tenant, web client, channel thread, November 2026), but Teams shows the entity's own text, mentionLabel, and puts in no name.
+//
+// TODO(TEAMS-6): name the decider. Once ResolveUser reads names, Update can resolve the Ending's By and write the name in the tag and
+// the entity. The invoke's from.name is not carried: the press reaches the ending as chat.Interaction and the interaction's Decider,
+// which hold the user's ID alone, so carrying it would change that seam.
 func (b *cardBuilder) who(by, words, alone string) {
 	switch {
 	case entraID.MatchString(by):

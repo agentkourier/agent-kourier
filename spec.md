@@ -577,9 +577,13 @@ Rules:
   buttons are Adaptive Cards 1.5 whose `Action.Execute` Teams sends as an `adaptiveCard/action` invoke; the adapter hands the press
   to the sink in the request and answers it at once with a message response for the presser (received, may not be recorded, or
   not a press of Agent Kourier's), since Teams waits about 14 s and does not send it again (both measured on a test tenant,
-  November 2026). The message response is the shape Microsoft documents (`application/vnd.microsoft.activity.message`), not
-  measured. Refusals decided by the press worker after the
-  answer (not a member, not ready, gone, invalid) reach nobody, as there are no ephemeral messages. Until the adapter reads
+  November 2026). The message response (`application/vnd.microsoft.activity.message`) shows the presser a banner under the card
+  and resets its inputs; TextRuns and choice titles show literally (no mention, markdown or link); the input styles, the
+  positive and destructive actions and the verb render or arrive as sent; a choice of several arrives comma-joined; the
+  ending's PUT replaces the card ("Edited"); the decider's mention notifies the person and shows the entity's text, "someone"
+  (all measured on a test tenant, web client, channel thread, November 2026). A PUT that omits `text` keeps the message's old
+  text, so every Teams edit sends its text; whether one with no attachments drops a card is not measured. Refusals decided by
+  the press worker after the answer (not a member, not ready, gone, invalid) reach nobody, as there are no ephemeral messages. Until the adapter reads
   membership, no press is decided, and a question or approval times out. There are no streams, reactions or ephemeral messages.
 - An empty namespace in a reference means the referring resource's namespace.
 - **One bearer token per request.** The Binding identity (D14) owns the `Authorization`

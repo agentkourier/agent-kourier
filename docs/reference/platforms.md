@@ -88,20 +88,23 @@ them), the time it closes, and Submit. An approval of one tool shows its name an
 tool numbered with its arguments and a choice of Approve or Deny under them, then Submit, Approve all and Deny all. When the question
 or approval ends, Agent Kourier replaces the card with one that has no controls: who answered or cancelled it, or that nobody
 answered in time, then what was asked with each answer, or each tool with `Approved` or `Denied` and its arguments. With
-`feedback.enabled` set, the useful and not-useful buttons are a card of buttons under the reply.
+`feedback.enabled` set, the useful and not-useful buttons are a card of buttons under the reply. When Agent Kourier replaces a
+card, Teams marks the message `Edited`.
 
-In a card, what the agent, a person or an alert wrote is the text of a `TextRun` or the title of a choice, which the Adaptive Cards
-schema shows as the characters they hold, with no markdown, so Agent Kourier does not escape it (that Teams shows them so was not
-checked yet). A tool whose name or arguments are longer than their cap is refused and never shown cut, and so is a card over the
+The ending names who decided with a mention: Teams styles it and notifies the person, but shows it as `@someone`, as every mention
+that Agent Kourier makes on Teams, since the broker does not read people's names on Teams yet; so the ending reads `someone answered.`
+
+In a card, what the agent, a person or an alert wrote is the text of a `TextRun` or the title of a choice, which Teams shows as the
+characters they hold: `<at>`, markdown, braces and links in them show as written, and none becomes a mention or a link. So Agent
+Kourier does not escape them. Arguments shown in monospace keep their braces and their line breaks. A tool whose name or arguments are longer than their cap is refused and never shown cut, and so is a card over the
 budget of a message: the pause is refused as one that cannot be shown. An ending's texts are cut until its card fits
 ([Limits](limits.md#what-a-thread-shows)).
 
 Teams sends a press to the broker in a request, and waits about 14 seconds for the answer (measured on a test tenant in November
 2026). Agent Kourier records the press and answers at once, with a line for Teams to show the person who pressed: that it received
-the press (and, for a question's or an approval's card, that the card changes for everyone when the question is decided), that it
-may not have recorded it and to press again, or that it cannot take the press, which names no button of Agent Kourier's, or has
-no presser or no message. That answer is the shape Microsoft documents for a message to the presser; it was not measured, nor
-where and to whom Teams shows the line. Who may press, and whether the question is still open, are checked after that answer, by the
+the press (and, for a question's or an approval's card, that the card changes for everyone when it is decided), that it may not
+have recorded it and to press again, or that it cannot take the press, which names no button of Agent Kourier's, or has no
+presser or no message. Teams shows the line to the person who pressed, as a banner under the card, and clears the card's inputs. Who may press, and whether the question is still open, are checked after that answer, by the
 worker that decides recorded presses; Teams has no ephemeral messages, so a press refused there is told nothing more, and its card
 does not change.
 
@@ -110,6 +113,13 @@ is tried again, with a line at WARN for each try, until the worker gives up on i
 ([Limits](limits.md)), and logs that at ERROR. A
 question or an approval ends when it times out, which a recorded press holds off until the worker gives up on it, and a vote is not
 counted.
+
+What is written here of how Teams shows cards and answers presses was seen on a test tenant, in the web client, in a channel thread,
+in November 2026. In the same check, an edit that sent no text left the message's earlier text in place. Every edit that Agent
+Kourier makes on Teams sends the text a message is to show: a reply's edits always hold text, and a question's card, and the card
+that replaces it, have none to leave. Whether an edit that sends no card takes away a card the message had was not seen: if it does not,
+a card of buttons would stay, and could still be pressed, on a message that an edit meant to take it off. A reply gets its buttons
+on its last edit, and no later edit of Agent Kourier's is meant to take them off.
 
 ## Chat IDs
 
