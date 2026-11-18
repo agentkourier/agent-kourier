@@ -599,6 +599,26 @@ Rules:
   members) at each press, uncached, by the presser's Entra object ID; IsBot and ResolveUser read the account from the rosters of the
   teams the bot has heard from (a 28: Teams ID is a bot), kept an hour. The roster's paging, shape and errors are Microsoft's
   documentation, not measured. A channel's archive is not known on Teams. There are no streams, reactions or ephemeral messages.
+  A thread's earlier messages (the thread context of 8.2) are read through Microsoft Graph with a second token of the same app and
+  client secret (scope `https://graph.microsoft.com/.default`), kept by the Bot Framework token's rules and sent to Graph alone:
+  `GET /teams/{group}/channels/{channel}/messages/{root}/replies`, `$top` 50, paged by `@odata.nextLink` (a link off Graph's own
+  scheme, host and path, or one already read, fails the read), at most 20 pages, 8 MiB an answer and 10 s a read, under the
+  resource-specific permission `ChannelMessage.Read.Group` that the manifest asks for and the team grants at install. The group is the
+  team's Microsoft Entra group ID (`aadGroupId`) that the receiver stores from the channel's activities (`teams_conversations`); a
+  channel none of whose activities named it is not readable, and the turn goes with the fixed line (it is an error, not
+  `chat.ErrNoThreadReads`). Graph bounds the replies by page size alone, so the adapter reads the whole thread and cuts the window by
+  message ID, compared as a number; a thread past 20 pages is `chat.ErrThreadTooLong` whatever the window. A message is decoded as live:
+  the bot's own app's is Own, a person's (from.user) carries its HTML read as text and Mentioned from Graph's mentions list, another
+  app's (from.application, Workflows' alert card) is a bot's message whose body is its Adaptive Cards' text, and a system event, a
+  deleted message or one with no sender is Ignored. Graph's 401 is FatalAuth, 404 ChannelGone, 403 and 400 Permanent (the 403's error
+  names the permission and the install), a 429 Transient with its Retry-After (at least a second), and a 5xx
+  Transient. Find still finds nothing on Teams: Post
+  keeps its tag in no part of an activity that people do not see and that Graph is known to return, so a post sent and not recorded
+  before a crash is sent again. Measured on a test tenant, November 2026: the Graph token, a 200 for a channel's messages under the
+  permission alone, the path form, the message shapes (HTML body, from.user and from.application, a card's JSON as a string, a system
+  event), and message IDs that were each post's time in milliseconds. Microsoft's documentation, not measured: the replies endpoint,
+  its `$top`, paging and order (the adapter sorts and does not rely on it), its errors and the body of its 403, the HTML of other
+  formatting, and that message IDs order as their posts (Microsoft calls them opaque).
 - An empty namespace in a reference means the referring resource's namespace.
 - **One bearer token per request.** The Binding identity (D14) owns the `Authorization`
   header. `AgentBackend` has no credentials of its own; a gateway in front of the
@@ -1018,7 +1038,8 @@ themselves turns or answers, and replies that are blank once their invisible cha
 6000 for the block with its lead sentence, are kept; the block says how many were left out. The window comes from the
 reply queue, so it is the same after a restart or a failover, and a reply posted after a mention falls in the next
 mention's window. A platform that cannot read a thread sends the mentioned message alone; a read that fails, or a
-thread whose window is longer than the adapter reads (on Slack, more than 5 pages, 1000 messages), sends it with a fixed
+thread whose window is longer than the adapter reads (on Slack, more than 5 pages, 1000 messages; on Microsoft Teams, a thread of
+more than 20 pages of 50 replies, whatever the window), sends it with a fixed
 line saying the earlier replies could not be read (`agentkourier_thread_context_total{binding,outcome}`).
 In `mention`, the final message of each turn (not one that ends in a question, not a turn with no output) carries, under
 its text and above the feedback question when there is one (8.7), the context line "Mention me in this thread to ask a

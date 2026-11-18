@@ -145,6 +145,36 @@ that replaces it, have none to leave. Whether an edit that sends no card takes a
 a card of buttons would stay, and could still be pressed, on a message that an edit meant to take it off. A reply gets its buttons
 on its last edit, and no later edit of Agent Kourier's is meant to take them off.
 
+## Earlier replies on Microsoft Teams
+
+A mentioned turn carries the replies that people posted in its thread since the previous turn, as on Slack ([Limits](limits.md#what-a-thread-shows)).
+On Microsoft Teams the broker reads them from Microsoft Graph, `GET /teams/{team}/channels/{channel}/messages/{thread}/replies`, with a
+token for Microsoft Graph that Microsoft Entra issues to the connection's app for the same client secret. The app may read them under
+the resource-specific permission `ChannelMessage.Read.Group`, which its manifest must ask for and which the team grants when the app
+is installed in it. On a test tenant in November 2026, Graph issued that token and answered a read of a channel's messages under that
+permission alone, with no tenant-wide consent.
+
+Graph names a team by its Microsoft Entra group. The broker learns it from the activities that Teams sends of the channel, and keeps
+it in its store ([Stored data](stored-data.md)). A channel none of whose activities has named its team cannot be read yet: the turn
+goes with the line that says the earlier replies could not be read, and the broker logs why at WARN.
+
+Graph takes no bound on a thread's replies but the page size, so the broker reads every page, 50 replies a page and at most 20 pages,
+and keeps the replies of the window itself. A thread with more replies than that cannot be read, however few the window holds, and
+the turn goes with the same line ([Limits](limits.md#what-a-thread-shows)). The broker orders the replies by their message IDs, which on
+the test tenant were each post's time in milliseconds; Microsoft calls them opaque. A reply's HTML is read as text: its tags are
+dropped, a paragraph, a list item or a line break begins a line, and its character references are decoded. A post of another app, such
+as an alert's card that Workflows posted, is read as a bot's message, whose body is the text of its card; a person's mention leaves
+bots' messages out of the replies it carries, as on Slack. A system event and a deleted message are left out.
+
+A 403 of Graph, which an app gets that may not read the team's channel messages, is logged with the fix: the manifest must ask for
+`ChannelMessage.Read.Group`, and the app must be installed in the team. A 429 that asks for at most 5 seconds is waited out once; any
+other refusal, and a read that runs out of time, sends the turn with the line. The replies endpoint, its paging, the order of its
+replies and its errors are Microsoft's documentation: none of them was measured.
+
+On Teams the outbox finds no post again by its tag. On Slack a post carries its tag in metadata that people do not see, and a post
+that was sent and not recorded before a crash is found and not sent again; on Teams no part of a post that people do not see is
+known to come back through Graph, so such a post is sent again, and the thread shows it twice.
+
 ## Chat IDs
 
 | Field | Slack | Microsoft Teams |
@@ -172,5 +202,6 @@ bounds it at 21, and neither can an approver group, whose field's cap is Slack's
 | Questions to a person: `interactions.askUser` | Works: Agent Kourier asks in the thread with buttons. | Works: the question is a card that a member of the channel's team presses ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
 | Tool approvals: `interactions.toolApprovals`, and `interactions.approverGroups`, which requires it | Works: Agent Kourier asks in the thread with buttons. | `toolApprovals` works: the approval is a card that a member of the channel's team presses ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). `approverGroups` is refused: `UnsupportedOnPlatform`. Remove it. | Refused: `UnsupportedOnPlatform`. Set `toolApprovals` to `false` and remove `approverGroups`. |
 | The useful and not-useful buttons: `feedback.enabled` | Works. | Works: the buttons are a card under the reply, and a vote of a member of the channel's team is counted ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
-| Alert triggers: a `botMessage` trigger in `chat.triggers` | Works. | Taken, in either `spec.teams.mode` and with or without `spec.teams.notificationURL`, and not served yet: Microsoft Teams does not send a bot the posts of another app (measured on a test tenant in November 2026), and the broker does not read them through Microsoft Graph yet, so no alert starts a turn. | Refused: `UnsupportedOnPlatform`. Remove the trigger. |
+| Alert triggers: a `botMessage` trigger in `chat.triggers` | Works. | Taken, in either `spec.teams.mode` and with or without `spec.teams.notificationURL`, and not served yet: Microsoft Teams does not send a bot the posts of another app (measured on a test tenant in November 2026), and the broker does not watch a channel through Microsoft Graph yet, so no alert starts a turn. It reads a thread's replies through Graph, for a mention's context ([Earlier replies on Microsoft Teams](#earlier-replies-on-microsoft-teams)), and nothing else. | Refused: `UnsupportedOnPlatform`. Remove the trigger. |
+| The earlier replies a mentioned turn carries: `chat.threadReplies: mention`, the thread of a `personMessage` trigger, and a bot's mention | Works. | Works for a person's mention, read through Microsoft Graph ([Earlier replies on Microsoft Teams](#earlier-replies-on-microsoft-teams)). Teams sends a bot no other app's posts, so no bot's mention reaches it. | Served: the turn carries the mentioned message alone. |
 | The acknowledgment reaction: `chat.acknowledgment` | Works. With no `emoji` the reaction is `hourglass_flowing_sand`. | Taken, and no reaction is shown, as on a platform without it. | Served, and no reaction is shown. A Binding whose acknowledgment is enabled and names an `emoji` has the condition `AcknowledgmentShown`, `False` with the reason `NoReactions` ([Binding status](binding-status.md#acknowledgmentshown)). |
