@@ -448,7 +448,7 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 	if inv != nil {
 		answered(requestInvoke)
-		r.answerInvoke(ctx, w, *inv)
+		r.answerInvoke(ctx, w, s.sink, *inv)
 		return
 	}
 	answered(requestAccepted)
@@ -469,14 +469,15 @@ func (r *Receiver) count(ctx context.Context, name, value string) {
 	telemetry.Count(ctx, name, value, r.conn)
 }
 
-// answerInvoke writes the InvokeHandler's answer to inv, or 200 with no body when there is no handler.
-func (r *Receiver) answerInvoke(ctx context.Context, w http.ResponseWriter, inv Invoke) {
+// answerInvoke writes the InvokeHandler's answer to inv, which it is given with sink, the live Serve's, or 200 with no body when there
+// is no handler.
+func (r *Receiver) answerInvoke(ctx context.Context, w http.ResponseWriter, sink chat.Sink, inv Invoke) {
 	if r.invokes == nil {
 		r.log.DebugContext(ctx, "teams: an invoke was answered with no body; nothing handles invokes", "name", quote(inv.Name))
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	ans := r.invokes.Invoke(ctx, inv)
+	ans := r.invokes.Invoke(ctx, sink, inv)
 	status := ans.Status
 	if status == 0 {
 		status = http.StatusOK

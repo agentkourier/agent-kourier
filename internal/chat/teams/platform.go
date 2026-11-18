@@ -50,10 +50,11 @@ type Config struct {
 // the bot's token from Microsoft Entra.
 //
 // A message's progress steps are a list under the rest of the message (Caps.Steps), which each update of a live reply shows anew.
-// What it does not do yet, and says so: streams (ErrNoStreams), ephemeral messages (ErrNoEphemeral), reactions
-// (ErrNoReactions), the busy mark (ErrNoBusy), buttons and tool approvals (a prompt is shown as text, a prompt of tools is
-// ErrInvalid), reading a thread (ErrNoThreadReads), finding a post by its tag (Find says not found), and reading membership,
-// bots and names (IsMember and IsBot fail closed, ResolveUser gives the ID alone).
+// A prompt, a prompt of tools among them, is an Adaptive Card, and so are a message's buttons; the Client is the Receiver's
+// InvokeHandler, which takes their presses (Invoke). What it does not do yet, and says so: streams (ErrNoStreams), ephemeral
+// messages (ErrNoEphemeral), reactions (ErrNoReactions), the busy mark (ErrNoBusy), reading a thread (ErrNoThreadReads), finding a
+// post by its tag (Find says not found), and reading membership, bots and names (IsMember and IsBot fail closed, ResolveUser gives
+// the ID alone), so no press is decided yet.
 type Client struct {
 	conn, tenant string
 	recv         *Receiver
@@ -84,15 +85,17 @@ func New(cfg Config) (*Client, error) {
 	if log == nil {
 		log = slog.Default()
 	}
+	direct := noRedirects(client)
+	tokens := newTokenSource(cmp.Or(cfg.TokenURL, DefaultTokenURL(cfg.TenantID)), cfg.AppID, cfg.ClientSecret, direct, now)
+	c := &Client{conn: cfg.Connection, tenant: cfg.TenantID, convs: convs, log: log, onConnection: cfg.OnConnection,
+		api: &connector{client: direct, tokens: tokens, now: now}}
 	recv, err := NewReceiver(ReceiverConfig{Connection: cfg.Connection, TenantID: cfg.TenantID, AppID: cfg.AppID,
-		MetadataURL: cfg.MetadataURL, HTTPClient: client, Conversations: convs, Logger: log, Now: now})
+		MetadataURL: cfg.MetadataURL, HTTPClient: client, Conversations: convs, Logger: log, Now: now, Invokes: c})
 	if err != nil {
 		return nil, err
 	}
-	direct := noRedirects(client)
-	tokens := newTokenSource(cmp.Or(cfg.TokenURL, DefaultTokenURL(cfg.TenantID)), cfg.AppID, cfg.ClientSecret, direct, now)
-	return &Client{conn: cfg.Connection, tenant: cfg.TenantID, recv: recv, convs: convs, log: log, onConnection: cfg.OnConnection,
-		api: &connector{client: direct, tokens: tokens, now: now}}, nil
+	c.recv = recv
+	return c, nil
 }
 
 // Run takes the activities that Teams sends the connection and hands them to sink until ctx ends (Receiver.Serve). Serve starts
@@ -306,7 +309,8 @@ func (c *Client) ChannelAccess(ctx context.Context, channel string) (a chat.Acce
 	return chat.Access{Member: true}, nil
 }
 
-// Fits implements chat.Platform: a prompt fits if it renders within the budget of a message. A prompt of tools is chat.ErrInvalid.
+// Fits implements chat.Platform: a prompt fits if its card renders within the budget of a message, with no tool whose name or
+// arguments are over their cap (chat.ErrTooLarge).
 func (c *Client) Fits(p chat.Prompt) error {
 	_, err := render(chat.Ask(p))
 	return err

@@ -7,7 +7,8 @@
 //
 // The Client posts, replies and edits through the Bot Connector, at the service URL that the channel's record names, with the bot's
 // token from Microsoft Entra (the client credentials grant). It renders the neutral message as Teams' markdown, with every text that
-// the agent, a person or an alert wrote shown as text and a message's steps as a list in a quote under the rest, and says what
-// Teams cannot do yet (streams, reactions, ephemeral messages,
-// answers to a question, tool approvals) by the chat package's errors.
+// the agent, a person or an alert wrote shown as text, a message's steps as a list in a quote under the rest and its buttons as an
+// Adaptive Card under it; a prompt, and the ending that replaces it, as an Adaptive Card alone (card.go). A press of a card's button
+// comes as an invoke, which the Client hands to the sink and answers in the request (press.go). What Teams cannot do yet (streams,
+// reactions, ephemeral messages) it says by the chat package's errors.
 package teams

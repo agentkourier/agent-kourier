@@ -119,17 +119,19 @@ func (s *recordingSink) has(id string) bool {
 	return false
 }
 
-// invokeRecorder is an InvokeHandler that records the invokes and answers with answer.
+// invokeRecorder is an InvokeHandler that records the invokes, and the sink each was given, and answers with answer.
 type invokeRecorder struct {
 	mu      sync.Mutex
 	invokes []Invoke
+	sinks   []chat.Sink
 	answer  InvokeAnswer
 }
 
-func (h *invokeRecorder) Invoke(_ context.Context, inv Invoke) InvokeAnswer {
+func (h *invokeRecorder) Invoke(_ context.Context, sink chat.Sink, inv Invoke) InvokeAnswer {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.invokes = append(h.invokes, inv)
+	h.sinks = append(h.sinks, sink)
 	return h.answer
 }
 
@@ -699,8 +701,8 @@ func TestReceiverWritesARecordOnlyWhenItAddsSomething(t *testing.T) {
 	}
 }
 
-// TestReceiverAnswersAnInvokeThroughItsSeam: an invoke goes to the InvokeHandler in the request, and its answer is the response; with no
-// handler, the invoke is answered 200 with no body. Neither reaches the sink as a message.
+// TestReceiverAnswersAnInvokeThroughItsSeam: an invoke goes to the InvokeHandler in the request, with the sink of the live Serve, and its
+// answer is the response; with no handler, the invoke is answered 200 with no body. Neither reaches the sink as a message.
 func TestReceiverAnswersAnInvokeThroughItsSeam(t *testing.T) {
 	h := &invokeRecorder{answer: InvokeAnswer{Status: http.StatusOK, Body: []byte(`{"statusCode":200}`)}}
 	rt := newReceiverTest(t, true, h)
@@ -710,6 +712,9 @@ func TestReceiverAnswersAnInvokeThroughItsSeam(t *testing.T) {
 	}
 	if h.count() != 1 || h.invokes[0].Name != "adaptiveCard/action" || h.invokes[0].User != testUser {
 		t.Errorf("the handler got %+v", h.invokes)
+	}
+	if h.count() == 1 && h.sinks[0] != chat.Sink(rt.sink) {
+		t.Errorf("the handler was given the sink %v, want the live Serve's", h.sinks[0])
 	}
 
 	bare := newReceiverTest(t, true, nil)

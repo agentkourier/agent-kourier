@@ -37,6 +37,8 @@ func TestAtTagsInTextAreNeverSentRaw(t *testing.T) {
 			"mention text": chat.Say(chat.Message{Parts: []chat.Part{chat.Mention{User: testUser, Text: h}, chat.Body{Markdown: h}}}),
 			"forged user":  chat.Say(chat.Message{Parts: []chat.Part{chat.Mention{User: h, Text: "answered."}}}),
 			"question":     chat.Ask(chat.Prompt{ID: "p", Questions: []chat.Question{{Text: h, Choices: []string{h}}}}),
+			"tool":         chat.Ask(chat.Prompt{ID: "p", Hint: h, Tools: []chat.Tool{{Name: h, Args: h}}}),
+			"button":       chat.Say(chat.Message{Parts: []chat.Part{chat.Buttons{Buttons: []chat.Button{{ID: "b", Label: h, Value: "v"}}}}}),
 			"ending":       chat.End(chat.Ending{Outcome: chat.Answered, By: h, Prompt: chat.Prompt{ID: "p", Hint: h}}),
 		} {
 			a := mustRender(t, o)
@@ -47,6 +49,23 @@ func TestAtTagsInTextAreNeverSentRaw(t *testing.T) {
 			for _, e := range a.Entities {
 				if e.Mentioned.ID != testUser || e.Text != tag || !strings.HasPrefix(a.Text, tag) {
 					t.Errorf("%s of %q: the entity %+v in %q", name, h, e, a.Text)
+				}
+			}
+			// A card's text is in TextRuns, which take no "<at>", and a choice's title: its one "<at>" is the decider's line, a
+			// TextBlock of Agent Kourier's own words that its mention entity names.
+			for _, at := range a.Attachments {
+				card := cardOf(t, outActivity{Attachments: []attachment{at}})
+				var blocks []string
+				body, _ := card["body"].([]any)
+				for _, el := range body {
+					if el.(map[string]any)["type"] == "TextBlock" {
+						blocks = append(blocks, el.(map[string]any)["text"].(string))
+					}
+				}
+				teams, _ := card["msteams"].(map[string]any)
+				entities, _ := teams["entities"].([]any)
+				if len(blocks) != len(entities) || (len(blocks) == 1 && blocks[0] != tag+" answered.") {
+					t.Errorf("%s of %q: TextBlocks %q for %d entities", name, h, blocks, len(entities))
 				}
 			}
 		}
@@ -180,28 +199,12 @@ func TestTheBudgetOfAMessage(t *testing.T) {
 	if err := c.Fits(chat.Prompt{ID: "p", Questions: qs}); !errors.Is(err, chat.ErrTooLarge) {
 		t.Errorf("a large prompt: %v", err)
 	}
-	if err := c.Fits(chat.Prompt{ID: "p", Tools: []chat.Tool{{Name: "t"}}}); !errors.Is(err, chat.ErrInvalid) {
-		t.Errorf("a prompt of tools: %v", err)
+	if err := c.Fits(chat.Prompt{ID: "p", Tools: []chat.Tool{{Name: "t"}}}); err != nil {
+		t.Errorf("a prompt of one tool: %v", err)
 	}
 }
 
-// A prompt is shown as text, with the line that says it cannot be answered here; its ending says who decided and what.
-func TestPromptsAreText(t *testing.T) {
-	t.Parallel()
-	p := chat.Prompt{ID: "p", Hint: "Deploy", Questions: []chat.Question{{Text: "Where?", Choices: []string{"prod", "staging"}}}}
-	a := mustRender(t, chat.Ask(p))
-	want := "Deploy\n\nWhere?\n\nOption 1: prod\n\nOption 2: staging\n\n" + noAnswers
-	if a.Text != want {
-		t.Errorf("prompt text %q, want %q", a.Text, want)
-	}
-	e := mustRender(t, chat.End(chat.Ending{Outcome: chat.Answered, By: testUser, Prompt: p, Answers: [][]string{{"prod"}}}))
-	if e.Text != "<at>someone</at> answered.\n\nDeploy\n\nWhere?\n\nAnswer: prod" || len(e.Entities) != 1 {
-		t.Errorf("ending %+v", e)
-	}
-}
-
-// A message's steps are a list in a quote after the rest of the message, the answer and its buttons included, so that the reply
-// reads first and the list stays under it as a record. The line that a Context part just before the steps says of them (how many
+// A message's steps are a list in a quote after the rest of the message's text, so that the reply reads first and the list stays under it as a record. The line that a Context part just before the steps says of them (how many
 // earlier steps are not shown) heads the list. A call is worded as the status line words one, by its state; a step that is no call
 // shows its title, its detail, and how it ended if it did not end well.
 func TestStepsAreAListUnderTheRestOfTheMessage(t *testing.T) {
@@ -221,7 +224,7 @@ func TestStepsAreAListUnderTheRestOfTheMessage(t *testing.T) {
 		chat.Body{Markdown: "The pods cannot read their logs."},
 		chat.Buttons{Buttons: []chat.Button{{ID: "useful", Label: "Useful"}, {ID: "not", Label: "Not useful"}}},
 	}}))
-	want := "The pods cannot read their logs.\n\nUseful · Not useful\n\n" +
+	want := "The pods cannot read their logs.\n\n" +
 		"> 2 earlier steps are not shown.\n>\n" +
 		"> - Ran get\\_pods(ns=\"prod\")\n" +
 		"> - get\\_logs() failed\n" +

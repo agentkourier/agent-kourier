@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -40,12 +39,13 @@ const mentionLabel = "someone"
 // made a mention of no other shape.
 var entraID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
-// outActivity is a message as the Bot Connector takes it: text in Teams' markdown, and the mentions in it.
+// outActivity is a message as the Bot Connector takes it: text in Teams' markdown and the mentions in it, an Adaptive Card, or both.
 type outActivity struct {
-	Type       string          `json:"type"`
-	Text       string          `json:"text"`
-	TextFormat string          `json:"textFormat"`
-	Entities   []mentionEntity `json:"entities,omitempty"`
+	Type        string          `json:"type"`
+	Text        string          `json:"text,omitempty"`
+	TextFormat  string          `json:"textFormat,omitempty"`
+	Entities    []mentionEntity `json:"entities,omitempty"`
+	Attachments []attachment    `json:"attachments,omitempty"`
 }
 
 // mentionEntity makes the text Text of an activity a mention of a person.
@@ -69,30 +69,34 @@ func capabilities() chat.Caps {
 // errEmpty is wrapped by the error of an Outgoing that shows nothing on Teams (no part that shows text, and no Fallback).
 var errEmpty = errors.New("the message shows nothing on Microsoft Teams")
 
-// render is o as one activity within maxMessageBytes. Its error wraps chat.ErrInvalid for an Outgoing that is not valid, a prompt
-// of tools or the ending of one (Teams shows no tool approvals yet), and one that shows nothing (errEmpty); and chat.ErrTooLarge
-// for one over the budget even with its Body cut to minBodyUnits.
+// render is o as one activity within maxMessageBytes: a message as text, with its buttons on a card under it; a prompt, and the
+// ending that replaces it, as a card alone (card.go). Its error wraps chat.ErrInvalid for an Outgoing that is not valid and one that
+// shows nothing (errEmpty); and chat.ErrTooLarge for a message over the budget even with its Body cut to minBodyUnits, a prompt over
+// it, or one with a tool that would be shown cut. An ending is never too large: its texts are cut until it fits.
 func render(o chat.Outgoing) (outActivity, error) {
 	if err := o.Validate(); err != nil {
 		return outActivity{}, err
 	}
 	switch {
-	case o.Prompt != nil && len(o.Prompt.Tools) > 0, o.Ending != nil && len(o.Ending.Prompt.Tools) > 0:
-		return outActivity{}, fmt.Errorf("%w: Microsoft Teams shows no tool approvals yet", chat.ErrInvalid)
+	case o.Prompt != nil:
+		return renderPrompt(*o.Prompt)
+	case o.Ending != nil:
+		return renderEnding(*o.Ending)
 	}
+	return renderMessage(*o.Message)
+}
+
+// renderMessage is m as text, cut further when it is over the budget, and its buttons as a card under it.
+func renderMessage(m chat.Message) (outActivity, error) {
 	for body := maxBodyUnits; ; body /= 2 {
 		var r renderer
 		r.caps, r.body = capabilities(), max(body, minBodyUnits)
-		switch {
-		case o.Message != nil:
-			r.message(*o.Message)
-		case o.Prompt != nil:
-			r.prompt(*o.Prompt)
-		default:
-			r.ending(*o.Ending)
-		}
+		r.message(m)
 		a := r.activity()
-		if a.Text == "" {
+		if card := buttonsCard(r.caps, r.buttons); card != nil {
+			a.Attachments = []attachment{{ContentType: cardContentType, Content: card}}
+		}
+		if a.Text == "" && len(a.Attachments) == 0 {
 			return outActivity{}, fmt.Errorf("%w: %w", chat.ErrInvalid, errEmpty)
 		}
 		n, err := size(a)
@@ -105,6 +109,49 @@ func render(o chat.Outgoing) (outActivity, error) {
 		if !r.hasBody || body <= minBodyUnits {
 			return outActivity{}, fmt.Errorf("%w: %d bytes, over the %d byte budget of a message", chat.ErrTooLarge, n, maxMessageBytes)
 		}
+	}
+}
+
+// cardActivity is a message of the one card.
+func cardActivity(card map[string]any) outActivity {
+	return outActivity{Type: "message", Attachments: []attachment{{ContentType: cardContentType, Content: card}}}
+}
+
+// renderPrompt is p's card, which is chat.ErrTooLarge over the budget: a prompt is refused, not cut to fit.
+func renderPrompt(p chat.Prompt) (outActivity, error) {
+	b := cardBuilder{caps: capabilities()}
+	card, err := b.prompt(p)
+	if err != nil {
+		return outActivity{}, err
+	}
+	a := cardActivity(card)
+	n, err := size(a)
+	if err != nil {
+		return outActivity{}, err
+	}
+	if n > maxMessageBytes {
+		return outActivity{}, fmt.Errorf("%w: %d bytes, over the %d byte budget of a message", chat.ErrTooLarge, n, maxMessageBytes)
+	}
+	return a, nil
+}
+
+// renderEnding is e's card, with its texts cut to half of the longest place's limit, and to half again, down to minEndingUnits, until it
+// fits the budget. The longest ending fits at minEndingUnits (TestTheLongestEndingFits), so the error past it is no ending's.
+func renderEnding(e chat.Ending) (outActivity, error) {
+	for cut := 0; ; {
+		b := cardBuilder{caps: capabilities(), cut: cut}
+		a := cardActivity(b.ending(e))
+		n, err := size(a)
+		if err != nil {
+			return outActivity{}, err
+		}
+		if n <= maxMessageBytes {
+			return a, nil
+		}
+		if cut == minEndingUnits {
+			return outActivity{}, fmt.Errorf("%w: an ending of %d bytes with its texts cut to %d units", chat.ErrTooLarge, n, minEndingUnits)
+		}
+		cut = max(cmp.Or(cut, maxTextUnits)/2, minEndingUnits)
 	}
 }
 
@@ -128,6 +175,7 @@ type renderer struct {
 	paras    []string
 	entities []mentionEntity
 	fallback string
+	buttons  []chat.Button // the message's buttons, in order, for the card under the text
 }
 
 func (r *renderer) activity() outActivity {
@@ -135,7 +183,11 @@ func (r *renderer) activity() outActivity {
 	if text == "" {
 		text = r.fallback
 	}
-	return outActivity{Type: "message", Text: text, TextFormat: "markdown", Entities: r.entities}
+	a := outActivity{Type: "message", Text: text, Entities: r.entities}
+	if text != "" {
+		a.TextFormat = "markdown"
+	}
+	return a
 }
 
 // add appends a paragraph, unless it is empty.
@@ -215,12 +267,7 @@ func (r *renderer) message(m chat.Message) {
 		case chat.Mention:
 			r.mentionLine(chat.WhereContext, p.User, p.Text)
 		case chat.Buttons:
-			// Teams shows no buttons yet: the labels are shown as text, so that what the message offers is still read.
-			var labels []string
-			for _, b := range p.Buttons {
-				labels = append(labels, chat.Clean(b.Label, true))
-			}
-			r.line(chat.WhereButton, strings.Join(labels, " · "))
+			r.buttons = append(r.buttons, p.Buttons...) // the actions of the card under the text
 		case chat.Steps:
 			if len(p.Steps) > 0 {
 				head, _ := headOfSteps(m.Parts, i-1)
@@ -291,69 +338,6 @@ func (r *renderer) stepLine(st chat.Step) string {
 		title += " (no result)"
 	}
 	return r.lineOf(chat.WhereStepTitle, title)
-}
-
-// noAnswers is the line under a prompt: a person cannot answer one on Teams yet.
-const noAnswers = "This question cannot be answered in Microsoft Teams yet."
-
-func (r *renderer) prompt(p chat.Prompt) {
-	r.promptText(p)
-	if !p.Deadline.IsZero() {
-		r.line(chat.WhereFallback, "It closes at "+p.Deadline.UTC().Format(time.RFC1123)+".")
-	}
-	r.line(chat.WhereFallback, noAnswers)
-}
-
-// promptText adds what a prompt asked: its hint, its sub-agent, and each question with its options.
-func (r *renderer) promptText(p chat.Prompt) {
-	if p.Hint != "" {
-		r.line(chat.WhereHint, p.Hint)
-	}
-	if p.Subagent != "" {
-		r.line(chat.WhereSubagent, "Asked by the sub-agent ", p.Subagent)
-	}
-	for _, q := range p.Questions {
-		r.line(chat.WhereQuestion, q.Text)
-		for i, c := range q.Choices {
-			r.line(chat.WhereChoice, "Option "+strconv.Itoa(i+1)+": ", c)
-		}
-	}
-}
-
-func (r *renderer) ending(e chat.Ending) {
-	switch e.Outcome {
-	case chat.Answered:
-		if e.By != "" {
-			r.mentionLine(chat.WhereUser, e.By, "answered.")
-		} else {
-			r.line(chat.WhereFallback, "Answered.")
-		}
-	case chat.TimedOut:
-		r.line(chat.WhereFallback, "Nobody answered in time.")
-	default:
-		if e.By != "" {
-			r.mentionLine(chat.WhereUser, e.By, "cancelled the question.")
-		} else {
-			r.line(chat.WhereFallback, "The question was cancelled.")
-		}
-	}
-	p := e.Prompt
-	if p.Hint != "" {
-		r.line(chat.WhereHint, p.Hint)
-	}
-	if p.Subagent != "" {
-		r.line(chat.WhereSubagent, "Asked by the sub-agent ", p.Subagent)
-	}
-	for i, q := range p.Questions {
-		r.line(chat.WhereQuestion, q.Text)
-		if i < len(e.Answers) && len(e.Answers[i]) > 0 {
-			var answers []string
-			for _, a := range e.Answers[i] {
-				answers = append(answers, chat.Clean(a, true))
-			}
-			r.line(chat.WhereAnswer, "Answer: ", strings.Join(answers, ", "))
-		}
-	}
 }
 
 // escapeLine writes one line of literal text so that CommonMark shows its characters and acts on none of them: "&", "<", ">", "["

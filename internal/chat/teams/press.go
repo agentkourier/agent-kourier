@@ -1,0 +1,175 @@
+package teams
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/agentkourier/agent-kourier/internal/chat"
+)
+
+// actionInvoke is the name of the invoke that a press of an Action.Execute sends.
+const actionInvoke = "adaptiveCard/action"
+
+// messageAnswer is the type of an invoke's answer whose value is a text that Teams shows the presser.
+const messageAnswer = "application/vnd.microsoft.activity.message"
+
+// What a press is answered with, in its request: before it is decided, which the press worker does after the answer.
+const (
+	// textPromptReceived answers the press of a prompt's button, whose card is changed for everyone when the press is taken.
+	textPromptReceived = "Agent Kourier received your press. The card changes when it is decided; if it does not change, the press was not accepted."
+	// textButtonReceived answers the press of a message's button, such as a vote.
+	textButtonReceived = "Agent Kourier received your press."
+	// textPressNotRecorded answers a press that the sink did not take: nothing will come of it, and Teams does not send it again.
+	textPressNotRecorded = "Agent Kourier could not record your press. Please press again."
+	// textPressUnusable answers a press that names no button of Agent Kourier's, or that came from no one or of no message.
+	textPressUnusable = "Agent Kourier cannot take this press."
+)
+
+// pressKind is what a press is of: a prompt's button or a message's.
+type pressKind int
+
+const (
+	pressPrompt pressKind = iota
+	pressButton
+)
+
+// inputKey is the ID of an input of a prompt's card that a Submit reads: its control and the index of its question (inputID).
+var inputKey = regexp.MustCompile(`^([` + string(inputText) + string(inputSingle) + string(inputMulti) + `])(\d{1,4})$`)
+
+// actionValue is the value of an adaptiveCard/action invoke: the pressed action, and its data with the card's inputs merged in by ID.
+type actionValue struct {
+	Action struct {
+		Type string                     `json:"type"`
+		Data map[string]json.RawMessage `json:"data"`
+	} `json:"action"`
+}
+
+// ownData is the data that the adapter put on an action (execute): a prompt's ID and its action, or a message's button and its value.
+type ownData struct {
+	Prompt *string `json:"prompt"`
+	Action *string `json:"action"`
+	Button *string `json:"button"`
+	Value  *string `json:"value"`
+}
+
+// Invoke implements InvokeHandler. It answers a press of a card's Action.Execute at once, in the request, with a message for the
+// presser, and hands the press to sink first, which records it and returns (the press worker decides it after): received, when sink
+// took it; could not be recorded, when sink returned an error, since nothing comes of the press and Teams does not send it again; and
+// cannot be taken, when the press names no button of Agent Kourier's. Who may press, and whether the question is still open, are
+// decided by the worker after the answer, so a press refused there is answered as received, and its card does not change. Any other
+// invoke is answered 200 with no body.
+func (c *Client) Invoke(ctx context.Context, sink chat.Sink, inv Invoke) InvokeAnswer {
+	if inv.Name != actionInvoke {
+		c.log.DebugContext(ctx, "teams: an invoke was answered with no body; it is not a press", "name", quote(inv.Name))
+		return InvokeAnswer{Status: http.StatusOK}
+	}
+	press, kind, ok := c.press(inv)
+	if !ok {
+		c.log.DebugContext(ctx, "teams: a press was not taken; it names no button of Agent Kourier's, or no presser or message")
+		return toldPresser(textPressUnusable)
+	}
+	if err := sink.Interaction(ctx, press); err != nil {
+		c.log.WarnContext(ctx, "teams: a press could not be recorded; the presser was told to press again", "error", err.Error())
+		return toldPresser(textPressNotRecorded)
+	}
+	if kind == pressButton {
+		return toldPresser(textButtonReceived)
+	}
+	return toldPresser(textPromptReceived)
+}
+
+// toldPresser is the answer to an invoke that Teams shows the presser as text.
+func toldPresser(text string) InvokeAnswer {
+	body, _ := json.Marshal(struct {
+		StatusCode int    `json:"statusCode"`
+		Type       string `json:"type"`
+		Value      string `json:"value"`
+	}{http.StatusOK, messageAnswer, text}) // marshalling a struct of a number and strings does not fail
+	return InvokeAnswer{Status: http.StatusOK, Body: body}
+}
+
+// press is the neutral Interaction of inv, a press of an Action.Execute of a card the adapter rendered, and what it is of; false when
+// inv has no presser or message, or its action is not an Action.Execute with the adapter's data of one of two forms: a prompt's ID with
+// an action chat.Action reads (promptAction), or a message's button with its value (buttonsCard).
+func (c *Client) press(inv Invoke) (chat.Interaction, pressKind, bool) {
+	if inv.User == "" || inv.At.ID == "" || inv.At.Channel == "" {
+		return chat.Interaction{}, 0, false
+	}
+	var v actionValue
+	if json.Unmarshal(inv.Value, &v) != nil || v.Action.Type != "Action.Execute" {
+		return chat.Interaction{}, 0, false
+	}
+	var own ownData
+	if raw, ok := v.Action.Data[dataKey]; !ok || json.Unmarshal(raw, &own) != nil {
+		return chat.Interaction{}, 0, false
+	}
+	out := chat.Interaction{User: inv.User, At: inv.At, Delivery: pressKey(inv)}
+	switch {
+	case own.Prompt != nil && own.Action != nil && own.Button == nil && own.Value == nil:
+		if out.Action.UnmarshalText([]byte(*own.Action)) != nil {
+			return chat.Interaction{}, 0, false
+		}
+		out.PromptID = *own.Prompt
+		if out.Action == chat.ActionSubmit {
+			out.Answers = answersOf(v.Action.Data)
+		}
+		return out, pressPrompt, true
+	case own.Value != nil && own.Prompt == nil && own.Action == nil:
+		out.PromptID = *own.Value
+		return out, pressButton, true
+	}
+	return chat.Interaction{}, 0, false
+}
+
+// answersOf reads a Submit's answers from the inputs Teams merged into the action's data, by the IDs the card gave them (inputID): a
+// text's value whole, a choice of one as the index it holds, a choice of several split at its commas (Teams joins the chosen values
+// with them), in the order of the questions. A key of no input, a value that is not a string, and an input that holds nothing are left
+// out; what the answers mean for the prompt (a question answered twice, an index past its options) is the session's to decide.
+func answersOf(data map[string]json.RawMessage) []chat.Answer {
+	var out []chat.Answer
+	for key, raw := range data {
+		m := inputKey.FindStringSubmatch(key)
+		var s string
+		if m == nil || json.Unmarshal(raw, &s) != nil {
+			continue
+		}
+		q, _ := strconv.Atoi(m[2]) // at most four digits, as inputKey matched
+		var values []string
+		if m[1] == string(inputMulti) {
+			for _, part := range strings.Split(s, ",") {
+				if part != "" {
+					values = append(values, part)
+				}
+			}
+		} else if s != "" {
+			values = []string{s}
+		}
+		if len(values) > 0 {
+			out = append(out, chat.Answer{Question: q, Values: values})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Question < out[j].Question })
+	return out
+}
+
+// pressKey is the key of a press by which the broker records it once (chat.Interaction.Delivery): the presser, the channel, the message
+// and the invoke's activity ID, each prefixed by its length, hashed with SHA-256 and written in hex. A second delivery of the invoke
+// has the same activity ID, and another press another; "" when the invoke has no ID.
+func pressKey(inv Invoke) string {
+	if inv.ID == "" {
+		return ""
+	}
+	h := sha256.New()
+	for _, part := range []string{inv.User, inv.At.Channel, inv.At.ID, inv.ID} {
+		_, _ = fmt.Fprintf(h, "%d:%s", len(part), part)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}

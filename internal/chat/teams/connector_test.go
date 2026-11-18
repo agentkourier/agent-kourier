@@ -200,24 +200,80 @@ func shownBy(reqs []connRequest) []chattest.Shown {
 			text = text[:i] + e.Mentioned.Name + text[i+len(e.Text):]
 			active = append(active, chattest.Active{Kind: chattest.KindMention, Text: e.Mentioned.ID})
 		}
-		scan := chattest.ScanCommonMark(unlisted(text))
-		active = append(active, scan.Active...)
-		pieces := strings.Split(scan.Displayed, "\n\n")
-		at := 0
-		for i, p := range pieces {
-			if strings.Contains(p, "zq7kx3") {
-				at = i
-				break
+		if text != "" || len(active) > 0 {
+			scan := chattest.ScanCommonMark(unlisted(text))
+			active = append(active, scan.Active...)
+			pieces := strings.Split(scan.Displayed, "\n\n")
+			at := 0
+			for i, p := range pieces {
+				if strings.Contains(p, "zq7kx3") {
+					at = i
+					break
+				}
+			}
+			for i, p := range pieces {
+				s := chattest.Shown{Displayed: p}
+				if i == at {
+					s.Active = active
+				}
+				out = append(out, s)
 			}
 		}
-		for i, p := range pieces {
-			s := chattest.Shown{Displayed: p}
-			if i == at {
-				s.Active = active
-			}
-			out = append(out, s)
+		for _, a := range r.activity.Attachments {
+			out = append(out, cardShown(a.Content)...)
 		}
 	}
+	return out
+}
+
+// cardShown is what Teams shows of a card, one piece for each text in it: a TextRun's text, a choice's title and an action's title as
+// the characters they hold (the card schema gives a TextRun no markdown, and a title is plain text; how Teams shows them is
+// unmeasured); a TextBlock's text, which takes markdown, with the card's mention entities found in it as in a message's text, and read
+// as CommonMark; and the fallbackText as CommonMark, since where Teams shows it is not known. inert holds a card to the elements and
+// keys read here.
+func cardShown(card map[string]any) []chattest.Shown {
+	var mentions []mentionEntity
+	if teams, ok := card["msteams"].(map[string]any); ok {
+		raw, _ := json.Marshal(teams["entities"])
+		_ = json.Unmarshal(raw, &mentions)
+	}
+	var out []chattest.Shown
+	if s, ok := card["fallbackText"].(string); ok {
+		out = append(out, chattest.ScanCommonMark(s))
+	}
+	var walk func(v any)
+	walk = func(v any) {
+		switch v := v.(type) {
+		case []any:
+			for _, e := range v {
+				walk(e)
+			}
+		case map[string]any:
+			typ, _ := v["type"].(string)
+			text, _ := v["text"].(string)
+			title, isTitled := v["title"].(string)
+			switch {
+			case typ == "TextRun":
+				out = append(out, chattest.Shown{Displayed: text})
+			case typ == "TextBlock":
+				var active []chattest.Active
+				for _, e := range mentions {
+					if i := strings.Index(text, e.Text); i >= 0 && e.Text != "" {
+						text = text[:i] + e.Mentioned.Name + text[i+len(e.Text):]
+						active = append(active, chattest.Active{Kind: chattest.KindMention, Text: e.Mentioned.ID})
+					}
+				}
+				scan := chattest.ScanCommonMark(text)
+				out = append(out, chattest.Shown{Displayed: scan.Displayed, Active: append(active, scan.Active...)})
+			case isTitled:
+				out = append(out, chattest.Shown{Displayed: title})
+			}
+			for _, k := range []string{"body", "inlines", "choices", "actions"} {
+				walk(v[k])
+			}
+		}
+	}
+	walk(card)
 	return out
 }
 
@@ -245,8 +301,9 @@ func unlisted(text string) string {
 	return text[:cut] + strings.Join(lines, "\n\n")
 }
 
-// inert checks that every activity is a plain message in markdown with no more than its text and its mentions: no attachment, card
-// or suggested action that could carry a link or a preview.
+// inert checks that every activity is a plain message in markdown with no more than its text, its mentions and Agent Kourier's cards:
+// no other attachment, and no suggested action, that could carry a link or a preview. A card holds only the elements and the keys
+// that cardKeys lists, so none has an image, a link, a selectAction or an Action.OpenUrl; its schema is the one the adapter names.
 func inert(reqs []connRequest) error {
 	for _, r := range reqs {
 		if r.raw == nil {
@@ -254,13 +311,89 @@ func inert(reqs []connRequest) error {
 		}
 		for k := range r.raw {
 			switch k {
-			case "type", "text", "textFormat", "entities":
+			case "type", "text", "textFormat", "entities", "attachments":
 			default:
 				return fmt.Errorf("%s %s carried %q", r.method, r.path, k)
 			}
 		}
-		if r.activity.Type != "message" || r.activity.TextFormat != "markdown" {
+		if r.activity.Type != "message" || (r.activity.Text != "" && r.activity.TextFormat != "markdown") {
 			return fmt.Errorf("%s %s is a %q of the format %q", r.method, r.path, r.activity.Type, r.activity.TextFormat)
+		}
+		atts, _ := r.raw["attachments"].([]any)
+		for _, a := range atts {
+			att, _ := a.(map[string]any)
+			if len(att) != 2 || att["contentType"] != cardContentType {
+				return fmt.Errorf("%s %s carried the attachment %v", r.method, r.path, a)
+			}
+			card, _ := att["content"].(map[string]any)
+			if card["$schema"] != cardSchema || card["version"] != cardVersion {
+				return fmt.Errorf("%s %s carried a card of the schema %v, version %v", r.method, r.path, card["$schema"], card["version"])
+			}
+			if err := inertElement(card, "AdaptiveCard"); err != nil {
+				return fmt.Errorf("%s %s: %w", r.method, r.path, err)
+			}
+		}
+	}
+	return nil
+}
+
+// cardKeys is each element a card may hold, by its type ("choice" for an Input.ChoiceSet's choice, "msteams" for the card's Teams
+// object, "mention" for one of its entities), with the keys it may have and, for a key that holds elements, their type ("" for
+// elements that name their own); a key with no type is a leaf, or the action's data, which Teams sends back and shows nowhere.
+var cardKeys = map[string]map[string]string{
+	"AdaptiveCard":    {"type": "-", "$schema": "-", "version": "-", "fallbackText": "-", "body": "", "actions": "Action.Execute", "msteams": "msteams"},
+	"msteams":         {"entities": "mention"},
+	"mention":         {"type": "-", "text": "-", "mentioned": "-"},
+	"RichTextBlock":   {"type": "-", "inlines": "TextRun"},
+	"TextRun":         {"type": "-", "text": "-", "weight": "-", "isSubtle": "-", "fontType": "-"},
+	"TextBlock":       {"type": "-", "text": "-", "wrap": "-"},
+	"Input.Text":      {"type": "-", "id": "-", "isMultiline": "-"},
+	"Input.ChoiceSet": {"type": "-", "id": "-", "style": "-", "isMultiSelect": "-", "choices": "choice"},
+	"choice":          {"title": "-", "value": "-"},
+	"Action.Execute":  {"type": "-", "title": "-", "style": "-", "data": "-"},
+}
+
+// bodyTypes are the elements a card's body may hold.
+var bodyTypes = []string{"RichTextBlock", "TextBlock", "Input.Text", "Input.ChoiceSet"}
+
+// inertElement checks that v is an element of the type want (for "", one of bodyTypes) with only the keys cardKeys gives that type,
+// and so for every element it holds. An element whose keys name a type must be of it.
+func inertElement(v any, want string) error {
+	el, ok := v.(map[string]any)
+	if !ok {
+		return fmt.Errorf("a card element %v is not an object", v)
+	}
+	typ := want
+	if want == "" {
+		typ, _ = el["type"].(string)
+		if !slices.Contains(bodyTypes, typ) {
+			return fmt.Errorf("a card's body holds the element %q", typ)
+		}
+	}
+	keys := cardKeys[typ]
+	if _, typed := keys["type"]; typed && el["type"] != typ {
+		return fmt.Errorf("a card element %v is not a %q", v, typ)
+	}
+	for k, sub := range el {
+		inner, allowed := keys[k]
+		switch {
+		case !allowed:
+			return fmt.Errorf("a card's %q carried %q", typ, k)
+		case inner == "-":
+		case inner == "msteams":
+			if err := inertElement(sub, inner); err != nil {
+				return err
+			}
+		default:
+			list, isList := sub.([]any)
+			if !isList {
+				return fmt.Errorf("a card's %q holds %q that is not a list", typ, k)
+			}
+			for _, e := range list {
+				if err := inertElement(e, inner); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil
@@ -302,6 +435,7 @@ func teamsSubject(t *testing.T) chattest.Subject {
 	for range 40 {
 		tooLarge.Questions = append(tooLarge.Questions, chat.Question{Text: strings.Repeat("q", maxTextUnits)})
 	}
+	tooLargeTools := chat.Prompt{ID: "ix-large-tools", Tools: twentyTools(strings.Repeat("中", capabilities().Limit(chat.WhereToolArgs)))}
 	return chattest.Subject{
 		Platform: ct.c,
 		Sent: func() []chattest.Shown {
@@ -322,6 +456,8 @@ func teamsSubject(t *testing.T) chattest.Subject {
 		AllowAutolink: true,
 		Target:        chat.Target{Conn: testConn, Channel: testChannel, Thread: "1700000000000"},
 		TooLarge:      &tooLarge,
+		ToolApprovals: true,
+		TooLargeTools: &tooLargeTools,
 		MentionUser:   testUser,
 		Channels: func(st chattest.ChannelState) string {
 			if st == chattest.ChannelJoined {
@@ -366,6 +502,92 @@ func TestTheTeamsReadingOfTheWireFindsWhatTeamsWouldActOn(t *testing.T) {
 		}
 		if fmt.Sprint(kinds) != fmt.Sprint(tc.want) {
 			t.Errorf("%s: found %v, want %v", tc.name, kinds, tc.want)
+		}
+	}
+}
+
+// The reading of a card is itself tested: a TextBlock takes markdown and the card's mentions, and a TextRun and a title are the
+// characters they hold; inert takes Agent Kourier's cards and nothing that could carry a link.
+func TestTheTeamsReadingOfACard(t *testing.T) {
+	t.Parallel()
+	mention := map[string]any{"type": "mention", "text": "<at>someone</at>", "mentioned": map[string]any{"id": testUser, "name": "someone"}}
+	cardOfBody := func(body ...any) map[string]any {
+		return map[string]any{"type": "AdaptiveCard", "$schema": cardSchema, "version": cardVersion, "body": body,
+			"msteams": map[string]any{"entities": []any{mention}}}
+	}
+	block := func(text string) map[string]any {
+		return map[string]any{"type": "TextBlock", "text": text, "wrap": true}
+	}
+	run := func(text string) map[string]any {
+		return map[string]any{"type": "RichTextBlock", "inlines": []any{map[string]any{"type": "TextRun", "text": text}}}
+	}
+	for _, tc := range []struct {
+		name string
+		card map[string]any
+		want []chattest.Kind
+	}{
+		{"a mention in a TextBlock", cardOfBody(block("<at>someone</at> answered.")), []chattest.Kind{chattest.KindMention}},
+		{"a link in a TextBlock", cardOfBody(block("[x](https://evil.test)")), []chattest.Kind{chattest.KindLink}},
+		{"markup in a TextRun", cardOfBody(run("[x](https://evil.test) *b* <at>someone</at>")), nil},
+	} {
+		var kinds []chattest.Kind
+		for _, s := range cardShown(tc.card) {
+			for _, a := range s.Active {
+				kinds = append(kinds, a.Kind)
+			}
+		}
+		if fmt.Sprint(kinds) != fmt.Sprint(tc.want) {
+			t.Errorf("%s: found %v, want %v", tc.name, kinds, tc.want)
+		}
+	}
+	if got := cardShown(cardOfBody(run("a *b*"))); len(got) != 1 || got[0].Displayed != "a *b*" {
+		t.Errorf("a TextRun is shown as %+v, want its characters", got)
+	}
+
+	posted := func(att map[string]any) connRequest {
+		return connRequest{method: http.MethodPost, activity: outActivity{Type: "message"}, raw: map[string]any{"type": "message", "attachments": []any{att}}}
+	}
+	ours := func(card map[string]any) map[string]any {
+		return map[string]any{"contentType": cardContentType, "content": card}
+	}
+	press := map[string]any{"type": "Action.Execute", "title": "Submit", "data": map[string]any{dataKey: map[string]any{}}}
+	good := cardOfBody(run("x"), block("<at>someone</at> answered."), map[string]any{"type": "Input.Text", "id": "t0", "isMultiline": true},
+		map[string]any{"type": "Input.ChoiceSet", "id": "r1", "style": "expanded", "isMultiSelect": false,
+			"choices": []any{map[string]any{"title": "a", "value": "0"}}})
+	good["actions"] = []any{press}
+	if err := inert([]connRequest{posted(ours(good))}); err != nil {
+		t.Errorf("Agent Kourier's card is not inert: %v", err)
+	}
+	with := func(edit func(map[string]any)) map[string]any {
+		raw, _ := json.Marshal(good)
+		var c map[string]any
+		_ = json.Unmarshal(raw, &c)
+		edit(c)
+		return ours(c)
+	}
+	for name, att := range map[string]map[string]any{
+		"another attachment": {"contentType": "application/vnd.microsoft.card.hero", "content": map[string]any{}},
+		"a content URL":      {"contentType": cardContentType, "content": good, "contentUrl": "https://evil.test"},
+		"an image": with(func(c map[string]any) {
+			c["body"] = []any{map[string]any{"type": "Image", "url": "https://evil.test/x.png"}}
+		}),
+		"an Action.OpenUrl": with(func(c map[string]any) {
+			c["actions"] = []any{map[string]any{"type": "Action.OpenUrl", "url": "https://evil.test"}}
+		}),
+		"a selectAction": with(func(c map[string]any) {
+			c["body"].([]any)[1].(map[string]any)["selectAction"] = map[string]any{"type": "Action.OpenUrl", "url": "https://evil.test"}
+		}),
+		"a background image": with(func(c map[string]any) { c["backgroundImage"] = "https://evil.test/x.png" }),
+		"another version":    with(func(c map[string]any) { c["version"] = "1.6" }),
+		"a TextRun's link": with(func(c map[string]any) {
+			c["body"].([]any)[0].(map[string]any)["inlines"].([]any)[0].(map[string]any)["selectAction"] = "x"
+		}),
+		"a choice's type": with(func(c map[string]any) {
+			c["body"].([]any)[3].(map[string]any)["choices"].([]any)[0].(map[string]any)["type"] = "Image"
+		}),
+	} {
+		if err := inert([]connRequest{posted(att)}); err == nil {
+			t.Errorf("%s is taken for inert", name)
 		}
 	}
 }
