@@ -58,17 +58,19 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-// blockingInvokes answers each invoke with answer, after release is closed or the invoke's context ends, if release is set.
+// blockingInvokes answers each invoke with answer, after release is closed or the invoke's context ends, if release is set, and after
+// lag more once the context has ended.
 type blockingInvokes struct {
 	mu      sync.Mutex
 	answer  InvokeAnswer
 	release chan struct{}
 	started chan struct{} // gets a value as each invoke starts, if set
+	lag     time.Duration
 }
 
 func (b *blockingInvokes) Invoke(ctx context.Context, _ chat.Sink, _ Invoke) InvokeAnswer {
 	b.mu.Lock()
-	release, started, ans := b.release, b.started, b.answer
+	release, started, ans, lag := b.release, b.started, b.answer, b.lag
 	b.mu.Unlock()
 	if started != nil {
 		started <- struct{}{}
@@ -77,6 +79,7 @@ func (b *blockingInvokes) Invoke(ctx context.Context, _ chat.Sink, _ Invoke) Inv
 		select {
 		case <-release:
 		case <-ctx.Done():
+			time.Sleep(lag)
 		}
 	}
 	return ans
@@ -709,14 +712,14 @@ func TestSocketModeStopsDuringAHandshake(t *testing.T) {
 	if took := time.Since(stopped); took > time.Second {
 		t.Errorf("Run returned %s after its context ended during a handshake; want within a second", took)
 	}
+	select { // the fake, holding the handshake, sees the client close the connection
+	case <-hold.Closed:
+	case <-time.After(2 * time.Second):
+		t.Error("the client did not close the connection whose handshake was held")
+	}
 	hold.Release()
-	time.Sleep(200 * time.Millisecond) // the fake answers the handshake, and calls SocketReady if it can
-	for _, sock := range st.f.RegionSockets("amer") {
-		select {
-		case <-sock.Closed():
-		case <-time.After(2 * time.Second):
-			t.Errorf("%s is open after the run stopped; want every socket of the run closed", sock)
-		}
+	if n := len(st.f.RegionSockets("amer")); n != 0 {
+		t.Errorf("%d sockets got past the handshake; want none", n)
 	}
 	if c, _ := st.told(); slices.Contains(c, true) {
 		t.Errorf("OnConnection was told %v; want never up", c)
@@ -871,5 +874,21 @@ func TestSocketModeCountsARegionRefusedOnlyWhileItsLastAnswerIs403(t *testing.T)
 	case err := <-st.done:
 		t.Fatalf("Run ended (%v) with apac's last answer a 503; want it running", err)
 	default:
+	}
+}
+
+// Run returns only once the envelopes it was handling are counted, even one whose handler answers well after the stop closed its
+// socket: no series of the connection is set after Run returns, when the broker may have forgotten them.
+func TestSocketModeCountsEachEnvelopeBeforeRunReturns(t *testing.T) {
+	st := newSocketTest(t)
+	st.c.sockets.stopWait = 10 * time.Millisecond
+	st.invokes.release, st.invokes.started, st.invokes.lag = make(chan struct{}), make(chan struct{}, 1), 300*time.Millisecond
+	st.run(t)
+	sock := st.f.WaitSocket(t, "amer", 0, 5*time.Second)
+	sock.Activity(t, envelopeOf(t, "invoke", "env-held", fixture(t, "invoke_action"), 0))
+	<-st.invokes.started
+	_ = st.stop(t)
+	if got := st.series(t, "agentkourier_teams_socket_envelopes_total", "invoke"); got != 1 {
+		t.Errorf("envelopes{invoke} = %v when Run returned; want 1: the handler's count came after Run", got)
 	}
 }

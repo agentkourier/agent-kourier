@@ -24,7 +24,7 @@ leader's run ends, and a standby opens none. Each socket is replaced before its 
 life measured, by one that takes over its region before the old one closes. A rejected client secret, or a 401 to the call that opens
 a socket, stops the connection's run as in `http` mode; if every region answers 403 and none has a socket, the run ends and the broker
 runs it again after a wait. A team's connection that is edited from one mode to the other is restarted in the new mode; the broker's
-own connection (`AGENTKOURIER_CHAT_CONNECTION`) takes the edit when the broker restarts.
+own connection takes the edit when the broker restarts.
 
 **What Teams sends while no socket is ready is lost.** Teams does not queue an activity for a bot with no socket, nor send it to an
 HTTPS endpoint: a message or a mention sent while the connection has no ready socket in any region (while the broker starts,

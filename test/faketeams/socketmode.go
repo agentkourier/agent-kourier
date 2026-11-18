@@ -10,7 +10,9 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -81,9 +83,42 @@ type issue struct {
 // Hold holds the handshakes of a region's sockets: each is read, and answered only once Release is called.
 type Hold struct {
 	// Held gets a value as each handshake is read and held.
-	Held    chan struct{}
+	Held chan struct{}
+	// Closed gets a value for each held handshake whose client closed the connection while it was held.
+	Closed  chan struct{}
 	release chan struct{}
 	once    sync.Once
+}
+
+// wait holds the handshake just read on ws until Release, and says false if the client closed the connection first. A client waits for
+// the handshake's answer and sends nothing, so the connection is watched with a raw read, which a release ends with a deadline before it
+// reads a byte.
+func (h *Hold) wait(ws *websocket.Conn) bool {
+	h.Held <- struct{}{}
+	conn := ws.NetConn()
+	closed := make(chan bool, 1)
+	go func() {
+		var b [1]byte
+		_, err := conn.Read(b[:])
+		var ne net.Error
+		timedOut := errors.As(err, &ne) && ne.Timeout()
+		closed <- err != nil && !timedOut
+	}()
+	select {
+	case <-h.release:
+		_ = conn.SetReadDeadline(time.Now())
+		if <-closed {
+			h.Closed <- struct{}{}
+			return false
+		}
+		_ = conn.SetReadDeadline(time.Time{})
+		return true
+	case c := <-closed:
+		if c {
+			h.Closed <- struct{}{}
+		}
+		return false
+	}
 }
 
 // Release lets the held handshakes, and the later ones, be answered.
@@ -150,7 +185,7 @@ func (f *SocketMode) Silence(region string, silent bool) {
 func (f *SocketMode) HoldHandshakes(region string) *Hold {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	h := &Hold{Held: make(chan struct{}, 16), release: make(chan struct{})}
+	h := &Hold{Held: make(chan struct{}, 16), Closed: make(chan struct{}, 16), release: make(chan struct{})}
 	f.held[region] = h
 	return h
 }
@@ -353,9 +388,9 @@ func (f *SocketMode) hub(w http.ResponseWriter, r *http.Request) {
 		_ = ws.Close()
 		return
 	}
-	if hold != nil {
-		hold.Held <- struct{}{}
-		<-hold.release
+	if hold != nil && !hold.wait(ws) {
+		_ = ws.Close()
+		return
 	}
 	s := &Socket{Region: region, ws: ws, results: map[string]chan Frame{}, closed: make(chan struct{})}
 	if err := s.write([]byte("{}")); err != nil {
