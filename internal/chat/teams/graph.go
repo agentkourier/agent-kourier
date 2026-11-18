@@ -166,9 +166,10 @@ type graphPage struct {
 }
 
 // pages reads the collection at first, and each page that its @odata.nextLink names, at most maxPages of them, and gives each page's
-// messages to visit. more says Graph named a page past maxPages, which was not read. A page that names one the read already took (a
-// cycle) is an error: a read that cannot reach the end fails, and never passes a part for the whole.
-func (g *graphClient) pages(ctx context.Context, first string, maxPages int, visit func([]graphMessage)) (more bool, err error) {
+// messages to visit, which ends the read by returning true. more says Graph named a page past maxPages, which was not read. A page
+// that names one the read already took (a cycle) is an error: a read that cannot reach the end fails, and never passes a part for the
+// whole.
+func (g *graphClient) pages(ctx context.Context, first string, maxPages int, visit func([]graphMessage) (stop bool)) (more bool, err error) {
 	seen := map[string]bool{first: true}
 	link := first
 	for n := 1; ; n++ {
@@ -176,9 +177,8 @@ func (g *graphClient) pages(ctx context.Context, first string, maxPages int, vis
 		if err := g.get(ctx, link, &page); err != nil {
 			return false, err
 		}
-		visit(page.Value)
 		switch {
-		case page.NextLink == "":
+		case visit(page.Value), page.NextLink == "":
 			return false, nil
 		case n >= maxPages:
 			return true, nil

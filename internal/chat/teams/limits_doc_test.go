@@ -67,10 +67,12 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Duration(t, "teamsNamesTTL", namesTTL)
 	limitsdoc.Count(t, "teamsNameUnits", nameUnits)
 
-	// The reads of a thread through Microsoft Graph: the bound a Client is built with, and the pages, answers and cards it reads.
+	// The reads of a thread through Microsoft Graph, and Find's of a channel: the bound a Client is built with, and the pages, answers and
+	// cards it reads.
 	limitsdoc.Duration(t, "teamsThreadTimeout", c.threadTimeout)
 	limitsdoc.Count(t, "teamsGraphTop", graphPageTop)
 	limitsdoc.Count(t, "teamsThreadPages", threadMaxPages)
+	limitsdoc.Count(t, "teamsFindRootPages", findRootPages)
 	limitsdoc.Bytes(t, "teamsGraphBody", graphMaxBody)
 	limitsdoc.Count(t, "teamsCardDepth", cardMaxDepth)
 	limitsdoc.Bytes(t, "teamsGraphText", graphTextMax)

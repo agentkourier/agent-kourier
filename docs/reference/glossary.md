@@ -103,8 +103,8 @@ Message field
 
 Outbox
 :   The durable table of posts Agent Kourier means to make. A post is recorded before it is sent, so a crash between
-    sending and recording is found and not posted twice, on Slack. On Microsoft Teams such a post is not found in this release, and
-    is posted again.
+    sending and recording is found by a tag that the post carries and not posted twice. On Microsoft Teams a post whose tag cannot
+    be looked for is posted again, and may show twice.
 
 Platform
 :   A chat platform behind the `chat.Platform` interface. Slack is the only platform a broker runs today; the API also takes a ChatConnection of Microsoft Teams, which no broker runs yet.

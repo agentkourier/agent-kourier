@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -256,7 +257,7 @@ func shownBy(reqs []connRequest) []chattest.Shown {
 		if r.method != http.MethodPost && r.method != http.MethodPut {
 			continue
 		}
-		text := r.activity.Text
+		text := uncarried(r.activity.Text)
 		var active []chattest.Active
 		for _, e := range r.activity.Entities {
 			if e.Type != "mention" {
@@ -346,6 +347,13 @@ func cardShown(card map[string]any) []chattest.Shown {
 	return out
 }
 
+// trailingCarrier is the paragraph of Agent Kourier's carrier of a post's tag at the end of a text (withCarrier).
+var trailingCarrier = regexp.MustCompile(`\n\n<span title="kourier[0-9a-f]{32}"></span>$`)
+
+// uncarried is text without the paragraph of the carrier at its end, which Teams shows nothing of: the reading takes off that one
+// paragraph of the exact shape, last, and reads any other span as the HTML it is.
+func uncarried(text string) string { return trailingCarrier.ReplaceAllString(text, "") }
+
 // unlisted is text with the step list that the adapter puts last (stepList) read as what it shows: the quote and the list are the
 // adapter's own, so each of its lines is a paragraph of its own here, and only what is in the lines is scanned. escapeLine starts
 // no line with ">" or "- ", so a last paragraph whose every line starts with ">" is a list of the adapter's, or a quote of the
@@ -408,14 +416,15 @@ func inert(reqs []connRequest) error {
 
 // cardKeys is each element a card may hold, by its type ("choice" for an Input.ChoiceSet's choice, "msteams" for the card's Teams
 // object, "mention" for one of its entities), with the keys it may have and, for a key that holds elements, their type ("" for
-// elements that name their own); a key with no type is a leaf, or the action's data, which Teams sends back and shows nowhere.
+// elements that name their own); a key with no type is a leaf, or the action's data, which Teams sends back and shows nowhere; and a
+// key of the type "carrier" holds Agent Kourier's carrier of a post's tag and nothing else.
 var cardKeys = map[string]map[string]string{
 	"AdaptiveCard":    {"type": "-", "$schema": "-", "version": "-", "fallbackText": "-", "body": "", "actions": "Action.Execute", "msteams": "msteams"},
 	"msteams":         {"entities": "mention"},
 	"mention":         {"type": "-", "text": "-", "mentioned": "-"},
-	"RichTextBlock":   {"type": "-", "inlines": "TextRun"},
+	"RichTextBlock":   {"type": "-", "id": "carrier", "inlines": "TextRun"},
 	"TextRun":         {"type": "-", "text": "-", "weight": "-", "isSubtle": "-", "fontType": "-"},
-	"TextBlock":       {"type": "-", "text": "-", "wrap": "-"},
+	"TextBlock":       {"type": "-", "id": "carrier", "text": "-", "wrap": "-"},
 	"Input.Text":      {"type": "-", "id": "-", "isMultiline": "-"},
 	"Input.ChoiceSet": {"type": "-", "id": "-", "style": "-", "isMultiSelect": "-", "choices": "choice"},
 	"choice":          {"title": "-", "value": "-"},
@@ -449,6 +458,10 @@ func inertElement(v any, want string) error {
 		case !allowed:
 			return fmt.Errorf("a card's %q carried %q", typ, k)
 		case inner == "-":
+		case inner == "carrier": // the id of a text: Agent Kourier's carrier alone (withCarrier), which shows nothing
+			if id, _ := sub.(string); !carrierShape.MatchString(id) {
+				return fmt.Errorf("a card's %q has the id %v, which is no carrier", typ, sub)
+			}
 		case inner == "msteams":
 			if err := inertElement(sub, inner); err != nil {
 				return err
@@ -562,6 +575,9 @@ func TestTheTeamsReadingOfTheWireFindsWhatTeamsWouldActOn(t *testing.T) {
 		{"an entity whose text is not there", post("hi", mention), nil},
 		{"a markdown link", post("[x](https://evil.test)"), []chattest.Kind{chattest.KindLink}},
 		{"escaped text", post("&lt;at&gt;x&lt;/at&gt; &#91;x&#93;(y) \\*b\\*"), nil},
+		{"the carrier last", post("hi\n\n<span title=\"kourier0123456789abcdef0123456789abcdef\"></span>"), nil},
+		{"a carrier not last", post("<span title=\"kourier0123456789abcdef0123456789abcdef\"></span>\n\nhi"), []chattest.Kind{chattest.KindHTML, chattest.KindHTML}},
+		{"a span of another title last", post("hi\n\n<span title=\"x\"></span>"), []chattest.Kind{chattest.KindHTML, chattest.KindHTML}},
 	} {
 		var kinds []chattest.Kind
 		for _, s := range shownBy([]connRequest{tc.req}) {
@@ -624,6 +640,7 @@ func TestTheTeamsReadingOfACard(t *testing.T) {
 		map[string]any{"type": "Input.ChoiceSet", "id": "r1", "style": "expanded", "isMultiSelect": false,
 			"choices": []any{map[string]any{"title": "a", "value": "0"}}})
 	good["actions"] = []any{press}
+	good["body"].([]any)[0].(map[string]any)["id"] = "kourier0123456789abcdef0123456789abcdef"
 	if err := inert([]connRequest{posted(ours(good))}); err != nil {
 		t.Errorf("Agent Kourier's card is not inert: %v", err)
 	}
@@ -642,6 +659,9 @@ func TestTheTeamsReadingOfACard(t *testing.T) {
 		}),
 		"an Action.OpenUrl": with(func(c map[string]any) {
 			c["actions"] = []any{map[string]any{"type": "Action.OpenUrl", "url": "https://evil.test"}}
+		}),
+		"an id on a text that is no carrier": with(func(c map[string]any) {
+			c["body"].([]any)[0].(map[string]any)["id"] = "https://evil.test"
 		}),
 		"a selectAction": with(func(c map[string]any) {
 			c["body"].([]any)[1].(map[string]any)["selectAction"] = map[string]any{"type": "Action.OpenUrl", "url": "https://evil.test"}

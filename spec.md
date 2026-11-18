@@ -614,7 +614,21 @@ Rules:
   thread read must not stop the connection: Graph's 404 is ChannelGone; its 401, 403 and 400, and Entra's refusal of the Graph token
   alone (a scope or a consent), are Permanent (the 403's error names the permission and the install); a 429 is Transient with its
   Retry-After (at least a second), and a 5xx Transient. A wrong or revoked client secret is still FatalAuth, through the bot's token.
-  Find finds nothing on Teams in this release, so a post sent and not recorded before a crash is sent again. Measured on a test tenant, November 2026: the Graph token, a 200 for a channel's messages under the
+  Post carries its tag where people do not see it: `kourier` and the first 16 bytes of the tag's SHA-256 in hex, as an empty
+  `<span title>` in a paragraph of its own at the end of a text (after the closing fence of a block, never at the start, which changed
+  how Teams parsed the first line), or as the `id` of the first element of a card's body that has none when the post is a card alone.
+  No `<` of the agent's, a person's or an alert's text reaches Teams raw, so only the adapter writes a span. Find reads the thread's
+  replies with the same bounds, or for a post with no thread the channel's messages (`GET …/channels/{channel}/messages`, at most 4
+  pages, the first that Graph gives: Microsoft documents them as sorted by each thread's last change, not in which direction), stops
+  at the page that holds the post, and matches only a message of the bot's own app (`from.application.id`), by a span tag in its
+  body's HTML (not the text, which has no tags) or an id among its cards' body elements. Update sends no tag: the outbox looks a post up
+  only before its ID is recorded, and nothing edits a post before that. What no retry mends (a post past the pages, a channel whose
+  team is not known, a Permanent refusal of Graph or of its token) is not found, logged at WARN, so the post is sent and may show twice
+  rather than abandoned; a Transient error is returned and the outbox looks again. Measured on a test tenant, November 2026, web
+  client: the span and a card element's id come back through the replies list and a message's GET, and after a PUT that sent the tag
+  again; channelData, entities, summary, an HTML comment, `data-` attributes, an attachment's name and a card's unknown keys are
+  dropped; the client shows no carrier, and the span's paragraph adds a little space. Not measured: Teams' mobile and desktop clients,
+  screen readers, and Teams' search and notifications. Measured on a test tenant, November 2026: the Graph token, a 200 for a channel's messages under the
   permission alone, the path form, the message shapes (HTML body, from.user and from.application, a card's JSON as a string, a system
   event), and message IDs that were each post's time in milliseconds. Microsoft's documentation, not measured: the replies endpoint,
   its `$top`, paging and order (the adapter sorts and does not rely on it), its errors and the body of its 403, the HTML of other

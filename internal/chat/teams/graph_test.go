@@ -25,9 +25,9 @@ type graphReq struct {
 	auth  string
 }
 
-// fakeGraph is the part of Microsoft Graph that the Client reads: a channel message (GET …/messages/{id}) and its replies (GET
-// …/messages/{id}/replies), in pages of $top, newest first, as Microsoft's example shows them, each page naming the next by an
-// @odata.nextLink with a $skiptoken. The fields are the fakeConnector's, guarded by its mu.
+// fakeGraph is the part of Microsoft Graph that the Client reads: a channel message (GET …/messages/{id}), its replies (GET
+// …/messages/{id}/replies) and the channel's messages that open a thread (GET …/messages), in pages of $top, newest first, as
+// Microsoft's example of the replies shows them, each page naming the next by an @odata.nextLink with a $skiptoken. The fields are the fakeConnector's, guarded by its mu.
 type fakeGraph struct {
 	msgs   map[string]map[string]any // a message, by its resource path (/teams/{group}/channels/{channel}/messages/{id})
 	pageAt int                       // the most a page holds, 0 for $top
@@ -105,7 +105,8 @@ func (f *fakeConnector) serveGraph(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, `{"error":{"code":"NotFound","message":"`+path+`"}}`)
 	}
 	root, isReplies := strings.CutSuffix(path, "/replies")
-	if !isReplies {
+	isRoots := strings.HasSuffix(path, "/messages")
+	if !isReplies && !isRoots {
 		f.mu.Lock()
 		m, ok := g.msgs[path]
 		f.mu.Unlock()
@@ -116,11 +117,16 @@ func (f *fakeConnector) serveGraph(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(m)
 		return
 	}
+	// The list is a root's replies, or for …/messages the channel's roots, which have no replyToId.
 	f.mu.Lock()
-	_, known := g.msgs[root]
+	known, prefix, parent := true, path+"/", any(nil)
+	if isReplies {
+		_, known = g.msgs[root]
+		prefix, parent = root[:strings.LastIndex(root, "/")+1], root[strings.LastIndex(root, "/")+1:]
+	}
 	var replies []map[string]any
 	for p, m := range g.msgs {
-		if strings.HasPrefix(p, root[:strings.LastIndex(root, "/")+1]) && m["replyToId"] == root[strings.LastIndex(root, "/")+1:] {
+		if strings.HasPrefix(p, prefix) && m["replyToId"] == parent {
 			replies = append(replies, m)
 		}
 	}

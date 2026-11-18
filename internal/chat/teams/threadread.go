@@ -90,7 +90,7 @@ func (c *Client) readThread(ctx context.Context, t chat.Target, after, before st
 	var raw []graphMessage
 	seen := map[string]bool{}
 	first := c.graph.resource("teams", group, "channels", t.Channel, "messages", t.Thread, "replies") + fmt.Sprintf("?$top=%d", graphPageTop)
-	more, err := c.graph.pages(ctx, first, threadMaxPages, func(page []graphMessage) {
+	more, err := c.graph.pages(ctx, first, threadMaxPages, func(page []graphMessage) bool {
 		for _, m := range page {
 			if !isMessageID(m.ID) || m.ID == t.Thread || seen[m.ID] ||
 				(after != "" && compareIDs(m.ID, after) <= 0) || (before != "" && compareIDs(m.ID, before) >= 0) {
@@ -99,6 +99,7 @@ func (c *Client) readThread(ctx context.Context, t chat.Target, after, before st
 			seen[m.ID] = true
 			raw = append(raw, m)
 		}
+		return false
 	})
 	switch {
 	case err != nil:

@@ -54,10 +54,10 @@ type Config struct {
 // A message's progress steps are a list under the rest of the message (Caps.Steps), which each update of a live reply shows anew.
 // A prompt, a prompt of tools among them, is an Adaptive Card, and so are a message's buttons; the Client is the Receiver's
 // InvokeHandler, which takes their presses (Invoke). What it does not do yet, and says so: streams (ErrNoStreams), ephemeral
-// messages (ErrNoEphemeral), reactions (ErrNoReactions), the busy mark (ErrNoBusy) and finding a post by its tag (Find says not found).
+// messages (ErrNoEphemeral), reactions (ErrNoReactions) and the busy mark (ErrNoBusy).
 // It reads people from the Bot Connector's rosters (members.go): who is in a channel's team, whether a user is a bot, and a person's
-// name, which the ending of a prompt shows for its decider; and a thread's messages from Microsoft Graph (threadread.go), with the
-// app's Graph token.
+// name, which the ending of a prompt shows for its decider; and from Microsoft Graph, with the app's Graph token, a thread's messages
+// (threadread.go) and a post by the tag that Post carries in it (find.go).
 type Client struct {
 	conn, tenant  string
 	app           string // the bot's application ID
@@ -173,8 +173,8 @@ func (c *Client) ref(channel, thread, id string) chat.Ref {
 }
 
 // Post implements chat.Platform. A post with no thread starts one in the channel, and its ID is the thread's root; a post with a
-// thread replies in it. tag is not kept: Find cannot read a post back yet.
-func (c *Client) Post(ctx context.Context, t chat.Target, o chat.Outgoing, _ string) (ref chat.Ref, err error) {
+// thread replies in it. It carries tag where people do not see it and Graph gives it back (withCarrier), which Find reads.
+func (c *Client) Post(ctx context.Context, t chat.Target, o chat.Outgoing, tag string) (ref chat.Ref, err error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.Post")
 	defer func() { c.finish(ctx, op, "Post", err) }()
 	if t.Channel == "" {
@@ -184,7 +184,7 @@ func (c *Client) Post(ctx context.Context, t chat.Target, o chat.Outgoing, _ str
 	if err != nil {
 		return chat.Ref{}, err
 	}
-	id, err := c.api.send(ctx, c.serviceURL(ctx, t.Channel), conversation(t.Channel, t.Thread), a)
+	id, err := c.api.send(ctx, c.serviceURL(ctx, t.Channel), conversation(t.Channel, t.Thread), withCarrier(a, carrierOf(tag)))
 	if err != nil {
 		return chat.Ref{}, err
 	}
@@ -212,12 +212,6 @@ func (c *Client) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) (err e
 		return err
 	}
 	return c.api.update(ctx, c.serviceURL(ctx, r.Channel), conversation(r.Channel, cmp.Or(r.Thread, r.ID)), r.ID, a)
-}
-
-// Find implements chat.Platform: Teams has no Find in this release. Nothing is found, with no call, and Post keeps its tag nowhere, so a
-// post that the outbox made before a crash, and did not record, is made again.
-func (c *Client) Find(context.Context, chat.Target, string, time.Time) (chat.Ref, bool, error) {
-	return chat.Ref{}, false, nil
 }
 
 // RefAt implements chat.Platform.
