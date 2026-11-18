@@ -34,18 +34,18 @@ const AR = Q.get('ar') || '16x9';
 // On-screen copy. Narration lives in narration.json; these are the captions cut from it.
 const COPY = {
   p1: { wide: [['You’ve put AI agents', 'on Kubernetes.'], ['They can read logs, check rollouts', 'and find the cause.']],
-        tall: [['You’ve put AI agents', 'on Kubernetes.'], ['They can read logs, check', 'rollouts and find the cause.']] },
+        tall: [['You’ve put AI agents', 'on Kubernetes.'], ['They can read logs, check rollouts', 'and find the cause.']] },
   p2: { wide: [['But they sit behind a prompt,', 'away from where your team works.'], []],
-        tall: [['But they sit behind', 'a prompt, away from', 'where your team works.'], []] },
-  p3: { wide: [['Alerts and questions', 'land in team chat.'], ['Putting your agent there means building', 'threads, streaming and questions yourself.']],
-        tall: [['Alerts and', 'questions land', 'in team chat.'], ['Putting your agent there means', 'building threads, streaming', 'and questions yourself.']] },
-  reveal: { wide: [['Introducing Agent Kourier'], ['A Kubernetes-native broker between team chat', 'and streaming A2A agents.']],
-            tall: [['Introducing', 'Agent Kourier'], ['A Kubernetes-native broker', 'between team chat and', 'streaming A2A agents.']] },
+        tall: [['But they sit', 'behind a prompt,', 'away from where', 'your team works.'], []] },
+  p3: { wide: [['Alerts and questions', 'land in team chat.'], ['Putting your agent there means', 'building threads, streaming and questions yourself.']],
+        tall: [['Alerts and questions', 'land in team chat.'], ['Putting your agent there', 'means building threads,', 'streaming and questions yourself.']] },
+  reveal: { wide: [['Introducing Agent Kourier'], ['A Kubernetes-native broker', 'between team chat and streaming A2A agents.']],
+            tall: [['Introducing', 'Agent Kourier'], ['A Kubernetes-native broker', 'between team chat', 'and streaming A2A agents.']] },
   promise: { wide: [['An alert or a question', 'becomes an agent session.'], ['In its own thread. Slack today.']],
-             tall: [['An alert or', 'a question', 'becomes an', 'agent session.'], ['In its own thread. Slack today.']] },
+             tall: [['An alert or', 'a question becomes', 'an agent session.'], ['In its own thread. Slack today.']] },
   tproblem: { wide: [['Your agent is ready.'], ['The chat integration is another project.']],
               tall: [['Your agent', 'is ready.'], ['The chat integration', 'is another project.']] },
-  yaml: { '16x9': [['A Binding connects', 'a channel to', 'an agent.'], ['The agent needs', 'no chat code.']],
+  yaml: { '16x9': [['A Binding connects', 'a channel', 'to an agent.'], ['The agent needs', 'no chat code.']],
           '1x1': [['A Binding connects a channel to an agent.'], ['The agent needs no chat code.']],
           '9x16': [['A Binding connects', 'a channel to an agent.'], ['The agent needs no chat code.']] },
   yamlNote: 'To start from alerts, add a trigger to the Binding.',
@@ -98,7 +98,7 @@ const LAYOUTS = {
     am: [170, 520], slack: [170, 760], k: [540, 640], agents: [[910, 500], [910, 640], [910, 780]],
     r: 54, kSize: 200, tile: 104, firing: [215, 438],
     prompt: { cx: 480, cy: 640, w: 400, h: 76 },
-    thread: { x: 260, y: 790, w: 210 }, bubble: [280, 628],
+    thread: { x: 260, y: 790, w: 210 }, bubble: [305, 645],
     yaml: { x: 40, y: 290, w: 1000, size: 22, headX: 70, headY: 130 },
     pills: { cx: 540, y: 379, size: 34, w: 880, h: 90, gap: 26 },
     end: { mode: 'stack', cx: 540, cy: 400, mark: 300, word: 96, hook: 40, cat: 26, catWrap: true },
@@ -149,12 +149,18 @@ function hexPoints(cx, cy, r) {
 }
 function fit(t, maxW) {
   const w = t.getComputedTextLength();
-  if (w > maxW) t.setAttribute('font-size', (parseFloat(t.getAttribute('font-size')) * maxW / w).toFixed(1));
+  if (w > maxW) shrink(t, maxW / w);
+}
+// Records the size a line was set at, so a review can find every line that fit() had to shrink (data-shrunk).
+function shrink(t, k) {
+  const size = parseFloat(t.getAttribute('font-size'));
+  if (!t.hasAttribute('data-shrunk')) t.setAttribute('data-shrunk', size);
+  t.setAttribute('font-size', (size * k).toFixed(1));
 }
 // fit() for a text of several tspans: the widest line sets the size, not the sum of the lines.
 function fitLines(t, maxW) {
   const w = Math.max(...[...t.querySelectorAll('tspan')].map(sp => sp.getComputedTextLength()));
-  if (w > maxW) t.setAttribute('font-size', (parseFloat(t.getAttribute('font-size')) * maxW / w).toFixed(1));
+  if (w > maxW) shrink(t, maxW / w);
 }
 // Greedy word wrap, measured with the real font.
 function wrap(text, attrs, maxW, parent) {
@@ -171,8 +177,17 @@ function wrap(text, attrs, maxW, parent) {
   return lines;
 }
 
-// One line if it fits; otherwise two. A break after a comma wins when both halves fit and neither is under half the
-// other (no one-word line); else the break that keeps the longer line shortest.
+// wrap() with even lines: the same number of lines as a greedy wrap, at the narrowest width that still gives that
+// many, so a caption never ends on a short last line ("An alert opens a / session.").
+function wrapEven(text, attrs, maxW, parent) {
+  const n = wrap(text, attrs, maxW, parent).length;
+  if (n < 2) return [text];
+  let lo = 0, hi = maxW;
+  for (let i = 0; i < 14; i++) { const mid = (lo + hi) / 2; if (wrap(text, attrs, mid, parent).length <= n) hi = mid; else lo = mid; }
+  return wrap(text, attrs, hi, parent);
+}
+// One line if it fits; otherwise two. A break after a comma wins when both halves fit and the shorter is at least
+// 40% of the longer (no stranded "kagent,"); else the break that keeps the longer line shortest.
 function balance(text, attrs, maxW, parent) {
   const probe = el('text', attrs, parent), width = s => { probe.textContent = s; return probe.getComputedTextLength(); };
   const words = text.split(' ');
@@ -180,7 +195,7 @@ function balance(text, attrs, maxW, parent) {
   if (bestW > maxW) for (let i = 1; i < words.length; i++) {
     const a = words.slice(0, i).join(' '), b = words.slice(i).join(' '), wa = width(a), wb = width(b), m = Math.max(wa, wb);
     if (best.length === 1 || m < bestW) { best = [a, b]; bestW = m; }
-    if (a.endsWith(',') && m <= maxW && Math.min(wa, wb) >= m * 0.5 && (!comma || m < comma.m)) comma = { lines: [a, b], m };
+    if (a.endsWith(',') && m <= maxW && Math.min(wa, wb) >= m * 0.4 && (!comma || m < comma.m)) comma = { lines: [a, b], m };
   }
   probe.remove();
   return comma ? comma.lines : best;
@@ -309,7 +324,7 @@ if (OVERLAY) {
   const capX = Number(Q.get('capx')), capY = Number(Q.get('capy')), capW = Number(Q.get('capw')), anchor = Q.get('capalign') || 'start';
   const capAttrs = { 'font-size': P.size, 'font-weight': 700, 'letter-spacing': -0.02 * P.size };
   const subAttrs = { 'font-size': P.sub, 'font-weight': 400 };
-  const capLines = wrap(cap, capAttrs, capW, svg), subLines = sub ? wrap(sub, subAttrs, capW, svg) : [];
+  const capLines = wrapEven(cap, capAttrs, capW, svg), subLines = sub ? wrapEven(sub, subAttrs, capW, svg) : [];
   const blockH = capLines.length * P.size * 1.16 + (subLines.length ? P.sub * 0.25 + subLines.length * P.sub * 1.3 : 0);
   let y = Q.get('capvc') ? capY - blockH / 2 + P.size * 0.8 : capY;
   for (const line of capLines) {

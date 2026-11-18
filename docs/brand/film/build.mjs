@@ -1,6 +1,7 @@
 // Builds the v2 film: motion graphics from film.html, real footage from raw/, narration from audio/.
 //
 //   node build.mjs stills [16x9 ...]           review stills of every motion-graphics segment and footage frame
+//   node build.mjs fitcheck [16x9 ...]         list every motion-graphics line that had to shrink to fit its width
 //   node build.mjs demo [16x9 9x16 1x1]        the demo cut
 //   node build.mjs teaser [16x9 9x16 1x1]      the 20-second teaser
 //   node build.mjs sheets                      contact sheets and posters from the finished files in out/
@@ -203,7 +204,8 @@ async function buildCut(browser, name, ar) {
   console.log(`wrote ${file} (${at.toFixed(1)} s)`);
 }
 
-// One still per motion-graphics segment and one footage frame per rec beat, to look at before a full build.
+// One still per motion-graphics segment and one footage frame per shot of every rec beat, demo and teaser, to look at
+// before a full build.
 async function stills(browser, ars) {
   const dir = join(WORK, 'stills');
   await mkdir(dir, { recursive: true });
@@ -214,7 +216,7 @@ async function stills(browser, ars) {
       await page.screenshot({ path: join(dir, `${ar}-${seg}-${t}.png`) });
       await page.close();
     }
-    for (const [beat, j] of DEMO.filter(b => b.rec).flatMap(b => b.shots.map((_, j) => [b, j]))) {
+    for (const [beat, j] of [...DEMO, ...TEASER].filter(b => b.rec).flatMap(b => b.shots.map((_, j) => [b, j]))) {
       const shot = shotFor(ar, beat.shots[j]), base = join(dir, `${ar}-${beat.rec}-${j}`);
       const card = await renderOverlay(browser, ar, beat, shot, `${base}-overlay.png`);
       const one = [shot[0], shot[1] + shot[2] * 0.8, 0.2, 0.2, shot[4], shot[5], shot[6]];
@@ -222,6 +224,19 @@ async function stills(browser, ars) {
       run(FFMPEG, ['-y', '-loglevel', 'error', '-nostdin', '-i', `${base}.mp4`, '-frames:v', '1', `${base}.png`]);
     }
     console.log(`stills for ${ar} in ${dir}`);
+  }
+}
+
+// Lines film.html shrank to fit (it marks them data-shrunk with the size they were set at). A headline line that
+// shrinks while its neighbours do not reads as a mistake: break it differently in COPY instead. Pills shrink together.
+async function fitcheck(browser, ars) {
+  const segs = [...new Set([...DEMO, ...TEASER].filter(b => b.mg).map(b => b.mg))];
+  for (const ar of ars) for (const seg of segs) {
+    const page = await openPage(browser, ar, { seg, t: 30, ...(seg === 'close' ? { endAt: 13.2 } : {}) });
+    const lines = await page.evaluate(() => [...document.querySelectorAll('[data-shrunk]')]
+      .map(t => `${t.textContent} (${t.getAttribute('data-shrunk')} -> ${t.getAttribute('font-size')})`));
+    for (const l of lines) console.log(`${ar} ${seg}: ${l}`);
+    await page.close();
   }
 }
 
@@ -285,6 +300,7 @@ else {
   const browser = await chromium.launch();
   try {
     if (cmd === 'stills') await stills(browser, ars);
+    else if (cmd === 'fitcheck') await fitcheck(browser, ars);
     else if (cmd === 'storyboard') await storyboard(browser);
     else if (CUTS[cmd]) for (const ar of ars) await buildCut(browser, cmd, ar);
     else throw new Error(`unknown command ${cmd}`);
