@@ -128,3 +128,8 @@ func (s *Source) PlatformCheckForTest(b *v1alpha1.Binding) (config.RejectionReas
 	defer s.mu.Unlock()
 	return s.platformCheck(nil)(b)
 }
+
+// SetPlatformsForTest replaces the rules that a read holds a valid Binding to on its connection's platform (platformCheck), before
+// Start. Slack, the only platform, serves every feature and Validate holds its shapes, so a test that needs the check to refuse a
+// Binding gives rules of its own.
+func (s *Source) SetPlatformsForTest(platforms config.PlatformRules) { s.platforms = platforms }

@@ -170,7 +170,7 @@ func TestRefusedOnPlatform(t *testing.T) {
 	tests := []struct {
 		name        string
 		mutate      func(*Set)
-		platforms   platformRules
+		platforms   PlatformRules
 		wantReason  RejectionReason
 		wantMessage string
 	}{
@@ -192,15 +192,10 @@ func TestRefusedOnPlatform(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			set := specSet(t)
 			tc.mutate(set)
-			reason, message := refusedOnPlatform(sreAlerts(set), &set.ChatConnections[0], tc.platforms)
+			reason, message := RefusedOnPlatform(sreAlerts(set), &set.ChatConnections[0], tc.platforms)
 			if reason != tc.wantReason || message != tc.wantMessage {
-				t.Errorf("refusedOnPlatform = %q, %q; want %q, %q", reason, message, tc.wantReason, tc.wantMessage)
+				t.Errorf("RefusedOnPlatform = %q, %q; want %q, %q", reason, message, tc.wantReason, tc.wantMessage)
 			}
 		})
-	}
-	set := specSet(t)
-	sreAlerts(set).Spec.Chat.Triggers[1].From.ID = "alertmanager"
-	if reason, message := RefusedOnPlatform(sreAlerts(set), &set.ChatConnections[0]); reason != ReasonInvalidPlatformID || message != sender {
-		t.Errorf("RefusedOnPlatform = %q, %q; want the rules of v1alpha1.ChatPlatformOf", reason, message)
 	}
 }
