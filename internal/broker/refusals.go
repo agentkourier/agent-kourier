@@ -10,9 +10,21 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/config"
 )
 
-// refusedMessage is why a connection's Bindings are told the connection is not served when it is a second connection of a Slack app that the
-// broker serves already. It names no other connection: the Bindings that read it may be in a namespace the other connection is not.
-const refusedMessage = "another ChatConnection of the same Slack app is older and is the one this broker serves, and an app is served once"
+// refusedMessage is why a connection's Bindings are told the connection is not served when it is a second connection of an app of platform
+// (a Slack app, say) that the broker serves already. It names no other connection: the Bindings that read it may be in a namespace the other
+// connection is not.
+func refusedMessage(platform string) string {
+	return "another ChatConnection of the same " + appOf(platform) + " is older and is the one this broker serves, and an app is served once"
+}
+
+// appOf names an app of platform as the broker's messages say it: "Slack app", "Microsoft Teams app", and "app" for a platform the API does
+// not know. The name is the platform's alone; the empty spec.teams is there only because ChatPlatformOf knows no Teams connection without one.
+func appOf(platform string) string {
+	if p, ok := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: platform, Teams: &v1alpha1.TeamsConnectionSpec{}}); ok {
+		return p.Name + " app"
+	}
+	return "app"
+}
 
 // refusals are the ChatConnections that the broker holds in its Snapshot and does not run because they are a second connection of a Slack app
 // (spec D52), with why. The Snapshot serves their Bindings, so the status writer would call them accepted; overlay adds the rejection that says

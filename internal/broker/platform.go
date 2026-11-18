@@ -62,16 +62,22 @@ type platformSpec struct {
 
 // platformFor is the one place that names a platform: a platform is a case here, with its identity call, one in newPlatform for its
 // adapter, and its keys in v1alpha1.CredentialKeys. One that is not here has no adapter, and a ChatConnection of it is a wiring error. It
-// is a func and not a table, so that there is no state to change. Microsoft Teams has no identity call yet: its connections have the
-// zero identity, so two of one bot are not told apart.
+// is a func and not a table, so that there is no state to change.
 func platformFor(name string) (platformSpec, bool) {
 	switch name {
 	case v1alpha1.PlatformSlack:
 		return platformSpec{Identify: slackIdentityOf}, true
 	case v1alpha1.PlatformTeams:
-		return platformSpec{}, true
+		return platformSpec{Identify: teamsIdentityOf}, true
 	}
 	return platformSpec{}, false
+}
+
+// teamsIdentityOf is Microsoft Teams' identity call (platformSpec.Identify), which asks Teams nothing: a Teams bot is its Entra app, which
+// spec.teams.appID names, and its Teams ID is 28:<app ID>. Two connections of one app are then one app to the supervisor, and the older
+// serves it, as two of one Slack app do. Whether the client secret is the app's is for the connection's run to find (a FatalAuth).
+func teamsIdentityOf(_ context.Context, _ RunConfig, conn Connection) (appIdentity, error) {
+	return appIdentity{App: conn.Teams.AppID, Bot: "28:" + conn.Teams.AppID}, nil
 }
 
 // actorPlatform is the platform a ChatConnection's users are on, as the dialects attribute a turn to them: the ID is

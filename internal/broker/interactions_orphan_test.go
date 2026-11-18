@@ -214,7 +214,7 @@ func TestTheInteractionOfARefusedConnectionIsEndedAndOfOneThatIsDownIsKept(t *te
 		t.Errorf("the session records task %q; want the pause left alone", got)
 	}
 
-	r.refused.set(map[string]string{downTeam: refusedMessage}) // the supervisor finds it the second connection of an app
+	r.refused.set(map[string]string{downTeam: refusedMessage(v1alpha1.PlatformSlack)}) // the supervisor finds it the second connection of an app
 	r.sweep(t)
 	if got := r.state(t, "ix-team"); got != store.InteractionPending {
 		t.Fatalf("the interaction is %s at the first sight of the refusal; want it pending: the older connection may go", got)
@@ -289,7 +289,7 @@ func TestTheLeaderTellsTheSweepWhichConnectionsAreRefused(t *testing.T) {
 	if !r.served("team-a/slack") {
 		t.Error("a connection nobody refused is not served")
 	}
-	r.set(map[string]string{"team-a/slack": refusedMessage})
+	r.set(map[string]string{"team-a/slack": refusedMessage(v1alpha1.PlatformSlack)})
 	if r.served("team-a/slack") || !r.served("team-b/slack") {
 		t.Errorf("served = %v for the refused connection and %v for another; want false and true", r.served("team-a/slack"), r.served("team-b/slack"))
 	}
@@ -368,7 +368,7 @@ func TestConnectionServedIsWhatTheConfigAndTheSupervisorSay(t *testing.T) {
 		{"before the first load", "ns/b", nil, nil, true},
 		{"in the config", "ns/b", snap, nil, true},
 		{"not in the config", "ns/gone", snap, nil, false},
-		{"refused", "ns/c", snap, map[string]string{"ns/c": refusedMessage}, false},
+		{"refused", "ns/c", snap, map[string]string{"ns/c": refusedMessage(v1alpha1.PlatformSlack)}, false},
 		{"the own, whatever the config has", "ns/own", snap, nil, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -386,7 +386,7 @@ func TestConnectionServedIsWhatTheConfigAndTheSupervisorSay(t *testing.T) {
 func TestConnectionServedWithNoOwnConnectionServesNoEmptyName(t *testing.T) {
 	snap := connectionsConfig(t, "http://agent.test", "ns/b", "ns/b", "ns/c")
 	refused := &refusals{}
-	refused.set(map[string]string{"ns/c": refusedMessage})
+	refused.set(map[string]string{"ns/c": refusedMessage(v1alpha1.PlatformSlack)})
 	served := connectionServed(func() config.Report { return config.Report{Snapshot: snap} }, "", refused)
 	for conn, want := range map[string]bool{"": false, "ns/b": true, "ns/c": false, "ns/gone": false} {
 		if got := served(conn); got != want {

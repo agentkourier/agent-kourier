@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/config"
 )
 
@@ -102,7 +103,7 @@ func TestTheBindingsOfARefusedSecondConnectionAreCounted(t *testing.T) {
 	sr.reconcile()
 	wantCount(t, m, "both connections are served", "0")
 
-	refused.set(map[string]string{teamConn: refusedMessage})
+	refused.set(map[string]string{teamConn: refusedMessage(v1alpha1.PlatformSlack)})
 	sr.pass()
 	wantCount(t, m, "the team connection is a second connection of an app", "1")
 
@@ -140,7 +141,7 @@ func TestAServedFromAnOlderGenerationBindingOfARefusedConnectionIsCountedByItsSt
 	sr := &servedRig{statusRig: rig, record: &recordedServed{}}
 	sr.serving(t, bothServed())
 	sr.reject(config.Rejection{Namespace: "team-a", Name: "on-a", Reason: config.ReasonInvalidSpec, Generation: 2, Served: 1, Message: "spec.chat.channel: is invalid"})
-	refused.set(map[string]string{teamConn: refusedMessage})
+	refused.set(map[string]string{teamConn: refusedMessage(v1alpha1.PlatformSlack)})
 	sr.reconcile()
 	m.ConfigReport(source)
 

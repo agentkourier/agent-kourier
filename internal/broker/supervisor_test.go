@@ -1594,3 +1594,32 @@ func TestSupervisorStopsARunningConnectionEditedToWhatItCannotRun(t *testing.T) 
 		})
 	}
 }
+
+// A Microsoft Teams bot is its Entra app: its identity is the connection's spec.teams.appID, asked of no service, so of two Teams connections of
+// one app the older is served and the younger refused, as two of one Slack app are, and one of another app is served beside them.
+func TestSupervisorServesTheOlderConnectionOfATeamsApp(t *testing.T) {
+	const app, other = "22222222-3333-4444-8555-666666666666", "22222222-3333-4444-8555-777777777777"
+	id, err := RunConfig{}.identityOf(t.Context(), Connection{Platform: v1alpha1.PlatformTeams, Teams: v1alpha1.TeamsConnectionSpec{AppID: app}})
+	if want := (appIdentity{App: app, Bot: "28:" + app}); err != nil || id != want {
+		t.Fatalf("identityOf a teams connection = %+v, %v; want %+v", id, err, want)
+	}
+
+	w := newTeamOnlySupWorld(t)
+	w.sup.identify = func(ctx context.Context, c Connection) (appIdentity, error) { return RunConfig{}.identityOf(ctx, c) }
+	teamsOf := func(name, appID string, age int) TeamConnection {
+		c := teamOn(v1alpha1.PlatformTeams, name, 1, "secret-"+name, age)
+		c.Teams = v1alpha1.TeamsConnectionSpec{TenantID: "11111111-2222-4333-8444-555555555555", AppID: appID, Mode: v1alpha1.TeamsModeHTTP}
+		return c
+	}
+	older, younger, another := teamsOf("team-a/teams", app, 1), teamsOf("team-b/teams", app, 2), teamsOf("team-c/teams", other, 3)
+	w.reconcile(older, younger, another) // oldest first, as the Snapshot gives them
+	if got := w.running(); !slices.Equal(got, []string{"team-a/teams", "team-c/teams"}) {
+		t.Errorf("running = %v; want the older connection of the app, and the one of another app", got)
+	}
+	if got := w.sup.refusals.names(); !slices.Equal(got, []string{"team-b/teams"}) {
+		t.Errorf("refused = %v; want the younger connection of the app", got)
+	}
+	if want := `msg="the ChatConnection is not served: it uses the same Microsoft Teams app as the older ChatConnection team-a/teams, and an app is served once" connection=team-b/teams`; !strings.Contains(w.logs.String(), want) {
+		t.Errorf("the logs do not say %s:\n%s", want, w.logs.String())
+	}
+}
