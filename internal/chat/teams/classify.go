@@ -15,19 +15,24 @@ import (
 
 // goneCodes are the Bot Connector's codes of a 403 that refuses one conversation, not the bot: the bot was removed from the team
 // (BotNotInConversationRoster), or the person blocked it (ConversationBlockedByUser). They are Permanent, as a conversation that is
-// gone is, and not FatalAuth, which would stop the connection for every other channel. The codes are Microsoft's documented ones
-// (Teams' bot API error reference), not measured.
+// gone is, and not FatalAuth, which would stop the connection for every other channel. disabledCode is the one 403 that refuses the
+// bot itself, in its tenant: an admin disabled the app (BotDisabledByAdmin), which is FatalAuth. Every other 403
+// (ForbiddenOperationException, InvalidBotApiHost, NotEnoughPermissions, or a code not listed) refuses one call, and is Permanent
+// with no more said. The codes are Microsoft's documented ones ("Status codes from agent conversational APIs" in Teams' platform
+// documentation, read 2026-11-18), not measured.
 var goneCodes = map[string]bool{"BotNotInConversationRoster": true, "ConversationBlockedByUser": true}
+
+const disabledCode = "BotDisabledByAdmin"
 
 // gone403 says whether ae is a 403 of goneCodes.
 func gone403(ae *APIError) bool { return ae.Status == http.StatusForbidden && goneCodes[ae.Code] }
 
 // Classify implements chat.Platform. What no retry mends:
-//   - Entra's refusal of the bot's token (400, 401) and the Bot Connector's of the call (401, and a 403 other than goneCodes) are
-//     FatalAuth: the app, its secret or its tenant is wrong, or the bot is not the Bot Framework's;
+//   - Entra's refusal of the bot's token (400, 401) and the Bot Connector's of the bot (401, and a 403 BotDisabledByAdmin) are
+//     FatalAuth: the app, its secret or its tenant is wrong, the bot is not the Bot Framework's, or an admin disabled it;
 //   - a conversation or a message that is not there (404, ActivityNotFoundInConversation and the like) and a 403 of goneCodes are
 //     Permanent, ReasonChannelGone; a message too large (413, MessageSizeTooBig) is ReasonTooLong; any other 400 is
-//     ReasonInvalidContent;
+//     ReasonInvalidContent; any other 403 is ReasonOther;
 //   - the errors of the Client itself: chat.ErrInvalid, chat.ErrTooLarge, chat.ErrWouldDropText, chat.ErrNoEphemeral,
 //     chat.ErrNoReactions, and for ChannelAccess chat.ErrChannelNotFound.
 //
@@ -55,8 +60,10 @@ func (c *Client) Classify(_ chat.Op, err error) chat.Verdict {
 		switch {
 		case gone403(ae), ae.Status == http.StatusNotFound:
 			return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonChannelGone, Code: ae.Code}
-		case ae.Status == http.StatusUnauthorized, ae.Status == http.StatusForbidden:
+		case ae.Status == http.StatusUnauthorized, ae.Status == http.StatusForbidden && ae.Code == disabledCode:
 			return chat.Verdict{Class: chat.FatalAuth, Code: ae.Code}
+		case ae.Status == http.StatusForbidden:
+			return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonOther, Code: ae.Code}
 		case ae.Status == http.StatusRequestEntityTooLarge:
 			return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonTooLong, Code: ae.Code}
 		case ae.Status == http.StatusBadRequest:
