@@ -159,15 +159,16 @@ func (t *threadContext) build(ctx context.Context, key session.Key, binding, aft
 // the thread stays out, a person's replies and other apps' alike. On a platform that does not carry roots, and for a connection that
 // is not running, whose platform cannot say whether it does, it returns "" with no outcome: nothing is read, logged or counted.
 //
-// The thread is read from its start up to the mention, for one reply, which is left out: the reader has no read of the root alone.
-// A thread too long to read that came back with its root has given all that the turn carries.
+// The root is read alone where the platform can (chat.RootReader: one call on Microsoft Teams), and otherwise from the thread's start
+// up to the mention, for one reply, which is left out (readRoot). A thread too long to read that came back with its root has given all
+// that the turn carries.
 func (t *threadContext) root(ctx context.Context, key session.Key, binding, before string) (section, outcome string) {
 	pl, err := t.platforms.Platform(key.Connection)
 	if err != nil || !pl.Capabilities().RootContext {
 		return "", ""
 	}
 	target := chat.Target{Conn: key.Connection, Channel: key.Channel, Thread: key.Thread}
-	msgs, _, err := t.read(ctx, pl, target, "", before, true, 1)
+	msgs, err := t.readRoot(ctx, pl, target, before)
 	tooLong := errors.Is(err, chat.ErrThreadTooLong) && len(msgs) > 0 // the root came back with the error
 	switch {
 	case errors.Is(err, chat.ErrNoThreadReads):
@@ -190,6 +191,62 @@ func (t *threadContext) root(ctx context.Context, key session.Key, binding, befo
 	return section, threadRead
 }
 
+// readRoot reads the message that opened the thread target, first of what it returns: alone, in one call of the platform's, where the
+// platform reads a root alone (chat.RootReader, which the lease fence passes through), and otherwise as the start of the thread up to
+// before, for one reply. A short rate limit is waited out once, as read waits it out; a root that is gone is nothing.
+func (t *threadContext) readRoot(ctx context.Context, pl chat.Platform, target chat.Target, before string) ([]chat.HistoryMessage, error) {
+	rr, ok := rootReaderOf(pl)
+	if !ok {
+		msgs, _, err := t.read(ctx, pl, target, "", before, true, 1)
+		return msgs, err
+	}
+	once := func() ([]chat.HistoryMessage, error) {
+		m, found, err := rr.ThreadRoot(ctx, target)
+		if err != nil || !found {
+			return nil, err
+		}
+		return []chat.HistoryMessage{m}, nil
+	}
+	msgs, err := once()
+	if wait, ok := t.shortWait(pl, err); ok {
+		if err := t.wait(ctx, wait); err != nil {
+			return nil, err
+		}
+		return once()
+	}
+	return msgs, err
+}
+
+// rootReaderOf is p's read of a thread's root alone (chat.RootReader), through the lease fence, which checks writes and passes reads
+// through, and false if p has none.
+func rootReaderOf(p chat.Platform) (chat.RootReader, bool) {
+	if f, ok := p.(fencedPlatform); ok {
+		p = f.Platform
+	}
+	rr, ok := p.(chat.RootReader)
+	return rr, ok
+}
+
+// shortWait is the wait that the platform asked for after the read that failed with err, if it is one that the read waits out once: a
+// rate limit of at most threadRateWaitMax. Any other error, ErrNoThreadReads and ErrThreadTooLong among them, is no wait.
+func (t *threadContext) shortWait(pl chat.Platform, err error) (time.Duration, bool) {
+	if err == nil || errors.Is(err, chat.ErrNoThreadReads) || errors.Is(err, chat.ErrThreadTooLong) {
+		return 0, false
+	}
+	wait := pl.Classify(chat.OpOther, err).RetryAfter
+	return wait, wait > 0 && wait <= threadRateWaitMax
+}
+
+// wait waits for d, or until ctx ends, which is its error.
+func (t *threadContext) wait(ctx context.Context, d time.Duration) error {
+	select {
+	case <-t.after(d):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // read reads the window, the newest limit of it, from the thread's start if fromStart says so, and once more if the platform said to
 // wait a few seconds: a rate limit that asks for up to threadRateWaitMax is waited out once; any other error, a longer wait, or a
 // second refusal is the caller's to do without.
@@ -201,17 +258,12 @@ func (t *threadContext) read(ctx context.Context, pl chat.Platform, target chat.
 		return pl.ThreadBetween(ctx, target, after, before, limit)
 	}
 	msgs, dropped, err := once()
-	if err == nil || errors.Is(err, chat.ErrNoThreadReads) || errors.Is(err, chat.ErrThreadTooLong) {
+	wait, ok := t.shortWait(pl, err)
+	if !ok {
 		return msgs, dropped, err
 	}
-	wait := pl.Classify(chat.OpOther, err).RetryAfter
-	if wait <= 0 || wait > threadRateWaitMax {
-		return msgs, dropped, err
-	}
-	select {
-	case <-t.after(wait):
-	case <-ctx.Done():
-		return nil, 0, ctx.Err()
+	if err := t.wait(ctx, wait); err != nil {
+		return nil, 0, err
 	}
 	return once()
 }

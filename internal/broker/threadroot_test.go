@@ -7,8 +7,10 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/render"
 )
 
@@ -243,4 +245,121 @@ func TestThreadContextOfTheRootIsTheRendersBlock(t *testing.T) {
 	if want := render.ThreadRoot(render.ThreadReply{UserID: "U1", Name: "Ada", Text: "what opened it"}); got != want {
 		t.Errorf("section:\n%s\nwant:\n%s", got, want)
 	}
+}
+
+// rootReading is a rootedReader that also reads the root alone (chat.RootReader): it answers with root, or not found when gone, after
+// the errors of script, one for each call. It counts its calls.
+type rootReading struct {
+	*rootedReader
+	gone   bool
+	script []error
+	calls  int
+}
+
+func (r *rootReading) ThreadRoot(_ context.Context, t chat.Target) (chat.HistoryMessage, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls++
+	if t.Thread != tcThread {
+		return chat.HistoryMessage{}, false, fmt.Errorf("a read of thread %q", t.Thread)
+	}
+	if len(r.script) > 0 {
+		err := r.script[0]
+		r.script = r.script[1:]
+		if err != nil {
+			return chat.HistoryMessage{}, false, err
+		}
+	}
+	if r.gone {
+		return chat.HistoryMessage{}, false, nil
+	}
+	return r.root, true, nil
+}
+
+func (r *rootReading) rootCalls() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
+}
+
+// A platform that reads a thread's root alone (chat.RootReader) is asked for it in one call, and its thread is not read, through the
+// lease fence too, which passes reads through: Microsoft Teams reads the root with one request, where a read from the thread's start
+// would page through every reply.
+func TestThreadContextReadsTheRootAloneWhereThePlatformCan(t *testing.T) {
+	for name, wrap := range map[string]func(chat.Platform) chat.Platform{
+		"unwrapped, as with SQLite":   func(p chat.Platform) chat.Platform { return p },
+		"fenced, as with an election": func(p chat.Platform) chat.Platform { return fencedPlatform{Platform: p} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newTCWorld(t)
+			w.carriesRoots()
+			w.win.window = []chat.HistoryMessage{msg(3, "U1", "a reply")}
+			r := &rootReading{rootedReader: &rootedReader{windowReader: w.win, root: opener(botPost(1, "", chat.BotMessage{ID: appID, Body: "FIRING"}, ""))}}
+			got := w.rootFirstTurn(wrap(r))
+			if want := []entry{{"", appID, "FIRING"}}; fmt.Sprint(entries(got)) != fmt.Sprint(want) {
+				t.Errorf("entries = %+v; want %+v", entries(got), want)
+			}
+			if r.rootCalls() != 1 || len(w.win.reads()) != 0 {
+				t.Errorf("%d root reads and thread reads %+v; want one root read and no thread read", r.rootCalls(), w.win.reads())
+			}
+		})
+	}
+}
+
+// Through a platform that reads the root alone: a root that is gone is nothing, a refusal is the line, a short rate limit is waited out
+// once, and a platform that cannot read a thread is the message alone.
+func TestThreadContextOfARootReadAlone(t *testing.T) {
+	root := opener(botPost(1, "", chat.BotMessage{ID: appID, Body: "FIRING"}, ""))
+	world := func(t *testing.T) (*tcWorld, *rootReading) {
+		w := newTCWorld(t)
+		w.carriesRoots()
+		return w, &rootReading{rootedReader: &rootedReader{windowReader: w.win, root: root}}
+	}
+	t.Run("gone", func(t *testing.T) {
+		w, r := world(t)
+		r.gone = true
+		if got := w.rootFirstTurn(r); got != "" {
+			t.Errorf("section = %q; want nothing", got)
+		}
+		if o := w.outcomes(); fmt.Sprint(o) != fmt.Sprint(map[string]float64{tcBinding + " empty": 1}) {
+			t.Errorf("outcomes = %v; want one empty", o)
+		}
+	})
+	t.Run("refused", func(t *testing.T) {
+		w, r := world(t)
+		r.script = []error{&chattest.FakeError{Verdict: chat.Verdict{Class: chat.Permanent}, Msg: "forbidden"}}
+		if got := w.rootFirstTurn(r); got != threadReadFailed {
+			t.Errorf("section = %q; want the line", got)
+		}
+		if r.rootCalls() != 1 || len(w.waited()) != 0 {
+			t.Errorf("%d reads after %v; want one and no wait", r.rootCalls(), w.waited())
+		}
+	})
+	t.Run("rate limited once", func(t *testing.T) {
+		w, r := world(t)
+		r.script = []error{&chattest.FakeError{Verdict: chat.Verdict{Class: chat.Transient, RetryAfter: 2 * time.Second}, Msg: "limited"}}
+		if got := w.rootFirstTurn(r); !strings.Contains(got, "FIRING") {
+			t.Errorf("section = %q; want the root", got)
+		}
+		if r.rootCalls() != 2 || fmt.Sprint(w.waited()) != fmt.Sprint([]time.Duration{2 * time.Second}) {
+			t.Errorf("%d reads after %v; want two after one wait of 2s", r.rootCalls(), w.waited())
+		}
+	})
+	t.Run("rate limited past the longest wait", func(t *testing.T) {
+		w, r := world(t)
+		r.script = []error{&chattest.FakeError{Verdict: chat.Verdict{Class: chat.Transient, RetryAfter: threadRateWaitMax + time.Second}, Msg: "limited"}}
+		if got := w.rootFirstTurn(r); got != threadReadFailed || r.rootCalls() != 1 {
+			t.Errorf("section = %q after %d reads; want the line after one", got, r.rootCalls())
+		}
+	})
+	t.Run("no thread reads", func(t *testing.T) {
+		w, r := world(t)
+		r.script = []error{fmt.Errorf("teams: %w", chat.ErrNoThreadReads)}
+		if got := w.rootFirstTurn(r); got != "" {
+			t.Errorf("section = %q; want nothing", got)
+		}
+		if o := w.outcomes(); fmt.Sprint(o) != fmt.Sprint(map[string]float64{tcBinding + " unsupported": 1}) {
+			t.Errorf("outcomes = %v; want one unsupported", o)
+		}
+	})
 }

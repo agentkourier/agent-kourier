@@ -107,6 +107,17 @@ type ThreadReader interface {
 	ThreadFromStart(ctx context.Context, t Target, before string, limit int) (msgs []HistoryMessage, dropped int, err error)
 }
 
+// RootReader is an optional interface of a ThreadReader that reads the message that opened a thread alone, in fewer calls than
+// ThreadFromStart, which reads the replies with it: what the first turn of a session that a person's mention opened inside a thread
+// carries (Caps.RootContext, spec 8.2, D55). A caller that finds a platform without it reads ThreadFromStart and keeps its first
+// message.
+type RootReader interface {
+	// ThreadRoot returns the message that opened the thread t.Thread, decoded as ThreadFromStart decodes it, and false, with no
+	// error, if the platform no longer has it. Its errors are a ThreadReader's: ErrNoThreadReads for a platform that cannot read a
+	// thread, ErrInvalid for a target that names no thread, and the platform's own, which Classify reads (OpOther).
+	ThreadRoot(ctx context.Context, t Target) (msg HistoryMessage, found bool, err error)
+}
+
 // Sink receives what Platform.Run decodes. A platform may call it from several goroutines at once, so a Sink is safe for
 // concurrent use; a platform keeps the events of one channel in order and calls for one channel one at a time.
 type Sink interface {

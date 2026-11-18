@@ -56,6 +56,46 @@ func (c *Client) ThreadFromStart(ctx context.Context, t chat.Target, before stri
 	return append([]chat.HistoryMessage{*root}, msgs...), dropped, err
 }
 
+// ThreadRoot implements chat.RootReader: the message that opened the thread t.Thread, read with GET …/messages/{root} alone, the one
+// call that ThreadFromStart begins with, decoded as it decodes it (historyOf), within threadTimeout. A root that Graph says is not there
+// (404) is not found, with no error. The bounds and errors are ThreadBetween's: a target with no channel, or a thread that is not a
+// Teams message ID, is chat.ErrInvalid with no call; a channel whose team is not known is errTeamNotKnown; Graph's refusals are
+// *GraphError, which Classify reads. It is counted as ThreadRoot.
+func (c *Client) ThreadRoot(ctx context.Context, t chat.Target) (msg chat.HistoryMessage, found bool, err error) {
+	if t.Channel == "" || !isMessageID(t.Thread) {
+		return chat.HistoryMessage{}, false, fmt.Errorf("teams thread root read: %w: a channel and a thread's message ID", chat.ErrInvalid)
+	}
+	ctx, op := telemetry.Start(ctx, "agentkourier.chat.ThreadRoot")
+	defer func() { c.finish(ctx, op, "ThreadRoot", err) }()
+	ctx, cancel := context.WithTimeout(ctx, c.threadTimeout)
+	defer cancel()
+	group, err := c.teamGroup(ctx, t.Channel)
+	if err != nil {
+		return chat.HistoryMessage{}, false, err
+	}
+	root, err := c.readRoot(ctx, group, t)
+	if err != nil || root == nil {
+		return chat.HistoryMessage{}, false, err
+	}
+	return *root, true, nil
+}
+
+// readRoot reads the message that opened the thread t.Thread in the team of group, and nil if Graph says it is not there (404).
+func (c *Client) readRoot(ctx context.Context, group string, t chat.Target) (*chat.HistoryMessage, error) {
+	var m graphMessage
+	switch err := c.graph.get(ctx, c.graph.resource("teams", group, "channels", t.Channel, "messages", t.Thread), &m); {
+	case err == nil && m.ID == t.Thread:
+		r := c.historyOf(t.Channel, t.Thread, m)
+		return &r, nil
+	case err == nil:
+		return nil, errors.New("teams: Microsoft Graph answered the thread's first message with another")
+	case isNotFound(err):
+		return nil, nil
+	default:
+		return nil, err
+	}
+}
+
 // readThread is the read of ThreadBetween and ThreadFromStart: root is the thread's first message, read when withRoot is set.
 func (c *Client) readThread(ctx context.Context, t chat.Target, after, before string, limit int, withRoot bool) (root *chat.HistoryMessage,
 	msgs []chat.HistoryMessage, dropped int, err error) {
@@ -76,14 +116,7 @@ func (c *Client) readThread(ctx context.Context, t chat.Target, after, before st
 		return nil, nil, 0, err
 	}
 	if withRoot {
-		var m graphMessage
-		switch err := c.graph.get(ctx, c.graph.resource("teams", group, "channels", t.Channel, "messages", t.Thread), &m); {
-		case err == nil && m.ID == t.Thread:
-			r := c.historyOf(t.Channel, t.Thread, m)
-			root = &r
-		case err == nil:
-			return nil, nil, 0, errors.New("teams: Microsoft Graph answered the thread's first message with another")
-		case !isNotFound(err):
+		if root, err = c.readRoot(ctx, group, t); err != nil {
 			return nil, nil, 0, err
 		}
 	}
