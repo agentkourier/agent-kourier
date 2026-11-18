@@ -183,7 +183,8 @@ func TestThreadContextIsAskedOnlyWhereItBelongs(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f, sink, hook := thread(t, tc.mode, tc.previous)
 			if tc.roots {
-				f.rootContext, hook.root = true, rootSection
+				f.rootContext.Store(true)
+				hook.root = rootSection
 			}
 			if tc.noop {
 				f.m.cfg.ThreadContext = NoThreadContext
@@ -334,7 +335,8 @@ func TestTheRootIsAskedTheSameAcrossResendsAndARestart(t *testing.T) {
 	rootCall := windowCall{key, "ns/b1", "", queuedRef, false}
 	t.Run("busy retries", func(t *testing.T) {
 		f, sink, hook := thread(t, v1alpha1.ThreadRepliesAll, false)
-		f.rootContext, hook.root = true, rootSection
+		f.rootContext.Store(true)
+		hook.root = rootSection
 		f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
 			if n < 2 {
 				return fmt.Errorf("send message: %w", agent.ErrBusy)
@@ -355,7 +357,8 @@ func TestTheRootIsAskedTheSameAcrossResendsAndARestart(t *testing.T) {
 	})
 	t.Run("a restart", func(t *testing.T) {
 		f, sink, hook := thread(t, v1alpha1.ThreadRepliesAll, false)
-		f.rootContext, hook.root = true, rootSection
+		f.rootContext.Store(true)
+		hook.root = rootSection
 		f.m.cfg.RetryBase, f.m.cfg.RetryMax = 20*time.Millisecond, 20*time.Millisecond
 		f.agent.script = func(context.Context, int, agent.Handler) error { return fmt.Errorf("send message: %w", agent.ErrBusy) }
 		f.enqueue(t, "turn", queuedRef, "U1", false)
@@ -391,6 +394,41 @@ func TestTheRootIsAskedTheSameAcrossResendsAndARestart(t *testing.T) {
 			t.Errorf("text before the restart %q and after %q; want the same, with the root", first, last)
 		}
 	})
+}
+
+// Whether a turn takes the thread's root is decided once for the turn, at its first send, and its resends after the agent was busy carry
+// what it carried, whatever the Backend says at the resend: a first turn sent while its connection was down (no RootContext) goes again
+// without the root, though the connection is back, and one sent with the root keeps it, though the connection is down.
+func TestATurnKeepsItsFirstDecisionOnTheRootAcrossResends(t *testing.T) {
+	for _, first := range []bool{false, true} {
+		t.Run(fmt.Sprintf("roots at the first send: %t", first), func(t *testing.T) {
+			f, sink, hook := thread(t, v1alpha1.ThreadRepliesAll, false)
+			hook.root = rootSection
+			f.rootContext.Store(first)
+			f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
+				if n == 0 {
+					f.rootContext.Store(!first) // the connection's platform changes before the resends
+					return fmt.Errorf("send message: %w", agent.ErrBusy)
+				}
+				return turn(h, n, a2a.TaskStateCompleted)
+			}
+			f.enqueue(t, "turn", queuedRef, "U1", false)
+			f.m.wake(key)
+			waitFinal(t, sink)
+			want, calls := "hello", 0
+			if first {
+				want, calls = "hello\n\n"+rootSection, 1
+			}
+			for n := range 2 {
+				if got := f.sentText(t, n); got != want {
+					t.Errorf("send %d = %q; want %q, as the first send", n, got, want)
+				}
+			}
+			if got := hook.seen(); len(got) != calls {
+				t.Errorf("hook calls = %+v; want %d", got, calls)
+			}
+		})
+	}
 }
 
 // countingPrevious counts the calls of PreviousReply, and fails each with err if it is set.
@@ -430,7 +468,7 @@ func TestATurnOfAllRepliesAsksTheStoreNothingWithoutRoots(t *testing.T) {
 	}
 	t.Run("roots are carried", func(t *testing.T) {
 		f, sink, _ := thread(t, v1alpha1.ThreadRepliesAll, true)
-		f.rootContext = true
+		f.rootContext.Store(true)
 		st := &countingPrevious{Store: f.st}
 		f.m.cfg.Store = st
 		f.enqueue(t, "turn", queuedRef, "U1", false)

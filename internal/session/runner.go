@@ -298,7 +298,7 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 	t := &tstate{key: key, c: c, r: r, sess: sess, b: backend}
 	send := func(ctx context.Context, h agent.Handler) error {
 		// Only a send carries the thread's context: the turn that is followed was sent before, with its own.
-		msg := m.message(withMentionPrompt(m.withThreadContext(ctx, c, r, sess.Binding, backend), sess, backend), sess, backend)
+		msg := m.message(withMentionPrompt(m.withThreadContext(ctx, c, r, sess.Binding), sess, backend), sess, backend)
 		if err := testhooks.BeforeSend(ctx, msg.ID); err != nil {
 			return err
 		}
@@ -407,11 +407,17 @@ func mayTakeRoot(r store.Reply, b Backend) bool {
 // between them carried no bot's post. A person's turn with no row before it that may take the thread's root (mayTakeRoot) has a
 // window with no lower bound, for the root (D55); in a Binding that is not mention-only, a later turn has none, as every reply was a
 // turn. It is read from stored rows, so it is the same on every attempt,
-// after a restart and after a failover. A turn with no row before it has no window. It runs before the turn is sent,
+// after a restart and after a failover. A turn with no row before it has no window. What a turn takes is decided at its first send
+// and kept for its resends, so a Backend that says otherwise at a resend (its connection's platform down, or back) changes nothing: a
+// turn that took no context then keeps none. It runs before the turn is sent,
 // where a store that fails waits like any other failure of the runner: the turn is never sent without its context,
 // which it could not be sent again with, and nothing tells the thread the agent cannot be reached.
 func (m *Manager) readWindow(ctx context.Context, c *convo, r store.Reply, b Backend) error {
-	if !m.wantsThreadContext(r, b) || c.window.id == r.ID {
+	switch {
+	case c.window.id == r.ID: // decided at the turn's first send: a resend carries what the first send carried
+		return nil
+	case !m.wantsThreadContext(r, b): // and stays so, should the Backend say otherwise at a resend (its connection back up)
+		c.window = windowText{id: r.ID, none: true}
 		return nil
 	}
 	previous := m.cfg.Store.PreviousReply
@@ -436,8 +442,8 @@ func (m *Manager) readWindow(ctx context.Context, c *convo, r store.Reply, b Bac
 // withThreadContext returns the turn r with the thread's context after the person's text (R18: one text part, the
 // dialect's attribution in front of it), or r as it was queued. The hook is called once for the turn, for the window
 // from readWindow's message to this turn's, and what it returned is kept, so a resend after -32004 does not ask again.
-func (m *Manager) withThreadContext(ctx context.Context, c *convo, r store.Reply, binding string, b Backend) store.Reply {
-	if !m.wantsThreadContext(r, b) || c.window.id != r.ID || c.window.none {
+func (m *Manager) withThreadContext(ctx context.Context, c *convo, r store.Reply, binding string) store.Reply {
+	if c.window.id != r.ID || c.window.none { // readWindow decided it for the turn, once
 		return r
 	}
 	if !c.window.asked {
