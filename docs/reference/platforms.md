@@ -118,8 +118,9 @@ The worker decides a press as it does on Slack: the person who pressed must be a
 Teams the broker reads the Bot Connector's list of the members of the channel's conversation, which Microsoft documents as the
 team's members for a team's channel, at every press, and finds the person by their Microsoft Entra object ID; someone the list does not hold is refused as
 not a member. Whether the person is a bot it reads from the account that list gave, or from the lists of the members of the teams
-it has heard from since it started: an account whose Teams ID begins `28:` is a bot's, and an ID no list holds counts as a bot's. A read that
-fails, or that is not done within 10 seconds ([Limits](limits.md)), is no answer: the press is tried again, with a line at WARN for
+it has heard from since it started: an account whose Teams ID begins `28:` is a bot's. A person whom no list holds, a read that
+fails, a read that is not done within 10 seconds, and one that would need more than 50 pages of the lists ([Limits](limits.md)) are no
+answer: the press is tried again, with a line at WARN for
 each try, until the worker gives up on it, an hour after it was recorded, and logs that at ERROR. The list's paging, the fields of its
 answer and its errors are what Microsoft documents: no list was read on a test tenant.
 
