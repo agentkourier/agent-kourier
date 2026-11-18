@@ -491,3 +491,24 @@ func TestAFindIsCounted(t *testing.T) {
 		t.Errorf("api_error = %v, want 1 (Graph's 403, answered as not found)", got)
 	}
 }
+
+// withCarrier puts the carrier on the first element of a card's body that has no id, and never in place of an id that an element
+// has: an input's id is how its answer comes back. A card whose every element has an id carries none.
+func TestWithCarrierKeepsTheIDsAnElementHas(t *testing.T) {
+	t.Parallel()
+	card := func(body ...any) outActivity {
+		return cardActivity(map[string]any{"type": "AdaptiveCard", "body": body})
+	}
+	input := func() map[string]any { return map[string]any{"type": "Input.Text", "id": "t0"} }
+	text := func() map[string]any { return map[string]any{"type": "TextBlock", "text": "x"} }
+	carrier := carrierOf(findTag)
+	a := withCarrier(card(input(), text(), text()), carrier)
+	body := a.Attachments[0].Content["body"].([]any)
+	if body[0].(map[string]any)["id"] != "t0" || body[1].(map[string]any)["id"] != carrier || body[2].(map[string]any)["id"] != nil {
+		t.Errorf("body = %v, want the input's id kept and the carrier on the first text alone", body)
+	}
+	a = withCarrier(card(input()), carrier)
+	if got := a.Attachments[0].Content["body"].([]any)[0].(map[string]any)["id"]; got != "t0" {
+		t.Errorf("a card of inputs alone: the input's id is %v", got)
+	}
+}
