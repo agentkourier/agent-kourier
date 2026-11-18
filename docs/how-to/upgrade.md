@@ -1026,9 +1026,11 @@ its chat listener, with what [What each platform supports](../reference/platform
   `crds.install` is true, or unset on `config.source: crds`; if you apply the CRDs yourself, apply `charts/agent-kourier/files/crds` again.
   [Limits](../reference/limits.md#write-a-binding-an-agentbackend-or-a-chatconnection) has the new caps.
 - **A database migration, 0031, runs at the first start.** On SQLite and on Postgres it adds the table `teams_conversations`, which
-  will keep, for each channel of a teams connection, where to post to it and which team it is in ([Stored data](../reference/stored-data.md)).
-  Nothing writes it yet. It only adds a table. A broker of an earlier release, after a rollback, does not read it, and logs at start that
-  the database schema is newer than its build.
+  keeps, for each channel of a teams connection, where to post to it and which team it is in, so that a restart or a change of leader
+  posts where the channel's last activity said ([Stored data](../reference/stored-data.md)). The leader writes it from the activities of a
+  teams connection, and on custom resources deletes a connection's rows when its ChatConnection is deleted. It only adds a table. A broker of
+  an earlier release, after a rollback, does not read the table or delete from it, and logs at start that the database schema is newer than
+  its build.
 
 ### Roll back from the release that takes Microsoft Teams ChatConnections
 
@@ -1038,4 +1040,5 @@ there the config does not load (exit code 2). On custom resources a Binding with
 not served; a teams ChatConnection, which has no status, is refused when the broker reads it: as the broker's own connection it stops the
 start (exit code 2), and as a team's it is not served and each of its Bindings says `ConnectionRejected`. The CRDs of an earlier release do not
 have `spec.teams` and hold each chat ID to Slack's shape and caps, so the API server refuses a new write of such an object. No other stored
-object depends on this release.
+object depends on this release. On custom resources, a teams ChatConnection deleted while this release still runs also takes its rows of
+`teams_conversations` with it; on the ConfigMap route, and for one deleted after the rollback, the rows stay, and an earlier release does not read them.

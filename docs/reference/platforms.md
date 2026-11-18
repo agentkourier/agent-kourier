@@ -21,8 +21,9 @@ answers, and an invoke answered 503, were not measured. So a message that arrive
 its channel has no room for, is lost unless there is room when it comes again, and an activity that the broker took and then could
 not hand on is lost. The adapter counts the first in `agentkourier_teams_activities_shed_total` and the second in
 `agentkourier_teams_activities_lost_total` ([Metrics](metrics.md)). A post goes to
-the service URL that the channel's last activity named; for a channel that no activity has come from since the broker started, it goes
-to Microsoft's global route, `https://smba.trafficmanager.net/teams/`.
+the service URL that the channel's last activity named, which the broker keeps in its store, so a restart or a change of leader does not
+lose it ([Stored data](stored-data.md)); for a channel that no activity has come from, or whose record cannot be read, it goes to
+Microsoft's global route, `https://smba.trafficmanager.net/teams/`.
 
 A message on Microsoft Teams shows the agent's reply in Teams' markdown, with what the agent, a person or an alert wrote shown as
 text: no `<at>` in it becomes a mention, and no HTML or markdown link in it is acted on (a bare URL still links). A mention that Agent Kourier makes names a person by
