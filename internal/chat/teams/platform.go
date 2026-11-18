@@ -94,25 +94,32 @@ func New(cfg Config) (*Client, error) {
 		api: &connector{client: direct, tokens: tokens, now: now}}, nil
 }
 
-// Run takes the activities that Teams sends the connection and hands them to sink until ctx ends (Receiver.Serve). It first gets
-// the bot's token, so that a client secret, app or tenant that Microsoft Entra refuses ends Run at once with an error that Classify
-// says is FatalAuth; a fetch that fails otherwise is logged, and Run goes on, since the token is fetched again when a post needs it.
+// Run takes the activities that Teams sends the connection and hands them to sink until ctx ends (Receiver.Serve). Serve starts
+// first, so that what Teams sends while the bot's token is fetched is taken and counted; then Run gets the token, so that a client
+// secret, app or tenant that Microsoft Entra refuses ends Run, with Serve, and an error that Classify says is FatalAuth. A fetch that
+// fails otherwise is logged, and Run goes on, since the token is fetched again when a post needs it. OnConnection is told up once the
+// token was asked for, and down when Serve has returned.
 func (c *Client) Run(ctx context.Context, sink chat.Sink) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	served := make(chan error, 1)
+	go func() { served <- c.recv.Serve(ctx, sink) }()
 	if _, err := c.api.tokens.token(ctx); err != nil {
 		if c.Classify(chat.OpOther, err).Class == chat.FatalAuth {
+			cancel()
+			<-served
 			return err
 		}
-		if ctx.Err() != nil {
-			return fmt.Errorf("teams: the bot's token: %w", ctx.Err())
+		if ctx.Err() == nil {
+			c.log.WarnContext(ctx, "teams: the bot's token could not be fetched; taking activities, and fetching it again for the next post",
+				"error", err.Error())
 		}
-		c.log.WarnContext(ctx, "teams: the bot's token could not be fetched; taking activities, and fetching it again for the next post",
-			"error", err.Error())
 	}
 	if c.onConnection != nil {
 		c.onConnection(true)
 		defer c.onConnection(false)
 	}
-	return c.recv.Serve(ctx, sink)
+	return <-served
 }
 
 // HTTPHandler implements chat.HTTPReceiver: the Receiver, the handler of the connection's route.

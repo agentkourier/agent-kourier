@@ -141,23 +141,28 @@ func (f *fakeConnector) take() []connRequest {
 	return out
 }
 
-// clientTest is a Client of the test connection on the fake, with its store.
+// clientTest is a Client of the test connection on the fake, with its store, and the Bot Framework's key that signs the activities a
+// test sends it.
 type clientTest struct {
 	c     *Client
 	f     *fakeConnector
 	convs *MemoryConversations
+	key   signingKey
 }
 
 func newClientTest(t testing.TB) *clientTest {
 	t.Helper()
 	f := newFakeConnector(t)
+	key := newSigningKey(t, "k", "msteams")
+	bf := newFakeBotFramework(t, key)
 	convs := NewMemoryConversations()
 	c, err := New(Config{Connection: testConn, TenantID: testTenant, AppID: testAppID, ClientSecret: secret.New(testClientSecret),
-		TokenURL: f.srv.URL + "/token", HTTPClient: f.srv.Client(), Conversations: convs, Logger: testutil.DiscardLogger()})
+		TokenURL: f.srv.URL + "/token", MetadataURL: bf.metadataURL(), HTTPClient: f.srv.Client(), Conversations: convs,
+		Logger: testutil.DiscardLogger()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &clientTest{c: c, f: f, convs: convs}
+	return &clientTest{c: c, f: f, convs: convs, key: key}
 }
 
 // record gives channel a record at the fake's service URL, in team.

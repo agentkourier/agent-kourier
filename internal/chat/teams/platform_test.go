@@ -1,6 +1,7 @@
 package teams
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -335,6 +336,54 @@ func TestRun(t *testing.T) {
 	defer mu.Unlock()
 	if len(states) != 2 || !states[0] || states[1] {
 		t.Errorf("states %v, want up then down", states)
+	}
+}
+
+// What Teams sends while Run waits for the bot's token is taken and counted, as Serve runs from the start; once Entra refuses the
+// secret, Run ends Serve with it, and the route answers 503.
+func TestRunTakesActivitiesWhileItWaitsForTheToken(t *testing.T) {
+	t.Parallel()
+	o := newObserved(t)
+	ct := newClientTest(t)
+	release := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(unblock) // before the fake's server is closed, which waits for the blocked handler
+	ct.f.setFail(func(r *http.Request) (int, string, bool) {
+		if r.URL.Path != "/token" {
+			return 0, "", false
+		}
+		<-release
+		return http.StatusUnauthorized, `{"error":"invalid_client"}`, true
+	})
+	done := make(chan error, 1)
+	go func() { done <- ct.c.Run(o.ctx, &recordingSink{}) }()
+	// Shorter than tokenFetchTimeout, after which a fetch that has had no answer fails and Run would serve anyway.
+	testutil.Eventually(t, "Run takes activities while the token is fetched", func() bool { return ct.c.recv.live.Load() != nil },
+		testutil.Within(tokenFetchTimeout/3))
+	post := func() int {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat/teams/"+testConn, bytes.NewReader(fixture(t, "message_plain")))
+		req.Header.Set("Authorization", bearer(t, ct.key, claimsAt(time.Now())))
+		rec := httptest.NewRecorder()
+		ct.c.recv.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if code := post(); code != http.StatusOK {
+		t.Errorf("an activity while the token is fetched: %d, want 200", code)
+	}
+	if got := o.value(t, "agentkourier_teams_requests_total", requestAccepted); got != 1 {
+		t.Errorf("requests accepted = %v, want 1: the request is counted on Run's instruments", got)
+	}
+	unblock()
+	err := <-done
+	if v := ct.c.Classify(chat.OpOther, err); v.Class != chat.FatalAuth {
+		t.Fatalf("Run with a refused secret: %v (%+v), want FatalAuth", err, v)
+	}
+	if ct.c.recv.live.Load() != nil {
+		t.Error("the receiver still takes activities after Run returned")
+	}
+	if code := post(); code != http.StatusServiceUnavailable {
+		t.Errorf("an activity after Run returned: %d, want 503", code)
 	}
 }
 
