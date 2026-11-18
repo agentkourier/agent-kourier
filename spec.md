@@ -610,11 +610,11 @@ Rules:
   message ID, compared as a number; a thread past 20 pages is `chat.ErrThreadTooLong` whatever the window. A message is decoded as live:
   the bot's own app's is Own, a person's (from.user) carries its HTML read as text and Mentioned from Graph's mentions list, another
   app's (from.application, Workflows' alert card) is a bot's message whose body is its Adaptive Cards' text, and a system event, a
-  deleted message or one with no sender is Ignored. Graph's 401 is FatalAuth, 404 ChannelGone, 403 and 400 Permanent (the 403's error
-  names the permission and the install), a 429 Transient with its Retry-After (at least a second), and a 5xx
-  Transient. Find still finds nothing on Teams: Post
-  keeps its tag in no part of an activity that people do not see and that Graph is known to return, so a post sent and not recorded
-  before a crash is sent again. Measured on a test tenant, November 2026: the Graph token, a 200 for a channel's messages under the
+  deleted message or one with no sender is Ignored. No refusal of Graph is FatalAuth, since a
+  thread read must not stop the connection: Graph's 404 is ChannelGone; its 401, 403 and 400, and Entra's refusal of the Graph token
+  alone (a scope or a consent), are Permanent (the 403's error names the permission and the install); a 429 is Transient with its
+  Retry-After (at least a second), and a 5xx Transient. A wrong or revoked client secret is still FatalAuth, through the bot's token.
+  Find finds nothing on Teams in this release, so a post sent and not recorded before a crash is sent again. Measured on a test tenant, November 2026: the Graph token, a 200 for a channel's messages under the
   permission alone, the path form, the message shapes (HTML body, from.user and from.application, a card's JSON as a string, a system
   event), and message IDs that were each post's time in milliseconds. Microsoft's documentation, not measured: the replies endpoint,
   its `$top`, paging and order (the adapter sorts and does not rely on it), its errors and the body of its 403, the HTML of other

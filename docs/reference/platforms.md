@@ -171,9 +171,8 @@ A 403 of Graph, which an app gets that may not read the team's channel messages,
 other refusal, and a read that runs out of time, sends the turn with the line. The replies endpoint, its paging, the order of its
 replies and its errors are Microsoft's documentation: none of them was measured.
 
-On Teams the outbox finds no post again by its tag. On Slack a post carries its tag in metadata that people do not see, and a post
-that was sent and not recorded before a crash is found and not sent again; on Teams no part of a post that people do not see is
-known to come back through Graph, so such a post is sent again, and the thread shows it twice.
+On Teams the outbox does not find its posts again in this release. On Slack a post that was sent and not recorded before a crash is
+found by its tag and not sent again; on Teams such a post is sent again, and the thread shows it twice.
 
 ## Chat IDs
 
