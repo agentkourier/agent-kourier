@@ -104,7 +104,7 @@ nothing is accepted on the file route that the schema refuses.
 ```text
 $ kubectl apply -f bad.yaml
 The Binding "bad" is invalid:
-* spec.chat.channel: Invalid value: "#sre alerts": spec.chat.channel in body should match '^[!-9;-~]+$'
+* spec.chat.channel: Invalid value: "general": spec.chat.channel in body should match '^[CG][A-Z0-9]+$'
 * spec.identity: Invalid value: "object": set userId, tokenSecretRef, or both
 ```
 
