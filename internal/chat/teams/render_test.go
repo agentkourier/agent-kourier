@@ -13,11 +13,11 @@ import (
 
 func mustRender(t *testing.T, o chat.Outgoing) outActivity {
 	t.Helper()
-	a, err := render(o)
+	m, err := render(o)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return a
+	return m.activity
 }
 
 // No text of the agent's, a person's or an alert's can make a mention: "<at>" is never sent raw from it, in any place, so the only

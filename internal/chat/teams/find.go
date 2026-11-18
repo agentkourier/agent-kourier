@@ -29,8 +29,8 @@ import (
 //   - Teams drops, and so cannot carry a tag: the activity's channelData and entities, its summary, an HTML comment, a span's data-
 //     attributes, an attachment's name and a card's unknown keys;
 //   - a text with a card of buttons in one activity is answered 202 with no ID, and shows as two messages: the text, with the span,
-//     and the card alone, with no tag. Post then fails (errNoID), and the outbox's lookup adopts the text; the card is a message whose
-//     ID Agent Kourier never has;
+//     and the card alone, with no tag. So Post sends a message's text and its buttons as two posts (buttons.go): the text, which
+//     carries the tag, and the card, which carries none;
 //   - a reply was in Graph's replies at the first read, 1.4 s after it was posted.
 //
 // A zero-width run at the start of a text changed how Teams parsed the first line; the span was put only at the end, and not tried at
@@ -60,8 +60,7 @@ func carrierOf(tag string) string {
 // everything render wrote, a block's closing fence included; a zero-width tag at the start changed how Teams parsed the first line,
 // and the span was measured only at the end); a card alone has it as the id of the first element of its body with no id, which no
 // input of a card has (inputID): a prompt's and an ending's first element is a RichTextBlock or a TextBlock, whose id was measured.
-// A message with text and a card of buttons carries it in the text alone: Teams shows the card as a message of its own, which must not
-// be taken for the post.
+// A message's buttons under its text are a post of their own with no carrier (buttons.go): the text is the post that Find finds.
 // The span is the adapter's alone: no "<" of the agent's, a person's or an alert's text reaches Teams raw (markdown.go, escapeLine).
 // render's budget leaves room for the carrier, whose length is fixed.
 func withCarrier(a outActivity, carrier string) outActivity {

@@ -84,10 +84,7 @@ func TestATextPostCarriesItsTagAtItsEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := ct.posted(t)
-	plain, err := render(o)
-	if err != nil {
-		t.Fatal(err)
-	}
+	plain := mustRender(t, o)
 	carrier := carrierOf(findTag)
 	if !carrierShape.MatchString(carrier) {
 		t.Fatalf("carrier %q is not of the shape %v", carrier, carrierShape)
@@ -113,10 +110,7 @@ func TestACardPostCarriesItsTagAsAnElementID(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := ct.posted(t)
-	plain, err := render(prompt)
-	if err != nil {
-		t.Fatal(err)
-	}
+	plain := mustRender(t, prompt)
 	if a.Text != "" || len(a.Attachments) != 1 {
 		t.Fatalf("a prompt is %+v, want a card alone", a)
 	}
@@ -513,40 +507,6 @@ func TestWithCarrierKeepsTheIDsAnElementHas(t *testing.T) {
 	a = withCarrier(card(input()), carrier)
 	if got := a.Attachments[0].Content["body"].([]any)[0].(map[string]any)["id"]; got != "t0" {
 		t.Errorf("a card of inputs alone: the input's id is %v", got)
-	}
-}
-
-// A message with a Body and buttons, as the useful and not-useful buttons go under a reply, carries the tag in its text alone: the
-// buttons are a card that Teams shows as a message of its own (measured, round 3 of the probe), which must not be taken for the
-// post. Find finds the text.
-func TestATextPostWithButtonsCarriesItsTagInTheText(t *testing.T) {
-	t.Parallel()
-	ct, target := threadTest(t)
-	o := chat.Say(chat.Message{Fallback: "the answer", Parts: []chat.Part{
-		chat.Body{Markdown: "It is the disk."},
-		chat.Context{Text: "Was this useful?"},
-		chat.Buttons{Buttons: []chat.Button{
-			{ID: "feedback-useful", Label: "Useful", Value: "fb1|investigation|useful|100.1|turn-1"},
-			{ID: "feedback-not-useful", Label: "Not useful", Value: "fb1|investigation|not_useful|100.1|turn-1"},
-		}},
-	}})
-	ref, err := ct.c.Post(t.Context(), target, o, findTag)
-	if err != nil {
-		t.Fatal(err)
-	}
-	a := ct.posted(t)
-	if !strings.HasSuffix(a.Text, "\n\n"+`<span title="`+carrierOf(findTag)+`"></span>`) {
-		t.Errorf("text = %q, want the carrier at its end", a.Text)
-	}
-	if len(a.Attachments) != 1 {
-		t.Fatalf("attachments = %+v, want the buttons' card", a.Attachments)
-	}
-	if raw := mustJSON(t, a.Attachments[0].Content); strings.Contains(raw, `"id"`) || strings.Contains(raw, carrierOf(findTag)) {
-		t.Errorf("the buttons' card = %s, want no id and no carrier", raw)
-	}
-	ct.echo(t, ref.ID, testRoot, testAppID, a)
-	if got, found, err := ct.c.Find(t.Context(), target, findTag, time.Time{}); !found || err != nil || got != ref {
-		t.Errorf("Find = %+v, %t, %v; want %+v", got, found, err, ref)
 	}
 }
 

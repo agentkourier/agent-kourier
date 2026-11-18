@@ -340,9 +340,10 @@ func (b *cardBuilder) ending(e chat.Ending) map[string]any {
 	return b.card(verb+".", nil)
 }
 
-// buttonsCard is the card of a message's buttons, in order: a card of actions alone, under the message's text. Each is named by its
-// ID and value, which are Agent Kourier's own; a label cut to nothing reads "(blank)". It is nil for no buttons.
-func buttonsCard(caps chat.Caps, buttons []chat.Button) map[string]any {
+// buttonsCard is the card of a message's buttons, in order: a card of actions alone, posted under the message's text. Each is named by
+// its ID and value, which are Agent Kourier's own, and by the text message's ID, of, when it is set ("of"), which a press reads as the
+// message pressed (press); a label cut to nothing reads "(blank)". It is nil for no buttons.
+func buttonsCard(caps chat.Caps, buttons []chat.Button, of string) map[string]any {
 	if len(buttons) == 0 {
 		return nil
 	}
@@ -353,7 +354,11 @@ func buttonsCard(caps chat.Caps, buttons []chat.Button) map[string]any {
 		if btn.Primary {
 			style = "positive"
 		}
-		actions[i] = execute(cmp.Or(b.literal(chat.WhereButton, btn.Label), blankChoice), style, map[string]any{"button": btn.ID, "value": btn.Value})
+		data := map[string]any{"button": btn.ID, "value": btn.Value}
+		if of != "" {
+			data["of"] = of
+		}
+		actions[i] = execute(cmp.Or(b.literal(chat.WhereButton, btn.Label), blankChoice), style, data)
 	}
 	return b.card("", actions)
 }

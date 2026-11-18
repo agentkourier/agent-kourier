@@ -70,57 +70,108 @@ func capabilities() chat.Caps {
 // errEmpty is wrapped by the error of an Outgoing that shows nothing on Teams (no part that shows text, and no Fallback).
 var errEmpty = errors.New("the message shows nothing on Microsoft Teams")
 
-// render is o as one activity within maxMessageBytes: a message as text, with its buttons on a card under it; a prompt, and the
-// ending that replaces it, as a card alone (card.go). Its error wraps chat.ErrInvalid for an Outgoing that is not valid and one that
-// shows nothing (errEmpty); and chat.ErrTooLarge for a message over the budget even with its Body cut to minBodyUnits, a prompt over
-// it, or one with a tool that would be shown cut. An ending is never too large: its texts are cut until it fits. Its decider is shown
-// as someone (renderWith).
-func render(o chat.Outgoing) (outActivity, error) { return renderWith(o, "") }
+// outMessage is an Outgoing as the Bot Connector is sent it: the activity that is the message, its text or a card alone, and the
+// buttons of a message with text, which go after it as a post of their own (buttonsActivity), a reply in the text's thread. They are
+// not attached to the text: Teams answers an activity of text and a card 202 with no ID, and shows it as two messages, the text and
+// a card of the buttons alone (measured on a test tenant, web client, 2026-11-18), so neither message's ID would be known.
+type outMessage struct {
+	activity outActivity
+	buttons  []chat.Button
+}
+
+// render is o as the activities that show it, each within maxMessageBytes: a message as text, with its buttons to go under it as a card
+// of their own; a message of buttons and no text as their card alone; a prompt, and the ending that replaces it, as a card alone
+// (card.go). Its error wraps chat.ErrInvalid for an Outgoing that is not valid and one that shows nothing (errEmpty); and
+// chat.ErrTooLarge for a message over the budget even with its Body cut to minBodyUnits, a card of buttons over it, a prompt over it,
+// or one with a tool that would be shown cut. An ending is never too large: its texts are cut until it fits. Its decider is shown as
+// someone (renderWith).
+func render(o chat.Outgoing) (outMessage, error) { return renderWith(o, "") }
 
 // renderWith is render with an ending's decider, a Microsoft Entra object ID, mentioned by the name decider, cleaned (mentionName):
 // someone when it is "", or nothing is left of it.
-func renderWith(o chat.Outgoing, decider string) (outActivity, error) {
+func renderWith(o chat.Outgoing, decider string) (outMessage, error) {
 	if err := o.Validate(); err != nil {
-		return outActivity{}, err
+		return outMessage{}, err
 	}
+	var a outActivity
+	var err error
 	switch {
 	case o.Prompt != nil:
-		return renderPrompt(*o.Prompt)
+		a, err = renderPrompt(*o.Prompt)
 	case o.Ending != nil:
-		return renderEnding(*o.Ending, decider)
+		a, err = renderEnding(*o.Ending, decider)
+	default:
+		return renderMessage(*o.Message)
 	}
-	return renderMessage(*o.Message)
+	return outMessage{activity: a}, err
 }
 
-// renderMessage is m as text, cut further when it is over the budget, and its buttons as a card under it.
-func renderMessage(m chat.Message) (outActivity, error) {
+// renderMessage is m as text, cut further when it is over the budget, with its buttons to go under it as a card of their own; or, for
+// a message of buttons that has no text, their card alone, which a press names by its own ID. The card is sized as it names a text of
+// the longest ID (maxActivityID), and no cut of the text makes it smaller.
+func renderMessage(m chat.Message) (outMessage, error) {
+	buttons := buttonsOf(m)
 	for body := maxBodyUnits; ; body /= 2 {
 		var r renderer
 		r.caps, r.body = capabilities(), max(body, minBodyUnits)
 		r.message(m)
 		a := r.activity()
-		if card := buttonsCard(r.caps, r.buttons); card != nil {
-			a.Attachments = []attachment{{ContentType: cardContentType, Content: card}}
-		}
-		if a.Text == "" && len(a.Attachments) == 0 {
-			return outActivity{}, fmt.Errorf("%w: %w", chat.ErrInvalid, errEmpty)
+		switch {
+		case a.Text == "" && len(buttons) == 0:
+			return outMessage{}, fmt.Errorf("%w: %w", chat.ErrInvalid, errEmpty)
+		case a.Text == "":
+			card := buttonsActivity(buttons, "")
+			return outMessage{activity: card}, withinBudget(card)
+		case len(buttons) > 0:
+			if err := withinBudget(buttonsActivity(buttons, strings.Repeat("9", maxActivityID))); err != nil {
+				return outMessage{}, err
+			}
 		}
 		n, err := size(a)
 		if err != nil {
-			return outActivity{}, err
+			return outMessage{}, err
 		}
 		if n <= maxMessageBytes {
-			return a, nil
+			return outMessage{activity: a, buttons: buttons}, nil
 		}
 		if !r.hasBody || body <= minBodyUnits {
-			return outActivity{}, fmt.Errorf("%w: %d bytes, over the %d byte budget of a message", chat.ErrTooLarge, n, maxMessageBytes)
+			return outMessage{}, fmt.Errorf("%w: %d bytes, over the %d byte budget of a message", chat.ErrTooLarge, n, maxMessageBytes)
 		}
 	}
+}
+
+// buttonsOf is the buttons of m's Buttons parts, in order.
+func buttonsOf(m chat.Message) []chat.Button {
+	var out []chat.Button
+	for _, p := range m.Parts {
+		if b, ok := p.(chat.Buttons); ok {
+			out = append(out, b.Buttons...)
+		}
+	}
+	return out
 }
 
 // cardActivity is a message of the one card.
 func cardActivity(card map[string]any) outActivity {
 	return outActivity{Type: "message", Attachments: []attachment{{ContentType: cardContentType, Content: card}}}
+}
+
+// buttonsActivity is the post of buttons: a card of them alone (buttonsCard), whose actions name the text message of the ID of, under
+// which it is posted, or no message when of is "".
+func buttonsActivity(buttons []chat.Button, of string) outActivity {
+	return cardActivity(buttonsCard(capabilities(), buttons, of))
+}
+
+// withinBudget is chat.ErrTooLarge for an activity over maxMessageBytes.
+func withinBudget(a outActivity) error {
+	n, err := size(a)
+	if err != nil {
+		return err
+	}
+	if n > maxMessageBytes {
+		return fmt.Errorf("%w: %d bytes, over the %d byte budget of a message", chat.ErrTooLarge, n, maxMessageBytes)
+	}
+	return nil
 }
 
 // renderPrompt is p's card, which is chat.ErrTooLarge over the budget: a prompt is refused, not cut to fit.
@@ -131,12 +182,8 @@ func renderPrompt(p chat.Prompt) (outActivity, error) {
 		return outActivity{}, err
 	}
 	a := cardActivity(card)
-	n, err := size(a)
-	if err != nil {
+	if err := withinBudget(a); err != nil {
 		return outActivity{}, err
-	}
-	if n > maxMessageBytes {
-		return outActivity{}, fmt.Errorf("%w: %d bytes, over the %d byte budget of a message", chat.ErrTooLarge, n, maxMessageBytes)
 	}
 	return a, nil
 }
@@ -163,13 +210,19 @@ func renderEnding(e chat.Ending, decider string) (outActivity, error) {
 
 // size is the length of a as the connector sends it.
 func size(a outActivity) (int, error) {
+	raw, err := encode(a)
+	return len(raw), err
+}
+
+// encode is a as the connector sends it.
+func encode(a outActivity) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(a); err != nil {
-		return 0, fmt.Errorf("teams: encoding the activity: %w", err)
+		return nil, fmt.Errorf("teams: encoding the activity: %w", err)
 	}
-	return buf.Len(), nil
+	return buf.Bytes(), nil
 }
 
 // renderer builds the text of one activity: paragraphs, each of which is one line or one literal text, or the Body's markdown,
@@ -181,7 +234,6 @@ type renderer struct {
 	paras    []string
 	entities []mentionEntity
 	fallback string
-	buttons  []chat.Button // the message's buttons, in order, for the card under the text
 }
 
 func (r *renderer) activity() outActivity {
@@ -272,8 +324,7 @@ func (r *renderer) message(m chat.Message) {
 			}
 		case chat.Mention:
 			r.mentionLine(chat.WhereContext, p.User, p.Text)
-		case chat.Buttons:
-			r.buttons = append(r.buttons, p.Buttons...) // the actions of the card under the text
+		case chat.Buttons: // a card of their own, posted after the text (renderMessage)
 		case chat.Steps:
 			if len(p.Steps) > 0 {
 				head, _ := headOfSteps(m.Parts, i-1)

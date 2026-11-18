@@ -1,6 +1,7 @@
 package teams
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -65,12 +66,14 @@ type actionValue struct {
 	} `json:"action"`
 }
 
-// ownData is the data that the adapter put on an action (execute): a prompt's ID and its action, or a message's button and its value.
+// ownData is the data that the adapter put on an action (execute): a prompt's ID and its action, or a message's button, its value and,
+// for a card posted under a text, the text's ID (buttonsCard).
 type ownData struct {
 	Prompt *string `json:"prompt"`
 	Action *string `json:"action"`
 	Button *string `json:"button"`
 	Value  *string `json:"value"`
+	Of     *string `json:"of"`
 }
 
 // Invoke implements InvokeHandler. It answers a press of a card's Action.Execute in the request, with a message for the presser. A sink
@@ -131,6 +134,12 @@ func toldPresser(text string) InvokeAnswer {
 // press is the neutral Interaction of inv, a press of an Action.Execute of a card the adapter rendered, and what it is of; false when
 // inv has no presser or message, or its action is not an Action.Execute with the adapter's data of one of two forms: a prompt's ID with
 // an action chat.Action reads (promptAction), or a message's button with its value (buttonsCard).
+//
+// The press is of the message that Post returned, which the card's message is for a prompt and for buttons alone. A message's buttons
+// under its text are a card of their own, whose data names the text ("of"): the press is of the text, in the card's thread, so that it
+// names the message that the outbox recorded, as a press on Slack does. The data is the card's own, which Agent Kourier wrote, as its
+// value and prompt are; a text ID that is empty, holds ':' or is longer than maxActivityID makes no press. The key of the press is the
+// invoke's, of the card's message.
 func (c *Client) press(inv Invoke) (chat.Interaction, pressKind, bool) {
 	if inv.User == "" || inv.At.ID == "" || inv.At.Channel == "" {
 		return chat.Interaction{}, 0, false
@@ -145,7 +154,7 @@ func (c *Client) press(inv Invoke) (chat.Interaction, pressKind, bool) {
 	}
 	out := chat.Interaction{User: inv.User, At: inv.At, Delivery: pressKey(inv)}
 	switch {
-	case own.Prompt != nil && own.Action != nil && own.Button == nil && own.Value == nil:
+	case own.Prompt != nil && own.Action != nil && own.Button == nil && own.Value == nil && own.Of == nil:
 		if out.Action.UnmarshalText([]byte(*own.Action)) != nil {
 			return chat.Interaction{}, 0, false
 		}
@@ -156,6 +165,14 @@ func (c *Client) press(inv Invoke) (chat.Interaction, pressKind, bool) {
 		return out, pressPrompt, true
 	case own.Value != nil && own.Prompt == nil && own.Action == nil:
 		out.PromptID = *own.Value
+		if own.Of != nil {
+			of := *own.Of
+			if of == "" || strings.Contains(of, idSeparator) || len(of) > maxActivityID {
+				return chat.Interaction{}, 0, false
+			}
+			root := cmp.Or(inv.At.Thread, inv.At.ID) // the card is a reply in the text's thread, whose root this is
+			out.At.ID, out.At.Thread = of, threadOf(root, of)
+		}
 		return out, pressButton, true
 	}
 	return chat.Interaction{}, 0, false

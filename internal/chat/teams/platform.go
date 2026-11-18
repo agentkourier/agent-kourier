@@ -66,6 +66,7 @@ type Client struct {
 	graph         *graphClient
 	convs         ConversationStore
 	names         *nameCache
+	cards         *buttonCards  // the cards of buttons posted under a text (buttons.go)
 	rosterTimeout time.Duration // rosterTimeout; a test shortens it
 	pressWait     time.Duration // pressWait; a test shortens it
 	threadTimeout time.Duration // threadTimeout; a test shortens it
@@ -103,7 +104,7 @@ func New(cfg Config) (*Client, error) {
 		return nil, err
 	}
 	c := &Client{conn: cfg.Connection, tenant: cfg.TenantID, app: cfg.AppID, convs: convs, log: log, onConnection: cfg.OnConnection,
-		api: &connector{client: direct, tokens: tokens, now: now}, graph: graph, names: newNameCache(now), rosterTimeout: rosterTimeout,
+		api: &connector{client: direct, tokens: tokens, now: now}, graph: graph, names: newNameCache(now), cards: newButtonCards(), rosterTimeout: rosterTimeout,
 		pressWait: pressWait, threadTimeout: threadTimeout}
 	recv, err := NewReceiver(ReceiverConfig{Connection: cfg.Connection, TenantID: cfg.TenantID, AppID: cfg.AppID,
 		MetadataURL: cfg.MetadataURL, HTTPClient: client, Conversations: convs, Logger: log, Now: now, Invokes: c})
@@ -174,26 +175,44 @@ func (c *Client) ref(channel, thread, id string) chat.Ref {
 
 // Post implements chat.Platform. A post with no thread starts one in the channel, and its ID is the thread's root; a post with a
 // thread replies in it. It carries tag where people do not see it and Graph gives it back (withCarrier), which Find reads.
+//
+// A message with text and buttons is two posts (buttons.go): the text, which is the message Post returns, and then its buttons, as a
+// card of their own in the text's thread. A post of the buttons that fails is logged at WARN and counted as PostButtons, and Post
+// returns the text with no error: an error would have the outbox look the post up, adopt the text and post nothing more, while the
+// next update of the message that has the buttons posts them. A crash between the two posts leaves the text alone, which the outbox's
+// lookup adopts, and the buttons are posted only if the message is updated with them after.
 func (c *Client) Post(ctx context.Context, t chat.Target, o chat.Outgoing, tag string) (ref chat.Ref, err error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.Post")
 	defer func() { c.finish(ctx, op, "Post", err) }()
 	if t.Channel == "" {
 		return chat.Ref{}, fmt.Errorf("%w: a post with no channel", chat.ErrInvalid)
 	}
-	a, err := render(o)
+	m, err := render(o)
 	if err != nil {
 		return chat.Ref{}, err
 	}
-	id, err := c.api.send(ctx, c.serviceURL(ctx, t.Channel), conversation(t.Channel, t.Thread), withCarrier(a, carrierOf(tag)))
+	serviceURL := c.serviceURL(ctx, t.Channel)
+	id, err := c.api.send(ctx, serviceURL, conversation(t.Channel, t.Thread), withCarrier(m.activity, carrierOf(tag)))
 	if err != nil {
 		return chat.Ref{}, err
 	}
-	return c.ref(t.Channel, t.Thread, id), nil
+	ref = c.ref(t.Channel, t.Thread, id)
+	if len(m.buttons) > 0 {
+		if err := c.buttonsUnder(ctx, serviceURL, ref, m.buttons); err != nil {
+			c.log.WarnContext(ctx, "teams: a message's buttons were not posted under its text, or Teams named no ID for them; the text "+
+				"stands, and an update of the message with them posts them", "channel", t.Channel, "message", id, "error", err.Error())
+		}
+	}
+	return ref, nil
 }
 
 // Update implements chat.Platform. Content that shows nothing on Teams, no text and no card, is ErrWouldDropText: a message with
-// buttons and no text keeps its card, and a prompt and its ending are a card alone. The ending of a prompt names its decider, a
-// Microsoft Entra object ID, by the name that the channel's roster gives (deciderName), and as someone when it cannot be had.
+// buttons and no text keeps its card, and a prompt and its ending are a card alone. A message with text and buttons edits the text,
+// and shows the buttons under it as a card of their own (buttonsUnder): posted by the first update that has them, edited when they
+// change, and left as they are otherwise. The update fails when they cannot be shown, after the text was edited, so that the caller's
+// next try, which edits the text to the same content, posts them; one whose card Teams took and named no ID is done. The ending of a
+// prompt names its decider, a Microsoft Entra object ID, by the name that the channel's roster gives (deciderName), and as someone
+// when it cannot be had.
 func (c *Client) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) (err error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.Update")
 	defer func() { c.finish(ctx, op, "Update", err) }()
@@ -204,14 +223,27 @@ func (c *Client) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) (err e
 	if o.Ending != nil && entraID.MatchString(o.Ending.By) {
 		decider = c.deciderName(ctx, r.Channel, o.Ending.By)
 	}
-	a, err := renderWith(o, decider)
+	m, err := renderWith(o, decider)
 	if errors.Is(err, errEmpty) {
 		return fmt.Errorf("teams: %w: %w", chat.ErrWouldDropText, errEmpty)
 	}
 	if err != nil {
 		return err
 	}
-	return c.api.update(ctx, c.serviceURL(ctx, r.Channel), conversation(r.Channel, cmp.Or(r.Thread, r.ID)), r.ID, a)
+	serviceURL := c.serviceURL(ctx, r.Channel)
+	if err := c.api.update(ctx, serviceURL, conversation(r.Channel, cmp.Or(r.Thread, r.ID)), r.ID, m.activity); err != nil {
+		return err
+	}
+	if len(m.buttons) == 0 {
+		return nil
+	}
+	err = c.buttonsUnder(ctx, serviceURL, r, m.buttons)
+	if errors.Is(err, errNoID) {
+		c.log.WarnContext(ctx, "teams: Teams named no ID for a message's buttons; they are shown, and other buttons would be posted anew",
+			"channel", r.Channel, "message", r.ID)
+		return nil
+	}
+	return err
 }
 
 // RefAt implements chat.Platform.

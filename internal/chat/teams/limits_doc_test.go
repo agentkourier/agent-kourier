@@ -52,6 +52,7 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Count(t, "teamsTextUnits", maxTextUnits)
 	limitsdoc.Count(t, "teamsBodyUnits", maxBodyUnits)
 	limitsdoc.Count(t, "teamsMinBodyUnits", minBodyUnits)
+	limitsdoc.Count(t, "teamsButtonCards", maxButtonCards)
 
 	// The reads of people: the bound a Client is built with, the page it asks for, and the names it keeps; and the wait of a press for
 	// its decision, which a Client is built with too.

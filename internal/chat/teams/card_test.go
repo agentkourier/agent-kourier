@@ -280,10 +280,11 @@ func TestTheLongestEndingFits(t *testing.T) {
 		"tools":     {Outcome: chat.Answered, By: testUser, Prompt: chat.Prompt{ID: "ix-1", Hint: long, Subagent: long, Tools: tools}, Verdicts: verdicts},
 		"questions": {Outcome: chat.Answered, By: testUser, Prompt: chat.Prompt{ID: "ix-1", Hint: long, Subagent: long, Questions: qs}, Answers: answers},
 	} {
-		a, err := render(chat.End(e))
+		m, err := render(chat.End(e))
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
+		a := m.activity
 		n, err := size(a)
 		if err != nil || n > maxMessageBytes {
 			t.Errorf("%s: %d bytes, %v; want at most %d", name, n, err, maxMessageBytes)
@@ -295,29 +296,38 @@ func TestTheLongestEndingFits(t *testing.T) {
 	}
 }
 
-// A message's buttons are the actions of a card under its text, each named by its ID and value; the text holds the rest of the
-// message, and no label. A message of buttons alone is the card, with its fallback as the text.
-func TestButtonsAreTheActionsOfACardUnderTheText(t *testing.T) {
+// A message's buttons are the actions of a card of their own, posted after its text, each named by its ID and value; the text holds
+// the rest of the message, and no label. A message of buttons alone is the card, with no text; with a fallback, the fallback is its
+// text, and the buttons go after it.
+func TestButtonsAreTheActionsOfACardOfTheirOwn(t *testing.T) {
 	t.Parallel()
-	a := mustRender(t, chat.Say(chat.Message{Parts: []chat.Part{
+	m, err := render(chat.Say(chat.Message{Parts: []chat.Part{
 		chat.Body{Markdown: "The pods cannot read their logs."},
 		chat.Context{Text: "Was this useful?"},
 		chat.Buttons{Buttons: []chat.Button{{ID: "useful", Label: "Useful", Value: "fb1|a", Primary: true}, {ID: "not", Label: "Not useful", Value: "fb1|b"}}},
 	}}))
-	if a.Text != "The pods cannot read their logs.\n\nWas this useful?" || a.TextFormat != "markdown" {
-		t.Errorf("text %q of the format %q", a.Text, a.TextFormat)
+	if err != nil {
+		t.Fatal(err)
 	}
-	card := cardOf(t, a)
+	if a := m.activity; a.Text != "The pods cannot read their logs.\n\nWas this useful?" || a.TextFormat != "markdown" || len(a.Attachments) != 0 {
+		t.Errorf("text %q of the format %q, %d attachments", a.Text, a.TextFormat, len(a.Attachments))
+	}
+	card := cardOf(t, buttonsActivity(m.buttons, "1700000000001"))
 	if _, ok := card["body"]; ok {
 		t.Errorf("the card of buttons has a body: %v", card["body"])
 	}
 	sameLines(t, "buttons", outline(t, card), []string{
-		`action:Useful positive {"kourier":{"button":"useful","value":"fb1|a"}}`,
-		`action:Not useful <nil> {"kourier":{"button":"not","value":"fb1|b"}}`,
+		`action:Useful positive {"kourier":{"button":"useful","of":"1700000000001","value":"fb1|a"}}`,
+		`action:Not useful <nil> {"kourier":{"button":"not","of":"1700000000001","value":"fb1|b"}}`,
 	})
-	only := mustRender(t, chat.Say(chat.Message{Fallback: "Rate it", Parts: []chat.Part{chat.Buttons{Buttons: []chat.Button{{ID: "b", Label: "B", Value: "v"}}}}}))
-	if only.Text != "Rate it" || len(outline(t, cardOf(t, only))) != 1 {
-		t.Errorf("buttons alone: %+v", only)
+	alone, err := render(chat.Say(chat.Message{Parts: []chat.Part{chat.Buttons{Buttons: []chat.Button{{ID: "b", Label: "B", Value: "v"}}}}}))
+	if err != nil || alone.activity.Text != "" || len(alone.buttons) != 0 {
+		t.Fatalf("buttons alone: %+v, %v", alone, err)
+	}
+	sameLines(t, "buttons alone", outline(t, cardOf(t, alone.activity)), []string{`action:B <nil> {"kourier":{"button":"b","value":"v"}}`})
+	only, err := render(chat.Say(chat.Message{Fallback: "Rate it", Parts: []chat.Part{chat.Buttons{Buttons: []chat.Button{{ID: "b", Label: "B", Value: "v"}}}}}))
+	if err != nil || only.activity.Text != "Rate it" || len(only.activity.Attachments) != 0 || len(only.buttons) != 1 {
+		t.Errorf("buttons with a fallback: %+v, %v", only, err)
 	}
 	if none := mustRender(t, chat.Say(chat.Message{Fallback: "x", Parts: []chat.Part{chat.Buttons{}}})); len(none.Attachments) != 0 {
 		t.Errorf("a Buttons part with no buttons made a card: %+v", none.Attachments)
@@ -357,30 +367,5 @@ func TestAnEndingIsCutNoFurtherThanItMust(t *testing.T) {
 	}
 	if longest != half {
 		t.Errorf("the longest text of the ending is %d units, want %d: cut to half the cap and no further", longest, half)
-	}
-}
-
-// A message's buttons count toward its budget: a reply that fits alone, and not with the card of its buttons, has its Body cut so
-// that both fit.
-func TestButtonsCountTowardTheBudget(t *testing.T) {
-	t.Parallel()
-	body := strings.Repeat("中", maxBodyUnits)
-	alone := mustRender(t, chat.Say(chat.Message{Parts: []chat.Part{chat.Body{Markdown: body}}}))
-	if !strings.Contains(alone.Text, body) {
-		t.Fatalf("the reply alone was cut: %d units", chat.Units(alone.Text))
-	}
-	var buttons []chat.Button
-	for i := range 5 {
-		buttons = append(buttons, chat.Button{ID: fmt.Sprintf("b%d", i), Label: strings.Repeat("中", maxTextUnits), Value: "v"})
-	}
-	a := mustRender(t, chat.Say(chat.Message{Parts: []chat.Part{chat.Body{Markdown: body}, chat.Buttons{Buttons: buttons}}}))
-	if n, err := size(a); err != nil || n > maxMessageBytes {
-		t.Fatalf("the message is %d bytes (%v), over the budget", n, err)
-	}
-	if strings.Contains(a.Text, body) || !strings.Contains(a.Text, chat.Truncated) {
-		t.Errorf("the reply beside its buttons was not cut: %d units", chat.Units(a.Text))
-	}
-	if actions, _ := cardOf(t, a)["actions"].([]any); len(actions) != len(buttons) {
-		t.Errorf("the card has %d buttons, want %d", len(actions), len(buttons))
 	}
 }
