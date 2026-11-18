@@ -574,17 +574,21 @@ Rules:
   leader takes Teams' requests on the connection's route, and posts, replies and edits through the Bot Connector with a token that
   Microsoft Entra issues for `clientSecret`. In `socket` mode ("Socket mode is not supported yet"), or with no chat listener, the
   broker's own teams connection is a wiring error at start and a team's is not started. A question, a tool approval and a message's
-  buttons are Adaptive Cards 1.5 whose `Action.Execute` Teams sends as an `adaptiveCard/action` invoke; the adapter hands the press
-  to the sink in the request and answers it at once with a message response for the presser (received, may not be recorded, or
-  not a press of Agent Kourier's), since Teams waits about 14 s and does not send it again (both measured on a test tenant,
-  November 2026). The message response (`application/vnd.microsoft.activity.message`) shows the presser a banner under the card
+  buttons are Adaptive Cards 1.5 whose `Action.Execute` Teams sends as an `adaptiveCard/action` invoke, which Teams waits about
+  14 s for and does not send again (both measured on a test tenant, November 2026). The chat listener gives the Teams route a 10 s
+  handler deadline in place of 3 s (`chat.HTTPDeadline`). The adapter hands the press to the sink in the request, which records it
+  and waits up to 8 s for the press worker to decide it (`chat.InlineDecider`: the worker stays the only decider, and publishes each
+  press's outcome to the waits for it), and answers with a message response for the presser: what the press came to when it was
+  decided in the wait and the decision has words (recorded, already recorded, not a member, not an approver, gone, answered by
+  another, invalid, not recorded); received, when it was not decided in the wait or is to be tried again; may not be recorded; or
+  not a press of Agent Kourier's. The message response (`application/vnd.microsoft.activity.message`) shows the presser a banner under the card
   and resets its inputs; TextRuns and choice titles show literally (no mention, markdown or link); the input styles, the
   positive and destructive actions and the verb render or arrive as sent; a choice of several arrives comma-joined; the
   ending's PUT replaces the card ("Edited"); the decider's mention notifies the person and shows the entity's text, so the adapter
   writes the decider's name in it, read from the roster of the channel's team, and "someone" when it cannot be read
   (all measured on a test tenant, web client, channel thread, November 2026, except a name in the mention, which was not shown). A PUT that omits `text` keeps the message's old
   text, so every Teams edit sends its text; whether one with no attachments drops a card is not measured. Refusals decided by
-  the press worker after the answer (not a member, not ready, gone, invalid) reach nobody, as there are no ephemeral messages. The press worker decides a press
+  the press worker after the answer reach nobody, as there are no ephemeral messages. The press worker decides a press
   as on Slack: the adapter's IsMember reads the Bot Connector's roster of the channel's conversation (`pagedmembers`, the team's
   members) at each press, uncached, by the presser's Entra object ID; IsBot and ResolveUser read the account from the rosters of the
   teams the bot has heard from (a 28: Teams ID is a bot), kept an hour. The roster's paging, shape and errors are Microsoft's

@@ -107,12 +107,17 @@ budget of a message: the pause is refused as one that cannot be shown. An ending
 ([Limits](limits.md#what-a-thread-shows)).
 
 Teams sends a press to the broker in a request, and waits about 14 seconds for the answer (measured on a test tenant in November
-2026). Agent Kourier records the press and answers at once, with a line for Teams to show the person who pressed: that it received
-the press (and, for a question's or an approval's card, that the card changes for everyone when it is decided), that it may not
-have recorded it and to press again, or that it cannot take the press, which names no button of Agent Kourier's, or has no
-presser or no message. Teams shows the line to the person who pressed, as a banner under the card, and clears the card's inputs. Who may press, and whether the question is still open, are checked after that answer, by the
-worker that decides recorded presses; Teams has no ephemeral messages, so a press refused there is told nothing more, and its card
-does not change.
+2026). Agent Kourier records the press and waits up to 8 seconds in the request for the worker that decides recorded presses to
+decide it ([Limits](limits.md)), then answers with a line for Teams to show the person who pressed. A press decided in that wait is
+told what it came to: that it was recorded, or was already, or why it was refused (not a member of the channel, not an approver, a
+question that is gone or that someone else answered first, an answer that is not valid). A
+press not decided in the wait, or whose decision is to be tried again (a read of the members that failed, say), is told that it was
+received (and, for a question's or an approval's card, that the card changes for everyone when it is decided); the worker decides it
+after the answer, once, and since Teams has no ephemeral messages, a refusal then is told nothing more and its card does not change.
+A press whose recording failed is told that it may not have been recorded and to press again, and one that names no button of Agent
+Kourier's, or has no presser or no message, that it cannot be taken. Teams shows the line to the person who pressed, as a banner under
+the card, and clears the card's inputs. The card changes for everyone by its own update when the question is decided, not by this
+answer.
 
 The worker decides a press as it does on Slack: the person who pressed must be a member of the channel and no bot. On Microsoft
 Teams the broker reads the Bot Connector's list of the members of the channel's conversation, which Microsoft documents as the
