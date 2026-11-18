@@ -80,6 +80,9 @@ func outline(t *testing.T, card map[string]any) []string {
 		if act["type"] != "Action.Execute" {
 			t.Fatalf("an action of the type %v", act["type"])
 		}
+		if act["verb"] != "kourier" {
+			t.Errorf("the action %v has the verb %v, want the one fixed word kourier", act["title"], act["verb"])
+		}
 		data, _ := json.Marshal(act["data"])
 		out = append(out, fmt.Sprintf("action:%s %v %s", act["title"], act["style"], data))
 	}
@@ -325,4 +328,59 @@ func TestButtonsAreTheActionsOfACardUnderTheText(t *testing.T) {
 func TestCardBoundsAreOnTheLimitsPage(t *testing.T) {
 	limitsdoc.Count(t, "teamsInlineChoices", inlineChoices)
 	limitsdoc.Count(t, "teamsMinEndingUnits", minEndingUnits)
+}
+
+// An ending over the budget is cut a half of the cap at a time, and no further than it must: one that fits with its texts at half the
+// cap is cut to that, and not to the floor.
+func TestAnEndingIsCutNoFurtherThanItMust(t *testing.T) {
+	t.Parallel()
+	half := maxTextUnits / 2
+	qs := make([]chat.Question, 20)
+	answers := make([][]string, len(qs))
+	for i := range qs {
+		qs[i] = chat.Question{Text: strings.Repeat("a", maxTextUnits)}
+		answers[i] = []string{strings.Repeat("b", maxTextUnits)}
+	}
+	e := chat.Ending{Outcome: chat.Answered, By: testUser, Prompt: chat.Prompt{ID: "ix-1", Questions: qs}, Answers: answers}
+	uncut := cardBuilder{caps: capabilities()}
+	if n, err := size(cardActivity(uncut.ending(e))); err != nil || n <= maxMessageBytes {
+		t.Fatalf("the ending uncut is %d bytes (%v), want it over the budget for the test to mean anything", n, err)
+	}
+	atHalf := cardBuilder{caps: capabilities(), cut: half}
+	if n, err := size(cardActivity(atHalf.ending(e))); err != nil || n > maxMessageBytes {
+		t.Fatalf("the ending at half the cap is %d bytes (%v), want it within the budget", n, err)
+	}
+	card := cardOf(t, mustRender(t, chat.End(e)))
+	longest := 0
+	for _, line := range outline(t, card) {
+		longest = max(longest, chat.Units(strings.TrimLeft(strings.TrimPrefix(line, "text:"), "*~`")))
+	}
+	if longest != half {
+		t.Errorf("the longest text of the ending is %d units, want %d: cut to half the cap and no further", longest, half)
+	}
+}
+
+// A message's buttons count toward its budget: a reply that fits alone, and not with the card of its buttons, has its Body cut so
+// that both fit.
+func TestButtonsCountTowardTheBudget(t *testing.T) {
+	t.Parallel()
+	body := strings.Repeat("中", maxBodyUnits)
+	alone := mustRender(t, chat.Say(chat.Message{Parts: []chat.Part{chat.Body{Markdown: body}}}))
+	if !strings.Contains(alone.Text, body) {
+		t.Fatalf("the reply alone was cut: %d units", chat.Units(alone.Text))
+	}
+	var buttons []chat.Button
+	for i := range 5 {
+		buttons = append(buttons, chat.Button{ID: fmt.Sprintf("b%d", i), Label: strings.Repeat("中", maxTextUnits), Value: "v"})
+	}
+	a := mustRender(t, chat.Say(chat.Message{Parts: []chat.Part{chat.Body{Markdown: body}, chat.Buttons{Buttons: buttons}}}))
+	if n, err := size(a); err != nil || n > maxMessageBytes {
+		t.Fatalf("the message is %d bytes (%v), over the budget", n, err)
+	}
+	if strings.Contains(a.Text, body) || !strings.Contains(a.Text, chat.Truncated) {
+		t.Errorf("the reply beside its buttons was not cut: %d units", chat.Units(a.Text))
+	}
+	if actions, _ := cardOf(t, a)["actions"].([]any); len(actions) != len(buttons) {
+		t.Errorf("the card has %d buttons, want %d", len(actions), len(buttons))
+	}
 }

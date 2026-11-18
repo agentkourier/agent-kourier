@@ -175,7 +175,8 @@ func (c *Client) Post(ctx context.Context, t chat.Target, o chat.Outgoing, _ str
 	return c.ref(t.Channel, t.Thread, id), nil
 }
 
-// Update implements chat.Platform. Every message on Teams holds only text, so content that shows none is ErrWouldDropText.
+// Update implements chat.Platform. Content that shows nothing on Teams, no text and no card, is ErrWouldDropText: a message with
+// buttons and no text keeps its card, and a prompt and its ending are a card alone.
 func (c *Client) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) (err error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.Update")
 	defer func() { c.finish(ctx, op, "Update", err) }()

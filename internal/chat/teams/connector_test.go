@@ -350,7 +350,7 @@ var cardKeys = map[string]map[string]string{
 	"Input.Text":      {"type": "-", "id": "-", "isMultiline": "-"},
 	"Input.ChoiceSet": {"type": "-", "id": "-", "style": "-", "isMultiSelect": "-", "choices": "choice"},
 	"choice":          {"title": "-", "value": "-"},
-	"Action.Execute":  {"type": "-", "title": "-", "style": "-", "data": "-"},
+	"Action.Execute":  {"type": "-", "verb": "-", "title": "-", "style": "-", "data": "-"},
 }
 
 // bodyTypes are the elements a card's body may hold.

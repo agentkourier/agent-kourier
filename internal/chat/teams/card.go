@@ -12,9 +12,10 @@ import (
 
 // This file is the Adaptive Card layout of the neutral model: a prompt, the ending that replaces it, and a message's buttons. A
 // button is an Action.Execute, which Teams sends back as an adaptiveCard/action invoke (press.go); Universal Actions need a card of
-// version 1.5 (Microsoft's "Work with Universal Actions for Adaptive Cards", updated 2026-07-27). A card with a body and an
-// Action.Execute, posted as a message's one attachment, was posted, pressed and answered on a test tenant on 2026-11-18, and the invoke
-// named the card's message in its replyToId.
+// version 1.5 (Microsoft's "Work with Universal Actions for Adaptive Cards", updated 2026-07-27). What was measured, on a test tenant
+// on 2026-11-18, is a card of two TextBlocks and one Action.Execute with the verb "press", posted as a message's one attachment: it was
+// pressed, the invoke named the card's message in its replyToId, and it was answered with a card that replaced it. The cards here
+// (RichTextBlocks, inputs, several actions, the verb actionVerb) and the answer that press.go gives (a message, not a card) were not.
 //
 // Every text that the agent, a person or an alert wrote is the text of a TextRun in a RichTextBlock, or the title of a choice, which
 // the Adaptive Cards schema shows as the characters they hold: a TextRun takes no markdown, unlike a TextBlock. So the text is
@@ -33,6 +34,9 @@ const (
 	// dataKey is the key of Agent Kourier's own part of an action's data. Teams merges the values of the card's inputs into the data
 	// by their IDs (the Adaptive Cards schema of Action.Execute), and no input's ID is this.
 	dataKey = "kourier"
+	// actionVerb is the verb of every Action.Execute of a card: Universal Actions route an action by its verb, and the press is read
+	// by its data, so the verb is one fixed word.
+	actionVerb = "kourier"
 
 	// inlineChoices is the most choices a question shows as radio buttons or checkboxes; one with more shows them in a menu.
 	inlineChoices = 10
@@ -129,7 +133,7 @@ func (b *cardBuilder) card(fallback string, actions []any) map[string]any {
 
 // execute is an Action.Execute with the title, the style ("" for none) and Agent Kourier's data.
 func execute(title, style string, data map[string]any) map[string]any {
-	a := map[string]any{"type": "Action.Execute", "title": title, "data": map[string]any{dataKey: data}}
+	a := map[string]any{"type": "Action.Execute", "verb": actionVerb, "title": title, "data": map[string]any{dataKey: data}}
 	if style != "" {
 		a["style"] = style
 	}

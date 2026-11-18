@@ -23,12 +23,15 @@ const messageAnswer = "application/vnd.microsoft.activity.message"
 
 // What a press is answered with, in its request: before it is decided, which the press worker does after the answer.
 const (
-	// textPromptReceived answers the press of a prompt's button, whose card is changed for everyone when the press is taken.
-	textPromptReceived = "Agent Kourier received your press. The card changes when it is decided; if it does not change, the press was not accepted."
+	// textPromptReceived answers the press of a prompt's button. It says only what is known in the request: the press is recorded,
+	// and the card is replaced for everyone once the question is decided, by this press or another, or ends.
+	textPromptReceived = "Agent Kourier received your press. The card changes for everyone when the question is decided."
 	// textButtonReceived answers the press of a message's button, such as a vote.
 	textButtonReceived = "Agent Kourier received your press."
-	// textPressNotRecorded answers a press that the sink did not take: nothing will come of it, and Teams does not send it again.
-	textPressNotRecorded = "Agent Kourier could not record your press. Please press again."
+	// textPressNotRecorded answers a press whose recording returned an error: it may still have been recorded (the write can commit
+	// and its answer be lost), so it says may not, and Teams does not send the press again. A second press is recorded on its own
+	// and decided as any press is.
+	textPressNotRecorded = "Agent Kourier may not have recorded your press. Please press again."
 	// textPressUnusable answers a press that names no button of Agent Kourier's, or that came from no one or of no message.
 	textPressUnusable = "Agent Kourier cannot take this press."
 )
@@ -62,8 +65,8 @@ type ownData struct {
 
 // Invoke implements InvokeHandler. It answers a press of a card's Action.Execute at once, in the request, with a message for the
 // presser, and hands the press to sink first, which records it and returns (the press worker decides it after): received, when sink
-// took it; could not be recorded, when sink returned an error, since nothing comes of the press and Teams does not send it again; and
-// cannot be taken, when the press names no button of Agent Kourier's. Who may press, and whether the question is still open, are
+// took it; may not be recorded, when sink returned an error, since Teams does not send the press again; and cannot be taken, when the
+// press names no button of Agent Kourier's, or has no presser or message. Who may press, and whether the question is still open, are
 // decided by the worker after the answer, so a press refused there is answered as received, and its card does not change. Any other
 // invoke is answered 200 with no body.
 func (c *Client) Invoke(ctx context.Context, sink chat.Sink, inv Invoke) InvokeAnswer {
