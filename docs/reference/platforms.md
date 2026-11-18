@@ -183,8 +183,9 @@ replies and its errors are Microsoft's documentation: none of them was measured.
 
 ## Finding a post again on Microsoft Teams
 
-The outbox records each post before it sends it, and before it posts one that it queued or tried before, a post that was sent and not
-recorded before a crash among them, it asks the platform for the post by its tag. On Slack the tag is in the message's metadata. On
+The outbox records each post before it sends it, and before it posts one that it tried before, or that was queued before this leader
+started, a post that was sent and not recorded before a crash among them, it asks the platform for the post by its tag. A post that this
+leader queued and has not tried is sent with no lookup. On Slack the tag is in the message's metadata. On
 Microsoft Teams it is in a part of the post that people do not see: an empty `<span>` whose `title` is the tag's carrier, in a paragraph
 of its own at the end of a text, or the `id` of the first element of a card's body when the card is the whole post (a question's or an
 approval's card, and the card that ends one). A reply with buttons, such as the useful and not-useful buttons, carries it in its text. An edit of a post
