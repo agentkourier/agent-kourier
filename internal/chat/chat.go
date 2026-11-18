@@ -124,6 +124,11 @@ type Caps struct {
 	// says which one is its own (Slack: hourglass_flowing_sand). Empty means the platform has no reactions at all: React and
 	// Unreact say ErrNoReactions, a message shows no acknowledgment, and a Binding that names a reaction is told it is not shown.
 	AckReaction string
+	// RootContext says that the first turn of a session that a person's mention opened inside a thread carries the message that
+	// opened the thread, whoever wrote it, read through the platform's ThreadReader (spec 8.2, D55). It is for a platform where an
+	// alert's post reaches no trigger (Microsoft Teams sends a bot no other app's posts), so a person asks about an alert that no turn
+	// has carried. Without it such a turn carries the person's message alone.
+	RootContext bool
 	// MaxText is the most text, in UTF-16 units, that one place shows, and Limits is the same for the
 	// places that differ. A place cut to its limit ends in Truncated, which counts.
 	MaxText int

@@ -60,10 +60,11 @@ type mentioned struct {
 	Name string `json:"name"`
 }
 
-// capabilities is what a Teams connection does in this release: a message's steps, as a list under the rest of the message; and
-// no streams, ephemeral messages, busy mark or reactions.
+// capabilities is what a Teams connection does in this release: a message's steps, as a list under the rest of the message; the
+// root of a thread with a person's first mention in it, since Teams sends a bot no alert that another app posted; and no streams,
+// ephemeral messages, busy mark or reactions.
 func capabilities() chat.Caps {
-	return chat.Caps{Steps: true, MaxText: maxTextUnits, Limits: map[chat.Where]int{chat.WhereBody: maxBodyUnits, chat.WhereStream: maxBodyUnits}}
+	return chat.Caps{Steps: true, RootContext: true, MaxText: maxTextUnits, Limits: map[chat.Where]int{chat.WhereBody: maxBodyUnits, chat.WhereStream: maxBodyUnits}}
 }
 
 // errEmpty is wrapped by the error of an Outgoing that shows nothing on Teams (no part that shows text, and no Fallback).
