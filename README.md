@@ -222,7 +222,7 @@ other bots, and the [trigger reference](docs/reference/chat-triggers.md) has the
 | Chat platform | Slack over Socket Mode: mentions, thread replies, streamed output, questions | Implemented |
 | Chat platform | Slack over the Events API (HTTP mode): the same, with Slack's signed requests taken on the chat listener, behind a Service that selects the leader. Tested against the end-to-end tests' fake Slack, and tried once against Slack itself. Needs a release later than 0.4.0, whose chart refuses `chatListener` and `networkPolicy.chatFrom`. See [Configure Slack](docs/how-to/configure-slack.md) | Experimental |
 | Chat platform | Slack direct messages | Planned |
-| Chat platform | Microsoft Teams | Planned |
+| Chat platform | Microsoft Teams. The API takes a `teams` ChatConnection and checks its Bindings; no broker runs one yet, as there is no adapter | Planned |
 | Chat platform | Other platforms, through the `chat.Platform` interface and its conformance suite | Planned |
 | Agent backend | kagent 1.0, `kagent-v1` dialect, with structured questions and optional Slack tool approvals. Tested against 1.0.0-alpha5. Needs a cluster that serves the pod-certificate APIs, which managed EKS through 1.36 cannot; see [Connect a kagent agent](docs/how-to/connect-kagent.md) | Implemented |
 | Agent backend | Any A2A agent, 1.0 or 0.3, whose card advertises streaming and a JSON-RPC interface, `a2a` dialect. Questions arrive as text, or as kagent's structured questions and tool approvals when the card lists its human-in-the-loop extension | Implemented |

@@ -76,31 +76,38 @@ const (
 // set far above any real use, which today is:
 //
 //   - maxAllowedNamespaces 256: one namespace in every example (a namespace is at most 63 characters, so the list is at most 16 KiB).
-//   - maxChatIDLen 32: a channel, a sender and a user group are 11 characters in every example, and Slack's IDs are 9 to 11
-//     (unverified: not readable in this repository). A mention's name and user ID are already bounded by their patterns, to
-//     63 and 21: maxMentionNameLen and maxMentionUserLen say so as caps, so that the schema has a maxLength for them and a
-//     value over one is refused without being shown.
+//   - The chat IDs are capped by the union of the platforms' shapes (platforms.go): each cap is the largest of its platforms'
+//     caps, and the broker holds an ID to its own platform's cap when it reads the Binding with its connection (a Slack channel,
+//     sender and user group to maxSlackIDLen, 32; a Slack user to maxSlackUserIDLen, 21). maxChannelIDLen 140 is Microsoft
+//     Teams' channel cap: a channel ID of the test tenant is 60 bytes, and the cap leaves room for a longer one. maxSenderIDLen
+//     and maxMentionUserLen 36 are a Microsoft Entra ID's length, entraIDLen, longer than any Slack bot or user ID; a Slack user
+//     ID is 21 at most, by its pattern. maxApproverGroupIDLen 32 is Slack's, the only platform with approver groups. A channel,
+//     a sender and a user group are 11 characters in every example, and Slack's IDs are 9 to 11 (unverified: not readable in
+//     this repository). A mention's name is already bounded by its pattern, to 63: maxMentionNameLen says so as a cap, so that
+//     the schema has a maxLength for it and a value over one is refused without being shown.
 //   - maxEmojiLen 100: the default reaction, hourglass_flowing_sand, is 21. Slack's own limit on a custom emoji name is
 //     100 characters (unverified: not readable in this repository).
-//   - maxURLLen 2048: the longest URL in an example or a test fixture is under 100 characters.
+//   - maxURLLen 2048, for an AgentBackend's url and a teams connection's notificationURL: the longest URL in an example or a test fixture is under 100 characters.
 //   - maxHeaderValueLen 4096: a static header value in an example is under 50 bytes, and a secret goes in valueSecretRef.
 //   - maxExtractNameLen 63, as a mention name: the longest extract name in an example is 9 characters. A closeWhen key
 //     must be an extract name, so it is bounded too.
 //   - maxCloseWhenValueLen 256: the value in an example is RESOLVED.
 const (
-	maxAllowedNamespaces = 256
-	maxChatIDLen         = 32
-	maxMentionNameLen    = 63
-	maxMentionUserLen    = 21
-	maxEmojiLen          = 100
-	maxURLLen            = 2048
-	maxHeaderValueLen    = 4096
-	maxExtractNameLen    = 63
-	maxCloseWhenValueLen = 256
+	maxAllowedNamespaces  = 256
+	maxChannelIDLen       = 140
+	maxSenderIDLen        = entraIDLen
+	maxApproverGroupIDLen = maxSlackIDLen
+	maxMentionNameLen     = 63
+	maxMentionUserLen     = entraIDLen
+	maxEmojiLen           = 100
+	maxURLLen             = 2048
+	maxHeaderValueLen     = 4096
+	maxExtractNameLen     = 63
+	maxCloseWhenValueLen  = 256
 )
 
 // mentionName is what an agent writes after an "@"; its literal must equal ChatMention.Name's Pattern marker. (The shape of the
-// user it names, slackUserID, is in platforms.go with the other chat IDs.)
+// user it names, mentionUser, is in platforms.go with the other chat IDs.)
 var mentionName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 
 // broadcastNames are the words a platform reads as a mention of everyone. None may be declared, so that no reply that names
@@ -300,7 +307,7 @@ func (c *ChatConnection) Validate() error {
 	var p problems
 	p.meta(c.ObjectMeta)
 	s := &c.Spec
-	p.oneOf("spec.platform", s.Platform, PlatformSlack)
+	p.oneOf("spec.platform", s.Platform, PlatformSlack, PlatformTeams)
 	p.name("spec.credentialsSecretRef.name", s.CredentialsSecretRef.Name)
 	p.namespaces("spec.allowedNamespaces", s.AllowedNamespaces)
 	if s.Slack != nil {
@@ -311,7 +318,75 @@ func (c *ChatConnection) Validate() error {
 			p.oneOf("spec.slack.mode", string(s.Slack.Mode), string(SlackModeSocket), string(SlackModeHTTP))
 		}
 	}
+	switch {
+	case s.Teams != nil:
+		if s.Platform != PlatformTeams {
+			p.add("spec.teams", "is set, but only a teams connection has one")
+		}
+		p.teams(s.Teams, c.Namespace, c.Name)
+	case s.Platform == PlatformTeams:
+		p.add("spec.teams", "is required on a teams connection: it names the tenant and the app")
+	}
 	return errors.Join(p...)
+}
+
+// teams checks the settings of a teams connection named namespace/name: the tenant and the app, each a Microsoft Entra ID, the mode,
+// and the notification URL, if they are set.
+func (p *problems) teams(t *TeamsConnectionSpec, namespace, name string) {
+	p.entraGUID("spec.teams.tenantID", "tenant ID", t.TenantID)
+	p.entraGUID("spec.teams.appID", "application ID", t.AppID)
+	if t.Mode != "" { // unset is http (TeamsMode)
+		p.oneOf("spec.teams.mode", string(t.Mode), string(TeamsModeHTTP), string(TeamsModeSocket))
+	}
+	if t.NotificationURL != "" {
+		p.notificationURL(t.NotificationURL, namespace, name)
+	}
+}
+
+// entraGUID checks a Microsoft Entra ID of a teams connection: a GUID in lowercase hex (entraIDPattern, which the schema copies). It
+// is not a secret, so a message shows it, unless it is longer than any GUID.
+func (p *problems) entraGUID(path, what, v string) {
+	const fix = "must be a GUID in lowercase hex, such as 11111111-2222-3333-4444-555555555555"
+	switch {
+	case v == "":
+		p.add(path, "required")
+	case len(v) > entraIDLen:
+		p.add(path, "invalid %s: %s", what, fix)
+	case !entraIDPattern.MatchString(v):
+		p.add(path, "invalid %s %q: %s", what, v, fix)
+	}
+}
+
+// teamsRoute is the path of a teams connection's route on the broker's chat listener, /chat/teams/<namespace>/<name>: the path that
+// spec.teams.notificationURL must have.
+func teamsRoute(namespace, name string) string {
+	return "/chat/" + PlatformTeams + "/" + namespace + "/" + name
+}
+
+// notificationURL checks the notification URL of a teams connection named namespace/name: an https URL with a host, no credentials,
+// query or fragment, at most maxURLLen bytes, whose path is the connection's own route (teamsRoute). The path is checked when the
+// object has a namespace and a name, which meta requires: without them it has no route, and meta says so. https is the only scheme
+// that Microsoft Graph's documentation of a subscription's notificationUrl allows.
+func (p *problems) notificationURL(raw, namespace, name string) {
+	const path = "spec.teams.notificationURL"
+	if len(raw) > maxURLLen {
+		p.maxBytes(path, raw, maxURLLen)
+		return
+	}
+	u, err := url.Parse(raw)
+	// A message shows the scheme and the host at most: not a path or a query, where a token may ride.
+	switch {
+	case err != nil:
+		p.add(path, "must be an https URL with a host")
+	case u.User != nil:
+		p.add(path, "must not contain credentials")
+	case u.Scheme != "https" || u.Host == "":
+		p.add(path, "invalid URL %q: must be an https URL with a host", (&url.URL{Scheme: u.Scheme, Host: u.Host}).String())
+	case strings.ContainsAny(raw, "?#"):
+		p.add(path, "must not have a query or fragment")
+	case namespace != "" && name != "" && u.EscapedPath() != teamsRoute(namespace, name):
+		p.add(path, "must have the path %s, the connection's route on the chat listener", teamsRoute(namespace, name))
+	}
 }
 
 // Validate reports every per-object rule the object breaks, joined, each naming the field
@@ -333,10 +408,10 @@ func (b *Binding) Validate() error {
 	p.objectRef("spec.chat.connectionRef", &s.Chat.ConnectionRef)
 	if c := s.Chat.Channel; c == "" {
 		p.add("spec.chat.channel", "required")
-	} else if len(c) > maxChatIDLen {
-		p.maxBytes("spec.chat.channel", c, maxChatIDLen) // not shown: the channel is in the messages that name a conflict
-	} else if !slackChannelID.MatchString(c) {
-		p.add("spec.chat.channel", "invalid channel %q: must be a channel ID such as C0123456789, not a name", c)
+	} else if len(c) > maxChannelIDLen {
+		p.maxBytes("spec.chat.channel", c, maxChannelIDLen) // not shown: the channel is in the messages that name a conflict
+	} else if !channelID.MatchString(c) {
+		p.add("spec.chat.channel", "invalid channel %q: must be a channel ID such as C0123456789 (Slack) or 19:…@thread.tacv2 (Microsoft Teams), not a name", c)
 	}
 	p.oneOf("spec.chat.output", string(s.Chat.Output), string(OutputLive), string(OutputFinal))
 	p.oneOf("spec.chat.progress", string(s.Chat.Progress), string(ProgressSteps), string(ProgressStepsAndActivity), string(ProgressActivity))
@@ -392,8 +467,8 @@ func (p *problems) mentions(path string, mentions []ChatMention) {
 			p.add(at+".user", "required")
 		case len(m.User) > maxMentionUserLen:
 			p.maxBytes(at+".user", m.User, maxMentionUserLen)
-		case !slackUserID.MatchString(m.User):
-			p.add(at+".user", "invalid user ID %q: must be a user ID such as U0123456789", m.User)
+		case !mentionUser.MatchString(m.User):
+			p.add(at+".user", "invalid user ID %q: must be a user ID such as U0123456789 (Slack) or a Microsoft Entra object ID, a GUID in lowercase hex (Microsoft Teams)", m.User)
 		}
 	}
 }
@@ -411,8 +486,8 @@ func (p *problems) interactions(path string, in Interactions) {
 		switch {
 		case group == "":
 			p.add(at, "must not be empty")
-		case len(group) > maxChatIDLen:
-			p.maxBytes(at, group, maxChatIDLen)
+		case len(group) > maxApproverGroupIDLen:
+			p.maxBytes(at, group, maxApproverGroupIDLen)
 		case !slackGroupID.MatchString(group):
 			p.add(at, "invalid group ID %q: must be a Slack user group ID such as S0123456789", group)
 		}
@@ -582,10 +657,11 @@ func (p *problems) botMessageTrigger(path string, t *Trigger, b *regexBudget) {
 	switch {
 	case t.From == nil || t.From.ID == "":
 		p.add(path+".from.id", "required")
-	case len(t.From.ID) > maxChatIDLen:
-		p.maxBytes(path+".from.id", t.From.ID, maxChatIDLen)
-	case !slackBotID.MatchString(t.From.ID):
-		p.add(path+".from.id", "invalid sender ID %q: must be the sender's ID (Slack: a bot ID such as B0123456789), not a name", t.From.ID)
+	case len(t.From.ID) > maxSenderIDLen:
+		p.maxBytes(path+".from.id", t.From.ID, maxSenderIDLen)
+	case !senderID.MatchString(t.From.ID):
+		p.add(path+".from.id", "invalid sender ID %q: must be the sender's ID (Slack: a bot ID such as B0123456789; Microsoft Teams: "+
+			"the Microsoft Entra application ID of the app that posts, a GUID in lowercase hex), not a name", t.From.ID)
 	}
 	if t.From != nil {
 		if t.From.Kind == "" {

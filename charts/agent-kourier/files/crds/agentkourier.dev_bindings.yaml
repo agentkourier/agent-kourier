@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    agentkourier.dev/schema-sha256: bb3b0cc50f11d0669d4023dbe260d946c4f669cf9746b6509b6dd7206ac891f0
+    agentkourier.dev/schema-sha256: 514fd60874108a594e48a39a0baba01afd4b2d0958e4d810ff463565386b2386
     controller-gen.kubebuilder.io/version: v0.23.0
   name: bindings.agentkourier.dev
 spec:
@@ -143,10 +143,14 @@ spec:
                     - ""
                     type: string
                   channel:
-                    description: 'Channel is the platform''s channel ID, not its name
-                      (Slack: `C…` or `G…`). At most 32 bytes.'
-                    maxLength: 32
-                    pattern: ^[CG][A-Z0-9]+$
+                    description: |-
+                      Channel is the platform's channel ID, not its name: on Slack `C…` or `G…`, capitals and digits, at most 32 bytes; on Microsoft
+                      Teams `19:…@thread.tacv2` (or `@thread.skype`), at most 140 bytes. The API server takes either platform's shape, and refuses
+                      a name such as `general`, which has neither. The broker holds the channel to the shape of its connection's platform when it
+                      reads the Binding with its connection, and refuses a Binding whose channel has the other shape as it refuses an invalid one,
+                      with the reason InvalidPlatformID.
+                    maxLength: 140
+                    pattern: ^(?:[CG][A-Z0-9]+|19:[A-Za-z0-9._-]+@thread\.(?:tacv2|skype))$
                     type: string
                   connectionRef:
                     description: |-
@@ -200,11 +204,12 @@ spec:
                               is reserved and cannot be declared
                             rule: '!(self in [''here'', ''channel'', ''everyone''])'
                         user:
-                          description: 'User is the platform''s user ID of the person
-                            (Slack: `U…` or `W…`). It comes only from here, never
-                            from the agent.'
-                          maxLength: 21
-                          pattern: ^[UW][A-Z0-9]{2,20}$
+                          description: |-
+                            User is the platform's user ID of the person: on Slack `U…` or `W…`, then 2 to 20 capitals and digits; on Microsoft Teams the
+                            person's Microsoft Entra object ID, a GUID in lowercase hex. It comes only from here, never from the agent. At most 36 bytes.
+                            The broker holds it to the shape of its connection's platform as it does spec.chat.channel.
+                          maxLength: 36
+                          pattern: ^(?:[UW][A-Z0-9]{2,20}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$
                           type: string
                       required:
                       - name
@@ -337,9 +342,11 @@ spec:
                                 ID is the sender's ID on the platform, never a display name (Slack: the bot ID, `B…`). The load cannot know
                                 Agent Kourier's own ID, so naming it loads: Agent Kourier's own posts are never forwarded, so the trigger
                                 matches nothing, and the Slack adapter logs one warning, the first time one of its posts arrives.
-                                At most 32 bytes.
-                              maxLength: 32
-                              pattern: ^B[A-Z0-9]+$
+                                On Slack it is `B`, then capitals and digits, at most 32 bytes; on Microsoft Teams the Microsoft Entra application ID of the
+                                app that posts, a GUID in lowercase hex. At most 36 bytes. The broker holds it to the shape of its connection's platform as it
+                                does spec.chat.channel.
+                              maxLength: 36
+                              pattern: ^(?:B[A-Z0-9]+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$
                               type: string
                             kind:
                               default: bot
@@ -661,7 +668,8 @@ spec:
                       ApproverGroups names the platform's user groups whose members may decide a tool approval, by the platform's ID (Slack: `S…`).
                       An empty list allows any non-bot channel member. At most 10 groups may be named. Group IDs start with S and contain
                       uppercase letters and digits, at most 32 bytes; duplicates and empty entries are refused. A platform that cannot ask for tool
-                      approvals refuses toolApprovals: true with the reason UnsupportedOnPlatform; Slack can.
+                      approvals refuses toolApprovals: true with the reason UnsupportedOnPlatform; Slack can. A platform that takes tool approvals and
+                      has no approver groups refuses approverGroups with that reason: Microsoft Teams does.
                     items:
                       maxLength: 32
                       pattern: ^S[A-Z0-9]+$

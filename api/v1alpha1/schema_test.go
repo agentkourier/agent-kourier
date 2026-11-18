@@ -272,6 +272,13 @@ func TestSchemaEnumsListTheEmptyValueExactlyWhereTheBrokerAcceptsIt(t *testing.T
 			o.Default()
 			return o.Validate()
 		}},
+		{conns.at(t, "spec.teams.mode"), "teams mode", func(t *testing.T) error {
+			o := load[ChatConnection](t, "chatconnection.yaml")
+			teamsConn(o, "")
+			o.Spec.Teams.Mode = ""
+			o.Default()
+			return o.Validate()
+		}},
 		{bindings.at(t, trigger+".type"), "trigger type", binding(func(o *Binding) { bot(o).Type = "" })},
 		{bindings.at(t, trigger+".extract.{}.field"), "extract field", binding(func(o *Binding) {
 			e := bot(o).Extract["state"]
@@ -328,11 +335,13 @@ func TestSchemaPatternsEqualTheGoLiterals(t *testing.T) {
 		plural, path string
 		re           *regexp.Regexp
 	}{
-		{"bindings", "spec.chat.channel", slackChannelID},
-		{"bindings", "spec.chat.triggers[].from.id", slackBotID},
+		{"bindings", "spec.chat.channel", channelID},
+		{"bindings", "spec.chat.triggers[].from.id", senderID},
 		{"bindings", "spec.chat.mentions[].name", mentionName},
-		{"bindings", "spec.chat.mentions[].user", slackUserID},
+		{"bindings", "spec.chat.mentions[].user", mentionUser},
 		{"bindings", "spec.interactions.approverGroups[]", slackGroupID},
+		{"chatconnections", "spec.teams.tenantID", entraIDPattern},
+		{"chatconnections", "spec.teams.appID", entraIDPattern},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			if got := crdSchema(t, tc.plural).at(t, tc.path).str("pattern"); got != tc.re.String() {
@@ -359,9 +368,12 @@ func TestSchemaCapsEqualTheBrokersCaps(t *testing.T) {
 		// The broker counts bytes and the schema characters, so the schema is never the stricter of the two.
 		{"backend url", backends.at(t, "spec.url"), "maxLength", maxURLLen},
 		{"header value", backends.at(t, "spec.headers[].value"), "maxLength", maxHeaderValueLen},
-		{"channel", bindings.at(t, "spec.chat.channel"), "maxLength", maxChatIDLen},
-		{"sender ID", bindings.at(t, trigger+".from.id"), "maxLength", maxChatIDLen},
-		{"approver group", bindings.at(t, "spec.interactions.approverGroups[]"), "maxLength", maxChatIDLen},
+		{"channel", bindings.at(t, "spec.chat.channel"), "maxLength", maxChannelIDLen},
+		{"sender ID", bindings.at(t, trigger+".from.id"), "maxLength", maxSenderIDLen},
+		{"approver group", bindings.at(t, "spec.interactions.approverGroups[]"), "maxLength", maxApproverGroupIDLen},
+		{"teams notification url", connections.at(t, "spec.teams.notificationURL"), "maxLength", maxURLLen},
+		{"teams tenant", connections.at(t, "spec.teams.tenantID"), "maxLength", entraIDLen},
+		{"teams app", connections.at(t, "spec.teams.appID"), "maxLength", entraIDLen},
 		{"emoji", bindings.at(t, "spec.chat.acknowledgment.emoji"), "maxLength", maxEmojiLen},
 		{"mention name", bindings.at(t, "spec.chat.mentions[].name"), "maxLength", maxMentionNameLen},
 		{"mention user", bindings.at(t, "spec.chat.mentions[].user"), "maxLength", maxMentionUserLen},

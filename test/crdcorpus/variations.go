@@ -191,6 +191,37 @@ func urls() func(*rand.Rand) any {
 	}
 }
 
+// teamsURLs is a pool of a teams connection's notification URLs: the AgentBackend's pool, whose http URLs are all refused, and
+// the hosts and paths around the variation's own route, /chat/teams/sre/variation (another connection's route, a prefix, a
+// trailing slash, odd case, an escape), with credentials, a query or a fragment, and at the length cap.
+func teamsURLs() func(*rand.Rand) any {
+	backend := urls()
+	const route = "/chat/teams/sre/variation"
+	hosts := []string{"kourier.example.com", "Kourier.Example.com:8443", "10.0.0.7", "[2001:db8::1]", "u:p@kourier.example.com", "@kourier.example.com", "", "h h", "h:"}
+	paths := []string{route, route, route, "", "/", route + "/", "/chat/teams/sre/other", "/chat/teams/payments/variation", "/chat/slack/sre/variation",
+		"/prefix" + route, "/CHAT/teams/sre/variation", "/chat/teams/sre/vari%61tion", "/chat/teams/sre/", "/chat/teams/Sre/variation"}
+	tails := []string{"", "", "", "?q", "#f", "?", " ", "\\x"}
+	return func(r *rand.Rand) any {
+		switch r.IntN(5) {
+		case 0:
+			return backend(r)
+		case 1:
+			return []any{absent{}, "", nil, "https://kourier.example.com" + route + strings.Repeat("a", 2048-len("https://kourier.example.com"+route)),
+				"https://kourier.example.com" + route + strings.Repeat("a", 2049-len("https://kourier.example.com"+route))}[r.IntN(5)]
+		}
+		scheme := []string{"https://", "https://", "HTTPS://", "http://", "hTtPs://"}[r.IntN(5)]
+		return scheme + hosts[r.IntN(len(hosts))] + paths[r.IntN(len(paths))] + tails[r.IntN(len(tails))]
+	}
+}
+
+// entraIDs is a pool of Microsoft Entra IDs, for a teams connection's tenant and application and a Binding's sender and user: GUIDs
+// in lowercase hex, and what is near one.
+func entraIDs() func(*rand.Rand) any {
+	const guid = "66666666-7777-4888-9999-aaaaaaaaaaaa"
+	return of(guid, guid, guid, "11111111-2222-3333-4444-555555555555", strings.ToUpper(guid), "{"+guid+"}", guid[:35], guid+"a", strings.ReplaceAll(guid, "-", ""),
+		"28:"+guid, "contoso.onmicrosoft.com", "", nil, absent{}, "6666666g-7777-4888-9999-aaaaaaaaaaaa")
+}
+
 // headerNames is a pool of header names: each reserved one in random case, with a space, a suffix or a prefix, and names
 // of multibyte characters that are near 256 bytes.
 func headerNames() func(*rand.Rand) any {
@@ -267,6 +298,19 @@ func variationTemplates() []template {
 		}},
 		{kind: "Binding", doc: bindingDoc, mutations: bindingMutations(dur, messageFields, extractNames)},
 		{kind: "Binding", doc: bindingDoc, mutations: bindingMutations(dur, messageFields, extractNames)},
+		{kind: "ChatConnection", doc: teamsConnectionDoc, mutations: []mutation{
+			{"spec.platform", of("teams", "teams", "teams", "slack", "web", "", "Teams")},
+			{"spec.teams", of(absent{}, nil, map[string]any{}, map[string]any{"tenantID": "11111111-2222-3333-4444-555555555555"},
+				map[string]any{"appID": "66666666-7777-4888-9999-aaaaaaaaaaaa"},
+				map[string]any{"tenantID": "11111111-2222-3333-4444-555555555555", "appID": "66666666-7777-4888-9999-aaaaaaaaaaaa"},
+				map[string]any{"tenantID": "11111111-2222-3333-4444-555555555555", "appID": "66666666-7777-4888-9999-aaaaaaaaaaaa", "notificationURL": nil, "mode": nil})},
+			{"spec.teams.tenantID", entraIDs()},
+			{"spec.teams.appID", entraIDs()},
+			{"spec.teams.mode", of("http", "socket", "", absent{}, nil, "HTTP", "Socket", "webhook")},
+			{"spec.teams.notificationURL", teamsURLs()},
+			{"spec.teams.notificationURL", teamsURLs()},
+			{"spec.slack", of(absent{}, absent{}, absent{}, nil, map[string]any{}, map[string]any{"mode": "http"})},
+		}},
 		{kind: "Binding", doc: mentionBindingDoc, mutations: []mutation{
 			{"spec.chat.triggers.0.from", of(absent{}, map[string]any{"id": "B0123456789"}, map[string]any{})},
 			{"spec.chat.triggers.0.match", of(absent{}, map[string]any{}, map[string]any{"title": "x"}, map[string]any{"title": ""})},
@@ -302,7 +346,12 @@ func bindingMutations(dur, messageFields, extractNames func(*rand.Rand) any) []m
 		{"spec.identity.tokenSecretRef", of(nil, map[string]any{"name": "s", "key": nil})},
 		{"spec.identity.userId", of("u", "", absent{}, nil)},
 		{"spec.chat.channel", of("C0123456789", "C"+strings.Repeat("0", 31), "C"+strings.Repeat("0", 32), "G"+strings.Repeat("A", 31), "#"+strings.Repeat("x", 32), "C"+strings.Repeat("é", 20),
-			"general", "octo/repo", "1", "ch:1", "ch 1", "sre\talerts", "sre\x00", "D0123456789", "c0123456789")},
+			"general", "octo/repo", "1", "ch:1", "ch 1", "sre\talerts", "sre\x00", "D0123456789", "c0123456789",
+			// Slack's shape within the union's cap, and Microsoft Teams': 19:<id>@thread.tacv2 or @thread.skype, a stand-in of a real one's length,
+			// at the union's cap and past it, and what is near one.
+			"C"+strings.Repeat("0", 139), "C"+strings.Repeat("0", 140), "19:KourierStandInChannelForTestsOnly0000000000a@thread.tacv2",
+			"19:a1b2c3d4@thread.tacv2", "19:a.b_c-d@thread.skype", "19:"+strings.Repeat("a", 124)+"@thread.tacv2", "19:"+strings.Repeat("a", 125)+"@thread.tacv2",
+			"19:@thread.tacv2", "19:a@thread.v2", "19:a@thread.TACV2", "29:a@thread.tacv2", "19:a b@thread.tacv2", "19:a@thread.tacv2;messageid=1")},
 		{"spec.chat.output", of("live", "final", "none", "", absent{}, nil, "None", "off")},
 		{"spec.chat.acknowledgment.emoji", of("eyes", "+1", "-1", strings.Repeat("a", 100), strings.Repeat("a", 101), strings.Repeat("é", 60), absent{})},
 		{"spec.identity.tokenSecretRef", of(absent{}, map[string]any{"name": "s"}, map[string]any{"name": "s", "key": ""})},
@@ -316,11 +365,20 @@ func bindingMutations(dur, messageFields, extractNames func(*rand.Rand) any) []m
 			[]any{map[string]any{"name": "channel", "user": "U0123456789"}}, []any{map[string]any{"name": "everyone", "user": "U0123456789"}},
 			[]any{map[string]any{"name": strings.Repeat("m", 63), "user": "U" + strings.Repeat("0", 20)}}, []any{map[string]any{"name": strings.Repeat("m", 64), "user": "U" + strings.Repeat("0", 21)}},
 			[]any{map[string]any{"name": "ok", "user": "S0123456789"}}, []any{map[string]any{"name": "ok", "user": "sam@example.com"}},
-			[]any{map[string]any{"name": "ok", "user": ".sam"}}, []any{map[string]any{"name": "ok", "user": "U0"}})},
+			[]any{map[string]any{"name": "ok", "user": ".sam"}}, []any{map[string]any{"name": "ok", "user": "U0"}},
+			[]any{map[string]any{"name": "ok", "user": "U" + strings.Repeat("0", 35)}}, []any{map[string]any{"name": "ok", "user": "29:1a2b3c"}})},
+		{"spec.chat.mentions", func(r *rand.Rand) any {
+			m := map[string]any{"name": "ok"}
+			if user := entraIDs()(r); user != (absent{}) {
+				m["user"] = user
+			}
+			return []any{m}
+		}},
 		{t + "type", of("botMessage", "botMessage", "botMessage", "mention", "")},
 		{t + "from", of(absent{}, map[string]any{"id": "B0123456789"}, map[string]any{"id": "B0123456789", "kind": "bot"}, map[string]any{"id": "B0123456789", "kind": ""})},
 		{t + "from.id", of("B0123456789", "", "b1", "Bx", "B", "B"+strings.Repeat("0", 31), "B"+strings.Repeat("0", 32),
-			"alertmanager", "dependabot[bot]", "U0123456789", "s:1")},
+			"alertmanager", "dependabot[bot]", "U0123456789", "s:1", "B"+strings.Repeat("0", 35), "B"+strings.Repeat("0", 36))},
+		{t + "from.id", entraIDs()},
 		{t + "match", of(absent{}, map[string]any{}, map[string]any{"title": "^FIRING"})},
 		{t + "match." + "text", regexes()},
 		{t + "match." + "title", regexes()},
@@ -429,6 +487,20 @@ spec:
         promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
   interactions: {toolApprovals: true, approverGroups: [S0123456789], timeout: 30m}
   session: {threadTTL: 90h}
+`
+
+const teamsConnectionDoc = `
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: variation, namespace: sre}
+spec:
+  platform: teams
+  credentialsSecretRef: {name: s}
+  teams:
+    tenantID: 11111111-2222-3333-4444-555555555555
+    appID: 66666666-7777-4888-9999-aaaaaaaaaaaa
+    mode: http
+    notificationURL: "https://kourier.example.com/chat/teams/sre/variation"
 `
 
 const mentionBindingDoc = `

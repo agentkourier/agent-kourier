@@ -1,8 +1,6 @@
-# Not answerable from the documentation. "absent:" names a term that no page of the corpus holds; the module's tests check it.
-name: Microsoft Teams (not in the documentation)
+name: Microsoft Teams (not served yet)
 app: agent-kourier-docs
 question: Can Agent Kourier post to Microsoft Teams?
-cause: 'The documentation does not cover Microsoft Teams. A good answer says so plainly, and does not claim support or lack of support. It may say that the documentation describes Slack.'
+cause: 'Not yet. The API takes a ChatConnection with platform teams and checks its Bindings against Microsoft Teams, but there is no Microsoft Teams adapter, so no broker runs one: as the broker''s own connection it stops the start, and a team''s is not started. Slack is the platform a broker runs.'
 evidence:
-  - 'absent: Microsoft Teams'
-  - 'The answer says the documentation does not cover it and cites no page for the claim.'
+  - reference/platforms.md

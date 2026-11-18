@@ -555,7 +555,23 @@ Rules:
   `valueSecretRef`) takes an optional `key` that defaults to `token`. `ChatConnection.spec.credentialsSecretRef` names one Secret with
   keys fixed per platform and mode (D42); Slack's are `botToken` and `appToken` in Socket Mode and `botToken` and `signingSecret`
   in HTTP mode. Non-secret settings of a platform go in a `spec.<platform>` block that is added along with the platform (D42);
-  Slack's is `spec.slack`, whose `mode` is `socket` or `http` and is Socket Mode when unset (D40).
+  Slack's is `spec.slack`, whose `mode` is `socket` or `http` and is Socket Mode when unset (D40). Microsoft Teams' Secret key is
+  `clientSecret`, the Microsoft Entra app's client secret, in either mode.
+- **Microsoft Teams (API only).** `ChatConnection.spec.platform` takes `teams` (owner, 2026-11-16; scope revised 2026-11-17). Its
+  `spec.teams` block is required on a teams connection and refused on any other: `tenantID` and `appID`, each a GUID in lowercase hex,
+  are required; `mode` is `http` or `socket` and is `http` when unset, because Microsoft recommends an HTTPS messaging endpoint in
+  production and calls Socket mode a public preview (Microsoft's "Connect an agent without the SDK" page, read 2026-11-17): in `http` Teams
+  sends activities to `POST /chat/teams/<namespace>/<name>` on the chat listener, and in `socket` the broker opens an outbound WebSocket
+  and needs no public endpoint. `notificationURL` is optional in either mode, an `https` URL (Microsoft Graph's subscription resource
+  requires https) whose path must be the connection's own route, `/chat/teams/<namespace>/<name>`; set, alerts are to arrive by Graph
+  change notifications, unset by polling Graph. A Binding of a teams connection takes questions, tool approvals, feedback and
+  `botMessage` triggers in either mode, and is refused `approverGroups` (`UnsupportedOnPlatform`). The chat IDs of a Binding are held, by
+  the schema and `Validate`, to the union of Slack's and Teams' shapes (a channel `19:…@thread.tacv2` or `@thread.skype`; a sender, the
+  posting app's Microsoft Entra application ID; a mention's user, the person's Microsoft Entra object ID), with the union's caps: 140
+  bytes for a channel, 36 for a sender and a user, 32 for an approver group, which keeps Slack's shape alone. GUIDs are lowercase hex
+  only, since chat IDs are compared byte for byte. Which platform's shape an ID must have is checked where the broker has the
+  connection (`InvalidPlatformID`, D42). No broker runs a teams connection yet: there is no adapter, so the broker's own teams
+  connection is a wiring error at start and a team's is not started.
 - An empty namespace in a reference means the referring resource's namespace.
 - **One bearer token per request.** The Binding identity (D14) owns the `Authorization`
   header. `AgentBackend` has no credentials of its own; a gateway in front of the

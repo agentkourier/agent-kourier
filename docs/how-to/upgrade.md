@@ -990,8 +990,47 @@ Binding that 0.4.0 took loads as it did. What changes:
   `charts/agent-kourier/files/crds` again.
 - **Two more reasons a Binding can be refused for.** The broker checks a Binding once more against the platform of its ChatConnection when
   it reads the two together, and refuses one that names an ID of another shape with `InvalidPlatformID` or asks for a feature the platform
-  does not serve with `UnsupportedOnPlatform` ([What each platform supports](../reference/platforms.md)). The schema holds Slack's shapes
-  already and Slack serves every feature the broker checks, so no Binding on Slack gets either. `agentkourier_config_binding_rejections`
+  does not serve with `UnsupportedOnPlatform` ([What each platform supports](../reference/platforms.md)). The schema of this release holds
+  Slack's shapes and Slack serves every feature the broker checks, so no Binding on Slack gets either until
+  [the release that takes Microsoft Teams ChatConnections](#upgrade-to-the-release-that-takes-microsoft-teams-chatconnections) widens the
+  schema. `agentkourier_config_binding_rejections`
   has a series for each, at 0.
 
 **Roll back.** No stored object depends on this release: the chat ID rules are 0.4.0's. The CRDs of 0.4.0 have neither column.
+
+## Upgrade to the release that takes Microsoft Teams ChatConnections
+
+A ChatConnection may now say `spec.platform: teams`, with a `spec.teams` block ([ChatConnection](../reference/chatconnection.md)), and
+the schema and the broker's load take Microsoft Teams' chat IDs beside Slack's. No broker runs a teams connection yet: there is no
+Microsoft Teams adapter. What changes:
+
+- **A teams ChatConnection is checked, and not started.** `spec.teams.tenantID` and `spec.teams.appID` are required, each a GUID in
+  lowercase hex; `spec.teams.mode` is `http` or `socket`, and `http` when left out; `spec.teams.notificationURL` is optional, an `https`
+  URL whose path is the connection's own route, `/chat/teams/<namespace>/<name>`. Its Secret needs the key `clientSecret`, in either mode.
+  `spec.teams` on a Slack connection, and `spec.slack` on a teams one, are refused. As the broker's own connection a teams ChatConnection
+  stops the broker's start, with a wiring error that says the broker has no adapter for the platform; as a team's connection it is not
+  started, and the broker logs why. Nothing changes for a Slack connection.
+- **Wider chat IDs at apply and load.** `chat.channel` takes a Microsoft Teams channel ID, `19:…@thread.tacv2` or `@thread.skype`, and
+  its cap goes from 32 bytes to 140. A `botMessage` trigger's `from.id` and a mention's `user` take a Microsoft Entra ID, a GUID in
+  lowercase hex, and their caps go to 36 bytes (a Slack user ID is still bounded at 21 by its pattern). `interactions.approverGroups`
+  keeps Slack's shape and its 32 bytes. The messages of an ID with neither platform's shape now name both shapes, for example
+  `spec.chat.channel: invalid channel "general": must be a channel ID such as C0123456789 (Slack) or 19:…@thread.tacv2 (Microsoft Teams), not a name`.
+  A script that matches the earlier message needs the new one.
+- **The broker holds each Binding to its own platform.** A Microsoft Teams ID on a Slack connection, a Slack ID on a teams connection,
+  and a Slack channel or sender ID of 33 to 140 bytes (36 for a sender), which the schema now takes, are refused when the broker reads the
+  Binding with its ChatConnection, with `InvalidPlatformID`; `approverGroups` on a teams connection is refused with
+  `UnsupportedOnPlatform` ([What each platform supports](../reference/platforms.md)). A Binding that 0.4.0 took has Slack's shapes within
+  Slack's caps, and loads as it did. `agent-kourier dry-run` holds a Binding to Slack's shapes and caps, as before.
+- **The Binding and ChatConnection CRDs change**, and their schema hashes with them: the chart applies them with the release when
+  `crds.install` is true, or unset on `config.source: crds`; if you apply the CRDs yourself, apply `charts/agent-kourier/files/crds` again.
+  [Limits](../reference/limits.md#write-a-binding-an-agentbackend-or-a-chatconnection) has the new caps.
+
+### Roll back from the release that takes Microsoft Teams ChatConnections
+
+**Delete every teams ChatConnection, and every Binding that names a Microsoft Teams ID, before you roll back.** A broker of an earlier
+release refuses `spec.platform: teams` and a Microsoft Teams ID as invalid, and on the ConfigMap route `spec.teams` as an unknown field:
+there the config does not load (exit code 2). On custom resources a Binding with a Microsoft Teams ID is refused with `InvalidSpec` and
+not served; a teams ChatConnection, which has no status, is refused when the broker reads it: as the broker's own connection it stops the
+start (exit code 2), and as a team's it is not served and each of its Bindings says `ConnectionRejected`. The CRDs of an earlier release do not
+have `spec.teams` and hold each chat ID to Slack's shape and caps, so the API server refuses a new write of such an object. No other stored
+object depends on this release.

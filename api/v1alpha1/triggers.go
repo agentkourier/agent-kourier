@@ -144,9 +144,11 @@ type BotSource struct {
 	// ID is the sender's ID on the platform, never a display name (Slack: the bot ID, `B…`). The load cannot know
 	// Agent Kourier's own ID, so naming it loads: Agent Kourier's own posts are never forwarded, so the trigger
 	// matches nothing, and the Slack adapter logs one warning, the first time one of its posts arrives.
-	// At most 32 bytes.
-	// +kubebuilder:validation:MaxLength=32
-	// +kubebuilder:validation:Pattern=`^B[A-Z0-9]+$`
+	// On Slack it is `B`, then capitals and digits, at most 32 bytes; on Microsoft Teams the Microsoft Entra application ID of the
+	// app that posts, a GUID in lowercase hex. At most 36 bytes. The broker holds it to the shape of its connection's platform as it
+	// does spec.chat.channel.
+	// +kubebuilder:validation:MaxLength=36
+	// +kubebuilder:validation:Pattern=`^(?:B[A-Z0-9]+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`
 	ID string `json:"id"`
 	// Kind is what kind of sender ID names. Only bot exists today, and it is the default.
 	// +kubebuilder:validation:Enum=bot;""

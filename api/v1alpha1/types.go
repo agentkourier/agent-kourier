@@ -28,6 +28,8 @@ type (
 	BotMentions string
 	// SlackMode selects how a Slack connection receives its events and button presses (spec D16).
 	SlackMode string
+	// TeamsMode selects how a Microsoft Teams connection receives its activities.
+	TeamsMode string
 )
 
 // Values of the enumerations, plus the platforms.
@@ -51,7 +53,11 @@ const (
 	SlackModeSocket SlackMode = "socket"
 	SlackModeHTTP   SlackMode = "http"
 
+	TeamsModeHTTP   TeamsMode = "http"
+	TeamsModeSocket TeamsMode = "socket"
+
 	PlatformSlack = "slack"
+	PlatformTeams = "teams"
 )
 
 // ObjectRef names a resource in a namespace. An empty namespace means the namespace of the
@@ -263,12 +269,16 @@ type ChatConnectionList struct {
 // ChatConnectionSpec is the desired state of a ChatConnection.
 //
 // +kubebuilder:validation:XValidation:rule="!has(self.slack) || self.platform == 'slack'",message="is set, but only a slack connection has one",fieldPath=".slack"
+// +kubebuilder:validation:XValidation:rule="!has(self.teams) || self.platform == 'teams'",message="is set, but only a teams connection has one",fieldPath=".teams"
+// +kubebuilder:validation:XValidation:rule="self.platform != 'teams' || has(self.teams)",message="is required on a teams connection: it names the tenant and the app",fieldPath=".teams"
 type ChatConnectionSpec struct {
-	// Platform is the chat platform: slack.
-	// +kubebuilder:validation:Enum=slack
+	// Platform is the chat platform: slack, or teams, Microsoft Teams. No broker runs a teams connection yet: one that is the
+	// broker's own connection stops its start, and a team one is not started.
+	// +kubebuilder:validation:Enum=slack;teams
 	Platform string `json:"platform"`
 	// CredentialsSecretRef names one Secret whose keys are fixed by the platform and its mode. A Slack connection in Socket Mode needs
-	// botToken and appToken; one in HTTP mode needs botToken and signingSecret.
+	// botToken and appToken; one in HTTP mode needs botToken and signingSecret. A teams connection needs clientSecret, the client
+	// secret of its Microsoft Entra application.
 	CredentialsSecretRef SecretRef `json:"credentialsSecretRef"`
 	// AllowedNamespaces lists the other namespaces whose Bindings may reference this connection. Each is a DNS-1123 label.
 	// An empty list permits references only from the connection's own namespace. At most 256.
@@ -281,6 +291,9 @@ type ChatConnectionSpec struct {
 	// uses Socket Mode.
 	// +optional
 	Slack *SlackConnectionSpec `json:"slack,omitempty"`
+	// Teams holds the settings of a teams connection. A connection whose platform is teams must set it, and no other may.
+	// +optional
+	Teams *TeamsConnectionSpec `json:"teams,omitempty"`
 }
 
 // SlackMode returns the mode of a Slack connection: spec.slack.mode, or socket when it is unset. The API fills in no default (spec
@@ -303,6 +316,57 @@ type SlackConnectionSpec struct {
 	// +doc:default=socket
 	// +optional
 	Mode SlackMode `json:"mode,omitempty"`
+}
+
+// TeamsMode returns the mode of a teams connection: spec.teams.mode, or http when it is unset. The API fills in no default (spec
+// D42), so a stored ChatConnection does not carry one; the mode is read here.
+func (s ChatConnectionSpec) TeamsMode() TeamsMode {
+	if s.Teams == nil || s.Teams.Mode == "" {
+		return TeamsModeHTTP
+	}
+	return s.Teams.Mode
+}
+
+// TeamsConnectionSpec is the settings of a teams connection: the Microsoft Entra tenant and application of its bot, how Microsoft
+// Teams delivers its activities, and the URL of the connection's route on the broker's chat listener.
+type TeamsConnectionSpec struct {
+	// The pattern of tenantID and appID is entraIDPattern in platforms.go, which TestSchemaPatternsEqualTheGoLiterals holds the
+	// markers to, and the rules of notificationURL refuse nothing that Validate accepts
+	// (TestCELTeamsNotificationURLRulesRefuseOnlyWhatValidateRefuses). (Not in the doc comment below, which the reference pages print.)
+
+	// TenantID is the Microsoft Entra tenant of the bot, a GUID in lowercase hex, such as 11111111-2222-3333-4444-555555555555.
+	// A connection has one tenant.
+	// +kubebuilder:validation:MaxLength=36
+	// +kubebuilder:validation:Pattern=`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`
+	TenantID string `json:"tenantID"`
+	// AppID is the bot's Microsoft Entra application (client) ID, a GUID in lowercase hex. It is not a secret: the client secret
+	// is the credentials Secret's clientSecret.
+	// +kubebuilder:validation:MaxLength=36
+	// +kubebuilder:validation:Pattern=`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`
+	AppID string `json:"appID"`
+	// Mode selects how Microsoft Teams delivers the bot's activities: http, as requests that Teams sends to the broker's chat listener
+	// (AGENTKOURIER_CHAT_LISTEN) at POST /chat/teams/<namespace>/<name>, or socket, over an outbound WebSocket that Agent Kourier
+	// opens to Teams, with no public endpoint. Both use the same credentials, the Secret's clientSecret. Unlike Slack's, the default
+	// is http: Microsoft's documentation recommends an HTTPS messaging endpoint for agents in production, and says that Socket mode
+	// is in public preview. No broker runs a teams connection yet, in either mode.
+	// +kubebuilder:validation:Enum=http;socket;""
+	// +doc:default=http
+	// +optional
+	Mode TeamsMode `json:"mode,omitempty"`
+	// NotificationURL is the public URL of the connection's route on the broker's chat listener, for Microsoft Graph's change
+	// notifications of the bound channels' messages. Its path is /chat/teams/<namespace>/<name>, the ChatConnection's own namespace
+	// and name. It is optional, in either mode. At most 2048 bytes, https only (Microsoft Graph's documentation of a subscription's
+	// notificationUrl requires HTTPS), with no credentials, query or fragment. The API server checks the form of the path, and the
+	// broker that it is the connection's own. No broker runs a teams connection yet: the URL is checked, and not used.
+	// +kubebuilder:validation:MaxLength=2048
+	// +kubebuilder:validation:XValidation:rule=`self == '' || self.matches('(?i)^https://[^/?#]')`,message="must be an https URL with a host"
+	// +kubebuilder:validation:XValidation:rule=`!self.matches('(?i)^https?://[^/?#]*@')`,message="must not contain credentials"
+	// +kubebuilder:validation:XValidation:rule=`!self.matches(r'^[^#]*[\x00-\x1f\x7f]')`,message="invalid URL: must not contain control characters"
+	// +kubebuilder:validation:XValidation:rule=`!self.matches(r'(?i)^https?://[^/?#]*[ \\^\x60{|}]')`,message="invalid URL: the host must not contain a space, backslash, caret, backtick, brace or bar"
+	// +kubebuilder:validation:XValidation:rule=`!self.matches('[?#]')`,message="must not have a query or fragment"
+	// +kubebuilder:validation:XValidation:rule=`self == '' || self.matches(r'^[^/?#]*//[^/?#]*/chat/teams/[a-z0-9-]+/[a-z0-9.-]+$')`,message="must have the path /chat/teams/<namespace>/<name>, the connection's route on the chat listener"
+	// +optional
+	NotificationURL string `json:"notificationURL,omitempty"`
 }
 
 // Binding connects one agent to one chat channel.
@@ -390,9 +454,13 @@ type Identity struct {
 // ChatBinding places the Binding in a channel.
 type ChatBinding struct {
 	ConnectionRef ObjectRef `json:"connectionRef"`
-	// Channel is the platform's channel ID, not its name (Slack: `C…` or `G…`). At most 32 bytes.
-	// +kubebuilder:validation:MaxLength=32
-	// +kubebuilder:validation:Pattern=`^[CG][A-Z0-9]+$`
+	// Channel is the platform's channel ID, not its name: on Slack `C…` or `G…`, capitals and digits, at most 32 bytes; on Microsoft
+	// Teams `19:…@thread.tacv2` (or `@thread.skype`), at most 140 bytes. The API server takes either platform's shape, and refuses
+	// a name such as `general`, which has neither. The broker holds the channel to the shape of its connection's platform when it
+	// reads the Binding with its connection, and refuses a Binding whose channel has the other shape as it refuses an invalid one,
+	// with the reason InvalidPlatformID.
+	// +kubebuilder:validation:MaxLength=140
+	// +kubebuilder:validation:Pattern=`^(?:[CG][A-Z0-9]+|19:[A-Za-z0-9._-]+@thread\.(?:tacv2|skype))$`
 	Channel string `json:"channel"`
 	// Output says what Agent Kourier posts of the agent's work: live, the reply as it is written, or final, the finished reply
 	// alone. Defaults to live.
@@ -470,9 +538,11 @@ type ChatMention struct {
 	// +kubebuilder:validation:Pattern=`^[a-z][a-z0-9-]{0,62}$`
 	// +kubebuilder:validation:XValidation:rule="!(self in ['here', 'channel', 'everyone'])",message="a broadcast name (here, channel or everyone) is reserved and cannot be declared"
 	Name string `json:"name"`
-	// User is the platform's user ID of the person (Slack: `U…` or `W…`). It comes only from here, never from the agent.
-	// +kubebuilder:validation:MaxLength=21
-	// +kubebuilder:validation:Pattern=`^[UW][A-Z0-9]{2,20}$`
+	// User is the platform's user ID of the person: on Slack `U…` or `W…`, then 2 to 20 capitals and digits; on Microsoft Teams the
+	// person's Microsoft Entra object ID, a GUID in lowercase hex. It comes only from here, never from the agent. At most 36 bytes.
+	// The broker holds it to the shape of its connection's platform as it does spec.chat.channel.
+	// +kubebuilder:validation:MaxLength=36
+	// +kubebuilder:validation:Pattern=`^(?:[UW][A-Z0-9]{2,20}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`
 	User string `json:"user"`
 }
 
@@ -521,7 +591,8 @@ type Interactions struct {
 	// ApproverGroups names the platform's user groups whose members may decide a tool approval, by the platform's ID (Slack: `S…`).
 	// An empty list allows any non-bot channel member. At most 10 groups may be named. Group IDs start with S and contain
 	// uppercase letters and digits, at most 32 bytes; duplicates and empty entries are refused. A platform that cannot ask for tool
-	// approvals refuses toolApprovals: true with the reason UnsupportedOnPlatform; Slack can.
+	// approvals refuses toolApprovals: true with the reason UnsupportedOnPlatform; Slack can. A platform that takes tool approvals and
+	// has no approver groups refuses approverGroups with that reason: Microsoft Teams does.
 	// +kubebuilder:validation:MaxItems=10
 	// +kubebuilder:validation:items:MaxLength=32
 	// +kubebuilder:validation:items:Pattern=`^S[A-Z0-9]+$`

@@ -531,7 +531,7 @@ func TestOnlyTheBrokersOwnConnectionAndItsBindingsAreRead(t *testing.T) {
 	brokenOther := find(objs, "slack-main")
 	brokenOther.SetName("slack-broken")
 	brokenOther.SetUID("uid-slack-broken")
-	_ = unstructured.SetNestedField(brokenOther.Object, "teams", "spec", "platform")
+	_ = unstructured.SetNestedField(brokenOther.Object, "discord", "spec", "platform")
 
 	s, _ := set(t, newCluster(t, append(objs, other, foreign, dangling, brokenForeign, brokenOther)...).start(t))
 	if got := names(s.ChatConnections, func(c v1alpha1.ChatConnection) string { return c.Name }); !slices.Equal(got, []string{"slack-main"}) {
@@ -550,7 +550,7 @@ func TestTheOwnConnectionThatIsInvalidIsReported(t *testing.T) {
 	leakCheck(t)
 	objs := corpus(t)
 	bad := find(objs, "slack-main")
-	_ = unstructured.SetNestedField(bad.Object, "teams", "spec", "platform")
+	_ = unstructured.SetNestedField(bad.Object, "discord", "spec", "platform")
 	objs[slices.IndexFunc(objs, func(u *unstructured.Unstructured) bool { return u.GetName() == "slack-main" })] = bad
 	s, _ := set(t, newCluster(t, objs...).start(t))
 	if len(s.ChatConnections) != 0 || len(s.Invalid) != 1 || s.Invalid[0].Kind != config.KindChatConnection || s.Invalid[0].Served != 0 {

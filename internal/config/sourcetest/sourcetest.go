@@ -166,7 +166,7 @@ var invalidCases = []invalidCase{
 	{"a channel with a space", "binding-minimal.yaml", "channel: G0123456789", `channel: "sre alerts"`, "spec.chat.channel: invalid channel"},
 	{"a field the type does not have", "binding.yaml", "  chat:\n", "  chat:\n    chanel: C0123456789\n", "chanel: unknown field"},
 	{"a URL with no scheme", "agentbackend.yaml", "url: http://kagent-controller.kagent-pilot:8083", "url: kagent-controller", "spec.url: invalid URL"},
-	{"a platform that is not supported", "chatconnection.yaml", "platform: slack", "platform: teams", "spec.platform: unsupported value"},
+	{"a platform that is not supported", "chatconnection.yaml", "platform: slack", "platform: discord", "spec.platform: unsupported value"},
 	{"a dialect that is not supported", "agentbackend.yaml", "dialect: kagent-v1", "dialect: nope", "spec.dialect: unsupported value"},
 }
 
@@ -399,10 +399,11 @@ const chatOnlyRoute = "sre/chat-only -> agent-kourier-system/kagent-pilot on age
 
 // chatIDCase is a change to a Binding of the spec corpus that gives it a chat ID that its connection's platform does not take, with
 // the reason that the Binding is told and the problem; how a Snapshot serves the field, before the change; and the routing table of
-// the rest. The schema and Validate hold each chat ID to Slack's shape, Slack being the only platform, so Validate refuses each case
-// (InvalidSpec) before the broker's check against the platform (InvalidPlatformID, which resolution and the custom resource source
-// make) would: TestPlatformIDs and TestRefusedOnPlatform in internal/config cover that check with a table of their own. A Slack ID
-// typo in an edit thus does not take, on either route.
+// the rest. The schema and Validate hold each chat ID to the union of the platforms' shapes, so Validate refuses an ID that no
+// platform has (InvalidSpec), and the broker's check against the platform (InvalidPlatformID, which resolution and the custom
+// resource source make) refuses an ID of another platform's shape, such as a Microsoft Teams channel on a Slack connection:
+// TestPlatformIDs and TestRefusedOnPlatform in internal/config cover that check with a table of their own. An edit to either thus
+// does not take, on either route.
 type chatIDCase struct {
 	name     string
 	doc      int    // the Binding's document in the corpus
@@ -420,14 +421,21 @@ var chatIDCases = []chatIDCase{
 		name: "a bot's name as a sender", doc: 2, binding: "sre-alerts", rest: chatOnlyRoute,
 		from: "from: { id: B0123456789 }", to: "from: { id: alertmanager }",
 		reason:  config.ReasonInvalidSpec,
-		problem: `spec.chat.triggers[1].from.id: invalid sender ID "alertmanager": must be the sender's ID (Slack: a bot ID such as B0123456789), not a name`,
+		problem: `spec.chat.triggers[1].from.id: invalid sender ID "alertmanager": must be the sender's ID (Slack: a bot ID such as B0123456789; Microsoft Teams: the Microsoft Entra application ID of the app that posts, a GUID in lowercase hex), not a name`,
 		served:  func(rb config.ResolvedBinding) string { return rb.Binding.Spec.Chat.Triggers[1].From.ID }, before: "B0123456789",
 	},
 	{
 		name: "a channel's name", doc: 2, binding: "sre-alerts", rest: chatOnlyRoute,
 		from: "channel: C0123456789 ", to: "channel: general ",
 		reason:  config.ReasonInvalidSpec,
-		problem: `spec.chat.channel: invalid channel "general": must be a channel ID such as C0123456789, not a name`,
+		problem: `spec.chat.channel: invalid channel "general": must be a channel ID such as C0123456789 (Slack) or 19:…@thread.tacv2 (Microsoft Teams), not a name`,
+		served:  func(rb config.ResolvedBinding) string { return rb.Binding.Spec.Chat.Channel }, before: "C0123456789",
+	},
+	{
+		name: "a Microsoft Teams channel on a Slack connection", doc: 2, binding: "sre-alerts", rest: chatOnlyRoute,
+		from: "channel: C0123456789 ", to: `channel: "19:KourierStandInChannelForTestsOnly0000000000a@thread.tacv2" `,
+		reason:  config.ReasonInvalidPlatformID,
+		problem: `spec.chat.channel: "19:KourierStandInChannelForTestsOnly0000000000a@thread.tacv2" is not a channel ID on Slack`,
 		served:  func(rb config.ResolvedBinding) string { return rb.Binding.Spec.Chat.Channel }, before: "C0123456789",
 	},
 }
@@ -444,14 +452,25 @@ func (c chatIDCase) changed(t *testing.T, docs []string) []string {
 }
 
 // refusedChatID: a Binding that names a chat ID that its connection's platform does not take is refused, in the same words on either
-// route. The files fail, and so the whole load. The custom resources list that Binding in Set.Invalid, with the reason it is told and
-// nothing served in its place, and read and serve the rest.
+// route. The files fail, and so the whole load: the read for an ID that Validate refuses, and resolution for one of another platform's
+// shape. The custom resources list that Binding in Set.Invalid, with the reason it is told and nothing served in its place, and read
+// and serve the rest.
 func refusedChatID(t *testing.T, f Factory, opts Options, c chatIDCase) {
 	base := Spec(t)
 	src := f(t, Corpus{Name: base.Name, Docs: c.changed(t, base.Docs), Connection: base.Connection})
 	if !opts.PerObject {
-		if _, _, err := src.Set(context.Background()); err == nil || !strings.Contains(err.Error(), c.problem) {
-			t.Errorf("Set = %v; want it to fail with the problem %q", err, c.problem)
+		set, _, err := src.Set(context.Background())
+		if c.reason == config.ReasonInvalidSpec {
+			if err == nil || !strings.Contains(err.Error(), c.problem) {
+				t.Errorf("Set = %v; want it to fail with the problem %q", err, c.problem)
+			}
+			return
+		}
+		if err != nil {
+			t.Fatalf("Set = %v; want it read, and refused when it is resolved", err)
+		}
+		if got := routingStrict(t, set); !strings.HasPrefix(got, "error:") || !strings.Contains(got, c.problem) {
+			t.Errorf("strict resolution = %q; want the problem %q", got, c.problem)
 		}
 		return
 	}

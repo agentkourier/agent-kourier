@@ -73,7 +73,7 @@ ChatBinding places the Binding in a channel.
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `connectionRef` | [ObjectRef](#objectref) | Yes | None |  |
-| `channel` | string | Yes | None | Channel is the platform's channel ID, not its name (Slack: `C…` or `G…`). At most 32 bytes. Pattern `^[CG][A-Z0-9]+$`. At most 32 characters. |
+| `channel` | string | Yes | None | Channel is the platform's channel ID, not its name: on Slack `C…` or `G…`, capitals and digits, at most 32 bytes; on Microsoft Teams `19:…@thread.tacv2` (or `@thread.skype`), at most 140 bytes. The API server takes either platform's shape, and refuses a name such as `general`, which has neither. The broker holds the channel to the shape of its connection's platform when it reads the Binding with its connection, and refuses a Binding whose channel has the other shape as it refuses an invalid one, with the reason InvalidPlatformID. Pattern `^(?:[CG][A-Z0-9]+|19:[A-Za-z0-9._-]+@thread\.(?:tacv2|skype))$`. At most 140 characters. |
 | `output` | string | No | `live` | Output says what Agent Kourier posts of the agent's work: live, the reply as it is written, or final, the finished reply alone. Defaults to live. One of `live`, `final`. |
 | `progress` | string | No | `steps-and-activity` | Progress chooses what a live reply shows of the agent's work before its text arrives. steps shows a card for each tool call; an alert thread's first post, which cannot carry cards, shows a status line for the latest call instead, as every write does on a platform without cards. steps-and-activity shows those, and a Working… card (or line, in that first post) whenever 3 seconds pass with nothing new, titled or stood in for by the agent's own progress line. activity shows one Working… card (a line in an alert thread) that counts the steps, or the agent's working updates until the first step is counted, and names no tool, no argument and nothing the agent said. A Binding that sets none gets steps-and-activity. Output final ignores it. One of `steps`, `steps-and-activity`, `activity`. |
 | `threadReplies` | string | No | `all` | ThreadReplies defaults to all: any person's reply in a thread Agent Kourier owns is a turn. With mention, only a reply that mentions Agent Kourier is a turn, whether a mention or a trigger started the thread; the next mentioned turn carries the other replies as context. A typed answer to a pending question that takes text replies needs no mention. One of `all`, `mention`. |
@@ -113,7 +113,7 @@ BotSource identifies the sender whose messages a trigger accepts: a message matc
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `id` | string | Yes | None | ID is the sender's ID on the platform, never a display name (Slack: the bot ID, `B…`). The load cannot know Agent Kourier's own ID, so naming it loads: Agent Kourier's own posts are never forwarded, so the trigger matches nothing, and the Slack adapter logs one warning, the first time one of its posts arrives. At most 32 bytes. Pattern `^B[A-Z0-9]+$`. At most 32 characters. |
+| `id` | string | Yes | None | ID is the sender's ID on the platform, never a display name (Slack: the bot ID, `B…`). The load cannot know Agent Kourier's own ID, so naming it loads: Agent Kourier's own posts are never forwarded, so the trigger matches nothing, and the Slack adapter logs one warning, the first time one of its posts arrives. On Slack it is `B`, then capitals and digits, at most 32 bytes; on Microsoft Teams the Microsoft Entra application ID of the app that posts, a GUID in lowercase hex. At most 36 bytes. The broker holds it to the shape of its connection's platform as it does spec.chat.channel. Pattern `^(?:B[A-Z0-9]+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`. At most 36 characters. |
 | `kind` | string | No | `bot` | Kind is what kind of sender ID names. Only bot exists today, and it is the default. One of `bot`. |
 
 ## Extract
@@ -162,7 +162,7 @@ ChatMention is one person an agent may notify.
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `name` | string | Yes | None | Name is what the agent writes, after an `@`: lowercase letters, digits and `-`, starting with a letter, at most 63 characters. `here`, `channel` and `everyone` are refused. Pattern `^[a-z][a-z0-9-]{0,62}$`. At most 63 characters. |
-| `user` | string | Yes | None | User is the platform's user ID of the person (Slack: `U…` or `W…`). It comes only from here, never from the agent. Pattern `^[UW][A-Z0-9]{2,20}$`. At most 21 characters. |
+| `user` | string | Yes | None | User is the platform's user ID of the person: on Slack `U…` or `W…`, then 2 to 20 capitals and digits; on Microsoft Teams the person's Microsoft Entra object ID, a GUID in lowercase hex. It comes only from here, never from the agent. At most 36 bytes. The broker holds it to the shape of its connection's platform as it does spec.chat.channel. Pattern `^(?:[UW][A-Z0-9]{2,20}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`. At most 36 characters. |
 
 ## Interactions
 
@@ -172,7 +172,7 @@ Interactions configures agent pauses that wait on a person.
 |---|---|---|---|---|
 | `askUser` | boolean | No | `false` | AskUser lets the agent ask questions in the thread. Defaults to false. A platform that cannot put a question to a person refuses true with the reason UnsupportedOnPlatform; Slack can. |
 | `toolApprovals` | boolean | No | `false` | ToolApprovals lets the agent ask a person to approve tool calls in the thread. Defaults to false. |
-| `approverGroups` | []string | No | None | ApproverGroups names the platform's user groups whose members may decide a tool approval, by the platform's ID (Slack: `S…`). An empty list allows any non-bot channel member. At most 10 groups may be named. Group IDs start with S and contain uppercase letters and digits, at most 32 bytes; duplicates and empty entries are refused. A platform that cannot ask for tool approvals refuses toolApprovals: true with the reason UnsupportedOnPlatform; Slack can. |
+| `approverGroups` | []string | No | None | ApproverGroups names the platform's user groups whose members may decide a tool approval, by the platform's ID (Slack: `S…`). An empty list allows any non-bot channel member. At most 10 groups may be named. Group IDs start with S and contain uppercase letters and digits, at most 32 bytes; duplicates and empty entries are refused. A platform that cannot ask for tool approvals refuses toolApprovals: true with the reason UnsupportedOnPlatform; Slack can. A platform that takes tool approvals and has no approver groups refuses approverGroups with that reason: Microsoft Teams does. |
 | `timeout` | duration | No | `30m` | Timeout is how long a pause waits for an answer. Defaults to 30m. At most 168h (7 days); a longer one is refused. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. At most 64 characters. |
 
 ## Feedback

@@ -155,7 +155,7 @@ func TestBootstrapCRDsFailuresAtStart(t *testing.T) {
 		},
 		"the own connection is invalid": {
 			edit: func(objs []*unstructured.Unstructured) {
-				_ = unstructured.SetNestedField(objs[1].Object, "teams", "spec", "platform")
+				_ = unstructured.SetNestedField(objs[1].Object, "discord", "spec", "platform")
 			},
 			wiring: true, says: "ChatConnection agent-kourier-system/slack-main is invalid",
 		},
