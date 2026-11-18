@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -20,27 +21,31 @@ import (
 // connRequest is one call that the fake Bot Connector took.
 type connRequest struct {
 	method, path string // path as it came on the wire, escaped
+	query        string // the query as it came on the wire
 	auth         string
 	activity     outActivity
 	raw          map[string]any
 }
 
 // fakeConnector is the Bot Connector and Entra's token endpoint on one TLS server. It records each call, answers a post with a new
-// activity ID, an update with 200, and a team's channels from teams; fail, if set, answers a call instead.
+// activity ID, an update with 200, a team's channels from teams, and a conversation's members from rosters, in pages of the size
+// asked for and at most pageMax; fail, if set, answers a call instead.
 type fakeConnector struct {
 	srv *httptest.Server
 
-	mu     sync.Mutex
-	reqs   []connRequest                                            // guarded by mu
-	teams  map[string][]string                                      // guarded by mu: the channels of each team
-	fail   func(r *http.Request) (status int, body string, ok bool) // guarded by mu
-	nextID int                                                      // guarded by mu
-	tokens int                                                      // guarded by mu: the token grants taken
+	mu      sync.Mutex
+	reqs    []connRequest                                            // guarded by mu
+	teams   map[string][]string                                      // guarded by mu: the channels of each team
+	rosters map[string][]account                                     // guarded by mu: the members of each conversation
+	pageMax int                                                      // guarded by mu: the most members a page holds, 0 for no cap
+	fail    func(r *http.Request) (status int, body string, ok bool) // guarded by mu
+	nextID  int                                                      // guarded by mu
+	tokens  int                                                      // guarded by mu: the token grants taken
 }
 
 func newFakeConnector(t testing.TB) *fakeConnector {
 	t.Helper()
-	f := &fakeConnector{teams: map[string][]string{}, nextID: 1700000000000}
+	f := &fakeConnector{teams: map[string][]string{}, rosters: map[string][]account{}, nextID: 1700000000000}
 	f.srv = httptest.NewTLSServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -69,7 +74,7 @@ func (f *fakeConnector) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body, _ := io.ReadAll(r.Body)
-	req := connRequest{method: r.Method, path: r.URL.EscapedPath(), auth: r.Header.Get("Authorization")}
+	req := connRequest{method: r.Method, path: r.URL.EscapedPath(), query: r.URL.RawQuery, auth: r.Header.Get("Authorization")}
 	if len(body) > 0 {
 		_ = json.Unmarshal(body, &req.activity)
 		_ = json.Unmarshal(body, &req.raw)
@@ -108,6 +113,8 @@ func (f *fakeConnector) serve(w http.ResponseWriter, r *http.Request) {
 			out.Conversations = append(out.Conversations, map[string]string{"id": c, "name": "Example Team"})
 		}
 		_ = json.NewEncoder(w).Encode(out)
+	case r.Method == http.MethodGet && strings.HasSuffix(rest, "/pagedmembers"):
+		f.members(w, r, strings.TrimSuffix(strings.TrimPrefix(rest, "conversations/"), "/pagedmembers"))
 	case r.Method == http.MethodPost:
 		w.WriteHeader(http.StatusCreated)
 		_, _ = fmt.Fprintf(w, `{"id":"%d"}`, id)
@@ -116,6 +123,57 @@ func (f *fakeConnector) serve(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "unexpected", http.StatusMethodNotAllowed)
 	}
+}
+
+// members answers a page of the roster of conv, as Microsoft documents GET /v3/conversations/{id}/pagedmembers: the members from
+// the continuationToken on (here, an index), at most pageSize of them, and the token of the next page while there is one. A
+// conversation with no roster is not found.
+func (f *fakeConnector) members(w http.ResponseWriter, r *http.Request, conv string) {
+	f.mu.Lock()
+	roster, known := f.rosters[conv]
+	pageMax := f.pageMax
+	f.mu.Unlock()
+	if !known {
+		http.Error(w, `{"error":{"code":"ConversationNotFound"}}`, http.StatusNotFound)
+		return
+	}
+	size, err := strconv.Atoi(r.URL.Query().Get("pageSize"))
+	if err != nil || size < 1 {
+		http.Error(w, `{"error":{"code":"BadArgument"}}`, http.StatusBadRequest)
+		return
+	}
+	if pageMax > 0 {
+		size = min(size, pageMax)
+	}
+	from := 0
+	if tok := r.URL.Query().Get("continuationToken"); tok != "" {
+		if from, err = strconv.Atoi(tok); err != nil || from > len(roster) {
+			http.Error(w, `{"error":{"code":"BadArgument"}}`, http.StatusBadRequest)
+			return
+		}
+	}
+	page := struct {
+		Members           []account `json:"members"`
+		ContinuationToken string    `json:"continuationToken,omitempty"`
+	}{Members: roster[from:min(from+size, len(roster))]}
+	if from+size < len(roster) {
+		page.ContinuationToken = strconv.Itoa(from + size)
+	}
+	_ = json.NewEncoder(w).Encode(page)
+}
+
+// setRoster lists members as the roster of the conversation conv.
+func (f *fakeConnector) setRoster(conv string, members ...account) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rosters[conv] = members
+}
+
+// setPageMax caps a page of a roster at n members.
+func (f *fakeConnector) setPageMax(n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pageMax = n
 }
 
 // setFail sets fail.

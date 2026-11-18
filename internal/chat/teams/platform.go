@@ -52,16 +52,18 @@ type Config struct {
 // A message's progress steps are a list under the rest of the message (Caps.Steps), which each update of a live reply shows anew.
 // A prompt, a prompt of tools among them, is an Adaptive Card, and so are a message's buttons; the Client is the Receiver's
 // InvokeHandler, which takes their presses (Invoke). What it does not do yet, and says so: streams (ErrNoStreams), ephemeral
-// messages (ErrNoEphemeral), reactions (ErrNoReactions), the busy mark (ErrNoBusy), reading a thread (ErrNoThreadReads), finding a
-// post by its tag (Find says not found), and reading membership, bots and names (IsMember and IsBot fail closed, ResolveUser gives
-// the ID alone), so no press is decided yet.
+// messages (ErrNoEphemeral), reactions (ErrNoReactions), the busy mark (ErrNoBusy), reading a thread (ErrNoThreadReads) and finding a
+// post by its tag (Find says not found). It reads people from the Bot Connector's rosters (members.go): who is in a channel's team,
+// whether a user is a bot, and a person's name, which the ending of a prompt shows for its decider.
 type Client struct {
-	conn, tenant string
-	recv         *Receiver
-	api          *connector
-	convs        ConversationStore
-	log          *slog.Logger
-	onConnection func(bool)
+	conn, tenant  string
+	recv          *Receiver
+	api           *connector
+	convs         ConversationStore
+	names         *nameCache
+	rosterTimeout time.Duration // rosterTimeout; a test shortens it
+	log           *slog.Logger
+	onConnection  func(bool)
 }
 
 // New returns the Client of cfg. It refuses a config with no connection, tenant, app or secret.
@@ -88,7 +90,7 @@ func New(cfg Config) (*Client, error) {
 	direct := noRedirects(client)
 	tokens := newTokenSource(cmp.Or(cfg.TokenURL, DefaultTokenURL(cfg.TenantID)), cfg.AppID, cfg.ClientSecret, direct, now)
 	c := &Client{conn: cfg.Connection, tenant: cfg.TenantID, convs: convs, log: log, onConnection: cfg.OnConnection,
-		api: &connector{client: direct, tokens: tokens, now: now}}
+		api: &connector{client: direct, tokens: tokens, now: now}, names: newNameCache(now), rosterTimeout: rosterTimeout}
 	recv, err := NewReceiver(ReceiverConfig{Connection: cfg.Connection, TenantID: cfg.TenantID, AppID: cfg.AppID,
 		MetadataURL: cfg.MetadataURL, HTTPClient: client, Conversations: convs, Logger: log, Now: now, Invokes: c})
 	if err != nil {
@@ -176,14 +178,19 @@ func (c *Client) Post(ctx context.Context, t chat.Target, o chat.Outgoing, _ str
 }
 
 // Update implements chat.Platform. Content that shows nothing on Teams, no text and no card, is ErrWouldDropText: a message with
-// buttons and no text keeps its card, and a prompt and its ending are a card alone.
+// buttons and no text keeps its card, and a prompt and its ending are a card alone. The ending of a prompt names its decider, a
+// Microsoft Entra object ID, by the name that the channel's roster gives (deciderName), and as someone when it cannot be had.
 func (c *Client) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) (err error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.Update")
 	defer func() { c.finish(ctx, op, "Update", err) }()
 	if r.Channel == "" || r.ID == "" {
 		return fmt.Errorf("%w: an update with no channel or message", chat.ErrInvalid)
 	}
-	a, err := render(o)
+	decider := ""
+	if o.Ending != nil && entraID.MatchString(o.Ending.By) {
+		decider = c.deciderName(ctx, r.Channel, o.Ending.By)
+	}
+	a, err := renderWith(o, decider)
 	if errors.Is(err, errEmpty) {
 		return fmt.Errorf("teams: %w: %w", chat.ErrWouldDropText, errEmpty)
 	}
@@ -238,20 +245,6 @@ func (c *Client) React(context.Context, chat.Ref, string) error { return chat.Er
 // Unreact implements chat.Platform: a bot cannot react on Teams.
 func (c *Client) Unreact(context.Context, chat.Ref, string) error { return chat.ErrNoReactions }
 
-// errMembership is the error of the reads of people that the Client does not make yet.
-var errMembership = errors.New("teams: membership is not read on Microsoft Teams yet")
-
-// IsMember implements chat.Platform. It does not read the channel's members yet, and fails closed: false, with an error.
-func (c *Client) IsMember(context.Context, string, string) (bool, error) { return false, errMembership }
-
-// IsBot implements chat.Platform. It does not read who a user is yet, and fails closed: a bot, with an error.
-func (c *Client) IsBot(context.Context, string) (bool, error) { return true, errMembership }
-
-// ResolveUser implements chat.Platform. It does not read names yet: the user is the ID alone.
-func (c *Client) ResolveUser(_ context.Context, id string) (chat.User, error) {
-	return chat.User{ID: id}, nil
-}
-
 // errNoGroups is the cause of the errors of the group reads: a Binding of a Teams connection takes no approver groups.
 var errNoGroups = errors.New("a Microsoft Teams connection has no approver groups")
 
@@ -283,7 +276,8 @@ func (c *Client) GroupsReadable(ctx context.Context, groups []string) error {
 // one the bot is a member of, and one it does not list, or a team it does not know, is chat.ErrChannelNotFound. The team is the
 // one that the channel's record names, so a channel that no activity has come from yet cannot be read, and that error wraps no
 // sentinel. Teams says nothing of a channel's archive or the app's permissions here: Access.Archived is never set, and
-// chat.ErrMissingScope never given.
+// chat.ErrMissingScope never given. Whether the list leaves out an archived channel, or a channel of an archived team, is not known
+// (Microsoft's documentation does not say, and it was not measured), so an archived channel reads as a member's, or as not found.
 func (c *Client) ChannelAccess(ctx context.Context, channel string) (a chat.Access, err error) {
 	if channel == "" {
 		return chat.Access{}, fmt.Errorf("teams: %w: no channel", chat.ErrChannelNotFound)

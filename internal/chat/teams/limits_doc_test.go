@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/secret"
 
 	"github.com/agentkourier/agent-kourier/internal/limitsdoc"
 )
@@ -49,4 +50,15 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Count(t, "teamsTextUnits", maxTextUnits)
 	limitsdoc.Count(t, "teamsBodyUnits", maxBodyUnits)
 	limitsdoc.Count(t, "teamsMinBodyUnits", minBodyUnits)
+
+	// The reads of people: the bound a Client is built with, the page it asks for, and the names it keeps.
+	c, err := New(Config{Connection: testConn, TenantID: testTenant, AppID: testAppID, ClientSecret: secret.New(testClientSecret)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	limitsdoc.Duration(t, "teamsRosterTimeout", c.rosterTimeout)
+	limitsdoc.Count(t, "teamsRosterPage", rosterPage)
+	limitsdoc.Count(t, "teamsNamesMax", namesMax)
+	limitsdoc.Duration(t, "teamsNamesTTL", namesTTL)
+	limitsdoc.Count(t, "teamsNameUnits", nameUnits)
 }

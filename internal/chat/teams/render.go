@@ -31,8 +31,8 @@ const (
 	minBodyUnits = 1000
 )
 
-// mentionLabel is the name a mention shows: Agent Kourier does not read people's names on Teams yet, so a mention of anyone is
-// "@someone", and notifies the person it names.
+// mentionLabel is the name a mention shows when Agent Kourier has none for the person: every mention in a message, and the decider of an
+// ending whose name could not be read. It shows as "@someone", and notifies the person it names.
 const mentionLabel = "someone"
 
 // entraID is the shape of a Microsoft Entra object ID, a lowercase GUID: the user ID that a Mention or an Ending names, which is
@@ -72,8 +72,13 @@ var errEmpty = errors.New("the message shows nothing on Microsoft Teams")
 // render is o as one activity within maxMessageBytes: a message as text, with its buttons on a card under it; a prompt, and the
 // ending that replaces it, as a card alone (card.go). Its error wraps chat.ErrInvalid for an Outgoing that is not valid and one that
 // shows nothing (errEmpty); and chat.ErrTooLarge for a message over the budget even with its Body cut to minBodyUnits, a prompt over
-// it, or one with a tool that would be shown cut. An ending is never too large: its texts are cut until it fits.
-func render(o chat.Outgoing) (outActivity, error) {
+// it, or one with a tool that would be shown cut. An ending is never too large: its texts are cut until it fits. Its decider is shown
+// as someone (renderWith).
+func render(o chat.Outgoing) (outActivity, error) { return renderWith(o, "") }
+
+// renderWith is render with an ending's decider, a Microsoft Entra object ID, mentioned by the name decider, cleaned (mentionName):
+// someone when it is "", or nothing is left of it.
+func renderWith(o chat.Outgoing, decider string) (outActivity, error) {
 	if err := o.Validate(); err != nil {
 		return outActivity{}, err
 	}
@@ -81,7 +86,7 @@ func render(o chat.Outgoing) (outActivity, error) {
 	case o.Prompt != nil:
 		return renderPrompt(*o.Prompt)
 	case o.Ending != nil:
-		return renderEnding(*o.Ending)
+		return renderEnding(*o.Ending, decider)
 	}
 	return renderMessage(*o.Message)
 }
@@ -135,11 +140,11 @@ func renderPrompt(p chat.Prompt) (outActivity, error) {
 	return a, nil
 }
 
-// renderEnding is e's card, with its texts cut to half of the longest place's limit, and to half again, down to minEndingUnits, until it
+// renderEnding is e's card, its decider named decider, with its texts cut to half of the longest place's limit, and to half again, down to minEndingUnits, until it
 // fits the budget. The longest ending fits at minEndingUnits (TestTheLongestEndingFits), so the error past it is no ending's.
-func renderEnding(e chat.Ending) (outActivity, error) {
+func renderEnding(e chat.Ending, decider string) (outActivity, error) {
 	for cut := 0; ; {
-		b := cardBuilder{caps: capabilities(), cut: cut}
+		b := cardBuilder{caps: capabilities(), cut: cut, decider: decider}
 		a := cardActivity(b.ending(e))
 		n, err := size(a)
 		if err != nil {

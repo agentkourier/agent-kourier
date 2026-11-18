@@ -82,7 +82,9 @@ var (
 type cardBuilder struct {
 	caps chat.Caps
 	// cut, when not 0, is the most units of any text of the card, below its place's limit: an ending cut to fit the budget.
-	cut      int
+	cut int
+	// decider is the name of an ending's decider as the roster gives it, or "" (mentionLabel).
+	decider  string
 	body     []any
 	entities []any
 }
@@ -281,16 +283,16 @@ func (b *cardBuilder) toolPrompt(p chat.Prompt) (map[string]any, error) {
 
 // who adds the line that says who decided: a mention of by, beside the words, when it is a Microsoft Entra object ID; "someone" and the
 // words, as text, for any other; and alone, the line to say when no one is named. The mention works in a card (styled, and the person
-// notified, on a test tenant, web client, channel thread, November 2026), but Teams shows the entity's own text, mentionLabel, and puts in no name.
-//
-// TODO(TEAMS-6): name the decider. Once ResolveUser reads names, Update can resolve the Ending's By and write the name in the tag and
-// the entity. The invoke's from.name is not carried: the press reaches the ending as chat.Interaction and the interaction's Decider,
-// which hold the user's ID alone, so carrying it would change that seam.
+// notified, on a test tenant, web client, channel thread, November 2026), and Teams shows the entity's own text and puts in no name, so
+// the tag and the entity hold the decider's name (b.decider, cleaned by mentionName), or mentionLabel with none. The name is read by
+// Update from the roster (deciderName): the invoke's from.name is not carried, since the press reaches the ending as chat.Interaction
+// and the interaction's Decider, which hold the user's ID alone. That the tag shows a name as written was not measured.
 func (b *cardBuilder) who(by, words, alone string) {
 	switch {
 	case entraID.MatchString(by):
-		tag := "<at>" + mentionLabel + "</at>"
-		b.entities = append(b.entities, map[string]any{"type": "mention", "text": tag, "mentioned": map[string]any{"id": by, "name": mentionLabel}})
+		name := cmp.Or(mentionName(b.decider), mentionLabel)
+		tag := "<at>" + name + "</at>"
+		b.entities = append(b.entities, map[string]any{"type": "mention", "text": tag, "mentioned": map[string]any{"id": by, "name": name}})
 		b.body = append(b.body, map[string]any{"type": "TextBlock", "text": tag + " " + words, "wrap": true})
 	case by != "":
 		b.text(plainText, mentionLabel+" "+words)

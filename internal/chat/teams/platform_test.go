@@ -461,7 +461,7 @@ func TestRunTakesActivitiesWhileItWaitsForTheToken(t *testing.T) {
 }
 
 // What Teams does not do in this release is said with the contract's errors, and nothing is called. It shows a message's steps,
-// with no stream.
+// with no stream. (Membership, bots and names are read: members_test.go.)
 func TestTheSeamsTeamsDoesNotFillYet(t *testing.T) {
 	t.Parallel()
 	ct := newClientTest(t)
@@ -486,15 +486,6 @@ func TestTheSeamsTeamsDoesNotFillYet(t *testing.T) {
 	}
 	if _, found, err := c.Find(ctx, target, "tag", time.Time{}); found || err != nil {
 		t.Errorf("Find: %t, %v", found, err)
-	}
-	if member, err := c.IsMember(ctx, testChannel, testUser); member || err == nil {
-		t.Errorf("IsMember: %t, %v; want false and an error", member, err)
-	}
-	if bot, err := c.IsBot(ctx, testUser); !bot || err == nil {
-		t.Errorf("IsBot: %t, %v; want true and an error", bot, err)
-	}
-	if u, err := c.ResolveUser(ctx, testUser); err != nil || u != (chat.User{ID: testUser}) {
-		t.Errorf("ResolveUser: %+v, %v", u, err)
 	}
 	if in, err := c.IsInAnyGroup(ctx, []string{"S0X"}, testUser); in || !errors.Is(err, chat.ErrGroupsMisconfigured) {
 		t.Errorf("IsInAnyGroup: %t, %v", in, err)

@@ -18,7 +18,8 @@ import (
 // tenant's region: it answered the bot's read of a team on a test tenant on 2026-11-17 (a post through it is not measured).
 const DefaultServiceURL = "https://smba.trafficmanager.net/teams/"
 
-// connectorMaxBody is the most of the Bot Connector's answer that is read: an activity's ID, an error, or a team's channels.
+// connectorMaxBody is the most of the Bot Connector's answer that is read: an activity's ID, an error, a team's channels, or a page of
+// a roster.
 const connectorMaxBody = 1 << 20
 
 // APIError is the Bot Connector's refusal of a call: its HTTP status, its error code ("ActivityNotFoundInConversation", say) and
@@ -149,6 +150,8 @@ func scrubPath(path string) string {
 	switch {
 	case strings.HasPrefix(path, "v3/teams/"):
 		return "v3/teams/…/conversations"
+	case strings.Contains(path, "/pagedmembers?"):
+		return "v3/conversations/…/pagedmembers"
 	case strings.Count(path, "/") > 3:
 		return "v3/conversations/…/activities/…"
 	}
