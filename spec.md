@@ -1069,7 +1069,9 @@ making the prefix optional breaks multi-turn context.
   step per tool call (`render.Step`, the line's redacted, capped name and summary), begun when the call is made and
   ended or failed when its result arrives, in call order, the final update included. It holds the latest 20 steps;
   when there are more, a `chat.Context` line above them counts the earlier ones (`k earlier steps are not shown.`), so a
-  long run never crowds out the text or the buttons. An update with no fallback of its own takes the status line while the
+  long run never crowds out the text or the buttons. A platform with progress steps and no streams (Microsoft Teams) has every
+  live reply, a mention's as an alert's, on this edit path, so its step list is shown in the edits of the reply; Teams writes
+  it under the text, as a quoted list. An update with no fallback of its own takes the status line while the
   turn shows one, or else the last step's title, so a stale line is not left as the message's text. A platform that refuses such an update as
   content it cannot show gets it again without the steps, and the turn shows the line from then on. On a platform
   without steps every write shows the line: a returned call's line is written even when no text has arrived, so a line
