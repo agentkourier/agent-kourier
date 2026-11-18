@@ -19,7 +19,7 @@
     {
       "id": "p3",
       "shot": "Problem 3",
-      "text": "Alerts fire in your monitoring. Questions come up in chat. Your agents hear neither."
+      "text": "Alerts and questions land in team chat. Putting your agent there is another project."
     },
     {
       "id": "reveal",
@@ -34,7 +34,7 @@
     {
       "id": "r1",
       "shot": "R1 alert thread",
-      "text": "When an alert lands in the channel, Agent Kourier picks it up, opens the thread, and hands it to your agent. It investigates right there, step by step, and reports what it found."
+      "text": "Your alerting posts to the channel as it always has. Agent Kourier reads the post and hands it to your agent, which investigates in the alert's thread, step by step."
     },
     {
       "id": "r2",
@@ -54,12 +54,12 @@
     {
       "id": "yaml",
       "shot": "T1 Binding",
-      "text": "Teams add one Binding, in YAML, next to their agent. The platform wiring is shared."
+      "text": "A team applies a Binding next to its agent. The agent needs no chat code."
     },
     {
       "id": "close",
       "shot": "Close",
-      "text": "It works with kagent, or any A2A agent that streams. It's a two-way session: it answers as it works, asks when it needs you, and keeps the context when you reply. Slack today; more chat platforms are planned. Agent Kourier. Write the agent, not the chat integration."
+      "text": "It works with kagent, or any A2A agent that streams. Agent Kourier keeps the thread, streams the reply, and carries the agent's questions and your answers. Slack today; more chat platforms are planned. Agent Kourier. Write the agent, not the chat integration."
     }
   ],
   "teaser": [

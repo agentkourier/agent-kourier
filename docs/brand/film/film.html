@@ -37,22 +37,24 @@ const COPY = {
         tall: [['You’ve put AI agents', 'on Kubernetes.'], ['They can read logs, check', 'rollouts and find the cause.']] },
   p2: { wide: [['But they only work when', 'someone opens a prompt and asks.'], []],
         tall: [['But they only work', 'when someone opens', 'a prompt and asks.'], []] },
-  p3: { wide: [['Alerts fire in your monitoring.', 'Questions come up in chat.'], ['Your agents hear neither.']],
-        tall: [['Alerts fire in', 'your monitoring.', 'Questions come up', 'in chat.'], ['Your agents hear neither.']] },
+  p3: { wide: [['Alerts and questions', 'land in team chat.'], ['Putting your agent there', 'is another project.']],
+        tall: [['Alerts and', 'questions land', 'in team chat.'], ['Putting your agent there', 'is another project.']] },
   reveal: { wide: [['Introducing Agent Kourier'], ['A Kubernetes-native broker between team chat', 'and streaming A2A agents.']],
             tall: [['Introducing', 'Agent Kourier'], ['A Kubernetes-native broker', 'between team chat and', 'streaming A2A agents.']] },
   promise: { wide: [['An alert or a question', 'becomes an agent session.'], ['In the thread. Slack today.']],
              tall: [['An alert or', 'a question', 'becomes an', 'agent session.'], ['In the thread. Slack today.']] },
   tproblem: { wide: [['Your agent is ready.'], ['The chat integration is another project.']],
               tall: [['Your agent', 'is ready.'], ['The chat integration', 'is another project.']] },
-  yaml: { '16x9': [['One Binding', 'per channel.'], ['Declared in YAML,', 'next to your agent.']],
-          '1x1': [['One Binding per channel.'], ['Declared in YAML, next to your agent.']],
-          '9x16': [['One Binding', 'per channel.'], ['Declared in YAML,', 'next to your agent.']] },
-  pills: ['kagent, or any A2A agent that streams', 'It answers, asks back, and keeps the context', 'Slack today, more chat platforms planned'],
-  pillAt: [0.2, 4.0, 10.6],
+  yaml: { '16x9': [['A Binding connects', 'a channel to', 'an agent.'], ['The agent needs', 'no chat code.']],
+          '1x1': [['A Binding connects a channel to an agent.'], ['The agent needs no chat code.']],
+          '9x16': [['A Binding connects', 'a channel to an agent.'], ['The agent needs', 'no chat code.']] },
+  yamlNote: 'To start from alerts, add a trigger to the Binding.',
+  pills: ['kagent, or any A2A agent that streams', 'It keeps the thread, streams, and relays questions', 'Slack today, more chat platforms planned'],
+  pillAt: [0.2, 4.2, 10.2],
   can: ['logs', 'rollouts', 'events'],
   hook: 'Write the agent, not the chat integration.',
   category: 'A Kubernetes-native broker between team chat and streaming A2A agents',
+  url: 'agentkourier.dev',
 };
 
 // The Binding the demo ran with: hack/kind/sandbox/agent-kourier/config/binding.yaml, comments removed and the
@@ -373,7 +375,7 @@ if (!OVERLAY && STORY.includes(SEG)) {
     u.textContent = first;
     return { disc, place(sc, op) { set(g, { transform: `translate(${pos[0]} ${pos[1]}) scale(${sc})`, opacity: op }); } };
   }
-  const am = source(L.am, 'Alerts', 'Alertmanager first', g => {
+  const am = source(L.am, 'Alerts', 'posted by any bot', g => {
     el('path', { d: 'M24 7c-7.2 0-12 5.2-12 12.5v8.5l-4.5 6.5h33l-4.5-6.5v-8.5C36 12.2 31.2 7 24 7z' }, g);
     el('path', { d: 'M19.5 38.5a4.5 4.5 0 0 0 9 0' }, g);
   });
@@ -493,7 +495,7 @@ if (!OVERLAY && STORY.includes(SEG)) {
   const PLAN = {
     'p1': t => ({ G: SLOT.p1 + t, head: 'p1', subAt: 2.9 }),
     'p2': t => ({ G: SLOT.p2 + t, head: 'p2', subAt: 0.3 }),
-    'p3': t => ({ G: SLOT.p3 + t, head: 'p3', subAt: 4.2 }),
+    'p3': t => ({ G: SLOT.p3 + t, head: 'p3', subAt: 2.9 }),
     'reveal': t => ({ G: SLOT.reveal + t, head: 'reveal', subAt: 2.3 }),
     'promise': t => ({ G: SLOT.promise + t, head: 'promise', subAt: 4.0 }),
     't-problem': t => ({ G: SLOT.p3 + 0.2 + t, head: 'tproblem', subAt: 2.0, fade: true }),
@@ -591,10 +593,13 @@ if (!OVERLAY && SEG === 'yaml') {
     return t;
   });
   // The two lines that carry the idea.
+  const note = el('text', { x: Y.x + Y.w / 2, y: Y.y + h + Y.size * 2.2, 'text-anchor': 'middle', 'font-size': Y.size * 1.15, fill: C.white, opacity: 0 }, svg);
+  note.textContent = COPY.yamlNote; fit(note, Y.w);
   const hi = [1, 13].map(i => { const r = el('rect', { x: Y.x + pad * 0.5, y: Y.y + pad * 1.5 + lineH * i + lineH * 0.06, width: Y.w - pad, height: lineH * 0.92, rx: 8, fill: C.k8s, opacity: 0 }, card); card.insertBefore(r, lines[0]); return r; });
   renderAt = function (t) {
     set(lat, { transform: `translate(${(t * 6) % hexW} ${(t * 10) % hexH})` });
-    showHeadline(head, t, 0.15, 1.0, Infinity, Infinity);
+    showHeadline(head, t, 0.15, 3.2, Infinity, Infinity);
+    set(note, { opacity: 0.75 * outCubic(ramp(t, 4.0, 4.5)) });
     const cp = outCubic(ramp(t, 0.1, 0.6));
     set(card, { opacity: cp, transform: `translate(0 ${(1 - cp) * 30})` });
     lines.forEach((n, i) => set(n, { opacity: outCubic(ramp(t, 0.3 + i * 0.06, 0.6 + i * 0.06)) }));
@@ -626,10 +631,12 @@ if (!OVERLAY && (SEG === 'close' || SEG === 't-end')) {
   hook.textContent = COPY.hook; fit(hook, L.W - 120);
   const cat = el('text', { 'font-size': E.cat, fill: C.white, 'text-anchor': 'middle', class: 'mono' }, end);
   cat.textContent = COPY.category; fit(cat, L.W - 120);
+  const url = el('text', { 'font-size': E.hook * 0.8, 'font-weight': 600, fill: C.feather, 'text-anchor': 'middle', class: 'mono' }, end);
+  url.textContent = COPY.url;
   let lkT, hookY;
   if (E.mode === 'row') { lkT = [E.cx - lk.w / 2, E.cy]; hookY = E.cy + E.mark * 0.42 + E.hook * 1.5; }
   else { lkT = [E.cx, E.cy]; hookY = E.cy + E.mark * 0.36 + E.word * 1.2 + E.hook * 2.0; }
-  set(hook, { x: E.cx, y: hookY }); set(cat, { x: E.cx, y: hookY + E.cat * 2.5 });
+  set(hook, { x: E.cx, y: hookY }); set(cat, { x: E.cx, y: hookY + E.cat * 2.5 }); set(url, { x: E.cx, y: hookY + E.cat * 2.5 + E.hook * 1.9 });
   const T0 = SEG === 'close' ? Number(Q.get('endAt') || 5.7) : 0.1;
   renderAt = function (t) {
     set(lat, { transform: `translate(${(t * 6) % hexW} ${(t * 10) % hexH})` });
@@ -641,6 +648,7 @@ if (!OVERLAY && (SEG === 'close' || SEG === 't-end')) {
     const hp = outCubic(ramp(u, 1.0, 1.5));
     set(hook, { opacity: hp, transform: `translate(0 ${(1 - hp) * 16})` });
     set(cat, { opacity: outCubic(ramp(u, 1.5, 2.0)) * 0.6 });
+    set(url, { opacity: outCubic(ramp(u, 2.0, 2.5)) });
   };
 }
 

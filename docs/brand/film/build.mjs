@@ -64,8 +64,8 @@ const DEMO = [
       { wide: [S1, 26.6, 1.6, 1.6, 'wide', COMPOSER], tall: [S1, 26.6, 1.6, 1.6, 'wideTight', COMPOSER] }, [S1, 37.2, 2.4, 2.4, 'threadTop', HEADER]] },
   { rec: 'r4', line: 'r4', lead: 0.3, cap: 'It asks when it needs to.', sub: 'Answer in the thread and it carries on.',
     shots: [[S1, 147.5, 3.4, 3.4, 'threadTop', HEADER], [S1, 166.2, 13.8, 4.6, 'threadTop', HEADER]] },
-  { mg: 'yaml', line: 'yaml', lead: 0.3, dur: 7.6 },
-  { mg: 'close', line: 'close', lead: 0.3, dur: 21.0, query: { endAt: 14.1 } },
+  { mg: 'yaml', line: 'yaml', lead: 0.3, dur: 7.0 },
+  { mg: 'close', line: 'close', lead: 0.3, dur: 20.2, query: { endAt: 13.2 } },
 ];
 const TEASER = [
   { mg: 't-problem', line: 't-problem', lead: 0.3, dur: 4.8 },
@@ -207,10 +207,10 @@ async function buildCut(browser, name, ar) {
 async function stills(browser, ars) {
   const dir = join(WORK, 'stills');
   await mkdir(dir, { recursive: true });
-  const shots = [['p1', 5.5], ['p2', 3.6], ['p3', 5.6], ['reveal', 4.5], ['promise', 6.6], ['yaml', 4.0], ['close', 13.0], ['close', 19.0], ['t-problem', 3.6], ['t-reveal', 5.4], ['t-end', 3.0]];
+  const shots = [['p1', 5.5], ['p2', 3.6], ['p3', 5.6], ['reveal', 4.5], ['promise', 6.6], ['yaml', 5.0], ['close', 12.0], ['close', 19.0], ['t-problem', 3.6], ['t-reveal', 5.4], ['t-end', 3.0]];
   for (const ar of ars) {
     for (const [seg, t] of shots) {
-      const page = await openPage(browser, ar, { seg, t, ...(seg === 'close' ? { endAt: 14.1 } : {}) });
+      const page = await openPage(browser, ar, { seg, t, ...(seg === 'close' ? { endAt: 13.2 } : {}) });
       await page.screenshot({ path: join(dir, `${ar}-${seg}-${t}.png`) });
       await page.close();
     }

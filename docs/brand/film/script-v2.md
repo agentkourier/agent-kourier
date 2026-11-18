@@ -15,7 +15,7 @@ Status: built 2026-10-10 (`out/agent-kourier-demo-*.mp4`, `out/agent-kourier-tea
 the footage captions) are the script. This table is a copy for reading; if it and those files differ, they win.
 
 Both cuts follow the same arc: the problem, the reveal, the product working, the close. Sources are named
-generally (alerts, chat) with the supported tool beside them (Alertmanager first, Slack today).
+generally (alerts, chat) with what they mean today beside them (alerts posted by any bot, Slack today).
 
 ### Demo cut, 97.6 s
 
@@ -23,15 +23,15 @@ generally (alerts, chat) with the supported tool beside them (Alertmanager first
 |---|---|---|---|
 | 1 | Problem, animated | You've put AI agents on Kubernetes. They can read logs, check rollouts, and find the cause. | **You've put AI agents on Kubernetes.** They can read logs, check rollouts and find the cause. Chips: logs, rollouts, events. |
 | 2 | Problem, animated | But they only work when someone opens a prompt and asks. | **But they only work when someone opens a prompt and asks.** |
-| 3 | Problem, animated | Alerts fire in your monitoring. Questions come up in chat. Your agents hear neither. | **Alerts fire in your monitoring. Questions come up in chat.** Your agents hear neither. Nodes: Alerts (Alertmanager first), Chat (Slack today). |
+| 3 | Problem, animated | Alerts and questions land in team chat. Putting your agent there is another project. | **Alerts and questions land in team chat.** Putting your agent there is another project. Nodes: Alerts (posted by any bot), Chat (Slack today). |
 | 4 | Reveal, animated | Introducing Agent Kourier: a Kubernetes-native broker between team chat and A2A agents. | **Introducing Agent Kourier.** A Kubernetes-native broker between team chat and streaming A2A agents. |
 | 5 | Solution, animated | An alert, or a question, becomes an agent session, in the thread where it landed. Slack today. | **An alert or a question becomes an agent session.** In the thread. Slack today. |
-| 6 | Real footage: alert | When an alert lands in the channel, Agent Kourier picks it up, opens the thread, and hands it to your agent. It investigates right there, step by step, and reports what it found. | **An alert opens a session.** Nobody typed a prompt. |
+| 6 | Real footage: alert | Your alerting posts to the channel as it always has. Agent Kourier reads the post and hands it to your agent, which investigates in the alert's thread, step by step. | **An alert opens a session.** Nobody typed a prompt. |
 | 7 | Real footage: reply | Reply in the thread, and the same session continues. Same context, nothing re-explained. | **Reply in the thread.** Same session, full context. |
 | 8 | Real footage: mention | Or skip the alert, and just ask. | **Or just ask.** A mention opens its own thread. |
 | 9 | Real footage: question | When the agent needs a decision, it asks, and waits for your answer. | **It asks when it needs to.** Answer in the thread and it carries on. |
-| 10 | Setup, animated | Teams add one Binding, in YAML, next to their agent. The platform wiring is shared. | **One Binding per channel.** Declared in YAML, next to your agent. The Binding the demo ran with, its channel ID replaced by a placeholder. |
-| 11 | Close, animated | It works with kagent, or any A2A agent that streams. It's a two-way session: it answers as it works, asks when it needs you, and keeps the context when you reply. Slack today; more chat platforms are planned. Agent Kourier. Write the agent, not the chat integration. | Pills: kagent, or any A2A agent that streams · It answers, asks back, and keeps the context · Slack today, more chat platforms planned. End card: **Agent Kourier.** Write the agent, not the chat integration. A Kubernetes-native broker between team chat and streaming A2A agents. |
+| 10 | Setup, animated | A team applies a Binding next to its agent. The agent needs no chat code. | **A Binding connects a channel to an agent.** The agent needs no chat code. The Binding the demo ran with, its channel ID replaced by a placeholder; under it: To start from alerts, add a trigger to the Binding. |
+| 11 | Close, animated | It works with kagent, or any A2A agent that streams. Agent Kourier keeps the thread, streams the reply, and carries the agent's questions and your answers. Slack today; more chat platforms are planned. Agent Kourier. Write the agent, not the chat integration. | Pills: kagent, or any A2A agent that streams · It keeps the thread, streams, and relays questions · Slack today, more chat platforms planned. End card: **Agent Kourier.** Write the agent, not the chat integration. A Kubernetes-native broker between team chat and streaming A2A agents. agentkourier.dev |
 
 ### Teaser, 20 s
 
@@ -40,16 +40,21 @@ generally (alerts, chat) with the supported tool beside them (Alertmanager first
 | 1 | Problem, animated | Your agent is ready. The chat integration is another project. | **Your agent is ready.** The chat integration is another project. |
 | 2 | Reveal, animated | Introducing Agent Kourier: a Kubernetes-native broker between team chat and A2A agents. | **Introducing Agent Kourier.** A Kubernetes-native broker between team chat and streaming A2A agents. |
 | 3 | Real footage | Alerts and questions become agent sessions in the thread. Slack today, more platforms planned. | An alert opens a session. · Reply in the thread. · Or just ask. |
-| 4 | End card | | **Agent Kourier.** Write the agent, not the chat integration. |
+| 4 | End card | | **Agent Kourier.** Write the agent, not the chat integration. agentkourier.dev |
 
 ### The close
 
 The three closing points answer what a viewer still wants to know after watching it work: does my agent
 qualify, is this a real conversation or a one-shot bot, and am I tied to these tools. An earlier close said
 "Never in your paging path"; the owner found it jargon and too narrowly about alerts (2026-10-11), so the
-alerting-safety point lives in the README and the close sells the general product. Not claimed, because they
-are not built or would overstate: steering an agent mid-turn (a reply is queued until the turn ends) and
-tool approvals from Slack (planned).
+alerting-safety point lives in the README and the close sells the general product. Not claimed, because it
+is not built: steering an agent mid-turn (a reply is queued until the turn ends). Tool approvals in the thread are
+shipped (0.4.0) but not in this cut: no footage of them was recorded for it; the cross-team incident film shows one.
+
+The 2026-11-17 re-cut followed a messaging review: the demo's problem beat now states the hook's problem (putting
+an agent in team chat is a project of its own), the setup beat says the agent needs no chat code and that alerts add a
+trigger to the Binding, the alert line says your alerting posts as it always has, and the close says what Agent
+Kourier takes on instead of recapping the shots. The end cards carry the site's address.
 
 The restart scene was cut (owner, 2026-10-16): it added little, the footage shows a graceful pod deletion rather
 than a crash, and its line had to be hedged to stay true (one delivery window is accepted; see the delivery
