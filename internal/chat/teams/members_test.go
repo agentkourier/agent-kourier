@@ -612,6 +612,12 @@ func TestAPressIsDecidedEndToEnd(t *testing.T) {
 	}
 	press("f:e2e-1", testUser)
 	press("f:e2e-2", stranger)
+	// The receiver records the channel as lane work after the press reached the sink: wait for it, or the roster read below
+	// goes to the default service URL instead of the fake.
+	testutil.Eventually(t, "the channel is recorded", func() bool {
+		_, ok, _ := ct.convs.Lookup(t.Context(), testConn, testChannel)
+		return ok
+	})
 	presses := sink.taken()
 	if len(presses) != 2 {
 		t.Fatalf("the sink was given %d presses", len(presses))

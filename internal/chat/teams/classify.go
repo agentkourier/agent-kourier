@@ -45,8 +45,9 @@ func gone403(ae *APIError) bool { return ae.Status == http.StatusForbidden && go
 // ReasonChannelGone (the team, the channel or the thread is gone); a 400 is Permanent, ReasonOther.
 //
 // Anything else may pass on another try and is Transient: a 429, with its Retry-After (at least a second) as RetryAfter; a 412, a
-// 5xx, a timeout, a network failure, a cancelled context, and a read of a channel whose team is not known yet. The caller's own backoff paces the retry (the outbox's doubles, with
-// jitter where the caller adds it); the Client does not retry inside a call.
+// 5xx, a timeout, a network failure, a cancelled context, and a read of a channel whose team is not known yet. The caller's
+// own backoff paces the retry (the outbox's doubles, with jitter where the caller adds it); the Client does not retry inside a
+// call.
 func (c *Client) Classify(_ chat.Op, err error) chat.Verdict {
 	var (
 		te *TokenRequestError

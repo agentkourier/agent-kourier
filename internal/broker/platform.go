@@ -33,8 +33,8 @@ const slackAPITimeout = 30 * time.Second
 // teamsAPITimeout bounds one call of a Microsoft Teams connection as a whole, from the dial to the end of the answer's body: a token
 // from Microsoft Entra, a post, reply or edit through the Bot Connector, a read of a thread's page through Microsoft Graph, and a fetch
 // of the Bot Framework's keys. The adapter bounds a token fetch (15 s), a key fetch (10 s) and a read of a thread, all its pages
-// (10 s), more closely itself, so this is the bound of a Bot Connector call, which answers a small JSON body. It is Slack's bound (slackAPITimeout), for the same reason: a connection that a network blip left dead does not hold a
-// post for minutes.
+// (10 s), more closely itself, so this is the bound of a Bot Connector call, which answers a small JSON body. It is Slack's
+// bound (slackAPITimeout), for the same reason: a connection that a network blip left dead does not hold a post for minutes.
 const teamsAPITimeout = 30 * time.Second
 
 // Connection is the one ChatConnection v1 serves, with its credentials as read at startup: the Secret keys that
