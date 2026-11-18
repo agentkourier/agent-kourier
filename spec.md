@@ -1480,7 +1480,12 @@ this with an outbox:
    holding the outbox ID).
 3. On recovery, an outbox row with no recorded message ref is reconciled first: Agent Kourier
    reads recent channel or thread history with metadata included and adopts a matching
-   message instead of posting again.
+   message instead of posting again. Any queued row is looked up this way before it is posted,
+   except one that the leader queued itself since its drain loop started and has not tried yet:
+   a lookup can find a message only after an attempt, or after another process delivered the row,
+   so such a row is posted at once. The row stops being one when its first attempt begins, so a
+   row whose attempt failed or timed out is looked up before the next. Which rows are untried is
+   kept in memory, so after a crash or a takeover every row is looked up.
 4. Edits (`chat.update`) are naturally idempotent and need no reconciliation. Reactions
    (role `reaction`, e.g. the acknowledgment marker of 8.2) also go through the outbox for
    durability but need no reconciliation: `reactions.add` on a message that already has

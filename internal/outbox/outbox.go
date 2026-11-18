@@ -1,8 +1,9 @@
 // Package outbox posts to a chat platform once, even across a crash (spec 8.6). A post is written to the
 // store before it is sent, as a message in the neutral model (chat.Outgoing, versioned), tagged so that the
 // platform can find it again, and its message ref is recorded after. A row with no ref may have been posted, so
-// it is looked up before it is posted again. The platform renders the message at delivery, and the outbox knows
-// nothing of its markup.
+// it is looked up before it is posted again. A row that this Outbox's Enqueue wrote, since Run started, and that no delivery
+// has tried is the exception: nothing can have posted it, so it is posted with no lookup (see Outbox.untried). The platform
+// renders the message at delivery, and the outbox knows nothing of its markup.
 //
 // Where a caller can wait for the platform, such as the renderer's own goroutine, it uses Send and gets the
 // message's Ref. Where it cannot, such as the session's Notice, which runs on the chat platform's
@@ -174,7 +175,22 @@ type Outbox struct {
 	// removal's, so that no reaction is written after its removal was delivered. It is held only across local
 	// writes, never a platform call, and never with a lane's lock held, so Enqueue never waits for a delivery.
 	pairMu sync.Mutex
-	wake   chan struct{} // Enqueue's signal to Run; one slot, since a drain takes every row
+	// untriedMu guards untried, the rows that enqueue wrote (created, not found there) and that no delivery has tried since,
+	// and writing, the writes of enqueue in flight, each with its token from writes. A delivery of an untried row posts it with
+	// no lookup: a lookup can find a message only after an attempt, or after another process delivered the row, and neither
+	// has happened. Another process cannot have: the broker builds the Outbox when the replica gains leadership and starts
+	// Run at once, a replica that loses it ends, and Run forgets the set when it starts (forgetUntried), so a row in it was
+	// written while this process led. A delivery takes the row out before its first call (takeUntried), so a post that
+	// failed or timed out, and may have landed, is looked up the next time; and a delivery that takes a row while its write is
+	// in flight cancels the token, so the write does not put it back. Every row leaves the set when it leaves the backlog
+	// (delivered, by Run or Send; abandoned, past Retention or cancelled by the removal of its reaction), so the set is no
+	// larger than the rows still queued. A crash empties it, and the next process looks every row up. It is held only across
+	// the maps, never a call.
+	untriedMu sync.Mutex
+	untried   map[string]struct{}
+	writing   map[string]uint64
+	writes    uint64
+	wake      chan struct{} // Enqueue's signal to Run; one slot, since a drain takes every row
 }
 
 // lane is the delivery of one connection's rows. Its refs, and drop, are guarded by Outbox.lanesMu.
@@ -321,7 +337,8 @@ func New(cfg Config) (*Outbox, error) {
 	if cfg.Retention <= 0 {
 		cfg.Retention = 7 * 24 * time.Hour
 	}
-	return &Outbox{cfg: cfg, wake: make(chan struct{}, 1), lanes: map[string]*lane{}, retry: map[string]retryState{}}, nil
+	return &Outbox{cfg: cfg, wake: make(chan struct{}, 1), lanes: map[string]*lane{}, retry: map[string]retryState{},
+		untried: map[string]struct{}{}, writing: map[string]uint64{}}, nil
 }
 
 // Send writes the row, posts the message and records its ID, and returns where it is. A message that
@@ -389,9 +406,13 @@ func (o *Outbox) Enqueue(ctx context.Context, p Post) (string, error) {
 	return o.enqueue(ctx, row)
 }
 
-// enqueue writes row and wakes Run.
+// enqueue writes row and wakes Run. A row it creates is untried until a delivery takes it (see Outbox.untried); one that was
+// there already is not, since it may have been tried.
 func (o *Outbox) enqueue(ctx context.Context, row store.OutboxEntry) (string, error) {
-	if _, err := o.cfg.Store.CreateOutbox(ctx, row); err != nil {
+	token := o.beginWrite(row.ID)
+	created, err := o.cfg.Store.CreateOutbox(ctx, row)
+	o.endWrite(row.ID, token, err == nil && created)
+	if err != nil {
 		return "", err
 	}
 	select {
@@ -474,6 +495,49 @@ func (o *Outbox) reactionRow(id string, r Reaction, remove bool) (store.OutboxEn
 	return store.OutboxEntry{ID: id, EventID: r.Source, Role: store.OutboxReaction, Connection: o.connection(r.Connection), Channel: r.Channel, CreatedAt: o.cfg.Now(), Payload: string(payload)}, nil
 }
 
+// beginWrite notes that enqueue is writing the row id, and returns the token that endWrite needs.
+func (o *Outbox) beginWrite(id string) uint64 {
+	o.untriedMu.Lock()
+	defer o.untriedMu.Unlock()
+	o.writes++
+	o.writing[id] = o.writes
+	return o.writes
+}
+
+// endWrite ends the write of beginWrite, and marks the row untried if the write created it and its token still stands: a
+// delivery that took the row meanwhile (takeUntried), a Run that started (forgetUntried) or a later write of the same ID
+// cancelled it, and the row stays one to look up.
+func (o *Outbox) endWrite(id string, token uint64, created bool) {
+	o.untriedMu.Lock()
+	defer o.untriedMu.Unlock()
+	if o.writing[id] != token {
+		return
+	}
+	delete(o.writing, id)
+	if created {
+		o.untried[id] = struct{}{}
+	}
+}
+
+// takeUntried takes the row id out of the untried rows, and cancels a write of it in flight, and says whether it was untried.
+// A delivery calls it before it tries the row, and anything that settles the row otherwise calls it too.
+func (o *Outbox) takeUntried(id string) bool {
+	o.untriedMu.Lock()
+	defer o.untriedMu.Unlock()
+	_, ok := o.untried[id]
+	delete(o.untried, id)
+	delete(o.writing, id)
+	return ok
+}
+
+// forgetUntried forgets every untried row, and cancels the writes in flight: what was written before Run started is looked up.
+func (o *Outbox) forgetUntried() {
+	o.untriedMu.Lock()
+	defer o.untriedMu.Unlock()
+	clear(o.untried)
+	clear(o.writing)
+}
+
 // connection is the connection of a row whose producer named c: c, or Config.DefaultConnection if it named none.
 func (o *Outbox) connection(c string) string {
 	if c != "" {
@@ -486,9 +550,11 @@ func (o *Outbox) connection(c string) string {
 // what a crash left, then on each Enqueue and every Interval. Each connection with rows to deliver is drained by a
 // goroutine of its own, so a connection whose platform is slow or hung holds up its own rows and no other connection's;
 // Run returns once those goroutines have, which ctx ends. A row that fails is tried again after
-// a delay that doubles from RetryBase up to RetryMax, so one that always fails does not spin. Call
+// a delay that doubles from RetryBase up to RetryMax, so one that always fails does not spin. It first forgets which rows
+// Enqueue wrote (see Outbox.untried), so that every row written before it started is looked up before it is posted. Call
 // it once.
 func (o *Outbox) Run(ctx context.Context) error {
+	o.forgetUntried()
 	tick := time.NewTicker(o.cfg.Interval)
 	defer tick.Stop()
 	var drains sync.WaitGroup
@@ -671,11 +737,13 @@ func (o *Outbox) expire(ctx context.Context, r store.OutboxEntry) (gone bool, er
 	newly, err := o.cfg.Store.AbandonOutbox(ctx, r.ID, now)
 	switch {
 	case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrNotFound): // posted, or gone, since it was listed
+		o.takeUntried(r.ID)
 		return true, nil
 	case err != nil:
 		return false, fmt.Errorf("drop expired outbox text of %s: %w", r.ID, err)
 	}
 	o.dropRetry(r.ID)
+	o.takeUntried(r.ID)
 	if newly {
 		o.reportAbandon(ctx, r.ID, AbandonExpired, "", nil)
 	}
@@ -722,7 +790,8 @@ func decode(payload string) (chat.Outgoing, error) {
 }
 
 // deliver posts the row id unless it already has a ref, which it returns. With lookup it first
-// asks the platform for the message, and adopts it if it is there. The platform is the one of the row's connection; with none
+// asks the platform for the message, and adopts it if it is there, unless the row is untried (see Outbox.untried): it takes the
+// row out of the untried rows before any call, whether it looks up or not. The platform is the one of the row's connection; with none
 // running the error wraps chat.ErrConnectionDown, and nothing was tried. The caller holds ln.mu, the lane of the row's
 // connection. The row is read again here, so a delivery that finished while the caller waited for the
 // lock is seen.
@@ -733,7 +802,10 @@ func (o *Outbox) deliver(ctx context.Context, ln *lane, id string, lookup bool) 
 	}
 	pl, err := o.cfg.Platforms.Platform(o.connection(row.Connection)) // a row nobody has attributed yet is the own connection's
 	if err != nil {
-		return chat.Ref{}, fmt.Errorf("deliver %s: %w", id, err)
+		return chat.Ref{}, fmt.Errorf("deliver %s: %w", id, err) // nothing is tried, so an untried row stays so
+	}
+	if o.takeUntried(id) { // from here the row is tried, whatever comes of it
+		lookup = false
 	}
 	if row.MessageRef != "" {
 		return pl.RefAt(row.Channel, row.Thread, row.MessageRef), nil
@@ -865,6 +937,7 @@ func (o *Outbox) unreact(ctx context.Context, row store.OutboxEntry) (needed boo
 		return false, fmt.Errorf("deliver %s: cancel the reaction it takes off: %w", row.ID, err)
 	}
 	o.dropRetry(addID)
+	o.takeUntried(addID)
 	return true, nil
 }
 
