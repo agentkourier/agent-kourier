@@ -219,8 +219,8 @@ type problem struct {
 }
 
 // PlatformRules returns the rules of the chat platform of a ChatConnection's spec, and false for one that has none:
-// v1alpha1.ChatPlatformOf, or a test's own table. Slack, the only platform, serves every feature and its shapes are the schema's,
-// so a test that needs the platform to refuse something gives a table of its own.
+// v1alpha1.ChatPlatformOf, or a test's own table. Slack serves every feature, and Microsoft Teams every one but approver groups,
+// so a test that needs a platform to refuse something else gives a table of its own.
 type PlatformRules func(spec v1alpha1.ChatConnectionSpec) (v1alpha1.ChatPlatform, bool)
 
 // PlatformsPage is the reference page that says what each platform supports, which the message of a rejection for the platform

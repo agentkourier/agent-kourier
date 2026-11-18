@@ -1,0 +1,67 @@
+{
+  "text": "<at>Agent Kourier</at> echo two-socket test",
+  "textFormat": "plain",
+  "attachments": [
+    {
+      "contentType": "text/html",
+      "content": "<p><span itemtype=\"http://schema.skype.com/Mention\" itemscope=\"\" itemid=\"0\">Agent Kourier</span>&nbsp;echo two-socket test</p>"
+    }
+  ],
+  "type": "message",
+  "timestamp": "2026-11-18T01:28:42.7434457Z",
+  "localTimestamp": "2026-11-18T01:28:42.7434457Z",
+  "id": "1794965322719",
+  "channelId": "msteams",
+  "serviceUrl": "https://smba.trafficmanager.net/amer/11111111-2222-4333-8444-555555555555/",
+  "from": {
+    "id": "29:1test-user-not-a-real-id",
+    "name": "Test User",
+    "aadObjectId": "00000000-0000-4000-8000-000000000001"
+  },
+  "conversation": {
+    "isGroup": true,
+    "conversationType": "channel",
+    "tenantId": "11111111-2222-4333-8444-555555555555",
+    "id": "19:KourierStandInChannelForTestsOnly0000000000a@thread.tacv2;messageid=1794965322719"
+  },
+  "recipient": {
+    "id": "28:22222222-3333-4444-8555-666666666666",
+    "name": "Agent Kourier"
+  },
+  "entities": [
+    {
+      "mentioned": {
+        "id": "28:22222222-3333-4444-8555-666666666666",
+        "name": "Agent Kourier"
+      },
+      "text": "<at>Agent Kourier</at>",
+      "type": "mention"
+    },
+    {
+      "locale": "en-US",
+      "country": "US",
+      "platform": "Web",
+      "timezone": "UTC",
+      "type": "clientInfo"
+    }
+  ],
+  "channelData": {
+    "teamsChannelId": "19:KourierStandInChannelForTestsOnly0000000000a@thread.tacv2",
+    "teamsTeamId": "19:KourierStandInChannelForTestsOnly0000000000a@thread.tacv2",
+    "channel": {
+      "id": "19:KourierStandInChannelForTestsOnly0000000000a@thread.tacv2"
+    },
+    "team": {
+      "aadGroupId": "33333333-4444-4555-8666-777777777777",
+      "id": "19:KourierStandInChannelForTestsOnly0000000000a@thread.tacv2"
+    },
+    "tenant": {
+      "id": "11111111-2222-4333-8444-555555555555"
+    },
+    "replyChain": {
+      "id": "1794965322719"
+    }
+  },
+  "locale": "en-US",
+  "localTimezone": "UTC"
+}
