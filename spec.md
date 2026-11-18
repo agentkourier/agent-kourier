@@ -627,16 +627,26 @@ Rules:
   types whose `id` was measured). A message with text and buttons is two posts (owner, 2026-11-18): Teams answers one activity of
   text and a card 202 with no ID and shows it as two messages, the text with the span and the buttons' card with no tag (measured), so
   Post sends the text alone (its ID is the Ref, it keeps its markdown and carries the tag), then the buttons as a card alone in the
-  text's thread, whose actions' data name the text (`of`). A press of that card is an Interaction whose At is the text, in the card's
-  thread, so that the feedback check of the press's message against the outbox row holds; the press's key stays the invoke's. A
-  message of buttons and no text is one card post, as a prompt is. Each post has the 80 KiB budget; the card is sized naming a text ID
-  of the longest (64 bytes), and one over it refuses the message before any post. A failed post of the buttons is logged at WARN and
-  counted as `PostButtons`, and Post returns the text with no error (an error would have the outbox adopt the text and post nothing
-  more); a crash between the posts leaves the text, which the lookup adopts. Update edits the text with no attachment and shows its
-  buttons once, by the cards the Client remembers (4096, in memory, oldest first out): posted by the first update that has them (a
-  live reply's last edit), PUT when they change, no call when they are the same; a failed post fails the update, which the caller
-  retries; a card Teams took with no ID is remembered. After a restart, on another replica or past the bound, an update with buttons
-  posts them again. No edit follows a button's press (the presser's words are the invoke's answer), and nothing takes buttons off.
+  text's thread, whose actions' data name the text (`of`) with `mac`, an HMAC-SHA256 of the connection, channel, card's thread root,
+  text ID and button value (each length-prefixed), keyed by HKDF-SHA256 of the connection's client secret with the info
+  `agent-kourier/teams/button-mac/v1`, never logged or stored (review, 2026-11-18: the data comes from the presser's
+  client, so `of` is bound to the card with no lookup, and the bind holds after a restart and on every replica). A press of that card
+  whose MAC is not the one the Client computes makes no press ("cannot take this press"); a rotation of the client secret refuses the
+  presses of the cards posted before it. A press that is taken is an Interaction whose At is the text, in the card's thread, so that
+  the feedback check of the press's message against the outbox row holds; the press's key stays the invoke's. The feedback handler
+  also refuses a vote on an answer while its Binding's `feedback.enabled` is off (an investigation's vote does not depend on it; a
+  Binding the config no longer has takes votes as before), on every platform. A text ID that a card cannot name (longer than 64 bytes,
+  or with `:`) gets no buttons, with a WARN. A message of buttons and no text is one card post, as a prompt is. Each post has the
+  80 KiB budget; the card is sized naming a text ID of the longest (64 bytes) and the longest MAC, and one over it refuses the message
+  before any post. A post of the buttons that fails for this try only is tried once more after its 429's wait, when that is at most
+  5 s, or 1 s when it names none; one that still fails is logged at WARN and counted as `PostButtons`, and Post returns the text with
+  no error (an error would have the outbox adopt the text and post nothing more); a crash between the posts leaves the text, which the
+  lookup adopts. Update edits the text with no attachment and shows its buttons once, by the cards the Client remembers (4096, in
+  memory, oldest first out): posted by the first update that has them (a live reply's last edit), PUT when they change, no call when
+  they are the same; a failed post fails the update, which the caller retries; a card Teams took with no ID is remembered. A PUT that
+  Teams answers 404 forgets the card and posts it anew; if that fails too, the update logs it at WARN and succeeds, since the text was
+  edited. After a restart, on another replica or past the bound, an update with buttons posts them again. A message has one writer at
+  a time (the turn's live run), so the cards' record takes no lock per message. No edit follows a button's press (the presser's words are the invoke's answer), and nothing takes buttons off.
   Not measured: that the two posts each get 201 and an ID, and that the card's press names the card's message (both as measured for
   a prompt's card).
   No `<` of the agent's, a person's or an alert's text reaches Teams raw, so only the adapter writes a span. Find reads the thread's

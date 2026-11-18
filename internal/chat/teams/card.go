@@ -341,9 +341,9 @@ func (b *cardBuilder) ending(e chat.Ending) map[string]any {
 }
 
 // buttonsCard is the card of a message's buttons, in order: a card of actions alone, posted under the message's text. Each is named by
-// its ID and value, which are Agent Kourier's own, and by the text message's ID, of, when it is set ("of"), which a press reads as the
-// message pressed (press); a label cut to nothing reads "(blank)". It is nil for no buttons.
-func buttonsCard(caps chat.Caps, buttons []chat.Button, of string) map[string]any {
+// its ID and value, which are Agent Kourier's own, and, when of is set, by the text message's ID ("of") and mac of the button's value
+// ("mac"), which bind the press to that text (press); a label cut to nothing reads "(blank)". It is nil for no buttons.
+func buttonsCard(caps chat.Caps, buttons []chat.Button, of string, mac func(value string) string) map[string]any {
 	if len(buttons) == 0 {
 		return nil
 	}
@@ -356,7 +356,7 @@ func buttonsCard(caps chat.Caps, buttons []chat.Button, of string) map[string]an
 		}
 		data := map[string]any{"button": btn.ID, "value": btn.Value}
 		if of != "" {
-			data["of"] = of
+			data["of"], data["mac"] = of, mac(btn.Value)
 		}
 		actions[i] = execute(cmp.Or(b.literal(chat.WhereButton, btn.Label), blankChoice), style, data)
 	}

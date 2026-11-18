@@ -3,6 +3,7 @@ package teams
 import (
 	"cmp"
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -67,13 +68,14 @@ type actionValue struct {
 }
 
 // ownData is the data that the adapter put on an action (execute): a prompt's ID and its action, or a message's button, its value and,
-// for a card posted under a text, the text's ID (buttonsCard).
+// for a card posted under a text, the text's ID and the MAC that binds it to the card (buttonsCard, buttonMAC).
 type ownData struct {
 	Prompt *string `json:"prompt"`
 	Action *string `json:"action"`
 	Button *string `json:"button"`
 	Value  *string `json:"value"`
 	Of     *string `json:"of"`
+	MAC    *string `json:"mac"`
 }
 
 // Invoke implements InvokeHandler. It answers a press of a card's Action.Execute in the request, with a message for the presser. A sink
@@ -137,9 +139,10 @@ func toldPresser(text string) InvokeAnswer {
 //
 // The press is of the message that Post returned, which the card's message is for a prompt and for buttons alone. A message's buttons
 // under its text are a card of their own, whose data names the text ("of"): the press is of the text, in the card's thread, so that it
-// names the message that the outbox recorded, as a press on Slack does. The data is the card's own, which Agent Kourier wrote, as its
-// value and prompt are; a text ID that is empty, holds ':' or is longer than maxActivityID makes no press. The key of the press is the
-// invoke's, of the card's message.
+// names the message that the outbox recorded, as a press on Slack does. The data comes from the presser's client, so the text is taken
+// only with its MAC, which must be the one this Client computes for the press's connection, channel and thread, the text and the value
+// (buttonMAC): data that names another text, another value or another thread, or a card posted under another secret, makes no press,
+// nor does a text ID that a card cannot name (nameableText). The key of the press is the invoke's, of the card's message.
 func (c *Client) press(inv Invoke) (chat.Interaction, pressKind, bool) {
 	if inv.User == "" || inv.At.ID == "" || inv.At.Channel == "" {
 		return chat.Interaction{}, 0, false
@@ -154,7 +157,7 @@ func (c *Client) press(inv Invoke) (chat.Interaction, pressKind, bool) {
 	}
 	out := chat.Interaction{User: inv.User, At: inv.At, Delivery: pressKey(inv)}
 	switch {
-	case own.Prompt != nil && own.Action != nil && own.Button == nil && own.Value == nil && own.Of == nil:
+	case own.Prompt != nil && own.Action != nil && own.Button == nil && own.Value == nil && own.Of == nil && own.MAC == nil:
 		if out.Action.UnmarshalText([]byte(*own.Action)) != nil {
 			return chat.Interaction{}, 0, false
 		}
@@ -165,13 +168,16 @@ func (c *Client) press(inv Invoke) (chat.Interaction, pressKind, bool) {
 		return out, pressPrompt, true
 	case own.Value != nil && own.Prompt == nil && own.Action == nil:
 		out.PromptID = *own.Value
-		if own.Of != nil {
-			of := *own.Of
-			if of == "" || strings.Contains(of, idSeparator) || len(of) > maxActivityID {
+		switch {
+		case own.Of != nil:
+			of, root := *own.Of, cmp.Or(inv.At.Thread, inv.At.ID) // the card is a reply in the text's thread, whose root this is
+			if !nameableText(of) || own.MAC == nil ||
+				!hmac.Equal([]byte(*own.MAC), []byte(c.buttonMAC(inv.At.Channel, root, of, *own.Value))) {
 				return chat.Interaction{}, 0, false
 			}
-			root := cmp.Or(inv.At.Thread, inv.At.ID) // the card is a reply in the text's thread, whose root this is
 			out.At.ID, out.At.Thread = of, threadOf(root, of)
+		case own.MAC != nil:
+			return chat.Interaction{}, 0, false
 		}
 		return out, pressButton, true
 	}

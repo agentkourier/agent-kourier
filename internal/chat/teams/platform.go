@@ -66,10 +66,12 @@ type Client struct {
 	graph         *graphClient
 	convs         ConversationStore
 	names         *nameCache
-	cards         *buttonCards  // the cards of buttons posted under a text (buttons.go)
-	rosterTimeout time.Duration // rosterTimeout; a test shortens it
-	pressWait     time.Duration // pressWait; a test shortens it
-	threadTimeout time.Duration // threadTimeout; a test shortens it
+	cards         *buttonCards                              // the cards of buttons posted under a text (buttons.go)
+	buttonKey     []byte                                    // the key of the buttons' MACs (buttonKey); never logged
+	buttonsWait   func(context.Context, time.Duration) bool // the wait before a post of buttons is tried again (waitFor); a test shortens it
+	rosterTimeout time.Duration                             // rosterTimeout; a test shortens it
+	pressWait     time.Duration                             // pressWait; a test shortens it
+	threadTimeout time.Duration                             // threadTimeout; a test shortens it
 	log           *slog.Logger
 	onConnection  func(bool)
 }
@@ -95,6 +97,10 @@ func New(cfg Config) (*Client, error) {
 	if log == nil {
 		log = slog.Default()
 	}
+	key, err := buttonKey(cfg.ClientSecret.Reveal())
+	if err != nil {
+		return nil, err
+	}
 	direct := noRedirects(client)
 	tokenURL := cmp.Or(cfg.TokenURL, DefaultTokenURL(cfg.TenantID))
 	tokens := newTokenSource(tokenURL, cfg.AppID, botFrameworkScope, cfg.ClientSecret, direct, now)
@@ -105,7 +111,7 @@ func New(cfg Config) (*Client, error) {
 	}
 	c := &Client{conn: cfg.Connection, tenant: cfg.TenantID, app: cfg.AppID, convs: convs, log: log, onConnection: cfg.OnConnection,
 		api: &connector{client: direct, tokens: tokens, now: now}, graph: graph, names: newNameCache(now), cards: newButtonCards(), rosterTimeout: rosterTimeout,
-		pressWait: pressWait, threadTimeout: threadTimeout}
+		pressWait: pressWait, threadTimeout: threadTimeout, buttonKey: key, buttonsWait: waitFor}
 	recv, err := NewReceiver(ReceiverConfig{Connection: cfg.Connection, TenantID: cfg.TenantID, AppID: cfg.AppID,
 		MetadataURL: cfg.MetadataURL, HTTPClient: client, Conversations: convs, Logger: log, Now: now, Invokes: c})
 	if err != nil {
@@ -177,10 +183,11 @@ func (c *Client) ref(channel, thread, id string) chat.Ref {
 // thread replies in it. It carries tag where people do not see it and Graph gives it back (withCarrier), which Find reads.
 //
 // A message with text and buttons is two posts (buttons.go): the text, which is the message Post returns, and then its buttons, as a
-// card of their own in the text's thread. A post of the buttons that fails is logged at WARN and counted as PostButtons, and Post
-// returns the text with no error: an error would have the outbox look the post up, adopt the text and post nothing more, while the
-// next update of the message that has the buttons posts them. A crash between the two posts leaves the text alone, which the outbox's
-// lookup adopts, and the buttons are posted only if the message is updated with them after.
+// card of their own in the text's thread. A post of the buttons that fails is tried once more after a short wait (buttonsAfterPost);
+// one that fails then is logged at WARN and counted as PostButtons, and Post returns the text with no error: an error would have the
+// outbox look the post up, adopt the text and post nothing more, while the next update of the message that has the buttons posts
+// them, and a message that is never updated keeps its text without them. A crash between the two posts leaves the text alone, which
+// the outbox's lookup adopts, and the buttons are posted only if the message is updated with them after.
 func (c *Client) Post(ctx context.Context, t chat.Target, o chat.Outgoing, tag string) (ref chat.Ref, err error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.Post")
 	defer func() { c.finish(ctx, op, "Post", err) }()
@@ -198,10 +205,7 @@ func (c *Client) Post(ctx context.Context, t chat.Target, o chat.Outgoing, tag s
 	}
 	ref = c.ref(t.Channel, t.Thread, id)
 	if len(m.buttons) > 0 {
-		if err := c.buttonsUnder(ctx, serviceURL, ref, m.buttons); err != nil {
-			c.log.WarnContext(ctx, "teams: a message's buttons were not posted under its text, or Teams named no ID for them; the text "+
-				"stands, and an update of the message with them posts them", "channel", t.Channel, "message", id, "error", err.Error())
-		}
+		c.buttonsAfterPost(ctx, serviceURL, ref, m.buttons)
 	}
 	return ref, nil
 }
@@ -210,7 +214,8 @@ func (c *Client) Post(ctx context.Context, t chat.Target, o chat.Outgoing, tag s
 // buttons and no text keeps its card, and a prompt and its ending are a card alone. A message with text and buttons edits the text,
 // and shows the buttons under it as a card of their own (buttonsUnder): posted by the first update that has them, edited when they
 // change, and left as they are otherwise. The update fails when they cannot be shown, after the text was edited, so that the caller's
-// next try, which edits the text to the same content, posts them; one whose card Teams took and named no ID is done. The ending of a
+// next try, which edits the text to the same content, posts them; one whose card Teams took and named no ID is done, and so is one
+// whose card was gone (404) and could not be posted anew. The ending of a
 // prompt names its decider, a Microsoft Entra object ID, by the name that the channel's roster gives (deciderName), and as someone
 // when it cannot be had.
 func (c *Client) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) (err error) {
@@ -237,10 +242,19 @@ func (c *Client) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) (err e
 	if len(m.buttons) == 0 {
 		return nil
 	}
+	if !nameableText(r.ID) {
+		c.log.WarnContext(ctx, "teams: a message's buttons were not posted: its text's ID cannot be named on a card", "channel", r.Channel)
+		return nil
+	}
 	err = c.buttonsUnder(ctx, serviceURL, r, m.buttons)
-	if errors.Is(err, errNoID) {
+	switch {
+	case errors.Is(err, errNoID):
 		c.log.WarnContext(ctx, "teams: Teams named no ID for a message's buttons; they are shown, and other buttons would be posted anew",
 			"channel", r.Channel, "message", r.ID)
+		return nil
+	case errors.Is(err, errCardGone): // the text is edited, and the record forgotten: the next update with the buttons posts them
+		c.log.WarnContext(ctx, "teams: the card of a message's buttons is gone, and could not be posted anew; the text stands",
+			"channel", r.Channel, "message", r.ID, "error", err.Error())
 		return nil
 	}
 	return err

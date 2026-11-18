@@ -42,13 +42,14 @@ type fakeConnector struct {
 	pageMax int                                                      // guarded by mu: the most members a page holds, 0 for no cap
 	fail    func(r *http.Request) (status int, body string, ok bool) // guarded by mu
 	nextID  int                                                      // guarded by mu
+	retry   string                                                   // guarded by mu: the Retry-After of a failed answer, "" for none
 	tokens  int                                                      // guarded by mu: the token grants taken
 	graph   fakeGraph                                                // guarded by mu
 }
 
 func newFakeConnector(t testing.TB) *fakeConnector {
 	t.Helper()
-	f := &fakeConnector{teams: map[string][]string{}, rosters: map[string][]account{}, nextID: 1700000000000, graph: newFakeGraph()}
+	f := &fakeConnector{teams: map[string][]string{}, rosters: map[string][]account{}, nextID: 1700000000000, graph: newFakeGraph(), retry: "3"}
 	f.srv = httptest.NewTLSServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -96,10 +97,13 @@ func (f *fakeConnector) serve(w http.ResponseWriter, r *http.Request) {
 	f.reqs = append(f.reqs, req)
 	f.nextID++
 	id := f.nextID
+	retry := f.retry
 	f.mu.Unlock()
 	if fail != nil {
 		if status, body, ok := fail(r); ok {
-			w.Header().Set("Retry-After", "3")
+			if retry != "" {
+				w.Header().Set("Retry-After", retry)
+			}
 			w.WriteHeader(status)
 			_, _ = io.WriteString(w, body)
 			return
@@ -194,6 +198,13 @@ func (f *fakeConnector) setFail(fail func(r *http.Request) (status int, body str
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.fail = fail
+}
+
+// retryAfter sets the Retry-After of a failed answer, "" for none.
+func (f *fakeConnector) retryAfter(v string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.retry = v
 }
 
 // setTeam lists channels as the channels of team.

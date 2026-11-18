@@ -312,13 +312,13 @@ func TestButtonsAreTheActionsOfACardOfTheirOwn(t *testing.T) {
 	if a := m.activity; a.Text != "The pods cannot read their logs.\n\nWas this useful?" || a.TextFormat != "markdown" || len(a.Attachments) != 0 {
 		t.Errorf("text %q of the format %q, %d attachments", a.Text, a.TextFormat, len(a.Attachments))
 	}
-	card := cardOf(t, buttonsActivity(m.buttons, "1700000000001"))
+	card := cardOf(t, buttonsActivity(m.buttons, "1700000000001", func(v string) string { return "mac-of-" + v }))
 	if _, ok := card["body"]; ok {
 		t.Errorf("the card of buttons has a body: %v", card["body"])
 	}
 	sameLines(t, "buttons", outline(t, card), []string{
-		`action:Useful positive {"kourier":{"button":"useful","of":"1700000000001","value":"fb1|a"}}`,
-		`action:Not useful <nil> {"kourier":{"button":"not","of":"1700000000001","value":"fb1|b"}}`,
+		`action:Useful positive {"kourier":{"button":"useful","mac":"mac-of-fb1|a","of":"1700000000001","value":"fb1|a"}}`,
+		`action:Not useful <nil> {"kourier":{"button":"not","mac":"mac-of-fb1|b","of":"1700000000001","value":"fb1|b"}}`,
 	})
 	alone, err := render(chat.Say(chat.Message{Parts: []chat.Part{chat.Buttons{Buttons: []chat.Button{{ID: "b", Label: "B", Value: "v"}}}}}))
 	if err != nil || alone.activity.Text != "" || len(alone.buttons) != 0 {

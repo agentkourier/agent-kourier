@@ -93,14 +93,24 @@ answered in time, then what was asked with each answer, or each tool with `Appro
 right after the reply's text, or, for a reply that it edits as the agent works, after the final edit. When Agent Kourier replaces a
 card, Teams marks the message `Edited`.
 
-A reply's text and its buttons are two posts because Teams does not take them as one: on a test tenant in November 2026, one message
-of text and a card was answered with no ID and shown as two messages, the text and a card of the buttons alone, so the broker could
-not learn either one's ID. Posted apart, each is a message of its own, and the text is the message that the broker records as the reply. A press of
-the buttons is taken as a press of that text, which the card names. What the person who pressed is told shows under the card they
-pressed, and no edit follows a vote. If the post of the buttons fails, the text stands; the next edit of the reply that has the
-buttons posts them, and a reply that is posted and never edited after keeps its text without them. The broker remembers which
-buttons it posted under which text, so that an edit with the same buttons does not post them again: it forgets the oldest past 4096,
-and remembers nothing across a restart or between replicas, where such an edit posts them a second time ([Limits](limits.md)). The
+A reply's text and its buttons are two posts because Teams did not take them as one: on a test tenant in November 2026, Teams answered
+one message of text and a card with no ID, and showed it as two messages, the text and a card of the buttons alone, so the broker could
+not learn either one's ID. Posted apart, each is a message of its own, and the text is the message that the broker records as the reply.
+A press of the buttons is taken as a press of that text, which the card names. Each button of the card carries, beside the text's ID, an
+HMAC-SHA256 of the connection, the channel, the thread, the text's ID and the button's value, under a key that the broker derives from
+the connection's client secret and neither logs nor stores. A press is taken only when it carries the MAC that the broker computes for
+it, so every replica takes it, and so does the broker after a restart; a press whose data names another message, another value or
+another thread is refused, and the person who pressed is told that Agent Kourier cannot take it. When the client secret is rotated, the
+presses of every card of buttons posted before are refused the same way: a vote on an older reply can no longer be cast. What the person
+who pressed is told shows under the card they pressed, and no edit follows a vote.
+
+If the post of the buttons fails for this try only (a rate limit, a 5xx, a call that ran out of time), the broker waits as the answer
+asks, if that is at most 5 seconds, and tries once more ([Limits](limits.md)). If that fails too, or Teams refuses the post for good, the
+text stands, and the broker logs it at WARN; the next edit of the reply that has the buttons posts them, and a reply that is posted and
+never edited after keeps its text without them. A text whose ID is longer than 64 bytes or holds a `:` gets no buttons. The broker
+remembers which buttons it posted under which text, so that an edit with the same buttons does not post them again, and an edit with
+other buttons edits their card; if that card is gone (someone deleted it), the broker posts the buttons anew. It forgets the oldest past
+4096, and remembers nothing across a restart or between replicas, where such an edit posts them a second time ([Limits](limits.md)). The
 two posts were not checked on a test tenant: that Teams answers each with its ID, as it did for every card posted alone, and that a
 press of the card names the card's message, as it did for a question's card, follow from the checks above.
 
@@ -215,9 +225,9 @@ opened a thread, and so did the `id` of the two kinds of card element that the b
 little space under the text. The span was tried only at the end of a text. Teams' mobile and desktop clients, screen readers, Teams'
 search and notifications, and the order in which Graph lists a channel's messages were not checked.
 
-A reply with buttons is posted as its text and then a card of its buttons, two messages that each get their own ID: Teams answers one
-message of text and a card with no ID, and shows it as two messages, the text with the span and a card of the buttons with no tag
-(seen on a test tenant in November 2026). If the broker stops between the two posts, the outbox's lookup finds the text by its tag and
+A reply with buttons is posted as its text and then a card of its buttons, two messages that each should get their own ID (not
+measured: Teams answered every card posted alone with its ID). Teams answered one message of text and a card with no ID in November
+2026, on a test tenant, and showed it as two messages, the text with the span and a card of the buttons with no tag. If the broker stops between the two posts, the outbox's lookup finds the text by its tag and
 records it, and the buttons are posted only if the reply is edited with them after.
 
 A post that the pages read do not hold, a channel whose team the broker does not know yet, a read that runs out of time after Graph

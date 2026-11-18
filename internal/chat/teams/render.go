@@ -3,6 +3,7 @@ package teams
 import (
 	"bytes"
 	"cmp"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -108,7 +109,7 @@ func renderWith(o chat.Outgoing, decider string) (outMessage, error) {
 
 // renderMessage is m as text, cut further when it is over the budget, with its buttons to go under it as a card of their own; or, for
 // a message of buttons that has no text, their card alone, which a press names by its own ID. The card is sized as it names a text of
-// the longest ID (maxActivityID), and no cut of the text makes it smaller.
+// the longest ID (maxActivityID), with a MAC on each button, and no cut of the text makes it smaller.
 func renderMessage(m chat.Message) (outMessage, error) {
 	buttons := buttonsOf(m)
 	for body := maxBodyUnits; ; body /= 2 {
@@ -120,10 +121,10 @@ func renderMessage(m chat.Message) (outMessage, error) {
 		case a.Text == "" && len(buttons) == 0:
 			return outMessage{}, fmt.Errorf("%w: %w", chat.ErrInvalid, errEmpty)
 		case a.Text == "":
-			card := buttonsActivity(buttons, "")
+			card := buttonsActivity(buttons, "", nil)
 			return outMessage{activity: card}, withinBudget(card)
 		case len(buttons) > 0:
-			if err := withinBudget(buttonsActivity(buttons, strings.Repeat("9", maxActivityID))); err != nil {
+			if err := withinBudget(buttonsActivity(buttons, strings.Repeat("9", maxActivityID), longestMAC)); err != nil {
 				return outMessage{}, err
 			}
 		}
@@ -157,10 +158,13 @@ func cardActivity(card map[string]any) outActivity {
 }
 
 // buttonsActivity is the post of buttons: a card of them alone (buttonsCard), whose actions name the text message of the ID of, under
-// which it is posted, or no message when of is "".
-func buttonsActivity(buttons []chat.Button, of string) outActivity {
-	return cardActivity(buttonsCard(capabilities(), buttons, of))
+// which it is posted, each with mac of its value, or no message when of is "".
+func buttonsActivity(buttons []chat.Button, of string, mac func(value string) string) outActivity {
+	return cardActivity(buttonsCard(capabilities(), buttons, of, mac))
 }
+
+// longestMAC stands for a button's MAC (buttonMAC) when a card is sized: it is as long as one.
+func longestMAC(string) string { return strings.Repeat("0", 2*sha256.Size) }
 
 // withinBudget is chat.ErrTooLarge for an activity over maxMessageBytes.
 func withinBudget(a outActivity) error {

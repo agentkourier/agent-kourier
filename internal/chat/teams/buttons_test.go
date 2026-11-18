@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
@@ -121,7 +122,8 @@ func TestATextWithButtonsIsTwoPosts(t *testing.T) {
 		t.Fatalf("the card has %d actions, want 2", len(data))
 	}
 	for i, d := range data {
-		want := map[string]any{"button": feedbackButtons().Buttons[i].ID, "value": feedbackButtons().Buttons[i].Value, "of": ref.ID}
+		b := feedbackButtons().Buttons[i]
+		want := map[string]any{"button": b.ID, "mac": ct.c.buttonMAC(testChannel, testRoot, ref.ID, b.Value), "of": ref.ID, "value": b.Value}
 		if mustJSON(t, d) != mustJSON(t, want) {
 			t.Errorf("action %d's data = %v, want %v", i, d, want)
 		}
@@ -185,16 +187,19 @@ func TestButtonsAloneAreOneCardAndATextAloneOnePost(t *testing.T) {
 	}
 }
 
-// A post of the buttons that fails leaves the text posted and its Ref returned, with no error: an error would have the outbox look the
-// post up, adopt the text, and post nothing more, and the text is never posted twice. The failure is counted as PostButtons. The next
-// update of the message that has the buttons posts them, once.
+// A post of the buttons that fails, and fails again when tried once more, leaves the text posted and its Ref returned, with no error:
+// an error would have the outbox look the post up, adopt the text, and post nothing more, and the text is never posted twice. Each
+// failure is counted as PostButtons. The next update of the message that has the buttons posts them, once.
 func TestAFailedButtonsPostLeavesTheText(t *testing.T) {
 	t.Parallel()
 	o := newObserved(t)
 	ct, target := threadTest(t)
+	ct.c.buttonsWait = func(context.Context, time.Duration) bool { return true }
 	var posts atomic.Int32
+	var failing atomic.Bool
+	failing.Store(true)
 	ct.f.setFail(func(r *http.Request) (int, string, bool) {
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/activities") && posts.Add(1) == 2 {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/activities") && posts.Add(1) >= 2 && failing.Load() {
 			return http.StatusTooManyRequests, `{"error":{"code":"Throttled"}}`, true
 		}
 		return 0, "", false
@@ -203,12 +208,13 @@ func TestAFailedButtonsPostLeavesTheText(t *testing.T) {
 	if err != nil || ref != ct.c.RefAt(testChannel, testRoot, "1700000000001") {
 		t.Fatalf("Post = %+v, %v; want the text's Ref and no error", ref, err)
 	}
-	if calls := activityCalls(ct.f.take()); len(calls) != 2 || len(calls[0].activity.Attachments) != 0 || len(calls[1].activity.Attachments) != 1 {
-		t.Fatalf("calls %+v, want the text once and the buttons tried once", calls)
+	if calls := activityCalls(ct.f.take()); len(calls) != 3 || len(calls[0].activity.Attachments) != 0 || len(calls[2].activity.Attachments) != 1 {
+		t.Fatalf("calls %+v, want the text once and the buttons tried twice", calls)
 	}
-	if got := buttonsCalls(t, o, "rate_limited"); got != 1 {
-		t.Errorf("PostButtons rate_limited = %v, want 1", got)
+	if got := buttonsCalls(t, o, "rate_limited"); got != 2 {
+		t.Errorf("PostButtons rate_limited = %v, want 2", got)
 	}
+	failing.Store(false)
 
 	if err := ct.c.Update(o.ctx, ref, rated("It is the disk.")); err != nil {
 		t.Fatal(err)
@@ -328,6 +334,9 @@ func TestAPressOfButtonsUnderATextNamesTheText(t *testing.T) {
 		own := map[string]any{"button": "useful", "value": "fb1|x"}
 		if of != nil {
 			own["of"] = of
+			if s, ok := of.(string); ok {
+				own["mac"] = c.buttonMAC(testChannel, "1790000000100", s, "fb1|x")
+			}
 		}
 		return map[string]any{dataKey: own}
 	}
@@ -347,6 +356,7 @@ func TestAPressOfButtonsUnderATextNamesTheText(t *testing.T) {
 	}
 	prompt := promptData("submit")
 	prompt[dataKey].(map[string]any)["of"] = "1790000000150"
+	prompt[dataKey].(map[string]any)["mac"] = c.buttonMAC(testChannel, "1790000000100", "1790000000150", "")
 	for name, data := range map[string]map[string]any{
 		"an empty text":         button(""),
 		"a text with a ':'":     button("1:1790000000150"),
@@ -424,8 +434,8 @@ func TestTheTextAndTheButtonsEachHaveTheBudget(t *testing.T) {
 	}
 }
 
-// The card of buttons under a text is sized as it names a text of the longest ID: buttons that fit with no ID and not with that one
-// are refused, though the card that a post sends would name a shorter ID.
+// The card of buttons under a text is sized as it names a text of the longest ID, with a MAC on each button: buttons that fit with no
+// ID and not with those are refused, though the card that a post sends would name a shorter ID.
 func TestTheButtonsAreSizedWithTheLongestTextID(t *testing.T) {
 	t.Parallel()
 	longest := strings.Repeat("9", maxActivityID)
@@ -434,12 +444,12 @@ func TestTheButtonsAreSizedWithTheLongestTextID(t *testing.T) {
 		var bs []chat.Button
 		for i := 0; ; i++ {
 			bs = append(bs, chat.Button{ID: fmt.Sprintf("b%d", i), Label: "Useful", Value: strings.Repeat("v", value)})
-			if n, _ := size(buttonsActivity(bs, "")); n > maxMessageBytes {
+			if n, _ := size(buttonsActivity(bs, "", nil)); n > maxMessageBytes {
 				bs = bs[:len(bs)-1]
 				break
 			}
 		}
-		if n, _ := size(buttonsActivity(bs, longest)); n > maxMessageBytes {
+		if n, _ := size(buttonsActivity(bs, longest, longestMAC)); n > maxMessageBytes {
 			edge = bs
 		}
 	}
@@ -470,6 +480,208 @@ func TestTheButtonCardsAreBounded(t *testing.T) {
 	cards.put("1", buttonCard{id: "x", sum: "t"})
 	if c, _ := cards.get("1"); c.id != "x" || len(cards.order) != maxButtonCards || !slices.Contains(cards.order, "1") {
 		t.Errorf("card 1 = %+v with %d remembered", c, len(cards.order))
+	}
+}
+
+// postedCard posts a rated reply in target and returns its Ref and the data of the first action of the card of its buttons.
+func postedCard(t *testing.T, ct *clientTest, target chat.Target) (chat.Ref, map[string]any) {
+	t.Helper()
+	ref, err := ct.c.Post(t.Context(), target, rated("It is the disk."), findTag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := activityCalls(ct.f.take())
+	if len(calls) != 2 {
+		t.Fatalf("%d calls, want 2", len(calls))
+	}
+	actions, _ := cardOf(t, calls[1].activity)["actions"].([]any)
+	data, _ := actions[0].(map[string]any)["data"].(map[string]any)
+	return ref, data
+}
+
+// pressOf is the invoke of a press of the card message card in testChannel's thread root, whose action's data is data.
+func pressOf(t *testing.T, c *Client, root, card string, data map[string]any) Invoke {
+	t.Helper()
+	inv := Invoke{Name: actionInvoke, ID: "f:00000000-0000-4000-8000-0000000000c6", User: testUser, At: c.RefAt(testChannel, root, card)}
+	inv.Value, _ = json.Marshal(map[string]any{"action": map[string]any{"type": "Action.Execute", "data": data}})
+	return inv
+}
+
+// copyData is a deep copy of an action's data, with Agent Kourier's own part edited by edit.
+func copyData(t *testing.T, data map[string]any, edit func(own map[string]any)) map[string]any {
+	t.Helper()
+	var out map[string]any
+	if err := json.Unmarshal([]byte(mustJSON(t, data)), &out); err != nil {
+		t.Fatal(err)
+	}
+	edit(out[dataKey].(map[string]any))
+	return out
+}
+
+// The text that a card names is bound to the card: its "of" comes with a MAC of the connection, the channel, the card's thread, the
+// text and the button's value, under a key that only the connection's client secret gives. A press whose data names another text, has
+// another value, has no MAC or one of another card, or is of a card in another thread or on another connection, makes no press.
+func TestAPressWhoseTextIsNotTheCardsIsRefused(t *testing.T) {
+	t.Parallel()
+	ct, target := threadTest(t)
+	ref, data := postedCard(t, ct, target)
+	if got, _, ok := ct.c.press(pressOf(t, ct.c, testRoot, "1700000000002", data)); !ok || got.At != ref {
+		t.Fatalf("the card's own press: %+v, %v; want one of %+v", got.At, ok, ref)
+	}
+	_, other := postedCard(t, ct, target) // another reply's card in the same thread
+	for name, inv := range map[string]Invoke{
+		"another text":       pressOf(t, ct.c, testRoot, "1700000000002", copyData(t, data, func(o map[string]any) { o["of"] = "1794965009000" })),
+		"another value":      pressOf(t, ct.c, testRoot, "1700000000002", copyData(t, data, func(o map[string]any) { o["value"] = "fb1|investigation|useful|100.1|turn-9" })),
+		"no MAC":             pressOf(t, ct.c, testRoot, "1700000000002", copyData(t, data, func(o map[string]any) { delete(o, "mac") })),
+		"a MAC not a string": pressOf(t, ct.c, testRoot, "1700000000002", copyData(t, data, func(o map[string]any) { o["mac"] = 7 })),
+		"another card's MAC": pressOf(t, ct.c, testRoot, "1700000000002", copyData(t, data, func(o map[string]any) { o["mac"] = other[dataKey].(map[string]any)["mac"] })),
+		"another thread":     pressOf(t, ct.c, "1794965099000", "1700000000002", data),
+	} {
+		if got, _, ok := ct.c.press(inv); ok {
+			t.Errorf("%s: taken as %+v", name, got.At)
+		}
+	}
+	elsewhere, err := New(Config{Connection: "agent-kourier/other", TenantID: testTenant, AppID: testAppID, ClientSecret: secret.New(testClientSecret)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _, ok := elsewhere.press(pressOf(t, elsewhere, testRoot, "1700000000002", data)); ok {
+		t.Errorf("a press of the card on another connection: taken as %+v", got.At)
+	}
+}
+
+// A press of a card is taken after a restart, and by another replica: the key is derived from the connection's client secret, and
+// nothing that a Client remembers is needed. A Client of another secret, as after the secret was rotated, refuses the press of a card
+// that was posted before.
+func TestAPressIsTakenAfterARestart(t *testing.T) {
+	t.Parallel()
+	ct, target := threadTest(t)
+	ref, data := postedCard(t, ct, target)
+	restarted, err := New(Config{Connection: testConn, TenantID: testTenant, AppID: testAppID, ClientSecret: secret.New(testClientSecret)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _, ok := restarted.press(pressOf(t, restarted, testRoot, "1700000000002", data)); !ok || got.At != ref {
+		t.Errorf("after a restart: %+v, %v; want a press of %+v", got.At, ok, ref)
+	}
+	rotated, err := New(Config{Connection: testConn, TenantID: testTenant, AppID: testAppID, ClientSecret: secret.New("fake-rotated-secret")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _, ok := rotated.press(pressOf(t, rotated, testRoot, "1700000000002", data)); ok {
+		t.Errorf("after a rotation of the secret: taken as %+v", got.At)
+	}
+}
+
+// A post of the buttons that Teams refuses for now is tried once more, after the wait it asked for, when that is at most
+// buttonsWaitMax; a longer wait, or a second refusal, leaves the text alone.
+func TestAFailedButtonsPostIsTriedOnceMore(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		header string
+		fails  int32
+		waits  []time.Duration
+		posted bool
+	}{
+		"a 429 waited out":   {"3", 1, []time.Duration{3 * time.Second}, true},
+		"a 503 with no wait": {"", 1, []time.Duration{time.Second}, true},
+		"a 429 too long":     {"30", 1, nil, false},
+		"refused twice":      {"1", 2, []time.Duration{time.Second}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ct, target := threadTest(t)
+			var waits []time.Duration
+			ct.c.buttonsWait = func(_ context.Context, d time.Duration) bool { waits = append(waits, d); return true }
+			var posts, failed atomic.Int32
+			ct.f.setFail(func(r *http.Request) (int, string, bool) {
+				if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/activities") && posts.Add(1) > 1 && failed.Load() < tc.fails {
+					failed.Add(1)
+					if tc.header == "" {
+						return http.StatusServiceUnavailable, "", true
+					}
+					return http.StatusTooManyRequests, `{"error":{"code":"Throttled"}}`, true
+				}
+				return 0, "", false
+			})
+			ct.f.retryAfter(tc.header)
+			ref, err := ct.c.Post(t.Context(), target, rated("It is the disk."), findTag)
+			if err != nil || ref.ID == "" {
+				t.Fatalf("Post = %+v, %v", ref, err)
+			}
+			if !slices.Equal(waits, tc.waits) {
+				t.Errorf("waits %v, want %v", waits, tc.waits)
+			}
+			calls := activityCalls(ct.f.take())
+			_, remembered := ct.c.cards.get(testChannel + idSeparator + ref.ID)
+			if remembered != tc.posted || len(calls) != 2+len(tc.waits) {
+				t.Errorf("%d calls, the card remembered %v; want %d and %v", len(calls), remembered, 2+len(tc.waits), tc.posted)
+			}
+		})
+	}
+}
+
+// An edit of a remembered card that Teams answers 404, a card someone deleted, forgets it and posts the buttons anew. If that post
+// fails too, the update is done, since its text was edited, and is logged.
+func TestAGoneCardIsPostedAnew(t *testing.T) {
+	t.Parallel()
+	ct, target := threadTest(t)
+	ref, _ := postedCard(t, ct, target)
+	other := chat.Say(chat.Message{Parts: []chat.Part{chat.Body{Markdown: "x"}, chat.Buttons{Buttons: []chat.Button{{ID: "b", Label: "B", Value: "v"}}}}})
+	var postFails atomic.Bool
+	ct.f.setFail(func(r *http.Request) (int, string, bool) {
+		switch {
+		case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/1700000000002"):
+			return http.StatusNotFound, `{"error":{"code":"ActivityNotFoundInConversation"}}`, true
+		case r.Method == http.MethodPost && postFails.Load():
+			return http.StatusForbidden, `{"error":{"code":"Forbidden"}}`, true
+		}
+		return 0, "", false
+	})
+	if err := ct.c.Update(t.Context(), ref, other); err != nil {
+		t.Fatalf("Update = %v", err)
+	}
+	calls := activityCalls(ct.f.take())
+	if len(calls) != 3 || calls[1].method != http.MethodPut || calls[2].method != http.MethodPost || calls[2].path != threadPath(testRoot, "") {
+		t.Fatalf("calls %+v, want the text put, the card's put refused, and the card posted anew", calls)
+	}
+	if c, _ := ct.c.cards.get(testChannel + idSeparator + ref.ID); c.id != "1700000000005" {
+		t.Errorf("the card remembered is %+v, want the new one", c)
+	}
+
+	postFails.Store(true)
+	ct.c.cards.put(testChannel+idSeparator+ref.ID, buttonCard{id: "1700000000002", sum: "old"})
+	if err := ct.c.Update(t.Context(), ref, other); err != nil {
+		t.Errorf("an update whose card is gone and cannot be posted anew: %v, want none", err)
+	}
+	if _, ok := ct.c.cards.get(testChannel + idSeparator + ref.ID); ok {
+		t.Error("the gone card is still remembered")
+	}
+}
+
+// A text whose ID cannot be named in a card's data (it holds ':', or is longer than maxActivityID) gets no buttons: they could not be
+// pressed. The text is posted, and its Ref returned.
+func TestATextOfAnUnusableIDGetsNoButtons(t *testing.T) {
+	t.Parallel()
+	ct, target := threadTest(t)
+	ct.f.setFail(func(r *http.Request) (int, string, bool) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/activities") {
+			return http.StatusCreated, `{"id":"1:1795033843362"}`, true
+		}
+		return 0, "", false
+	})
+	ref, err := ct.c.Post(t.Context(), target, rated("It is the disk."), findTag)
+	if err != nil || ref.ID != "1:1795033843362" {
+		t.Fatalf("Post = %+v, %v", ref, err)
+	}
+	if calls := activityCalls(ct.f.take()); len(calls) != 1 {
+		t.Errorf("%d calls, want the text alone", len(calls))
+	}
+	if err := ct.c.Update(t.Context(), ref, rated("It is the disk.")); err != nil {
+		t.Errorf("Update = %v", err)
+	}
+	if calls := activityCalls(ct.f.take()); len(calls) != 1 || calls[0].method != http.MethodPut {
+		t.Errorf("the update: %+v, want the text put alone", calls)
 	}
 }
 
