@@ -62,13 +62,13 @@ func (in *Intake) admit(ctx context.Context, m Match) (store.TriggerAdmission, e
 // not do (D26). If the release fails the error is returned, and nothing is counted: the redelivery finds its own
 // reservation and is checked again. A message stopped before is a redelivery, and was counted then.
 func (in *Intake) stopThread(ctx context.Context, m Match, hash string, out decided, adm store.TriggerAdmission) (decided, error) {
+	out.decision = DecisionLimited // what the attempt carries out, which a failed release logs
 	if _, err := in.cfg.TriggerThreads.ReleaseTriggerThread(ctx, m.Binding, hash, m.Message.At.ID); err != nil {
 		return out, fmt.Errorf("release the thread of key %s: %w", out.keyHash, err)
 	}
 	if !adm.Again {
 		in.countLimited(ctx, m, adm.Limit)
 	}
-	out.decision = DecisionLimited
 	return out, nil
 }
 
