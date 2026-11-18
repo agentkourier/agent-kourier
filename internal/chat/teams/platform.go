@@ -49,7 +49,8 @@ type Config struct {
 // route on the chat listener (HTTPHandler, the Receiver), and the Client posts, replies and edits through the Bot Connector with
 // the bot's token from Microsoft Entra.
 //
-// What it does not do yet, and says so: streams (ErrNoStreams), progress steps, ephemeral messages (ErrNoEphemeral), reactions
+// A message's progress steps are a list under the rest of the message (Caps.Steps), which each update of a live reply shows anew.
+// What it does not do yet, and says so: streams (ErrNoStreams), ephemeral messages (ErrNoEphemeral), reactions
 // (ErrNoReactions), the busy mark (ErrNoBusy), buttons and tool approvals (a prompt is shown as text, a prompt of tools is
 // ErrInvalid), reading a thread (ErrNoThreadReads), finding a post by its tag (Find says not found), and reading membership,
 // bots and names (IsMember and IsBot fail closed, ResolveUser gives the ID alone).

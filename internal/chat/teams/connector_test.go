@@ -175,8 +175,9 @@ func (ct *clientTest) record(t testing.TB, channel, team string) {
 }
 
 // shownBy is what Teams shows of the activities the fake took, as CommonMark reads their text (Teams' markdown is unmeasured, so
-// code is not taken for inert): each mention entity's text, found in the text, is the mention of its user, shown as its name; and
-// the text is split into its paragraphs, each a piece that a place's limit holds. What the reading finds acting is put on the first
+// code is not taken for inert): each mention entity's text, found in the text, is the mention of its user, shown as its name; the
+// adapter's own step list is read as its lines (unlisted); and the text is split into its paragraphs, each a piece that a place's
+// limit holds. What the reading finds acting is put on the first
 // piece that holds the conformance canary (or the first piece), so that every construct is checked once, against a piece that
 // carries hostile text.
 func shownBy(reqs []connRequest) []chattest.Shown {
@@ -199,7 +200,7 @@ func shownBy(reqs []connRequest) []chattest.Shown {
 			text = text[:i] + e.Mentioned.Name + text[i+len(e.Text):]
 			active = append(active, chattest.Active{Kind: chattest.KindMention, Text: e.Mentioned.ID})
 		}
-		scan := chattest.ScanCommonMark(text)
+		scan := chattest.ScanCommonMark(unlisted(text))
 		active = append(active, scan.Active...)
 		pieces := strings.Split(scan.Displayed, "\n\n")
 		at := 0
@@ -218,6 +219,30 @@ func shownBy(reqs []connRequest) []chattest.Shown {
 		}
 	}
 	return out
+}
+
+// unlisted is text with the step list that the adapter puts last (stepList) read as what it shows: the quote and the list are the
+// adapter's own, so each of its lines is a paragraph of its own here, and only what is in the lines is scanned. escapeLine starts
+// no line with ">" or "- ", so a last paragraph whose every line starts with ">" is a list of the adapter's, or a quote of the
+// Body's, whose style a Body may have anyway.
+func unlisted(text string) string {
+	cut := strings.LastIndex(text, "\n\n") + 1
+	if cut > 0 {
+		cut++
+	}
+	last := strings.Split(text[cut:], "\n")
+	var lines []string
+	for _, l := range last {
+		rest, quoted := strings.CutPrefix(l, ">")
+		if !quoted {
+			return text
+		}
+		rest = strings.TrimPrefix(strings.TrimPrefix(rest, " "), "- ")
+		if rest != "" {
+			lines = append(lines, rest)
+		}
+	}
+	return text[:cut] + strings.Join(lines, "\n\n")
 }
 
 // inert checks that every activity is a plain message in markdown with no more than its text and its mentions: no attachment, card

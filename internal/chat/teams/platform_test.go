@@ -83,8 +83,8 @@ func TestUpdateEditsTheMessageInItsThread(t *testing.T) {
 			t.Errorf("update of %+v: %+v, want PUT %s", tc.ref, reqs, tc.path)
 		}
 	}
-	// A message whose new content shows nothing keeps its text.
-	only := chat.Say(chat.Message{Parts: []chat.Part{chat.Steps{Steps: []chat.Step{{ID: "s", Title: "t"}}}}})
+	// A message whose new content shows nothing (a Steps part with no steps, and no fallback) keeps its text.
+	only := chat.Say(chat.Message{Parts: []chat.Part{chat.Steps{}}})
 	if err := ct.c.Update(t.Context(), ct.c.RefAt(testChannel, "", "1700000000001"), only); !errors.Is(err, chat.ErrWouldDropText) {
 		t.Errorf("an update with no text: %v, want ErrWouldDropText", err)
 	}
@@ -460,7 +460,8 @@ func TestRunTakesActivitiesWhileItWaitsForTheToken(t *testing.T) {
 	}
 }
 
-// What Teams does not do in this release is said with the contract's errors, and nothing is called.
+// What Teams does not do in this release is said with the contract's errors, and nothing is called. It shows a message's steps,
+// with no stream.
 func TestTheSeamsTeamsDoesNotFillYet(t *testing.T) {
 	t.Parallel()
 	ct := newClientTest(t)
@@ -468,7 +469,7 @@ func TestTheSeamsTeamsDoesNotFillYet(t *testing.T) {
 	target := chat.Target{Conn: testConn, Channel: testChannel, Thread: "1700000000001"}
 	ref := c.RefAt(testChannel, "1700000000001", "1700000000002")
 	caps := c.Capabilities()
-	if caps.Streams || caps.Steps || caps.Ephemeral || caps.Busy || caps.AckReaction != "" {
+	if caps.Streams || !caps.Steps || caps.Ephemeral || caps.Busy || caps.AckReaction != "" {
 		t.Errorf("caps = %+v", caps)
 	}
 	if err := c.React(ctx, ref, "eyes"); !errors.Is(err, chat.ErrNoReactions) {

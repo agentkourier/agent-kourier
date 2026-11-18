@@ -2,6 +2,7 @@ package teams
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -173,5 +174,87 @@ func TestPromptsAreText(t *testing.T) {
 	e := mustRender(t, chat.End(chat.Ending{Outcome: chat.Answered, By: testUser, Prompt: p, Answers: [][]string{{"prod"}}}))
 	if e.Text != "<at>someone</at> answered.\n\nDeploy\n\nWhere?\n\nAnswer: prod" || len(e.Entities) != 1 {
 		t.Errorf("ending %+v", e)
+	}
+}
+
+// A message's steps are a list in a quote after the rest of the message, the answer and its buttons included, so that the reply
+// reads first and the list stays under it as a record. The line that a Context part just before the steps says of them (how many
+// earlier steps are not shown) heads the list. A call is worded as the status line words one, by its state; a step that is no call
+// shows its title, its detail, and how it ended if it did not end well.
+func TestStepsAreAListUnderTheRestOfTheMessage(t *testing.T) {
+	t.Parallel()
+	a := mustRender(t, chat.Say(chat.Message{Parts: []chat.Part{
+		chat.Context{Text: "2 earlier steps are not shown."},
+		chat.Steps{Steps: []chat.Step{
+			{ID: "s3", Title: "get_pods", Detail: `ns="prod"`, State: chat.StepDone, Call: true},
+			{ID: "s4", Title: "get_logs", State: chat.StepFailed, Call: true},
+			{ID: "s5", Title: "describe", Detail: "name=web", State: chat.StepEnded, Call: true},
+			{ID: "s6", Title: "rollout", Detail: "name=web", Call: true},
+			{ID: "s7", Title: "Working…"},
+			{ID: "s8", Title: "Worked", Detail: "Took 9 s, 4 steps", State: chat.StepDone},
+			{ID: "s9", Title: "Stopped", State: chat.StepFailed},
+			{ID: "s10", Title: "Approval requested: scale", Detail: "n=3", State: chat.StepEnded},
+		}},
+		chat.Body{Markdown: "The pods cannot read their logs."},
+		chat.Buttons{Buttons: []chat.Button{{ID: "useful", Label: "Useful"}, {ID: "not", Label: "Not useful"}}},
+	}}))
+	want := "The pods cannot read their logs.\n\nUseful · Not useful\n\n" +
+		"> 2 earlier steps are not shown.\n>\n" +
+		"> - Ran get\\_pods(ns=\"prod\")\n" +
+		"> - get\\_logs() failed\n" +
+		"> - describe(name=web) ended with no result\n" +
+		"> - Calling rollout(name=web)\n" +
+		"> - Working…\n" +
+		"> - Worked · Took 9 s, 4 steps\n" +
+		"> - Stopped (failed)\n" +
+		"> - Approval requested: scale · n=3 (no result)"
+	if a.Text != want {
+		t.Errorf("text\n%q\nwant\n%q", a.Text, want)
+	}
+}
+
+// Only a Context part just before the steps heads them: one elsewhere stays where it is. A message of steps alone is a list, and
+// no empty message; a Steps part with no steps shows nothing, and the Context before it stays a line of the message.
+func TestOnlyTheContextJustBeforeTheStepsHeadsThem(t *testing.T) {
+	t.Parallel()
+	step := chat.Step{ID: "s1", Title: "get_pods", State: chat.StepDone, Call: true}
+	for name, tc := range map[string]struct {
+		parts []chat.Part
+		want  string
+	}{
+		"a context apart": {[]chat.Part{chat.Context{Text: "a note"}, chat.Body{Markdown: "text"}, chat.Steps{Steps: []chat.Step{step}}},
+			"a note\n\ntext\n\n> - Ran get\\_pods()"},
+		"steps alone": {[]chat.Part{chat.Steps{Steps: []chat.Step{step}}}, "> - Ran get\\_pods()"},
+		"no steps":    {[]chat.Part{chat.Context{Text: "a note"}, chat.Steps{}, chat.Body{Markdown: "text"}}, "a note\n\ntext"},
+	} {
+		if a := mustRender(t, chat.Say(chat.Message{Parts: tc.parts})); a.Text != tc.want {
+			t.Errorf("%s: %q, want %q", name, a.Text, tc.want)
+		}
+	}
+}
+
+// The step list of a live reply is within the budget of a message whatever its text holds: the renderer lists at most the latest 20
+// steps (the stepsListed row of the limits page), each a tool's name of at most 64 units and an argument summary of at most 160
+// (render.Step), here of characters that cost the most bytes once escaped. Beside the longest body, which is cut to make room, all
+// of them are shown.
+func TestTheLongestStepListFitsTheBudgetBesideTheLongestBody(t *testing.T) {
+	t.Parallel()
+	const listed, name, summary = 20, 64, 160
+	var steps []chat.Step
+	for i := range listed {
+		steps = append(steps, chat.Step{ID: fmt.Sprintf("s%d", i+1), Title: strings.Repeat("&", name), Detail: strings.Repeat("\"", summary), State: chat.StepDone, Call: true})
+	}
+	a := mustRender(t, chat.Say(chat.Message{Parts: []chat.Part{
+		chat.Context{Text: "5 earlier steps are not shown."},
+		chat.Steps{Steps: steps},
+		chat.Body{Markdown: strings.Repeat("中\\", maxBodyUnits)},
+		chat.Buttons{Buttons: []chat.Button{{ID: "useful", Label: "Useful"}, {ID: "not", Label: "Not useful"}}},
+	}}))
+	n, err := size(a)
+	if err != nil || n > maxMessageBytes {
+		t.Fatalf("%d bytes, %v; want at most %d", n, err, maxMessageBytes)
+	}
+	if got := strings.Count(a.Text, "\n> - Ran "); got != listed {
+		t.Errorf("%d steps shown, want %d", got, listed)
 	}
 }

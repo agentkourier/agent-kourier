@@ -7,6 +7,7 @@
 //
 // The Client posts, replies and edits through the Bot Connector, at the service URL that the channel's record names, with the bot's
 // token from Microsoft Entra (the client credentials grant). It renders the neutral message as Teams' markdown, with every text that
-// the agent, a person or an alert wrote shown as text, and says what Teams cannot do yet (streams, reactions, ephemeral messages,
+// the agent, a person or an alert wrote shown as text and a message's steps as a list in a quote under the rest, and says what
+// Teams cannot do yet (streams, reactions, ephemeral messages,
 // answers to a question, tool approvals) by the chat package's errors.
 package teams

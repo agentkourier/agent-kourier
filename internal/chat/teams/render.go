@@ -2,6 +2,7 @@ package teams
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -57,12 +58,13 @@ type mentioned struct {
 	Name string `json:"name"`
 }
 
-// capabilities is what a Teams connection does in this release: no streams, steps, ephemeral messages, busy mark or reactions.
+// capabilities is what a Teams connection does in this release: a message's steps, as a list under the rest of the message; and
+// no streams, ephemeral messages, busy mark or reactions.
 func capabilities() chat.Caps {
-	return chat.Caps{MaxText: maxTextUnits, Limits: map[chat.Where]int{chat.WhereBody: maxBodyUnits, chat.WhereStream: maxBodyUnits}}
+	return chat.Caps{Steps: true, MaxText: maxTextUnits, Limits: map[chat.Where]int{chat.WhereBody: maxBodyUnits, chat.WhereStream: maxBodyUnits}}
 }
 
-// errEmpty is wrapped by the error of an Outgoing that shows nothing on Teams (only Steps, and no Fallback).
+// errEmpty is wrapped by the error of an Outgoing that shows nothing on Teams (no part that shows text, and no Fallback).
 var errEmpty = errors.New("the message shows nothing on Microsoft Teams")
 
 // render is o as one activity within maxMessageBytes. Its error wraps chat.ErrInvalid for an Outgoing that is not valid, a prompt
@@ -141,10 +143,13 @@ func (r *renderer) add(p string) {
 	}
 }
 
-// line adds one line: the pieces, each cleaned, joined, cut to the limit of w and escaped. Every piece is literal: Agent Kourier's
-// own words and the text of the place alike.
-func (r *renderer) line(w chat.Where, pieces ...string) {
-	r.add(escapeLine(chat.Truncate(chat.Clean(strings.Join(pieces, ""), true), r.caps.Limit(w))))
+// line adds one line: the pieces, each cleaned, joined, cut to the limit of w and escaped (lineOf). Every piece is literal: Agent
+// Kourier's own words and the text of the place alike.
+func (r *renderer) line(w chat.Where, pieces ...string) { r.add(r.lineOf(w, pieces...)) }
+
+// lineOf is the pieces as one line: joined, cleaned, cut to the limit of w and escaped.
+func (r *renderer) lineOf(w chat.Where, pieces ...string) string {
+	return escapeLine(chat.Truncate(chat.Clean(strings.Join(pieces, ""), true), r.caps.Limit(w)))
 }
 
 // text adds the literal text s of several lines at w (textOf).
@@ -180,7 +185,11 @@ func (r *renderer) mentionLine(w chat.Where, user, words string) {
 }
 
 func (r *renderer) message(m chat.Message) {
-	for _, p := range m.Parts {
+	var lists []string // the step lists, which go under the rest of the message
+	for i, p := range m.Parts {
+		if _, heads := headOfSteps(m.Parts, i); heads {
+			continue // said of the steps that follow it, and shown with them
+		}
 		switch p := p.(type) {
 		case chat.Header:
 			r.line(chat.WhereHeader, p.Text)
@@ -211,12 +220,75 @@ func (r *renderer) message(m chat.Message) {
 			}
 			r.line(chat.WhereButton, strings.Join(labels, " · "))
 		case chat.Steps:
-			// Caps.Steps is false: a message's steps are not shown.
+			if len(p.Steps) > 0 {
+				head, _ := headOfSteps(m.Parts, i-1)
+				lists = append(lists, r.stepList(head, p.Steps))
+			}
 		}
+	}
+	for _, l := range lists {
+		r.add(l)
 	}
 	if len(r.paras) == 0 {
 		r.fallback = r.textOf(chat.WhereFallback, m.Fallback)
 	}
+}
+
+// headOfSteps says whether the part at i is a Context that heads the steps just after it (chat.Steps: such as how many earlier
+// steps are not shown), and returns its text. A Steps part with no steps heads nothing, and the Context before it stays where it is.
+func headOfSteps(parts []chat.Part, i int) (string, bool) {
+	if i < 0 || i+1 >= len(parts) {
+		return "", false
+	}
+	c, isContext := parts[i].(chat.Context)
+	st, isSteps := parts[i+1].(chat.Steps)
+	return c.Text, isContext && isSteps && len(st.Steps) > 0
+}
+
+// stepList is steps as one paragraph: a quote, which Teams shows with a bar beside it, of the line head, if there is one, and a
+// list of the steps, one line each (stepLine).
+func (r *renderer) stepList(head string, steps []chat.Step) string {
+	var b strings.Builder
+	if head != "" {
+		b.WriteString("> " + r.lineOf(chat.WhereContext, head) + "\n>\n")
+	}
+	for i, st := range steps {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("> - " + r.stepLine(st))
+	}
+	return b.String()
+}
+
+// stepLine is a step as one line, cut to the limit of a step's title. A call is worded as the status line of a call is (ToolLine):
+// "Calling name(arguments)" while it runs, "Ran name(arguments)" once done, "name(arguments) failed", and "name(arguments) ended
+// with no result" for one whose result never came. A step that is no call, such as a card that stands for time, is its title
+// and its detail after a "·", with "(failed)" or "(no result)" after them when it ended so.
+func (r *renderer) stepLine(st chat.Step) string {
+	title := cmp.Or(chat.Clean(st.Title, true), "(blank)")
+	detail := chat.Clean(st.Detail, true)
+	if st.Call {
+		switch st.State {
+		case chat.StepDone:
+			return r.lineOf(chat.WhereStepTitle, "Ran ", title, "(", detail, ")")
+		case chat.StepFailed:
+			return r.lineOf(chat.WhereStepTitle, title, "(", detail, ") failed")
+		case chat.StepEnded:
+			return r.lineOf(chat.WhereStepTitle, title, "(", detail, ") ended with no result")
+		}
+		return r.lineOf(chat.WhereStepTitle, "Calling ", title, "(", detail, ")")
+	}
+	if detail != "" {
+		title += " · " + detail
+	}
+	switch st.State {
+	case chat.StepFailed:
+		title += " (failed)"
+	case chat.StepEnded:
+		title += " (no result)"
+	}
+	return r.lineOf(chat.WhereStepTitle, title)
 }
 
 // noAnswers is the line under a prompt: a person cannot answer one on Teams yet.
