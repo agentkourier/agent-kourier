@@ -30,3 +30,13 @@ func (g *Guarded) GetTeamsConversation(ctx context.Context, connection, channel 
 	})
 	return c, err
 }
+
+// DeleteTeamsConversations implements TeamsConversations.
+func (g *Guarded) DeleteTeamsConversations(ctx context.Context, connection string) error {
+	return g.run(ctx, "agentkourier.store.DeleteTeamsConversations", func(ctx context.Context) error {
+		if connection == "" {
+			return fmt.Errorf("delete teams conversations: a connection is required: %w", ErrInvalid)
+		}
+		return g.a.DeleteTeamsConversations(ctx, connection)
+	})
+}

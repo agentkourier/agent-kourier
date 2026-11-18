@@ -46,3 +46,11 @@ func (s *adapter) GetTeamsConversation(ctx context.Context, connection, channel 
 	c.UpdatedAt = utc(at)
 	return c, nil
 }
+
+// DeleteTeamsConversations implements store.TeamsConversations. It is a write transaction, so it carries the epoch check of every write.
+func (s *adapter) DeleteTeamsConversations(ctx context.Context, connection string) error {
+	if _, err := s.exec(ctx, `DELETE FROM teams_conversations WHERE connection = $1`, connection); err != nil {
+		return fmt.Errorf("delete the teams conversations of %s: %w", connection, err)
+	}
+	return nil
+}

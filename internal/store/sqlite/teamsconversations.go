@@ -43,3 +43,11 @@ func (s *adapter) GetTeamsConversation(ctx context.Context, connection, channel 
 	c.UpdatedAt = fromTS(at)
 	return c, nil
 }
+
+// DeleteTeamsConversations implements store.TeamsConversations.
+func (s *adapter) DeleteTeamsConversations(ctx context.Context, connection string) error {
+	if _, err := s.exec(ctx, `DELETE FROM teams_conversations WHERE connection = ?`, connection); err != nil {
+		return fmt.Errorf("delete the teams conversations of %s: %w", connection, err)
+	}
+	return nil
+}

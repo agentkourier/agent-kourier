@@ -64,6 +64,12 @@ func (f *fakeAdapter) GetTeamsConversation(_ context.Context, _, _ string) (stor
 	return zero[store.TeamsConversation](), f.err
 }
 
+func (f *fakeAdapter) DeleteTeamsConversations(_ context.Context, a1 string) error {
+	f.record("DeleteTeamsConversations")
+	f.row = a1
+	return f.err
+}
+
 func (f *fakeAdapter) AttributeConnection(_ context.Context, _ string) (store.AttributedRows, error) {
 	f.record("AttributeConnection")
 	return zero[store.AttributedRows](), f.err

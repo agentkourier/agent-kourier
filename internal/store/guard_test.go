@@ -591,6 +591,9 @@ func specs() []spec {
 			"no connection": getTeamsConversation("", "19:c@thread.tacv2"),
 			"no channel":    getTeamsConversation("ns/teams", ""),
 		}},
+		{"DeleteTeamsConversations", func(ctx context.Context, s store.Store) error { return s.DeleteTeamsConversations(ctx, "ns/teams") }, map[string]call{
+			"no connection": func(ctx context.Context, s store.Store) error { return s.DeleteTeamsConversations(ctx, "") },
+		}},
 		{"AttributeConnection", attributeConnection("slack"), map[string]call{"no connection": attributeConnection("")}},
 		{"UnattributedRows", func(ctx context.Context, s store.Store) error { _, err := s.UnattributedRows(ctx); return err }, nil},
 		{"PendingPresses", pendingPresses("i1", t0), map[string]call{

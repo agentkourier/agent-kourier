@@ -103,6 +103,39 @@ func (su suite) teamsConversations(t *testing.T) {
 		isErr(t, err, store.ErrInvalid, "GetTeamsConversation with no channel")
 	})
 
+	su.runReopen(t, "DeleteTeamsConversations deletes every record of the connection and no other, for good", func(t *testing.T, s store.Store, reopen func() store.Store) {
+		second := full
+		second.Channel = "19:second@thread.tacv2"
+		other := full
+		other.Connection = "ns/other"
+		lookalike := full
+		lookalike.Connection = "NS/teams"
+		for _, c := range []store.TeamsConversation{full, second, other, lookalike} {
+			remember(t, s, c)
+		}
+		noErr(t, s.DeleteTeamsConversations(t.Context(), conn), "DeleteTeamsConversations")
+		s = reopen()
+		for _, ch := range []string{full.Channel, second.Channel} {
+			if _, err := s.GetTeamsConversation(t.Context(), conn, ch); !isNotFound(err) {
+				t.Errorf("GetTeamsConversation(%s) after the delete = %v; want store.ErrNotFound", ch, err)
+			}
+		}
+		expect(t, s, other)
+		expect(t, s, lookalike)
+
+		// A record made after the delete starts empty: it takes nothing of the deleted one.
+		fresh := store.TeamsConversation{Connection: conn, Channel: channel, TeamID: full.TeamID, UpdatedAt: t0.Add(time.Hour)}
+		remember(t, s, fresh)
+		expect(t, s, fresh)
+	})
+
+	su.run(t, "DeleteTeamsConversations of a connection with no record changes nothing, and one with no connection is refused", func(t *testing.T, s store.Store) {
+		remember(t, s, full)
+		noErr(t, s.DeleteTeamsConversations(t.Context(), "ns/none"), "DeleteTeamsConversations of a connection with no record")
+		isErr(t, s.DeleteTeamsConversations(t.Context(), ""), store.ErrInvalid, "DeleteTeamsConversations with no connection")
+		expect(t, s, full)
+	})
+
 	// Records of one channel that come together each keep what they set: a store that read the record, merged and wrote it back
 	// would lose one of them.
 	su.run(t, "RememberTeamsConversation calls that run together for one channel each keep what they set", func(t *testing.T, s store.Store) {

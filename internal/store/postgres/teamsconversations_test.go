@@ -76,3 +76,36 @@ func TestRememberTeamsConversationIsFenced(t *testing.T) {
 		}
 	}
 }
+
+// TestDeleteTeamsConversationsIsFenced: the delete of a standby, and of a leader another replica has taken over from, changes nothing, like
+// every write, and the leader's delete takes the records.
+func TestDeleteTeamsConversationsIsFenced(t *testing.T) {
+	dsn, _, _ := freshSchema(t)
+	ctx := t.Context()
+	a, b := openStandbyAt(t, dsn), openStandbyAt(t, dsn)
+	if _, err := a.Lead(ctx, "pod-a"); err != nil {
+		t.Fatal(err)
+	}
+	rec := store.TeamsConversation{Connection: "ns/teams", Channel: "19:c@thread.tacv2", ServiceURL: "https://smba.example.test/amer/", UpdatedAt: t0}
+	if err := a.RememberTeamsConversation(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.DeleteTeamsConversations(ctx, rec.Connection); !errors.Is(err, store.ErrDeposed) {
+		t.Fatalf("DeleteTeamsConversations of a standby = %v; want store.ErrDeposed", err)
+	}
+	if _, err := b.Lead(ctx, "pod-b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.DeleteTeamsConversations(ctx, rec.Connection); !errors.Is(err, store.ErrDeposed) {
+		t.Fatalf("DeleteTeamsConversations of a deposed leader = %v; want store.ErrDeposed", err)
+	}
+	if got, err := b.GetTeamsConversation(ctx, rec.Connection, rec.Channel); err != nil || got.ServiceURL != rec.ServiceURL {
+		t.Fatalf("GetTeamsConversation = %+v, %v; want the record, which neither refused delete changed", got, err)
+	}
+	if err := b.DeleteTeamsConversations(ctx, rec.Connection); err != nil {
+		t.Fatalf("the leader's DeleteTeamsConversations: %v", err)
+	}
+	if _, err := b.GetTeamsConversation(ctx, rec.Connection, rec.Channel); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetTeamsConversation after the leader's delete = %v; want store.ErrNotFound", err)
+	}
+}
