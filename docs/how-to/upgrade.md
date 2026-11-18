@@ -977,31 +977,21 @@ replicas: with SQLite every rollout leaves Slack nothing to answer it until the 
 - **Take `chatListener` and `networkPolicy.chatFrom` off the values in the same change.** The chart of an earlier release refuses keys it does
   not have (its values schema, read in the chart of 0.4.0, not run).
 
-## Upgrade to the release that takes other platforms' chat IDs
+## Upgrade to the release that shows each Binding's connection
 
-The schema and the broker's load now hold `chat.channel`, a `botMessage` trigger's `from.id`, a mention's `user` and
-`interactions.approverGroups` to their length caps and to printable ASCII with no space and no `:`, and no longer to Slack's shapes. The
-broker holds each ID to the platform of the Binding's ChatConnection when it reads the two together, and Slack's shapes and its 32-byte
-cap are unchanged there ([What each platform supports](../reference/platforms.md)). A value with a space, a control character, a `:` or
-a character outside ASCII is still refused when it is applied. Every object stored before the upgrade loads as it did.
+The chat IDs of a Binding are checked as in 0.4.0: the schema and the broker's load hold `chat.channel`, a `botMessage` trigger's `from.id`,
+a mention's `user` and `interactions.approverGroups` to Slack's shapes and to the same length caps, with the same messages, so every
+Binding that 0.4.0 took loads as it did. What changes:
 
-- **A Slack ID typo is refused later.** A channel's name such as `general` as `chat.channel`, a bot's name such as `alertmanager` as
-  `from.id`, or a user group ID as a mention's `user`, was refused by the API server and at load. The API server now stores it, and the
-  broker refuses it with `InvalidPlatformID`. On custom resources an edit of a served Binding does not take: the broker keeps serving its last good generation,
-  and the Binding's `Accepted` condition says why the new one is refused and which generation is served
-  ([Binding status](../reference/binding-status.md#accepted)). A new Binding with such an ID is not served. On the files route the
-  whole config fails, as before, with the new message: at start the broker exits with [code 2](../reference/cli.md#exit-codes), and on a
-  reload it keeps its last good config. `agent-kourier dry-run` still refuses it.
-- **New columns in `kubectl get`.** `kubectl get akbinding` shows `CONNECTION`, the name of the ChatConnection, before `CHANNEL`, and
-  `kubectl get akconnection` shows `PLATFORM` and `AGE`. A script that reads the columns by position needs the new order. The Binding and
-  ChatConnection CRDs change, and their schema hashes with them: the chart applies them with the release when `crds.install` is true, or
-  unset on `config.source: crds`; if you apply the CRDs yourself, apply `charts/agent-kourier/files/crds` again.
-- **The messages at apply.** A chat ID with a character that no platform's ID has is refused with, for instance,
-  `invalid channel "...": a chat ID is printable ASCII with no space and no ':'`; the messages that named Slack's shapes there are gone,
-  and the broker's `InvalidPlatformID` message names the shape to use.
+- **New columns in `kubectl get`.** `kubectl get akbinding` shows `CONNECTION`, the name of the Binding's ChatConnection, before `CHANNEL`.
+  `kubectl get akconnection` shows `PLATFORM` between `NAME` and `AGE`; it showed `NAME` and `AGE` alone before. A script that reads the
+  columns by position needs the new order. The Binding and ChatConnection CRDs change, and their schema hashes with them: the chart applies
+  them with the release when `crds.install` is true, or unset on `config.source: crds`; if you apply the CRDs yourself, apply
+  `charts/agent-kourier/files/crds` again.
+- **Two more reasons a Binding can be refused for.** The broker checks a Binding once more against the platform of its ChatConnection when
+  it reads the two together, and refuses one that names an ID of another shape with `InvalidPlatformID` or asks for a feature the platform
+  does not serve with `UnsupportedOnPlatform` ([What each platform supports](../reference/platforms.md)). The schema holds Slack's shapes
+  already and Slack serves every feature the broker checks, so no Binding on Slack gets either. `agentkourier_config_binding_rejections`
+  has a series for each, at 0.
 
-**Roll back.** An earlier broker holds the four fields to Slack's shapes at load. On custom resources it refuses a stored Binding that
-has another platform's ID with `InvalidSpec`, and a broker that has just started has no earlier generation of it to serve; on the
-files route such a Binding fails the config. This release refuses such a Binding on a Slack connection too, so fix its IDs before the
-rollback. An earlier release's CRDs have Slack's patterns and 32-byte caps; whether the API server then lets you change another field of
-a stored object that breaks them depends on its version, so fix the IDs in the same edit.
+**Roll back.** No stored object depends on this release: the chat ID rules are 0.4.0's. The CRDs of 0.4.0 have neither column.
