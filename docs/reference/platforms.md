@@ -96,16 +96,18 @@ checked yet). A tool whose name or arguments are longer than their cap is refuse
 budget of a message: the pause is refused as one that cannot be shown. An ending's texts are cut until its card fits
 ([Limits](limits.md#what-a-thread-shows)).
 
-Teams sends a press to the broker in a request, and waits about 14 seconds for the answer. Agent Kourier records the press and
-answers at once, with a line for Teams to show the person who pressed: that it received the press (and, for a question's card, that
-the card changes when the press is decided, and that a card that does not change means the press was not accepted), that it could not
-record it and to press again, or that it cannot take the press, which names no button of Agent Kourier's. Where and to whom
-Teams shows the line was not measured. Who may press, and whether the question is still open, are checked after that answer, by the
+Teams sends a press to the broker in a request, and waits about 14 seconds for the answer (measured on a test tenant in November
+2026). Agent Kourier records the press and answers at once, with a line for Teams to show the person who pressed: that it received
+the press (and, for a question's or an approval's card, that the card changes for everyone when the question is decided), that it
+may not have recorded it and to press again, or that it cannot take the press, which names no button of Agent Kourier's, or has
+no presser or no message. That answer is the shape Microsoft documents for a message to the presser; it was not measured, nor
+where and to whom Teams shows the line. Who may press, and whether the question is still open, are checked after that answer, by the
 worker that decides recorded presses; Teams has no ephemeral messages, so a press refused there is told nothing more, and its card
 does not change.
 
 The broker does not read a channel's members on Microsoft Teams yet, so it cannot check who pressed: no press is decided. Each
-is tried again until the worker gives up on it, an hour after it was recorded ([Limits](limits.md)), and logs that at ERROR. A
+is tried again, with a line at WARN for each try, until the worker gives up on it, an hour after it was recorded
+([Limits](limits.md)), and logs that at ERROR. A
 question or an approval ends when it times out, which a recorded press holds off until the worker gives up on it, and a vote is not
 counted.
 

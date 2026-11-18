@@ -575,8 +575,10 @@ Rules:
   Microsoft Entra issues for `clientSecret`. In `socket` mode ("Socket mode is not supported yet"), or with no chat listener, the
   broker's own teams connection is a wiring error at start and a team's is not started. A question, a tool approval and a message's
   buttons are Adaptive Cards 1.5 whose `Action.Execute` Teams sends as an `adaptiveCard/action` invoke; the adapter hands the press
-  to the sink in the request and answers it at once with a message response for the presser (received, not recorded, or not a
-  press of Agent Kourier's), since Teams waits about 14 s and does not send it again. Refusals decided by the press worker after the
+  to the sink in the request and answers it at once with a message response for the presser (received, may not be recorded, or
+  not a press of Agent Kourier's), since Teams waits about 14 s and does not send it again (both measured on a test tenant,
+  November 2026). The message response is the shape Microsoft documents (`application/vnd.microsoft.activity.message`), not
+  measured. Refusals decided by the press worker after the
   answer (not a member, not ready, gone, invalid) reach nobody, as there are no ephemeral messages. Until the adapter reads
   membership, no press is decided, and a question or approval times out. There are no streams, reactions or ephemeral messages.
 - An empty namespace in a reference means the referring resource's namespace.
