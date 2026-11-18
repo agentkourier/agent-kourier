@@ -14,37 +14,37 @@
     {
       "id": "p2",
       "shot": "Problem 2",
-      "text": "But they only work when someone opens a prompt and asks."
+      "text": "But they sit behind a prompt, away from where your team works."
     },
     {
       "id": "p3",
       "shot": "Problem 3",
-      "text": "Alerts and questions land in team chat. Putting your agent there is another project."
+      "text": "Alerts and questions land in team chat. Putting your agent there means building threads, streaming and questions yourself."
     },
     {
       "id": "reveal",
       "shot": "Reveal",
-      "text": "Introducing Agent Kourier: a Kubernetes-native broker between team chat and A2A agents."
+      "text": "Introducing Agent Kourier: a Kubernetes-native broker between team chat and streaming A2A agents."
     },
     {
       "id": "promise",
       "shot": "Promise",
-      "text": "An alert, or a question, becomes an agent session, in the thread where it landed. Slack today."
+      "text": "An alert, or a question, becomes an agent session in its own thread."
     },
     {
       "id": "r1",
       "shot": "R1 alert thread",
-      "text": "Your alerting posts to the channel as it always has. Agent Kourier reads the post and hands it to your agent, which investigates in the alert's thread, step by step."
+      "text": "Your alerts arrive in the channel as they always have. Agent Kourier reads each one and hands it to your agent. The agent investigates under the alert, step by step."
     },
     {
       "id": "r2",
       "shot": "R2 thread reply",
-      "text": "Reply in the thread, and the same session continues. Same context, nothing re-explained."
+      "text": "Reply in the thread, and the session continues with everything it already found."
     },
     {
       "id": "r3",
       "shot": "R3 mention",
-      "text": "Or skip the alert, and just ask."
+      "text": "No alert? Mention Agent Kourier and ask."
     },
     {
       "id": "r4",
@@ -59,7 +59,7 @@
     {
       "id": "close",
       "shot": "Close",
-      "text": "It works with kagent, or any A2A agent that streams. Agent Kourier keeps the thread, streams the reply, and carries the agent's questions and your answers. Slack today; more chat platforms are planned. Agent Kourier. Write the agent, not the chat integration."
+      "text": "Agent Kourier works with kagent, or any A2A agent that streams. It keeps a session per thread, streams the reply, and carries the agent's questions and your answers. Slack today; more chat platforms are planned. Agent Kourier. Write the agent, not the chat integration."
     }
   ],
   "teaser": [
@@ -71,12 +71,12 @@
     {
       "id": "t-reveal",
       "shot": "Reveal",
-      "text": "Introducing Agent Kourier: a Kubernetes-native broker between team chat and A2A agents."
+      "text": "Introducing Agent Kourier: a Kubernetes-native broker between team chat and streaming A2A agents."
     },
     {
       "id": "t-proof",
       "shot": "R1 to R3",
-      "text": "Alerts and questions become agent sessions in the thread. Slack today, more platforms planned."
+      "text": "Alerts and questions become agent sessions in a Slack thread. More platforms are planned."
     }
   ]
 }

@@ -35,21 +35,21 @@ const AR = Q.get('ar') || '16x9';
 const COPY = {
   p1: { wide: [['You’ve put AI agents', 'on Kubernetes.'], ['They can read logs, check rollouts', 'and find the cause.']],
         tall: [['You’ve put AI agents', 'on Kubernetes.'], ['They can read logs, check', 'rollouts and find the cause.']] },
-  p2: { wide: [['But they only work when', 'someone opens a prompt and asks.'], []],
-        tall: [['But they only work', 'when someone opens', 'a prompt and asks.'], []] },
-  p3: { wide: [['Alerts and questions', 'land in team chat.'], ['Putting your agent there', 'is another project.']],
-        tall: [['Alerts and', 'questions land', 'in team chat.'], ['Putting your agent there', 'is another project.']] },
+  p2: { wide: [['But they sit behind a prompt,', 'away from where your team works.'], []],
+        tall: [['But they sit behind', 'a prompt, away from', 'where your team works.'], []] },
+  p3: { wide: [['Alerts and questions', 'land in team chat.'], ['Putting your agent there means building', 'threads, streaming and questions yourself.']],
+        tall: [['Alerts and', 'questions land', 'in team chat.'], ['Putting your agent there', 'means building threads,', 'streaming and questions.']] },
   reveal: { wide: [['Introducing Agent Kourier'], ['A Kubernetes-native broker between team chat', 'and streaming A2A agents.']],
             tall: [['Introducing', 'Agent Kourier'], ['A Kubernetes-native broker', 'between team chat and', 'streaming A2A agents.']] },
-  promise: { wide: [['An alert or a question', 'becomes an agent session.'], ['In the thread. Slack today.']],
-             tall: [['An alert or', 'a question', 'becomes an', 'agent session.'], ['In the thread. Slack today.']] },
+  promise: { wide: [['An alert or a question', 'becomes an agent session.'], ['In its own thread. Slack today.']],
+             tall: [['An alert or', 'a question', 'becomes an', 'agent session.'], ['In its own thread. Slack today.']] },
   tproblem: { wide: [['Your agent is ready.'], ['The chat integration is another project.']],
               tall: [['Your agent', 'is ready.'], ['The chat integration', 'is another project.']] },
   yaml: { '16x9': [['A Binding connects', 'a channel to', 'an agent.'], ['The agent needs', 'no chat code.']],
           '1x1': [['A Binding connects a channel to an agent.'], ['The agent needs no chat code.']],
           '9x16': [['A Binding connects', 'a channel to an agent.'], ['The agent needs', 'no chat code.']] },
   yamlNote: 'To start from alerts, add a trigger to the Binding.',
-  pills: ['kagent, or any A2A agent that streams', 'It keeps the thread, streams, and relays questions', 'Slack today, more chat platforms planned'],
+  pills: ['kagent, or any A2A agent that streams', 'A session per thread, streamed replies, questions', 'Slack today, more chat platforms planned'],
   pillAt: [0.2, 4.2, 10.2],
   can: ['logs', 'rollouts', 'events'],
   hook: 'Write the agent, not the chat integration.',
@@ -375,7 +375,7 @@ if (!OVERLAY && STORY.includes(SEG)) {
     u.textContent = first;
     return { disc, place(sc, op) { set(g, { transform: `translate(${pos[0]} ${pos[1]}) scale(${sc})`, opacity: op }); } };
   }
-  const am = source(L.am, 'Alerts', 'posted by any bot', g => {
+  const am = source(L.am, 'Alerts', 'posted by a bot', g => {
     el('path', { d: 'M24 7c-7.2 0-12 5.2-12 12.5v8.5l-4.5 6.5h33l-4.5-6.5v-8.5C36 12.2 31.2 7 24 7z' }, g);
     el('path', { d: 'M19.5 38.5a4.5 4.5 0 0 0 9 0' }, g);
   });
