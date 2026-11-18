@@ -483,6 +483,24 @@ func TestTheButtonCardsAreBounded(t *testing.T) {
 	}
 }
 
+// testOtherChannel is a second channel, for a press of a card's data in a channel the card is not in.
+const testOtherChannel = "19:KourierStandInChannelForTestsOnly0000000000b@thread.tacv2"
+
+// pressedIn is inv as a press of the card message card in channel's thread root.
+func pressedIn(inv Invoke, c *Client, channel, root, card string) Invoke {
+	inv.At = c.RefAt(channel, root, card)
+	return inv
+}
+
+// Each part of a button's MAC is prefixed by its length, so that parts that join to the same bytes do not give the same MAC.
+func TestAButtonsMACKeepsItsPartsApart(t *testing.T) {
+	t.Parallel()
+	ct, _ := threadTest(t)
+	if ct.c.buttonMAC("ab", "c", "1700000000001", "v") == ct.c.buttonMAC("a", "bc", "1700000000001", "v") {
+		t.Error(`the MAC of channel "ab" and root "c" is that of channel "a" and root "bc"`)
+	}
+}
+
 // postedCard posts a rated reply in target and returns its Ref and the data of the first action of the card of its buttons.
 func postedCard(t *testing.T, ct *clientTest, target chat.Target) (chat.Ref, map[string]any) {
 	t.Helper()
@@ -520,7 +538,8 @@ func copyData(t *testing.T, data map[string]any, edit func(own map[string]any)) 
 
 // The text that a card names is bound to the card: its "of" comes with a MAC of the connection, the channel, the card's thread, the
 // text and the button's value, under a key that only the connection's client secret gives. A press whose data names another text, has
-// another value, has no MAC or one of another card, or is of a card in another thread or on another connection, makes no press.
+// another value, has no MAC, an empty one or one of another card, a MAC with no text, or is of a card in another channel, another
+// thread or on another connection, makes no press.
 func TestAPressWhoseTextIsNotTheCardsIsRefused(t *testing.T) {
 	t.Parallel()
 	ct, target := threadTest(t)
@@ -536,6 +555,9 @@ func TestAPressWhoseTextIsNotTheCardsIsRefused(t *testing.T) {
 		"a MAC not a string": pressOf(t, ct.c, testRoot, "1700000000002", copyData(t, data, func(o map[string]any) { o["mac"] = 7 })),
 		"another card's MAC": pressOf(t, ct.c, testRoot, "1700000000002", copyData(t, data, func(o map[string]any) { o["mac"] = other[dataKey].(map[string]any)["mac"] })),
 		"another thread":     pressOf(t, ct.c, "1794965099000", "1700000000002", data),
+		"an empty MAC":       pressOf(t, ct.c, testRoot, "1700000000002", copyData(t, data, func(o map[string]any) { o["mac"] = "" })),
+		"a MAC with no text": pressOf(t, ct.c, testRoot, "1700000000002", copyData(t, data, func(o map[string]any) { delete(o, "of") })),
+		"another channel":    pressedIn(pressOf(t, ct.c, testRoot, "1700000000002", data), ct.c, testOtherChannel, testRoot, "1700000000002"),
 	} {
 		if got, _, ok := ct.c.press(inv); ok {
 			t.Errorf("%s: taken as %+v", name, got.At)
@@ -621,20 +643,21 @@ func TestAFailedButtonsPostIsTriedOnceMore(t *testing.T) {
 	}
 }
 
-// An edit of a remembered card that Teams answers 404, a card someone deleted, forgets it and posts the buttons anew. If that post
-// fails too, the update is done, since its text was edited, and is logged.
+// An edit of a remembered card that Teams answers 404, a card someone deleted, forgets it and posts the buttons anew. If that post is
+// refused for good, the update is done, since its text was edited, and is logged; if it fails for this try only, the update fails, and
+// the caller's next try posts the card.
 func TestAGoneCardIsPostedAnew(t *testing.T) {
 	t.Parallel()
 	ct, target := threadTest(t)
 	ref, _ := postedCard(t, ct, target)
 	other := chat.Say(chat.Message{Parts: []chat.Part{chat.Body{Markdown: "x"}, chat.Buttons{Buttons: []chat.Button{{ID: "b", Label: "B", Value: "v"}}}}})
-	var postFails atomic.Bool
+	var postFails atomic.Int32 // the status that a post of the card is answered, 0 for none
 	ct.f.setFail(func(r *http.Request) (int, string, bool) {
 		switch {
 		case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/1700000000002"):
 			return http.StatusNotFound, `{"error":{"code":"ActivityNotFoundInConversation"}}`, true
-		case r.Method == http.MethodPost && postFails.Load():
-			return http.StatusForbidden, `{"error":{"code":"Forbidden"}}`, true
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/activities") && postFails.Load() != 0:
+			return int(postFails.Load()), `{"error":{"code":"Refused"}}`, true
 		}
 		return 0, "", false
 	})
@@ -649,13 +672,32 @@ func TestAGoneCardIsPostedAnew(t *testing.T) {
 		t.Errorf("the card remembered is %+v, want the new one", c)
 	}
 
-	postFails.Store(true)
-	ct.c.cards.put(testChannel+idSeparator+ref.ID, buttonCard{id: "1700000000002", sum: "old"})
+	key := testChannel + idSeparator + ref.ID
+	postFails.Store(http.StatusForbidden)
+	ct.c.cards.put(key, buttonCard{id: "1700000000002", sum: "old"})
 	if err := ct.c.Update(t.Context(), ref, other); err != nil {
-		t.Errorf("an update whose card is gone and cannot be posted anew: %v, want none", err)
+		t.Errorf("an update whose card is gone and is refused anew: %v, want none", err)
 	}
-	if _, ok := ct.c.cards.get(testChannel + idSeparator + ref.ID); ok {
+	if _, ok := ct.c.cards.get(key); ok {
 		t.Error("the gone card is still remembered")
+	}
+
+	postFails.Store(http.StatusServiceUnavailable)
+	ct.c.cards.put(key, buttonCard{id: "1700000000002", sum: "old"})
+	err := ct.c.Update(t.Context(), ref, other)
+	if err == nil || errors.Is(err, errCardGone) || ct.c.Classify(chat.OpPost, err).Class != chat.Transient {
+		t.Errorf("an update whose card is gone and whose new post failed for now: %v, want that failure", err)
+	}
+	if _, ok := ct.c.cards.get(key); ok {
+		t.Error("the gone card is still remembered")
+	}
+	postFails.Store(0)
+	ct.f.take()
+	if err := ct.c.Update(t.Context(), ref, other); err != nil {
+		t.Fatalf("the update tried again: %v", err)
+	}
+	if calls := activityCalls(ct.f.take()); len(calls) != 2 || calls[1].method != http.MethodPost {
+		t.Errorf("the update tried again: %+v, want the text put and the card posted", calls)
 	}
 }
 

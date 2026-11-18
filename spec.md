@@ -644,8 +644,8 @@ Rules:
   lookup adopts. Update edits the text with no attachment and shows its buttons once, by the cards the Client remembers (4096, in
   memory, oldest first out): posted by the first update that has them (a live reply's last edit), PUT when they change, no call when
   they are the same; a failed post fails the update, which the caller retries; a card Teams took with no ID is remembered. A PUT that
-  Teams answers 404 forgets the card and posts it anew; if that fails too, the update logs it at WARN and succeeds, since the text was
-  edited. After a restart, on another replica or past the bound, an update with buttons posts them again. A message has one writer at
+  Teams answers 404 forgets the card and posts it anew; if Teams refuses that for good, the update logs it at WARN and succeeds, since
+  the text was edited, and a failure for this try only fails the update, whose retry posts the card. After a restart, on another replica or past the bound, an update with buttons posts them again. A message has one writer at
   a time (the turn's live run), so the cards' record takes no lock per message. No edit follows a button's press (the presser's words are the invoke's answer), and nothing takes buttons off.
   Not measured: that the two posts each get 201 and an ID, and that the card's press names the card's message (both as measured for
   a prompt's card).

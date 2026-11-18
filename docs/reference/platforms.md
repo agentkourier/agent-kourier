@@ -109,7 +109,8 @@ asks, if that is at most 5 seconds, and tries once more ([Limits](limits.md)). I
 text stands, and the broker logs it at WARN; the next edit of the reply that has the buttons posts them, and a reply that is posted and
 never edited after keeps its text without them. A text whose ID is longer than 64 bytes or holds a `:` gets no buttons. The broker
 remembers which buttons it posted under which text, so that an edit with the same buttons does not post them again, and an edit with
-other buttons edits their card; if that card is gone (someone deleted it), the broker posts the buttons anew. It forgets the oldest past
+other buttons edits their card; if that card is gone (someone deleted it), the broker posts the buttons anew, and if that post fails
+for this try only, the edit fails and is tried again. It forgets the oldest past
 4096, and remembers nothing across a restart or between replicas, where such an edit posts them a second time ([Limits](limits.md)). The
 two posts were not checked on a test tenant: that Teams answers each with its ID, as it did for every card posted alone, and that a
 press of the card names the card's message, as it did for a question's card, follow from the checks above.

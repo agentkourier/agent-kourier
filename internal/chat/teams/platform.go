@@ -215,7 +215,7 @@ func (c *Client) Post(ctx context.Context, t chat.Target, o chat.Outgoing, tag s
 // and shows the buttons under it as a card of their own (buttonsUnder): posted by the first update that has them, edited when they
 // change, and left as they are otherwise. The update fails when they cannot be shown, after the text was edited, so that the caller's
 // next try, which edits the text to the same content, posts them; one whose card Teams took and named no ID is done, and so is one
-// whose card was gone (404) and could not be posted anew. The ending of a
+// whose card was gone (404) and that Teams refused for good to post anew (a failure for this try only fails the update). The ending of a
 // prompt names its decider, a Microsoft Entra object ID, by the name that the channel's roster gives (deciderName), and as someone
 // when it cannot be had.
 func (c *Client) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) (err error) {
@@ -252,8 +252,8 @@ func (c *Client) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) (err e
 		c.log.WarnContext(ctx, "teams: Teams named no ID for a message's buttons; they are shown, and other buttons would be posted anew",
 			"channel", r.Channel, "message", r.ID)
 		return nil
-	case errors.Is(err, errCardGone): // the text is edited, and the record forgotten: the next update with the buttons posts them
-		c.log.WarnContext(ctx, "teams: the card of a message's buttons is gone, and could not be posted anew; the text stands",
+	case errors.Is(err, errCardGone): // refused for good: a retry would be refused too, and the text is edited
+		c.log.WarnContext(ctx, "teams: the card of a message's buttons is gone, and Teams refused to post it anew; the text stands",
 			"channel", r.Channel, "message", r.ID, "error", err.Error())
 		return nil
 	}

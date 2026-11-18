@@ -126,13 +126,15 @@ func (b *buttonCards) forget(key string) {
 	}
 }
 
-// errCardGone is wrapped by the error of buttonsUnder when the card it remembered was gone (404), and posting it anew failed too.
+// errCardGone is wrapped by the error of buttonsUnder when the card it remembered was gone (404), and Teams refused for good to post
+// it anew.
 var errCardGone = errors.New("teams: the card of a message's buttons is gone, and could not be posted anew")
 
 // buttonsUnder shows buttons under the text message text, through the Bot Connector at serviceURL, as a card of their own in the text's
 // thread, each action bound to the text (buttonMAC): posted when the Client remembers no card of them under the text, edited when it
 // remembers one with other buttons, and left as it is when it remembers one of the same. A remembered card that Teams answers 404 for
-// is forgotten and posted anew; if that fails too, the error wraps errCardGone. A card that Teams took and named no ID is remembered, so
+// is forgotten and posted anew; if Teams refuses that for good (Classify: Permanent), the error wraps errCardGone, and any other
+// failure of it is returned as it is, so that the caller's next try posts the card. A card that Teams took and named no ID is remembered, so
 // that the same buttons are not posted again (other buttons are posted anew: it cannot be edited), and the error is errNoID. Each call is
 // counted as PostButtons; one that the card needs no call for is not counted.
 func (c *Client) buttonsUnder(ctx context.Context, serviceURL string, text chat.Ref, buttons []chat.Button) error {
@@ -160,10 +162,14 @@ func (c *Client) buttonsUnder(ctx context.Context, serviceURL string, text chat.
 			return err
 		}
 		c.cards.forget(key)
-		if err := c.postButtons(ctx, serviceURL, conv, key, sum, a); err != nil && !errors.Is(err, errNoID) {
+		switch err := c.postButtons(ctx, serviceURL, conv, key, sum, a); {
+		case err == nil, errors.Is(err, errNoID):
+			return nil
+		case c.Classify(chat.OpPost, err).Class == chat.Permanent:
 			return fmt.Errorf("%w: %w", errCardGone, err)
+		default: // the card is forgotten: the caller's next try posts it
+			return err
 		}
-		return nil
 	}
 	return c.postButtons(ctx, serviceURL, conv, key, sum, a)
 }
