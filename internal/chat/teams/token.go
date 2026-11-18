@@ -22,7 +22,8 @@ const botFrameworkScope = "https://api.botframework.com/.default"
 // tokenRefreshMargin is how long before a token expires the next is fetched, in the background, while callers go on using the one
 // they have; tokenStaleMargin is how long before it expires a token is no longer used, and a caller waits for a new one instead.
 // Microsoft Entra issued tokens of 3599 s on every fetch measured (16 in November 2026), which took from 125 ms to 2.5 s. A token
-// that lives less than four times these margins (only a fake's does) is refreshed at half its life, and is stale at three quarters.
+// whose life is less than twice tokenRefreshMargin (only a fake's is) is refreshed at half its life, and one whose life is less than
+// four times tokenStaleMargin is stale at three quarters of it (fetch).
 const (
 	tokenRefreshMargin = 5 * time.Minute
 	tokenStaleMargin   = time.Minute
