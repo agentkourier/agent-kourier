@@ -73,10 +73,11 @@ In a channel's thread, Teams' web client shows the list as a quote, with a bar a
 (seen in a live check, November 2026). Agent Kourier sets no busy mark on Teams: in the same check Teams showed no typing indicator
 for the bot in a channel's thread. A reply that waits on the agent shows its latest line, `Working…` or a step, until the next edit.
 
-In the same check Teams dropped a span in braces from a step's arguments: `rate(http_requests_total{code=~"5.."}[5m])` showed as
-`rate(http_requests_total[5m])`.
-So every line that Agent Kourier writes on Teams, other than the agent's reply, sends `{` and `}` as the character references
-`&#123;` and `&#125;`. That Teams shows them as braces is not verified.
+Teams drops every span in braces from a message's prose: in a live check (November 2026, a channel thread, the web client)
+`rate(http_requests_total{code=~"5.."}[5m])` showed as `rate(http_requests_total[5m])`. So every line that Agent Kourier writes
+on Teams, other than the agent's reply, sends `{` and `}` as the character references `&#123;` and `&#125;`, and the agent's
+reply sends them with a backslash, `\{` and `\}`, in its prose. Teams showed both as braces in the same check. In the reply's
+code, inline or in a block, braces are sent as the agent wrote them, which Teams shows raw.
 
 ## Chat IDs
 

@@ -3,8 +3,9 @@
 // mention (Teams' <at> tag) or an entity. It is the CommonMark writer that Agent Kourier had for a receiver that reads CommonMark
 // (removed, unreleased, on 2026-11-17), with what Teams needs besides: a "<" is never sent raw, in prose or in code, and an "&" in
 // prose is sent as "&amp;".
-// That a Teams client renders these escapes and fences as CommonMark does is not measured (no live probe of Teams' rendering
-// was made); what the conformance suite holds it to is CommonMark's reading, which treats code as not inert (chattest.ScanCommonMark).
+// That a Teams client renders these escapes and fences as CommonMark does is measured only in part (a channel thread, web client,
+// 2026-11-18: braces with a backslash, inline code and a fenced block showed as written); what the conformance suite holds it to
+// is CommonMark's reading, which treats code as not inert (chattest.ScanCommonMark).
 //
 // Agent Kourier decides what is code, and writes every block of it itself:
 //
@@ -22,7 +23,9 @@
 //     word that may be linked;
 //   - everything else is prose, in which "\", "[" and "]" get a backslash, "<" is written "&lt;" and "&" "&amp;", so that no link,
 //     image, link reference, autolink, HTML, mention or entity is made, and every backtick and every tilde of a run of three or more
-//     get a backslash, so that no code opens that Agent Kourier did not write. CommonMark shows each escaped character as itself.
+//     get a backslash, so that no code opens that Agent Kourier did not write. "{" and "}" get a backslash too: Teams drops a span
+//     in braces from prose, and shows "\{" and "\}" as braces (measured in a channel thread, web client, 2026-11-18), while in code
+//     it shows braces raw, as it shows an escape, so code keeps them as written. CommonMark shows each escaped character as itself.
 //
 // So the only code a reader finds is what Agent Kourier wrote, and no "<" reaches Teams from the agent's text, so that nothing
 // the agent wrote can be taken for the "<at>" of a mention entity that Agent Kourier adds. Where Agent Kourier reads the agent's
@@ -360,7 +363,7 @@ func (r *reader) prose(i int, line string) bool {
 			if size >= 3 {
 				piece = strings.Repeat(`\~`, size)
 			}
-		case '\\', '[', ']':
+		case '\\', '[', ']', '{', '}':
 			piece = `\` + string(c)
 		case '<':
 			piece = "&lt;" // not "\<": a bare URL that a receiver links runs on over a backslash, and would leave the "<" bare

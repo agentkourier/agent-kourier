@@ -134,6 +134,25 @@ func TestMarkdownSendsNoAngleBracket(t *testing.T) {
 	}
 }
 
+// The writer of the Body escapes "{" and "}" in prose, where Teams drops a span in braces (seen in a live check, 2026-11-18), and
+// leaves them raw in code, where Teams shows them raw and would show an escape as written.
+func TestMarkdownEscapesBracesInProseOnly(t *testing.T) {
+	t.Parallel()
+	for md, want := range map[string]string{
+		`rate(x{code=~"5.."}[5m]) and {a}`: `rate(x\{code=~"5.."\}\[5m\]) and \{a\}`,
+		"Run `{a}` now.":                   "Run `{a}` now.",
+		"```\n{a}\n```":                    "```\n{a}\n```",
+		"    {a}":                          "```\n{a}\n```",
+		"{a} `{b}` {c}":                    "\\{a\\} `{b}` \\{c\\}",
+		"{a} `{b} {c}":                     "\\{a\\} \\`\\{b\\} \\{c\\}",
+		"at:`{a}`":                         "at:\\`\\{a\\}\\`",
+	} {
+		if got := markdown(md, math.MaxInt); got != want {
+			t.Errorf("markdown(%q) = %q, want %q", md, got, want)
+		}
+	}
+}
+
 // A message is held to the budget: a body too long for it is cut further, and a prompt that cannot fit is ErrTooLarge.
 func TestTheBudgetOfAMessage(t *testing.T) {
 	t.Parallel()
@@ -246,7 +265,7 @@ func TestTheLongestStepListFitsTheBudgetBesideTheLongestBody(t *testing.T) {
 	const listed, name, summary = 20, 64, 160
 	var steps []chat.Step
 	for i := range listed {
-		steps = append(steps, chat.Step{ID: fmt.Sprintf("s%d", i+1), Title: strings.Repeat("&", name), Detail: strings.Repeat("\"", summary), State: chat.StepDone, Call: true})
+		steps = append(steps, chat.Step{ID: fmt.Sprintf("s%d", i+1), Title: strings.Repeat("{", name), Detail: strings.Repeat("{", summary), State: chat.StepDone, Call: true})
 	}
 	a := mustRender(t, chat.Say(chat.Message{Parts: []chat.Part{
 		chat.Context{Text: "5 earlier steps are not shown."},

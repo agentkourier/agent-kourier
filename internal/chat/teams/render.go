@@ -22,7 +22,9 @@ import (
 const maxMessageBytes = 80 << 10
 
 // maxTextUnits is the most UTF-16 units that one literal place of a message shows (Caps.MaxText), and maxBodyUnits what the Body
-// does, its escapes and fences counted. Each is under the budget whatever the text holds: at most three bytes of JSON for each unit.
+// does, its escapes and fences counted. Each is under the budget whatever the text holds: a unit of the Body, counted after its
+// escapes, is at most three bytes of JSON, and a unit of a literal place, counted before escapeLine writes it, at most six (a "{"
+// written "&#123;").
 // minBodyUnits is the shortest that the Body is cut to when the whole message is over the budget.
 const (
 	maxTextUnits = 3000
@@ -356,8 +358,8 @@ func (r *renderer) ending(e chat.Ending) {
 
 // escapeLine writes one line of literal text so that CommonMark shows its characters and acts on none of them: "&", "<", ">", "["
 // and "]" as entities (so that no tag, mention, link or entity is made, whatever Teams does with a backslash), "{" and "}" as
-// entities too (Teams dropped a "{…}" span of a step line in a live check, 2026-11-18; that the entities show as braces is
-// unverified), the characters of emphasis, code and tables with a backslash, and a "#", "-", "+" or "=" at its start, or the "."
+// entities too (Teams drops a "{…}" span from a line, and shows the entities as braces: measured in a channel thread, web client,
+// 2026-11-18), the characters of emphasis, code and tables with a backslash, and a "#", "-", "+" or "=" at its start, or the "."
 // or ")" after the digits it starts with, with a backslash, so that it is no heading, list item or underline.
 //
 // A bare URL is the one place where an escape may not be read: a reader that links bare URLs as they stand in the text (as the
