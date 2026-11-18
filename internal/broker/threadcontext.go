@@ -92,7 +92,8 @@ func newThreadContext(cfg threadContextConfig) (*threadContext, error) {
 //
 // A window with no lower bound that is not the whole thread is the first turn of a session that a person's mention opened inside the
 // thread (session.Config.ThreadContext), which carries the thread's root alone (root). A platform that does not carry roots is not
-// read for it and the turn is not counted, so its first turns go and count as they did before roots were carried.
+// read for it and the turn is not counted, so its first turns go and count as they did before roots were carried. The session asks
+// for it only on a Backend whose platform carries roots (session.Backend.RootContext); the check here is a defence.
 func (t *threadContext) Section(ctx context.Context, key session.Key, binding, after, before string, whole bool) string {
 	section, outcome := t.build(ctx, key, binding, after, before, whole)
 	if outcome != "" {

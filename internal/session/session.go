@@ -61,6 +61,10 @@ type Backend struct {
 	// ThreadReplies is the Binding's chat.threadReplies. Anything but mention, the empty value too,
 	// means every person's reply in a thread Agent Kourier owns is a turn (spec 8.2, D38).
 	ThreadReplies v1alpha1.ThreadReplies
+	// RootContext says that the platform of the Binding's connection carries a thread's root (chat.Caps.RootContext): the first
+	// turn of a session that a person's mention opened inside a thread asks Config.ThreadContext for it, whatever ThreadReplies
+	// says (D55). Without it such a turn asks nothing, and a turn of a Binding that is not mention-only reads nothing from the store.
+	RootContext bool
 	// ThreadTTL is how long after its last activity a thread keeps its session (D28).
 	ThreadTTL time.Duration
 	// Agent runs the Binding's turns. Its credentials resolve on every call.

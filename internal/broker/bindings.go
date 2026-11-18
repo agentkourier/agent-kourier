@@ -48,7 +48,8 @@ type Options struct {
 	// (chat.Caps.AckReaction), which a Binding that names none gets: the reaction of the platform that runs the Binding's own
 	// connection. A platform whose AckReaction is empty has no reactions, and a Binding on it shows none, even one it names. A
 	// connection no platform runs (an error from Platforms, such as one wrapping chat.ErrConnectionDown) has no default to give,
-	// and is not taken to have no reactions, so a reaction its Binding names is kept; nil Platforms gives no default at all.
+	// and is not taken to have no reactions, so a reaction its Binding names is kept; nil Platforms gives no default at all. It also
+	// says whether the platform carries a thread's root (session.Backend.RootContext), which a connection no platform runs does not.
 	Platforms chat.Resolver[platformCaps]
 	// fence, when set, refuses the calls that change what the agent holds (a send, an answer, a cancel) of a leader whose
 	// lease is past its renew deadline (fenceAgent). Nil with SQLite, which has no lease. Set only by the leader half, which is
@@ -171,6 +172,7 @@ func (b *Bindings) Backend(name string) (session.Backend, error) {
 		Progress:                 rb.Binding.Spec.Chat.Progress,
 		Feedback:                 rb.Binding.Spec.Feedback.Enabled,
 		ThreadReplies:            rb.Binding.Spec.Chat.ThreadReplies,
+		RootContext:              rootContextOf(b.opts.Platforms, v1alpha1.NamespacedName(rb.Connection.Namespace, rb.Connection.Name)),
 		Mentions:                 rb.Binding.Spec.Chat.Mentions,
 		MaxMentions:              rb.Binding.Spec.Chat.MentionCap(),
 		MentionPrompt:            render.MentionPrompt(rb.Binding.Spec.Chat.Mentions),
@@ -229,6 +231,16 @@ func reactionsOf(platforms chat.Resolver[platformCaps], conn string) platformRea
 	}
 	own := p.Capabilities().AckReaction
 	return platformReactions{own: own, none: own == ""}
+}
+
+// rootContextOf says whether the platform that platforms gives for conn ("namespace/name") carries a thread's root
+// (chat.Caps.RootContext, D55). A connection that no platform runs now, or nil platforms, gives false: its first turns ask for nothing.
+func rootContextOf(platforms chat.Resolver[platformCaps], conn string) bool {
+	if platforms == nil {
+		return false
+	}
+	p, err := platforms.Platform(conn)
+	return err == nil && p.Capabilities().RootContext
 }
 
 // ackUnshown reports whether the acknowledgment ack names a reaction that no message shows: it names one (namesReaction), and the

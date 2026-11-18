@@ -388,19 +388,25 @@ func (m *Manager) turn(key Key, c *convo) (outcome, error) {
 }
 
 // wantsThreadContext reports whether the turn r may take the thread's context (Config.ThreadContext): a turn marked to carry the
-// whole thread, a person's turn in a Binding with chat.threadReplies: mention, or a person's turn in a thread that its message did
-// not open, whatever the mode, which takes the thread's root if it is its session's first turn (readWindow tells; D55). A reply
-// that was admitted as an answer to a question is no turn (Queued).
+// whole thread, a person's turn in a Binding with chat.threadReplies: mention, or, whatever the mode, a person's turn that may take
+// the thread's root (mayTakeRoot), which it does if it is its session's first turn (readWindow tells). A reply that was admitted as
+// an answer to a question is no turn (Queued).
 func (m *Manager) wantsThreadContext(r store.Reply, b Backend) bool {
 	return Queued(r).Kind == AdmitTurn && (r.WholeThread ||
-		(r.UserID != SystemUser && (b.ThreadReplies == v1alpha1.ThreadRepliesMention || r.MessageRef != r.Key.Thread)))
+		(r.UserID != SystemUser && (b.ThreadReplies == v1alpha1.ThreadRepliesMention || mayTakeRoot(r, b))))
+}
+
+// mayTakeRoot reports whether the turn r, if it is its session's first, carries the thread's root (D55): its Backend's platform carries
+// roots, and its message is a reply in the thread, not the message that opened it.
+func mayTakeRoot(r store.Reply, b Backend) bool {
+	return b.RootContext && !r.WholeThread && r.MessageRef != r.Key.Thread
 }
 
 // readWindow finds where the window of the turn r opens, which is the message of the row before it in the session's
 // queue, delivered or not, and keeps it for the turn. A turn that carries the thread reads back to the last that did: a turn
-// between them carried no bot's post. A person's turn with no row before it, in a thread that its message did not open, has a
-// window with no lower bound, for the thread's root (D55); in a Binding that is not mention-only, a later turn has none, as every
-// reply was a turn. It is read from stored rows, so it is the same on every attempt,
+// between them carried no bot's post. A person's turn with no row before it that may take the thread's root (mayTakeRoot) has a
+// window with no lower bound, for the root (D55); in a Binding that is not mention-only, a later turn has none, as every reply was a
+// turn. It is read from stored rows, so it is the same on every attempt,
 // after a restart and after a failover. A turn with no row before it has no window. It runs before the turn is sent,
 // where a store that fails waits like any other failure of the runner: the turn is never sent without its context,
 // which it could not be sent again with, and nothing tells the thread the agent cannot be reached.
@@ -416,7 +422,7 @@ func (m *Manager) readWindow(ctx context.Context, c *convo, r store.Reply, b Bac
 	switch {
 	case errors.Is(err, store.ErrNotFound): // no turn came before it, or none that carried the thread
 		// a turn that carries the thread has all of it to read, and a person's first turn inside a thread has its root
-		c.window = windowText{id: r.ID, none: !r.WholeThread && r.MessageRef == r.Key.Thread}
+		c.window = windowText{id: r.ID, none: !r.WholeThread && !mayTakeRoot(r, b)}
 	case err != nil:
 		return fmt.Errorf("read the turn before %s: %w", r.ID, err)
 	case !r.WholeThread && b.ThreadReplies != v1alpha1.ThreadRepliesMention: // a later turn where every reply was a turn: nothing to carry

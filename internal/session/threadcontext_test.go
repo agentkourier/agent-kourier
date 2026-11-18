@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,8 +30,7 @@ type windowCall struct {
 }
 
 // threadHook is a Config.ThreadContext that records its calls and answers with section, or with root for the first turn of a
-// session opened inside a thread (no lower bound, not the whole thread): "" by default, as the broker answers on a platform that does
-// not carry a thread's root (chat.Caps.RootContext).
+// session opened inside a thread (no lower bound, not the whole thread), which the manager asks for only on a Backend with RootContext.
 type threadHook struct {
 	mu      sync.Mutex
 	section string
@@ -115,9 +115,8 @@ func (f *fixture) sentText(t *testing.T, n int) string {
 }
 
 // A mentioned turn in a mention-only Binding carries the section the hook returns, after the person's text, and
-// the hook is asked about the window from the previous turn's message to this one's. The first turn of a session has no
-// previous turn: opened inside the thread, it is asked about the thread's root alone, which a platform without roots answers with
-// nothing.
+// the hook is asked about the window from the previous turn's message to this one's. The first turn of a thread
+// has no previous turn, and so no section and no call, on a Backend that does not carry a thread's root.
 func TestThreadContextIsAppendedToAMentionedTurn(t *testing.T) {
 	f := newFixture(t)
 	sink := f.live()
@@ -131,9 +130,8 @@ func TestThreadContextIsAppendedToAMentionedTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFinal(t, sink)
-	rootCall := windowCall{key, "ns/b1", "", "1700.10", false}
-	if got := f.sentText(t, 0); got != "hello" || !slices.Equal(hook.seen(), []windowCall{rootCall}) {
-		t.Errorf("first turn = %q, hook calls %v; want the person's text alone after a call for the root", got, hook.seen())
+	if got := f.sentText(t, 0); got != "hello" || len(hook.seen()) != 0 {
+		t.Errorf("first turn = %q, hook calls %v; want the person's text alone and no call", got, hook.seen())
 	}
 
 	second := inbound("1700.50")
@@ -145,15 +143,15 @@ func TestThreadContextIsAppendedToAMentionedTurn(t *testing.T) {
 	if got, want := f.sentText(t, 1), "hello\n\n"+threadSection; got != want {
 		t.Errorf("second turn = %q; want the person's text, a blank line and the section: %q", got, want)
 	}
-	want := []windowCall{rootCall, {key, "ns/b1", "1700.10", "1700.50", false}}
+	want := []windowCall{{key, "ns/b1", "1700.10", "1700.50", false}}
 	if got := hook.seen(); !slices.Equal(got, want) {
 		t.Errorf("hook calls = %+v; want %+v: the window is the previous turn's message to this one's", got, want)
 	}
 }
 
 // The hook is asked for a mention-only Binding's turn that a person wrote, that is not pinned to a question, and that has a turn
-// before it; and, in either mode, for the first turn of a session that a person's mention opened inside a thread, which carries
-// the thread's root where the platform carries roots (D55). Anything else is sent as it was queued, and the hook is never called.
+// before it; and, in either mode, on a Backend that carries a thread's root (RootContext), for the first turn of a session that a
+// person's mention opened inside a thread (D55). Anything else is sent as it was queued, and the hook is never called.
 func TestThreadContextIsAskedOnlyWhereItBelongs(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -161,7 +159,7 @@ func TestThreadContextIsAskedOnlyWhereItBelongs(t *testing.T) {
 		user     string
 		ref      string // the turn's message; queuedRef, a reply in the thread, when empty
 		previous bool
-		roots    bool   // the platform carries a thread's root: the hook answers the first turn's call
+		roots    bool   // the Backend carries a thread's root (RootContext), and the hook answers the first turn's call
 		noop     bool   // the hook is NoThreadContext
 		want     string // the section appended, if any
 		calls    int    // the hook's calls
@@ -170,20 +168,22 @@ func TestThreadContextIsAskedOnlyWhereItBelongs(t *testing.T) {
 		{name: "all replies", mode: v1alpha1.ThreadRepliesAll, user: "U1", previous: true},
 		{name: "the mode is empty", mode: "", user: "U1", previous: true},
 		{name: "a turn nobody wrote", mode: v1alpha1.ThreadRepliesMention, user: SystemUser, previous: true},
-		{name: "the first turn of the thread", mode: v1alpha1.ThreadRepliesMention, user: "U1", calls: 1},
+		{name: "the first turn of the thread", mode: v1alpha1.ThreadRepliesMention, user: "U1"},
+		{name: "the first turn of the thread, all replies", mode: v1alpha1.ThreadRepliesAll, user: "U1"},
 		{name: "the first turn of the thread, where roots are carried", mode: v1alpha1.ThreadRepliesMention, user: "U1", roots: true, want: rootSection, calls: 1},
 		{name: "the first turn of the thread, all replies, where roots are carried", mode: v1alpha1.ThreadRepliesAll, user: "U1", roots: true, want: rootSection, calls: 1},
 		{name: "the first turn of the thread, the mode empty, where roots are carried", mode: "", user: "U1", roots: true, want: rootSection, calls: 1},
+		{name: "a later turn, all replies, where roots are carried", mode: v1alpha1.ThreadRepliesAll, user: "U1", previous: true, roots: true},
 		{name: "the first turn of a thread it opened", mode: v1alpha1.ThreadRepliesMention, user: "U1", ref: key.Thread, roots: true},
 		{name: "the first turn of a thread it opened, all replies", mode: v1alpha1.ThreadRepliesAll, user: "U1", ref: key.Thread, roots: true},
 		{name: "a first turn nobody wrote", mode: v1alpha1.ThreadRepliesMention, user: SystemUser, roots: true},
 		{name: "the no-op hook", mode: v1alpha1.ThreadRepliesMention, user: "U1", previous: true, noop: true},
-		{name: "the no-op hook on a first turn", mode: v1alpha1.ThreadRepliesAll, user: "U1", noop: true},
+		{name: "the no-op hook on a first turn", mode: v1alpha1.ThreadRepliesAll, user: "U1", roots: true, noop: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, sink, hook := thread(t, tc.mode, tc.previous)
 			if tc.roots {
-				hook.root = rootSection
+				f.rootContext, hook.root = true, rootSection
 			}
 			if tc.noop {
 				f.m.cfg.ThreadContext = NoThreadContext
@@ -334,7 +334,7 @@ func TestTheRootIsAskedTheSameAcrossResendsAndARestart(t *testing.T) {
 	rootCall := windowCall{key, "ns/b1", "", queuedRef, false}
 	t.Run("busy retries", func(t *testing.T) {
 		f, sink, hook := thread(t, v1alpha1.ThreadRepliesAll, false)
-		hook.root = rootSection
+		f.rootContext, hook.root = true, rootSection
 		f.agent.script = func(_ context.Context, n int, h agent.Handler) error {
 			if n < 2 {
 				return fmt.Errorf("send message: %w", agent.ErrBusy)
@@ -355,7 +355,7 @@ func TestTheRootIsAskedTheSameAcrossResendsAndARestart(t *testing.T) {
 	})
 	t.Run("a restart", func(t *testing.T) {
 		f, sink, hook := thread(t, v1alpha1.ThreadRepliesAll, false)
-		hook.root = rootSection
+		f.rootContext, hook.root = true, rootSection
 		f.m.cfg.RetryBase, f.m.cfg.RetryMax = 20*time.Millisecond, 20*time.Millisecond
 		f.agent.script = func(context.Context, int, agent.Handler) error { return fmt.Errorf("send message: %w", agent.ErrBusy) }
 		f.enqueue(t, "turn", queuedRef, "U1", false)
@@ -389,6 +389,55 @@ func TestTheRootIsAskedTheSameAcrossResendsAndARestart(t *testing.T) {
 		f.agent.mu.Unlock()
 		if last != first || first != "hello\n\n"+rootSection {
 			t.Errorf("text before the restart %q and after %q; want the same, with the root", first, last)
+		}
+	})
+}
+
+// countingPrevious counts the calls of PreviousReply, and fails each with err if it is set.
+type countingPrevious struct {
+	Store
+	err   error
+	calls atomic.Int32
+}
+
+func (s *countingPrevious) PreviousReply(ctx context.Context, k Key, seq int64) (store.Reply, error) {
+	s.calls.Add(1)
+	if s.err != nil {
+		return store.Reply{}, s.err
+	}
+	return s.Store.PreviousReply(ctx, k, seq)
+}
+
+// In a Binding where every reply is a turn, on a Backend that does not carry a thread's root (Slack), a person's turn in a thread asks
+// the store nothing about the turn before it, first or later: a store that would fail holds nothing back, and the turn is sent at once
+// as it was queued. On a Backend that carries roots, the same turn asks, to tell a first turn.
+func TestATurnOfAllRepliesAsksTheStoreNothingWithoutRoots(t *testing.T) {
+	for _, previous := range []bool{false, true} {
+		t.Run(fmt.Sprintf("a turn before it: %t", previous), func(t *testing.T) {
+			f, sink, hook := thread(t, v1alpha1.ThreadRepliesAll, previous)
+			st := &countingPrevious{Store: f.st, err: errors.New("database is locked")}
+			f.m.cfg.Store = st
+			f.enqueue(t, "turn", queuedRef, "U1", false)
+			f.m.wake(key)
+			waitFinal(t, sink)
+			if sends, _, _ := f.agent.counts(); sends != 1 || f.sentText(t, 0) != "hello" {
+				t.Errorf("%d sends of %q; want one, of the person's text", sends, f.sentText(t, 0))
+			}
+			if n := st.calls.Load(); n != 0 || len(hook.seen()) != 0 {
+				t.Errorf("PreviousReply asked %d times, hook calls %v; want neither", n, hook.seen())
+			}
+		})
+	}
+	t.Run("roots are carried", func(t *testing.T) {
+		f, sink, _ := thread(t, v1alpha1.ThreadRepliesAll, true)
+		f.rootContext = true
+		st := &countingPrevious{Store: f.st}
+		f.m.cfg.Store = st
+		f.enqueue(t, "turn", queuedRef, "U1", false)
+		f.m.wake(key)
+		waitFinal(t, sink)
+		if n := st.calls.Load(); n == 0 {
+			t.Error("PreviousReply was not asked; want it asked, to tell a first turn")
 		}
 	})
 }
@@ -428,8 +477,7 @@ func TestThreadContextIsNotAskedWhenATaskIsFollowed(t *testing.T) {
 }
 
 // A bot's mention reads back past a person's turn to the last turn that carried the thread, and from the thread's start if none did:
-// a person's turn carried no bot's post. The person's turn itself still asks only for what came since the turn before it, and the
-// session's first, a person's, for the thread's root alone.
+// a person's turn carried no bot's post. The person's turn itself still asks only for what came since the turn before it.
 func TestAWholeThreadTurnReadsBackPastAPlainTurn(t *testing.T) {
 	f := newFixture(t)
 	sink := f.live()
@@ -452,7 +500,7 @@ func TestAWholeThreadTurnReadsBackPastAPlainTurn(t *testing.T) {
 	turn("1700.20", true)
 	turn("1700.30", false)
 	turn("1700.40", true)
-	want := []windowCall{{key, "ns/b1", "", "1700.10", false}, {key, "ns/b1", "", "1700.20", true}, {key, "ns/b1", "1700.20", "1700.30", false}, {key, "ns/b1", "1700.20", "1700.40", true}}
+	want := []windowCall{{key, "ns/b1", "", "1700.20", true}, {key, "ns/b1", "1700.20", "1700.30", false}, {key, "ns/b1", "1700.20", "1700.40", true}}
 	if got := hook.seen(); !slices.Equal(got, want) {
 		t.Errorf("hook calls = %+v; want %+v", got, want)
 	}
