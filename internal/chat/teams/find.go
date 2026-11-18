@@ -19,12 +19,23 @@ import (
 // This file tags each post with the outbox's ID for it, in a part of the post that people do not see and that Microsoft Graph gives
 // back, and finds the post by that tag (Find), so that a post that was sent and not recorded before a crash is not sent again. What
 // was measured on a test tenant, web client, channel thread, in November 2026 (a bot's posts read back through the replies list and a
-// GET of each message, before and after a PUT that sent the same tag again): an empty <span title="…"> at the end of a markdown text
-// comes back as <p><span title="…"></span></p> in the body's HTML, and an Adaptive Card element's id comes back in the card's JSON;
-// neither shows in the client, and the span's paragraph adds a little space under the text. What Teams drops, and so cannot carry a
-// tag: the activity's channelData and entities, its summary, an HTML comment, a span's data- attributes, an attachment's name and a
-// card's unknown keys. Not measured: Teams' mobile and desktop clients, screen readers, and Teams' other surfaces (search,
-// notifications).
+// GET of each message, before and after a PUT that sent the same tag again; and a bot's post that opened a thread, read back through
+// the channel's messages):
+//   - an empty <span title="…"> at the end of a markdown text comes back as <p><span title="…"></span></p> in the body's HTML, in a
+//     reply and in a post that opened a thread;
+//   - the id of a card's TextBlock and of its RichTextBlock (the first element of a prompt's card) comes back in the card's JSON; an
+//     id on an element of another type was not measured;
+//   - neither shows in the client, and the span's paragraph adds a little space under the text;
+//   - Teams drops, and so cannot carry a tag: the activity's channelData and entities, its summary, an HTML comment, a span's data-
+//     attributes, an attachment's name and a card's unknown keys;
+//   - a text with a card of buttons in one activity is answered 202 with no ID, and shows as two messages: the text, with the span,
+//     and the card alone, with no tag. Post then fails (errNoID), and the outbox's lookup adopts the text; the card is a message whose
+//     ID Agent Kourier never has;
+//   - a reply was in Graph's replies at the first read, 1.4 s after it was posted.
+//
+// A zero-width run at the start of a text changed how Teams parsed the first line; the span was put only at the end, and not tried at
+// the start. Not measured: Teams' mobile and desktop clients, screen readers, Teams' other surfaces (search, notifications), and the
+// order of the channel's messages.
 
 // findRootPages is how many pages of a channel's messages Find reads for a post that opened a thread (a trigger's digest line): at
 // graphPageTop a page, the 200 threads that Graph gives first. Microsoft documents the list as sorted by the last change of each
@@ -46,9 +57,11 @@ func carrierOf(tag string) string {
 }
 
 // withCarrier is a carrying the carrier, if it is not "": a text ends with a paragraph of an empty span titled with it (after
-// everything render wrote, a block's closing fence included; Teams parsed the first line otherwise when a tag led the text); a
-// card alone has it as the id of the first element of its body with no id, which no input of a card has (inputID). A message with
-// text and a card carries it in the text alone, so that the card that Teams may post apart from the text is not taken for it.
+// everything render wrote, a block's closing fence included; a zero-width tag at the start changed how Teams parsed the first line,
+// and the span was measured only at the end); a card alone has it as the id of the first element of its body with no id, which no
+// input of a card has (inputID): a prompt's and an ending's first element is a RichTextBlock or a TextBlock, whose id was measured.
+// A message with text and a card of buttons carries it in the text alone: Teams shows the card as a message of its own, which must not
+// be taken for the post.
 // The span is the adapter's alone: no "<" of the agent's, a person's or an alert's text reaches Teams raw (markdown.go, escapeLine).
 // render's budget leaves room for the carrier, whose length is fixed.
 func withCarrier(a outActivity, carrier string) outActivity {
@@ -76,11 +89,14 @@ func withCarrier(a outActivity, carrier string) outActivity {
 // Only a message whose sender is the bot's own app counts, and only its body's HTML (an empty span, read as a tag: spanTitled) or the
 // id of an element of its cards' bodies (cardIDed): a person or another app can post either, and the text a person reads holds no
 // tag. Not found is false and a nil error, and so is what no retry would mend, so that the outbox posts, and the post may show twice,
-// instead of holding it back until it is abandoned: a target or tag that cannot be read for (with no call), a channel whose team is
-// not known yet (with no call), a thread with more pages than are read, and a refusal that Classify says is Permanent (Graph's 400,
-// 401, 403 and 404, and Entra's refusal of the Graph token); the last three are logged at WARN. Any other error is returned, which
-// Classify says is Transient (a 429, with its wait; a 5xx; a timeout), and the outbox looks again later. None is FatalAuth. Every
-// read is counted as Find by what it met, a refusal that is answered as not found too.
+// instead of holding it back until it is abandoned: a target or tag that cannot be read for (with no call), and, each logged at WARN,
+// a channel whose team is not known yet (with no call), a thread with more pages than are read, a read that ran out of its time after
+// Graph gave a page (a thread too long to read in time, every try: were it an error, the outbox would abandon the post once its
+// lookups had timed out often enough), a next page that is not Graph's or that the read already took, an answer past graphMaxBody,
+// and a refusal that Classify says is Permanent (Graph's 400, 401, 403 and 404, and Entra's refusal of the Graph token). Any other
+// error is returned, which Classify says is Transient (a 429, with its wait; a 5xx; an answer that is not JSON; a read that ran out
+// of time before any page came back), and the outbox looks again later. None is FatalAuth. Every read is counted as Find by what it
+// met, what is answered as not found too.
 func (c *Client) Find(ctx context.Context, t chat.Target, tag string, _ time.Time) (chat.Ref, bool, error) {
 	carrier := carrierOf(tag)
 	if carrier == "" || t.Channel == "" || (t.Thread != "" && !isMessageID(t.Thread)) {
@@ -89,7 +105,10 @@ func (c *Client) Find(ctx context.Context, t chat.Target, tag string, _ time.Tim
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.Find")
 	readCtx, cancel := context.WithTimeout(ctx, c.threadTimeout)
 	defer cancel()
-	ref, found, err := c.find(readCtx, t, carrier)
+	ref, found, pages, err := c.find(readCtx, t, carrier)
+	if pages > 0 && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+		err = fmt.Errorf("%w: after %d pages: %w", errReadCut, pages, err)
+	}
 	c.finish(ctx, op, "Find", err) // counted as what the read met, an error answered as not found too
 	if err != nil && c.cannotLook(err) {
 		c.log.WarnContext(ctx, "teams: the outbox could not look for a post it may have made before a restart; it posts it, and the "+
@@ -99,11 +118,15 @@ func (c *Client) Find(ctx context.Context, t chat.Target, tag string, _ time.Tim
 	return ref, found, err
 }
 
-// find reads t's replies, or its channel's roots, for the bot's message that carries carrier.
-func (c *Client) find(ctx context.Context, t chat.Target, carrier string) (chat.Ref, bool, error) {
+// errReadCut is wrapped by the error of a Find whose read ran out of its time after Graph gave a page: a thread too long to read in time,
+// which it is again on the next try.
+var errReadCut = errors.New("teams: the read of the thread ran out of time after Graph gave a page")
+
+// find reads t's replies, or its channel's roots, for the bot's message that carries carrier. pages is how many pages Graph gave.
+func (c *Client) find(ctx context.Context, t chat.Target, carrier string) (ref chat.Ref, found bool, pages int, err error) {
 	group, err := c.teamGroup(ctx, t.Channel)
 	if err != nil {
-		return chat.Ref{}, false, err
+		return chat.Ref{}, false, 0, err
 	}
 	link, maxPages := c.graph.resource("teams", group, "channels", t.Channel, "messages"), findRootPages
 	if t.Thread != "" {
@@ -111,6 +134,7 @@ func (c *Client) find(ctx context.Context, t chat.Target, carrier string) (chat.
 	}
 	var at string
 	more, err := c.graph.pages(ctx, link+fmt.Sprintf("?$top=%d", graphPageTop), maxPages, func(page []graphMessage) bool {
+		pages++
 		for _, m := range page {
 			if isMessageID(m.ID) && m.ID != t.Thread && c.carries(m, carrier) {
 				at = m.ID
@@ -121,18 +145,24 @@ func (c *Client) find(ctx context.Context, t chat.Target, carrier string) (chat.
 	})
 	switch {
 	case err != nil:
-		return chat.Ref{}, false, err
+		return chat.Ref{}, false, pages, err
 	case at != "":
-		return c.ref(t.Channel, t.Thread, at), true, nil
+		return c.ref(t.Channel, t.Thread, at), true, pages, nil
 	case more:
-		return chat.Ref{}, false, fmt.Errorf("teams find: %w: more than %d pages", chat.ErrThreadTooLong, maxPages)
+		return chat.Ref{}, false, pages, fmt.Errorf("teams find: %w: more than %d pages", chat.ErrThreadTooLong, maxPages)
 	}
-	return chat.Ref{}, false, nil
+	return chat.Ref{}, false, pages, nil
 }
 
-// cannotLook says whether err, of a Find's read, is one that no retry mends.
+// cannotLook says whether err, of a Find's read, is one that no retry mends: what Classify says is Permanent, and what Graph's answers
+// or the thread's length make so again on every try.
 func (c *Client) cannotLook(err error) bool {
-	return errors.Is(err, errTeamNotKnown) || errors.Is(err, chat.ErrThreadTooLong) || c.Classify(chat.OpPost, err).Class == chat.Permanent
+	for _, never := range []error{errTeamNotKnown, chat.ErrThreadTooLong, errReadCut, errNotGraph, errPageCycle, errAnswerTooLong} {
+		if errors.Is(err, never) {
+			return true
+		}
+	}
+	return c.Classify(chat.OpPost, err).Class == chat.Permanent
 }
 
 // carries says whether m is a message of the bot's own app that carries carrier, in its body's HTML or its cards.
@@ -192,9 +222,6 @@ func attrValue(attrs, name string) (string, bool) {
 			i++
 		}
 		if i >= len(attrs) || attrs[i] != '=' {
-			if key == "" && i < len(attrs) {
-				i++ // a stray character
-			}
 			continue
 		}
 		i++

@@ -176,7 +176,8 @@ replies and its errors are Microsoft's documentation: none of them was measured.
 The outbox records each post before it sends it, and before it posts one that it queued or tried before, a post that was sent and not
 recorded before a crash among them, it asks the platform for the post by its tag. On Slack the tag is in the message's metadata. On
 Microsoft Teams it is in a part of the post that people do not see: an empty `<span>` whose `title` is the tag's carrier, in a paragraph
-of its own at the end of a text, or the `id` of the first element of a card's body when the card is the whole post. An edit of a post
+of its own at the end of a text, or the `id` of the first element of a card's body when the card is the whole post (a question's or an
+approval's card, and the card that ends one). A reply with buttons, such as the useful and not-useful buttons, carries it in its text. An edit of a post
 does not carry the tag: the outbox looks for a post only until it has recorded where the post landed, and nothing edits a post before
 then. The broker looks for it through
 Microsoft Graph, with the same token, permission and bounds as a read of a thread's replies ([Limits](limits.md#what-the-broker-keeps-and-logs)): the
@@ -184,13 +185,22 @@ thread's replies, or, for a post that opens a thread, such as a trigger's digest
 first 200 that Graph gives. Only a post of the connection's own app counts, so a person or another app that writes the same span
 does not keep a post from being sent, and the agent cannot write one: no `<` of its text reaches Teams as HTML.
 
-On a test tenant in November 2026, with the web client, the span and a card's `id` came back through Graph; the client showed
-neither, and the span's paragraph adds a little space under the text. Teams' mobile and desktop
-clients, screen readers, and Teams' search and notifications were not checked.
+On a test tenant in November 2026, with the web client, the span came back through Graph at the end of a reply and of a post that
+opened a thread, and so did the `id` of the two kinds of card element that the broker puts first on a card, the `TextBlock` and the
+`RichTextBlock`. A reply was in Graph 1.4 seconds after it was posted. The client showed no carrier, and the span's paragraph adds a
+little space under the text. The span was tried only at the end of a text. Teams' mobile and desktop clients, screen readers, Teams'
+search and notifications, and the order in which Graph lists a channel's messages were not checked.
 
-A post that the pages read do not hold, a channel whose team the broker does not know yet, and a refusal of Graph that no retry mends
-(a 400, 401, 403 or 404, or Microsoft Entra's refusal of the token for Graph) are taken as not found: the broker logs why at WARN and
-sends the post, which may then show twice. A 429, a 5xx and a lookup that runs out of time are tried again later.
+A reply with buttons is sent as one message of text and a card, which Teams answers with no ID and shows as two messages: the text,
+with the span, and a second message that holds only the buttons, with no tag. The broker does not learn either one's ID from the post,
+so it looks the reply up, finds the text by its tag and records it; the message of buttons is one that the broker never knows the ID
+of, and a later edit of the reply does not reach it.
+
+A post that the pages read do not hold, a channel whose team the broker does not know yet, a read that runs out of time after Graph
+gave a page, a page that Graph names that is not Graph's or that the read already took, an answer longer than 8 MiB, and a refusal of
+Graph that no retry mends (a 400, 401, 403 or 404, or Microsoft Entra's refusal of the token for Graph) are taken as not found: the
+broker logs why at WARN and sends the post, which may then show twice. A 429, a 5xx, an answer that is not JSON and a lookup that runs
+out of time before any page came back are tried again later.
 
 ## Chat IDs
 

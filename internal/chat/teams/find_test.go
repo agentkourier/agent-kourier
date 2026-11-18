@@ -512,3 +512,109 @@ func TestWithCarrierKeepsTheIDsAnElementHas(t *testing.T) {
 		t.Errorf("a card of inputs alone: the input's id is %v", got)
 	}
 }
+
+// A message with a Body and buttons, as the useful and not-useful buttons go under a reply, carries the tag in its text alone: the
+// buttons are a card that Teams shows as a message of its own (measured, round 3 of the probe), which must not be taken for the
+// post. Find finds the text.
+func TestATextPostWithButtonsCarriesItsTagInTheText(t *testing.T) {
+	t.Parallel()
+	ct, target := threadTest(t)
+	o := chat.Say(chat.Message{Fallback: "the answer", Parts: []chat.Part{
+		chat.Body{Markdown: "It is the disk."},
+		chat.Context{Text: "Was this useful?"},
+		chat.Buttons{Buttons: []chat.Button{
+			{ID: "feedback-useful", Label: "Useful", Value: "fb1|investigation|useful|100.1|turn-1"},
+			{ID: "feedback-not-useful", Label: "Not useful", Value: "fb1|investigation|not_useful|100.1|turn-1"},
+		}},
+	}})
+	ref, err := ct.c.Post(t.Context(), target, o, findTag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := ct.posted(t)
+	if !strings.HasSuffix(a.Text, "\n\n"+`<span title="`+carrierOf(findTag)+`"></span>`) {
+		t.Errorf("text = %q, want the carrier at its end", a.Text)
+	}
+	if len(a.Attachments) != 1 {
+		t.Fatalf("attachments = %+v, want the buttons' card", a.Attachments)
+	}
+	if raw := mustJSON(t, a.Attachments[0].Content); strings.Contains(raw, `"id"`) || strings.Contains(raw, carrierOf(findTag)) {
+		t.Errorf("the buttons' card = %s, want no id and no carrier", raw)
+	}
+	ct.echo(t, ref.ID, testRoot, testAppID, a)
+	if got, found, err := ct.c.Find(t.Context(), target, findTag, time.Time{}); !found || err != nil || got != ref {
+		t.Errorf("Find = %+v, %t, %v; want %+v", got, found, err, ref)
+	}
+}
+
+// A message whose ID is not a Teams message ID is no post, even of the bot's own app with the carrier: no Ref can be made of it.
+func TestFindTakesNoMessageWhoseIDIsNoMessageID(t *testing.T) {
+	t.Parallel()
+	ct, target := threadTest(t)
+	ct.f.putMessage(testChannel, app("abc", testRoot, testAppID, `<p><span title="`+carrierOf(findTag)+`"></span></p>`))
+	if got, found, err := ct.c.Find(t.Context(), target, findTag, time.Time{}); found || err != nil {
+		t.Errorf("Find = %+v, %t, %v; want not found", got, found, err)
+	}
+}
+
+// What Graph gives that no retry reads otherwise is not found, so that the post is sent and not held until it expires: a next page
+// that names one already read, a next page that is not Graph's, and an answer past graphMaxBody. An answer that is not JSON may be
+// a fault of the moment, and is the error.
+func TestFindTakesAGraphAnomalyAsNotFound(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		edit func(g *fakeGraph)
+		err  bool
+	}{
+		{"a cycle", func(g *fakeGraph) {
+			g.pageAt, g.next = 1, func(self string, _ int) string { return self + "?$top=50&$skiptoken=0" }
+		}, false},
+		{"a page off Graph", func(g *fakeGraph) {
+			g.pageAt, g.next = 1, func(string, int) string { return "https://graph.example.test/v1.0/teams/x/replies?$skiptoken=1" }
+		}, false},
+		{"an answer too long", func(g *fakeGraph) { g.big = graphMaxBody }, false},
+		{"not JSON", func(g *fakeGraph) {
+			g.fail = func(*http.Request) (int, string, bool) { return http.StatusOK, "not JSON", true }
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ct, target := threadTest(t)
+			ct.replies(3)
+			ct.f.setGraph(tc.edit)
+			_, found, err := ct.c.Find(t.Context(), target, findTag, time.Time{})
+			if found || (err != nil) != tc.err {
+				t.Fatalf("Find = %t, %v; want an error: %t", found, err, tc.err)
+			}
+			if tc.err && ct.c.Classify(chat.OpPost, err).Class != chat.Transient {
+				t.Errorf("Classify(%v) is not Transient", err)
+			}
+		})
+	}
+}
+
+// A read that runs out of time after Graph gave a page is a thread too long to read in time, every time, and is not found (the post is
+// sent): a lookup that timed out each try would have the outbox abandon a post that was never sent. One that runs out before any page
+// came back is the deadline, which the outbox tries again (TestFindReadsWithinTheReadersBounds).
+func TestFindCutAfterAPageIsNotFound(t *testing.T) {
+	t.Parallel()
+	ct, target := threadTest(t)
+	ct.replies(3)
+	ct.c.threadTimeout = 200 * time.Millisecond
+	ct.f.setGraph(func(g *fakeGraph) {
+		g.pageAt = 1
+		g.fail = func(r *http.Request) (int, string, bool) {
+			if r.URL.Query().Get("$skiptoken") != "" {
+				<-r.Context().Done() // the second page never comes
+			}
+			return 0, "", false
+		}
+	})
+	if _, found, err := ct.c.Find(t.Context(), target, findTag, time.Time{}); found || err != nil {
+		t.Errorf("Find cut after a page = %t, %v; want not found", found, err)
+	}
+	if n := len(ct.f.graphTaken()); n != 2 {
+		t.Errorf("%d Graph calls, want 2: the first page, and the second that never came", n)
+	}
+}

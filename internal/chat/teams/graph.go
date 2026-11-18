@@ -34,9 +34,14 @@ const (
 	graphMaxBody = 8 << 20
 )
 
-// errNotGraph is the error of a read of a URL that is not of the Graph endpoint, which an @odata.nextLink named: it is not asked, and
-// the token does not go to it.
-var errNotGraph = errors.New("teams: Microsoft Graph named a page that is not Graph's")
+// Graph's answers that no retry reads otherwise. errNotGraph is the error of a read of a URL that is not of the Graph endpoint, which an
+// @odata.nextLink named: it is not asked, and the token does not go to it. errPageCycle is a page whose @odata.nextLink names a page
+// that the read already took. errAnswerTooLong is an answer past graphMaxBody.
+var (
+	errNotGraph      = errors.New("teams: Microsoft Graph named a page that is not Graph's")
+	errPageCycle     = errors.New("teams: a page of Microsoft Graph names as its next a page that the read already took")
+	errAnswerTooLong = fmt.Errorf("teams: Microsoft Graph's answer is longer than %d bytes", graphMaxBody)
+)
 
 // GraphError is Microsoft Graph's refusal of a read: its HTTP status, its error code ("Forbidden", say) and the wait it asked for. It
 // holds no token and not Graph's message, which may repeat what the request named.
@@ -151,7 +156,7 @@ func (g *graphClient) get(ctx context.Context, link string, out any) error {
 		return e
 	}
 	if len(data) > graphMaxBody {
-		return fmt.Errorf("teams: Microsoft Graph's answer is longer than %d bytes", graphMaxBody)
+		return errAnswerTooLong
 	}
 	if err := json.Unmarshal(data, out); err != nil {
 		return fmt.Errorf("teams: Microsoft Graph's answer is not JSON: %w", err)
@@ -183,7 +188,7 @@ func (g *graphClient) pages(ctx context.Context, first string, maxPages int, vis
 		case n >= maxPages:
 			return true, nil
 		case seen[page.NextLink]:
-			return false, errors.New("teams: a page of Microsoft Graph names as its next a page that the read already took")
+			return false, errPageCycle
 		}
 		seen[page.NextLink] = true
 		link = page.NextLink

@@ -615,18 +615,25 @@ Rules:
   alone (a scope or a consent), are Permanent (the 403's error names the permission and the install); a 429 is Transient with its
   Retry-After (at least a second), and a 5xx Transient. A wrong or revoked client secret is still FatalAuth, through the bot's token.
   Post carries its tag where people do not see it: `kourier` and the first 16 bytes of the tag's SHA-256 in hex, as an empty
-  `<span title>` in a paragraph of its own at the end of a text (after the closing fence of a block, never at the start, which changed
-  how Teams parsed the first line), or as the `id` of the first element of a card's body that has none when the post is a card alone.
+  `<span title>` in a paragraph of its own at the end of a text (after the closing fence of a block; a zero-width tag at the start
+  changed how Teams parsed the first line, and the span was measured only at the end), or as the `id` of the first element of a card's
+  body that has none when the post is a card alone (a prompt's and an ending's first element is a RichTextBlock or a TextBlock, the two
+  types whose `id` was measured). A text with a card of buttons carries it in the text: Teams answers such an activity 202 with no ID
+  and shows it as two messages, the text with the span and the buttons' card with no tag, so Post fails (no ID), the outbox's lookup
+  adopts the text, and the card is a message Agent Kourier never has the ID of (its shape is a later change).
   No `<` of the agent's, a person's or an alert's text reaches Teams raw, so only the adapter writes a span. Find reads the thread's
   replies with the same bounds, or for a post with no thread the channel's messages (`GET …/channels/{channel}/messages`, at most 4
-  pages, the first that Graph gives: Microsoft documents them as sorted by each thread's last change, not in which direction), stops
+  pages, the first that Graph gives: Microsoft documents them as sorted by each thread's last change, not in which direction, and the
+  order was not measured), stops
   at the page that holds the post, and matches only a message of the bot's own app (`from.application.id`), by a span tag in its
   body's HTML (not the text, which has no tags) or an id among its cards' body elements. Update sends no tag: the outbox looks a post up
   only before its ID is recorded, and nothing edits a post before that. What no retry mends (a post past the pages, a channel whose
-  team is not known, a Permanent refusal of Graph or of its token) is not found, logged at WARN, so the post is sent and may show twice
-  rather than abandoned; a Transient error is returned and the outbox looks again. Measured on a test tenant, November 2026, web
-  client: the span and a card element's id come back through the replies list and a message's GET, and after a PUT that sent the tag
-  again; channelData, entities, summary, an HTML comment, `data-` attributes, an attachment's name and a card's unknown keys are
+  team is not known, a read cut by its time after a page came back, a next page off Graph or already read, an answer past 8 MiB, a
+  Permanent refusal of Graph or of its token) is not found, logged at WARN, so the post is sent and may show twice rather than
+  abandoned; a Transient error (a 429, a 5xx, an answer that is not JSON, a read cut before any page) is returned and the outbox looks
+  again. Measured on a test tenant, November 2026, web client: the span and the `id` of a TextBlock and of a RichTextBlock come back
+  through the replies list and a message's GET, the span after a PUT that sent the tag again, and a root's span through the channel's
+  messages; a reply was in the replies 1.4 s after it was posted; channelData, entities, summary, an HTML comment, `data-` attributes, an attachment's name and a card's unknown keys are
   dropped; the client shows no carrier, and the span's paragraph adds a little space. Not measured: Teams' mobile and desktop clients,
   screen readers, and Teams' search and notifications. Measured on a test tenant, November 2026: the Graph token, a 200 for a channel's messages under the
   permission alone, the path form, the message shapes (HTML body, from.user and from.application, a card's JSON as a string, a system
