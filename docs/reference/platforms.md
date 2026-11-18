@@ -26,8 +26,9 @@ lose it ([Stored data](stored-data.md)); for a channel that no activity has come
 Microsoft's global route, `https://smba.trafficmanager.net/teams/`.
 
 A message on Microsoft Teams shows the agent's reply in Teams' markdown, with what the agent, a person or an alert wrote shown as
-text: no `<at>` in it becomes a mention, and no HTML or markdown link in it is acted on (a bare URL still links). A mention that Agent Kourier makes names a person by
-their Microsoft Entra object ID and shows as `@someone`, since the broker does not read people's names on Teams yet. There are no live
+text: no `<at>` in it becomes a mention, and no HTML or markdown link in it is acted on (a bare URL still links). A mention that Agent Kourier makes in a message names a person by
+their Microsoft Entra object ID and shows as `@someone`; only the card that ends a question or an approval names its decider
+([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). There are no live
 progress streams, ephemeral messages or reactions. Questions, tool approvals and the useful and not-useful buttons are Adaptive
 Cards, which a person presses ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)).
 
@@ -91,8 +92,13 @@ answered in time, then what was asked with each answer, or each tool with `Appro
 `feedback.enabled` set, the useful and not-useful buttons are a card of buttons under the reply. When Agent Kourier replaces a
 card, Teams marks the message `Edited`.
 
-The ending names who decided with a mention: Teams styles it and notifies the person, but shows it as `@someone`, as every mention
-that Agent Kourier makes on Teams, since the broker does not read people's names on Teams yet; so the ending reads `someone answered.`
+The ending names who decided with a mention, which Teams styles and which notifies the person. Teams shows the text that Agent
+Kourier writes in the mention, not the person's name, so when it edits the card the broker reads the name from the Bot Connector's
+list of the members of the channel's team, or uses the name it read of the person in the last hour, and writes it there: the ending
+reads, for example, `Alex Example answered.` It writes only the name's letters, marks, digits, `.`, `-` and `'`, and at most 64 units
+of it ([Limits](limits.md)). A name that cannot be read, because the list cannot be read or no longer lists the person, is written
+`someone`, and the mention still names the person. That Teams shows a name written so was not seen on a test tenant: the live check
+saw the text `someone`.
 
 In a card, what the agent, a person or an alert wrote is the text of a `TextRun` or the title of a choice, which Teams shows as the
 characters they hold: `<at>`, markdown, braces and links in them show as written, and none becomes a mention or a link. So Agent
@@ -108,11 +114,19 @@ presser or no message. Teams shows the line to the person who pressed, as a bann
 worker that decides recorded presses; Teams has no ephemeral messages, so a press refused there is told nothing more, and its card
 does not change.
 
-The broker does not read a channel's members on Microsoft Teams yet, so it cannot check who pressed: no press is decided. Each
-is tried again, with a line at WARN for each try, until the worker gives up on it, an hour after it was recorded
-([Limits](limits.md)), and logs that at ERROR. A
-question or an approval ends when it times out, which a recorded press holds off until the worker gives up on it, and a vote is not
-counted.
+The worker decides a press as it does on Slack: the person who pressed must be a member of the channel and no bot. On Microsoft
+Teams the broker reads the Bot Connector's list of the members of the channel's conversation, which Microsoft documents as the
+team's members for a team's channel, at every press, and finds the person by their Microsoft Entra object ID; someone the list does not hold is refused as
+not a member. Whether the person is a bot it reads from the account that list gave, or from the lists of the members of the teams
+it has heard from since it started: an account whose Teams ID begins `28:` is a bot's, and an ID no list holds counts as a bot's. A read that
+fails, or that is not done within 10 seconds ([Limits](limits.md)), is no answer: the press is tried again, with a line at WARN for
+each try, until the worker gives up on it, an hour after it was recorded, and logs that at ERROR. The list's paging, the fields of its
+answer and its errors are what Microsoft documents: no list was read on a test tenant.
+
+A Binding's `ChannelJoined` condition on Teams reads the Bot Connector's list of the channels of the channel's team: it is `True`
+when the list names the channel, and `False` with the reason `ChannelNotFound` when it does not. That list says nothing of an
+archive, so the reason is never `ChannelArchived` on Teams: whether the list leaves out an archived channel, or the channels of an
+archived team, is not known.
 
 What is written here of how Teams shows cards and answers presses was seen on a test tenant, in the web client, in a channel thread,
 in November 2026. In the same check, an edit that sent no text left the message's earlier text in place. Every edit that Agent
@@ -145,8 +159,8 @@ bounds it at 21, and neither can an approver group, whose field's cap is Slack's
 
 | Feature | Slack | Microsoft Teams | On a platform without it |
 |---|---|---|---|
-| Questions to a person: `interactions.askUser` | Works: Agent Kourier asks in the thread with buttons. | Taken, not decided yet: the question is a card that a person can press, and no press is decided, so it times out as an unanswered question does ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
-| Tool approvals: `interactions.toolApprovals`, and `interactions.approverGroups`, which requires it | Works: Agent Kourier asks in the thread with buttons. | `toolApprovals` is taken, and not decided yet: the approval is a card that a person can press, and no press is decided, so it times out as an approval nobody answered does ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). `approverGroups` is refused: `UnsupportedOnPlatform`. Remove it. | Refused: `UnsupportedOnPlatform`. Set `toolApprovals` to `false` and remove `approverGroups`. |
-| The useful and not-useful buttons: `feedback.enabled` | Works. | Taken, not counted yet: the buttons are a card under the reply that a person can press, and no vote is counted ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
+| Questions to a person: `interactions.askUser` | Works: Agent Kourier asks in the thread with buttons. | Works: the question is a card that a member of the channel's team presses ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
+| Tool approvals: `interactions.toolApprovals`, and `interactions.approverGroups`, which requires it | Works: Agent Kourier asks in the thread with buttons. | `toolApprovals` works: the approval is a card that a member of the channel's team presses ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). `approverGroups` is refused: `UnsupportedOnPlatform`. Remove it. | Refused: `UnsupportedOnPlatform`. Set `toolApprovals` to `false` and remove `approverGroups`. |
+| The useful and not-useful buttons: `feedback.enabled` | Works. | Works: the buttons are a card under the reply, and a vote of a member of the channel's team is counted ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
 | Alert triggers: a `botMessage` trigger in `chat.triggers` | Works. | Taken, in either `spec.teams.mode` and with or without `spec.teams.notificationURL`, and not served yet: Microsoft Teams does not send a bot the posts of another app (measured on a test tenant in November 2026), and the broker does not read them through Microsoft Graph yet, so no alert starts a turn. | Refused: `UnsupportedOnPlatform`. Remove the trigger. |
 | The acknowledgment reaction: `chat.acknowledgment` | Works. With no `emoji` the reaction is `hourglass_flowing_sand`. | Taken, and no reaction is shown, as on a platform without it. | Served, and no reaction is shown. A Binding whose acknowledgment is enabled and names an `emoji` has the condition `AcknowledgmentShown`, `False` with the reason `NoReactions` ([Binding status](binding-status.md#acknowledgmentshown)). |
