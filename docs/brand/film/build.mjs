@@ -12,7 +12,7 @@
 import { chromium } from 'playwright';
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -125,26 +125,34 @@ async function renderMg(browser, ar, beat, file) {
   await page.close();
 }
 
-// bare lays the sub-caption (or the command box in its place) out but does not draw it, so the caption sits exactly
-// where it does in the full overlay, which cutShot fades in over it.
-async function renderOverlay(browser, ar, beat, shot, file, bare = false) {
+// A beat's first shot brings its caption in as the motion-graphics headlines come in (film.html showHeadline): the
+// caption rises in from CAP_IN.cap and the sub-caption, or the command box, from CAP_IN.sub, each over 0.45 s.
+const CAP_IN = { cap: 0.1, sub: 0.5 }, CAP_IN_END = CAP_IN.sub + 0.45;
+
+// The overlay as one transparent PNG (file). With animate, file is a directory that gets the overlay's frames from 0
+// to CAP_IN_END, 0001.png on; cutShot holds the last one, which is the still overlay.
+async function renderOverlay(browser, ar, beat, shot, file, animate = false) {
   const [, , len, out, framing, , cmd] = shot, lay = layoutFor(ar, framing), card = lay.card, speed = len / out;
   const query = { overlay: 1, cap: beat.cap || '', sub: beat.sub || '', ...lay, card: card.join(','), lock: lay.lock.join(','), note: lay.note.join(',') };
   // The note under the footage says it is sped up in places. SPEED_CHIP=1 also labels each sped-up shot.
   if (process.env.SPEED_CHIP && speed > 1.05) query.speed = `${Math.round(speed * 10) / 10}\u00d7 speed`;
   if (cmd) query.cmd = cmd;
-  if (bare) query.hidesub = 1;
+  if (animate) Object.assign(query, { capin: CAP_IN.cap, subin: CAP_IN.sub });
   const page = await openPage(browser, ar, query);
-  await page.screenshot({ path: file, type: 'png', omitBackground: true });
+  if (animate) {
+    await rm(file, { recursive: true, force: true });
+    await mkdir(file, { recursive: true });
+    for (let i = 0; i <= frames(CAP_IN_END); i++) {
+      await page.evaluate(t => window.renderAt(t), i / FPS);
+      await page.screenshot({ path: join(file, `${String(i + 1).padStart(4, '0')}.png`), type: 'png', omitBackground: true });
+    }
+  } else await page.screenshot({ path: file, type: 'png', omitBackground: true });
   await page.close();
   return card;
 }
 
-// The sub-caption of a beat's first shot fades in after the caption, as the motion-graphics headlines do.
-const SUB_IN = { at: 0.45, dur: 0.35 };
-
-// With bare (the overlay without its sub-caption), the full overlay fades in over it at SUB_IN.
-function cutShot(ar, shot, card, overlay, file, bare) {
+// overlay is a PNG, or a directory of frames from renderOverlay's animate, whose last frame stays on to the end.
+function cutShot(ar, shot, card, overlay, file) {
   const [src, tin, len, out, framing, pointer] = shot, [W, H] = FORMATS[ar];
   const [fx, fy, fw, fh] = FRAMINGS[framing], k = SRC.scale;
   // The pointer is an arrow about 20 x 28 points whose tip is where it was aimed, with a soft glow around it. It is
@@ -154,9 +162,10 @@ function cutShot(ar, shot, card, overlay, file, bare) {
   const crop = `${fw * k}:${fh * k}:${fx * k}:${SRC.oy + fy * k}`, [cx, cy, cw, ch] = card;
   const filter = `[0:v]${unpoint}crop=${crop},setpts=(PTS-STARTPTS)*${(out / len).toFixed(6)},fps=${FPS},scale=${cw}:${ch}:flags=lanczos[fg];` +
     `color=c=0x0A1530:s=${W}x${H}:r=${FPS}[bg];[bg][fg]overlay=${cx}:${cy}:eof_action=repeat[a];` +
-    (bare ? `[a][2:v]overlay=0:0[b];[1:v]format=rgba,fade=in:st=${SUB_IN.at}:d=${SUB_IN.dur}:alpha=1[s];[b][s]overlay=0:0[v]` : '[a][1:v]overlay=0:0[v]');
+    '[a][1:v]overlay=0:0:eof_action=repeat[v]';
+  const seq = !overlay.endsWith('.png');
   run(FFMPEG, ['-y', '-loglevel', 'error', '-nostdin', '-ss', String(tin), '-t', String(len), '-i', join(HERE, 'raw', `${src}.mp4`),
-    '-loop', '1', '-i', overlay, ...(bare ? ['-loop', '1', '-i', bare] : []), '-filter_complex', filter, '-map', '[v]', '-frames:v', String(frames(out)),
+    ...(seq ? ['-framerate', String(FPS), '-i', join(overlay, '%04d.png')] : ['-loop', '1', '-i', overlay]), '-filter_complex', filter, '-map', '[v]', '-frames:v', String(frames(out)),
     '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '12', '-pix_fmt', 'yuv420p', '-r', String(FPS), '-an', file]);
 }
 
@@ -187,11 +196,12 @@ async function buildCut(browser, name, ar) {
         const shot = shotFor(ar, variants);
         const base = join(dir, `${String(i).padStart(2, '0')}-${beat.rec}-${j}`);
         if (!reuse(beat.rec, `${base}.mp4`)) {
-          const card = await renderOverlay(browser, ar, beat, shot, `${base}.png`);
-          // Only the first shot of a beat fades its sub-caption in; the beat's later shots keep it on screen.
-          const fades = j === 0 && (beat.sub || shot[6]);
-          if (fades) await renderOverlay(browser, ar, beat, shot, `${base}-bare.png`, true);
-          cutShot(ar, shot, card, `${base}.png`, `${base}.mp4`, fades ? `${base}-bare.png` : undefined);
+          // Only the first shot of a beat brings its caption in; the beat's later shots keep it on screen.
+          const overlay = j === 0 ? `${base}-in` : `${base}.png`;
+          const card = await renderOverlay(browser, ar, beat, shot, overlay, j === 0);
+          cutShot(ar, shot, card, overlay, `${base}.mp4`);
+          // The frames take about 25 MB a beat and nothing reads them again.
+          if (j === 0) await rm(overlay, { recursive: true, force: true });
         }
         segs.push(`${base}.mp4`);
       }
