@@ -17,7 +17,6 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/secret"
-	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/testhooks"
 )
 
@@ -103,11 +102,12 @@ type builtPlatform struct {
 // newPlatform builds the adapter of the connection's platform: the one place that names a platform. Slack and Microsoft Teams
 // (http mode; connectionOf refuses socket mode) exist; any other platform is a wiring error, which no retry mends. Each client gets
 // a transport of its own, so that its idle connections can be closed at shutdown. onConnection, if set, is told whether the
-// platform's connection is up: it is Config.OnConnection of the adapter. convs, the broker's store, keeps what a Microsoft Teams
-// connection's activities say of each channel (newTeamsConversations), so that a restart or a takeover does not post through the
-// global route until an activity comes; nil keeps it in memory, for a test that builds a platform alone. It refuses a connection that
-// needs the chat listener on a broker that has none (needsChatListener).
-func (c RunConfig) newPlatform(conn Connection, log *slog.Logger, onConnection func(connected bool), convs store.TeamsConversations) (builtPlatform, error) {
+// platform's connection is up: it is Config.OnConnection of the adapter. convs keeps what a Microsoft Teams connection's activities say
+// of each channel: the leader gives the broker's store (newTeamsConversations), so that a restart or a takeover does not post through
+// the global route until an activity comes, and a Teams connection with none is a wiring error; a Slack connection does not read it. It
+// refuses a connection that needs the chat listener on a broker that has none (needsChatListener).
+func (c RunConfig) newPlatform(conn Connection, log *slog.Logger, onConnection func(connected bool),
+	convs teams.ConversationStore) (builtPlatform, error) {
 	name := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
 	if err := c.needsChatListener(conn); err != nil {
 		return builtPlatform{}, err
@@ -126,13 +126,13 @@ func (c RunConfig) newPlatform(conn Connection, log *slog.Logger, onConnection f
 		return builtPlatform{Platform: slack.NewPlatform(api, name).WithLogger(log), closeIdle: transport.CloseIdleConnections}, nil
 	}
 	if conn.Platform == v1alpha1.PlatformTeams {
+		if convs == nil {
+			return builtPlatform{}, fmt.Errorf("%w: ChatConnection %s: a Microsoft Teams connection needs a store for its channels' conversations", ErrWiring, name)
+		}
 		transport := http.DefaultTransport.(*http.Transport).Clone()
 		tc := teams.Config{Connection: name, TenantID: conn.Teams.TenantID, AppID: conn.Teams.AppID,
 			ClientSecret: conn.Credentials[v1alpha1.TeamsClientSecretKey], Logger: log, OnConnection: onConnection,
-			HTTPClient: &http.Client{Transport: telemetry.Transport(transport, false), Timeout: teamsAPITimeout}}
-		if convs != nil {
-			tc.Conversations = newTeamsConversations(convs)
-		}
+			HTTPClient: &http.Client{Transport: telemetry.Transport(transport, false), Timeout: teamsAPITimeout}, Conversations: convs}
 		if c.teamsFakes != nil {
 			c.teamsFakes(&tc)
 		}

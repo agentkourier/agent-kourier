@@ -72,7 +72,7 @@ func teamsConn(ns, name string) Connection {
 }
 
 // A Microsoft Teams connection is built as the Teams adapter, which takes its requests on the chat listener and says what it cannot do; a
-// broker with no chat listener, or a connection with no client secret or tenant, is a wiring error.
+// broker with no chat listener, a connection with no client secret or tenant, or one with no store for its conversations, is a wiring error.
 func TestNewPlatformBuildsTheTeamsAdapter(t *testing.T) {
 	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
@@ -80,7 +80,7 @@ func TestNewPlatformBuildsTheTeamsAdapter(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = ln.Close() })
 	cfg := RunConfig{ChatListener: ln}
-	built, err := cfg.newPlatform(teamsConn("team-a", "teams"), nil, nil, nil)
+	built, err := cfg.newPlatform(teamsConn("team-a", "teams"), nil, nil, teams.NewMemoryConversations())
 	if err != nil || built.Platform == nil || built.closeIdle == nil {
 		t.Fatalf("newPlatform(teams) = %+v, %v; want the Teams adapter, and a way to close its connections", built, err)
 	}
@@ -95,7 +95,7 @@ func TestNewPlatformBuildsTheTeamsAdapter(t *testing.T) {
 	}
 
 	var none RunConfig
-	if _, err := none.newPlatform(teamsConn("team-a", "teams"), nil, nil, nil); !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), "AGENTKOURIER_CHAT_LISTEN") {
+	if _, err := none.newPlatform(teamsConn("team-a", "teams"), nil, nil, teams.NewMemoryConversations()); !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), "AGENTKOURIER_CHAT_LISTEN") {
 		t.Errorf("a teams connection on a broker with no chat listener: %v; want a wiring error that names AGENTKOURIER_CHAT_LISTEN", err)
 	}
 	if err := none.needsChatListener(teamsConn("team-a", "teams")); !errors.Is(err, ErrWiring) {
@@ -108,9 +108,12 @@ func TestNewPlatformBuildsTheTeamsAdapter(t *testing.T) {
 	} {
 		c := teamsConn("team-a", "teams")
 		edit(&c)
-		if built, err := cfg.newPlatform(c, nil, nil, nil); !errors.Is(err, ErrWiring) || built.Platform != nil {
+		if built, err := cfg.newPlatform(c, nil, nil, teams.NewMemoryConversations()); !errors.Is(err, ErrWiring) || built.Platform != nil {
 			t.Errorf("%s: newPlatform = %+v, %v; want a wiring error and no platform", name, built, err)
 		}
+	}
+	if built, err := cfg.newPlatform(teamsConn("team-a", "teams"), nil, nil, nil); !errors.Is(err, ErrWiring) || built.Platform != nil {
+		t.Errorf("no conversation store: newPlatform = %+v, %v; want a wiring error and no platform, not one that forgets its channels at a restart", built, err)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/bindingcheck"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/teams"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
@@ -56,9 +57,9 @@ type leaderHalf struct {
 // write of a replica that no longer leads is store.ErrDeposed, and ends the process, spec D37).
 func (h *leaderHalf) openPlatform(conn Connection, onConnection func(connected bool)) (builtPlatform, error) {
 	log := h.log.With("connection", v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name))
-	var convs store.TeamsConversations
+	var convs teams.ConversationStore
 	if h.st != nil {
-		convs = h.st
+		convs = newTeamsConversations(h.st)
 	}
 	p, err := h.cfg.newPlatform(conn, log, onConnection, convs)
 	if err != nil {
