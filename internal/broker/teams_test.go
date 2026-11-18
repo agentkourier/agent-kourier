@@ -242,3 +242,27 @@ func TestOpenPlatformKeepsTheTeamsConversationsInTheStore(t *testing.T) {
 		t.Errorf("the posts went to %v; want the recorded channel's service URL, then the global route", got)
 	}
 }
+
+// teamsInvokeWait is how long Microsoft Teams waited for the answer to an invoke before it gave up, measured on a test tenant on
+// 2026-11-18.
+const teamsInvokeWait = 13900 * time.Millisecond
+
+// The chat listener gives a Microsoft Teams connection's route the longer deadline its receiver asks for, and the request's whole bound
+// there (its read, that deadline and the answer's write) ends before Teams gives up on an invoke, so that a press answered at the
+// deadline is still heard.
+func TestTheTeamsRouteIsAnsweredBeforeTeamsGivesUpOnAnInvoke(t *testing.T) {
+	recv, err := teams.NewReceiver(teams.ReceiverConfig{Connection: "ns/teams", TenantID: teamsTestTenant, AppID: teamsTestApp,
+		Logger: testutil.DiscardLogger()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes := newChatRoutes(func(string) {}, testutil.DiscardLogger())
+	route := routes.register(v1alpha1.PlatformTeams, "ns/teams", recv)
+	defer route.drop()
+	if route.timeout <= chatHandlerTimeout {
+		t.Errorf("the Teams route's deadline is %v, no longer than the default %v", route.timeout, chatHandlerTimeout)
+	}
+	if bound := chatReadTimeout + route.timeout + chatAnswerTimeout; bound >= teamsInvokeWait {
+		t.Errorf("a Teams request is bounded at %v, not before Teams gives up at %v", bound, teamsInvokeWait)
+	}
+}

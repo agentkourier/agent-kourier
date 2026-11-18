@@ -1,6 +1,9 @@
 package chat
 
-import "net/http"
+import (
+	"net/http"
+	"time"
+)
 
 // HTTPReceiver is the part of a Platform that takes what the platform sends to Agent Kourier over HTTP (a webhook), in place of, or
 // beside, a connection that Run opens itself. A platform that takes nothing over HTTP does not implement it.
@@ -21,4 +24,16 @@ type HTTPReceiver interface {
 	// platform whose connections choose their transport, and this one does not use HTTP). It is asked each time the connection starts
 	// running here, and the handler it gives is routed to until that run ends or is stopped, and may be serving a request after it.
 	HTTPHandler() (http.Handler, bool)
+}
+
+// HTTPDeadline is an optional interface of the handler that HTTPReceiver.HTTPHandler returns, for a platform that waits longer for an
+// answer than the chat listener gives a handler by default (Slack's wait of about 3 seconds), and whose handler uses that time:
+// Microsoft Teams waits about 14 seconds for the answer to a press of a card, and its handler waits in the request for the press to be
+// decided (InlineDecider). The listener gives such a handler a context that ends HandlerTimeout after the body was read, in place of
+// its default, and the same time as any handler to write the answer after that. A value no longer than the default changes nothing.
+// The deadline is the route's, for every request of the connection, so a handler that answers some requests at once must not wait on
+// anything for them that its deadline would not cut.
+type HTTPDeadline interface {
+	// HandlerTimeout is the deadline of the handler's context, counted from when the request's body has been read.
+	HandlerTimeout() time.Duration
 }

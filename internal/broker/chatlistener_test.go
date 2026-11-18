@@ -231,6 +231,81 @@ func TestChatRoutesGiveTheHandlerADeadline(t *testing.T) {
 	}
 }
 
+// A route whose handler asks for a longer deadline (chat.HTTPDeadline) is given it, counted from when its body was read; one that asks
+// for less than the default, or does not ask, is given the default.
+func TestChatRoutesGiveARouteTheLongerDeadlineItAsksFor(t *testing.T) {
+	t.Parallel()
+	r := newChatRig(t)
+	for name, tc := range map[string]struct {
+		asks time.Duration // 0: the handler does not ask
+		want time.Duration
+	}{
+		"longer":  {9 * time.Second, 9 * time.Second},
+		"shorter": {time.Second, chatHandlerTimeout},
+		"none":    {0, chatHandlerTimeout},
+	} {
+		h := &heard{}
+		var route http.Handler = h
+		if tc.asks > 0 {
+			route = withDeadline{h, tc.asks}
+		}
+		r.routes.register(v1alpha1.PlatformTeams, "ns/"+name, route)
+		if code, _, _, _ := r.do(http.MethodPost, "/chat/teams/ns/"+name, nil); code != http.StatusOK {
+			t.Fatalf("%s: POST = %d", name, code)
+		}
+		_, _, dl := h.got()
+		if len(dl) != 1 || dl[0] > tc.want || dl[0] < tc.want-time.Second {
+			t.Errorf("%s: the handler's context had %v left, want about %s", name, dl, tc.want)
+		}
+	}
+}
+
+// A route given a longer deadline may answer after the server's own write bound, which is set for the default: it gets the same time to
+// answer after its own deadline as any route. Here the server's write bound is cut to 100 ms, so a handler that answers after 300 ms is
+// cut on a route with the default, and answered on one with its own deadline.
+func TestChatRoutesLetARouteWithALongerDeadlineAnswerAfterTheDefault(t *testing.T) {
+	t.Parallel()
+	routes := newChatRoutes(func(string) {}, testutil.DiscardLogger())
+	srv := httptest.NewUnstartedServer(routes)
+	srv.Config = newChatServer(routes)
+	srv.Config.WriteTimeout = 100 * time.Millisecond
+	srv.Start()
+	t.Cleanup(srv.Close)
+	late := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+		_, _ = io.WriteString(w, "late")
+	})
+	routes.register(v1alpha1.PlatformTeams, "ns/long", withDeadline{late, 5 * time.Second})
+	routes.register(v1alpha1.PlatformSlack, "ns/short", late)
+	post := func(path string) (string, error) {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			return "", err
+		}
+		defer func() { _ = resp.Body.Close() }()
+		b, err := io.ReadAll(resp.Body)
+		return string(b), err
+	}
+	if body, err := post("/chat/teams/ns/long"); err != nil || body != "late" {
+		t.Errorf("the route with a longer deadline: %q, %v; want its late answer", body, err)
+	}
+	if body, err := post("/chat/slack/ns/short"); err == nil && body == "late" {
+		t.Error("the route with the default deadline answered past the server's write bound: the test does not show the extension")
+	}
+}
+
+// withDeadline is a handler that asks for a deadline of its own (chat.HTTPDeadline).
+type withDeadline struct {
+	http.Handler
+	timeout time.Duration
+}
+
+func (d withDeadline) HandlerTimeout() time.Duration { return d.timeout }
+
 // The server's bounds are the constants, and they fit together: the headers are read within the time of the whole request, and the write
 // bound, which net/http starts once the headers are read, holds the body, the handler and a second to answer.
 func TestChatServerHasItsBounds(t *testing.T) {
@@ -239,7 +314,7 @@ func TestChatServerHasItsBounds(t *testing.T) {
 		srv.IdleTimeout != chatIdleTimeout || srv.MaxHeaderBytes != chatMaxHeaderBytes || srv.ErrorLog == nil {
 		t.Errorf("the chat server is %+v, want the chat listener's bounds", srv)
 	}
-	if chatReadHeaderTimeout > chatReadTimeout || chatWriteTimeout < chatReadTimeout+chatHandlerTimeout {
+	if chatReadHeaderTimeout > chatReadTimeout || chatWriteTimeout != chatReadTimeout+chatHandlerTimeout+chatAnswerTimeout {
 		t.Errorf("headers %s, request %s, handler %s, write %s: the headers must fit in the request, and the write bound must hold the body and the handler",
 			chatReadHeaderTimeout, chatReadTimeout, chatHandlerTimeout, chatWriteTimeout)
 	}

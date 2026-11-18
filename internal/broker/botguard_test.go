@@ -219,3 +219,18 @@ func TestTheGuardReadsOnlyTheBotsOfItsOwnPlatform(t *testing.T) {
 		t.Error("the guard of team-a no longer reads team-b's Slack bot as another connection's; want Slack's guard unchanged")
 	}
 }
+
+// A press whose platform waits for its decision is the Intake's, as every press is: the guard passes it and what it came to on.
+func TestTheGuardPassesAPressDecidedInTheWaitToTheIntake(t *testing.T) {
+	want := chat.PressOutcome{Decided: true, Text: "Your answer was recorded."}
+	var got []chat.Interaction
+	in := trigger.NewIntake(trigger.IntakeConfig{Logger: testutil.DiscardLogger(), DecidePress: func(_ context.Context, i chat.Interaction) (chat.PressOutcome, error) {
+		got = append(got, i)
+		return want, nil
+	}})
+	g := botGuard{in: in, self: "team-a/teams", platform: v1alpha1.PlatformTeams, log: testutil.DiscardLogger()}
+	out, err := g.DecidePress(t.Context(), chat.Interaction{User: "U1", PromptID: "ix-1"})
+	if err != nil || out != want || len(got) != 1 || got[0].PromptID != "ix-1" {
+		t.Errorf("DecidePress = %+v, %v, the Intake given %+v; want the Intake's outcome for the press", out, err, got)
+	}
+}

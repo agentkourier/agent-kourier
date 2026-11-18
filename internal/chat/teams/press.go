@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
 )
@@ -21,7 +22,14 @@ const actionInvoke = "adaptiveCard/action"
 // messageAnswer is the type of an invoke's answer whose value is a text that Teams shows the presser.
 const messageAnswer = "application/vnd.microsoft.activity.message"
 
-// What a press is answered with, in its request: before it is decided, which the press worker does after the answer.
+// pressWait is how long a press's invoke waits for the press to be decided (chat.InlineDecider), so that the presser is told what it came
+// to in the answer. It ends inside the invoke's deadline (invokeTimeout) with time left to answer: Teams gives up on an invoke after
+// about 14 seconds (13.9 measured on a test tenant on 2026-11-18). A press not decided by then is answered as received, and the press
+// worker decides it after, as it would have.
+const pressWait = 8 * time.Second
+
+// What a press is answered with, in its request, when it is not decided within pressWait, or the sink does not wait for its decision:
+// before it is decided, which the press worker does after the answer.
 const (
 	// textPromptReceived answers the press of a prompt's button. It says only what is known in the request: the press is recorded,
 	// and the card is replaced for everyone once the question is decided, by this press or another, or ends.
@@ -63,11 +71,14 @@ type ownData struct {
 	Value  *string `json:"value"`
 }
 
-// Invoke implements InvokeHandler. It answers a press of a card's Action.Execute at once, in the request, with a message for the
-// presser, and hands the press to sink first, which records it and returns (the press worker decides it after): received, when sink
-// took it; may not be recorded, when sink returned an error, since Teams does not send the press again; and cannot be taken, when the
-// press names no button of Agent Kourier's, or has no presser or message. Who may press, and whether the question is still open, are
-// decided by the worker after the answer, so a press refused there is answered as received, and its card does not change. Any other
+// Invoke implements InvokeHandler. It answers a press of a card's Action.Execute in the request, with a message for the presser. A sink
+// that decides presses in the request (chat.InlineDecider, the broker's) records the press and waits up to pressWait for the press worker
+// to decide it: a press decided so is answered with what it came to (recorded, already recorded, or why it was refused) when the
+// decision has words for the presser. A press not decided within the wait, or decided with nothing to tell, is answered as received, and
+// one whose decision is to be tried again too; the worker decides it after the answer, and a refusal then reaches nobody. Any other sink
+// records the press and returns, and the press is answered as received. A press whose recording returned an error is answered may not be
+// recorded, since Teams does not send the press again, and one that names no button of Agent Kourier's, or has no presser or message,
+// cannot be taken. The card changes for everyone when the question is decided, by its own update and not by this answer. Any other
 // invoke is answered 200 with no body.
 func (c *Client) Invoke(ctx context.Context, sink chat.Sink, inv Invoke) InvokeAnswer {
 	if inv.Name != actionInvoke {
@@ -79,14 +90,30 @@ func (c *Client) Invoke(ctx context.Context, sink chat.Sink, inv Invoke) InvokeA
 		c.log.DebugContext(ctx, "teams: a press was not taken; it names no button of Agent Kourier's, or no presser or message")
 		return toldPresser(textPressUnusable)
 	}
-	if err := sink.Interaction(ctx, press); err != nil {
+	out, err := c.decide(ctx, sink, press)
+	if err != nil {
 		c.log.WarnContext(ctx, "teams: a press could not be recorded; the presser was told to press again", "error", err.Error())
 		return toldPresser(textPressNotRecorded)
+	}
+	if out.Decided && out.Text != "" {
+		return toldPresser(out.Text)
 	}
 	if kind == pressButton {
 		return toldPresser(textButtonReceived)
 	}
 	return toldPresser(textPromptReceived)
+}
+
+// decide hands press to sink, and returns what it came to when sink decides it within pressWait (chat.InlineDecider); a sink that does
+// not decide presses records it, and nothing is known of its outcome.
+func (c *Client) decide(ctx context.Context, sink chat.Sink, press chat.Interaction) (chat.PressOutcome, error) {
+	d, ok := sink.(chat.InlineDecider)
+	if !ok {
+		return chat.PressOutcome{}, sink.Interaction(ctx, press)
+	}
+	wctx, cancel := context.WithTimeout(ctx, c.pressWait)
+	defer cancel()
+	return d.DecidePress(wctx, press)
 }
 
 // toldPresser is the answer to an invoke that Teams shows the presser as text.

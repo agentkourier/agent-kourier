@@ -33,6 +33,13 @@ const (
 	sinkRetryMax  = 4 * time.Second
 )
 
+// invokeTimeout is the deadline of a request's context that the receiver asks the chat listener for (chat.HTTPDeadline), in place of its
+// 3 seconds, so that a press can wait for its decision (pressWait) and be answered with it. Teams gives up on an invoke after about 14
+// seconds (13.9 measured on a test tenant on 2026-11-18); the listener's 2 seconds to read the request and its second to write the
+// answer, with this, come to 13. A message activity is answered at once, and only the fetch of the signing keys that its token may
+// start, bounded by keysFetchTimeout, can use the time.
+const invokeTimeout = 10 * time.Second
+
 // refusalLogEvery paces the WARN line of a refusal of a token the Bot Framework signed, for each reason: the first at once, and then one
 // line for each interval, which says how many were refused since the last. A connection whose app ID or clock is wrong refuses every
 // request, and would otherwise write a line for each.
@@ -112,10 +119,11 @@ type ReceiverConfig struct {
 // what an activity says of its channel to the ConversationStore. It is safe for concurrent use.
 //
 // Teams waits about 25 seconds for the answer to a message activity and about 14 for an invoke, while the chat listener gives a handler
-// 3 seconds. So the request does only what is quick: the token, the tenant, the dedup and a place on its channel's lane, and it answers
-// then; the sink and the store are called after, on the lane, one activity of a channel at a time and in the order the requests were
-// taken, with the lanes of different channels running at once. An invoke is answered in its request, by the InvokeHandler, which must
-// answer at once.
+// 3 seconds unless it asks for longer, as the receiver does (HandlerTimeout: invokeTimeout). A message's request does only what is
+// quick: the token, the tenant, the dedup and a place on its channel's lane, and it answers then; the sink and the store are called
+// after, on the lane, one activity of a channel at a time and in the order the requests were taken, with the lanes of different channels
+// running at once. An invoke is answered in its request, by the InvokeHandler, within the request's deadline: a press waits there for
+// its decision (Client.Invoke).
 //
 // What Teams sends again was measured on a test tenant on 2026-11-18: an activity answered 200, or one whose request it held until it
 // gave up, never; a message answered 503 at once, once, about 0.6 seconds later, with the same ID and body; an invoke answered 503, and
@@ -468,6 +476,10 @@ func (r *Receiver) telemetryContext(ctx context.Context) context.Context {
 func (r *Receiver) count(ctx context.Context, name, value string) {
 	telemetry.Count(ctx, name, value, r.conn)
 }
+
+// HandlerTimeout implements chat.HTTPDeadline: the chat listener gives the receiver's requests invokeTimeout, for a press to wait for its
+// decision in its invoke.
+func (r *Receiver) HandlerTimeout() time.Duration { return invokeTimeout }
 
 // answerInvoke writes the InvokeHandler's answer to inv, which it is given with sink, the live Serve's, or 200 with no body when there
 // is no handler.

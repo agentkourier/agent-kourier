@@ -24,7 +24,8 @@ func TestIntakeConfigConnectsTheTriggerPath(t *testing.T) {
 	cfg, err := newIntakeConfig(intakeParts{
 		conn: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"}, snapshot: func() *config.Snapshot { return nil },
 		submitter: s.sub, interactions: func(context.Context, chat.Interaction) error { return nil }, notice: s.notes.take,
-		starter: s.triggerStarter, threads: st, runs: st, replies: st, log: s.log,
+		decidePress: func(context.Context, chat.Interaction) (chat.PressOutcome, error) { return chat.PressOutcome{}, nil },
+		starter:     s.triggerStarter, threads: st, runs: st, replies: st, log: s.log,
 	})
 	if err != nil {
 		t.Fatalf("newIntakeConfig = %v", err)
@@ -36,8 +37,8 @@ func TestIntakeConfigConnectsTheTriggerPath(t *testing.T) {
 	if cfg.TriggerRuns != store.TriggerRuns(st) {
 		t.Errorf("TriggerRuns = %v; want the store: without it no limit holds", cfg.TriggerRuns)
 	}
-	if cfg.Notice == nil || cfg.Submitter == nil {
-		t.Errorf("Notice %t, Submitter %t; want both set", cfg.Notice != nil, cfg.Submitter != nil)
+	if cfg.Notice == nil || cfg.Submitter == nil || cfg.Interactions == nil || cfg.DecidePress == nil {
+		t.Errorf("Notice %t, Submitter %t, Interactions %t, DecidePress %t; want all set", cfg.Notice != nil, cfg.Submitter != nil, cfg.Interactions != nil, cfg.DecidePress != nil)
 	}
 
 	if cfg.OnStart == nil {
@@ -79,7 +80,8 @@ func TestIntakeConfigNamesThePartThatIsMissing(t *testing.T) {
 	full := intakeParts{
 		conn: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "slack-main"}, snapshot: func() *config.Snapshot { return nil },
 		submitter: s.sub, interactions: func(context.Context, chat.Interaction) error { return nil }, notice: s.notes.take,
-		starter: s.triggerStarter, threads: st, runs: st, replies: st, log: s.log,
+		decidePress: func(context.Context, chat.Interaction) (chat.PressOutcome, error) { return chat.PressOutcome{}, nil },
+		starter:     s.triggerStarter, threads: st, runs: st, replies: st, log: s.log,
 	}
 	for _, tc := range []struct {
 		part  string
@@ -89,6 +91,7 @@ func TestIntakeConfigNamesThePartThatIsMissing(t *testing.T) {
 		{"snapshot", func(p *intakeParts) { p.snapshot = nil }},
 		{"submitter", func(p *intakeParts) { p.submitter = nil }},
 		{"interactions", func(p *intakeParts) { p.interactions = nil }},
+		{"decidePress", func(p *intakeParts) { p.decidePress = nil }},
 		{"notice", func(p *intakeParts) { p.notice = nil }},
 		{"starter", func(p *intakeParts) { p.starter = nil }},
 		{"threads", func(p *intakeParts) { p.threads = nil }},

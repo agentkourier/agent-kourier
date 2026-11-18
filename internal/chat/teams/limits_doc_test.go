@@ -21,6 +21,7 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Duration(t, "teamsKeysMaxAge", keysMaxAge)
 	limitsdoc.Duration(t, "teamsKeysRefresh", keysRefreshAfter)
 	limitsdoc.Duration(t, "teamsKeysCheck", r.keysCheckEvery)
+	limitsdoc.Duration(t, "teamsInvokeDeadline", r.HandlerTimeout())
 	limitsdoc.Duration(t, "teamsKeysRetry", keysRetryBase)
 	limitsdoc.Duration(t, "teamsKeysRefetch", keysMinRefetch)
 	limitsdoc.Duration(t, "teamsKeysFetch", keysFetchTimeout)
@@ -51,12 +52,14 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Count(t, "teamsBodyUnits", maxBodyUnits)
 	limitsdoc.Count(t, "teamsMinBodyUnits", minBodyUnits)
 
-	// The reads of people: the bound a Client is built with, the page it asks for, and the names it keeps.
+	// The reads of people: the bound a Client is built with, the page it asks for, and the names it keeps; and the wait of a press for
+	// its decision, which a Client is built with too.
 	c, err := New(Config{Connection: testConn, TenantID: testTenant, AppID: testAppID, ClientSecret: secret.New(testClientSecret)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	limitsdoc.Duration(t, "teamsRosterTimeout", c.rosterTimeout)
+	limitsdoc.Duration(t, "teamsPressWait", c.pressWait)
 	limitsdoc.Count(t, "teamsRosterPage", rosterPage)
 	limitsdoc.Count(t, "teamsRosterMaxPages", rosterMaxPages)
 	limitsdoc.Count(t, "teamsNamesMax", namesMax)

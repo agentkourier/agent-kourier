@@ -302,7 +302,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	}
 	stops.add("binding-verification", startLoop(runCtx, func(c context.Context) error { prober.Run(c); return nil }))
 
-	interactions, err := parts.start(runCtx, mgr, ix, &stops)
+	presses, err := parts.start(runCtx, mgr, ix, &stops)
 	if err != nil {
 		return nil, err
 	}
@@ -320,7 +320,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	newIntake := func(conn Connection) (chat.Sink, error) {
 		ref := conn.Ref
 		intakeCfg, err := newIntakeConfig(intakeParts{
-			conn: ref, snapshot: boot.Reloader.Current, submitter: mgr, interactions: interactions, log: log,
+			conn: ref, snapshot: boot.Reloader.Current, submitter: mgr, interactions: presses.Interaction, decidePress: presses.DecidePress, log: log,
 			notice: sink.QueueNotice, starter: starter, threads: st, runs: st, replies: st,
 		})
 		if err != nil {

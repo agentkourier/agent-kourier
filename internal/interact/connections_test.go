@@ -179,8 +179,8 @@ func TestAPressOnAConnectionThatIsDownIsKept(t *testing.T) {
 
 type noDecider struct{}
 
-func (noDecider) Decide(_ context.Context, _ interact.PressDecision) error {
-	return errors.New("not decided")
+func (noDecider) Decide(_ context.Context, _ interact.PressDecision) (string, error) {
+	return "", errors.New("not decided")
 }
 
 // TestPausedPostsThePromptThroughTheConnectionOfThePause: the prompt's outbox row names the pause's connection, and a pause on a

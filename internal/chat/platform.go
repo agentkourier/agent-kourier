@@ -136,6 +136,30 @@ type BotMentionFilter interface {
 	AcceptsBotMention(channel, botID string) bool
 }
 
+// InlineDecider is an optional interface of a Sink, for a platform that answers a press in the press's own request and can show the
+// presser alone what that answer says (Microsoft Teams shows the answer to an Adaptive Card's press as a banner under the card). Such
+// a platform asks it in place of Interaction, and tells the presser what it returns; a Sink that does not implement it is given the
+// press by Interaction. A platform that answers a press before it hands it on (Slack) never asks it, so its presses take
+// Interaction's path as they always have.
+type InlineDecider interface {
+	// DecidePress takes i as Interaction does, an error meaning it was not taken, and then waits, until ctx ends, for i to be
+	// decided where Interaction's presses are decided (the press worker), which decides it once whether or not anyone waits. It
+	// returns what it knows when the decision is made, or when ctx ends: an outcome that is not Decided if the decision was not
+	// made in time, or is not final (the press is tried again later). The wait never decides a press itself.
+	DecidePress(ctx context.Context, i Interaction) (PressOutcome, error)
+}
+
+// PressOutcome is what became of a press, as InlineDecider.DecidePress knows it when it returns.
+type PressOutcome struct {
+	// Decided says the press was decided for good: Text then says what it came to. False says the press was taken and is still to
+	// be decided, later and once, so the presser cannot be told the outcome yet.
+	Decided bool
+	// Text is what the presser is to be told of a press that was Decided, in fixed words that hold nothing an agent or a person
+	// wrote: refused (and why), taken, or already recorded. Empty when the decision has nothing to tell them (a press that names
+	// another message than its prompt's is dropped without a word), and always empty when the press is not Decided.
+	Text string
+}
+
 // Stream is a message that grows while an agent writes it. The markdown that Append and Stop take is
 // untrusted, as Body.Markdown is.
 type Stream interface {

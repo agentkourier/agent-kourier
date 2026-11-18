@@ -31,8 +31,9 @@ type InvokeAnswer struct {
 }
 
 // InvokeHandler answers invokes. The receiver calls it in the request, after the token, the tenant and the dedup, with the request's
-// context, whose deadline is the chat listener's, and the Sink of the live Serve, and writes what it returns. It must answer at once:
-// what it hands the sink in the request must be quick (a press is recorded, and processed later), and any other work comes after.
+// context, whose deadline is the one the receiver asks the chat listener for (invokeTimeout), and the Sink of the live Serve, and writes
+// what it returns. It must answer before that deadline: what it waits for in the request is bounded inside it (a press waits up to
+// pressWait for its decision), and any other work comes after.
 type InvokeHandler interface {
 	Invoke(ctx context.Context, sink chat.Sink, inv Invoke) InvokeAnswer
 }

@@ -62,6 +62,7 @@ type Client struct {
 	convs         ConversationStore
 	names         *nameCache
 	rosterTimeout time.Duration // rosterTimeout; a test shortens it
+	pressWait     time.Duration // pressWait; a test shortens it
 	log           *slog.Logger
 	onConnection  func(bool)
 }
@@ -90,7 +91,8 @@ func New(cfg Config) (*Client, error) {
 	direct := noRedirects(client)
 	tokens := newTokenSource(cmp.Or(cfg.TokenURL, DefaultTokenURL(cfg.TenantID)), cfg.AppID, cfg.ClientSecret, direct, now)
 	c := &Client{conn: cfg.Connection, tenant: cfg.TenantID, convs: convs, log: log, onConnection: cfg.OnConnection,
-		api: &connector{client: direct, tokens: tokens, now: now}, names: newNameCache(now), rosterTimeout: rosterTimeout}
+		api: &connector{client: direct, tokens: tokens, now: now}, names: newNameCache(now), rosterTimeout: rosterTimeout,
+		pressWait: pressWait}
 	recv, err := NewReceiver(ReceiverConfig{Connection: cfg.Connection, TenantID: cfg.TenantID, AppID: cfg.AppID,
 		MetadataURL: cfg.MetadataURL, HTTPClient: client, Conversations: convs, Logger: log, Now: now, Invokes: c})
 	if err != nil {
@@ -346,4 +348,5 @@ func (c *Client) MarkBusy(context.Context, chat.Target, bool) error { return cha
 var (
 	_ chat.Platform     = (*Client)(nil)
 	_ chat.HTTPReceiver = (*Client)(nil)
+	_ chat.HTTPDeadline = (*Receiver)(nil)
 )
