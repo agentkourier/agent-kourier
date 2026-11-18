@@ -175,6 +175,43 @@ func TestTheTokenGoesToTheServiceURLAlone(t *testing.T) {
 	}
 }
 
+// An error of the transport names the call, and not the conversation or the message it was about: the URL's path holds both, and the
+// transport's own error repeats the URL.
+func TestATransportErrorNamesNoConversation(t *testing.T) {
+	t.Parallel()
+	ct := newClientTest(t)
+	ct.record(t, testChannel, testChannel)
+	errReset := errors.New("connection reset by the test")
+	base := ct.f.srv.Client().Transport
+	c, err := New(Config{Connection: testConn, TenantID: testTenant, AppID: testAppID, ClientSecret: secret.New(testClientSecret),
+		TokenURL: ct.f.srv.URL + "/token", Conversations: ct.convs, Logger: testutil.DiscardLogger(),
+		HTTPClient: &http.Client{Transport: roundTripper(func(r *http.Request) (*http.Response, error) {
+			if r.URL.Path == "/token" {
+				return base.RoundTrip(r)
+			}
+			return nil, errReset
+		})}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const msgID = "1794965012345"
+	conv := strings.TrimSuffix(strings.TrimPrefix(testChannel, "19:"), "@thread.tacv2")
+	_, postErr := c.Post(t.Context(), chat.Target{Conn: testConn, Channel: testChannel, Thread: msgID}, chat.Say(chat.Message{Fallback: "x"}), "tag")
+	updateErr := c.Update(t.Context(), c.RefAt(testChannel, msgID, msgID), chat.Say(chat.Message{Fallback: "x"}))
+	for name, err := range map[string]error{"Post": postErr, "Update": updateErr} {
+		if !errors.Is(err, errReset) {
+			t.Errorf("%s: %v, want the transport's error wrapped", name, err)
+			continue
+		}
+		if text := err.Error(); strings.Contains(text, conv) || strings.Contains(text, msgID) {
+			t.Errorf("%s: %q names the conversation or the message", name, text)
+		}
+		if v := c.Classify(chat.OpPost, err); v.Class != chat.Transient {
+			t.Errorf("%s: %+v, want Transient", name, v)
+		}
+	}
+}
+
 func TestClassify(t *testing.T) {
 	t.Parallel()
 	c := newClientTest(t).c

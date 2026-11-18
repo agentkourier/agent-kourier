@@ -108,6 +108,11 @@ func (c *connector) call(ctx context.Context, method, serviceURL, path string, b
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
+		// The *url.Error repeats the URL, whose path names the conversation and the message: only what it wraps is kept.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
 		return fmt.Errorf("teams: %s %s: %w", method, scrubPath(path), err)
 	}
 	defer func() { _ = resp.Body.Close() }()
