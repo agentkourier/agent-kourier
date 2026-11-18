@@ -170,7 +170,7 @@ func TestLaneRoomIsGivenBack(t *testing.T) {
 	l.Wait()
 }
 
-// Held counts the items of all lanes and HeldOn those of one, the one running included, and both fall to zero once they ran.
+// Held counts the items of all lanes, the ones running included, and falls to zero once they ran.
 func TestHeldCountsTheItemsHeld(t *testing.T) {
 	l := newLanes(PerChannel, Total)
 	running, release := make(chan struct{}), make(chan struct{})
@@ -180,23 +180,13 @@ func TestHeldCountsTheItemsHeld(t *testing.T) {
 	l.Submit("C1", func() {})
 	held := make(chan struct{})
 	l.Submit("C2", func() { <-held })
-	for _, tc := range []struct {
-		name      string
-		got, want int
-	}{
-		{"Held", l.Held(), 4},
-		{"HeldOn C1", l.HeldOn("C1"), 3},
-		{"HeldOn C2", l.HeldOn("C2"), 1},
-		{"HeldOn a channel with no lane", l.HeldOn("C3"), 0},
-	} {
-		if tc.got != tc.want {
-			t.Errorf("%s = %d, want %d", tc.name, tc.got, tc.want)
-		}
+	if n := l.Held(); n != 4 {
+		t.Errorf("Held = %d, want 4", n)
 	}
 	close(release)
 	close(held)
 	l.Wait()
-	if n, on := l.Held(), l.HeldOn("C1"); n != 0 || on != 0 {
-		t.Fatalf("after Wait Held = %d and HeldOn C1 = %d, want 0", n, on)
+	if n := l.Held(); n != 0 {
+		t.Fatalf("after Wait Held = %d, want 0", n)
 	}
 }

@@ -27,12 +27,3 @@ func (c *Client) PendingEvents() int {
 	}
 	return 0
 }
-
-// PendingOn is the events the lane of channel holds in the Run that is going: the one being handled and those waiting behind
-// it. It is zero when the channel has no lane, or before Run has begun.
-func (c *Client) PendingOn(channel string) int {
-	if l := c.lanes.Load(); l != nil {
-		return l.HeldOn(channel)
-	}
-	return 0
-}

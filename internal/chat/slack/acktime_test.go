@@ -30,9 +30,10 @@ func TestTheAcknowledgmentTimeIncludesTheWaitOnTheLane(t *testing.T) {
 	t.Cleanup(release) // runs before Run is ended, so that a failed check does not leave the sink stuck
 	waitConnected(t, fake)
 	ids := []string{send(t, fake, onChannel("C1", "1.1", "first")), send(t, fake, onChannel("C1", "2.1", "second"))}
-	for deadline := time.Now().Add(5 * time.Second); client.PendingOn("C1") != 2; time.Sleep(time.Millisecond) {
+	// Only C1 has events, so what the lanes hold is what C1's lane holds.
+	for deadline := time.Now().Add(5 * time.Second); client.PendingEvents() != 2; time.Sleep(time.Millisecond) {
 		if time.Now().After(deadline) {
-			t.Fatalf("C1's lane holds %d events, want 2", client.PendingOn("C1"))
+			t.Fatalf("C1's lane holds %d events, want 2", client.PendingEvents())
 		}
 	}
 	release()

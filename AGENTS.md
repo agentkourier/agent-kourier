@@ -29,7 +29,7 @@ internal/secret         redacting Secret value type
 internal/chat           chat-neutral model and chat.Platform; imports no session, config or store (chattest: conformance suite, fake platform, the Alertmanager trigger the tests share)
 internal/chat/slack     Slack adapter (Block Kit, Socket Mode); the only code, with the broker, that may import Slack or slack-go
 internal/chat/teams     Microsoft Teams adapter (http mode): Bot Framework token verifier, activities to the neutral model, conversation store, Entra token, Bot Connector posts and edits
-internal/chat/lanes     the per-channel lanes the Slack and Teams adapters hold what they took on, and their bounds; it reports a shed, and what a shed means stays in each adapter (a leaf: imports nothing of the module)
+internal/chat/lanes     the per-channel lanes in which the Slack and Teams adapters hold what they took on, and their bounds; it reports a shed, and what a shed means stays in each adapter (a leaf: imports nothing of the module)
 internal/trigger        message intake: chat.triggers matched (spec 8.2), trigger threads and limits, bot mentions, Submit to the session manager, the dry run's Replay
 internal/store          SQLite and Postgres persistence, leader fencing
 internal/outbox         durable outbound posting (the versioned neutral message)

@@ -112,13 +112,3 @@ func (l *Lanes) Held() int {
 	defer l.mu.Unlock()
 	return l.pending
 }
-
-// HeldOn is the items the lane of channel holds now, the one being run included, and zero when the channel has no lane.
-func (l *Lanes) HeldOn(channel string) int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if ln := l.byChannel[channel]; ln != nil {
-		return ln.held
-	}
-	return 0
-}
