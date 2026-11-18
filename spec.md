@@ -624,9 +624,21 @@ Rules:
   `<span title>` in a paragraph of its own at the end of a text (after the closing fence of a block; a zero-width tag at the start
   changed how Teams parsed the first line, and the span was measured only at the end), or as the `id` of the first element of a card's
   body that has none when the post is a card alone (a prompt's and an ending's first element is a RichTextBlock or a TextBlock, the two
-  types whose `id` was measured). A text with a card of buttons carries it in the text: Teams answers such an activity 202 with no ID
-  and shows it as two messages, the text with the span and the buttons' card with no tag, so Post fails (no ID), the outbox's lookup
-  adopts the text, and the card is a message Agent Kourier never has the ID of (its shape is a later change).
+  types whose `id` was measured). A message with text and buttons is two posts (owner, 2026-11-18): Teams answers one activity of
+  text and a card 202 with no ID and shows it as two messages, the text with the span and the buttons' card with no tag (measured), so
+  Post sends the text alone (its ID is the Ref, it keeps its markdown and carries the tag), then the buttons as a card alone in the
+  text's thread, whose actions' data name the text (`of`). A press of that card is an Interaction whose At is the text, in the card's
+  thread, so that the feedback check of the press's message against the outbox row holds; the press's key stays the invoke's. A
+  message of buttons and no text is one card post, as a prompt is. Each post has the 80 KiB budget; the card is sized naming a text ID
+  of the longest (64 bytes), and one over it refuses the message before any post. A failed post of the buttons is logged at WARN and
+  counted as `PostButtons`, and Post returns the text with no error (an error would have the outbox adopt the text and post nothing
+  more); a crash between the posts leaves the text, which the lookup adopts. Update edits the text with no attachment and shows its
+  buttons once, by the cards the Client remembers (4096, in memory, oldest first out): posted by the first update that has them (a
+  live reply's last edit), PUT when they change, no call when they are the same; a failed post fails the update, which the caller
+  retries; a card Teams took with no ID is remembered. After a restart, on another replica or past the bound, an update with buttons
+  posts them again. No edit follows a button's press (the presser's words are the invoke's answer), and nothing takes buttons off.
+  Not measured: that the two posts each get 201 and an ID, and that the card's press names the card's message (both as measured for
+  a prompt's card).
   No `<` of the agent's, a person's or an alert's text reaches Teams raw, so only the adapter writes a span. Find reads the thread's
   replies with the same bounds, or for a post with no thread the channel's messages (`GET …/channels/{channel}/messages`, at most 4
   pages, the first that Graph gives: Microsoft documents them as sorted by each thread's last change, not in which direction, and the

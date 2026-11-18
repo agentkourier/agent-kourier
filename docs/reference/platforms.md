@@ -66,8 +66,8 @@ the text so far and then, under it, the tool calls as a list in a quote, one lin
 result` for one with no result when the turn ended. The list holds the latest 20 steps, its `Working…` lines among them, under a
 line such as `5 earlier steps are not shown.` With `chat.progress: steps-and-activity`, the default, a gap with nothing new
 also adds a line, `Working…`, which the next tool call takes over, or which ends as `Wrote the answer`, `Wrote an update`, `Finished`, `Waiting for your answer` or `Stopped`.
-The final edit keeps the list under the answer, as a record of what the agent did, and, when `feedback.enabled` is set, a card of
-the useful and not-useful buttons under it. With `chat.progress: activity` there is no list: the message shows
+The final edit keeps the list under the answer, as a record of what the agent did, and, when `feedback.enabled` is set, posts the
+useful and not-useful buttons after it, as a card of their own ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). With `chat.progress: activity` there is no list: the message shows
 one `Working…` line that counts the steps. An edit that Teams' budget for a message cannot hold with its list is sent again
 without it, and the reply lists no steps from then on.
 
@@ -89,8 +89,20 @@ them), the time it closes, and Submit. An approval of one tool shows its name an
 tool numbered with its arguments and a choice of Approve or Deny under them, then Submit, Approve all and Deny all. When the question
 or approval ends, Agent Kourier replaces the card with one that has no controls: who answered or cancelled it, or that nobody
 answered in time, then what was asked with each answer, or each tool with `Approved` or `Denied` and its arguments. With
-`feedback.enabled` set, the useful and not-useful buttons are a card of buttons under the reply. When Agent Kourier replaces a
+`feedback.enabled` set, the useful and not-useful buttons are a card of their own, a message that Agent Kourier posts in the thread
+right after the reply's text, or, for a reply that it edits as the agent works, after the final edit. When Agent Kourier replaces a
 card, Teams marks the message `Edited`.
+
+A reply's text and its buttons are two posts because Teams does not take them as one: on a test tenant in November 2026, one message
+of text and a card was answered with no ID and shown as two messages, the text and a card of the buttons alone, so the broker could
+not learn either one's ID. Posted apart, each is a message of its own, and the text is the message that the broker records as the reply. A press of
+the buttons is taken as a press of that text, which the card names. What the person who pressed is told shows under the card they
+pressed, and no edit follows a vote. If the post of the buttons fails, the text stands; the next edit of the reply that has the
+buttons posts them, and a reply that is posted and never edited after keeps its text without them. The broker remembers which
+buttons it posted under which text, so that an edit with the same buttons does not post them again: it forgets the oldest past 4096,
+and remembers nothing across a restart or between replicas, where such an edit posts them a second time ([Limits](limits.md)). The
+two posts were not checked on a test tenant: that Teams answers each with its ID, as it did for every card posted alone, and that a
+press of the card names the card's message, as it did for a question's card, follow from the checks above.
 
 The ending names who decided with a mention, which Teams styles and which notifies the person. Teams shows the text that Agent
 Kourier writes in the mention, not the person's name, so when it edits the card the broker reads the name from the Bot Connector's
@@ -141,9 +153,9 @@ archived team, is not known.
 What is written here of how Teams shows cards and answers presses was seen on a test tenant, in the web client, in a channel thread,
 in November 2026. In the same check, an edit that sent no text left the message's earlier text in place. Every edit that Agent
 Kourier makes on Teams sends the text a message is to show: a reply's edits always hold text, and a question's card, and the card
-that replaces it, have none to leave. Whether an edit that sends no card takes away a card the message had was not seen: if it does not,
-a card of buttons would stay, and could still be pressed, on a message that an edit meant to take it off. A reply gets its buttons
-on its last edit, and no later edit of Agent Kourier's is meant to take them off.
+that replaces it, have none to leave. A reply's edits send its text alone: its buttons are a message of their own, which an edit
+of the reply posts if it has not been posted, and edits only when the buttons change. A reply gets its buttons on its last edit, and
+no later edit of Agent Kourier's is meant to take them off; an edit with none leaves the card of buttons as it is.
 
 ## Earlier replies on Microsoft Teams
 
@@ -188,7 +200,8 @@ started, a post that was sent and not recorded before a crash among them, it ask
 leader queued and has not tried is sent with no lookup. On Slack the tag is in the message's metadata. On
 Microsoft Teams it is in a part of the post that people do not see: an empty `<span>` whose `title` is the tag's carrier, in a paragraph
 of its own at the end of a text, or the `id` of the first element of a card's body when the card is the whole post (a question's or an
-approval's card, and the card that ends one). A reply with buttons, such as the useful and not-useful buttons, carries it in its text. An edit of a post
+approval's card, and the card that ends one). A reply with buttons, such as the useful and not-useful buttons, carries it in its text,
+and the card of its buttons, a post of its own, carries none. An edit of a post
 does not carry the tag: the outbox looks for a post only until it has recorded where the post landed, and nothing edits a post before
 then. The broker looks for it through
 Microsoft Graph, with the same token, permission and bounds as a read of a thread's replies ([Limits](limits.md#what-the-broker-keeps-and-logs)): the
@@ -202,10 +215,10 @@ opened a thread, and so did the `id` of the two kinds of card element that the b
 little space under the text. The span was tried only at the end of a text. Teams' mobile and desktop clients, screen readers, Teams'
 search and notifications, and the order in which Graph lists a channel's messages were not checked.
 
-A reply with buttons is sent as one message of text and a card, which Teams answers with no ID and shows as two messages: the text,
-with the span, and a second message that holds only the buttons, with no tag. The broker does not learn either one's ID from the post,
-so it looks the reply up, finds the text by its tag and records it; the message of buttons is one that the broker never knows the ID
-of, and a later edit of the reply does not reach it.
+A reply with buttons is posted as its text and then a card of its buttons, two messages that each get their own ID: Teams answers one
+message of text and a card with no ID, and shows it as two messages, the text with the span and a card of the buttons with no tag
+(seen on a test tenant in November 2026). If the broker stops between the two posts, the outbox's lookup finds the text by its tag and
+records it, and the buttons are posted only if the reply is edited with them after.
 
 A post that the pages read do not hold, a channel whose team the broker does not know yet, a read that runs out of time after Graph
 gave a page, a page that Graph names that is not Graph's or that the read already took, an answer longer than 8 MiB, and a refusal of
@@ -239,7 +252,7 @@ bounds it at 21, and neither can an approver group, whose field's cap is Slack's
 |---|---|---|---|
 | Questions to a person: `interactions.askUser` | Works: Agent Kourier asks in the thread with buttons. | Works: the question is a card that a member of the channel's team presses ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
 | Tool approvals: `interactions.toolApprovals`, and `interactions.approverGroups`, which requires it | Works: Agent Kourier asks in the thread with buttons. | `toolApprovals` works: the approval is a card that a member of the channel's team presses ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). `approverGroups` is refused: `UnsupportedOnPlatform`. Remove it. | Refused: `UnsupportedOnPlatform`. Set `toolApprovals` to `false` and remove `approverGroups`. |
-| The useful and not-useful buttons: `feedback.enabled` | Works. | Works: the buttons are a card under the reply, and a vote of a member of the channel's team is counted ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
+| The useful and not-useful buttons: `feedback.enabled` | Works. | Works: the buttons are a card of their own, posted after the reply, and a vote of a member of the channel's team is counted ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
 | Alert triggers: a `botMessage` trigger in `chat.triggers` | Works. | Taken, in either `spec.teams.mode` and with or without `spec.teams.notificationURL`, and not served yet: Microsoft Teams does not send a bot the posts of another app (measured on a test tenant in November 2026), and the broker does not watch a channel through Microsoft Graph yet, so no alert starts a turn. It reads Graph only for a thread's replies, for a mention's context ([Earlier replies on Microsoft Teams](#earlier-replies-on-microsoft-teams)), and to find its own posts again ([Finding a post again on Microsoft Teams](#finding-a-post-again-on-microsoft-teams)). | Refused: `UnsupportedOnPlatform`. Remove the trigger. |
 | The earlier replies a mentioned turn carries: `chat.threadReplies: mention`, the thread of a `personMessage` trigger, and a bot's mention | Works. | Works for a person's mention, read through Microsoft Graph ([Earlier replies on Microsoft Teams](#earlier-replies-on-microsoft-teams)). The first turn of a session that a person's mention starts in a thread also carries the thread's first message, such as an alert's card, whatever `chat.threadReplies` says. Teams sends a bot no other app's posts, so no bot's mention reaches it. | Served: the turn carries the mentioned message alone. |
 | The acknowledgment reaction: `chat.acknowledgment` | Works. With no `emoji` the reaction is `hourglass_flowing_sand`. | Taken, and no reaction is shown, as on a platform without it. | Served, and no reaction is shown. A Binding whose acknowledgment is enabled and names an `emoji` has the condition `AcknowledgmentShown`, `False` with the reason `NoReactions` ([Binding status](binding-status.md#acknowledgmentshown)). |
