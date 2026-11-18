@@ -44,6 +44,9 @@ func gone403(ae *APIError) bool { return ae.Status == http.StatusForbidden && go
 // permission; Microsoft documents no other 403 for the read, and the body of this one was not seen); a 404 is Permanent,
 // ReasonChannelGone (the team, the channel or the thread is gone); a 400 is Permanent, ReasonOther.
 //
+// The connect call of Socket mode (*SocketError) answered 401 is FatalAuth, as the Bot Connector's 401 is: the bot's token is refused.
+// Its other answers, every region's 403 among them, are Transient, with a 429's Retry-After.
+//
 // Anything else may pass on another try and is Transient: a 429, with its Retry-After (at least a second) as RetryAfter; a 412, a
 // 5xx, a timeout, a network failure, a cancelled context, and a read of a channel whose team is not known yet. The caller's
 // own backoff paces the retry (the outbox's doubles, with jitter where the caller adds it); the Client does not retry inside a
@@ -53,8 +56,14 @@ func (c *Client) Classify(_ chat.Op, err error) chat.Verdict {
 		te *TokenRequestError
 		ae *APIError
 		ge *GraphError
+		se *SocketError
 	)
 	switch {
+	case errors.As(err, &se):
+		if se.Status == http.StatusUnauthorized {
+			return chat.Verdict{Class: chat.FatalAuth}
+		}
+		return transient(se.Status, se.RetryAfter)
 	case errors.As(err, &te):
 		switch {
 		case te.rejected() && te.Graph:

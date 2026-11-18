@@ -82,6 +82,8 @@ func New(reg prometheus.Registerer, provider trace.TracerProvider) (*Observer, e
 		{"agentkourier_teams_tokens_refused_total", "Requests to a teams connection whose Bot Framework token was refused (answered 401), by the check it failed.", []string{"reason", ConnectionLabel}},
 		{"agentkourier_teams_activities_shed_total", "Activities Microsoft Teams sent to a teams connection that were answered 503, which Teams sends again once: channel_backlog or adapter_backlog (the lanes were full) or not_running (the connection was not taking them).", []string{"reason", ConnectionLabel}},
 		{"agentkourier_teams_activities_lost_total", "Activities Microsoft Teams sent to a teams connection that were answered 200 and never handed on, which Teams does not send again: stopped (dropped when the drain at the stop ran out) or not_taken (the broker did not take the message in its tries).", []string{"reason", ConnectionLabel}},
+		{"agentkourier_teams_socket_envelopes_total", "Envelopes Microsoft Teams sent over a teams connection's sockets in socket mode, by type (activity, invoke, other) and outcome: what the activity was answered with (accepted, duplicate, invoke, malformed, wrong_tenant, not_running, shed), busy (answered 503: the connection's sockets were handling as many envelopes as they may) or unanswered (the reply frame could not be sent).", []string{"type", "outcome", ConnectionLabel}},
+		{"agentkourier_teams_socket_reconnects_total", "Connects of a teams connection's socket in socket mode that follow another, by region and the reason for it: expiry (a replacement before the socket's token expired), a SocketClosing code (socket_mode_disabled, replaced, token_reused, no_identity, closing_other), closed, server_timeout, ready_timeout, rate_limited, refused, unavailable or failed.", []string{"region", "reason", ConnectionLabel}},
 		{"agentkourier_slack_http_retries_total", "Signed requests to a connection in HTTP mode that Slack marked as a retry (X-Slack-Retry-Num): a request it sent again because an earlier one was not answered 200 in time.", []string{ConnectionLabel}},
 	} {
 		c := prometheus.NewCounterVec(prometheus.CounterOpts{Name: d.name, Help: d.help}, d.labels)
@@ -103,6 +105,7 @@ func New(reg prometheus.Registerer, provider trace.TracerProvider) (*Observer, e
 		{"agentkourier_agent_first_text_duration_seconds", "Execution attempt to its first nonempty text event; recovered snapshots excluded.", []string{"operation"}},
 		{"agentkourier_outbox_delivery_duration_seconds", "Durable row creation to successful delivery or adoption.", []string{"role", "mode"}},
 		{"agentkourier_interaction_wait_seconds", "Interaction creation to its first durable resolution.", []string{"kind", "outcome"}},
+		{"agentkourier_teams_socket_gap_seconds", "Intervals in which no socket of a teams connection in socket mode was ready, from the start of its run or the end of its last ready socket to the next ready one, or to the end of the run. Teams delivers nothing in them, and does not send it later.", []string{ConnectionLabel}},
 	} {
 		h := prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: d.name, Help: d.help, Buckets: durationBuckets()}, d.labels)
 		if err := reg.Register(h); err != nil {
@@ -119,12 +122,16 @@ func New(reg prometheus.Registerer, provider trace.TracerProvider) (*Observer, e
 	}{
 		{"agentkourier_sessions_active", "Conversation runners currently active in this process.", nil},
 		{"agentkourier_sessions_paused", "Conversation runners currently awaiting input in this process.", nil},
+		{"agentkourier_teams_socket_ready", "Whether a teams connection in socket mode has a ready socket in the region (1) or not (0).", []string{"region", ConnectionLabel}},
 	} {
 		g := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: d.name, Help: d.help}, d.labels)
 		if err := reg.Register(g); err != nil {
 			return nil, err
 		}
 		o.gauges[d.name] = g
+		if slices.Contains(d.labels, ConnectionLabel) {
+			o.perConnection = append(o.perConnection, g)
+		}
 	}
 	for _, c := range []prometheus.Collector{collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{})} {
 		if err := reg.Register(c); err != nil {
@@ -258,6 +265,15 @@ func Observe(ctx context.Context, name string, d time.Duration, labels ...string
 	if o := observer(ctx); o != nil {
 		if h := o.histograms[name]; h != nil {
 			h.WithLabelValues(labels...).Observe(max(d.Seconds(), 0))
+		}
+	}
+}
+
+// SetGauge sets the series of the gauge name under labels to v.
+func SetGauge(ctx context.Context, name string, v float64, labels ...string) {
+	if o := observer(ctx); o != nil {
+		if g := o.gauges[name]; g != nil {
+			g.WithLabelValues(labels...).Set(v)
 		}
 	}
 }

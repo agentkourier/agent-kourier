@@ -226,6 +226,10 @@ var connectionSeries = []struct {
 	{"agentkourier_teams_tokens_refused_total", []string{"expired"}},
 	{"agentkourier_teams_activities_shed_total", []string{"channel_backlog"}},
 	{"agentkourier_teams_activities_lost_total", []string{"not_taken"}},
+	{"agentkourier_teams_socket_envelopes_total", []string{"activity", "accepted"}},
+	{"agentkourier_teams_socket_reconnects_total", []string{"amer", "expiry"}},
+	{"agentkourier_teams_socket_gap_seconds", []string{}},
+	{"agentkourier_teams_socket_ready", []string{"amer"}},
 }
 
 // seriesOf returns the values of the connection label of every series of the named family.
@@ -259,9 +263,12 @@ func TestForgetConnectionDeletesOnlyThatConnectionsSeries(t *testing.T) {
 	for _, conn := range []string{kept, gone} {
 		for _, s := range connectionSeries {
 			labels := append(slices.Clone(s.labels), conn)
-			if strings.HasSuffix(s.name, "_seconds") {
+			switch {
+			case strings.HasSuffix(s.name, "_seconds"):
 				Observe(ctx, s.name, time.Second, labels...)
-			} else {
+			case strings.HasSuffix(s.name, "_ready"):
+				SetGauge(ctx, s.name, 1, labels...)
+			default:
 				Count(ctx, s.name, labels...)
 			}
 		}

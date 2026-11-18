@@ -3,6 +3,7 @@ package teams
 import (
 	"cmp"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -42,14 +43,28 @@ type Config struct {
 	Logger *slog.Logger
 	// Now is the clock of the tokens, the keys and the dedup; time.Now if nil.
 	Now func() time.Time
-	// OnConnection, if set, is told true when Run starts taking activities and false when it stops. It is called from the
-	// goroutine of Run, in order; it must not block.
+	// OnConnection, if set, is told whether the connection takes activities: in http mode true when Run starts taking them and false
+	// when it stops; in socket mode true when a socket is ready and none was, and false when the last ready one ends or Run stops. It
+	// is called from the goroutine of Run, in order; it must not block.
 	OnConnection func(connected bool)
+	// Socket says the connection is in socket mode (spec.teams.mode socket): Run opens its sockets to Microsoft (socket.go) and the
+	// Client offers no handler for the chat listener. False is http mode.
+	Socket bool
+	// SocketURL is the connect endpoint of a region in socket mode; https://<region>.botapi.skype.com/v3/websockets/connect if nil. A
+	// test sets a fake's.
+	SocketURL func(region string) string
+	// SocketTLS is the TLS config of a socket's WebSocket; nil trusts the system's roots. A test sets one that trusts a fake's
+	// certificate. The connect call and the negotiate go through HTTPClient.
+	SocketTLS *tls.Config
+	// OnSocketGap, if set, is told of each interval in socket mode in which no socket was ready, when a socket is ready again (Gap): what
+	// Teams sent in it was not delivered. It is called from the goroutine of Run, in order; it must not block.
+	OnSocketGap func(Gap)
 }
 
-// Client is a Microsoft Teams connection as a chat.Platform, in http mode: Teams sends the bot's activities to the connection's
-// route on the chat listener (HTTPHandler, the Receiver), and the Client posts, replies and edits through the Bot Connector with
-// the bot's token from Microsoft Entra.
+// Client is a Microsoft Teams connection as a chat.Platform. In http mode Teams sends the bot's activities to the connection's route
+// on the chat listener (HTTPHandler, the Receiver); in socket mode Run opens a socket to Microsoft in each region that answers, and the
+// activities come on it to the same Receiver (socket.go). Either way the Client posts, replies and edits through the Bot Connector
+// with the bot's token from Microsoft Entra.
 //
 // A message's progress steps are a list under the rest of the message (Caps.Steps), which each update of a live reply shows anew.
 // A prompt, a prompt of tools among them, is an Adaptive Card, and so are a message's buttons; the Client is the Receiver's
@@ -74,6 +89,7 @@ type Client struct {
 	threadTimeout time.Duration                             // threadTimeout; a test shortens it
 	log           *slog.Logger
 	onConnection  func(bool)
+	sockets       *sockets // the connection's sockets in socket mode, nil in http mode
 }
 
 // New returns the Client of cfg. It refuses a config with no connection, tenant, app or secret.
@@ -118,19 +134,26 @@ func New(cfg Config) (*Client, error) {
 		return nil, err
 	}
 	c.recv = recv
+	if cfg.Socket {
+		c.sockets = newSockets(cfg.Connection, recv, tokens, direct, cfg, log)
+	}
 	return c, nil
 }
 
 // Run takes the activities that Teams sends the connection and hands them to sink until ctx ends (Receiver.Serve). Serve starts
 // first, so that what Teams sends while the bot's token is fetched is taken and counted; then Run gets the token, so that a client
 // secret, app or tenant that Microsoft Entra refuses ends Run, with Serve, and an error that Classify says is FatalAuth. A fetch that
-// fails otherwise is logged, and Run goes on, since the token is fetched again when a post needs it. OnConnection is told up once the
-// token was asked for, and down when Serve has returned.
+// fails otherwise is logged, and Run goes on, since the token is fetched again when a post needs it. In http mode OnConnection is told
+// up once the token was asked for, and down when Serve has returned.
+//
+// In socket mode Run then runs the connection's sockets until ctx ends (sockets.run), and returns sooner with the error that ends them:
+// the bot's credentials rejected (FatalAuth), or every region refusing the socket (an error Classify says may pass). It closes the
+// sockets before it returns, so a run that ends, as the leader's does when it stops leading, leaves none open.
 func (c *Client) Run(ctx context.Context, sink chat.Sink) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	served := make(chan error, 1)
-	go func() { served <- c.recv.Serve(ctx, sink) }()
+	go func() { served <- c.recv.serve(ctx, sink, c.sockets == nil) }()
 	if _, err := c.api.tokens.token(ctx); err != nil {
 		if c.Classify(chat.OpOther, err).Class == chat.FatalAuth {
 			cancel()
@@ -142,6 +165,12 @@ func (c *Client) Run(ctx context.Context, sink chat.Sink) error {
 				"error", err.Error())
 		}
 	}
+	if c.sockets != nil {
+		err := c.sockets.run(ctx)
+		cancel()
+		_ = <-served // the receiver drains what it took; its error says only that it was cancelled
+		return err
+	}
 	if c.onConnection != nil {
 		c.onConnection(true)
 		defer c.onConnection(false)
@@ -149,8 +178,14 @@ func (c *Client) Run(ctx context.Context, sink chat.Sink) error {
 	return <-served
 }
 
-// HTTPHandler implements chat.HTTPReceiver: the Receiver, the handler of the connection's route.
-func (c *Client) HTTPHandler() (http.Handler, bool) { return c.recv, true }
+// HTTPHandler implements chat.HTTPReceiver: the Receiver, the handler of the connection's route, in http mode. In socket mode there is
+// none: the activities come on the sockets.
+func (c *Client) HTTPHandler() (http.Handler, bool) {
+	if c.sockets != nil {
+		return nil, false
+	}
+	return c.recv, true
+}
 
 // conversation is the Bot Connector's conversation of a thread: the channel with the thread's root, or the channel alone for a post
 // that starts a thread.

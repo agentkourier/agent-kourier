@@ -150,10 +150,9 @@ func TestAChatConnectionOnAPlatformWithNoAdapterIsAWiringError(t *testing.T) {
 	}
 }
 
-// A teams ChatConnection in http mode is chosen with its client secret and its spec.teams, as the broker's own connection and as a team
-// one; one in socket mode is refused at connection start with its client secret in place: as the broker's own connection it is a wiring
-// error, which stops the start, and as a team connection it is its Err, which leaves it not started beside a Slack connection that is.
-func TestATeamsChatConnectionRunsInHTTPModeAndIsRefusedInSocketMode(t *testing.T) {
+// A teams ChatConnection is chosen with its client secret and its spec.teams, its mode with it, as the broker's own connection and as a
+// team one, in either mode.
+func TestATeamsChatConnectionIsChosenInEitherMode(t *testing.T) {
 	const tenant, app = "11111111-2222-4333-8444-555555555555", "22222222-3333-4444-8555-666666666666"
 	for _, mode := range []v1alpha1.TeamsMode{"", v1alpha1.TeamsModeHTTP, v1alpha1.TeamsModeSocket} {
 		t.Run(cmp.Or(string(mode), "unset"), func(t *testing.T) {
@@ -192,22 +191,13 @@ func TestATeamsChatConnectionRunsInHTTPModeAndIsRefusedInSocketMode(t *testing.T
 			}
 			team := got.Team[0]
 
-			if mode == v1alpha1.TeamsModeSocket {
-				if !errors.Is(ownErr, ErrWiring) || !errors.Is(ownErr, errTeamsSocket) || !strings.Contains(ownErr.Error(), "Socket mode is not supported yet") {
-					t.Errorf("own teams connection in socket mode: ChooseConnections = %v; want a wiring error that says Socket mode is not supported yet", ownErr)
-				}
-				if !errors.Is(team.Err, errTeamsSocket) || len(team.Credentials) != 0 {
-					t.Errorf("team teams connection in socket mode = %+v; want its socket-mode error and no credentials", team)
-				}
-				return
-			}
 			want := v1alpha1.TeamsConnectionSpec{TenantID: tenant, AppID: app, Mode: mode}
 			if ownErr != nil || own.Own == nil || own.Own.Platform != v1alpha1.PlatformTeams || own.Own.Teams != want ||
 				own.Own.Credentials[key].Reveal() != "fake-client-secret" {
-				t.Errorf("own teams connection in http mode: ChooseConnections = %+v, %v; want it chosen with its client secret and spec.teams", own.Own, ownErr)
+				t.Errorf("own teams connection: ChooseConnections = %+v, %v; want it chosen with its client secret and spec.teams", own.Own, ownErr)
 			}
 			if team.Err != nil || team.Teams != want || team.Credentials[key].Reveal() != "fake-client-secret" {
-				t.Errorf("team teams connection in http mode = %+v; want it chosen with its client secret and spec.teams", team)
+				t.Errorf("team teams connection = %+v; want it chosen with its client secret and spec.teams", team)
 			}
 		})
 	}

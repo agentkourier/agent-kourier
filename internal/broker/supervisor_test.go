@@ -42,7 +42,8 @@ var errRejected = errors.New("fake: token rejected")
 type fakeConn struct {
 	chat.Platform
 	token  string
-	keys   []string // the keys of the credentials it was built with, sorted
+	keys   []string           // the keys of the credentials it was built with, sorted
+	mode   v1alpha1.TeamsMode // the spec.teams.mode it was built with
 	live   *atomic.Int32
 	reject chan struct{} // closed: Run returns the rejection
 	// onConn is the adapter's OnConnection, which Run calls when its connection is up.
@@ -147,7 +148,7 @@ func newSupWorldWith(t *testing.T, withOwn bool) *supWorld {
 		cfg: RunConfig{transportClosed: func(conn string) { w.mu.Lock(); w.closed = append(w.closed, conn); w.mu.Unlock() }},
 		log: log, metrics: newTestMetrics(t), table: w.table, parent: t.Context(),
 		open: func(c Connection, onConn func(bool)) (builtPlatform, error) {
-			f := &fakeConn{token: c.Credentials["botToken"].Reveal(), keys: slices.Sorted(maps.Keys(c.Credentials)), live: &w.live, reject: make(chan struct{}), onConn: onConn, errs: map[string]error{}, calls: map[string]int{}}
+			f := &fakeConn{token: c.Credentials["botToken"].Reveal(), keys: slices.Sorted(maps.Keys(c.Credentials)), mode: c.Teams.Mode, live: &w.live, reject: make(chan struct{}), onConn: onConn, errs: map[string]error{}, calls: map[string]int{}}
 			w.mu.Lock()
 			defer w.mu.Unlock()
 			if err := w.openErr[f.token]; err != nil {
@@ -469,6 +470,39 @@ func TestSupervisorRestartsATeamConnectionSwitchedToAnotherMode(t *testing.T) {
 	w.reconcile(unready("team-a/slack", 4, 1), younger) // moved to HTTP mode again, and its Secret has no signingSecret yet
 	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack"}) || len(w.tokens()) != 4 {
 		t.Errorf("running = %v, platforms built = %v, when the new mode's keys cannot be read; want team-a left running in Socket Mode", got, w.tokens())
+	}
+}
+
+// A Microsoft Teams connection whose ChatConnection is switched between http and socket mode keeps its credentials, the client secret, and
+// is restarted in the new mode all the same: the edit is a new generation, which a runtime is started for, as for any other change of its
+// spec.
+func TestSupervisorRestartsATeamsConnectionSwitchedToAnotherMode(t *testing.T) {
+	w := newSupWorld(t)
+	w.ids["tok-teams"] = appIdentity{App: "22222222-3333-4444-8555-666666666666", Bot: "28:22222222-3333-4444-8555-666666666666"}
+	inMode := func(gen int64, mode v1alpha1.TeamsMode) TeamConnection {
+		c := teamOn(v1alpha1.PlatformTeams, "team-c/teams", gen, "tok-teams", 3)
+		c.Teams = v1alpha1.TeamsConnectionSpec{TenantID: "11111111-2222-4333-8444-555555555555", AppID: w.ids["tok-teams"].App, Mode: mode}
+		return c
+	}
+	modes := func() []v1alpha1.TeamsMode {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		var out []v1alpha1.TeamsMode
+		for _, f := range w.opened {
+			if f.token == "tok-teams" {
+				out = append(out, f.mode)
+			}
+		}
+		return out
+	}
+	w.reconcile(inMode(1, v1alpha1.TeamsModeHTTP))
+	w.reconcile(inMode(2, v1alpha1.TeamsModeSocket))
+	w.reconcile(inMode(3, v1alpha1.TeamsModeHTTP))
+	if got := w.running(); !slices.Equal(got, []string{ownName, "team-c/teams"}) {
+		t.Errorf("running = %v; want the teams connection running", got)
+	}
+	if got := modes(); !slices.Equal(got, []v1alpha1.TeamsMode{v1alpha1.TeamsModeHTTP, v1alpha1.TeamsModeSocket, v1alpha1.TeamsModeHTTP}) {
+		t.Errorf("the teams connection was built in %v; want http, then socket, then http again: a restart at each switch", got)
 	}
 }
 
@@ -1505,8 +1539,7 @@ func TestSupervisorWithNoOwnPublishesTheTeamConnectionsAlone(t *testing.T) {
 	}
 }
 
-// A served connection of a platform the broker has no adapter for, or of Microsoft Teams in socket mode, is not started, and the supervisor
-// says so as that, not as credentials to mend, which would start nothing; one whose Secret cannot be read yet is told the credentials cannot
+// A served connection of a platform the broker has no adapter for is not started, and the supervisor says so as that, not as credentials to mend, which would start nothing; one whose Secret cannot be read yet is told the credentials cannot
 // be used.
 func TestSupervisorSaysAConnectionOfAPlatformWithNoAdapterIsNotStarted(t *testing.T) {
 	w := newSupWorld(t)
@@ -1516,14 +1549,7 @@ func TestSupervisorSaysAConnectionOfAPlatformWithNoAdapterIsNotStarted(t *testin
 		t.Fatalf("connectionOf of a platform with no adapter = %v; want errNoAdapter", unknown.Err)
 	}
 	unknown.Credentials = nil
-	socket := teamOn(v1alpha1.PlatformTeams, "team-c/teams", 1, "tok-teams", 3)
-	c = &v1alpha1.ChatConnection{ObjectMeta: metav1.ObjectMeta{Namespace: "team-c", Name: "teams"}, Spec: v1alpha1.ChatConnectionSpec{
-		Platform: v1alpha1.PlatformTeams, Teams: &v1alpha1.TeamsConnectionSpec{Mode: v1alpha1.TeamsModeSocket}}}
-	if _, socket.Err = connectionOf(t.Context(), c, &reader{}); !errors.Is(socket.Err, errTeamsSocket) {
-		t.Fatalf("connectionOf of a teams connection in socket mode = %v; want errTeamsSocket", socket.Err)
-	}
-	socket.Credentials = nil
-	w.reconcile(unknown, unready("team-b/slack", 1, 2), socket)
+	w.reconcile(unknown, unready("team-b/slack", 1, 2))
 	if got := w.running(); !slices.Equal(got, []string{ownName}) {
 		t.Errorf("running = %v; want neither connection started", got)
 	}
@@ -1531,7 +1557,6 @@ func TestSupervisorSaysAConnectionOfAPlatformWithNoAdapterIsNotStarted(t *testin
 	for _, want := range []string{
 		`msg="the ChatConnection is not started: this broker has no adapter for its platform" connection=team-a/discord`,
 		`msg="the ChatConnection is not started yet: its credentials cannot be used" connection=team-b/slack`,
-		`msg="the ChatConnection is not started: Socket mode is not supported yet for Microsoft Teams" connection=team-c/teams`,
 	} {
 		if !strings.Contains(logs, want) {
 			t.Errorf("the logs do not say %s:\n%s", want, logs)
@@ -1539,8 +1564,7 @@ func TestSupervisorSaysAConnectionOfAPlatformWithNoAdapterIsNotStarted(t *testin
 	}
 }
 
-// A running Microsoft Teams connection whose ChatConnection is edited to socket mode, or a connection that comes to name a platform with no
-// adapter, is stopped and says why, not left running on the spec it no longer has; edited back, it starts again. One whose Secret cannot be
+// A running connection whose ChatConnection comes to name a platform with no adapter is stopped and says why, not left running on the spec it no longer has; edited back, it starts again. One whose Secret cannot be
 // read for a moment keeps running.
 func TestSupervisorStopsARunningConnectionEditedToWhatItCannotRun(t *testing.T) {
 	for _, tc := range []struct {
@@ -1548,8 +1572,6 @@ func TestSupervisorStopsARunningConnectionEditedToWhatItCannotRun(t *testing.T) 
 		err  error
 		msg  string
 	}{
-		{"socket mode", fmt.Errorf("%w: ChatConnection team-c/teams: %w", ErrWiring, errTeamsSocket),
-			`msg="the ChatConnection is not started: Socket mode is not supported yet for Microsoft Teams" connection=team-c/teams`},
 		{"no adapter", fmt.Errorf("%w: ChatConnection team-c/teams is \"discord\", %w", ErrWiring, errNoAdapter),
 			`msg="the ChatConnection is not started: this broker has no adapter for its platform" connection=team-c/teams`},
 	} {

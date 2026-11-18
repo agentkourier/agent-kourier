@@ -203,9 +203,9 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 		name := t.Name()
 		st := s.teams[name]
 		if t.Err != nil {
-			// Its Secret is not readable now, its platform has no adapter, or it is a Microsoft Teams connection in socket mode. What runs
+			// Its Secret is not readable now, or its platform has no adapter. What runs
 			// keeps running on the tokens it was started with when its Secret is at fault: a cache that is relisting is no reason to drop a
-			// connection. A ChatConnection that now asks for what this broker cannot run (one edited to socket mode) is stopped instead, as
+			// connection. A ChatConnection that now asks for what this broker cannot run (one edited to such a platform) is stopped instead, as
 			// one that changed is, and not left running on the spec it no longer has; its entry goes, and its bot with it, so that it starts
 			// afresh once it can. Otherwise it starts once it can.
 			if st != nil && unrunnable(t.Err) {
@@ -230,11 +230,8 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 			}
 			if st == nil || st.rt == nil {
 				msg := "the ChatConnection is not started yet: its credentials cannot be used"
-				switch { // no Secret is at fault in either, and none that is mended starts it
-				case errors.Is(t.Err, errNoAdapter):
+				if errors.Is(t.Err, errNoAdapter) { // no Secret is at fault, and none that is mended starts it
 					msg = "the ChatConnection is not started: this broker has no adapter for its platform"
-				case errors.Is(t.Err, errTeamsSocket):
-					msg = "the ChatConnection is not started: Socket mode is not supported yet for Microsoft Teams"
 				}
 				s.say(ctx, name, msg, t.Err)
 				if st == nil || !st.refused { // a refused connection is not served, and its series is not for this branch to bring back
@@ -440,10 +437,10 @@ func (s *supervisor) retire(name string) {
 	}
 }
 
-// unrunnable says whether err is a ChatConnection's own, and not its Secret's: a platform with no adapter, or Microsoft Teams in socket
-// mode. No Secret that is mended starts it, and what ran on its earlier spec is not what it asks for now.
+// unrunnable says whether err is a ChatConnection's own, and not its Secret's: a platform with no adapter. No Secret that is mended
+// starts it, and what ran on its earlier spec is not what it asks for now.
 func unrunnable(err error) bool {
-	return errors.Is(err, errNoAdapter) || errors.Is(err, errTeamsSocket)
+	return errors.Is(err, errNoAdapter)
 }
 
 // stop stops the runtime of st, if it has one, and says why. The connection is down from here.

@@ -1,6 +1,7 @@
 package teams
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -219,23 +220,34 @@ func NewReceiver(cfg ReceiverConfig) (*Receiver, error) {
 // waits for the lanes to stop, and returns ctx's error. One Serve runs at a time; a second replaces the first as the one the
 // handler submits to.
 func (r *Receiver) Serve(ctx context.Context, sink chat.Sink) error {
+	return r.serve(ctx, sink, true)
+}
+
+// serve is Serve, with the signing keys fetched and kept fresh only when the activities come over HTTPS: over a socket (socket.go) there
+// is no token to verify.
+func (r *Receiver) serve(ctx context.Context, sink chat.Sink, https bool) error {
 	wctx, stopWork := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopWork()
 	s := &serving{ctx: wctx, sink: sink, lanes: lanes.New()}
 	r.tctx.Store(&wctx)
 	r.live.Store(s)
-	r.verifier.warm(ctx)
-	r.log.InfoContext(ctx, "teams: taking activities over https")
-	check := time.NewTicker(r.keysCheckEvery)
-	for running := true; running; {
-		select {
-		case <-check.C:
-			r.verifier.warm(ctx)
-		case <-ctx.Done():
-			running = false
+	if https {
+		r.verifier.warm(ctx)
+		r.log.InfoContext(ctx, "teams: taking activities over https")
+		check := time.NewTicker(r.keysCheckEvery)
+		for running := true; running; {
+			select {
+			case <-check.C:
+				r.verifier.warm(ctx)
+			case <-ctx.Done():
+				running = false
+			}
 		}
+		check.Stop()
+	} else {
+		r.log.InfoContext(ctx, "teams: taking activities over Socket mode")
+		<-ctx.Done()
 	}
-	check.Stop()
 	s.mu.Lock()
 	s.closed = true
 	s.mu.Unlock()
@@ -257,6 +269,9 @@ func (r *Receiver) Serve(ctx context.Context, sink chat.Sink) error {
 		for range n {
 			r.count(wctx, "agentkourier_teams_activities_lost_total", lostStopped)
 		}
+	}
+	if !https {
+		return fmt.Errorf("teams socket mode: %w", ctx.Err())
 	}
 	return fmt.Errorf("teams https: %w", ctx.Err())
 }
@@ -348,16 +363,8 @@ func (s *serving) submit(channel string, fn func()) (shed string, open bool) {
 }
 
 // ServeHTTP answers one request Teams sends the connection. In order: the token is verified (401, or 503 when the keys cannot be
-// read within verifyWait), the body read as an activity of Teams (400), the token's service URL checked against the activity's (401), and the tenant
-// against the connection's (403); none of these work on the activity. With no Serve live it is 503, and nothing is claimed for the
-// dedup. Then:
-//   - A message puts its post, if it is a person's, and its conversation on its channel's lane, and is answered 200 at once; an ID
-//     with ':' is 400, and lanes that shed it 503.
-//   - An invoke is answered by the InvokeHandler in the request, whatever the lanes do with its conversation; one whose replyToId
-//     holds ':' is 400.
-//   - Anything else (an edit, a deletion, an install event) puts its conversation on the lane, and is answered 200, or 503 if shed.
-//
-// An activity that came before, by its type, channel and ID, within the dedup window, is answered 200 and handed on to nothing.
+// read within verifyWait), the body read as an activity of Teams (400), and the token's service URL checked against the activity's
+// (401); none of these work on the activity. Then the activity is taken (take), and the request answered as take says.
 func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	ctx := req.Context()
 	tctx := r.telemetryContext(ctx)
@@ -386,19 +393,61 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		answered(r.refuseToken(ctx, tctx, w, err))
 		return
 	}
+	ans := r.take(ctx, tctx, a)
+	answered(ans.outcome)
+	switch {
+	case len(ans.body) > 0:
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(ans.status)
+		_, _ = w.Write(ans.body)
+	case ans.text != "":
+		http.Error(w, ans.text, ans.status)
+	default:
+		w.WriteHeader(ans.status)
+	}
+}
+
+// answer is what the receiver answers one activity with: the response of its request over HTTPS, and the reply frame of its envelope
+// over a socket (socket.go).
+type answer struct {
+	status  int
+	body    []byte // the InvokeHandler's answer to an invoke, or nil
+	text    string // why, for a status other than 200 with no body
+	outcome string // the request's or the envelope's outcome: requestAccepted and the rest
+}
+
+// takePayload takes the activity of a socket's envelope. A socket has no token to verify: the broker opened it to Microsoft with the
+// bot's token (socket.go), so what comes on it is Microsoft's, and there is no token whose service URL the activity's could be checked
+// against. What is not an activity of Teams is 400.
+func (r *Receiver) takePayload(ctx context.Context, payload []byte) answer {
+	a, err := decodeActivity(payload)
+	if err != nil {
+		r.log.DebugContext(ctx, "teams: an envelope holds no activity; answered 400", "bytes", len(payload), "reason", err.Error())
+		return answer{status: http.StatusBadRequest, text: "not an activity of Microsoft Teams", outcome: requestMalformed}
+	}
+	return r.take(ctx, r.telemetryContext(ctx), a)
+}
+
+// take works on an activity whose origin was checked (a verified token over HTTPS, or the socket it came on), and says what to answer.
+// Its series are counted on tctx. An activity of another tenant is 403, and with no Serve live it is 503, and nothing is claimed for the
+// dedup. Then:
+//   - A message puts its post, if it is a person's, and its conversation on its channel's lane, and is answered 200 at once; an ID
+//     with ':' is 400, and lanes that shed it 503.
+//   - An invoke is answered by the InvokeHandler, in ctx, whatever the lanes do with its conversation; one whose replyToId holds ':'
+//     is 400.
+//   - Anything else (an edit, a deletion, an install event) puts its conversation on the lane, and is answered 200, or 503 if shed.
+//
+// An activity that came before, by its type, channel and ID, within the dedup window, is answered 200 and handed on to nothing.
+func (r *Receiver) take(ctx, tctx context.Context, a activity) answer {
 	if got := a.tenant(); got != r.tenant {
 		r.log.WarnContext(ctx, "teams: an activity of another tenant was refused; the bot is installed outside the connection's tenant",
 			"tenant", quote(got), "connectionTenant", r.tenant, "type", quote(a.Type))
-		answered(requestWrongTenant)
-		http.Error(w, "the activity is not of the connection's tenant", http.StatusForbidden)
-		return
+		return answer{status: http.StatusForbidden, text: "the activity is not of the connection's tenant", outcome: requestWrongTenant}
 	}
 	s := r.live.Load()
 	if s == nil {
-		answered(requestNotRunning)
 		r.count(tctx, "agentkourier_teams_activities_shed_total", shedNotRunning)
-		http.Error(w, "the connection does not take activities now", http.StatusServiceUnavailable)
-		return
+		return answer{status: http.StatusServiceUnavailable, text: "the connection does not take activities now", outcome: requestNotRunning}
 	}
 	var (
 		conv *Conversation
@@ -414,9 +463,7 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		switch v {
 		case invalid:
 			r.log.DebugContext(ctx, "teams: a message was refused; answered 400", "reason", why)
-			answered(requestMalformed)
-			http.Error(w, "the message has no ID that can name it", http.StatusBadRequest)
-			return
+			return answer{status: http.StatusBadRequest, text: "the message has no ID that can name it", outcome: requestMalformed}
 		case forward:
 			msg = &m
 		default:
@@ -426,9 +473,7 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		i, ok := a.invoke(r.conn)
 		if !ok {
 			r.log.DebugContext(ctx, "teams: an invoke was refused, since its replyToId holds ':'; answered 400")
-			answered(requestMalformed)
-			http.Error(w, "the invoke names no message that an ID can name", http.StatusBadRequest)
-			return
+			return answer{status: http.StatusBadRequest, text: "the invoke names no message that an ID can name", outcome: requestMalformed}
 		}
 		inv = &i
 	}
@@ -438,9 +483,7 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		key = a.Type + "\x00" + channel + "\x00" + a.ID
 		if !r.seen.claim(key) {
 			r.log.DebugContext(ctx, "teams: an activity came again; acknowledged", "type", quote(a.Type), "id", a.ID)
-			answered(requestDuplicate)
-			w.WriteHeader(http.StatusOK)
-			return
+			return answer{status: http.StatusOK, outcome: requestDuplicate}
 		}
 	}
 	if conv != nil || msg != nil {
@@ -452,26 +495,20 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			if key != "" {
 				r.seen.forget(key)
 			}
-			r.log.WarnContext(ctx, "teams: an activity was not taken; answered 503, after which Teams sends a message again once (an invoke was not measured)",
+			r.log.WarnContext(ctx, "teams: an activity was not taken; answered 503, after which Teams sends a message again once over https (an invoke, and Socket mode, were not measured)",
 				"type", quote(a.Type), "channel", quote(channel), "shed", shed)
+			ans := answer{status: http.StatusServiceUnavailable, text: "the connection cannot take the activity now", outcome: requestShed}
 			if !open {
-				answered(requestNotRunning)
-				r.count(tctx, "agentkourier_teams_activities_shed_total", shedNotRunning)
-			} else {
-				answered(requestShed)
-				r.count(tctx, "agentkourier_teams_activities_shed_total", shed)
+				ans.outcome, shed = requestNotRunning, shedNotRunning
 			}
-			http.Error(w, "the connection cannot take the activity now", http.StatusServiceUnavailable)
-			return
+			r.count(tctx, "agentkourier_teams_activities_shed_total", shed)
+			return ans
 		}
 	}
 	if inv != nil {
-		answered(requestInvoke)
-		r.answerInvoke(ctx, w, s.sink, *inv)
-		return
+		return r.answerInvoke(ctx, s.sink, *inv)
 	}
-	answered(requestAccepted)
-	w.WriteHeader(http.StatusOK)
+	return answer{status: http.StatusOK, outcome: requestAccepted}
 }
 
 // telemetryContext is the context the series of a request are counted on: the last Serve's, which carries the broker's instruments,
@@ -492,24 +529,15 @@ func (r *Receiver) count(ctx context.Context, name, value string) {
 // decision in its invoke.
 func (r *Receiver) HandlerTimeout() time.Duration { return invokeTimeout }
 
-// answerInvoke writes the InvokeHandler's answer to inv, which it is given with sink, the live Serve's, or 200 with no body when there
-// is no handler.
-func (r *Receiver) answerInvoke(ctx context.Context, w http.ResponseWriter, sink chat.Sink, inv Invoke) {
+// answerInvoke is the InvokeHandler's answer to inv, which it is given with sink, the live Serve's, or 200 with no body when there is no
+// handler.
+func (r *Receiver) answerInvoke(ctx context.Context, sink chat.Sink, inv Invoke) answer {
 	if r.invokes == nil {
 		r.log.DebugContext(ctx, "teams: an invoke was answered with no body; nothing handles invokes", "name", quote(inv.Name))
-		w.WriteHeader(http.StatusOK)
-		return
+		return answer{status: http.StatusOK, outcome: requestInvoke}
 	}
 	ans := r.invokes.Invoke(ctx, sink, inv)
-	status := ans.Status
-	if status == 0 {
-		status = http.StatusOK
-	}
-	if len(ans.Body) > 0 {
-		w.Header().Set("Content-Type", "application/json")
-	}
-	w.WriteHeader(status)
-	_, _ = w.Write(ans.Body)
+	return answer{status: cmp.Or(ans.Status, http.StatusOK), body: ans.Body, outcome: requestInvoke}
 }
 
 // refuseToken answers a request whose token was refused, and returns the outcome it counts the request under: 503 when the keys could

@@ -2,6 +2,7 @@ package broker
 
 import (
 	"cmp"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -26,19 +27,23 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
 	"github.com/agentkourier/agent-kourier/internal/testutil"
+	"github.com/agentkourier/agent-kourier/test/faketeams"
 )
 
 // The stand-ins of a Microsoft Teams connection's tenant and app; no tenant has them.
 const (
 	teamsTestTenant = "11111111-2222-4333-8444-555555555555"
 	teamsTestApp    = "22222222-3333-4444-8555-666666666666"
+	teamsTestApp2   = "33333333-4444-4555-8666-777777777777"
 )
 
 // fakeMicrosoft is, for a Teams connection in a test, Microsoft Entra's token endpoint, which issues a token for any client secret
-// unless told to refuse a scope, the Bot Framework's OpenID metadata, whose key set is empty, and Microsoft Graph, which answers every
-// read with graphStatus (404 if unset): so the connection runs and takes no activity, and nothing leaves the test.
+// unless told to refuse a scope, the Bot Framework's OpenID metadata, whose key set is empty, Microsoft Graph, which answers every
+// read with graphStatus (404 if unset), and Socket mode's service (faketeams): so the connection runs and takes no activity, and nothing
+// leaves the test.
 type fakeMicrosoft struct {
 	srv         *httptest.Server
+	sockets     *faketeams.SocketMode
 	tokens      atomic.Int32
 	refuse      atomic.Pointer[string] // a scope whose token is refused (400 invalid_scope), if set
 	graphStatus atomic.Int32
@@ -71,12 +76,14 @@ func newFakeMicrosoft(t *testing.T) *fakeMicrosoft {
 	})
 	f.srv = httptest.NewTLSServer(mux)
 	t.Cleanup(f.srv.Close)
+	f.sockets = faketeams.New(t)
 	return f
 }
 
 // point is RunConfig.teamsFakes: the Teams client calls f and nothing else.
 func (f *fakeMicrosoft) point(tc *teams.Config) {
 	tc.TokenURL, tc.MetadataURL, tc.GraphURL, tc.HTTPClient = f.srv.URL+"/token", f.srv.URL+"/openid", f.srv.URL+"/v1.0", f.srv.Client()
+	tc.SocketURL, tc.SocketTLS = f.sockets.URL, f.sockets.TLS()
 }
 
 // teamsConn is the Connection of a Microsoft Teams ChatConnection ns/name in http mode, with a fake client secret.
@@ -116,6 +123,19 @@ func TestNewPlatformBuildsTheTeamsAdapter(t *testing.T) {
 	if err := none.needsChatListener(teamsConn("team-a", "teams")); !errors.Is(err, ErrWiring) {
 		t.Errorf("needsChatListener(teams) with no chat listener = %v; want a wiring error, which stops a start with it as the own connection", err)
 	}
+	// In socket mode the activities come on the connection's own sockets: no chat listener is needed, and the adapter offers it no handler.
+	socket := teamsConn("team-a", "teams")
+	socket.Teams.Mode = v1alpha1.TeamsModeSocket
+	if err := none.needsChatListener(socket); err != nil {
+		t.Errorf("needsChatListener(teams in socket mode) with no chat listener = %v; want none", err)
+	}
+	built, err = none.newPlatform(socket, nil, nil, teams.NewMemoryConversations())
+	if err != nil {
+		t.Fatalf("newPlatform(teams in socket mode) with no chat listener = %v; want the adapter", err)
+	}
+	if _, ok := receiverOf(built.Platform); ok {
+		t.Error("the Teams adapter in socket mode offers a handler for the chat listener; want none")
+	}
 	for name, edit := range map[string]func(*Connection){
 		"no client secret": func(c *Connection) { c.Credentials = nil },
 		"no tenant":        func(c *Connection) { c.Teams.TenantID = "" },
@@ -132,8 +152,8 @@ func TestNewPlatformBuildsTheTeamsAdapter(t *testing.T) {
 	}
 }
 
-// teamsConnection puts the Microsoft Teams ChatConnection ns/name, in mode, with its Secret creds-teams, in w's cluster.
-func (w *connWorld) teamsConnection(ns, name string, mode v1alpha1.TeamsMode) {
+// teamsConnection puts the Microsoft Teams ChatConnection ns/name of app, in mode, with its Secret creds-teams, in w's cluster.
+func (w *connWorld) teamsConnection(ns, name, app string, mode v1alpha1.TeamsMode) {
 	w.t.Helper()
 	s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "creds-teams"},
 		Data: map[string][]byte{v1alpha1.TeamsClientSecretKey: []byte("fake-client-secret")}}
@@ -147,17 +167,17 @@ func (w *connWorld) teamsConnection(ns, name string, mode v1alpha1.TeamsMode) {
 	unstructured.RemoveNestedField(conn.Object, "spec", "allowedNamespaces")
 	_ = unstructured.SetNestedField(conn.Object, v1alpha1.PlatformTeams, "spec", "platform")
 	_ = unstructured.SetNestedField(conn.Object, "creds-teams", "spec", "credentialsSecretRef", "name")
-	_ = unstructured.SetNestedStringMap(conn.Object, map[string]string{"tenantID": teamsTestTenant, "appID": teamsTestApp, "mode": string(mode)},
+	_ = unstructured.SetNestedStringMap(conn.Object, map[string]string{"tenantID": teamsTestTenant, "appID": app, "mode": string(mode)},
 		"spec", "teams")
 	if err := w.dyn.Tracker().Create(crConnections, conn, ns); err != nil {
 		w.t.Fatal(err)
 	}
 }
 
-// A served Microsoft Teams connection in http mode runs beside the own Slack one: it gets the bot's token, and its route on the chat
-// listener reaches the Teams adapter, which refuses a request with no token (401). One in socket mode is not started, its route has no
-// handler (503), and the supervisor says why.
-func TestARunServesATeamsConnectionInHTTPModeAndNotOneInSocketMode(t *testing.T) {
+// Served Microsoft Teams connections run beside the own Slack one, in either mode. One in http mode gets the bot's token, and its route on
+// the chat listener reaches the Teams adapter, which refuses a request with no token (401). One in socket mode opens its sockets, is
+// connected once one is ready, and has no route (503). Run's end closes its socket.
+func TestARunServesATeamsConnectionInEitherMode(t *testing.T) {
 	ms := newFakeMicrosoft(t)
 	w := newConnWorld(t, nil)
 	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
@@ -167,8 +187,15 @@ func TestARunServesATeamsConnectionInHTTPModeAndNotOneInSocketMode(t *testing.T)
 	t.Cleanup(func() { _ = ln.Close() })
 	w.c.ChatListener = ln
 	w.c.teamsFakes = ms.point
-	w.teamsConnection("team-a", "teams", v1alpha1.TeamsModeHTTP)
-	w.teamsConnection("team-b", "teams", v1alpha1.TeamsModeSocket)
+	identify := w.c.identify // the world's names a connection by its Slack token, which a teams connection has none of
+	w.c.identify = func(ctx context.Context, c Connection) (appIdentity, error) {
+		if c.Platform == v1alpha1.PlatformTeams {
+			return teamsIdentityOf(ctx, w.c, c)
+		}
+		return identify(ctx, c)
+	}
+	w.teamsConnection("team-a", "teams", teamsTestApp, v1alpha1.TeamsModeHTTP)
+	w.teamsConnection("team-b", "teams", teamsTestApp2, v1alpha1.TeamsModeSocket) // another app: an app is served once
 	r := start(t, w.c)
 	r.until("/readyz", http.StatusOK)
 
@@ -180,13 +207,21 @@ func TestARunServesATeamsConnectionInHTTPModeAndNotOneInSocketMode(t *testing.T)
 	if n := ms.tokens.Load(); n < 1 {
 		t.Errorf("the bot's token was fetched %d times; want it fetched before the connection was up", n)
 	}
+	sock := ms.sockets.WaitSocket(t, "amer", 0, 10*time.Second)
+	r.waitMetric(`agentkourier_chat_connected{connection="team-b/teams"} 1`)
+	r.waitMetric(`agentkourier_teams_socket_ready{connection="team-b/teams",region="amer"} 1`)
 	if code := chatPost(t, http.MethodPost, addr, "/chat/teams/team-b/teams"); code != http.StatusServiceUnavailable {
-		t.Errorf("POST to the socket-mode connection's route = %d; want 503, as no handler runs for it", code)
+		t.Errorf("POST to the socket-mode connection's route = %d; want 503, as it takes its activities on its sockets", code)
 	}
-	w.eventually("the supervisor to say why the socket-mode connection is not started", func() bool {
-		return strings.Contains(w.logs.String(), `msg="the ChatConnection is not started: Socket mode is not supported yet for Microsoft Teams" connection=team-b/teams`)
-	})
-	r.waitMetric(`agentkourier_chat_connected{connection="team-b/teams"} 0`)
+	r.cancel()
+	if err := r.wait(); err != nil {
+		t.Fatalf("Run = %v; want a clean stop", err)
+	}
+	select {
+	case <-sock.Closed():
+	case <-time.After(10 * time.Second):
+		t.Error("the socket-mode connection's socket was open after Run returned")
+	}
 }
 
 // connectorCalls is, for a Teams client in a test, Microsoft Entra and the Bot Connector at every URL: it answers a token for the token
