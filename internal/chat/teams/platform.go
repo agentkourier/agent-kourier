@@ -107,7 +107,7 @@ func (c *Client) Run(ctx context.Context, sink chat.Sink) error {
 	if _, err := c.api.tokens.token(ctx); err != nil {
 		if c.Classify(chat.OpOther, err).Class == chat.FatalAuth {
 			cancel()
-			<-served
+			_ = <-served // Serve's own error says only that it was cancelled
 			return err
 		}
 		if ctx.Err() == nil {
