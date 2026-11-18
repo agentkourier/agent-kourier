@@ -390,14 +390,9 @@ type Identity struct {
 // ChatBinding places the Binding in a channel.
 type ChatBinding struct {
 	ConnectionRef ObjectRef `json:"connectionRef"`
-	// Channel is the platform's channel ID, not its name (Slack: `C…` or `G…`). At most 140 bytes of printable ASCII with no space
-	// and no ':', as the schema checks. The broker holds the channel to the shape of its connection's platform when it reads the
-	// Binding with its connection (on Slack: `C` or `G`, then capitals and digits, at most 32 bytes), and refuses a Binding whose
-	// channel has another shape, such as a Slack channel's name `general`, as it refuses an invalid one: with custom resources its
-	// Accepted condition is False with the reason InvalidPlatformID and its last good generation, if it has one, stays served; on the
-	// files route the whole config fails. agent-kourier dry-run holds it to Slack's shape.
-	// +kubebuilder:validation:MaxLength=140
-	// +kubebuilder:validation:Pattern=`^[!-9;-~]+$`
+	// Channel is the platform's channel ID, not its name (Slack: `C…` or `G…`). At most 32 bytes.
+	// +kubebuilder:validation:MaxLength=32
+	// +kubebuilder:validation:Pattern=`^[CG][A-Z0-9]+$`
 	Channel string `json:"channel"`
 	// Output says what Agent Kourier posts of the agent's work: live, the reply as it is written, or final, the finished reply
 	// alone. Defaults to live.
@@ -475,11 +470,9 @@ type ChatMention struct {
 	// +kubebuilder:validation:Pattern=`^[a-z][a-z0-9-]{0,62}$`
 	// +kubebuilder:validation:XValidation:rule="!(self in ['here', 'channel', 'everyone'])",message="a broadcast name (here, channel or everyone) is reserved and cannot be declared"
 	Name string `json:"name"`
-	// User is the platform's user ID of the person (Slack: `U…` or `W…`). It comes only from here, never from the agent. At most 64
-	// bytes of printable ASCII with no space and no ':', as the schema checks; the broker holds it to the shape of its connection's
-	// platform as it does spec.chat.channel (on Slack: `U` or `W`, then 2 to 20 capitals and digits).
-	// +kubebuilder:validation:MaxLength=64
-	// +kubebuilder:validation:Pattern=`^[!-9;-~]+$`
+	// User is the platform's user ID of the person (Slack: `U…` or `W…`). It comes only from here, never from the agent.
+	// +kubebuilder:validation:MaxLength=21
+	// +kubebuilder:validation:Pattern=`^[UW][A-Z0-9]{2,20}$`
 	User string `json:"user"`
 }
 
@@ -526,13 +519,12 @@ type Interactions struct {
 	// +optional
 	ToolApprovals bool `json:"toolApprovals,omitempty"`
 	// ApproverGroups names the platform's user groups whose members may decide a tool approval, by the platform's ID (Slack: `S…`).
-	// An empty list allows any non-bot channel member. At most 10 groups may be named, each at most 140 bytes of printable ASCII with
-	// no space and no ':'; duplicates and empty entries are refused. The broker holds each to the shape of its connection's platform
-	// as it does spec.chat.channel (on Slack: `S`, then capitals and digits, at most 32 bytes). A platform that cannot ask for tool
-	// approvals refuses toolApprovals: true in the same way, with the reason UnsupportedOnPlatform; Slack can.
+	// An empty list allows any non-bot channel member. At most 10 groups may be named. Group IDs start with S and contain
+	// uppercase letters and digits, at most 32 bytes; duplicates and empty entries are refused. A platform that cannot ask for tool
+	// approvals refuses toolApprovals: true with the reason UnsupportedOnPlatform; Slack can.
 	// +kubebuilder:validation:MaxItems=10
-	// +kubebuilder:validation:items:MaxLength=140
-	// +kubebuilder:validation:items:Pattern=`^[!-9;-~]+$`
+	// +kubebuilder:validation:items:MaxLength=32
+	// +kubebuilder:validation:items:Pattern=`^S[A-Z0-9]+$`
 	// +listType=set
 	// +optional
 	ApproverGroups []string `json:"approverGroups,omitempty"`

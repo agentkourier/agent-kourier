@@ -135,8 +135,9 @@ const (
 	// Binding's own namespace, with sameNamespace, nor listed in namespaces.
 	ReasonAgentNamespaceNotAllowed RejectionReason = "AgentNamespaceNotAllowed"
 	// ReasonInvalidPlatformID: a chat ID of the Binding (its channel, a botMessage trigger's sender, a mention's user or an
-	// approver group) does not have the shape of the IDs of its ChatConnection's platform, though it has another platform's, which
-	// is what the load takes (v1alpha1.BindingSpec.PlatformMismatches).
+	// approver group) does not have the shape of the IDs of its ChatConnection's platform (v1alpha1.BindingSpec.PlatformMismatches).
+	// Validate holds each chat ID to Slack's shape, the only platform's, so a Binding that loaded is not given this reason today: the
+	// check is a second line, for a platform whose IDs the schema takes besides Slack's.
 	ReasonInvalidPlatformID RejectionReason = "InvalidPlatformID"
 	// ReasonUnsupportedOnPlatform: the Binding asks for a feature that the platform of its ChatConnection does not serve, such as
 	// tool approvals on a platform that cannot ask for them.

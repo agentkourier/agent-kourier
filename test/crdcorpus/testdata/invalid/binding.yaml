@@ -397,11 +397,9 @@ spec:
     connectionRef: {name: slack}
     channel: ""
 ---
-# rule: binding/spec.chat.channel: a name, not an ID, on Slack
-# want: spec.chat.channel: "#sre-alerts" is not a channel ID on Slack
-# schema: accepts
-# broker-only: a chat ID's shape is its connection's platform's, which the schema of a Binding cannot read: the broker holds the ID to it when it resolves the Binding with its connection
-# connection: slack
+# rule: binding/spec.chat.channel: a name, not an ID
+# want: spec.chat.channel: invalid channel "#sre-alerts"
+# schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata:
@@ -678,11 +676,9 @@ spec:
     channel: C0123456789
     mentions: [{name: sam}]
 ---
-# rule: binding/spec.chat.mentions[].user: an e-mail address, on Slack
-# want: spec.chat.mentions[0].user: "sam@example.com" is not a user ID on Slack
-# schema: accepts
-# broker-only: a chat ID's shape is its connection's platform's, which the schema of a Binding cannot read: the broker holds the ID to it when it resolves the Binding with its connection
-# connection: slack
+# rule: binding/spec.chat.mentions[].user: a user group
+# want: spec.chat.mentions[0].user: invalid user ID "S0123456789"
+# schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata:
@@ -698,7 +694,7 @@ spec:
   chat:
     connectionRef: {name: slack}
     channel: C0123456789
-    mentions: [{name: oncall, user: sam@example.com}]
+    mentions: [{name: oncall, user: S0123456789}]
 ---
 # rule: binding/spec.chat.maxMentionsPerTurn: 0
 # want: spec.chat.maxMentionsPerTurn: 0 is out of range
@@ -825,11 +821,9 @@ spec:
     toolApprovals: true
     approverGroups: [""]
 ---
-# rule: binding/spec.interactions.approverGroups[]: a group's name, on Slack
-# want: spec.interactions.approverGroups[0]: "sre" is not a user group ID on Slack
-# schema: accepts
-# broker-only: a chat ID's shape is its connection's platform's, which the schema of a Binding cannot read: the broker holds the ID to it when it resolves the Binding with its connection
-# connection: slack
+# rule: binding/spec.interactions.approverGroups[]: not a user group ID
+# want: spec.interactions.approverGroups[0]: invalid group ID "C0123456789"
+# schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata:
@@ -847,7 +841,7 @@ spec:
     channel: C0123456789
   interactions:
     toolApprovals: true
-    approverGroups: [sre]
+    approverGroups: [C0123456789]
 ---
 # rule: binding/spec.interactions.approverGroups[]: named twice
 # want: spec.interactions.approverGroups[1]: duplicate of index 0
@@ -1254,8 +1248,8 @@ spec:
     connectionRef: {name: slack}
     channel: C0123456789
 ---
-# rule: binding/spec.chat.channel: over 140 characters
-# want: spec.chat.channel: is 141 bytes, longer than the 140 byte limit
+# rule: binding/spec.chat.channel: over 32 characters
+# want: spec.chat.channel: is 33 bytes, longer than the 32 byte limit
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
@@ -1271,7 +1265,7 @@ spec:
     userId: agent-kourier-sre
   chat:
     connectionRef: {name: slack}
-    channel: C00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+    channel: C00000000000000000000000000000000
     triggers:
       - {type: mention}
       - type: botMessage
@@ -1315,8 +1309,8 @@ spec:
         limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
         promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
 ---
-# rule: binding/spec.interactions.approverGroups[]: over 140 characters
-# want: spec.interactions.approverGroups[0]: is 141 bytes, longer than the 140 byte limit
+# rule: binding/spec.interactions.approverGroups[]: over 32 characters
+# want: spec.interactions.approverGroups[0]: is 33 bytes, longer than the 32 byte limit
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
@@ -1346,7 +1340,7 @@ spec:
         promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
   interactions:
     toolApprovals: true
-    approverGroups: [S00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000]
+    approverGroups: [S00000000000000000000000000000000]
 ---
 # rule: binding/spec.chat.mentions[].name: over 63 characters
 # want: spec.chat.mentions[0].name: is 64 bytes, longer than the 63 byte limit
@@ -1379,8 +1373,8 @@ spec:
         limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
         promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
 ---
-# rule: binding/spec.chat.mentions[].user: over 64 characters
-# want: spec.chat.mentions[0].user: is 65 bytes, longer than the 64 byte limit
+# rule: binding/spec.chat.mentions[].user: over 21 characters
+# want: spec.chat.mentions[0].user: is 22 bytes, longer than the 21 byte limit
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
@@ -1397,7 +1391,7 @@ spec:
   chat:
     connectionRef: {name: slack}
     channel: C0123456789
-    mentions: [{name: sam, user: U0000000000000000000000000000000000000000000000000000000000000000}]
+    mentions: [{name: sam, user: U000000000000000000000}]
     triggers:
       - {type: mention}
       - type: botMessage
@@ -1474,11 +1468,9 @@ spec:
         promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
   session: {threadTTL: "0000000000000000000000000000000000000000000000000000000000002160h"}
 ---
-# rule: binding/spec.chat.channel: a name without its #, on Slack
-# want: spec.chat.channel: "general" is not a channel ID on Slack
-# schema: accepts
-# broker-only: a chat ID's shape is its connection's platform's, which the schema of a Binding cannot read: the broker holds the ID to it when it resolves the Binding with its connection
-# connection: slack
+# rule: binding/spec.chat.channel: a name without its #
+# want: spec.chat.channel: invalid channel "general"
+# schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata:
@@ -1495,7 +1487,7 @@ spec:
     connectionRef: {name: slack}
     channel: general
 ---
-# rule: binding/spec.chat.channel: a colon, which a message's ID joins its parts with
+# rule: binding/spec.chat.channel: a colon
 # want: spec.chat.channel: invalid channel "ch:1"
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
@@ -1514,11 +1506,9 @@ spec:
     connectionRef: {name: slack}
     channel: "ch:1"
 ---
-# rule: binding/spec.chat.mentions[].user: starts with a dot, on Slack
-# want: spec.chat.mentions[0].user: ".octocat" is not a user ID on Slack
-# schema: accepts
-# broker-only: a chat ID's shape is its connection's platform's, which the schema of a Binding cannot read: the broker holds the ID to it when it resolves the Binding with its connection
-# connection: slack
+# rule: binding/spec.chat.mentions[].user: a login, not an ID
+# want: spec.chat.mentions[0].user: invalid user ID ".octocat"
+# schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata:

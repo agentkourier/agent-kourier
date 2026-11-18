@@ -1058,9 +1058,8 @@ spec:
     - t254
     - t255
 ---
-# The longest Slack chat identifiers and other names: a channel, a sender and an approver group of 32 characters, which is
-# Slack's cap at resolution, a reaction name of 100, a mention name of 63 and a user of 21, an extract name of 63 and a
-# closeWhen value of 256.
+# The longest chat identifiers and names: a channel, a sender and an approver group of 32 characters, a reaction name of 100,
+# a mention name of 63 and a user of 21, an extract name of 63 and a closeWhen value of 256.
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata:
@@ -1093,103 +1092,6 @@ spec:
   interactions:
     toolApprovals: true
     approverGroups: [S0000000000000000000000000000000]
----
-# The longest IDs that the load and the schema take: an owner/name of a 39-character owner and a 100-character name as the
-# channel and as an approver group (140, the cap), and a name of 39 with a [bot] as a mention's user and as a sender. Each is
-# printable ASCII with no space and no ':'; the resolution of a Slack connection refuses them.
-apiVersion: agentkourier.dev/v1alpha1
-kind: Binding
-metadata:
-  name: edges-longest-other-platform-ids
-  namespace: sre
-spec:
-  agent:
-    backendRef: {name: kagent}
-    name: k8s-agent
-    namespace: kagent
-  identity:
-    userId: agent-kourier-sre
-  chat:
-    connectionRef: {name: slack}
-    channel: ooooooooooooooooooooooooooooooooooooooo/rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr
-    mentions: [{name: app, user: "lllllllllllllllllllllllllllllllllllllll[bot]"}]
-    triggers:
-      - {type: mention}
-      - type: botMessage
-        from: {id: "dependabot[bot]"}
-        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
-        promptTemplate: "An alert."
-      - type: botMessage
-        from: {id: lllllllllllllllllllllllllllllllllllllll}
-        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
-        promptTemplate: "An alert."
-  interactions:
-    toolApprovals: true
-    approverGroups: [ooooooooooooooooooooooooooooooooooooooo/rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr]
----
-# A channel's name and a person's name where Slack takes only IDs, and ASCII punctuation in each ID: the load and the schema take
-# any platform's IDs, and the resolution of a Slack connection refuses these, with the reason InvalidPlatformID.
-apiVersion: agentkourier.dev/v1alpha1
-kind: Binding
-metadata:
-  name: edges-names-for-ids
-  namespace: sre
-spec:
-  agent:
-    backendRef: {name: kagent}
-    name: k8s-agent
-    namespace: kagent
-  identity:
-    userId: agent-kourier-sre
-  chat:
-    connectionRef: {name: slack}
-    channel: general
-    mentions:
-      - {name: email, user: sam@example.com}
-      - {name: markup, user: "<@U0123456789>"}
-      - {name: punctuation, user: "!\"#$%&'()*+,-./;<=>?@[\\]^_`{|}~"}
-    triggers:
-      - {type: mention}
-      - type: botMessage
-        from: {id: alertmanager}
-        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
-        promptTemplate: "An alert."
-  interactions:
-    toolApprovals: true
-    approverGroups: [sre, "#sre-team"]
----
-# Slack's shapes at the caps of every platform, which the load and the schema take and the resolution of a Slack connection
-# refuses: a channel, a sender and an approver group of 140, and IDs of the wrong kind: a user ID as a sender, and a user group
-# ID and a bot's name as a mention's user.
-apiVersion: agentkourier.dev/v1alpha1
-kind: Binding
-metadata:
-  name: edges-slack-shaped-at-the-caps
-  namespace: sre
-spec:
-  agent:
-    backendRef: {name: kagent}
-    name: k8s-agent
-    namespace: kagent
-  identity:
-    userId: agent-kourier-sre
-  chat:
-    connectionRef: {name: slack}
-    channel: C0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-    mentions: [{name: group, user: S0123456789}, {name: bot, user: alertmanager}]
-    triggers:
-      - {type: mention}
-      - type: botMessage
-        from: {id: B0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000}
-        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
-        promptTemplate: "An alert."
-      - type: botMessage
-        from: {id: U0123456789}
-        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
-        promptTemplate: "An alert."
-  interactions:
-    toolApprovals: true
-    approverGroups: [S0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000]
 ---
 # The longest text of every duration: 64 characters each, written with leading zeros.
 apiVersion: agentkourier.dev/v1alpha1
@@ -1566,35 +1468,3 @@ spec:
   platform: slack
   credentialsSecretRef: {name: slack-main}
   slack: {}
----
-# IDs of no Slack shape at the schema's edges: a channel of one digit, a user of 64 (its cap) and a sender of 64 with no digit,
-# the ID characters '.', '_' and '-', and a UUID. The load and the schema take them; the resolution of a Slack connection
-# refuses them.
-apiVersion: agentkourier.dev/v1alpha1
-kind: Binding
-metadata:
-  name: edges-opaque-ids
-  namespace: sre
-spec:
-  agent:
-    backendRef: {name: kagent}
-    name: k8s-agent
-    namespace: kagent
-  identity:
-    userId: agent-kourier-sre
-  chat:
-    connectionRef: {name: slack}
-    channel: "1"
-    mentions:
-      - {name: long, user: uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu}
-      - {name: dotted, user: sam.o_neil-2}
-    triggers:
-      - {type: mention}
-      - type: botMessage
-        from: {id: ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss}
-        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
-        promptTemplate: "An alert."
-      - type: botMessage
-        from: {id: 0b7a9c1e-3f2d-4a5b-8c6d-9e0f1a2b3c4d}
-        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
-        promptTemplate: "An alert."

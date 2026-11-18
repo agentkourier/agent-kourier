@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -47,10 +48,22 @@ var exampleIDs = map[string]map[string]string{
 	"Slack": {"channel": "C0123456789", "sender": "B0123456789", "user": "U0123456789", "group": "S0123456789"},
 }
 
-// Every ID that a platform takes, the schema and Validate take too, so that no ID that resolution takes on its platform is refused
-// when it is applied or loaded: each shape's cap is within its field's, and no ID of a shape holds a character outside chatIDChars.
-// The characters are tried one at a time, every byte of ASCII and a few runes outside it (a letter, a space that is not ASCII's, a
-// mark that turns the text and one that is not seen), at every place of an ID that the shape takes.
+// setID puts id in a Binding's field of the kind of chat ID that field names, as shapes names it.
+var setID = map[string]func(b *Binding, id string){
+	"channel": func(b *Binding, id string) { b.Spec.Chat.Channel = id },
+	"sender":  func(b *Binding, id string) { bot(b).From.ID = id },
+	"user":    func(b *Binding, id string) { b.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: id}} },
+	"group": func(b *Binding, id string) {
+		b.Spec.Interactions.ToolApprovals = true
+		b.Spec.Interactions.ApproverGroups = []string{id}
+	},
+}
+
+// Every ID that a platform takes, Validate takes too, and so the schema, whose patterns and caps are Validate's
+// (TestSchemaPatternsEqualTheGoLiterals, TestSchemaCapsEqualTheBrokersCaps): no ID that resolution takes on its platform is refused
+// when it is applied or loaded. Each shape's cap is within its field's, and IDs near the shape's example are tried: every byte of
+// ASCII and a few runes outside it (a letter, a space that is not ASCII's, a mark that turns the text and one that is not seen), at
+// every place of the example, and the example made as long as the shape's cap.
 func TestEveryPlatformsShapesAreWithinTheSchema(t *testing.T) {
 	var chars []string
 	for c := range 128 {
@@ -67,35 +80,23 @@ func TestEveryPlatformsShapesAreWithinTheSchema(t *testing.T) {
 			if !ok || !f.shape.Matches(example) {
 				t.Fatalf("%s: %s has no example of its shape, or %q is not one", field, p.Name, example)
 			}
+			ids := []string{example, example + strings.Repeat("0", f.shape.maxLen-len(example))}
 			for _, c := range chars {
 				for i := 0; i <= len(example); i++ {
-					if id := example[:i] + c + example[i:]; f.shape.Matches(id) && !chatIDChars.MatchString(id) {
-						t.Errorf("%s: %s's shape takes %q, which the schema refuses", field, p.Name, id)
-					}
+					ids = append(ids, example[:i]+c+example[i:])
+				}
+			}
+			for _, id := range ids {
+				if !f.shape.Matches(id) {
+					continue
+				}
+				b := load[Binding](t, "binding.yaml")
+				setID[field](b, id)
+				if err := b.Validate(); err != nil {
+					t.Errorf("%s: %s's shape takes %q, which Validate refuses: %v", field, p.Name, id, err)
 				}
 			}
 		}
-	}
-}
-
-// What the schema refuses of a chat ID, and what it takes, which resolution refuses on a platform whose shape it is not: a
-// channel's name such as general, which is no Slack channel ID.
-func TestTheChatIDCharacters(t *testing.T) {
-	for _, tc := range []struct {
-		id   string
-		want bool
-	}{
-		{"C0123456789", true}, {"octo-org/hello-world", true}, {"dependabot[bot]", true}, {"general", true}, {"#general", true},
-		{"sam@example.com", true}, {"{557058-uuid}", true}, {"a!\"#$%&'()*+,-./9;<=>?@Z[\\]^_`z{|}~", true},
-		{"", false}, {"ch:1", false}, {"ch 1", false}, {"ch\t1", false}, {"ch\n", false}, {"\x00", false}, {"ch\x7f", false},
-		{"ché", false}, {"ch\u00a01", false}, {"ch\u202e1", false}, {"ch\u200b1", false},
-	} {
-		if got := chatIDChars.MatchString(tc.id); got != tc.want {
-			t.Errorf("chatIDChars.MatchString(%q) = %v, want %v", tc.id, got, tc.want)
-		}
-	}
-	if slack(t).Channel.Matches("general") {
-		t.Error("Slack's channel shape takes the name general")
 	}
 }
 
@@ -109,8 +110,8 @@ func TestSlackIDShapes(t *testing.T) {
 	}{
 		{"channel", p.Channel, "C0123456789", true},
 		{"channel", p.Channel, "G0123456789", true},
-		{"channel", p.Channel, "C" + strings.Repeat("0", maxSlackIDLen-1), true},
-		{"channel", p.Channel, "C" + strings.Repeat("0", maxSlackIDLen), false},
+		{"channel", p.Channel, "C" + strings.Repeat("0", maxChatIDLen-1), true},
+		{"channel", p.Channel, "C" + strings.Repeat("0", maxChatIDLen), false},
 		{"channel", p.Channel, "C", false},
 		{"channel", p.Channel, "", false},
 		{"channel", p.Channel, "general", false},
@@ -121,7 +122,7 @@ func TestSlackIDShapes(t *testing.T) {
 		{"channel", p.Channel, "C0123456789\n", false},
 		{"channel", p.Channel, "octo-org/hello-world", false},
 		{"sender", p.Sender, "B0123456789", true},
-		{"sender", p.Sender, "B" + strings.Repeat("0", maxSlackIDLen), false},
+		{"sender", p.Sender, "B" + strings.Repeat("0", maxChatIDLen), false},
 		{"sender", p.Sender, "U0123456789", false},
 		{"sender", p.Sender, "alertmanager", false},
 		{"sender", p.Sender, "dependabot[bot]", false},
@@ -131,7 +132,7 @@ func TestSlackIDShapes(t *testing.T) {
 		{"user", p.User, "S0123456789", false},
 		{"user", p.User, "octocat", false},
 		{"group", p.Group, "S0123456789", true},
-		{"group", p.Group, "S" + strings.Repeat("0", maxSlackIDLen), false},
+		{"group", p.Group, "S" + strings.Repeat("0", maxChatIDLen), false},
 		{"group", p.Group, "octo-org/sre", false},
 	} {
 		if got := tc.shape.Matches(tc.in); got != tc.want {
@@ -207,16 +208,16 @@ func TestPlatformMismatches(t *testing.T) {
 			{Path: "spec.chat.triggers[1].from.id", Problem: `"alertmanager" is not a bot ID`, Fix: "use the bot's ID, such as B0123456789, not its name"},
 		}},
 		{"a Slack channel over Slack's length: the length, and not the value", slack(t), func(b *Binding) {
-			b.Spec.Chat.Channel = "C" + strings.Repeat("0", maxSlackIDLen)
+			b.Spec.Chat.Channel = "C" + strings.Repeat("0", maxChatIDLen)
 		}, []PlatformMismatch{
 			{Path: "spec.chat.channel", Problem: "is 33 bytes, longer than the 32 byte limit of a channel ID",
 				Fix: "use the channel's ID, such as C0123456789 (G… for an older private channel), not its name"},
 		}},
-		{"a Slack channel at Slack's length", slack(t), func(b *Binding) { b.Spec.Chat.Channel = "C" + strings.Repeat("0", maxSlackIDLen-1) }, nil},
+		{"a Slack channel at Slack's length", slack(t), func(b *Binding) { b.Spec.Chat.Channel = "C" + strings.Repeat("0", maxChatIDLen-1) }, nil},
 		{"a sender and a group over Slack's length", slack(t), func(b *Binding) {
-			bot(b).From.ID = "B" + strings.Repeat("0", maxSlackIDLen)
+			bot(b).From.ID = "B" + strings.Repeat("0", maxChatIDLen)
 			b.Spec.Interactions.ToolApprovals = true
-			b.Spec.Interactions.ApproverGroups = []string{"S" + strings.Repeat("0", maxSlackIDLen)}
+			b.Spec.Interactions.ApproverGroups = []string{"S" + strings.Repeat("0", maxChatIDLen)}
 		}, []PlatformMismatch{
 			{Path: "spec.chat.triggers[1].from.id", Problem: "is 33 bytes, longer than the 32 byte limit of a bot ID", Fix: "use the bot's ID, such as B0123456789, not its name"},
 			{Path: "spec.interactions.approverGroups[0]", Problem: "is 33 bytes, longer than the 32 byte limit of a user group ID", Fix: "use the user group's ID, such as S0123456789"},
@@ -244,15 +245,18 @@ func TestPlatformMismatches(t *testing.T) {
 			{Path: "spec.feedback.enabled", Unsupported: true, Problem: "feedback buttons are not supported", Fix: "set it to false"},
 		}},
 		{"output final on Slack", slack(t), func(b *Binding) { b.Spec.Chat.Output = OutputFinal }, nil},
-		{"a Slack channel's name on Slack, which the schema takes", slack(t), func(b *Binding) { b.Spec.Chat.Channel = "general" }, []PlatformMismatch{
+		{"a Slack channel's name on Slack", slack(t), func(b *Binding) { b.Spec.Chat.Channel = "general" }, []PlatformMismatch{
 			{Path: "spec.chat.channel", Problem: `"general" is not a channel ID`, Fix: "use the channel's ID, such as C0123456789 (G… for an older private channel), not its name"},
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := load[Binding](t, "binding.yaml")
 			tc.mutate(b)
-			if err := b.Validate(); err != nil {
-				t.Fatalf("the Binding does not pass Validate, which PlatformMismatches expects: %v", err)
+			// The schema and Validate hold Slack's shapes, so every chat ID that resolution refuses on Slack, Validate refused first;
+			// a feature a platform does not serve is resolution's alone.
+			wrongID := slices.ContainsFunc(tc.want, func(m PlatformMismatch) bool { return !m.Unsupported })
+			if err := b.Validate(); (err != nil) != wrongID {
+				t.Fatalf("Validate = %v; want an error exactly when an ID is not Slack's (%v)", err, wrongID)
 			}
 			if got := b.Spec.PlatformMismatches(tc.platform); !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("PlatformMismatches =\n%+v\nwant\n%+v", got, tc.want)
