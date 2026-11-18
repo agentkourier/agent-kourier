@@ -61,7 +61,7 @@ func TestAVoteWhoseRecordFailedAfterItsCommitIsProcessedWhenDeliveredAgain(t *te
 	r := newRig(t)
 	var err error
 	r.h, err = feedback.New(feedback.Config{
-		Store: &ambiguousCommit{Store: r.st}, Sessions: r.st, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Auditor: r.aud,
+		Store: &ambiguousCommit{Store: r.st}, Sessions: r.st, Bindings: r.rates, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Auditor: r.aud,
 		Limits: store.PressLimits{Total: 10, PerUser: 3}, Logger: slog.New(slog.NewTextHandler(&r.logs, nil)),
 		Now: func() time.Time { return r.now }, Notify: func(p store.Press) { r.seen = append(r.seen, p) },
 	})

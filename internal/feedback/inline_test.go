@@ -19,7 +19,7 @@ func (r *rig) inline(t *testing.T) {
 	t.Helper()
 	var w *interact.Worker
 	h, err := feedback.New(feedback.Config{
-		Store: r.st, Sessions: r.st, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Auditor: r.aud,
+		Store: r.st, Sessions: r.st, Bindings: r.rates, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Auditor: r.aud,
 		Limits: store.PressLimits{Total: 10, PerUser: 3}, Logger: testutil.DiscardLogger(), Now: func() time.Time { return r.now },
 		Notify: func(p store.Press) { w.Submit(p) }, Outcomes: interact.NewOutcomes(4),
 	})

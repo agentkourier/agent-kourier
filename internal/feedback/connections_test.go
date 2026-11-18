@@ -23,7 +23,7 @@ func TestAVoteIsCheckedAndAnsweredOnTheConnectionItCameIn(t *testing.T) {
 	r.message(t, keyB, own, "100.9")
 	azB, ephB := &authz{members: map[string]bool{"UCAROL": true}}, &ephemerals{}
 	h, err := feedback.New(feedback.Config{
-		Store: r.st, Sessions: r.st, Auditor: r.aud, Notify: func(store.Press) {}, Now: func() time.Time { return r.now },
+		Store: r.st, Sessions: r.st, Bindings: r.rates, Auditor: r.aud, Notify: func(store.Press) {}, Now: func() time.Time { return r.now },
 		Authorizers: chat.PlatformSet[interact.Authorizer]{key.Connection: r.az, keyB.Connection: azB},
 		Ephemerals:  chat.PlatformSet[interact.Ephemeral]{key.Connection: r.eph, keyB.Connection: ephB},
 		Logger:      testutil.DiscardLogger(),

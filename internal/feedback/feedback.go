@@ -25,6 +25,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
+	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
@@ -157,6 +158,9 @@ type Auditor interface {
 type Config struct {
 	Store    Store
 	Sessions interact.SessionReader
+	// Bindings says whether a Binding's answers to people carry the buttons, so that a vote on an answer of a Binding whose
+	// feedback is off is refused.
+	Bindings Bindings
 	// Authorizers and Ephemerals give the platform of the connection a vote came in on, which says who may vote and tells the
 	// voter alone what became of their press.
 	Authorizers chat.Resolver[interact.Authorizer]
@@ -174,6 +178,13 @@ type Config struct {
 	Outcomes *interact.Outcomes
 }
 
+// Bindings gives a Binding's feedback.enabled; the broker implements it.
+type Bindings interface {
+	// FeedbackEnabled is the feedback.enabled of the Binding named "namespace/name": whether its answers to people carry the
+	// buttons. An error wrapping session.ErrUnknownBinding means the config has no such Binding.
+	FeedbackEnabled(name string) (bool, error)
+}
+
 // Handler takes the presses of feedback buttons. Press is the sink's side and Process the worker's. It is safe for
 // concurrent use.
 type Handler struct {
@@ -187,8 +198,8 @@ var _ interact.PressProcessor = (*Handler)(nil)
 
 // New returns a Handler over cfg.
 func New(cfg Config) (*Handler, error) {
-	if cfg.Store == nil || cfg.Sessions == nil || cfg.Authorizers == nil || cfg.Ephemerals == nil || cfg.Auditor == nil {
-		return nil, errors.New("feedback: Store, Sessions, Authorizers, Ephemerals and Auditor are required")
+	if cfg.Store == nil || cfg.Sessions == nil || cfg.Bindings == nil || cfg.Authorizers == nil || cfg.Ephemerals == nil || cfg.Auditor == nil {
+		return nil, errors.New("feedback: Store, Sessions, Bindings, Authorizers, Ephemerals and Auditor are required")
 	}
 	if cfg.Notify == nil {
 		return nil, errors.New("feedback: Notify is required")
@@ -306,6 +317,18 @@ func (h *Handler) process(ctx context.Context, press store.Press) (interact.Resu
 		return h.finish(ctx, press, to, textGone)
 	} else if err != nil {
 		return interact.Retry, "", fmt.Errorf("feedback: read the session of %s: %w", v.Turn, err)
+	}
+	// An answer to a person carries the buttons only when its Binding's feedback is on (an investigation's always does): a vote on
+	// one while it is off is refused. A Binding the config no longer has takes votes as it did.
+	if v.Kind == store.FeedbackAnswer {
+		switch on, err := h.cfg.Bindings.FeedbackEnabled(sess.Binding); {
+		case errors.Is(err, session.ErrUnknownBinding):
+		case err != nil:
+			return interact.Retry, "", fmt.Errorf("feedback: read whether %s takes votes: %w", sess.Binding, err)
+		case !on:
+			h.cfg.Logger.DebugContext(ctx, "feedback: a vote on an answer of a Binding whose feedback is off was refused", "binding", sess.Binding)
+			return h.finish(ctx, press, to, textGone)
+		}
 	}
 	// The message the buttons are on is the one the turn's outbox row says it is, in the channel of the press: the thread and
 	// the turn in the value are the button's own words, and a vote is recorded for them only if the platform agrees (as a

@@ -124,14 +124,9 @@ func (b *Bindings) Close() {
 // resolve finds the Binding named "namespace/name" in the current snapshot, and the kit of its
 // backend's dialect. The errors are those of Backend.
 func (b *Bindings) resolve(name string) (config.ResolvedBinding, kit, error) {
-	snap := b.snaps.Current()
-	if snap == nil {
-		return config.ResolvedBinding{}, kit{}, fmt.Errorf("broker: Binding %s: the config has not loaded yet", name)
-	}
-	ns, n, ok := strings.Cut(name, "/")
-	rb, found := snap.Binding(ns, n)
-	if !ok || !found {
-		return config.ResolvedBinding{}, kit{}, fmt.Errorf("%w: %s", session.ErrUnknownBinding, name)
+	rb, err := b.find(name)
+	if err != nil {
+		return config.ResolvedBinding{}, kit{}, err
 	}
 	k, ok := b.kits[rb.Backend.Spec.Dialect]
 	if !ok {
@@ -139,6 +134,31 @@ func (b *Bindings) resolve(name string) (config.ResolvedBinding, kit, error) {
 			name, v1alpha1.NamespacedName(rb.Backend.Namespace, rb.Backend.Name), rb.Backend.Spec.Dialect, v1alpha1.DialectKagentV1, v1alpha1.DialectA2A)
 	}
 	return rb, k, nil
+}
+
+// find finds the Binding named "namespace/name" in the current snapshot. An error wrapping session.ErrUnknownBinding means the config
+// has no such Binding; any other, that no config has loaded yet.
+func (b *Bindings) find(name string) (config.ResolvedBinding, error) {
+	snap := b.snaps.Current()
+	if snap == nil {
+		return config.ResolvedBinding{}, fmt.Errorf("broker: Binding %s: the config has not loaded yet", name)
+	}
+	ns, n, ok := strings.Cut(name, "/")
+	rb, found := snap.Binding(ns, n)
+	if !ok || !found {
+		return config.ResolvedBinding{}, fmt.Errorf("%w: %s", session.ErrUnknownBinding, name)
+	}
+	return rb, nil
+}
+
+// FeedbackEnabled is the feedback.enabled of the Binding named "namespace/name", from the snapshot that is current: whether its
+// answers to people carry the feedback buttons, so whether a vote on one is taken (feedback.Bindings). Its errors are those of find.
+func (b *Bindings) FeedbackEnabled(name string) (bool, error) {
+	rb, err := b.find(name)
+	if err != nil {
+		return false, err
+	}
+	return rb.Binding.Spec.Feedback.Enabled, nil
 }
 
 // Backend returns the backend of the Binding named "namespace/name". An error wrapping

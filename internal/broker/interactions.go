@@ -179,7 +179,7 @@ func (d interactionDeps) build(inner session.Sink) (*interactionRuntime, error) 
 		return nil, fmt.Errorf("interactions: the press pipeline: %w", err)
 	}
 	votes, err := feedback.New(feedback.Config{
-		Store: d.st, Sessions: d.st, Authorizers: chat.Narrow[interact.Authorizer](d.platforms), Ephemerals: chat.Narrow[interact.Ephemeral](d.platforms), Auditor: d.auditor,
+		Store: d.st, Sessions: d.st, Bindings: d.bindings, Authorizers: chat.Narrow[interact.Authorizer](d.platforms), Ephemerals: chat.Narrow[interact.Ephemeral](d.platforms), Auditor: d.auditor,
 		Notify: func(p store.Press) { worker.Submit(p) }, Outcomes: outcomes, Logger: d.log,
 	})
 	if err != nil {

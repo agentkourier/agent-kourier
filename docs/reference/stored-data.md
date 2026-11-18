@@ -46,7 +46,8 @@ The useful and not-useful buttons store one row for each person and message, in 
 No free text is stored: Agent Kourier asks for none, origin source and subject are kept only in the name shape, and the alert name is kept only in that shape (an alert's title is
 untrusted text; a value outside the shape is stored as empty). A generic origin subject is not an alert name and is counted as `unknown` for an investigation or `none` for an answer. A vote counts only from a member of the bound channel and
 never from a bot. **Retention: rows are kept.** A review of how useful the investigations were is computed from them; no retention loop touches the table, the deletion of expired sessions included. A vote on a message whose session
-has been deleted is told that the message can no longer be rated. The voter's ID is the only personal datum in a row: remove the
+has been deleted is told that the message can no longer be rated, and so is a vote on an answer while its Binding's `feedback.enabled` is off,
+the buttons of an answer posted before it was turned off included; a Binding that the config no longer has takes votes as before. The voter's ID is the only personal datum in a row: remove the
 rows of a person with `DELETE FROM feedback WHERE user_id = ...` on the operator's own request.
 
 Migration 0026 replaces the old `sessions.alert_name` column with the generic origin columns and keeps nonempty legacy
