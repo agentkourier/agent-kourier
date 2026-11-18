@@ -53,6 +53,13 @@ gets its own reaction. Set `chat.acknowledgment.enabled: false` on the Binding t
 With `chat.threadReplies: mention`, only replies that mention Agent Kourier are turns, except a typed answer to the agent's pending question. The
 others are ignored, and the next mentioned turn carries them to the agent as context, in a block marked as untrusted data.
 
+A person's mention in a thread that Agent Kourier does not own starts a session there, and its first turn carries no reply of the thread. On
+Microsoft Teams it carries the thread's first message, whoever posted it, whatever `chat.threadReplies` says, in a block marked as
+untrusted data: Teams does not send Agent Kourier an alert that another app posts, so the person's mention is the first turn that can
+show the agent the alert it is about ([Earlier replies on Microsoft Teams](../reference/platforms.md#earlier-replies-on-microsoft-teams)).
+On Slack an alert's post reaches its `botMessage` trigger, which starts the session with the post, and a person's first mention in any
+other thread carries the person's message alone.
+
 ## Output
 
 With `output: live`, the answer streams into one message as the agent writes it. A dropped stream is reconciled by
