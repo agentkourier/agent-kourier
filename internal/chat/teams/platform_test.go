@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -131,35 +132,42 @@ func TestPostFallsBackToTheDefaultServiceURL(t *testing.T) {
 	}
 }
 
-// The bot's token goes to an https service URL alone: a record of another form is refused before any call, and a redirect is not
-// followed.
+// The bot's token goes to an https service URL alone: a record of another form is refused before any call, the token's included, and a
+// redirect is not followed.
 func TestTheTokenGoesToTheServiceURLAlone(t *testing.T) {
 	t.Parallel()
 	for _, bad := range []string{"http://smba.example.test/", "https://user:pw@smba.example.test/", "https://smba.example.test/?x=1", "/relative/"} {
-		ct := newClientTest(t)
-		if err := ct.convs.Remember(t.Context(), testConn, Conversation{Channel: testChannel, ServiceURL: bad}); err != nil {
+		var calls atomic.Int32
+		convs := NewMemoryConversations()
+		c, err := New(Config{Connection: testConn, TenantID: testTenant, AppID: testAppID, ClientSecret: secret.New(testClientSecret),
+			TokenURL: "https://login.example.test/token", Conversations: convs, Logger: testutil.DiscardLogger(),
+			HTTPClient: &http.Client{Transport: roundTripper(func(r *http.Request) (*http.Response, error) {
+				calls.Add(1)
+				return nil, fmt.Errorf("no call may be made, and one was: %s %s", r.Method, r.URL.Redacted())
+			})}})
+		if err != nil {
 			t.Fatal(err)
 		}
-		_, err := ct.c.Post(t.Context(), chat.Target{Conn: testConn, Channel: testChannel}, chat.Say(chat.Message{Fallback: "x"}), "tag")
-		if err == nil || len(ct.f.take()) != 0 {
-			t.Errorf("service URL %q: %v, and a call was made", bad, err)
+		if err := convs.Remember(t.Context(), testConn, Conversation{Channel: testChannel, ServiceURL: bad}); err != nil {
+			t.Fatal(err)
+		}
+		_, err = c.Post(t.Context(), chat.Target{Conn: testConn, Channel: testChannel}, chat.Say(chat.Message{Fallback: "x"}), "tag")
+		if err == nil || calls.Load() != 0 {
+			t.Errorf("service URL %q: %v, and %d calls were made", bad, err, calls.Load())
 		}
 	}
+
 	var elsewhere atomic.Int32
-	other := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "" {
-			elsewhere.Add(1)
-		}
-	}))
+	other := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { elsewhere.Add(1) }))
 	t.Cleanup(other.Close)
-	ct := newClientTest(t)
-	ct.record(t, testChannel, testChannel)
-	ct.f.setFail(func(r *http.Request) (int, string, bool) {
-		if r.URL.Path == "/token" {
-			return 0, "", false
-		}
-		return http.StatusTemporaryRedirect, "", true
-	})
+	redirector := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/x", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(redirector.Close)
+	ct := newClientTest(t) // the token from the fake, and the post to the redirector: httptest's TLS servers share one certificate
+	if err := ct.convs.Remember(t.Context(), testConn, Conversation{Channel: testChannel, ServiceURL: redirector.URL + "/amer/"}); err != nil {
+		t.Fatal(err)
+	}
 	_, err := ct.c.Post(t.Context(), chat.Target{Conn: testConn, Channel: testChannel}, chat.Say(chat.Message{Fallback: "x"}), "tag")
 	var ae *APIError
 	if !errors.As(err, &ae) || ae.Status != http.StatusTemporaryRedirect || elsewhere.Load() != 0 {
