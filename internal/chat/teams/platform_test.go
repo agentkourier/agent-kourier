@@ -101,34 +101,50 @@ type roundTripper func(*http.Request) (*http.Response, error)
 
 func (f roundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-// A channel with no record is posted to through the Bot Connector's global route.
+// unreadableStore is a ConversationStore whose every Lookup fails, as a database that cannot be reached does.
+type unreadableStore struct{ *MemoryConversations }
+
+func (unreadableStore) Lookup(context.Context, string, string) (Conversation, bool, error) {
+	return Conversation{}, false, errors.New("the store cannot be reached")
+}
+
+// A channel with no record, and one whose record cannot be read, are posted to through the Bot Connector's global route: a store that
+// fails is a miss, and the post goes on.
 func TestPostFallsBackToTheDefaultServiceURL(t *testing.T) {
 	t.Parallel()
-	var mu sync.Mutex
-	var urls []string
-	client := &http.Client{Transport: roundTripper(func(r *http.Request) (*http.Response, error) {
-		mu.Lock()
-		urls = append(urls, r.URL.String())
-		mu.Unlock()
-		body := `{"id":"1700000000002"}`
-		if r.URL.Host == "login.example.test" {
-			body = `{"token_type":"Bearer","expires_in":3599,"access_token":"fake-bot-token"}`
-		}
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}, Request: r}, nil
-	})}
-	c, err := New(Config{Connection: testConn, TenantID: testTenant, AppID: testAppID, ClientSecret: secret.New(testClientSecret),
-		TokenURL: "https://login.example.test/token", HTTPClient: client, Logger: testutil.DiscardLogger()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := c.Post(t.Context(), chat.Target{Conn: testConn, Channel: testChannel}, chat.Say(chat.Message{Fallback: "x"}), "tag"); err != nil {
-		t.Fatal(err)
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	want := "https://smba.trafficmanager.net/teams/v3/conversations/" + escapedChannel() + "/activities"
-	if len(urls) != 2 || urls[1] != want {
-		t.Fatalf("calls %v, want the token and then %s", urls, want)
+	for name, convs := range map[string]ConversationStore{
+		"no record":                   NewMemoryConversations(),
+		"a record that fails to read": unreadableStore{NewMemoryConversations()},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var mu sync.Mutex
+			var urls []string
+			client := &http.Client{Transport: roundTripper(func(r *http.Request) (*http.Response, error) {
+				mu.Lock()
+				urls = append(urls, r.URL.String())
+				mu.Unlock()
+				body := `{"id":"1700000000002"}`
+				if r.URL.Host == "login.example.test" {
+					body = `{"token_type":"Bearer","expires_in":3599,"access_token":"fake-bot-token"}`
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}, Request: r}, nil
+			})}
+			c, err := New(Config{Connection: testConn, TenantID: testTenant, AppID: testAppID, ClientSecret: secret.New(testClientSecret),
+				TokenURL: "https://login.example.test/token", HTTPClient: client, Conversations: convs, Logger: testutil.DiscardLogger()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.Post(t.Context(), chat.Target{Conn: testConn, Channel: testChannel}, chat.Say(chat.Message{Fallback: "x"}), "tag"); err != nil {
+				t.Fatal(err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			want := "https://smba.trafficmanager.net/teams/v3/conversations/" + escapedChannel() + "/activities"
+			if len(urls) != 2 || urls[1] != want {
+				t.Fatalf("calls %v, want the token and then %s", urls, want)
+			}
+		})
 	}
 }
 
@@ -317,6 +333,18 @@ func TestChannelAccess(t *testing.T) {
 	})
 	if _, err := ct.c.ChannelAccess(t.Context(), testChannel); !errors.Is(err, chat.ErrChannelNotFound) {
 		t.Errorf("a bot removed from the team: %v", err)
+	}
+}
+
+// A channel whose record cannot be read is not said to be gone: the error, like that of a channel with no record, is no verdict, so a
+// store that fails for a while does not make its Bindings' channel look deleted.
+func TestChannelAccessOfARecordThatCannotBeReadIsNoVerdict(t *testing.T) {
+	t.Parallel()
+	ct := newClientTest(t)
+	ct.f.setTeam(testChannel, testChannel)
+	ct.c.convs = unreadableStore{NewMemoryConversations()}
+	if _, err := ct.c.ChannelAccess(t.Context(), testChannel); err == nil || errors.Is(err, chat.ErrChannelNotFound) || errors.Is(err, chat.ErrMissingScope) {
+		t.Errorf("a record that cannot be read: %v, want an error that is no verdict", err)
 	}
 }
 

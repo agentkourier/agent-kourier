@@ -962,3 +962,42 @@ func TestReceiverDedupsByTypeToo(t *testing.T) {
 		t.Errorf("the sink got %+v, want the message", got)
 	}
 }
+
+// refusingStore is a ConversationStore that refuses every record, as the broker's store refuses the write of a replica that is not the
+// leader, and counts what it was asked to record.
+type refusingStore struct {
+	*MemoryConversations
+	mu    sync.Mutex
+	asked int
+}
+
+func (s *refusingStore) Remember(context.Context, string, Conversation) error {
+	s.mu.Lock()
+	s.asked++
+	s.mu.Unlock()
+	return errors.New("store: deposed")
+}
+
+func (s *refusingStore) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.asked
+}
+
+// TestReceiverHandsOnAPostWhoseRecordTheStoreRefuses: a record the store refuses stops nothing. The post is still given to the sink, and the
+// record, which the receiver does not take as written, is asked of the store again with the channel's next activity.
+func TestReceiverHandsOnAPostWhoseRecordTheStoreRefuses(t *testing.T) {
+	rt := newReceiverTest(t, false, nil)
+	refusing := &refusingStore{MemoryConversations: NewMemoryConversations()}
+	rt.r.convs = refusing
+	rt.serve(t)
+	for _, id := range []string{"1794965000101", "1794965000102"} {
+		if rec := rt.post(t, inChannel(t, "message_plain", testChannel, id), ""); rec.Code != http.StatusOK {
+			t.Fatalf("status %d, want 200", rec.Code)
+		}
+		testutil.Eventually(t, "the sink has the post", func() bool { return rt.sink.has(id) })
+	}
+	if got := refusing.count(); got != 2 {
+		t.Errorf("the store was asked for the record %d times, want twice: once for each activity, since the first was refused", got)
+	}
+}
