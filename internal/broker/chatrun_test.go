@@ -419,7 +419,7 @@ func TestChooseConnectionRefusesWhatV1CannotRun(t *testing.T) {
 	r := &reader{vals: map[string]string{"platform/creds-a/botToken": "xoxb-fake", "platform/creds-a/appToken": "xapp-fake"}}
 	snap := slackConnections(t, "platform/a")
 	conn := snap.ChatConnections()[0]
-	conn.Spec.Platform = "teams"
+	conn.Spec.Platform = "discord"
 	if _, err := ChooseConnection(t.Context(), snap, v1alpha1.ObjectRef{}, r); !errors.Is(err, ErrWiring) {
 		t.Errorf("a connection that is not Slack's: %v, want ErrWiring", err)
 	}

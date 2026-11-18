@@ -203,8 +203,9 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 		name := t.Name()
 		st := s.teams[name]
 		if t.Err != nil {
-			// Its Secret is not readable now, or its platform has no adapter. What runs keeps running on the tokens it was started with: a
-			// cache that is relisting is no reason to drop a connection. Otherwise it starts once it can.
+			// Its Secret is not readable now, its platform has no adapter, or it is a Microsoft Teams connection in socket mode. What runs
+			// keeps running on the tokens it was started with: a cache that is relisting is no reason to drop a connection. Otherwise it
+			// starts once it can.
 			if st != nil && st.held() {
 				// It holds its app unless an older connection claimed it in this pass (desired is oldest first): then it is the second
 				// connection of the app and is refused, as it would be if its Secret could be read, and not left running beside the older.
@@ -219,8 +220,11 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 			}
 			if st == nil || st.rt == nil {
 				msg := "the ChatConnection is not started yet: its credentials cannot be used"
-				if errors.Is(t.Err, errNoAdapter) { // no Secret is at fault, and none that is mended starts it
+				switch { // no Secret is at fault in either, and none that is mended starts it
+				case errors.Is(t.Err, errNoAdapter):
 					msg = "the ChatConnection is not started: this broker has no adapter for its platform"
+				case errors.Is(t.Err, errTeamsSocket):
+					msg = "the ChatConnection is not started: Socket mode is not supported yet for Microsoft Teams"
 				}
 				s.say(ctx, name, msg, t.Err)
 				if st == nil || !st.refused { // a refused connection is not served, and its series is not for this branch to bring back

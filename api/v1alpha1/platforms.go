@@ -134,10 +134,10 @@ func ChatPlatformOf(spec ChatConnectionSpec) (ChatPlatform, bool) {
 		if spec.Teams == nil {
 			return ChatPlatform{}, false
 		}
-		// The rules that a Binding of a teams connection is held to. No broker runs a teams connection yet (it has no adapter), so
-		// these say what the API takes, not what a Binding gets: questions, tool approvals, feedback and botMessage triggers are
-		// taken, in either mode and with or without spec.teams.notificationURL; approver groups are not, as the broker is not to
-		// read Microsoft Entra groups.
+		// The rules that a Binding of a teams connection is held to. They say what the API takes, which is more than the broker's
+		// Teams adapter does yet: questions, tool approvals, feedback and botMessage triggers are taken, in either mode and with or
+		// without spec.teams.notificationURL, while the adapter shows a question as text that cannot be answered, refuses a tool
+		// approval, and shows buttons, feedback's among them, as text that cannot be pressed. Approver groups are not taken, as the broker is not to read Microsoft Entra groups.
 		const guid = "a GUID in lowercase hex, such as 11111111-2222-3333-4444-555555555555"
 		return ChatPlatform{
 			Name: "Microsoft Teams", ActorName: "Microsoft Teams",

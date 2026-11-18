@@ -9,7 +9,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/limitsdoc"
 )
 
-// TestLimitsPage holds the page docs/reference/limits.md to the bounds of the Teams receiver.
+// TestLimitsPage holds the page docs/reference/limits.md to the bounds of the Teams receiver and of what the Client sends.
 func TestLimitsPage(t *testing.T) {
 	// The waits that a Receiver keeps in fields, which a test may shorten, are read from one NewReceiver built.
 	r, err := NewReceiver(ReceiverConfig{Connection: testConn, TenantID: testTenant, AppID: testAppID})
@@ -40,4 +40,15 @@ func TestLimitsPage(t *testing.T) {
 	if id := chat.MessageID(chat.Ref{Platform: "p", Conn: "c", Channel: "h", ID: "i"}); id != strings.Join([]string{"p", "c", "h", "i"}, idSeparator) {
 		t.Errorf("chat.MessageID gives %q: idSeparator is not what it joins on", id)
 	}
+
+	limitsdoc.Duration(t, "teamsTokenRefresh", tokenRefreshMargin)
+	limitsdoc.Duration(t, "teamsTokenStale", tokenStaleMargin)
+	limitsdoc.Duration(t, "teamsTokenFetch", tokenFetchTimeout)
+	limitsdoc.Duration(t, "teamsTokenRetry", tokenRetryWait)
+	limitsdoc.Bytes(t, "teamsTokenBody", tokenMaxBody)
+	limitsdoc.Bytes(t, "teamsConnectorBody", connectorMaxBody)
+	limitsdoc.Bytes(t, "teamsMessageBytes", maxMessageBytes)
+	limitsdoc.Count(t, "teamsTextUnits", maxTextUnits)
+	limitsdoc.Count(t, "teamsBodyUnits", maxBodyUnits)
+	limitsdoc.Count(t, "teamsMinBodyUnits", minBodyUnits)
 }

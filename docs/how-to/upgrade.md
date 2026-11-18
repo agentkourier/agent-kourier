@@ -1001,15 +1001,16 @@ Binding that 0.4.0 took loads as it did. What changes:
 ## Upgrade to the release that takes Microsoft Teams ChatConnections
 
 A ChatConnection may now say `spec.platform: teams`, with a `spec.teams` block ([ChatConnection](../reference/chatconnection.md)), and
-the schema and the broker's load take Microsoft Teams' chat IDs beside Slack's. No broker runs a teams connection yet: there is no
-Microsoft Teams adapter. What changes:
+the schema and the broker's load take Microsoft Teams' chat IDs beside Slack's. The broker runs a teams connection in `http` mode, on
+its chat listener, with what [What each platform supports](../reference/platforms.md) says it does not do yet. What changes:
 
-- **A teams ChatConnection is checked, and not started.** `spec.teams.tenantID` and `spec.teams.appID` are required, each a GUID in
+- **A teams ChatConnection runs in `http` mode, and is not started in `socket` mode.** `spec.teams.tenantID` and `spec.teams.appID` are required, each a GUID in
   lowercase hex; `spec.teams.mode` is `http` or `socket`, and `http` when left out; `spec.teams.notificationURL` is optional, an `https`
   URL whose path is the connection's own route, `/chat/teams/<namespace>/<name>`. Its Secret needs the key `clientSecret`, in either mode.
-  `spec.teams` on a Slack connection, and `spec.slack` on a teams one, are refused. As the broker's own connection a teams ChatConnection
-  stops the broker's start, with a wiring error that says the broker has no adapter for the platform; as a team's connection it is not
-  started, and the broker logs why. Nothing changes for a Slack connection.
+  `spec.teams` on a Slack connection, and `spec.slack` on a teams one, are refused. A teams ChatConnection in `http` mode needs the chat listener
+  (`AGENTKOURIER_CHAT_LISTEN`); with none, or in `socket` mode, which is not supported yet, it is not run: as the broker's own connection
+  it stops the broker's start with a wiring error that says why, and as a team's connection it is not started, and the broker logs why.
+  Nothing changes for a Slack connection.
 - **Wider chat IDs at apply and load.** `chat.channel` takes a Microsoft Teams channel ID, `19:…@thread.tacv2` or `@thread.skype`, and
   its cap goes from 32 bytes to 140. A `botMessage` trigger's `from.id` and a mention's `user` take a Microsoft Entra ID, a GUID in
   lowercase hex, and their caps go to 36 bytes (a Slack user ID is still bounded at 21 by its pattern). `interactions.approverGroups`

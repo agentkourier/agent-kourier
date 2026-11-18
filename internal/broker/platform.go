@@ -13,6 +13,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/chat/teams"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/secret"
@@ -29,6 +30,13 @@ import (
 // clients already use (dry-run, init).
 const slackAPITimeout = 30 * time.Second
 
+// teamsAPITimeout bounds one call of a Microsoft Teams connection as a whole, from the dial to the end of the answer's body: a token
+// from Microsoft Entra, a post, reply or edit through the Bot Connector, and a fetch of the Bot Framework's keys. The adapter bounds
+// a token fetch (15 s) and a key fetch (10 s) more closely itself, so this is the bound of a Bot Connector call, which answers a small
+// JSON body. It is Slack's bound (slackAPITimeout), for the same reason: a connection that a network blip left dead does not hold a
+// post for minutes.
+const teamsAPITimeout = 30 * time.Second
+
 // Connection is the one ChatConnection v1 serves, with its credentials as read at startup: the Secret keys that
 // its platform and mode need (v1alpha1.CredentialKeys), as secret.Values, which print as redacted.
 type Connection struct {
@@ -36,6 +44,8 @@ type Connection struct {
 	// Platform is ChatConnection.spec.platform, which chooses the adapter (newPlatform).
 	Platform    string
 	Credentials map[string]secret.Value
+	// Teams is spec.teams of a Microsoft Teams connection, its tenant, app and mode, and zero for any other.
+	Teams v1alpha1.TeamsConnectionSpec
 }
 
 // platformSpec is what the broker knows of a platform: the call that tells whose bot a connection's credentials are. The name it is
@@ -50,12 +60,16 @@ type platformSpec struct {
 	Identify func(ctx context.Context, c RunConfig, conn Connection) (appIdentity, error)
 }
 
-// platformFor is the one place that names a platform: a second platform is one more case here, with its identity call, one more in
-// newPlatform for its adapter, and its keys in v1alpha1.CredentialKeys. One that is not here has no adapter, and a ChatConnection of it is a wiring
-// error. It is a func and not a table, so that there is no state to change.
+// platformFor is the one place that names a platform: a platform is a case here, with its identity call, one in newPlatform for its
+// adapter, and its keys in v1alpha1.CredentialKeys. One that is not here has no adapter, and a ChatConnection of it is a wiring error. It
+// is a func and not a table, so that there is no state to change. Microsoft Teams has no identity call yet: its connections have the
+// zero identity, so two of one bot are not told apart.
 func platformFor(name string) (platformSpec, bool) {
-	if name == v1alpha1.PlatformSlack {
+	switch name {
+	case v1alpha1.PlatformSlack:
 		return platformSpec{Identify: slackIdentityOf}, true
+	case v1alpha1.PlatformTeams:
+		return platformSpec{}, true
 	}
 	return platformSpec{}, false
 }
@@ -79,11 +93,11 @@ type builtPlatform struct {
 	closeIdle func()
 }
 
-// newPlatform builds the adapter of the connection's platform: the one place that names a platform. Only
-// slack exists; any other platform is a wiring error, which no retry mends. The Slack client gets a transport of its
-// own, so that its idle connections can be closed at shutdown. onConnection, if set, is told whether the platform's
-// connection is up: it is Config.OnConnection of the Slack adapter, and another platform would report through the same func.
-// It refuses a connection that needs the chat listener on a broker that has none (needsChatListener).
+// newPlatform builds the adapter of the connection's platform: the one place that names a platform. Slack and Microsoft Teams
+// (http mode; connectionOf refuses socket mode) exist; any other platform is a wiring error, which no retry mends. Each client gets
+// a transport of its own, so that its idle connections can be closed at shutdown. onConnection, if set, is told whether the
+// platform's connection is up: it is Config.OnConnection of the adapter. It refuses a connection that needs the chat listener on a
+// broker that has none (needsChatListener).
 func (c RunConfig) newPlatform(conn Connection, log *slog.Logger, onConnection func(connected bool)) (builtPlatform, error) {
 	name := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
 	if err := c.needsChatListener(conn); err != nil {
@@ -102,20 +116,42 @@ func (c RunConfig) newPlatform(conn Connection, log *slog.Logger, onConnection f
 		}
 		return builtPlatform{Platform: slack.NewPlatform(api, name).WithLogger(log), closeIdle: transport.CloseIdleConnections}, nil
 	}
+	if conn.Platform == v1alpha1.PlatformTeams {
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		tc := teams.Config{Connection: name, TenantID: conn.Teams.TenantID, AppID: conn.Teams.AppID,
+			ClientSecret: conn.Credentials[v1alpha1.TeamsClientSecretKey], Logger: log, OnConnection: onConnection,
+			HTTPClient: &http.Client{Transport: telemetry.Transport(transport, false), Timeout: teamsAPITimeout}}
+		if c.teamsFakes != nil {
+			c.teamsFakes(&tc)
+		}
+		client, err := teams.New(tc)
+		if err != nil {
+			return builtPlatform{}, fmt.Errorf("%w: ChatConnection %s: %w", ErrWiring, name, err)
+		}
+		return builtPlatform{Platform: client, closeIdle: transport.CloseIdleConnections}, nil
+	}
 	return builtPlatform{}, fmt.Errorf("%w: ChatConnection %s: the platform %q has no adapter", ErrWiring, name, conn.Platform)
 }
 
 // needsChatListener refuses, with a wiring error, a connection that takes its platform's requests on the chat listener when the broker has
 // none (AGENTKOURIER_CHAT_LISTEN unset): a Slack connection in HTTP mode, whose credentials are read with the signing secret
-// (v1alpha1.CredentialKeys). Slack could not reach it, and it would show as connected while nothing came in. Run checks its own
-// connection with it at start, on every replica, so that a standby refuses the config as the leader does; newPlatform checks each
-// connection it builds.
+// (v1alpha1.CredentialKeys), and a Microsoft Teams connection, which runs in http mode alone (connectionOf). The platform could not reach
+// it, and it would show as connected while nothing came in. Run checks its own connection with it at start, on every replica, so that a
+// standby refuses the config as the leader does; newPlatform checks each connection it builds.
 func (c RunConfig) needsChatListener(conn Connection) error {
-	if conn.Platform != v1alpha1.PlatformSlack || conn.Credentials[v1alpha1.SlackSigningSecretKey].IsEmpty() || c.ChatListener != nil {
+	if c.ChatListener != nil {
 		return nil
 	}
-	return fmt.Errorf("%w: ChatConnection %s is in Slack HTTP mode, and the broker has no chat listener for Slack to send to: set AGENTKOURIER_CHAT_LISTEN",
-		ErrWiring, v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name))
+	name := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
+	switch {
+	case conn.Platform == v1alpha1.PlatformSlack && !conn.Credentials[v1alpha1.SlackSigningSecretKey].IsEmpty():
+		return fmt.Errorf("%w: ChatConnection %s is in Slack HTTP mode, and the broker has no chat listener for Slack to send to: set AGENTKOURIER_CHAT_LISTEN",
+			ErrWiring, name)
+	case conn.Platform == v1alpha1.PlatformTeams:
+		return fmt.Errorf("%w: ChatConnection %s is a Microsoft Teams connection in http mode, and the broker has no chat listener for Teams to send to: set AGENTKOURIER_CHAT_LISTEN",
+			ErrWiring, name)
+	}
+	return nil
 }
 
 // slackConfig is the Slack client's config for conn. Its API URL comes from testhooks.SlackAPIURL and

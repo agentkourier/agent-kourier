@@ -27,7 +27,7 @@ func TestNewPlatformIsChosenByThePlatformOfTheConnection(t *testing.T) {
 	if got := built.Capabilities(); !got.Streams || got.AckReaction == "" {
 		t.Errorf("the adapter's capabilities are %+v; want Slack's", got)
 	}
-	for _, name := range []string{"teams", "", "Slack"} {
+	for _, name := range []string{"discord", "", "Slack", "Teams"} {
 		bad := slackConn
 		bad.Platform = name
 		built, err := cfg.newPlatform(bad, nil, nil)

@@ -272,8 +272,8 @@ type ChatConnectionList struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.teams) || self.platform == 'teams'",message="is set, but only a teams connection has one",fieldPath=".teams"
 // +kubebuilder:validation:XValidation:rule="self.platform != 'teams' || has(self.teams)",message="is required on a teams connection: it names the tenant and the app",fieldPath=".teams"
 type ChatConnectionSpec struct {
-	// Platform is the chat platform: slack, or teams, Microsoft Teams. No broker runs a teams connection yet: one that is the
-	// broker's own connection stops its start, and a team one is not started.
+	// Platform is the chat platform: slack, or teams, Microsoft Teams. A broker runs a teams connection in http mode only: one in
+	// socket mode that is the broker's own connection stops its start, and a team one is not started.
 	// +kubebuilder:validation:Enum=slack;teams
 	Platform string `json:"platform"`
 	// CredentialsSecretRef names one Secret whose keys are fixed by the platform and its mode. A Slack connection in Socket Mode needs
@@ -348,7 +348,8 @@ type TeamsConnectionSpec struct {
 	// (AGENTKOURIER_CHAT_LISTEN) at POST /chat/teams/<namespace>/<name>, or socket, over an outbound WebSocket that Agent Kourier
 	// opens to Teams, with no public endpoint. Both use the same credentials, the Secret's clientSecret. Unlike Slack's, the default
 	// is http: Microsoft's documentation recommends an HTTPS messaging endpoint for agents in production, and says that Socket mode
-	// is in public preview. No broker runs a teams connection yet, in either mode.
+	// is in public preview. A broker runs http mode only, on a chat listener: socket mode is not supported yet, and a connection
+	// in it is not started.
 	// +kubebuilder:validation:Enum=http;socket;""
 	// +doc:default=http
 	// +optional
@@ -357,7 +358,7 @@ type TeamsConnectionSpec struct {
 	// notifications of the bound channels' messages. Its path is /chat/teams/<namespace>/<name>, the ChatConnection's own namespace
 	// and name. It is optional, in either mode. At most 2048 bytes, https only (Microsoft Graph's documentation of a subscription's
 	// notificationUrl requires HTTPS), with no credentials, query or fragment. The API server checks the form of the path, and the
-	// broker that it is the connection's own. No broker runs a teams connection yet: the URL is checked, and not used.
+	// broker that it is the connection's own. The broker does not subscribe to notifications yet: the URL is checked, and not used.
 	// +kubebuilder:validation:MaxLength=2048
 	// +kubebuilder:validation:XValidation:rule=`self == '' || self.matches('(?i)^https://[^/?#]')`,message="must be an https URL with a host"
 	// +kubebuilder:validation:XValidation:rule=`!self.matches('(?i)^https?://[^/?#]*@')`,message="must not contain credentials"

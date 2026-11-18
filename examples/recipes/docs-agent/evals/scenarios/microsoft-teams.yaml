@@ -1,6 +1,6 @@
-name: Microsoft Teams (not served yet)
+name: Microsoft Teams (http mode, experimental)
 app: agent-kourier-docs
 question: Can Agent Kourier post to Microsoft Teams?
-cause: 'Not yet. The API takes a ChatConnection with platform teams and checks its Bindings against Microsoft Teams, but there is no Microsoft Teams adapter, so no broker runs one: as the broker''s own connection it stops the start, and a team''s is not started. Slack is the platform a broker runs.'
+cause: 'Yes, in http mode, and experimentally. A broker with a chat listener runs a ChatConnection with platform teams: it takes a person''s posts in a team''s channel on the chat listener, and replies and edits through the Bot Connector. Socket mode is not supported yet, and there are no streams, reactions, answerable questions, tool approvals or alert triggers on Teams yet.'
 evidence:
   - reference/platforms.md

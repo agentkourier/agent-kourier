@@ -570,8 +570,12 @@ Rules:
   posting app's Microsoft Entra application ID; a mention's user, the person's Microsoft Entra object ID), with the union's caps: 140
   bytes for a channel, 36 for a sender and a user, 32 for an approver group, which keeps Slack's shape alone. GUIDs are lowercase hex
   only, since chat IDs are compared byte for byte. Which platform's shape an ID must have is checked where the broker has the
-  connection (`InvalidPlatformID`, D42). No broker runs a teams connection yet: there is no adapter, so the broker's own teams
-  connection is a wiring error at start and a team's is not started.
+  connection (`InvalidPlatformID`, D42). The broker runs a teams connection in `http` mode only, and only with a chat listener: the
+  leader takes Teams' requests on the connection's route, and posts, replies and edits through the Bot Connector with a token that
+  Microsoft Entra issues for `clientSecret`. In `socket` mode ("Socket mode is not supported yet"), or with no chat listener, the
+  broker's own teams connection is a wiring error at start and a team's is not started. Until the adapter does them, a question is
+  shown as text that cannot be answered, a tool approval is refused as a pause that cannot be shown, buttons show as their labels,
+  and there are no streams, reactions or ephemeral messages.
 - An empty namespace in a reference means the referring resource's namespace.
 - **One bearer token per request.** The Binding identity (D14) owns the `Authorization`
   header. `AgentBackend` has no credentials of its own; a gateway in front of the

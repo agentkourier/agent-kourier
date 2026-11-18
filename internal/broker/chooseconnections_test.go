@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"maps"
@@ -149,16 +150,17 @@ func TestAChatConnectionOnAPlatformWithNoAdapterIsAWiringError(t *testing.T) {
 	}
 }
 
-// A teams ChatConnection, which the API takes before any broker has its adapter, is refused at connection start in either mode, with
-// its client secret in place: as the broker's own connection it is a wiring error, which stops the start, and as a team connection
-// it is its Err, which leaves it not started beside a Slack connection that is.
-func TestATeamsChatConnectionIsRefusedAtConnectionStart(t *testing.T) {
-	for _, mode := range []v1alpha1.TeamsMode{v1alpha1.TeamsModeHTTP, v1alpha1.TeamsModeSocket} {
-		t.Run(string(mode), func(t *testing.T) {
+// A teams ChatConnection in http mode is chosen with its client secret and its spec.teams, as the broker's own connection and as a team
+// one; one in socket mode is refused at connection start with its client secret in place: as the broker's own connection it is a wiring
+// error, which stops the start, and as a team connection it is its Err, which leaves it not started beside a Slack connection that is.
+func TestATeamsChatConnectionRunsInHTTPModeAndIsRefusedInSocketMode(t *testing.T) {
+	const tenant, app = "11111111-2222-4333-8444-555555555555", "22222222-3333-4444-8555-666666666666"
+	for _, mode := range []v1alpha1.TeamsMode{"", v1alpha1.TeamsModeHTTP, v1alpha1.TeamsModeSocket} {
+		t.Run(cmp.Or(string(mode), "unset"), func(t *testing.T) {
 			conn := func(ns string) v1alpha1.ChatConnection {
 				return v1alpha1.ChatConnection{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "teams", CreationTimestamp: metav1.NewTime(time.Unix(2, 0))},
 					Spec: v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformTeams, CredentialsSecretRef: v1alpha1.SecretRef{Name: "creds-teams"},
-						Teams: &v1alpha1.TeamsConnectionSpec{TenantID: "11111111-2222-3333-4444-555555555555", AppID: "66666666-7777-4888-9999-aaaaaaaaaaaa", Mode: mode}}}
+						Teams: &v1alpha1.TeamsConnectionSpec{TenantID: tenant, AppID: app, Mode: mode}}}
 			}
 			slack := v1alpha1.ChatConnection{ObjectMeta: metav1.ObjectMeta{Namespace: "platform", Name: "slack", CreationTimestamp: metav1.NewTime(time.Unix(1, 0))},
 				Spec: v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformSlack, CredentialsSecretRef: v1alpha1.SecretRef{Name: "creds-slack"}}}
@@ -180,17 +182,32 @@ func TestATeamsChatConnectionIsRefusedAtConnectionStart(t *testing.T) {
 				return snap
 			}
 
-			_, err := ChooseConnections(t.Context(), resolved(conn("platform")), v1alpha1.ObjectRef{Namespace: "platform", Name: "teams"}, r)
-			if !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), `ChatConnection platform/teams is "teams", a platform this broker has no adapter for`) {
-				t.Errorf("own teams connection: ChooseConnections = %v; want a wiring error that names the platform", err)
-			}
-
+			own, ownErr := ChooseConnections(t.Context(), resolved(conn("platform")), v1alpha1.ObjectRef{Namespace: "platform", Name: "teams"}, r)
 			got, err := ChooseConnections(t.Context(), resolved(slack, conn("team-a")), ownRef, r)
 			if err != nil {
 				t.Fatalf("own Slack connection beside a team teams one: ChooseConnections = %v; want it served", err)
 			}
-			if len(got.Team) != 1 || !errors.Is(got.Team[0].Err, errNoAdapter) || len(got.Team[0].Credentials) != 0 || got.Team[0].Platform != v1alpha1.PlatformTeams {
-				t.Errorf("team teams connection = %+v; want its no-adapter error, its platform and no credentials", got.Team)
+			if len(got.Team) != 1 || got.Team[0].Platform != v1alpha1.PlatformTeams {
+				t.Fatalf("team connections = %+v; want the teams one", got.Team)
+			}
+			team := got.Team[0]
+
+			if mode == v1alpha1.TeamsModeSocket {
+				if !errors.Is(ownErr, ErrWiring) || !errors.Is(ownErr, errTeamsSocket) || !strings.Contains(ownErr.Error(), "Socket mode is not supported yet") {
+					t.Errorf("own teams connection in socket mode: ChooseConnections = %v; want a wiring error that says Socket mode is not supported yet", ownErr)
+				}
+				if !errors.Is(team.Err, errTeamsSocket) || len(team.Credentials) != 0 {
+					t.Errorf("team teams connection in socket mode = %+v; want its socket-mode error and no credentials", team)
+				}
+				return
+			}
+			want := v1alpha1.TeamsConnectionSpec{TenantID: tenant, AppID: app, Mode: mode}
+			if ownErr != nil || own.Own == nil || own.Own.Platform != v1alpha1.PlatformTeams || own.Own.Teams != want ||
+				own.Own.Credentials[key].Reveal() != "fake-client-secret" {
+				t.Errorf("own teams connection in http mode: ChooseConnections = %+v, %v; want it chosen with its client secret and spec.teams", own.Own, ownErr)
+			}
+			if team.Err != nil || team.Teams != want || team.Credentials[key].Reveal() != "fake-client-secret" {
+				t.Errorf("team teams connection in http mode = %+v; want it chosen with its client secret and spec.teams", team)
 			}
 		})
 	}

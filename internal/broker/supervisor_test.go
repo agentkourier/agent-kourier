@@ -1505,24 +1505,33 @@ func TestSupervisorWithNoOwnPublishesTheTeamConnectionsAlone(t *testing.T) {
 	}
 }
 
-// A served connection of a platform the broker has no adapter for is not started, and the supervisor says so as that, not as credentials to
-// mend, which would start nothing; one whose Secret cannot be read yet is told the credentials cannot be used.
+// A served connection of a platform the broker has no adapter for, or of Microsoft Teams in socket mode, is not started, and the supervisor
+// says so as that, not as credentials to mend, which would start nothing; one whose Secret cannot be read yet is told the credentials cannot
+// be used.
 func TestSupervisorSaysAConnectionOfAPlatformWithNoAdapterIsNotStarted(t *testing.T) {
 	w := newSupWorld(t)
-	unknown := teamOn("teams", "team-a/teams", 1, "tok-teams", 1)
-	c := &v1alpha1.ChatConnection{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "teams"}, Spec: v1alpha1.ChatConnectionSpec{Platform: "teams"}}
+	unknown := teamOn("discord", "team-a/discord", 1, "tok-discord", 1)
+	c := &v1alpha1.ChatConnection{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "discord"}, Spec: v1alpha1.ChatConnectionSpec{Platform: "discord"}}
 	if _, unknown.Err = connectionOf(t.Context(), c, &reader{}); !errors.Is(unknown.Err, errNoAdapter) {
 		t.Fatalf("connectionOf of a platform with no adapter = %v; want errNoAdapter", unknown.Err)
 	}
 	unknown.Credentials = nil
-	w.reconcile(unknown, unready("team-b/slack", 1, 2))
+	socket := teamOn(v1alpha1.PlatformTeams, "team-c/teams", 1, "tok-teams", 3)
+	c = &v1alpha1.ChatConnection{ObjectMeta: metav1.ObjectMeta{Namespace: "team-c", Name: "teams"}, Spec: v1alpha1.ChatConnectionSpec{
+		Platform: v1alpha1.PlatformTeams, Teams: &v1alpha1.TeamsConnectionSpec{Mode: v1alpha1.TeamsModeSocket}}}
+	if _, socket.Err = connectionOf(t.Context(), c, &reader{}); !errors.Is(socket.Err, errTeamsSocket) {
+		t.Fatalf("connectionOf of a teams connection in socket mode = %v; want errTeamsSocket", socket.Err)
+	}
+	socket.Credentials = nil
+	w.reconcile(unknown, unready("team-b/slack", 1, 2), socket)
 	if got := w.running(); !slices.Equal(got, []string{ownName}) {
 		t.Errorf("running = %v; want neither connection started", got)
 	}
 	logs := w.logs.String()
 	for _, want := range []string{
-		`msg="the ChatConnection is not started: this broker has no adapter for its platform" connection=team-a/teams`,
+		`msg="the ChatConnection is not started: this broker has no adapter for its platform" connection=team-a/discord`,
 		`msg="the ChatConnection is not started yet: its credentials cannot be used" connection=team-b/slack`,
+		`msg="the ChatConnection is not started: Socket mode is not supported yet for Microsoft Teams" connection=team-c/teams`,
 	} {
 		if !strings.Contains(logs, want) {
 			t.Errorf("the logs do not say %s:\n%s", want, logs)

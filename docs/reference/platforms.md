@@ -4,11 +4,26 @@ A Binding names its chat platform through its ChatConnection, whose `spec.platfo
 Teams. This page lists, for each platform, the shape of the chat IDs a Binding names and the features of a Binding that the platform
 serves.
 
-No broker runs a teams connection yet: there is no Microsoft Teams adapter. The API server takes a teams ChatConnection
-([ChatConnection](chatconnection.md)) and its Bindings, and the broker checks those Bindings against Microsoft Teams as this page
-says, but it does not start the connection. As the broker's own connection it stops the broker's start, with a wiring error that
-says the broker has no adapter for the platform; a team's teams connection is not started, and the broker logs that it has no
-adapter for its platform. The Microsoft Teams columns below say what the API takes, not what a Binding gets.
+The broker runs a teams connection ([ChatConnection](chatconnection.md)) in `http` mode, on its chat listener
+(`AGENTKOURIER_CHAT_LISTEN`): only the leader takes Teams' requests, at `POST /chat/teams/<namespace>/<name>`, and it posts, replies
+and edits through the Bot Connector with a token that Microsoft Entra issues for the connection's client secret. A broker with no
+chat listener does not run one: as its own connection it stops the broker's start with a wiring error that says to set
+`AGENTKOURIER_CHAT_LISTEN`, and a team's connection is not started. `socket` mode is not supported yet: the API server takes it, and
+the broker does not start the connection. As the broker's own connection it stops the start with a wiring error that says Socket
+mode is not supported yet; a team's is not started, and the broker logs `Socket mode is not supported yet for Microsoft Teams`.
+
+Microsoft Teams sends an activity again only when it was answered 503 at once, and then once, about 0.6 seconds later; it never
+sends again one answered 200 (measured on a test tenant in November 2026). So an activity that arrives while the connection is not
+taking them, or that its channel has no room for, is lost unless there is room when it comes again, and one that the broker took and
+then could not hand on is lost. The adapter counts the first in `agentkourier_teams_activities_shed_total` and the second in
+`agentkourier_teams_activities_lost_total` ([Metrics](metrics.md)). A post goes to
+the service URL that the channel's last activity named; for a channel that no activity has come from since the broker started, it goes
+to Microsoft's global route, `https://smba.trafficmanager.net/teams/`.
+
+A message on Microsoft Teams shows the agent's reply in Teams' markdown, with what the agent, a person or an alert wrote shown as
+text: no `<at>` in it becomes a mention, and no HTML or markdown link in it is acted on (a bare URL still links). A mention that Agent Kourier makes names a person by
+their Microsoft Entra object ID and shows as `@someone`, since the broker does not read people's names on Teams yet. There are no live
+progress streams, ephemeral messages or reactions, and nothing is pressed: buttons are shown as their labels.
 
 A Binding is checked against its platform when the broker reads it with its ChatConnection: the API server and the broker's load
 check only that each ID has the shape of some platform's ID and is within the field's cap, which is the largest of the platforms'. A
@@ -58,8 +73,8 @@ bounds it at 21, and neither can an approver group, whose field's cap is Slack's
 
 | Feature | Slack | Microsoft Teams | On a platform without it |
 |---|---|---|---|
-| Questions to a person: `interactions.askUser` | Works: Agent Kourier asks in the thread with buttons. | Taken. | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
-| Tool approvals: `interactions.toolApprovals`, and `interactions.approverGroups`, which requires it | Works: Agent Kourier asks in the thread with buttons. | `toolApprovals` is taken. `approverGroups` is refused: `UnsupportedOnPlatform`. Remove it, and any channel member who is not a bot may decide. | Refused: `UnsupportedOnPlatform`. Set `toolApprovals` to `false` and remove `approverGroups`. |
-| The useful and not-useful buttons: `feedback.enabled` | Works. | Taken. | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
-| Alert triggers: a `botMessage` trigger in `chat.triggers` | Works. | Taken, in either `spec.teams.mode` and with or without `spec.teams.notificationURL`. | Refused: `UnsupportedOnPlatform`. Remove the trigger. |
-| The acknowledgment reaction: `chat.acknowledgment` | Works. With no `emoji` the reaction is `hourglass_flowing_sand`. | Taken. | Served, and no reaction is shown. A Binding whose acknowledgment is enabled and names an `emoji` has the condition `AcknowledgmentShown`, `False` with the reason `NoReactions` ([Binding status](binding-status.md#acknowledgmentshown)). |
+| Questions to a person: `interactions.askUser` | Works: Agent Kourier asks in the thread with buttons. | Taken, not answered yet: the question is shown as text, with a line that says it cannot be answered in Microsoft Teams yet, and it times out as an unanswered question does. | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
+| Tool approvals: `interactions.toolApprovals`, and `interactions.approverGroups`, which requires it | Works: Agent Kourier asks in the thread with buttons. | `toolApprovals` is taken, and no approval is asked yet: a turn that asks for one is refused as a pause that cannot be shown, and its task is cancelled. `approverGroups` is refused: `UnsupportedOnPlatform`. Remove it. | Refused: `UnsupportedOnPlatform`. Set `toolApprovals` to `false` and remove `approverGroups`. |
+| The useful and not-useful buttons: `feedback.enabled` | Works. | Taken, not pressed yet: the buttons are shown as their labels. | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
+| Alert triggers: a `botMessage` trigger in `chat.triggers` | Works. | Taken, in either `spec.teams.mode` and with or without `spec.teams.notificationURL`, and not served yet: Microsoft Teams does not send a bot the posts of another app (measured on a test tenant in November 2026), and the broker does not read them through Microsoft Graph yet, so no alert starts a turn. | Refused: `UnsupportedOnPlatform`. Remove the trigger. |
+| The acknowledgment reaction: `chat.acknowledgment` | Works. With no `emoji` the reaction is `hourglass_flowing_sand`. | Taken, and no reaction is shown, as on a platform without it. | Served, and no reaction is shown. A Binding whose acknowledgment is enabled and names an `emoji` has the condition `AcknowledgmentShown`, `False` with the reason `NoReactions` ([Binding status](binding-status.md#acknowledgmentshown)). |

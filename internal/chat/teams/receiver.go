@@ -13,6 +13,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/backoff"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
 // stopDrain bounds how long Serve, as it stops, goes on handing to the sink and the store the activities it had already answered 200.
@@ -55,6 +56,31 @@ func (l *refusalLog) admit(reason Reason, now time.Time) (bool, int) {
 	l.last[reason], l.suppressed[reason] = now, 0
 	return true, n
 }
+
+// The outcomes of a request, the label of agentkourier_teams_requests_total: a closed set.
+const (
+	requestAccepted        = "accepted"         // 200: an activity put on its lane, or one with nothing to hand on
+	requestDuplicate       = "duplicate"        // 200: an activity that came before, within the dedup window
+	requestInvoke          = "invoke"           // an invoke, answered by the InvokeHandler
+	requestBadToken        = "bad_token"        // 401: the token failed a check (agentkourier_teams_tokens_refused_total says which)
+	requestKeysUnavailable = "keys_unavailable" // 503: the signing keys could not be read
+	requestMalformed       = "malformed"        // 400: no activity, a message with no ID that can name it, or an invoke whose replyToId holds ':'
+	requestWrongTenant     = "wrong_tenant"     // 403: an activity of another tenant
+	requestNotRunning      = "not_running"      // 503: no Serve takes activities now, or it is stopping
+	requestShed            = "shed"             // 503: the channel's lane, or all of them, held as many as they may
+)
+
+// The reasons an activity answered 503 was not taken, the label of agentkourier_teams_activities_shed_total: a closed set. Teams sends
+// such an activity again once, so it is not lost yet. The two reasons of a shed (lanes.go), channel_backlog and adapter_backlog, are
+// labels too.
+const shedNotRunning = "not_running" // no Serve took activities, or it was stopping
+
+// The reasons an activity answered 200 was lost, the label of agentkourier_teams_activities_lost_total: a closed set. Teams does not
+// send again an activity it was answered 200 for, so each is gone.
+const (
+	lostStopped  = "stopped"   // accepted, and still on its lane when the drain at the stop ran out
+	lostNotTaken = "not_taken" // the sink did not take it in sinkAttempts tries
+)
 
 // ReceiverConfig configures a Receiver.
 type ReceiverConfig struct {
@@ -108,6 +134,9 @@ type Receiver struct {
 
 	// live is the Serve that takes activities, or nil when none does.
 	live atomic.Pointer[serving]
+	// tctx is the context of the last Serve, whose values carry the broker's instruments: the series are counted on it, and a request
+	// that comes before the first Serve is counted on its own context, which carries none.
+	tctx atomic.Pointer[context.Context]
 
 	recMu    sync.Mutex
 	recorded map[string]Conversation // by channel: what this receiver last wrote to the store; guarded by recMu
@@ -173,6 +202,7 @@ func (r *Receiver) Serve(ctx context.Context, sink chat.Sink) error {
 	wctx, stopWork := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopWork()
 	s := &serving{ctx: wctx, sink: sink, lanes: newLanes(channelBacklog, pendingActivities)}
+	r.tctx.Store(&wctx)
 	r.live.Store(s)
 	r.verifier.warm(ctx)
 	r.log.InfoContext(ctx, "teams: taking activities over https")
@@ -204,6 +234,9 @@ func (r *Receiver) Serve(ctx context.Context, sink chat.Sink) error {
 		stopWork() // what is still on the lanes sees the end and is not handed on
 		<-drained  // nothing calls the sink or the store after Serve returns
 		r.log.WarnContext(wctx, "teams: activities answered 200 were dropped as the connection stopped, and Teams does not send them again", "count", n)
+		for range n {
+			r.count(wctx, "agentkourier_teams_activities_lost_total", lostStopped)
+		}
 	}
 	return fmt.Errorf("teams https: %w", ctx.Err())
 }
@@ -237,6 +270,7 @@ func (r *Receiver) deliver(s *serving, w work) {
 		}
 		if attempt == sinkAttempts || s.ctx.Err() != nil || !waitFor(s.ctx, backoff.Doubling(r.sinkRetryBase, sinkRetryMax, attempt)) {
 			r.release(w)
+			r.count(s.ctx, "agentkourier_teams_activities_lost_total", lostNotTaken)
 			r.log.WarnContext(s.ctx, "teams: the sink did not take a message, which is dropped",
 				"channel", quote(w.msg.At.Channel), "message", w.msg.At.ID, "attempts", attempt, "error", err.Error())
 			return
@@ -304,34 +338,41 @@ func (s *serving) submit(channel string, fn func()) (shed string, open bool) {
 // An activity that came before, by its type, channel and ID, within the dedup window, is answered 200 and handed on to nothing.
 func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	ctx := req.Context()
+	tctx := r.telemetryContext(ctx)
+	answered := func(outcome string) { r.count(tctx, "agentkourier_teams_requests_total", outcome) }
 	tok, err := r.verifier.verify(ctx, req.Header.Get("Authorization"))
 	if err != nil {
-		r.refuseToken(ctx, w, err)
+		answered(r.refuseToken(ctx, tctx, w, err))
 		return
 	}
 	body, err := io.ReadAll(req.Body) // the chat listener has read it whole and capped it: this reads memory
 	if err != nil {
+		answered(requestMalformed)
 		http.Error(w, "the body could not be read", http.StatusBadRequest)
 		return
 	}
 	a, err := decodeActivity(body)
 	if err != nil {
 		r.log.DebugContext(ctx, "teams: a verified request is no activity; answered 400", "bytes", len(body), "reason", err.Error())
+		answered(requestMalformed)
 		http.Error(w, "not an activity of Microsoft Teams", http.StatusBadRequest)
 		return
 	}
 	if err := tok.checkServiceURL(a.ServiceURL); err != nil {
-		r.refuseToken(ctx, w, err)
+		answered(r.refuseToken(ctx, tctx, w, err))
 		return
 	}
 	if got := a.tenant(); got != r.tenant {
 		r.log.WarnContext(ctx, "teams: an activity of another tenant was refused; the bot is installed outside the connection's tenant",
 			"tenant", quote(got), "connectionTenant", r.tenant, "type", quote(a.Type))
+		answered(requestWrongTenant)
 		http.Error(w, "the activity is not of the connection's tenant", http.StatusForbidden)
 		return
 	}
 	s := r.live.Load()
 	if s == nil {
+		answered(requestNotRunning)
+		r.count(tctx, "agentkourier_teams_activities_shed_total", shedNotRunning)
 		http.Error(w, "the connection does not take activities now", http.StatusServiceUnavailable)
 		return
 	}
@@ -349,6 +390,7 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		switch v {
 		case invalid:
 			r.log.DebugContext(ctx, "teams: a message was refused; answered 400", "reason", why)
+			answered(requestMalformed)
 			http.Error(w, "the message has no ID that can name it", http.StatusBadRequest)
 			return
 		case forward:
@@ -360,6 +402,7 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		i, ok := a.invoke(r.conn)
 		if !ok {
 			r.log.DebugContext(ctx, "teams: an invoke was refused, since its replyToId holds ':'; answered 400")
+			answered(requestMalformed)
 			http.Error(w, "the invoke names no message that an ID can name", http.StatusBadRequest)
 			return
 		}
@@ -371,6 +414,7 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		key = a.Type + "\x00" + channel + "\x00" + a.ID
 		if !r.seen.claim(key) {
 			r.log.DebugContext(ctx, "teams: an activity came again; acknowledged", "type", quote(a.Type), "id", a.ID)
+			answered(requestDuplicate)
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -386,15 +430,38 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			}
 			r.log.WarnContext(ctx, "teams: an activity was not taken; answered 503, after which Teams sends a message again once (an invoke was not measured)",
 				"type", quote(a.Type), "channel", quote(channel), "shed", shed)
+			if !open {
+				answered(requestNotRunning)
+				r.count(tctx, "agentkourier_teams_activities_shed_total", shedNotRunning)
+			} else {
+				answered(requestShed)
+				r.count(tctx, "agentkourier_teams_activities_shed_total", shed)
+			}
 			http.Error(w, "the connection cannot take the activity now", http.StatusServiceUnavailable)
 			return
 		}
 	}
 	if inv != nil {
+		answered(requestInvoke)
 		r.answerInvoke(ctx, w, *inv)
 		return
 	}
+	answered(requestAccepted)
 	w.WriteHeader(http.StatusOK)
+}
+
+// telemetryContext is the context the series of a request are counted on: the last Serve's, which carries the broker's instruments,
+// or ctx before the first Serve.
+func (r *Receiver) telemetryContext(ctx context.Context) context.Context {
+	if t := r.tctx.Load(); t != nil {
+		return *t
+	}
+	return ctx
+}
+
+// count counts one in the counter name, under the label value and the connection.
+func (r *Receiver) count(ctx context.Context, name, value string) {
+	telemetry.Count(ctx, name, value, r.conn)
 }
 
 // answerInvoke writes the InvokeHandler's answer to inv, or 200 with no body when there is no handler.
@@ -416,11 +483,12 @@ func (r *Receiver) answerInvoke(ctx context.Context, w http.ResponseWriter, inv 
 	_, _ = w.Write(ans.Body)
 }
 
-// refuseToken answers a request whose token was refused: 503 when the keys could not be read, which is no fault of the request, and 401
-// otherwise. A refusal of a token the Bot Framework signed (Reason.signed) is logged at WARN, paced by refusalLog, since it means the
-// connection's app ID or the broker's clock is wrong and the bot hears nothing; the others, which anyone can cause, at DEBUG. The log
-// names the reason and never the token.
-func (r *Receiver) refuseToken(ctx context.Context, w http.ResponseWriter, err error) {
+// refuseToken answers a request whose token was refused, and returns the outcome it counts the request under: 503 when the keys could
+// not be read, which is no fault of the request, and 401 otherwise, each 401 counted by its reason on tctx (agentkourier_teams_tokens_
+// refused_total, whatever the log shows). A refusal of a token the Bot Framework signed (Reason.signed) is logged at WARN, paced by
+// refusalLog, since it means the connection's app ID or the broker's clock is wrong and the bot hears nothing; the others, which anyone
+// can cause, at DEBUG. The log names the reason and never the token.
+func (r *Receiver) refuseToken(ctx, tctx context.Context, w http.ResponseWriter, err error) string {
 	var te *TokenError
 	if !errors.As(err, &te) {
 		te = &TokenError{}
@@ -429,7 +497,7 @@ func (r *Receiver) refuseToken(ctx context.Context, w http.ResponseWriter, err e
 	case te.Reason == ReasonKeysUnavailable:
 		r.log.WarnContext(ctx, "teams: a request was refused: the Bot Framework's signing keys could not be read", "error", err.Error())
 		http.Error(w, "the token cannot be verified now", http.StatusServiceUnavailable)
-		return
+		return requestKeysUnavailable
 	case te.Reason.signed():
 		if ok, n := r.refusals.admit(te.Reason, r.now()); ok {
 			r.log.WarnContext(ctx, "teams: a token the Bot Framework signed was refused; check the connection's app ID and the broker's clock",
@@ -438,7 +506,13 @@ func (r *Receiver) refuseToken(ctx context.Context, w http.ResponseWriter, err e
 	default:
 		r.log.DebugContext(ctx, "teams: a request was refused: its token is not the Bot Framework's for the connection's bot", "error", err.Error())
 	}
+	reason := string(te.Reason)
+	if reason == "" {
+		reason = "other"
+	}
+	r.count(tctx, "agentkourier_teams_tokens_refused_total", reason)
 	http.Error(w, "unauthorized", http.StatusUnauthorized)
+	return requestBadToken
 }
 
 var _ http.Handler = (*Receiver)(nil)

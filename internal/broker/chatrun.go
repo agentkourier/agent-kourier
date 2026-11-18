@@ -159,13 +159,27 @@ func ChooseConnection(ctx context.Context, snap *config.Snapshot, own v1alpha1.O
 // errNoAdapter is wrapped by the error of a ChatConnection whose platform this broker has no adapter for (platformFor does not know it).
 var errNoAdapter = errors.New("a platform this broker has no adapter for")
 
+// errTeamsSocket is wrapped by the error of a Microsoft Teams ChatConnection in socket mode, which the API takes and no broker runs yet.
+var errTeamsSocket = errors.New("spec.teams.mode is socket, and Socket mode is not supported yet: use http")
+
 // connectionOf is the Connection of c with the credentials of its platform and mode (v1alpha1.CredentialKeys) read through secrets. A
-// platform with no adapter is an error wrapping ErrWiring and errNoAdapter, and a Secret, key or value that is missing one wrapping
-// ErrWiring; a Secret that cannot be read just now is not.
+// platform with no adapter is an error wrapping ErrWiring and errNoAdapter, a Microsoft Teams connection in socket mode one wrapping
+// ErrWiring and errTeamsSocket, and a Secret, key or value that is missing one wrapping ErrWiring; a Secret that cannot be read just
+// now is not.
 func connectionOf(ctx context.Context, c *v1alpha1.ChatConnection, secrets identity.SecretReader) (Connection, error) {
 	name := v1alpha1.NamespacedName(c.Namespace, c.Name)
 	if _, ok := platformFor(c.Spec.Platform); !ok {
 		return Connection{}, fmt.Errorf("%w: ChatConnection %s is %q, %w", ErrWiring, name, c.Spec.Platform, errNoAdapter)
+	}
+	var teamsSpec v1alpha1.TeamsConnectionSpec
+	if c.Spec.Platform == v1alpha1.PlatformTeams {
+		if c.Spec.Teams == nil { // Validate refuses it; this keeps the adapter from a connection with no tenant
+			return Connection{}, fmt.Errorf("%w: ChatConnection %s is a Microsoft Teams connection with no spec.teams", ErrWiring, name)
+		}
+		if c.Spec.TeamsMode() != v1alpha1.TeamsModeHTTP {
+			return Connection{}, fmt.Errorf("%w: ChatConnection %s: %w", ErrWiring, name, errTeamsSocket)
+		}
+		teamsSpec = *c.Spec.Teams
 	}
 	read := func(key string) (secret.Value, error) {
 		v, err := secrets.Value(ctx, c.Namespace, c.Spec.CredentialsSecretRef.Name, key)
@@ -191,7 +205,7 @@ func connectionOf(ctx context.Context, c *v1alpha1.ChatConnection, secrets ident
 		}
 		creds[key] = v
 	}
-	return Connection{Ref: v1alpha1.ObjectRef{Namespace: c.Namespace, Name: c.Name}, Platform: c.Spec.Platform, Credentials: creds}, nil
+	return Connection{Ref: v1alpha1.ObjectRef{Namespace: c.Namespace, Name: c.Name}, Platform: c.Spec.Platform, Credentials: creds, Teams: teamsSpec}, nil
 }
 
 // Connections are the ChatConnections a broker runs: its own, if it has one, and the team connections it serves besides (spec D52, D53).
@@ -213,8 +227,9 @@ type TeamConnection struct {
 	UID        string
 	Generation int64
 	Created    time.Time
-	// Err is why its credentials could not be read, or its platform is not one the broker has an adapter for. It is no failure of the
-	// broker: the connection is left to start later, when the Secret is there, or left out. It holds no Secret value.
+	// Err is why its credentials could not be read, its platform is not one the broker has an adapter for, or it is a Microsoft Teams
+	// connection in socket mode, which the broker does not run yet. It is no failure of the broker: the connection is left to start
+	// later, when the Secret is there, or left out. It holds no Secret value.
 	Err error
 }
 
