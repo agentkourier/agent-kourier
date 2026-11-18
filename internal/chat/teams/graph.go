@@ -34,6 +34,10 @@ const (
 	graphMaxBody = 8 << 20
 )
 
+// errNotGraph is the error of a read of a URL that is not of the Graph endpoint, which an @odata.nextLink named: it is not asked, and
+// the token does not go to it.
+var errNotGraph = errors.New("teams: Microsoft Graph named a page that is not Graph's")
+
 // GraphError is Microsoft Graph's refusal of a read: its HTTP status, its error code ("Forbidden", say) and the wait it asked for. It
 // holds no token and not Graph's message, which may repeat what the request named.
 type GraphError struct {
@@ -88,18 +92,27 @@ func (g *graphClient) resource(segs ...string) string {
 	return b.String()
 }
 
-// ours says whether link is a URL of the Graph endpoint: the same scheme and host, a path under its own, and no credentials. Only such
-// a URL is given the token: an @odata.nextLink that names another is refused.
+// ours says whether link is a URL of the Graph endpoint: the same scheme and host, a path under its own with no "." or ".." segment
+// (escaped or not) that could climb out of it, and no credentials. Only such a URL is given the token: an @odata.nextLink that names
+// another is refused.
 func (g *graphClient) ours(link string) bool {
 	u, err := url.Parse(link)
-	return err == nil && u.Scheme == g.base.Scheme && u.Host == g.base.Host && u.User == nil &&
-		strings.HasPrefix(u.EscapedPath(), g.base.EscapedPath()+"/")
+	if err != nil || u.Scheme != g.base.Scheme || u.Host != g.base.Host || u.User != nil ||
+		!strings.HasPrefix(u.EscapedPath(), g.base.EscapedPath()+"/") {
+		return false
+	}
+	for seg := range strings.SplitSeq(u.Path, "/") {
+		if seg == "." || seg == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 // get reads the Graph URL link into out. An answer other than 2xx is a *GraphError.
 func (g *graphClient) get(ctx context.Context, link string, out any) error {
 	if !g.ours(link) {
-		return errors.New("teams: Microsoft Graph named a page that is not Graph's")
+		return errNotGraph
 	}
 	tok, err := g.tokens.token(ctx)
 	if err != nil {

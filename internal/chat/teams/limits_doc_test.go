@@ -73,4 +73,5 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Count(t, "teamsThreadPages", threadMaxPages)
 	limitsdoc.Bytes(t, "teamsGraphBody", graphMaxBody)
 	limitsdoc.Count(t, "teamsCardDepth", cardMaxDepth)
+	limitsdoc.Bytes(t, "teamsGraphText", graphTextMax)
 }

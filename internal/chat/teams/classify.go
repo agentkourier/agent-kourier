@@ -29,17 +29,20 @@ func gone403(ae *APIError) bool { return ae.Status == http.StatusForbidden && go
 
 // Classify implements chat.Platform. What no retry mends:
 //   - Entra's refusal of the bot's token (400, 401) and the Bot Connector's of the bot (401, and a 403 BotDisabledByAdmin) are
-//     FatalAuth: the app, its secret or its tenant is wrong, the bot is not the Bot Framework's, or an admin disabled it;
+//     FatalAuth: the app, its secret or its tenant is wrong, the bot is not the Bot Framework's, or an admin disabled it. Entra's
+//     refusal of the app's token for Microsoft Graph (TokenRequestError.Graph) is Permanent, ReasonOther: it refuses the reads of
+//     threads alone (a scope or a consent the app lacks), and a secret that is wrong is refused for the bot's token too;
 //   - a conversation or a message that is not there (404, ActivityNotFoundInConversation and the like) and a 403 of goneCodes are
 //     Permanent, ReasonChannelGone; a message too large (413, MessageSizeTooBig) is ReasonTooLong; any other 400 is
 //     ReasonInvalidContent; any other 403 is ReasonOther;
 //   - the errors of the Client itself: chat.ErrInvalid, chat.ErrTooLarge, chat.ErrWouldDropText, chat.ErrNoEphemeral,
 //     chat.ErrNoReactions, and for ChannelAccess chat.ErrChannelNotFound.
 //
-// Microsoft Graph's refusals of a read of a thread (*GraphError) are classified apart from the Bot Connector's: a 401 is FatalAuth (the
-// app's Graph token is rejected); a 403 is Permanent, ReasonOther, an app that may not read the channel's messages (the error says how
-// to grant it the permission; Microsoft documents no other 403 for the read, and the body of this one was not seen); a 404 is Permanent,
-// ReasonChannelGone (the team, the channel or the thread is gone); any other 400 is Permanent, ReasonOther.
+// Microsoft Graph's refusals of a read of a thread (*GraphError) are classified apart from the Bot Connector's, and none is FatalAuth:
+// a read of a thread is the turn's aid, and its refusal must not stop the connection. A 401 (the app's Graph token is refused) and a
+// 403 are Permanent, ReasonOther (a 403 is an app that may not read the channel's messages: the error says how to grant it the
+// permission; Microsoft documents no other 403 for the read, and the body of this one was not seen); a 404 is Permanent,
+// ReasonChannelGone (the team, the channel or the thread is gone); a 400 is Permanent, ReasonOther.
 //
 // Anything else may pass on another try and is Transient: a 429, with its Retry-After (at least a second) as RetryAfter; a 412, a
 // 5xx, a timeout, a network failure, a cancelled context, and a read of a channel whose team is not known yet. The caller's own backoff paces the retry (the outbox's doubles, with
@@ -52,7 +55,10 @@ func (c *Client) Classify(_ chat.Op, err error) chat.Verdict {
 	)
 	switch {
 	case errors.As(err, &te):
-		if te.rejected() {
+		switch {
+		case te.rejected() && te.Graph:
+			return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonOther, Code: te.Code}
+		case te.rejected():
 			return chat.Verdict{Class: chat.FatalAuth, Code: te.Code}
 		}
 		return transient(te.Status, te.RetryAfter)
@@ -78,11 +84,9 @@ func (c *Client) Classify(_ chat.Op, err error) chat.Verdict {
 		return transient(ae.Status, ae.RetryAfter)
 	case errors.As(err, &ge):
 		switch ge.Status {
-		case http.StatusUnauthorized:
-			return chat.Verdict{Class: chat.FatalAuth, Code: ge.Code}
 		case http.StatusNotFound:
 			return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonChannelGone, Code: ge.Code}
-		case http.StatusForbidden, http.StatusBadRequest:
+		case http.StatusUnauthorized, http.StatusForbidden, http.StatusBadRequest:
 			return chat.Verdict{Class: chat.Permanent, Reason: chat.ReasonOther, Code: ge.Code}
 		}
 		return transient(ge.Status, ge.RetryAfter)

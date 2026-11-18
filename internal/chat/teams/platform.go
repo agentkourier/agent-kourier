@@ -214,10 +214,8 @@ func (c *Client) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) (err e
 	return c.api.update(ctx, c.serviceURL(ctx, r.Channel), conversation(r.Channel, cmp.Or(r.Thread, r.ID)), r.ID, a)
 }
 
-// Find implements chat.Platform: nothing is found, with no call, and a post that the outbox made before a crash, and did not record, is
-// made again. Graph can read the bot's posts back (threadread.go), but Post keeps its tag nowhere: Slack keeps it as the message's
-// metadata, which people do not see, and no part of an activity that Teams keeps, that Graph gives back and that people do not see,
-// is known (none was measured; what Graph gave of the bot's posts on a test tenant was their body and attachments, which people see).
+// Find implements chat.Platform: Teams has no Find in this release. Nothing is found, with no call, and Post keeps its tag nowhere, so a
+// post that the outbox made before a crash, and did not record, is made again.
 func (c *Client) Find(context.Context, chat.Target, string, time.Time) (chat.Ref, bool, error) {
 	return chat.Ref{}, false, nil
 }

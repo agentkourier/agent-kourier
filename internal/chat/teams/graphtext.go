@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"html"
 	"strings"
+	"unicode/utf8"
 )
 
 // This file reads a Microsoft Graph chatMessage: who sent it, and what it says as text. The shapes are those that Graph gave on a test
@@ -18,6 +19,11 @@ const cardContentTypeIn = "application/vnd.microsoft.card.adaptive"
 // cardMaxDepth is how deep in a card's elements cardText reads: the card's body holds elements of depth 1, a Container's items are one
 // deeper. Text deeper than this is not read.
 const cardMaxDepth = 32
+
+// graphTextMax is the most of a message's body that is read as text, in bytes: what is past it is not read. A person's message in Teams
+// is at most about 28 KB (Microsoft's documentation, not measured), and htmlText is linear, so the cap bounds the work on a body that
+// Graph serves of any size.
+const graphTextMax = 128 << 10
 
 // graphMessage is the part of a Graph chatMessage that the adapter reads. Every field is untrusted: Graph serves what people and apps
 // wrote.
@@ -55,13 +61,22 @@ type graphAttached struct {
 	Content     json.RawMessage `json:"content"`
 }
 
-// text is what the body says: a text body as written, an html one as htmlText reads it (Graph's default), and nothing for another type.
+// text is what the body says, of its first graphTextMax bytes: a text body as written, an html one as htmlText reads it (Graph's
+// default), and nothing for another type.
 func (b graphBody) text() string {
+	content := b.Content
+	if len(content) > graphTextMax {
+		cut := graphTextMax
+		for cut > 0 && !utf8.RuneStart(content[cut]) {
+			cut--
+		}
+		content = content[:cut]
+	}
 	switch strings.ToLower(cmp.Or(b.ContentType, "html")) {
 	case "text":
-		return b.Content
+		return content
 	case "html":
-		return htmlText(b.Content)
+		return htmlText(content)
 	}
 	return ""
 }
@@ -102,7 +117,8 @@ var skippedTags = map[string]bool{"script": true, "style": true}
 // htmlText is the text a person reads in the HTML of a message: every tag gone, a block and a <br> a line, the entities decoded, a
 // non-breaking space a space, and nothing of a comment, a script or a style. A mention, <at id="n">name</at>, is written <at>name</at>,
 // as the text of a live activity writes it, so that a message reads the same whether it came live or from Graph. A "<" that begins no
-// tag is text. Lines lose their trailing blanks, and blank lines and the blank ends of the text are dropped.
+// tag is text, and so is the rest of the HTML from a "<" that no ">" closes, so the read is linear in the HTML. Lines lose their trailing
+// blanks, and blank lines and the blank ends of the text are dropped.
 func htmlText(s string) string {
 	var b strings.Builder
 	text := func(t string) { b.WriteString(strings.ReplaceAll(html.UnescapeString(t), "\u00a0", " ")) }
@@ -123,20 +139,21 @@ func htmlText(s string) string {
 			s = s[end+3:]
 			continue
 		}
-		end, name, closing, ok := tagAt(s)
-		if !ok {
+		end, name, closing, kind := tagAt(s)
+		switch kind {
+		case notATag:
 			text("<")
 			s = s[1:]
+			continue
+		case unclosed:
+			text(s)
+			s = ""
 			continue
 		}
 		s = s[end:]
 		switch {
 		case skippedTags[name] && !closing:
-			if j := strings.Index(strings.ToLower(s), "</"+name); j >= 0 {
-				s = s[j:]
-			} else {
-				s = ""
-			}
+			s = s[closingTag(s, name):]
 		case name == "at" && closing:
 			b.WriteString("</at>")
 		case name == "at":
@@ -150,9 +167,17 @@ func htmlText(s string) string {
 	return tidyLines(b.String())
 }
 
-// tagAt reads the tag that s begins with: where it ends, its name in lowercase, and whether it closes one. ok is false when s begins no
-// tag: "<" then no letter, or no ">" that ends it (a quoted ">" in an attribute does not).
-func tagAt(s string) (end int, name string, closing, ok bool) {
+// tagKind says what a "<" begins.
+type tagKind int
+
+const (
+	aTag     tagKind = iota // a tag, closed by its ">"
+	notATag                 // "<" then no letter: text
+	unclosed                // a tag's name, and no ">" that ends it (a quoted ">" in an attribute does not)
+)
+
+// tagAt reads the tag that s begins with: where it ends, its name in lowercase, whether it closes one, and its kind.
+func tagAt(s string) (end int, name string, closing bool, kind tagKind) {
 	i := 1
 	if i < len(s) && s[i] == '/' {
 		closing = true
@@ -163,7 +188,7 @@ func tagAt(s string) (end int, name string, closing, ok bool) {
 		i++
 	}
 	if i == start {
-		return 0, "", false, false
+		return 0, "", false, notATag
 	}
 	name = strings.ToLower(s[start:i])
 	var quote byte
@@ -176,10 +201,35 @@ func tagAt(s string) (end int, name string, closing, ok bool) {
 		case c == '"' || c == '\'':
 			quote = c
 		case c == '>':
-			return i + 1, name, closing, true
+			return i + 1, name, closing, aTag
 		}
 	}
-	return 0, "", false, false
+	return 0, "", false, unclosed
+}
+
+// closingTag is where in s the first "</name" begins, the name's letters in either case, or len(s) if there is none. name is lowercase
+// ASCII, and only ASCII letters are folded, so the index is one of s as written.
+func closingTag(s, name string) int {
+	for i := 0; i+2+len(name) <= len(s); i++ {
+		if s[i] == '<' && s[i+1] == '/' && asciiFold(s[i+2:i+2+len(name)], name) {
+			return i
+		}
+	}
+	return len(s)
+}
+
+// asciiFold says whether a is lower, an ASCII lowercase word, with its ASCII capitals lowered.
+func asciiFold(a, lower string) bool {
+	for i := range len(lower) {
+		c := a[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c != lower[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func isASCIILetter(c byte) bool { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') }

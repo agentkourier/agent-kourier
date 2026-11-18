@@ -214,6 +214,15 @@ func TestThreadBetweenRefusesANextLinkItCannotFollow(t *testing.T) {
 		"credentials in it": func(self string, _ int) string {
 			return strings.Replace(self, "https://", "https://u:p@", 1) + "?$skiptoken=1"
 		},
+		"a dot-dot segment": func(self string, _ int) string {
+			return strings.Replace(self, "/v1.0/", "/v1.0/../beta/", 1) + "?$skiptoken=1"
+		},
+		"an escaped dot-dot segment": func(self string, _ int) string {
+			return strings.Replace(self, "/v1.0/", "/v1.0/%2e%2E/beta/", 1) + "?$skiptoken=1"
+		},
+		"a dot segment": func(self string, _ int) string {
+			return strings.Replace(self, "/v1.0/", "/v1.0/./", 1) + "?$skiptoken=1"
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -228,6 +237,9 @@ func TestThreadBetweenRefusesANextLinkItCannotFollow(t *testing.T) {
 			if name == "a cycle" {
 				want = 2
 			}
+			if offGraph := errors.Is(err, errNotGraph); offGraph == (name == "a cycle") {
+				t.Errorf("err = %v; errors.Is(err, errNotGraph) = %v", err, offGraph)
+			}
 			if n := len(ct.f.graphTaken()); n != want {
 				t.Errorf("%d Graph calls, want %d", n, want)
 			}
@@ -241,6 +253,102 @@ func TestThreadBetweenRefusesANextLinkItCannotFollow(t *testing.T) {
 			t.Errorf("another server was asked %d times", n)
 		}
 	})
+}
+
+// Graph's client follows no redirect: a 3xx of Graph is its answer, and neither the request nor the token goes where it points.
+func TestThreadBetweenFollowsNoRedirect(t *testing.T) {
+	t.Parallel()
+	var elsewhere atomic.Int32
+	other := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { elsewhere.Add(1) }))
+	t.Cleanup(other.Close)
+	ct, target := threadTest(t)
+	ct.f.setGraph(func(g *fakeGraph) {
+		g.redirect = other.URL + "/v1.0/teams/x"
+	})
+	_, _, err := ct.c.ThreadBetween(t.Context(), target, "", "", 10)
+	var ge *GraphError
+	if !errors.As(err, &ge) || ge.Status != http.StatusTemporaryRedirect || elsewhere.Load() != 0 {
+		t.Fatalf("a redirect: %v, followed %d times", err, elsewhere.Load())
+	}
+}
+
+// The error of a read that fails in the transport, or that runs out of time, names none of the team, the channel or the thread, which
+// the URL of the read holds and the transport's own error repeats.
+func TestAFailedThreadReadNamesNoTeamChannelOrThread(t *testing.T) {
+	t.Parallel()
+	ids := []string{testGroup, testChannel, strings.TrimPrefix(strings.TrimSuffix(testChannel, "@thread.tacv2"), "19:"), testRoot}
+	names := func(t *testing.T, what string, err error) {
+		t.Helper()
+		for _, id := range ids {
+			if strings.Contains(err.Error(), id) {
+				t.Errorf("%s: %q names %q", what, err, id)
+			}
+		}
+	}
+
+	held, target := threadTest(t)
+	held.c.threadTimeout = 50 * time.Millisecond
+	hold := make(chan struct{})
+	t.Cleanup(func() { close(hold) })
+	held.f.setGraph(func(g *fakeGraph) { g.hold = hold })
+	_, _, err := held.c.ThreadBetween(t.Context(), target, "", "", 10)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a held read: %v, want its deadline", err)
+	}
+	names(t, "a held read", err)
+
+	failed, target := threadTest(t)
+	errReset := errors.New("connection reset by the test")
+	base := failed.f.srv.Client().Transport
+	failed.c.graph.client = &http.Client{Transport: roundTripper(func(r *http.Request) (*http.Response, error) {
+		if strings.HasPrefix(r.URL.Path, graphPrefix) {
+			return nil, errReset
+		}
+		return base.RoundTrip(r)
+	})}
+	_, _, err = failed.c.ThreadFromStart(t.Context(), target, "", 10)
+	if !errors.Is(err, errReset) {
+		t.Fatalf("a failed read: %v, want the transport's error wrapped", err)
+	}
+	names(t, "a failed read", err)
+}
+
+// Microsoft Entra's refusal of the app's token for Graph (a scope or a consent the app lacks) refuses the read alone: it is
+// Permanent, not FatalAuth, which would stop the connection. Entra's refusal of the bot's token still is FatalAuth.
+func TestARefusedGraphTokenIsNotTheBots(t *testing.T) {
+	t.Parallel()
+	for _, status := range []int{http.StatusBadRequest, http.StatusUnauthorized} {
+		ct, target := threadTest(t)
+		ct.f.setFail(func(r *http.Request) (int, string, bool) {
+			_ = r.ParseForm()
+			return status, `{"error":"invalid_scope","error_codes":[70011]}`, r.URL.Path == "/token" && r.PostForm.Get("scope") == graphScope
+		})
+		_, _, err := ct.c.ThreadBetween(t.Context(), target, "", "", 10)
+		var te *TokenRequestError
+		if !errors.As(err, &te) {
+			t.Fatalf("%d: %v, want Entra's refusal", status, err)
+		}
+		if v := ct.c.Classify(chat.OpOther, err); v.Class != chat.Permanent || v.Reason != chat.ReasonOther {
+			t.Errorf("%d for the Graph token: %+v, want Permanent, ReasonOther", status, v)
+		}
+		if !strings.Contains(err.Error(), "Microsoft Graph") {
+			t.Errorf("%d: %q does not say the token was Graph's", status, err)
+		}
+		if _, err := ct.c.Post(t.Context(), chat.Target{Conn: testConn, Channel: testChannel}, chat.Say(chat.Message{Fallback: "x"}), "tag"); err != nil {
+			t.Errorf("%d: a post with the bot's token: %v", status, err)
+		}
+
+		bot := newClientTest(t)
+		bot.record(t, testChannel, testChannel)
+		bot.f.setFail(func(r *http.Request) (int, string, bool) {
+			_ = r.ParseForm()
+			return status, `{"error":"invalid_client"}`, r.URL.Path == "/token" && r.PostForm.Get("scope") == botFrameworkScope
+		})
+		_, err = bot.c.Post(t.Context(), chat.Target{Conn: testConn, Channel: testChannel}, chat.Say(chat.Message{Fallback: "x"}), "tag")
+		if v := bot.c.Classify(chat.OpPost, err); v.Class != chat.FatalAuth {
+			t.Errorf("%d for the bot's token: %v, %+v, want FatalAuth", status, err, v)
+		}
+	}
 }
 
 // A message that Graph gives on two pages, or the root given among the replies, is one message, and the root is no reply.
@@ -433,7 +541,8 @@ func TestGraphRefusalsAreClassified(t *testing.T) {
 		{"server error", http.StatusInternalServerError, "InternalServerError", chat.Transient, "", 0},
 		{"no permission", http.StatusForbidden, "Forbidden", chat.Permanent, chat.ReasonOther, 0},
 		{"gone", http.StatusNotFound, "NotFound", chat.Permanent, chat.ReasonChannelGone, 0},
-		{"rejected token", http.StatusUnauthorized, "InvalidAuthenticationToken", chat.FatalAuth, "", 0},
+		// The app's Graph token refused is one read refused, not the connection's credentials: those are the bot's token's.
+		{"rejected token", http.StatusUnauthorized, "InvalidAuthenticationToken", chat.Permanent, chat.ReasonOther, 0},
 		{"bad request", http.StatusBadRequest, "BadRequest", chat.Permanent, chat.ReasonOther, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -523,6 +632,18 @@ func TestAThreadReadIsCounted(t *testing.T) {
 	unknown.Channel = "19:no-activity-yet@thread.tacv2"
 	if _, _, err := ct.c.ThreadBetween(ctx, unknown, "", "", 10); !errors.Is(err, errTeamNotKnown) {
 		t.Fatalf("a channel with no record: %v, want errTeamNotKnown", err)
+	}
+	ct.f.setGraph(func(g *fakeGraph) {
+		g.fail = func(*http.Request) (int, string, bool) {
+			return http.StatusUnauthorized, `{"error":{"code":"InvalidAuthenticationToken"}}`, true
+		}
+	})
+	_, _, _ = ct.c.ThreadBetween(ctx, target, "", "", 10)
+	if got := o.value(t, "agentkourier_chat_api_calls_total", "api_error"); got != 1 {
+		t.Errorf("api_error = %v, want 1 (Graph's 401)", got)
+	}
+	if got := o.value(t, "agentkourier_chat_api_calls_total", "auth_rejected"); got != 0 {
+		t.Errorf("auth_rejected = %v, want 0: Graph's 401 is not the bot's credentials", got)
 	}
 	if got := o.value(t, "agentkourier_chat_api_calls_total", "error"); got != 1 {
 		t.Errorf("error = %v, want 1 (a read of a channel whose team is not known)", got)

@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"io"
@@ -33,20 +34,34 @@ const (
 	teamsTestApp    = "22222222-3333-4444-8555-666666666666"
 )
 
-// fakeMicrosoft is, for a Teams connection in a test, Microsoft Entra's token endpoint, which issues a token for any client secret, and
-// the Bot Framework's OpenID metadata, whose key set is empty: so the connection runs and takes no activity, and nothing leaves the test.
+// fakeMicrosoft is, for a Teams connection in a test, Microsoft Entra's token endpoint, which issues a token for any client secret
+// unless told to refuse a scope, the Bot Framework's OpenID metadata, whose key set is empty, and Microsoft Graph, which answers every
+// read with graphStatus (404 if unset): so the connection runs and takes no activity, and nothing leaves the test.
 type fakeMicrosoft struct {
-	srv    *httptest.Server
-	tokens atomic.Int32
+	srv         *httptest.Server
+	tokens      atomic.Int32
+	refuse      atomic.Pointer[string] // a scope whose token is refused (400 invalid_scope), if set
+	graphStatus atomic.Int32
+	graphReads  atomic.Int32
 }
 
 func newFakeMicrosoft(t *testing.T) *fakeMicrosoft {
 	t.Helper()
 	f := &fakeMicrosoft{}
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /token", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("POST /token", func(w http.ResponseWriter, r *http.Request) {
 		f.tokens.Add(1)
+		if refuse := f.refuse.Load(); refuse != nil && r.FormValue("scope") == *refuse {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error":"invalid_scope"}`)
+			return
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"token_type": "Bearer", "expires_in": 3599, "access_token": "fake-bot-token"})
+	})
+	mux.HandleFunc("GET /v1.0/", func(w http.ResponseWriter, _ *http.Request) {
+		f.graphReads.Add(1)
+		w.WriteHeader(cmp.Or(int(f.graphStatus.Load()), http.StatusNotFound))
+		_, _ = io.WriteString(w, `{"error":{"code":"Refused"}}`)
 	})
 	mux.HandleFunc("GET /openid", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"issuer": "https://api.botframework.com", "jwks_uri": f.srv.URL + "/keys"})
@@ -61,7 +76,7 @@ func newFakeMicrosoft(t *testing.T) *fakeMicrosoft {
 
 // point is RunConfig.teamsFakes: the Teams client calls f and nothing else.
 func (f *fakeMicrosoft) point(tc *teams.Config) {
-	tc.TokenURL, tc.MetadataURL, tc.HTTPClient = f.srv.URL+"/token", f.srv.URL+"/openid", f.srv.Client()
+	tc.TokenURL, tc.MetadataURL, tc.GraphURL, tc.HTTPClient = f.srv.URL+"/token", f.srv.URL+"/openid", f.srv.URL+"/v1.0", f.srv.Client()
 }
 
 // teamsConn is the Connection of a Microsoft Teams ChatConnection ns/name in http mode, with a fake client secret.
@@ -240,6 +255,65 @@ func TestOpenPlatformKeepsTheTeamsConversationsInTheStore(t *testing.T) {
 	if len(got) != 2 || !strings.HasPrefix(got[0], "https://smba.example.test/amer/"+teamsTestTenant+"/v3/conversations/") ||
 		!strings.HasPrefix(got[1], teams.DefaultServiceURL+"v3/conversations/") {
 		t.Errorf("the posts went to %v; want the recorded channel's service URL, then the global route", got)
+	}
+}
+
+// A refusal of Microsoft Graph's, of a read of a thread or of the app's token for Graph, refuses that read alone: the broker's watch of
+// the platform reports no rejected credential, so the Teams connection stays up. Entra's refusal of the bot's token is still reported.
+func TestAGraphRefusalLeavesTheTeamsConnectionUp(t *testing.T) {
+	const (
+		channel = "19:KourierStandInChannelForTestsOnly0000000000a@thread.tacv2"
+		conn    = "team-a/teams"
+		group   = "33333333-4444-4555-8666-777777777777"
+		root    = "1794965000000"
+	)
+	for name, tc := range map[string]struct {
+		graphStatus int
+		refuse      string
+		reported    bool
+	}{
+		"Graph's 401":             {graphStatus: http.StatusUnauthorized},
+		"Graph's 403":             {graphStatus: http.StatusForbidden},
+		"the Graph token refused": {refuse: "https://graph.microsoft.com/.default"},
+		"the bot's token refused": {refuse: "https://api.botframework.com/.default", reported: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = ln.Close() })
+			ms := newFakeMicrosoft(t)
+			ms.graphStatus.Store(int32(tc.graphStatus))
+			if tc.refuse != "" {
+				ms.refuse.Store(&tc.refuse)
+			}
+			st := sqlitetest.Open(t)
+			if err := st.RememberTeamsConversation(t.Context(), store.TeamsConversation{Connection: conn, Channel: channel,
+				ServiceURL: ms.srv.URL + "/amer/", AADGroupID: group, TenantID: teamsTestTenant, UpdatedAt: time.Now()}); err != nil {
+				t.Fatal(err)
+			}
+			h := &leaderHalf{log: testutil.DiscardLogger(), st: st, cfg: RunConfig{ChatListener: ln, teamsFakes: ms.point}}
+			built, err := h.openPlatform(teamsConn("team-a", "teams"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var reports []string
+			watched := WatchAuth(built.Platform, func(code string) { reports = append(reports, code) })
+			target := chat.Target{Conn: conn, Channel: channel, Thread: root}
+			if _, _, err := watched.ThreadBetween(t.Context(), target, "", "", 10); err == nil {
+				t.Fatal("ThreadBetween succeeded; want the refusal")
+			}
+			if tc.reported {
+				_, _ = watched.Post(t.Context(), target, chat.Say(chat.Message{Fallback: "x"}), "tag")
+			}
+			if got := len(reports) > 0; got != tc.reported {
+				t.Errorf("reported %v; want a report %v", reports, tc.reported)
+			}
+			if tc.graphStatus != 0 && ms.graphReads.Load() == 0 {
+				t.Error("Graph was not read")
+			}
+		})
 	}
 }
 

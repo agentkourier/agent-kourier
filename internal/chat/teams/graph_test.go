@@ -32,13 +32,15 @@ type fakeGraph struct {
 	msgs   map[string]map[string]any // a message, by its resource path (/teams/{group}/channels/{channel}/messages/{id})
 	pageAt int                       // the most a page holds, 0 for $top
 	// next, if set, is the @odata.nextLink of the page that skipped skip messages, in place of the fake's own; "" is none.
-	next   func(self string, skip int) string
-	fail   func(r *http.Request) (status int, body string, ok bool)
-	hold   chan struct{}    // if set, a call waits until it is closed or the client gives up
-	big    int              // if set, the bytes of padding that each page of replies carries
-	extra  []map[string]any // put on every page of replies, besides the replies
-	reqs   []graphReq
-	scopes []string // the scope of each token grant that the fake's Entra took
+	next  func(self string, skip int) string
+	fail  func(r *http.Request) (status int, body string, ok bool)
+	hold  chan struct{}    // if set, a call waits until it is closed or the client gives up
+	big   int              // if set, the bytes of padding that each page of replies carries
+	extra []map[string]any // put on every page of replies, besides the replies
+	// redirect, if set, is where every call is sent with a 307 instead of an answer.
+	redirect string
+	reqs     []graphReq
+	scopes   []string // the scope of each token grant that the fake's Entra took
 }
 
 func newFakeGraph() fakeGraph { return fakeGraph{msgs: map[string]map[string]any{}} }
@@ -85,6 +87,10 @@ func (f *fakeConnector) serveGraph(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		}
+	}
+	if g.redirect != "" {
+		http.Redirect(w, r, g.redirect, http.StatusTemporaryRedirect)
+		return
 	}
 	if g.fail != nil {
 		if status, body, ok := g.fail(r); ok {

@@ -3,6 +3,8 @@ package teams
 import (
 	"strings"
 	"testing"
+	"time"
+	"unicode/utf8"
 )
 
 // The text of a Graph message's HTML body is what a person reads in it: the tags gone, a block a line of its own, the entities
@@ -33,11 +35,68 @@ func TestHTMLText(t *testing.T) {
 		{"uppercase tags", "<P>a</P><BR>b", "a\nb"},
 		{"an at tag with other attributes", `<at id="1" data-x="y">Someone</at>`, "<at>Someone</at>"},
 		{"a tag that only begins with at", `<attention>x</attention>`, "x"},
+		{"an uppercase closing script", "a<script>x</SCRIPT>b", "ab"},
+		{"an unclosed tag before more tags", "a <b x='1 <i>c</i>", "a <b x='1 <i>c</i>"},
 	} {
 		if got := htmlText(tc.in); got != tc.want {
 			t.Errorf("%s: htmlText(%q) = %q, want %q", tc.name, tc.in, got, tc.want)
 		}
 	}
+}
+
+// A script or a style whose content holds letters that change their length when lowercased (Ⱥ and İ grow, the Kelvin sign shrinks) is
+// still skipped whole: the end of a skipped element is found in the text as written, so no index of another string slices it.
+func TestHTMLTextSkipsAScriptWhateverItsLetters(t *testing.T) {
+	t.Parallel()
+	for _, letter := range []string{"Ⱥ", "İ", "\u212a", "ſ"} {
+		for _, tag := range []string{"script", "style"} {
+			in := "<" + tag + ">" + strings.Repeat(letter, 20) + "secret</" + tag + ">after"
+			if got := htmlText(in); got != "after" {
+				t.Errorf("%s with %q: %q, want %q", tag, letter, got, "after")
+			}
+		}
+	}
+}
+
+// A "<" that no ">" closes makes the rest of the HTML text, once: the read of a body is linear, however many of them it holds.
+func TestHTMLTextIsLinear(t *testing.T) {
+	t.Parallel()
+	for name, in := range map[string]string{
+		"unclosed tags":    strings.Repeat("<a", 128<<10),
+		"unclosed quotes":  strings.Repeat(`<a x="`, 40<<10),
+		"unclosed scripts": strings.Repeat("<script>", 32<<10),
+	} {
+		start := time.Now()
+		_ = htmlText(in)
+		if d := time.Since(start); d > 2*time.Second {
+			t.Errorf("%s: %d bytes took %v", name, len(in), d)
+		}
+	}
+}
+
+// A body is read up to graphTextMax bytes, cut at a character's start; what is past it is not read.
+func TestBodyTextIsCapped(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("é", graphTextMax) // two bytes each: the cap falls on a character's start or in one
+	for _, kind := range []string{"text", "html"} {
+		got := (graphBody{ContentType: kind, Content: "x" + long}).text()
+		if len(got) > graphTextMax || len(got) < graphTextMax-utf8.UTFMax || !utf8.ValidString(got) {
+			t.Errorf("%s: %d bytes, valid %v; want at most %d, cut at a character", kind, len(got), utf8.ValidString(got), graphTextMax)
+		}
+	}
+	if got := (graphBody{ContentType: "text", Content: "short"}).text(); got != "short" {
+		t.Errorf("a short body: %q", got)
+	}
+}
+
+// htmlText never panics, whatever HTML Graph serves.
+func FuzzHTMLText(f *testing.F) {
+	for _, s := range []string{"<p>a</p>", "<style>ȺȺ</style>b", "<script>İ</SCRIPT>", "<a x='>", "<!--", "<at id=\"1\">x</at>", "a<b"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(_ *testing.T, s string) {
+		_ = htmlText(s)
+	})
 }
 
 // A body of contentType text is taken as written; html is converted; any other type has no text.

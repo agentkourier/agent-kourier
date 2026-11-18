@@ -64,10 +64,15 @@ type TokenRequestError struct {
 	AADSTS int
 	// RetryAfter is the wait that the answer asked for, or 0.
 	RetryAfter time.Duration
+	// Graph says the token asked for was the app's token for Microsoft Graph, not the bot's.
+	Graph bool
 }
 
 func (e *TokenRequestError) Error() string {
 	s := fmt.Sprintf("teams token: Microsoft Entra answered %d", e.Status)
+	if e.Graph {
+		s = fmt.Sprintf("teams token for Microsoft Graph: Microsoft Entra answered %d", e.Status)
+	}
 	if e.Code != "" {
 		s += " " + e.Code
 	}
@@ -77,8 +82,8 @@ func (e *TokenRequestError) Error() string {
 	return s
 }
 
-// rejected says whether Entra refused the bot's credentials or its tenant: a 400 or a 401 to the client credentials grant, which
-// names an app, a secret, a tenant or a scope that is wrong, and which no retry mends.
+// rejected says whether Entra refused the app's credentials, its tenant or the scope: a 400 or a 401 to the client credentials grant,
+// which names an app, a secret, a tenant or a scope that is wrong, and which no retry mends.
 func (e *TokenRequestError) rejected() bool {
 	return e.Status == http.StatusBadRequest || e.Status == http.StatusUnauthorized
 }
@@ -214,7 +219,8 @@ func (s *tokenSource) request(ctx context.Context) (secret.Value, time.Duration,
 	var a tokenAnswer
 	jsonErr := json.Unmarshal(body, &a)
 	if resp.StatusCode != http.StatusOK {
-		e := &TokenRequestError{Status: resp.StatusCode, RetryAfter: retryAfter(resp.Header.Get("Retry-After"), s.now())}
+		e := &TokenRequestError{Status: resp.StatusCode, RetryAfter: retryAfter(resp.Header.Get("Retry-After"), s.now()),
+			Graph: s.scope == graphScope}
 		if jsonErr == nil {
 			if a.Error != "" {
 				e.Code = codeOf(a.Error)
