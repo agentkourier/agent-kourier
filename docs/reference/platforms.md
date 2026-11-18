@@ -10,12 +10,16 @@ and edits through the Bot Connector with a token that Microsoft Entra issues for
 chat listener does not run one: as its own connection it stops the broker's start with a wiring error that says to set
 `AGENTKOURIER_CHAT_LISTEN`, and a team's connection is not started. `socket` mode is not supported yet: the API server takes it, and
 the broker does not start the connection. As the broker's own connection it stops the start with a wiring error that says Socket
-mode is not supported yet; a team's is not started, and the broker logs `Socket mode is not supported yet for Microsoft Teams`.
+mode is not supported yet; a team's is not started, and the broker logs `Socket mode is not supported yet for Microsoft Teams`. A
+team's connection that runs in `http` mode and is edited to `socket` is stopped, and the broker logs why. A Teams bot is its
+Microsoft Entra app, so two teams connections with one `spec.teams.appID` are one app: the broker serves the older, as it serves the
+older of two connections of one Slack app, and the younger's Bindings say `ConnectionNotServed`.
 
-Microsoft Teams sends an activity again only when it was answered 503 at once, and then once, about 0.6 seconds later; it never
-sends again one answered 200 (measured on a test tenant in November 2026). So an activity that arrives while the connection is not
-taking them, or that its channel has no room for, is lost unless there is room when it comes again, and one that the broker took and
-then could not hand on is lost. The adapter counts the first in `agentkourier_teams_activities_shed_total` and the second in
+What Microsoft Teams sends again was measured on a test tenant in November 2026: a message answered 503 at once is sent once more,
+about 0.6 seconds later; an activity answered 200, or one whose request Teams held until it gave up, is not sent again. Other
+answers, and an invoke answered 503, were not measured. So a message that arrives while the connection is not taking them, or that
+its channel has no room for, is lost unless there is room when it comes again, and an activity that the broker took and then could
+not hand on is lost. The adapter counts the first in `agentkourier_teams_activities_shed_total` and the second in
 `agentkourier_teams_activities_lost_total` ([Metrics](metrics.md)). A post goes to
 the service URL that the channel's last activity named; for a channel that no activity has come from since the broker started, it goes
 to Microsoft's global route, `https://smba.trafficmanager.net/teams/`.
