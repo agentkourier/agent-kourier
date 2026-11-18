@@ -1538,3 +1538,59 @@ func TestSupervisorSaysAConnectionOfAPlatformWithNoAdapterIsNotStarted(t *testin
 		}
 	}
 }
+
+// A running Microsoft Teams connection whose ChatConnection is edited to socket mode, or a connection that comes to name a platform with no
+// adapter, is stopped and says why, not left running on the spec it no longer has; edited back, it starts again. One whose Secret cannot be
+// read for a moment keeps running.
+func TestSupervisorStopsARunningConnectionEditedToWhatItCannotRun(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		msg  string
+	}{
+		{"socket mode", fmt.Errorf("%w: ChatConnection team-c/teams: %w", ErrWiring, errTeamsSocket),
+			`msg="the ChatConnection is not started: Socket mode is not supported yet for Microsoft Teams" connection=team-c/teams`},
+		{"no adapter", fmt.Errorf("%w: ChatConnection team-c/teams is \"discord\", %w", ErrWiring, errNoAdapter),
+			`msg="the ChatConnection is not started: this broker has no adapter for its platform" connection=team-c/teams`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newSupWorld(t)
+			w.ids["tok-teams"] = appIdentity{App: "22222222-3333-4444-8555-666666666666", Bot: "28:22222222-3333-4444-8555-666666666666"}
+			running := teamOn(v1alpha1.PlatformTeams, "team-c/teams", 1, "tok-teams", 3)
+			w.reconcile(running)
+			if got := w.running(); !slices.Equal(got, []string{ownName, "team-c/teams"}) {
+				t.Fatalf("running = %v; want the teams connection started", got)
+			}
+
+			unreadable := running
+			unreadable.Credentials, unreadable.Err = nil, errors.New("Secret not synced")
+			w.reconcile(unreadable)
+			if got := w.running(); !slices.Equal(got, []string{ownName, "team-c/teams"}) {
+				t.Errorf("running = %v with its Secret unreadable; want it left running", got)
+			}
+
+			edited := running
+			edited.Generation, edited.Credentials, edited.Err = 2, nil, tc.err
+			w.reconcile(edited)
+			if got := w.running(); !slices.Equal(got, []string{ownName}) {
+				t.Errorf("running = %v after the edit; want the teams connection stopped", got)
+			}
+			logs := w.logs.String()
+			for _, want := range []string{
+				`msg="chat connection stopped" connection=team-c/teams why="its ChatConnection changed to what this broker cannot run"`,
+				tc.msg,
+			} {
+				if !strings.Contains(logs, want) {
+					t.Errorf("the logs do not say %s:\n%s", want, logs)
+				}
+			}
+
+			back := running
+			back.Generation = 3
+			w.reconcile(back)
+			if got := w.running(); !slices.Equal(got, []string{ownName, "team-c/teams"}) {
+				t.Errorf("running = %v once edited back; want the teams connection started again", got)
+			}
+		})
+	}
+}
