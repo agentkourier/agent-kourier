@@ -261,7 +261,7 @@ func (r *Receiver) handle(s *serving, w work) {
 
 // deliver gives w's post to s's sink, again after a failure, up to sinkAttempts times in all or until the work's context ends. A post
 // the sink never takes is dropped: its dedup key is released, so that the same activity is taken if it comes again, and the drop is
-// logged at WARN.
+// logged at WARN. It is counted as not taken unless the stop cut it, which Serve counts as stopped.
 func (r *Receiver) deliver(s *serving, w work) {
 	for attempt := 1; ; attempt++ {
 		err := s.sink.Message(s.ctx, *w.msg)
@@ -270,7 +270,9 @@ func (r *Receiver) deliver(s *serving, w work) {
 		}
 		if attempt == sinkAttempts || s.ctx.Err() != nil || !waitFor(s.ctx, backoff.Doubling(r.sinkRetryBase, sinkRetryMax, attempt)) {
 			r.release(w)
-			r.count(s.ctx, "agentkourier_teams_activities_lost_total", lostNotTaken)
+			if s.ctx.Err() == nil { // one that the drain at the stop cut is counted there, as stopped
+				r.count(s.ctx, "agentkourier_teams_activities_lost_total", lostNotTaken)
+			}
 			r.log.WarnContext(s.ctx, "teams: the sink did not take a message, which is dropped",
 				"channel", quote(w.msg.At.Channel), "message", w.msg.At.ID, "attempts", attempt, "error", err.Error())
 			return

@@ -161,6 +161,35 @@ func TestReceiverCountsWhatIsLost(t *testing.T) {
 	}
 }
 
+// What the drain at the stop cuts is lost, and counted once as stopped: the message the sink was given when the drain ran out, and the one
+// that waited behind it. The cut message is not counted as not taken as well.
+func TestReceiverCountsWhatTheStopDrops(t *testing.T) {
+	o := newObserved(t)
+	rt := newReceiverTest(t, false, nil)
+	rt.sink.block = make(chan struct{})
+	t.Cleanup(func() { close(rt.sink.block) })
+	ctx, cancel := context.WithCancel(o.ctx)
+	done := make(chan error, 1)
+	go func() { done <- rt.r.Serve(ctx, rt.sink) }()
+	testutil.Eventually(t, "the receiver takes requests", func() bool { return rt.r.live.Load() != nil })
+	for _, id := range []string{"1794965000001", "1794965000002"} {
+		if rec := rt.post(t, inChannel(t, "message_plain", testChannel, id), ""); rec.Code != http.StatusOK {
+			t.Fatalf("status %d", rec.Code)
+		}
+	}
+	testutil.Eventually(t, "the sink is given the first", func() bool { return rt.sink.callsOf("1794965000001") == 1 })
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Serve returned %v", err)
+	}
+	if got := o.value(t, "agentkourier_teams_activities_lost_total", lostStopped); got != 2 {
+		t.Errorf("lost stopped = %v, want 2: the message the sink held and the one behind it", got)
+	}
+	if got := o.value(t, "agentkourier_teams_activities_lost_total", lostNotTaken); got != 0 {
+		t.Errorf("lost not_taken = %v, want 0: the message cut by the stop is counted as stopped alone", got)
+	}
+}
+
 // failingSink takes nothing, and counts the tries.
 type failingSink struct{ tries atomic.Int32 }
 
