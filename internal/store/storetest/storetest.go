@@ -61,6 +61,7 @@ func Run(t *testing.T, open func(t *testing.T) Instance) {
 		{"Attribution", su.attribution},
 		{"UnattributedRows", su.unattributedRows},
 		{"ServedConnections", su.servedConnections},
+		{"TeamsConversations", su.teamsConversations},
 		{"Audit", su.audit},
 		{"Retention", su.retention},
 		{"StaleTasks", su.staleTasks},

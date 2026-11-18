@@ -36,6 +36,7 @@ var (
 	okOutbox      = store.OutboxEntry{ID: "o1", EventID: "e1", Role: store.OutboxReply, Channel: "C1", CreatedAt: t0}
 	okSession     = store.Session{Key: key, Binding: "ns/b", LastActivity: t0}
 	okInteraction = store.Interaction{ID: "i1", Key: key, TaskID: "t1", Kind: store.InteractionAskUser, CreatedAt: t0, Deadline: t0.Add(time.Hour)}
+	okTeams       = store.TeamsConversation{Connection: "ns/teams", Channel: "19:c@thread.tacv2", ServiceURL: "https://smba.example.test/", UpdatedAt: t0}
 	okPress       = store.Press{InteractionID: "i1", User: "U1", Channel: "C1", MessageRef: "1.2", PressedAt: t0}
 	okReply       = store.Reply{ID: "r1", Key: key, UserID: "U1", MessageRef: "1.2", EnqueuedAt: t0}
 	okRun         = store.TriggerRun{Binding: "ns/b", Trigger: 0, Key: key, At: t0}
@@ -232,6 +233,19 @@ func recordPress(f func(*store.Press), limits store.PressLimits) call {
 func replaceServedConnections(now time.Time, connections ...string) call {
 	return func(ctx context.Context, s store.Store) error {
 		return s.ReplaceServedConnections(ctx, connections, now)
+	}
+}
+
+func rememberTeamsConversation(f func(*store.TeamsConversation)) call {
+	return func(ctx context.Context, s store.Store) error {
+		return s.RememberTeamsConversation(ctx, mut(okTeams, f))
+	}
+}
+
+func getTeamsConversation(connection, channel string) call {
+	return func(ctx context.Context, s store.Store) error {
+		_, err := s.GetTeamsConversation(ctx, connection, channel)
+		return err
 	}
 }
 
@@ -566,6 +580,16 @@ func specs() []spec {
 			"an empty connection": replaceServedConnections(t0, "ns/a", ""),
 			"zero time":           replaceServedConnections(time.Time{}, "ns/a"),
 			"epoch":               replaceServedConnections(epoc, "ns/a"),
+		}},
+		{"RememberTeamsConversation", rememberTeamsConversation(nil), map[string]call{
+			"no Connection":      rememberTeamsConversation(func(c *store.TeamsConversation) { c.Connection = "" }),
+			"no Channel":         rememberTeamsConversation(func(c *store.TeamsConversation) { c.Channel = "" }),
+			"no UpdatedAt":       rememberTeamsConversation(func(c *store.TeamsConversation) { c.UpdatedAt = time.Time{} }),
+			"UpdatedAt at epoch": rememberTeamsConversation(func(c *store.TeamsConversation) { c.UpdatedAt = epoc }),
+		}},
+		{"GetTeamsConversation", getTeamsConversation("ns/teams", "19:c@thread.tacv2"), map[string]call{
+			"no connection": getTeamsConversation("", "19:c@thread.tacv2"),
+			"no channel":    getTeamsConversation("ns/teams", ""),
 		}},
 		{"AttributeConnection", attributeConnection("slack"), map[string]call{"no connection": attributeConnection("")}},
 		{"UnattributedRows", func(ctx context.Context, s store.Store) error { _, err := s.UnattributedRows(ctx); return err }, nil},

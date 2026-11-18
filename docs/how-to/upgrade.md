@@ -1025,6 +1025,10 @@ its chat listener, with what [What each platform supports](../reference/platform
 - **The Binding and ChatConnection CRDs change**, and their schema hashes with them: the chart applies them with the release when
   `crds.install` is true, or unset on `config.source: crds`; if you apply the CRDs yourself, apply `charts/agent-kourier/files/crds` again.
   [Limits](../reference/limits.md#write-a-binding-an-agentbackend-or-a-chatconnection) has the new caps.
+- **A database migration, 0031, runs at the first start.** On SQLite and on Postgres it adds the table `teams_conversations`, which
+  will keep, for each channel of a teams connection, where to post to it and which team it is in ([Stored data](../reference/stored-data.md)).
+  Nothing writes it yet. It only adds a table. A broker of an earlier release, after a rollback, does not read it, and logs at start that
+  the database schema is newer than its build.
 
 ### Roll back from the release that takes Microsoft Teams ChatConnections
 

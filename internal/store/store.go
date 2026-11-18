@@ -63,6 +63,7 @@ type Store interface {
 	Presses
 	Attribution
 	ConnectionServing
+	TeamsConversations
 	TriggerThreads
 	TriggerRuns
 	ReplyQueue
