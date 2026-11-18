@@ -387,9 +387,6 @@ func (c *checker) contract() {
 			c.add(RuleContract, chat.WhereStream, "Stream", "no streams", "a platform with Streams false gave %v, want chat.ErrNoStreams", err)
 		}
 	}
-	if c.caps.Steps && !c.caps.Streams {
-		c.add(RuleContract, chat.WhereStepTitle, "Capabilities", "steps", "Steps is true and Streams is false: a step is shown in a stream")
-	}
 	if c.caps.Streams {
 		c.zeroStop()
 		c.stepContract()

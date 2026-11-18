@@ -45,6 +45,7 @@ type leaks struct {
 	acceptsMalformed                            bool
 	noStreamError                               bool
 	noStepError                                 bool // says it has no steps, and shows one when asked
+	stepsNoStreams                              bool // shows a message's steps and has no streams, as Microsoft Teams does
 	stopRepeats                                 bool // a stop with nothing to add shows the streamed text again
 	tooLargeFits                                bool
 	tooLargeToolsFit                            bool // a prompt of too many tools is said to fit
@@ -425,6 +426,11 @@ func (m *markupPlatform) subject() Subject {
 	if m.leaks.noStepError {
 		m.SetCaps(chat.Caps{Streams: true, MaxText: 4000, Ephemeral: true, AckReaction: "hourglass"})
 	}
+	if m.leaks.stepsNoStreams {
+		c := m.Capabilities()
+		c.Streams, c.Steps = false, true
+		m.SetCaps(c)
+	}
 	if m.leaks.busyUnsaid {
 		c := m.Capabilities()
 		c.Busy = false
@@ -454,6 +460,8 @@ func TestAnEscapingMarkupAdapterPassesInBothDialects(t *testing.T) {
 		t.Run(name+" with mentions", func(t *testing.T) { t.Parallel(); Conformance(t, newMarkup(d, leaks{mentions: true}).subject()) })
 		t.Run(name+" with no reactions", func(t *testing.T) { t.Parallel(); Conformance(t, newMarkup(d, leaks{noReactions: true}).subject()) })
 		t.Run(name+" with no ephemeral messages", func(t *testing.T) { t.Parallel(); Conformance(t, newMarkup(d, leaks{noEphemeral: true}).subject()) })
+		// A platform may show a message's steps with no stream to show them in: Steps does not need Streams.
+		t.Run(name+" with steps and no streams", func(t *testing.T) { t.Parallel(); Conformance(t, newMarkup(d, leaks{stepsNoStreams: true}).subject()) })
 	}
 }
 

@@ -165,8 +165,10 @@ type Button struct {
 // and detail literal text on one line, untrusted. It is how a message that replaces a stream keeps the steps the stream
 // showed, which a platform such as Slack drops when it updates the message, and how a reply that is updated and never
 // streams, such as an alert thread's, shows its tool calls. A platform without
-// progress steps (Caps.Steps false) shows nothing of it. Only an update carries it today: no payload the outbox stores
-// has one, so a release that cannot read it never meets one.
+// progress steps (Caps.Steps false) shows nothing of it. A Context part just before a Steps part is said of the steps,
+// such as how many earlier steps are not shown: a platform that shows the steps elsewhere in the message (Microsoft Teams
+// shows them after the other parts) moves that line with them. Only an update carries it today: no payload the outbox
+// stores has one, so a release that cannot read it never meets one.
 type Steps struct{ Steps []Step }
 
 func (Header) part()   {}
@@ -197,6 +199,7 @@ type wireStep struct {
 	Title  string `json:"title,omitempty"`
 	Detail string `json:"detail,omitempty"`
 	State  string `json:"state,omitempty"`
+	Call   bool   `json:"call,omitempty"`
 }
 
 type wireMessage struct {
@@ -226,7 +229,7 @@ func (m Message) MarshalJSON() ([]byte, error) {
 		case Steps:
 			wp := wirePart{Kind: "steps"}
 			for _, st := range p.Steps {
-				ws := wireStep{ID: st.ID, Title: st.Title, Detail: st.Detail}
+				ws := wireStep{ID: st.ID, Title: st.Title, Detail: st.Detail, Call: st.Call}
 				if st.State != StepRunning {
 					ws.State = st.State.String()
 				}
@@ -271,7 +274,7 @@ func (m *Message) UnmarshalJSON(b []byte) error {
 				if !ok {
 					return fmt.Errorf("%w: a step of the state %q", ErrInvalid, ws.State)
 				}
-				steps = append(steps, Step{ID: ws.ID, Title: ws.Title, Detail: ws.Detail, State: state})
+				steps = append(steps, Step{ID: ws.ID, Title: ws.Title, Detail: ws.Detail, State: state, Call: ws.Call})
 			}
 			out.Parts = append(out.Parts, Steps{steps})
 		default:

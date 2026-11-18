@@ -113,8 +113,10 @@ func (w Where) String() string {
 // Caps is what a platform can do and how much it can show. A feature a platform lacks is false, and the
 // caller degrades (no Streams: a turn is posted once when it ends).
 type Caps struct {
-	Streams   bool // Stream works
-	Steps     bool // Stream.Step shows progress steps in a stream, and a message shows its Steps part; needs Streams
+	Streams bool // Stream works
+	// Steps says a message shows its Steps part and, on a platform with Streams, Stream.Step shows progress steps in a
+	// stream. A platform without streams may have it: its replies are updated, and each update shows the steps.
+	Steps     bool
 	Ephemeral bool // Ephemeral shows a message to one person alone; otherwise it says ErrNoEphemeral and shows nothing
 	Busy      bool // MarkBusy shows a thread as busy; otherwise it says ErrNoBusy, as a platform may later even when this is set
 	// AckReaction is the reaction name, without colons, that Agent Kourier puts on an accepted message while it works, when a
