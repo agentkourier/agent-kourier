@@ -293,25 +293,19 @@ func TestBindingValidate(t *testing.T) {
 			badKey("spec.identity.tokenSecretRef.key", "a b")},
 		{"connectionRef without name", func(o *Binding) { o.Spec.Chat.ConnectionRef.Name = "" }, "spec.chat.connectionRef.name: required"},
 		{"empty channel", func(o *Binding) { o.Spec.Chat.Channel = "" }, "spec.chat.channel: required"},
-		// A channel's name, and IDs of no platform's shape, load: resolution holds the channel to its connection's platform
-		// (TestPlatformMismatches), and on Slack refuses them.
-		{"a channel's name loads", func(o *Binding) { o.Spec.Chat.Channel = "general" }, ""},
-		{"a channel's name as Slack shows it loads", func(o *Binding) { o.Spec.Chat.Channel = "#sre-alerts" }, ""},
-		{"a repository as a channel ok", func(o *Binding) { o.Spec.Chat.Channel = "octo-org/hello.world_2-x" }, ""},
-		{"a repository with no name loads", func(o *Binding) { o.Spec.Chat.Channel = "octo-org/" }, ""},
-		{"a channel with a space", func(o *Binding) { o.Spec.Chat.Channel = "sre alerts" },
-			`spec.chat.channel: invalid channel "sre alerts": a chat ID is printable ASCII with no space and no ':'`},
-		{"a channel with a colon, which a message's ID joins its parts with", func(o *Binding) { o.Spec.Chat.Channel = "ch:1" },
-			`spec.chat.channel: invalid channel "ch:1": a chat ID is printable ASCII with no space and no ':'`},
+		{"channel name instead of ID", func(o *Binding) { o.Spec.Chat.Channel = "#sre-alerts" },
+			`spec.chat.channel: invalid channel "#sre-alerts": must be a channel ID such as C0123456789, not a name`},
+		{"a channel's name without its #", func(o *Binding) { o.Spec.Chat.Channel = "general" },
+			`spec.chat.channel: invalid channel "general": must be a channel ID such as C0123456789, not a name`},
+		{"a private channel's G ID ok", func(o *Binding) { o.Spec.Chat.Channel = "G0123456789" }, ""},
+		{"a direct message's D ID", func(o *Binding) { o.Spec.Chat.Channel = "D0123456789" },
+			`spec.chat.channel: invalid channel "D0123456789": must be a channel ID such as C0123456789, not a name`},
+		{"a channel ID in lower case", func(o *Binding) { o.Spec.Chat.Channel = "c0123456789" },
+			`spec.chat.channel: invalid channel "c0123456789": must be a channel ID such as C0123456789, not a name`},
 		{"a channel with a control character", func(o *Binding) { o.Spec.Chat.Channel = "C0123456789\n" },
-			`spec.chat.channel: invalid channel "C0123456789\n": a chat ID is printable ASCII with no space and no ':'`},
-		{"a channel with a letter outside ASCII", func(o *Binding) { o.Spec.Chat.Channel = "C0123456789é" },
-			`spec.chat.channel: invalid channel "C0123456789é": a chat ID is printable ASCII with no space and no ':'`},
-		{"a channel with a character that turns the text", func(o *Binding) { o.Spec.Chat.Channel = "C0123\u202e456789" },
-			`spec.chat.channel: invalid channel "C0123\u202e456789": a chat ID is printable ASCII with no space and no ':'`},
-		{"the longest repository ok", func(o *Binding) {
-			o.Spec.Chat.Channel = strings.Repeat("o", 39) + "/" + strings.Repeat("r", 100)
-		}, ""},
+			`spec.chat.channel: invalid channel "C0123456789\n": must be a channel ID such as C0123456789, not a name`},
+		{"a repository as a channel", func(o *Binding) { o.Spec.Chat.Channel = "octo-org/hello-world" },
+			`spec.chat.channel: invalid channel "octo-org/hello-world": must be a channel ID such as C0123456789, not a name`},
 		{"a channel at the length cap ok", func(o *Binding) { o.Spec.Chat.Channel = "C" + strings.Repeat("0", maxChatIDLen-1) }, ""},
 		{"a channel over the length cap", func(o *Binding) { o.Spec.Chat.Channel = "C" + strings.Repeat("0", maxChatIDLen) },
 			fmt.Sprintf("spec.chat.channel: is %d bytes, longer than the %d byte limit", maxChatIDLen+1, maxChatIDLen)},
@@ -335,10 +329,7 @@ func TestBindingValidate(t *testing.T) {
 			o.Spec.Chat.Mentions = []ChatMention{{Name: strings.Repeat("a", maxMentionNameLen+1), User: "U0123456789"}}
 		}, fmt.Sprintf("spec.chat.mentions[0].name: is %d bytes, longer than the %d byte limit", maxMentionNameLen+1, maxMentionNameLen)},
 		{"a mention user at the length cap ok", func(o *Binding) {
-			o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: strings.Repeat("a", maxMentionUserLen)}}
-		}, ""},
-		{"an app's longest login as a user ok", func(o *Binding) {
-			o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: strings.Repeat("a", 39) + "[bot]"}}
+			o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "U" + strings.Repeat("0", maxMentionUserLen-1)}}
 		}, ""},
 		{"a mention user over the length cap", func(o *Binding) {
 			o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "U" + strings.Repeat("0", maxMentionUserLen)}}
@@ -351,18 +342,14 @@ func TestBindingValidate(t *testing.T) {
 		{"mention named everyone", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "everyone", User: "U0123456789"}} },
 			`spec.chat.mentions[0].name: "everyone" is reserved: a broadcast cannot be declared`},
 		{"mention with no user", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam"}} }, "spec.chat.mentions[0].user: required"},
-		// Another kind of Slack ID, a login, markup or an e-mail address loads: resolution holds the user to its connection's
-		// platform, and on Slack refuses each.
-		{"a Slack user group ID as a user loads", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "oncall", User: "S0123456789"}} }, ""},
-		{"a login as a user loads", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "octo-cat"}} }, ""},
-		{"an app's login as a user loads", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "bot", User: "dependabot[bot]"}} }, ""},
-		{"a user that starts with a dot loads", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: ".octocat"}} }, ""},
-		{"an e-mail address as a user loads", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "sam@example.com"}} }, ""},
-		{"user markup loads", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "<@U0123456789>"}} }, ""},
-		{"a user with a space", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "Sam Lee"}} },
-			`spec.chat.mentions[0].user: invalid user ID "Sam Lee": a chat ID is printable ASCII with no space and no ':'`},
-		{"a user with a colon", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "sam:1"}} },
-			`spec.chat.mentions[0].user: invalid user ID "sam:1": a chat ID is printable ASCII with no space and no ':'`},
+		{"mention of a user group", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "oncall", User: "S0123456789"}} },
+			`spec.chat.mentions[0].user: invalid user ID "S0123456789": must be a user ID such as U0123456789`},
+		{"mention with user markup", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "<@U0123456789>"}} },
+			`spec.chat.mentions[0].user: invalid user ID "<@U0123456789>": must be a user ID such as U0123456789`},
+		{"an e-mail address as a user", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "sam@example.com"}} },
+			`spec.chat.mentions[0].user: invalid user ID "sam@example.com": must be a user ID such as U0123456789`},
+		{"a user ID of one character after U", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "U0"}} },
+			`spec.chat.mentions[0].user: invalid user ID "U0": must be a user ID such as U0123456789`},
 		{"mention declared twice", func(o *Binding) {
 			o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "U0123456789"}, {Name: "sam", User: "U9876543210"}}
 		}, "spec.chat.mentions[1].name: duplicate of index 0"},
@@ -408,28 +395,14 @@ func TestBindingValidate(t *testing.T) {
 			o.Spec.Interactions.ToolApprovals = true
 			o.Spec.Interactions.ApproverGroups = []string{""}
 		}, "spec.interactions.approverGroups[0]: must not be empty"},
-		// A name, or another kind of Slack ID, loads: resolution holds the group to its connection's platform, and on Slack
-		// refuses it.
-		{"an approver group that is a name loads", func(o *Binding) {
-			o.Spec.Interactions.ToolApprovals = true
-			o.Spec.Interactions.ApproverGroups = []string{"oncall"}
-		}, ""},
-		{"an approver group with a space", func(o *Binding) {
-			o.Spec.Interactions.ToolApprovals = true
-			o.Spec.Interactions.ApproverGroups = []string{"on call"}
-		}, `spec.interactions.approverGroups[0]: invalid group ID "on call": a chat ID is printable ASCII with no space and no ':'`},
-		{"a channel ID as an approver group loads", func(o *Binding) {
+		{"invalid approver group", func(o *Binding) {
 			o.Spec.Interactions.ToolApprovals = true
 			o.Spec.Interactions.ApproverGroups = []string{"C0123456789"}
-		}, ""},
-		{"a team as an approver group ok", func(o *Binding) {
+		}, `spec.interactions.approverGroups[0]: invalid group ID "C0123456789": must be a Slack user group ID such as S0123456789`},
+		{"an approver group that is a name", func(o *Binding) {
 			o.Spec.Interactions.ToolApprovals = true
-			o.Spec.Interactions.ApproverGroups = []string{"octo-org/sre-team"}
-		}, ""},
-		{"a team with no organisation loads", func(o *Binding) {
-			o.Spec.Interactions.ToolApprovals = true
-			o.Spec.Interactions.ApproverGroups = []string{"/sre-team"}
-		}, ""},
+			o.Spec.Interactions.ApproverGroups = []string{"oncall"}
+		}, `spec.interactions.approverGroups[0]: invalid group ID "oncall": must be a Slack user group ID such as S0123456789`},
 		{"an approver group at the length cap ok", func(o *Binding) {
 			o.Spec.Interactions.ToolApprovals = true
 			o.Spec.Interactions.ApproverGroups = []string{"S" + strings.Repeat("0", maxChatIDLen-1)}

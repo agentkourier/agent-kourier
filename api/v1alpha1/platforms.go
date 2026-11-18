@@ -5,40 +5,21 @@ import (
 	"regexp"
 )
 
-// The chat IDs of a Binding (spec D42) are checked in two places. The schema and Validate hold each ID field to a length cap and
-// to chatIDChars, a character set that every platform's IDs are written in, and nothing more: which shape an ID must have depends on
-// the platform of the ChatConnection it names, which neither the schema nor Validate reads.
-// The broker checks the shape (PlatformMismatches, with the ChatPlatform of the connection's spec) in two places where it has the
+// The chat IDs of a Binding (spec D42) are checked in two places. The schema and Validate hold each ID field to Slack's shape and
+// its length cap, Slack being the only platform: a Slack channel's name, such as general, is refused when it is applied or loaded.
+// The broker checks the shape again (PlatformMismatches, with the ChatPlatform of the connection's spec) where it has the
 // connection: when the custom resource source reads the Binding (config.RefusedOnPlatform, which refuses that generation as a failed
-// Validate does), and when it resolves the Binding. A Slack channel's name, such as general, is refused there, with
-// InvalidPlatformID, and not when it is applied.
+// Validate does), and when it resolves the Binding, with the reason InvalidPlatformID. With Slack alone that second check refuses
+// no ID that Validate passed; it is where a platform with other shapes would be told apart, once the schema takes its IDs.
 //
-// chatIDChars is printable ASCII but the space and ':'. ':' is left out because chat.MessageID joins the parts of a message's ID
-// with it; white space and control characters because no platform's ID holds one and a person cannot see one; and every character
-// outside ASCII, so that no ID holds an invisible character, a character that turns the direction of the text, or a letter that
-// looks like an ASCII one, which a pattern of white space and control characters would let through. The rest of ASCII's punctuation
-// is kept, since each platform's shape is checked at resolution.
-// ':' is kept out for now, and Teams will need it: its channel IDs look like 19:…@thread.tacv2 and its Bot Framework
-// user IDs like 29:… (Microsoft's documentation, unverified here). Taking it then needs the part of a message's ID that the ID
-// gives to stay free of ':', or chat.MessageID to escape it; and widening the set then is a loosening, which D42 does not count as
-// breaking. Its literal must equal the Pattern marker of each of the four fields
-// (TestSchemaPatternsEqualTheGoLiterals), and each platform's shape takes only IDs that it takes
-// (TestEveryPlatformsShapesAreWithinTheSchema).
-var chatIDChars = regexp.MustCompile(`^[!-9;-~]+$`)
-
-// Slack's shapes, which a Binding of a Slack connection is held to when the broker reads it with its connection. maxSlackIDLen is the
-// length cap that the schema had for a Slack channel, sender and user group before it took other platforms' IDs; Slack's IDs are 9 to
-// 11 characters (unverified: not readable in this repository). A Slack user ID is bounded by its pattern, to 21 characters.
+// Slack's shapes. Each literal must equal the Pattern marker of its field (TestSchemaPatternsEqualTheGoLiterals); maxChatIDLen and
+// maxMentionUserLen (validate.go) are their caps. Slack's IDs are 9 to 11 characters (unverified: not readable in this
+// repository). slackUserID matches what the Slack adapter makes a mention of.
 var (
 	slackChannelID = regexp.MustCompile(`^[CG][A-Z0-9]+$`)
 	slackBotID     = regexp.MustCompile(`^B[A-Z0-9]+$`)
 	slackUserID    = regexp.MustCompile(`^[UW][A-Z0-9]{2,20}$`)
 	slackGroupID   = regexp.MustCompile(`^S[A-Z0-9]+$`)
-)
-
-const (
-	maxSlackIDLen     = 32
-	maxSlackUserIDLen = 21
 )
 
 // IDShape is the form that one kind of chat ID has on one platform: a pattern, a length cap in bytes, and what to write instead. The
@@ -91,13 +72,13 @@ func ChatPlatformOf(spec ChatConnectionSpec) (ChatPlatform, bool) {
 	case PlatformSlack:
 		return ChatPlatform{
 			Name: "Slack", ActorName: "Slack",
-			Channel: IDShape{pattern: slackChannelID, maxLen: maxSlackIDLen, What: "a channel ID",
+			Channel: IDShape{pattern: slackChannelID, maxLen: maxChatIDLen, What: "a channel ID",
 				Fix: "use the channel's ID, such as C0123456789 (G… for an older private channel), not its name"},
-			Sender: IDShape{pattern: slackBotID, maxLen: maxSlackIDLen, What: "a bot ID",
+			Sender: IDShape{pattern: slackBotID, maxLen: maxChatIDLen, What: "a bot ID",
 				Fix: "use the bot's ID, such as B0123456789, not its name"},
-			User: IDShape{pattern: slackUserID, maxLen: maxSlackUserIDLen, What: "a user ID",
+			User: IDShape{pattern: slackUserID, maxLen: maxMentionUserLen, What: "a user ID",
 				Fix: "use the person's user ID, such as U0123456789"},
-			Group: IDShape{pattern: slackGroupID, maxLen: maxSlackIDLen, What: "a user group ID",
+			Group: IDShape{pattern: slackGroupID, maxLen: maxChatIDLen, What: "a user group ID",
 				Fix: "use the user group's ID, such as S0123456789"},
 			AskUser: true, ToolApprovals: true, Feedback: true,
 		}, true
@@ -121,7 +102,7 @@ type PlatformMismatch struct {
 
 // PlatformMismatches returns what s names or uses that the platform p does not take, in the order of the fields: each chat ID that
 // does not have p's shape, each kind of chat ID that p takes none of, and each feature that p does not serve. Call it on a spec that
-// passed Validate, which has held each ID to chatIDChars and its length cap.
+// passed Validate, which has held each ID to Slack's shape and its length cap: with Slack's own rules it returns nothing.
 func (s *BindingSpec) PlatformMismatches(p ChatPlatform) []PlatformMismatch {
 	var out []PlatformMismatch
 	id := func(path, value string, shape IDShape) {

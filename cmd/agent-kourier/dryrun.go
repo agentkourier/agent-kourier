@@ -138,23 +138,6 @@ func execDryRun(ctx context.Context, o dryRunOptions, getenv func(string) string
 	return exitOK
 }
 
-// slackIDs refuses a Binding whose chat IDs are not Slack's, as the broker rejects it at resolution on a Slack connection. The load
-// takes any platform's IDs, and only the connection says which platform's the Binding needs; dry-run reads only Slack, and its
-// directory may hold the Binding alone (no ChatConnection), so it holds the Binding to Slack's rules itself. Without it a bot's
-// name as a botMessage trigger's from.id, which has a login's shape, would load and match no message.
-func slackIDs(b *v1alpha1.Binding) error {
-	slackRules, _ := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformSlack})
-	mismatches := b.Spec.PlatformMismatches(slackRules)
-	if len(mismatches) == 0 {
-		return nil
-	}
-	parts := make([]string, len(mismatches))
-	for i, m := range mismatches {
-		parts[i] = fmt.Sprintf("%s: %s on %s: %s (see %s)", m.Path, m.Problem, slackRules.Name, m.Fix, config.PlatformsPage)
-	}
-	return errors.New(strings.Join(parts, "; "))
-}
-
 // usageError marks an error as one of the command line, the config or the token: the exit code is exitUsage.
 type usageError struct{ err error }
 
@@ -192,9 +175,6 @@ func dryRunReportOf(ctx context.Context, o dryRunOptions, getenv func(string) st
 	b, err := findBinding(set, o.binding)
 	if err != nil {
 		return dryRunReport{}, usagef("%w", err)
-	}
-	if err := slackIDs(b); err != nil {
-		return dryRunReport{}, usagef("Binding %s: %w", o.binding, err)
 	}
 	replay, err := trigger.NewReplay(b)
 	if err != nil {

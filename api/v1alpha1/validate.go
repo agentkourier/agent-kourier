@@ -76,12 +76,10 @@ const (
 // set far above any real use, which today is:
 //
 //   - maxAllowedNamespaces 256: one namespace in every example (a namespace is at most 63 characters, so the list is at most 16 KiB).
-//   - maxChatIDLen 140: a channel, a sender and a user group are 11 characters in every example, and Slack's IDs are 9 to 11
-//     (unverified: not readable in this repository). The cap fits a GitHub repository, owner/name, of a 39-character owner and
-//     a 100-character name (GitHub's own limits, unverified here); each platform holds its IDs to its own cap when the broker
-//     resolves the Binding (a Slack connection to 32, maxSlackIDLen). A mention's name is already bounded by its pattern, to 63,
-//     and maxMentionNameLen says so as a cap, so that the schema has a maxLength for it and a value over one is refused without
-//     being shown. maxMentionUserLen 64 is above every platform served today: a Slack user ID is 21 at most, by its pattern.
+//   - maxChatIDLen 32: a channel, a sender and a user group are 11 characters in every example, and Slack's IDs are 9 to 11
+//     (unverified: not readable in this repository). A mention's name and user ID are already bounded by their patterns, to
+//     63 and 21: maxMentionNameLen and maxMentionUserLen say so as caps, so that the schema has a maxLength for them and a
+//     value over one is refused without being shown.
 //   - maxEmojiLen 100: the default reaction, hourglass_flowing_sand, is 21. Slack's own limit on a custom emoji name is
 //     100 characters (unverified: not readable in this repository).
 //   - maxURLLen 2048: the longest URL in an example or a test fixture is under 100 characters.
@@ -91,9 +89,9 @@ const (
 //   - maxCloseWhenValueLen 256: the value in an example is RESOLVED.
 const (
 	maxAllowedNamespaces = 256
-	maxChatIDLen         = 140
+	maxChatIDLen         = 32
 	maxMentionNameLen    = 63
-	maxMentionUserLen    = 64
+	maxMentionUserLen    = 21
 	maxEmojiLen          = 100
 	maxURLLen            = 2048
 	maxHeaderValueLen    = 4096
@@ -101,8 +99,8 @@ const (
 	maxCloseWhenValueLen = 256
 )
 
-// mentionName is what an agent writes after an "@"; its literal must equal ChatMention.Name's Pattern marker. (The characters of
-// the user it names, chatIDChars, are in platforms.go with the other chat IDs.)
+// mentionName is what an agent writes after an "@"; its literal must equal ChatMention.Name's Pattern marker. (The shape of the
+// user it names, slackUserID, is in platforms.go with the other chat IDs.)
 var mentionName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 
 // broadcastNames are the words a platform reads as a mention of everyone. None may be declared, so that no reply that names
@@ -335,8 +333,10 @@ func (b *Binding) Validate() error {
 	p.objectRef("spec.chat.connectionRef", &s.Chat.ConnectionRef)
 	if c := s.Chat.Channel; c == "" {
 		p.add("spec.chat.channel", "required")
-	} else {
-		p.chatID("spec.chat.channel", "channel", c, maxChatIDLen) // past the cap not shown: the channel is in the messages that name a conflict
+	} else if len(c) > maxChatIDLen {
+		p.maxBytes("spec.chat.channel", c, maxChatIDLen) // not shown: the channel is in the messages that name a conflict
+	} else if !slackChannelID.MatchString(c) {
+		p.add("spec.chat.channel", "invalid channel %q: must be a channel ID such as C0123456789, not a name", c)
 	}
 	p.oneOf("spec.chat.output", string(s.Chat.Output), string(OutputLive), string(OutputFinal))
 	p.oneOf("spec.chat.progress", string(s.Chat.Progress), string(ProgressSteps), string(ProgressStepsAndActivity), string(ProgressActivity))
@@ -365,17 +365,6 @@ func (b *Binding) Validate() error {
 	return errors.Join(p...)
 }
 
-// chatID checks a chat ID that is set: at most limit bytes, and of chatIDChars. Its shape is the platform's, which resolution checks
-// (PlatformMismatches). A value past the cap is not shown.
-func (p *problems) chatID(path, what, id string, limit int) {
-	switch {
-	case len(id) > limit:
-		p.maxBytes(path, id, limit)
-	case !chatIDChars.MatchString(id):
-		p.add(path, "invalid %s %q: a chat ID is printable ASCII with no space and no ':'", what, id)
-	}
-}
-
 func (p *problems) mentions(path string, mentions []ChatMention) {
 	if len(mentions) > maxMentions {
 		p.add(path, "has %d items, maximum is %d", len(mentions), maxMentions)
@@ -398,10 +387,13 @@ func (p *problems) mentions(path string, mentions []ChatMention) {
 		} else {
 			seen[m.Name] = idx
 		}
-		if m.User == "" {
+		switch {
+		case m.User == "":
 			p.add(at+".user", "required")
-		} else {
-			p.chatID(at+".user", "user ID", m.User, maxMentionUserLen)
+		case len(m.User) > maxMentionUserLen:
+			p.maxBytes(at+".user", m.User, maxMentionUserLen)
+		case !slackUserID.MatchString(m.User):
+			p.add(at+".user", "invalid user ID %q: must be a user ID such as U0123456789", m.User)
 		}
 	}
 }
@@ -416,10 +408,13 @@ func (p *problems) interactions(path string, in Interactions) {
 	seen := make(map[string]int, len(in.ApproverGroups))
 	for idx, group := range in.ApproverGroups {
 		at := fmt.Sprintf("%s.approverGroups[%d]", path, idx)
-		if group == "" {
+		switch {
+		case group == "":
 			p.add(at, "must not be empty")
-		} else {
-			p.chatID(at, "group ID", group, maxChatIDLen)
+		case len(group) > maxChatIDLen:
+			p.maxBytes(at, group, maxChatIDLen)
+		case !slackGroupID.MatchString(group):
+			p.add(at, "invalid group ID %q: must be a Slack user group ID such as S0123456789", group)
 		}
 		if previous, ok := seen[group]; ok {
 			p.add(at, "duplicate of index %d", previous)
@@ -584,10 +579,13 @@ func (p *problems) personMessageTrigger(path string, t *Trigger, b *regexBudget)
 }
 
 func (p *problems) botMessageTrigger(path string, t *Trigger, b *regexBudget) {
-	if t.From == nil || t.From.ID == "" {
+	switch {
+	case t.From == nil || t.From.ID == "":
 		p.add(path+".from.id", "required")
-	} else {
-		p.chatID(path+".from.id", "sender ID", t.From.ID, maxChatIDLen)
+	case len(t.From.ID) > maxChatIDLen:
+		p.maxBytes(path+".from.id", t.From.ID, maxChatIDLen)
+	case !slackBotID.MatchString(t.From.ID):
+		p.add(path+".from.id", "invalid sender ID %q: must be the sender's ID (Slack: a bot ID such as B0123456789), not a name", t.From.ID)
 	}
 	if t.From != nil {
 		if t.From.Kind == "" {

@@ -96,7 +96,7 @@ func Resolve(ctx context.Context, set *Set, secrets SecretResolver) (*Snapshot, 
 }
 
 // resolve is Resolve with the rules of the chat platforms that platforms gives, which a test can choose.
-func resolve(ctx context.Context, set *Set, secrets SecretResolver, platforms platformRules) (*Snapshot, error) {
+func resolve(ctx context.Context, set *Set, secrets SecretResolver, platforms PlatformRules) (*Snapshot, error) {
 	r := newResolver(set, platforms)
 	r.secrets = secrets
 	r.resolveReferences(set)
@@ -135,8 +135,9 @@ const (
 	// Binding's own namespace, with sameNamespace, nor listed in namespaces.
 	ReasonAgentNamespaceNotAllowed RejectionReason = "AgentNamespaceNotAllowed"
 	// ReasonInvalidPlatformID: a chat ID of the Binding (its channel, a botMessage trigger's sender, a mention's user or an
-	// approver group) does not have the shape of the IDs of its ChatConnection's platform, though it has another platform's, which
-	// is what the load takes (v1alpha1.BindingSpec.PlatformMismatches).
+	// approver group) does not have the shape of the IDs of its ChatConnection's platform (v1alpha1.BindingSpec.PlatformMismatches).
+	// Validate holds each chat ID to Slack's shape, the only platform's, so a Binding that loaded is not given this reason today: the
+	// check is a second line, for a platform whose IDs the schema takes besides Slack's.
 	ReasonInvalidPlatformID RejectionReason = "InvalidPlatformID"
 	// ReasonUnsupportedOnPlatform: the Binding asks for a feature that the platform of its ChatConnection does not serve, such as
 	// tool approvals on a platform that cannot ask for them.
@@ -192,7 +193,7 @@ func ResolvePartial(set *Set) (*Snapshot, []Rejection) {
 }
 
 // resolvePartial is ResolvePartial with the rules of the chat platforms that platforms gives, which a test can choose.
-func resolvePartial(set *Set, platforms platformRules) (*Snapshot, []Rejection) {
+func resolvePartial(set *Set, platforms PlatformRules) (*Snapshot, []Rejection) {
 	// The first Binding to claim a channel keeps it, so the oldest goes first.
 	slices.SortStableFunc(set.Bindings, func(a, b v1alpha1.Binding) int {
 		return cmp.Or(a.CreationTimestamp.Compare(b.CreationTimestamp.Time), cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name))
@@ -217,9 +218,10 @@ type problem struct {
 	rejection *Rejection
 }
 
-// platformRules returns the rules of the chat platform of a ChatConnection's spec, and false for one that has none:
-// v1alpha1.ChatPlatformOf, or a test's own table.
-type platformRules func(spec v1alpha1.ChatConnectionSpec) (v1alpha1.ChatPlatform, bool)
+// PlatformRules returns the rules of the chat platform of a ChatConnection's spec, and false for one that has none:
+// v1alpha1.ChatPlatformOf, or a test's own table. Slack, the only platform, serves every feature and its shapes are the schema's,
+// so a test that needs the platform to refuse something gives a table of its own.
+type PlatformRules func(spec v1alpha1.ChatConnectionSpec) (v1alpha1.ChatPlatform, bool)
 
 // PlatformsPage is the reference page that says what each platform supports, which the message of a rejection for the platform
 // links.
@@ -227,7 +229,7 @@ const PlatformsPage = "https://agentkourier.dev/reference/platforms/"
 
 type resolver struct {
 	secrets   SecretResolver
-	platforms platformRules
+	platforms PlatformRules
 	sources   map[identity]string
 	backends  map[identity]*v1alpha1.AgentBackend
 	conns     map[identity]*v1alpha1.ChatConnection
@@ -238,7 +240,7 @@ type resolver struct {
 
 // newResolver returns a resolver for set that holds each Binding to the rules of its connection's platform that platforms gives.
 // Resolve adds the Secret reader.
-func newResolver(set *Set, platforms platformRules) *resolver {
+func newResolver(set *Set, platforms PlatformRules) *resolver {
 	r := &resolver{
 		platforms: platforms,
 		sources:   set.sources,
@@ -363,7 +365,7 @@ type platformProblem struct {
 
 // platformProblems returns what fitsPlatform rejects b for on conn, in the order of b's fields: nothing for a platform that
 // platforms has no rules for.
-func platformProblems(b *v1alpha1.Binding, conn *v1alpha1.ChatConnection, platforms platformRules) []platformProblem {
+func platformProblems(b *v1alpha1.Binding, conn *v1alpha1.ChatConnection, platforms PlatformRules) []platformProblem {
 	p, ok := platforms(conn.Spec)
 	if !ok {
 		return nil
@@ -380,18 +382,14 @@ func platformProblems(b *v1alpha1.Binding, conn *v1alpha1.ChatConnection, platfo
 	return out
 }
 
-// RefusedOnPlatform says why resolution would reject b on conn for its platform, the check that fitsPlatform makes: the reason of
-// the first chat ID or feature that the platform does not take (InvalidPlatformID or UnsupportedOnPlatform), and each of them as
-// "path: message", joined with "; ". Both are empty when the platform takes all of b, and when conn does not admit b (it is in
-// another namespace that conn's allowedNamespaces does not list), since such a Binding learns nothing of conn's platform. A source
-// that fails one object at a time asks it of each valid Binding whose connection it holds, and refuses that generation as it
-// refuses one that fails Validate, so that a mistyped ID in an edit leaves the last good generation served (see Invalid.Reason).
-func RefusedOnPlatform(b *v1alpha1.Binding, conn *v1alpha1.ChatConnection) (RejectionReason, string) {
-	return refusedOnPlatform(b, conn, v1alpha1.ChatPlatformOf)
-}
-
-// refusedOnPlatform is RefusedOnPlatform with the rules of the chat platforms that platforms gives, which a test can choose.
-func refusedOnPlatform(b *v1alpha1.Binding, conn *v1alpha1.ChatConnection, platforms platformRules) (RejectionReason, string) {
+// RefusedOnPlatform says why resolution would reject b on conn for its platform, the check that fitsPlatform makes, with the rules
+// that platforms gives (v1alpha1.ChatPlatformOf, as resolution has): the reason of the first chat ID or feature that the platform
+// does not take (InvalidPlatformID or UnsupportedOnPlatform), and each of them as "path: message", joined with "; ". Both are empty
+// when the platform takes all of b, and when conn does not admit b (it is in another namespace that conn's allowedNamespaces does
+// not list), since such a Binding learns nothing of conn's platform. A source that fails one object at a time asks it of each valid
+// Binding whose connection it holds, and refuses that generation as it refuses one that fails Validate, so that an edit the platform
+// does not take leaves the last good generation served (see Invalid.Reason).
+func RefusedOnPlatform(b *v1alpha1.Binding, conn *v1alpha1.ChatConnection, platforms PlatformRules) (RejectionReason, string) {
 	if !ReferenceAllowed(b.Namespace, conn.Namespace, conn.Spec.AllowedNamespaces) {
 		return "", ""
 	}

@@ -328,11 +328,11 @@ func TestSchemaPatternsEqualTheGoLiterals(t *testing.T) {
 		plural, path string
 		re           *regexp.Regexp
 	}{
-		{"bindings", "spec.chat.channel", chatIDChars},
-		{"bindings", "spec.chat.triggers[].from.id", chatIDChars},
+		{"bindings", "spec.chat.channel", slackChannelID},
+		{"bindings", "spec.chat.triggers[].from.id", slackBotID},
 		{"bindings", "spec.chat.mentions[].name", mentionName},
-		{"bindings", "spec.chat.mentions[].user", chatIDChars},
-		{"bindings", "spec.interactions.approverGroups[]", chatIDChars},
+		{"bindings", "spec.chat.mentions[].user", slackUserID},
+		{"bindings", "spec.interactions.approverGroups[]", slackGroupID},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			if got := crdSchema(t, tc.plural).at(t, tc.path).str("pattern"); got != tc.re.String() {

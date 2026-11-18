@@ -4,25 +4,26 @@ A Binding names its chat platform through its ChatConnection, whose `spec.platfo
 platform, the shape of the chat IDs a Binding names and the features of a Binding that the platform serves. Slack is the only
 platform today.
 
-A Binding is checked against its platform when the broker reads it with its ChatConnection: the API server and the broker's load
-check only each ID's length and characters (see [Chat IDs](#chat-ids)). A Binding that names an ID of another shape than its platform's,
-such as the Slack channel's name `general`, or asks for a feature that its platform does not serve, is refused then, as a Binding that
-fails validation is:
-
-- with custom resources its `Accepted` condition is `False` with the reason `InvalidPlatformID` or `UnsupportedOnPlatform`
-  ([Binding status](binding-status.md#accepted)). A Binding that had a good generation keeps serving it, and the message says which
-  (`serving generation 1`), so an edit with a mistyped ID does not take; a new Binding is not served. The other Bindings keep running;
-- on the files route the whole config fails, with the same message: at start the broker exits with code 2, and on a reload it keeps
-  its last good config.
-
-`agent-kourier dry-run`, which reads only Slack, holds the Binding to Slack's shapes and features too, and refuses it with the same
-problem and fix.
-
-The message names the field, the value, the platform, the ChatConnection and what to write instead, and links this page, for example:
+The API server and the broker's load hold each chat ID of a Binding to Slack's shape, the only platform's (see [Chat IDs](#chat-ids)):
+a Binding that names a channel's name such as `general`, or a bot's name such as `alertmanager` as a sender, is refused when it is
+applied: the API server refuses it on `kubectl apply`, `--dry-run=server` included, and on any other client that writes it. On the
+files route the load refuses it with the same rule, and so does `agent-kourier dry-run`:
 
 ```text
-spec.chat.channel: "general" is not a channel ID on Slack, the platform of ChatConnection agent-kourier-system/slack-main: use the channel's ID, such as C0123456789 (G… for an older private channel), not its name (see https://agentkourier.dev/reference/platforms/)
+spec.chat.channel: invalid channel "general": must be a channel ID such as C0123456789, not a name
 ```
+
+The broker checks the Binding against its platform once more when it reads the Binding with its ChatConnection. That check refuses a
+chat ID that does not have the shape of the platform's IDs (`InvalidPlatformID`) and a feature that the platform does not serve
+(`UnsupportedOnPlatform`); with Slack, which serves every feature in [Features](#features) and whose shapes the schema already holds,
+it refuses nothing that was accepted. A Binding it refuses is refused as a Binding that fails validation is:
+
+- with custom resources its `Accepted` condition is `False` with that reason ([Binding status](binding-status.md#accepted)). A Binding
+  that had a good generation keeps serving it, and the message says which (`serving generation 1`); a new Binding is not served. The
+  other Bindings keep running;
+- on the files route the whole config fails: at start the broker exits with code 2, and on a reload it keeps its last good config.
+
+Its message names the field, the value, the platform, the ChatConnection and what to write instead, and links this page.
 
 A Binding that its ChatConnection does not admit (in another namespace that `allowedNamespaces` does not list) is told
 `NamespaceNotAllowed` and nothing of the platform.
@@ -36,11 +37,8 @@ A Binding that its ChatConnection does not admit (in another namespace that `all
 | A `chat.mentions` entry's `user` | A user ID: `U` or `W`, then 2 to 20 capitals and digits, such as `U0123456789`. |
 | An entry of `interactions.approverGroups` | A user group ID: `S`, then capitals and digits, at most 32 bytes, such as `S0123456789`. |
 
-What the API server and the load take of a Binding's IDs is wider: any ID of printable ASCII with no space and no `:`, up to the field's
-cap. So a channel's name such as `general`, a bot's name such as `alertmanager`, or another platform's ID is taken when it is applied,
-and refused by the broker, as above. A value with a space, a tab or another control character, a `:`, or a character outside ASCII is
-refused when it is applied: no platform's ID has one. The length caps of each field are in
-[Limits](limits.md#write-a-binding-an-agentbackend-or-a-chatconnection).
+The API server and the load refuse any other value, with the field's pattern and length cap (the caps are in
+[Limits](limits.md#write-a-binding-an-agentbackend-or-a-chatconnection)).
 
 ## Features
 

@@ -21,8 +21,8 @@ const (
 )
 
 // TestPlatformIDs holds Resolve and ResolvePartial to the shapes of the connection's platform: a Binding of a Slack connection
-// whose chat IDs have another platform's shape, which the load takes, is rejected with InvalidPlatformID, one rejection for each
-// ID in the order of the fields, and holds no channel.
+// whose chat IDs are not Slack's is rejected with InvalidPlatformID, one rejection for each ID in the order of the fields, and
+// holds no channel. Validate refuses these IDs first, at the load; resolution, which the Set here reaches without it, checks again.
 func TestPlatformIDs(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -33,7 +33,7 @@ func TestPlatformIDs(t *testing.T) {
 		{"Slack's own shapes", func(*Set) {}, []string{"sre/chat-only", "sre/sre-alerts"}, nil},
 		{"a repository as the channel", func(s *Set) { sreAlerts(s).Spec.Chat.Channel = "octo-org/hello-world" }, []string{"sre/chat-only"},
 			[]Rejection{rejected("sre-alerts", ReasonInvalidPlatformID, onSlack("spec.chat.channel", `"octo-org/hello-world" is not a channel ID`, channelFix))}},
-		{"a bot's name as the sender, which has a login's shape", func(s *Set) { sreAlerts(s).Spec.Chat.Triggers[1].From.ID = "alertmanager" }, []string{"sre/chat-only"},
+		{"a bot's name as the sender", func(s *Set) { sreAlerts(s).Spec.Chat.Triggers[1].From.ID = "alertmanager" }, []string{"sre/chat-only"},
 			[]Rejection{rejected("sre-alerts", ReasonInvalidPlatformID, onSlack("spec.chat.triggers[1].from.id", `"alertmanager" is not a bot ID`, botFix))}},
 		{"every ID, in the order of the fields", func(s *Set) {
 			b := sreAlerts(s)
@@ -170,7 +170,7 @@ func TestRefusedOnPlatform(t *testing.T) {
 	tests := []struct {
 		name        string
 		mutate      func(*Set)
-		platforms   platformRules
+		platforms   PlatformRules
 		wantReason  RejectionReason
 		wantMessage string
 	}{
@@ -192,15 +192,10 @@ func TestRefusedOnPlatform(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			set := specSet(t)
 			tc.mutate(set)
-			reason, message := refusedOnPlatform(sreAlerts(set), &set.ChatConnections[0], tc.platforms)
+			reason, message := RefusedOnPlatform(sreAlerts(set), &set.ChatConnections[0], tc.platforms)
 			if reason != tc.wantReason || message != tc.wantMessage {
-				t.Errorf("refusedOnPlatform = %q, %q; want %q, %q", reason, message, tc.wantReason, tc.wantMessage)
+				t.Errorf("RefusedOnPlatform = %q, %q; want %q, %q", reason, message, tc.wantReason, tc.wantMessage)
 			}
 		})
-	}
-	set := specSet(t)
-	sreAlerts(set).Spec.Chat.Triggers[1].From.ID = "alertmanager"
-	if reason, message := RefusedOnPlatform(sreAlerts(set), &set.ChatConnections[0]); reason != ReasonInvalidPlatformID || message != sender {
-		t.Errorf("RefusedOnPlatform = %q, %q; want the rules of v1alpha1.ChatPlatformOf", reason, message)
 	}
 }

@@ -461,7 +461,7 @@ func TestLoadRejects(t *testing.T) {
 				"b.yaml": strings.Replace(backendDoc, "kagent-v1", "grpc", 1),
 			},
 			want: []string{
-				`a.yaml#1 Binding sre/sre-alerts: spec.chat.channel: invalid channel "sre alerts": a chat ID is printable ASCII with no space and no ':'`,
+				`a.yaml#1 Binding sre/sre-alerts: spec.chat.channel: invalid channel "sre alerts": must be a channel ID such as C0123456789, not a name`,
 				`b.yaml#1 AgentBackend agent-kourier-system/kagent-pilot: spec.dialect: unsupported value "grpc", must be one of a2a, kagent-v1`,
 			},
 		},

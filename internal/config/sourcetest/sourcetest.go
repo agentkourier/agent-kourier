@@ -16,6 +16,7 @@
 package sourcetest
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -77,8 +78,8 @@ func Run(t *testing.T, f Factory, opts Options) {
 	t.Run("each Set is the caller's own", func(t *testing.T) { setsAreIndependent(t, f, spec) })
 	t.Run("an invalid object is refused with the problem the validator names", func(t *testing.T) { invalidObjects(t, f, spec, opts) })
 	t.Run("a rule across objects says the same of the objects of either source", func(t *testing.T) { crossObject(t, f, spec) })
-	for _, c := range platformCases {
-		t.Run(c.name+" is refused as the route refuses a bad object", func(t *testing.T) { refusedOnPlatform(t, f, opts, c) })
+	for _, c := range chatIDCases {
+		t.Run(c.name+" is refused as the route refuses a bad object", func(t *testing.T) { refusedChatID(t, f, opts, c) })
 		t.Run("an edit to "+c.name+" leaves the Binding as it was", func(t *testing.T) { refusedEdit(t, opts, c) })
 	}
 }
@@ -396,11 +397,13 @@ var crossCases = []crossCase{
 // chatOnlyRoute is the routing line of the spec corpus' Binding sre/chat-only, which names no output and is served with the default.
 const chatOnlyRoute = "sre/chat-only -> agent-kourier-system/kagent-pilot on agent-kourier-system/slack-main channel G0123456789 output live\n"
 
-// platformCase is a change to a Binding of the spec corpus that the load takes and its connection's platform does not, with the
-// reason and the problem that resolution gives; how a Snapshot serves the field, before the change; and the routing table of the
-// rest. Each case is a chat ID: Slack, the one platform, serves every feature, so no source can be given a Binding that asks for one
-// it does not; TestUnsupportedOnPlatform and TestRefusedOnPlatform in internal/config cover that refusal with a table of their own.
-type platformCase struct {
+// chatIDCase is a change to a Binding of the spec corpus that gives it a chat ID that its connection's platform does not take, with
+// the reason that the Binding is told and the problem; how a Snapshot serves the field, before the change; and the routing table of
+// the rest. The schema and Validate hold each chat ID to Slack's shape, Slack being the only platform, so Validate refuses each case
+// (InvalidSpec) before the broker's check against the platform (InvalidPlatformID, which resolution and the custom resource source
+// make) would: TestPlatformIDs and TestRefusedOnPlatform in internal/config cover that check with a table of their own. A Slack ID
+// typo in an edit thus does not take, on either route.
+type chatIDCase struct {
 	name     string
 	doc      int    // the Binding's document in the corpus
 	binding  string // the Binding's name, in namespace sre
@@ -412,26 +415,25 @@ type platformCase struct {
 	rest     string
 }
 
-var platformCases = []platformCase{
+var chatIDCases = []chatIDCase{
 	{
-		name: "a chat ID that the connection's platform does not take", doc: 2, binding: "sre-alerts", rest: chatOnlyRoute,
+		name: "a bot's name as a sender", doc: 2, binding: "sre-alerts", rest: chatOnlyRoute,
 		from: "from: { id: B0123456789 }", to: "from: { id: alertmanager }",
-		reason:  config.ReasonInvalidPlatformID,
-		problem: `spec.chat.triggers[1].from.id: "alertmanager" is not a bot ID on Slack, the platform of ChatConnection agent-kourier-system/slack-main`,
+		reason:  config.ReasonInvalidSpec,
+		problem: `spec.chat.triggers[1].from.id: invalid sender ID "alertmanager": must be the sender's ID (Slack: a bot ID such as B0123456789), not a name`,
 		served:  func(rb config.ResolvedBinding) string { return rb.Binding.Spec.Chat.Triggers[1].From.ID }, before: "B0123456789",
 	},
 	{
-		// A channel's name passes Validate, which takes any platform's IDs, and the connection's platform refuses it.
-		name: "a channel's name on Slack", doc: 2, binding: "sre-alerts", rest: chatOnlyRoute,
+		name: "a channel's name", doc: 2, binding: "sre-alerts", rest: chatOnlyRoute,
 		from: "channel: C0123456789 ", to: "channel: general ",
-		reason:  config.ReasonInvalidPlatformID,
-		problem: `spec.chat.channel: "general" is not a channel ID on Slack, the platform of ChatConnection agent-kourier-system/slack-main`,
+		reason:  config.ReasonInvalidSpec,
+		problem: `spec.chat.channel: invalid channel "general": must be a channel ID such as C0123456789, not a name`,
 		served:  func(rb config.ResolvedBinding) string { return rb.Binding.Spec.Chat.Channel }, before: "C0123456789",
 	},
 }
 
 // changed returns docs, the case's corpus, with the case's change made to its Binding.
-func (c platformCase) changed(t *testing.T, docs []string) []string {
+func (c chatIDCase) changed(t *testing.T, docs []string) []string {
 	t.Helper()
 	docs = slices.Clone(docs)
 	if !strings.Contains(docs[c.doc], c.from) {
@@ -441,25 +443,24 @@ func (c platformCase) changed(t *testing.T, docs []string) []string {
 	return docs
 }
 
-// refusedOnPlatform: a Binding that names a chat ID that its connection's platform does not take passes
-// Default and Validate, and the platform refuses it, in the same words on either route. The files fail resolution, and so the
-// whole load. The custom resources refuse that Binding as they refuse one that fails Validate, with the platform's reason: it is
-// listed in Set.Invalid, with nothing served in its place, and the rest is read and served.
-func refusedOnPlatform(t *testing.T, f Factory, opts Options, c platformCase) {
+// refusedChatID: a Binding that names a chat ID that its connection's platform does not take is refused, in the same words on either
+// route. The files fail, and so the whole load. The custom resources list that Binding in Set.Invalid, with the reason it is told and
+// nothing served in its place, and read and serve the rest.
+func refusedChatID(t *testing.T, f Factory, opts Options, c chatIDCase) {
 	base := Spec(t)
 	src := f(t, Corpus{Name: base.Name, Docs: c.changed(t, base.Docs), Connection: base.Connection})
-	set, _ := read(t, src)
 	if !opts.PerObject {
-		if got := routingStrict(t, set); !strings.HasPrefix(got, "error:") || !strings.Contains(got, c.problem) {
-			t.Errorf("strict resolution = %q; want the problem %q", got, c.problem)
+		if _, _, err := src.Set(context.Background()); err == nil || !strings.Contains(err.Error(), c.problem) {
+			t.Errorf("Set = %v; want it to fail with the problem %q", err, c.problem)
 		}
 		return
 	}
+	set, _ := read(t, src)
 	if len(set.Invalid) != 1 {
 		t.Fatalf("Invalid = %+v; want sre/%s alone", set.Invalid, c.binding)
 	}
 	inv := set.Invalid[0]
-	if inv.Name != c.binding || inv.Reason != c.reason || !strings.Contains(inv.Message, c.problem) || inv.Served != 0 {
+	if inv.Name != c.binding || cmp.Or(inv.Reason, config.ReasonInvalidSpec) != c.reason || !strings.Contains(inv.Message, c.problem) || inv.Served != 0 {
 		t.Errorf("Invalid = %+v; want sre/%s, not served, refused with %s and the problem %q", inv, c.binding, c.reason, c.problem)
 	}
 	if got := routing(set); got != c.rest {
@@ -467,11 +468,10 @@ func refusedOnPlatform(t *testing.T, f Factory, opts Options, c platformCase) {
 	}
 }
 
-// refusedEdit: an edit that gives a serving Binding a chat ID that its platform does not take does not take, on either route, as an edit
-// that fails Validate does not. The files fail the reload with the problem, and the Reloader keeps the config it serves. The custom
-// resources keep serving the Binding's last good generation, and the Report says why the new one is refused, with the platform's
-// reason, which the Binding's status carries.
-func refusedEdit(t *testing.T, opts Options, c platformCase) {
+// refusedEdit: an edit that gives a serving Binding a chat ID that its platform does not take does not take, on either route. The
+// files fail the reload with the problem, and the Reloader keeps the config it serves. The custom resources keep serving the
+// Binding's last good generation, and the Report says why the new one is refused, with the reason that the Binding's status carries.
+func refusedEdit(t *testing.T, opts Options, c chatIDCase) {
 	base := Spec(t)
 	docs := base.Docs
 	src, change := opts.Edit(t, Corpus{Name: base.Name, Docs: docs, Connection: base.Connection})

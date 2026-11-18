@@ -317,6 +317,59 @@ func TestFingerprintFollowsGenerationAndUIDNotResourceVersion(t *testing.T) {
 	until(t, func() { c.remove(again); c.apply(again) }, func() bool { return src.Fingerprint(t.Context()) != afterSpec })
 }
 
+// An edit that passes Validate and that the platform of its live connection does not take is refused as an invalid edit is: the last
+// good generation stays served, and Invalid says why, with the reason of resolution. Slack serves every feature, so the platform here is
+// Slack's without questions to a person.
+func TestAnEditThePlatformDoesNotTakeKeepsTheLastGoodGeneration(t *testing.T) {
+	leakCheck(t)
+	objs := corpus(t)
+	c := newCluster(t, objs...)
+	src, err := crsource.New(crsource.Options{Client: c.client, Connection: own})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src.SetPlatformsForTest(func(spec v1alpha1.ChatConnectionSpec) (v1alpha1.ChatPlatform, bool) {
+		p, ok := v1alpha1.ChatPlatformOf(spec)
+		p.AskUser = false
+		return p, ok
+	})
+	t.Cleanup(src.Stop)
+	if err := src.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	s, fp := set(t, src)
+	if len(s.Invalid) != 1 || s.Invalid[0].Name != "sre-alerts" || s.Invalid[0].Reason != config.ReasonUnsupportedOnPlatform {
+		t.Fatalf("Invalid = %+v; want sre-alerts, which asks questions at generation 1, refused for its platform", s.Invalid)
+	}
+
+	edit := find(objs, "chat-only")
+	edit.SetGeneration(2)
+	_ = unstructured.SetNestedField(edit.Object, true, "spec", "interactions", "askUser")
+	until(t, func() { c.apply(edit) }, func() bool { return src.Fingerprint(t.Context()) != fp })
+	s, _ = set(t, src)
+	const msg = "spec.interactions.askUser: questions to a person are not supported on Slack, the platform of ChatConnection " +
+		"agent-kourier-system/slack-main: set it to false (see " + config.PlatformsPage + ")"
+	i := slices.IndexFunc(s.Invalid, func(inv config.Invalid) bool { return inv.Name == "chat-only" })
+	if i < 0 {
+		t.Fatalf("Invalid = %+v; want chat-only's edit refused", s.Invalid)
+	}
+	if inv := s.Invalid[i]; inv.Reason != config.ReasonUnsupportedOnPlatform || inv.Generation != 2 || inv.Served != 1 || inv.Message != msg {
+		t.Errorf("Invalid = %+v; want generation 2 refused with UnsupportedOnPlatform, 1 served, and the message %q", inv, msg)
+	}
+	j := slices.IndexFunc(s.Bindings, func(b v1alpha1.Binding) bool { return b.Name == "chat-only" })
+	if j < 0 || s.Bindings[j].Generation != 1 || s.Bindings[j].Spec.Interactions.AskUser {
+		t.Fatalf("Bindings = %v; want chat-only served at generation 1, which asks no questions", bindingNames(s))
+	}
+	rep := report(t, src)
+	k := slices.IndexFunc(rep.Rejections, func(r config.Rejection) bool { return r.Name == "chat-only" })
+	if k < 0 || rep.Rejections[k].Reason != config.ReasonUnsupportedOnPlatform || rep.Rejections[k].Served != 1 {
+		t.Errorf("rejections = %+v; want chat-only's edit rejected with UnsupportedOnPlatform, generation 1 served", rep.Rejections)
+	}
+	if _, ok := rep.Snapshot.Binding("sre", "chat-only"); !ok {
+		t.Error("chat-only is not served; want its generation 1")
+	}
+}
+
 // The Set read and the fingerprint it returns describe the same state, and a Fingerprint taken then agrees.
 func TestSetReturnsTheFingerprintOfWhatItRead(t *testing.T) {
 	leakCheck(t)

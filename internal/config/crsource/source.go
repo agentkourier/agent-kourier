@@ -10,8 +10,8 @@
 // validate is left out of the Set and listed in Set.Invalid, and when the object had a good generation, that generation is
 // kept in memory and put in the Set in its place, so that a typo in an update does not take a Binding out of routing. A
 // Binding that validates and names a chat ID or a feature that the platform of its connection does not take
-// (config.RefusedOnPlatform) is refused the same way, with that reason in its Invalid: the schema takes any platform's IDs, and
-// only the connection says which platform's the Binding needs. A Reloader that is PerObject turns the two into what is served
+// (config.RefusedOnPlatform) is refused the same way, with that reason in its Invalid: only the connection says which platform's
+// IDs the Binding needs (with Slack the only platform, Validate has held them to Slack's shapes already). A Reloader that is PerObject turns the two into what is served
 // and what is reported.
 //
 // # What it reads
@@ -322,6 +322,9 @@ type Source struct {
 	probeErr error     // the latest probe's failure, nil once a probe passes
 	now      func() time.Time
 
+	// platforms gives the rules that a read holds a valid Binding to on its connection's platform (platformCheck): v1alpha1.ChatPlatformOf.
+	platforms config.PlatformRules
+
 	probeEvery, probeTimeout time.Duration
 	holding                  bool           // the own connection is deleted and held, with what went with it
 	capped                   map[key]bool   // the connections the last read left out under maxServedConnections, so that the log says each once
@@ -348,7 +351,7 @@ func New(opts Options) (*Source, error) {
 	}
 	s := &Source{
 		client: opts.Client, log: cmp.Or(opts.Logger, slog.Default()), good: map[key]goodObject{}, decoded: map[key]decodedObject{}, warned: map[key]warnedGeneration{},
-		now: time.Now, probeEvery: probeEvery, probeTimeout: probeTimeout, capped: map[key]bool{},
+		now: time.Now, probeEvery: probeEvery, probeTimeout: probeTimeout, capped: map[key]bool{}, platforms: v1alpha1.ChatPlatformOf,
 		hasOwn: hasOwn, admission: newAdmission(hasOwn, opts.ConnectionNamespaces, opts.ConnectionNamespaceSelector),
 	}
 	if hasOwn {
@@ -1102,7 +1105,7 @@ func (s *Source) platformCheck(conns []v1alpha1.ChatConnection) func(*v1alpha1.B
 			// not served either.
 			return "", ""
 		}
-		reason, message := config.RefusedOnPlatform(b, conn)
+		reason, message := config.RefusedOnPlatform(b, conn, s.platforms)
 		return reason, config.CapMessage(message)
 	}
 }

@@ -655,14 +655,13 @@ func TestDryRunRefusesABindingWhoseRegexesAreTooCostly(t *testing.T) {
 	}
 }
 
-// A Binding file whose chat IDs are not Slack's is refused by dry-run, which reads only Slack, as the broker rejects it at
-// resolution: the load takes any platform's IDs, a bot's name such as alertmanager has a login's shape, and a user group ID has a
-// login's shape as a mention's user. The directory holds the Binding alone, with no ChatConnection, and the refusal comes before
-// the token is read or Slack is asked. The file with Slack's own IDs loads, and dry-run then fails for want of a token.
+// A Binding file whose chat IDs are not Slack's is refused by dry-run's load, which holds them to Slack's shapes as the API server
+// does: a bot's name such as alertmanager as the sender, and a user group ID as a mention's user. The directory holds the Binding
+// alone, with no ChatConnection, and the refusal comes before the token is read or Slack is asked. The file with Slack's own IDs
+// loads, and dry-run then fails for want of a token.
 func TestDryRunRefusesChatIDsThatAreNotSlacks(t *testing.T) {
 	const match = "{title: 'FIRING'}"
 	slackIDs := costlyBinding(match, "{}", "{}")
-	page := " (see https://agentkourier.dev/reference/platforms/)"
 	for _, tc := range []struct {
 		name string
 		file string
@@ -670,9 +669,9 @@ func TestDryRunRefusesChatIDsThatAreNotSlacks(t *testing.T) {
 	}{
 		{"Slack's own IDs", slackIDs, "SLACK_BOT_TOKEN"},
 		{"a bot's name as the sender", strings.Replace(slackIDs, "from: {id: B0123456789}", "from: {id: alertmanager}", 1),
-			`Binding agent-kourier/trial: spec.chat.triggers[1].from.id: "alertmanager" is not a bot ID on Slack: use the bot's ID, such as B0123456789, not its name` + page},
+			`Binding agent-kourier/trial: spec.chat.triggers[1].from.id: invalid sender ID "alertmanager": must be the sender's ID (Slack: a bot ID such as B0123456789), not a name`},
 		{"a user group ID as a mention's user", strings.Replace(slackIDs, "    channel: C0123456789\n", "    channel: C0123456789\n    mentions: [{name: oncall, user: S0123456789}]\n", 1),
-			`Binding agent-kourier/trial: spec.chat.mentions[0].user: "S0123456789" is not a user ID on Slack: use the person's user ID, such as U0123456789` + page},
+			`Binding agent-kourier/trial: spec.chat.mentions[0].user: invalid user ID "S0123456789": must be a user ID such as U0123456789`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.file == slackIDs && tc.name != "Slack's own IDs" {
