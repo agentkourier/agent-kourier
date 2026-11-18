@@ -187,7 +187,7 @@ does not keep a post from being sent, and the agent cannot write one: no `<` of 
 
 On a test tenant in November 2026, with the web client, the span came back through Graph at the end of a reply and of a post that
 opened a thread, and so did the `id` of the two kinds of card element that the broker puts first on a card, the `TextBlock` and the
-`RichTextBlock`. A reply was in Graph 1.4 seconds after it was posted. The client showed no carrier, and the span's paragraph adds a
+`RichTextBlock`. A reply was in Graph at the first look, 1.4 seconds after it was posted. The client showed no carrier, and the span's paragraph adds a
 little space under the text. The span was tried only at the end of a text. Teams' mobile and desktop clients, screen readers, Teams'
 search and notifications, and the order in which Graph lists a channel's messages were not checked.
 

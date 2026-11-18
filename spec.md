@@ -633,7 +633,7 @@ Rules:
   abandoned; a Transient error (a 429, a 5xx, an answer that is not JSON, a read cut before any page) is returned and the outbox looks
   again. Measured on a test tenant, November 2026, web client: the span and the `id` of a TextBlock and of a RichTextBlock come back
   through the replies list and a message's GET, the span after a PUT that sent the tag again, and a root's span through the channel's
-  messages; a reply was in the replies 1.4 s after it was posted; channelData, entities, summary, an HTML comment, `data-` attributes, an attachment's name and a card's unknown keys are
+  messages; a reply was in the replies at the first look, 1.4 s after it was posted; channelData, entities, summary, an HTML comment, `data-` attributes, an attachment's name and a card's unknown keys are
   dropped; the client shows no carrier, and the span's paragraph adds a little space. Not measured: Teams' mobile and desktop clients,
   screen readers, and Teams' search and notifications. Measured on a test tenant, November 2026: the Graph token, a 200 for a channel's messages under the
   permission alone, the path form, the message shapes (HTML body, from.user and from.application, a card's JSON as a string, a system

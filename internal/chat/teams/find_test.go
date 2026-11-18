@@ -388,7 +388,10 @@ func TestFindReadsWithinTheReadersBounds(t *testing.T) {
 	hold := make(chan struct{})
 	t.Cleanup(func() { close(hold) })
 	held.f.setGraph(func(g *fakeGraph) { g.hold = hold })
-	if _, found, err := held.c.Find(t.Context(), heldTarget, findTag, time.Time{}); found || !errors.Is(err, context.DeadlineExceeded) {
+	heldCtx, cancelHeld := context.WithTimeout(t.Context(), 5*time.Second) // a Find that did not bound its read fails, and does not hang
+	defer cancelHeld()
+	start := time.Now()
+	if _, found, err := held.c.Find(heldCtx, heldTarget, findTag, time.Time{}); found || !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 2*time.Second {
 		t.Errorf("a held Find = %t, %v; want its deadline, which the outbox counts as a lookup that timed out", found, err)
 	}
 }
@@ -594,27 +597,44 @@ func TestFindTakesAGraphAnomalyAsNotFound(t *testing.T) {
 	}
 }
 
-// A read that runs out of time after Graph gave a page is a thread too long to read in time, every time, and is not found (the post is
-// sent): a lookup that timed out each try would have the outbox abandon a post that was never sent. One that runs out before any page
-// came back is the deadline, which the outbox tries again (TestFindReadsWithinTheReadersBounds).
+// A read that runs out of its own time after Graph gave a page is a thread too long to read in time, every time, and is not found (the
+// post is sent): a lookup that timed out each try would have the outbox abandon a post that was never sent. One that runs out before
+// any page came back is the deadline, which the outbox tries again (TestFindReadsWithinTheReadersBounds), and so is one whose caller's
+// own time ran out first, after a page: that says nothing of the thread.
 func TestFindCutAfterAPageIsNotFound(t *testing.T) {
 	t.Parallel()
-	ct, target := threadTest(t)
-	ct.replies(3)
-	ct.c.threadTimeout = 200 * time.Millisecond
-	ct.f.setGraph(func(g *fakeGraph) {
-		g.pageAt = 1
-		g.fail = func(r *http.Request) (int, string, bool) {
-			if r.URL.Query().Get("$skiptoken") != "" {
-				<-r.Context().Done() // the second page never comes
+	stall := func(ct *clientTest) {
+		ct.replies(3)
+		ct.f.setGraph(func(g *fakeGraph) {
+			g.pageAt = 1
+			g.fail = func(r *http.Request) (int, string, bool) {
+				if r.URL.Query().Get("$skiptoken") != "" {
+					<-r.Context().Done() // the second page never comes
+				}
+				return 0, "", false
 			}
-			return 0, "", false
-		}
-	})
-	if _, found, err := ct.c.Find(t.Context(), target, findTag, time.Time{}); found || err != nil {
-		t.Errorf("Find cut after a page = %t, %v; want not found", found, err)
+		})
+	}
+
+	ct, target := threadTest(t)
+	stall(ct)
+	ct.c.threadTimeout = 200 * time.Millisecond
+	// The caller's bound is far past the read's, so that a Find that did not bound its read fails here, and does not hang.
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if _, found, err := ct.c.Find(ctx, target, findTag, time.Time{}); found || err != nil {
+		t.Errorf("Find cut by its own time after a page = %t, %v; want not found", found, err)
 	}
 	if n := len(ct.f.graphTaken()); n != 2 {
 		t.Errorf("%d Graph calls, want 2: the first page, and the second that never came", n)
+	}
+
+	caller, callerTarget := threadTest(t)
+	stall(caller)
+	caller.c.threadTimeout = 5 * time.Second
+	short, cancelShort := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancelShort()
+	if _, found, err := caller.c.Find(short, callerTarget, findTag, time.Time{}); found || !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Find cut by the caller's time after a page = %t, %v; want the caller's deadline", found, err)
 	}
 }
