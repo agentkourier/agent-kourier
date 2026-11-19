@@ -4,7 +4,7 @@ For an operator running the Helm chart: at the end, Agent Kourier runs a newer r
 audit log intact, and you know how to roll back.
 
 Each release publishes a signed multi-arch image and a chart whose default image is that image by digest, as
-[Install with Helm](install-with-helm.md#the-release) describes. The current release is `0.4.0`. To run a build that is not
+[Install with Helm](install-with-helm.md#the-release) describes. The current release is `0.5.0`. To run a build that is not
 released, see [Build from source](install-with-helm.md#build-from-source).
 
 The [release notes](../release-notes.md) say what each release changed and what is breaking. 0.2.0 makes custom resources the chart's default, so a
@@ -941,20 +941,34 @@ A Slack ChatConnection can now take its events and button presses over HTTP, as 
 the app's signing secret, instead of over Socket Mode: `spec.slack.mode: http`, with the chat listener that the chart's `chatListener` values
 open ([Configure Slack](configure-slack.md)).
 
-- **Nothing changes for Socket Mode.** A ChatConnection that does not set `spec.slack.mode` is in Socket Mode, as before, and its Secret
-  keeps `botToken` and `appToken`. `chatListener.enabled` is false by default, so the upgrade adds no port, Service, Role or admission
-  policy.
+### What changes for every install
+
+These apply whether or not any connection moves to HTTP mode.
+
+- **A database migration, 0030, runs at the first start.** On SQLite and on Postgres it adds the table `press_deliveries`, which keeps
+  a key of each button press for at least an hour, so that a press Slack sends again is recorded once, in Socket Mode as in HTTP mode
+  ([Stored data](../reference/stored-data.md)). It only adds a table.
+- **The chart refuses `podLabels` that set `agentkourier.dev/role`**, with the chat listener on or off
+  (`podLabels must not set agentkourier.dev/role: ...`): the leader writes that label on its own pod, and the chat Service selects it. Take
+  the key out of `podLabels` in the values you upgrade with.
+- **`AGENTKOURIER_POD_NAMESPACE` needs `AGENTKOURIER_CHAT_LISTEN`.** A Deployment of your own that sets the new variable without the chat
+  listener exits with [code 2](troubleshoot.md#the-pod-exits-with-code-2). The chart sets it only with `chatListener.enabled`.
+- **Socket Mode is unchanged.** A ChatConnection that does not set `spec.slack.mode` is in Socket Mode, as before, and its Secret keeps
+  `botToken` and `appToken`. `chatListener.enabled` is false by default, so the upgrade adds no port, Service, Role or admission policy.
+
+### Move a connection to HTTP mode
+
 - **The chat listener needs cluster-scoped objects.** With `chatListener.enabled` and `rbac.create` the chart installs a
-  ValidatingAdmissionPolicy and its binding, `<fullname>-<namespace>-leader-label`, beside a Role that may patch the release namespace's pods
-  ([Security model](../explanation/security.md#the-chat-port)). Whoever runs `helm upgrade` needs the right to create both kinds.
+  ValidatingAdmissionPolicy (`admissionregistration.k8s.io/v1`) and its binding, `<fullname>-<namespace>-leader-label`, beside a Role that
+  may patch the release namespace's pods ([Security model](../explanation/security.md#the-chat-port)). Whoever runs `helm upgrade` needs the
+  right to create both kinds.
+- **Run the chat listener on Kubernetes 1.33 or later.** The chart checks no Kubernetes version for the admission policy, on either route,
+  and its tests run the policy on 1.33 and 1.37 only. The custom resource route requires 1.33 already; on the ConfigMap route, check the
+  cluster's version yourself.
 - **Upgrade first, then set the mode.** Upgrade the chart, with the broker and the CRDs, before any ChatConnection sets `spec.slack.mode`.
   A broker of an earlier release does not know the field: on the ConfigMap route it refuses it (`spec.slack: unknown field`, exit code 2),
   and on custom resources, once the later release's CRDs are installed, it ignores it and runs the connection in Socket Mode, which needs `appToken`
   ([Troubleshoot](troubleshoot.md#the-pod-exits-with-code-2)). CRDs of an earlier release do not have the field either, so the API server refuses it there (or drops it, for a client that does not ask for strict field validation).
-- **A database migration, 0030, runs at the first start.** On SQLite and on Postgres it adds the table `press_deliveries`, which keeps
-  a key of each button press for at least an hour, so that a press Slack sends again is recorded once, in Socket Mode as in HTTP mode
-  ([Stored data](../reference/stored-data.md)). It only adds a table. A broker of an earlier release, after a rollback, does not read it and
-  records each delivery of a press, as it did.
 
 To move a connection that runs in Socket Mode to HTTP mode, after the upgrade:
 
@@ -976,6 +990,9 @@ replicas: with SQLite every rollout leaves Slack nothing to answer it until the 
   `spec.slack` whatever it holds (above).
 - **Take `chatListener` and `networkPolicy.chatFrom` off the values in the same change.** The chart of an earlier release refuses keys it does
   not have (its values schema, read in the chart of 0.4.0, not run).
+- **The table `press_deliveries` stays, unread.** 0.4.0 does not read it and records each delivery of a press, as it did. At start it logs
+  at WARN `the database schema is newer than this build of Agent Kourier`, with `newest_known_migration` 29 and `newest_in_database` 30, and
+  starts (read in the source of 0.4.0, not run).
 
 ## Upgrade to the release that shows each Binding's connection
 

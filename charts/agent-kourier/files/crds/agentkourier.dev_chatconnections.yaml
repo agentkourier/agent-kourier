@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    agentkourier.dev/schema-sha256: 2c818dac6876ca2ef1cfb2a9f9652b0d9e2ca9fd6f6029e34179ebf9446b36f0
+    agentkourier.dev/schema-sha256: 99c9f86b0f1c6e071f9e5fe4e09197c96daebb391c46cd1e0eb20a8476d42133
     controller-gen.kubebuilder.io/version: v0.23.0
   name: chatconnections.agentkourier.dev
 spec:
@@ -66,7 +66,8 @@ spec:
                 description: |-
                   CredentialsSecretRef names one Secret whose keys are fixed by the platform and its mode. A Slack connection in Socket Mode needs
                   botToken and appToken; one in HTTP mode needs botToken and signingSecret. A teams connection needs clientSecret, the client
-                  secret of its Microsoft Entra application.
+                  secret of its Microsoft Entra application. A webhook connection needs webhookSecret with the hmac-sha256 scheme, and token
+                  with the token scheme.
                 properties:
                   name:
                     description: |-
@@ -80,12 +81,16 @@ spec:
                 type: object
               platform:
                 description: |-
-                  Platform is the chat platform: slack, or teams, Microsoft Teams. A broker runs a teams connection in http or socket mode
-                  (spec.teams.mode). One in http mode, or with a spec.teams.notificationURL in either mode, needs the broker's chat listener: on a
-                  broker with none, the broker's own connection stops its start, and a team one is not started.
+                  Platform is the chat platform: slack; teams, Microsoft Teams; or webhook, which takes signed JSON webhooks from a service such
+                  as a code host or an issue tracker (spec.webhook) and posts nothing there: the agent posts on the service with its own tools. A
+                  broker runs a teams connection in http or socket mode (spec.teams.mode). One in http mode, or with a spec.teams.notificationURL
+                  in either mode, needs the broker's chat listener: on a broker with none, the broker's own connection stops its start, and a team
+                  one is not started. The broker does not run a webhook connection yet: it refuses one as a wiring error, so that one as the
+                  broker's own stops its start, and a team's is not started.
                 enum:
                 - slack
                 - teams
+                - webhook
                 type: string
               slack:
                 description: |-
@@ -169,6 +174,291 @@ spec:
                 - appID
                 - tenantID
                 type: object
+              webhook:
+                description: |-
+                  Webhook is how a webhook connection reads a delivery. A connection whose platform is webhook requires it, and every other
+                  refuses it.
+                properties:
+                  actor:
+                    description: Actor is who caused an event, by which the agent's
+                      own events are dropped.
+                    properties:
+                      from:
+                        description: |-
+                          From lists the pointers that can name who caused an event, each compared with the identity. Required unless none is true,
+                          which refuses it. At most 8, each at most 256 bytes.
+                        items:
+                          maxLength: 256
+                          type: string
+                        maxItems: 8
+                        type: array
+                        x-kubernetes-validations:
+                        - message: must be JSON Pointers that are not the root
+                          rule: self.all(p, p.matches('^/(?:[^~]|~[01])*$'))
+                      none:
+                        description: None turns the self-drop off, for a source that
+                          has no actors.
+                        type: boolean
+                      whenMissing:
+                        description: 'WhenMissing says what happens to an event in
+                          which no actor pointer resolves: drop (the default) or keep.'
+                        enum:
+                        - drop
+                        - keep
+                        - ""
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - fieldPath: .from
+                      message: is required unless actor.none is true
+                      rule: (has(self.none) && self.none) || (has(self.from) && size(self.from)
+                        > 0)
+                    - fieldPath: .from
+                      message: is set, but actor.none turns the self-drop off
+                      rule: '!(has(self.none) && self.none) || !has(self.from) ||
+                        size(self.from) == 0'
+                    - fieldPath: .whenMissing
+                      message: is set, but actor.none turns the self-drop off
+                      rule: '!(has(self.none) && self.none) || !has(self.whenMissing)
+                        || self.whenMissing == ""'
+                  channel:
+                    description: 'Channel is where an event belongs: the Binding of
+                      the connection whose spec.chat.channel is the value takes it.'
+                    properties:
+                      from:
+                        description: From is a first-of list of pointers to the channel.
+                          At most 8, each at most 256 bytes.
+                        items:
+                          maxLength: 256
+                          type: string
+                        maxItems: 8
+                        type: array
+                        x-kubernetes-validations:
+                        - message: must be JSON Pointers that are not the root
+                          rule: self.all(p, p.matches('^/(?:[^~]|~[01])*$'))
+                      value:
+                        description: |-
+                          Value is a fixed channel, for a source that has one: letters, digits, '.', '_' and '-', starting with a letter or a digit,
+                          with '/' between parts, at most 140 bytes.
+                        maxLength: 140
+                        pattern: ^([A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9._-]+)*)?$
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - message: set from or value, and not both
+                      rule: (has(self.from) && size(self.from) > 0) != (has(self.value)
+                        && self.value != "")
+                  delivery:
+                    description: |-
+                      Delivery names the header that carries the source's ID of a delivery, which the log line of each answered delivery shows.
+                      Left out, the line shows none.
+                    properties:
+                      header:
+                        description: |-
+                          Header is the request header that carries the source's ID of a delivery, such as X-GitHub-Delivery: an HTTP header name of
+                          at most 64 bytes, not verify.header, Authorization, Proxy-Authorization or Cookie.
+                        maxLength: 64
+                        minLength: 1
+                        pattern: ^[-!#$%&'*+.^_|~0-9A-Za-z\x60]+$
+                        type: string
+                        x-kubernetes-validations:
+                        - message: reads a credential header (verify.header, Authorization,
+                            Proxy-Authorization or Cookie)
+                          rule: '!(self.lowerAscii() in [''authorization'', ''proxy-authorization'',
+                            ''cookie''])'
+                    required:
+                    - header
+                    type: object
+                  fields:
+                    description: Fields are the event's named values, in the order
+                      the agent reads them. At most 32, each named once.
+                    items:
+                      description: |-
+                        WebhookField is one named value of an event: from a first-of list of pointers into the body, or from a header. Set one of from and
+                        header.
+                      properties:
+                        from:
+                          description: From is a first-of list of pointers into the
+                            body. At most 8, each at most 256 bytes.
+                          items:
+                            maxLength: 256
+                            type: string
+                          maxItems: 8
+                          type: array
+                          x-kubernetes-validations:
+                          - message: must be JSON Pointers that are not the root
+                            rule: self.all(p, p.matches('^/(?:[^~]|~[01])*$'))
+                        header:
+                          description: |-
+                            Header is a request header, of at most 64 bytes. It is not signed, so a header field is a filter hint only. A field may not
+                            read verify.header, Authorization, Proxy-Authorization or Cookie.
+                          maxLength: 64
+                          pattern: ^([-!#$%&'*+.^_|~0-9A-Za-z\x60]+)?$
+                          type: string
+                          x-kubernetes-validations:
+                          - message: reads a credential header (verify.header, Authorization,
+                              Proxy-Authorization or Cookie)
+                            rule: '!(self.lowerAscii() in [''authorization'', ''proxy-authorization'',
+                              ''cookie''])'
+                        kind:
+                          description: |-
+                            Kind is text (the default) or id. An id field's value is checked as an identifier, and the thread and the prompt template may
+                            read it; a text field reaches the agent only as untrusted data.
+                          enum:
+                          - id
+                          - text
+                          - ""
+                          type: string
+                        name:
+                          description: |-
+                            Name is how the triggers and the template name the field: a lower-case letter, then letters and digits, at most 63 bytes.
+                            key and state are reserved.
+                          maxLength: 63
+                          minLength: 1
+                          pattern: ^[a-z][A-Za-z0-9]*$
+                          type: string
+                          x-kubernetes-validations:
+                          - message: 'is reserved: the prompt view gives it a meaning'
+                            rule: '!(self in [''key'', ''state''])'
+                      required:
+                      - name
+                      type: object
+                      x-kubernetes-validations:
+                      - message: set from or header, and not both
+                        rule: (has(self.from) && size(self.from) > 0) != (has(self.header)
+                          && self.header != "")
+                    maxItems: 32
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  identity:
+                    description: |-
+                      Identity is the account the agent works as on the source, as the source names it in the actor pointers, such as
+                      pr-reviewer[bot] or an Atlassian account ID: letters, digits and _.:@{}[]/-, at most 128 bytes. An event that it caused is
+                      dropped. Required unless actor.none is true, which refuses it.
+                    maxLength: 128
+                    pattern: ^([A-Za-z0-9_.:@{}\[\]/-]+)?$
+                    type: string
+                  thread:
+                    description: Thread names the field whose value, after prefix,
+                      is the event's thread. Left out, every event is a thread of
+                      its own.
+                    properties:
+                      field:
+                        description: Field is the name of an id field.
+                        maxLength: 63
+                        minLength: 1
+                        type: string
+                      prefix:
+                        description: 'Prefix comes before the field''s value in the
+                          thread, such as pr-: letters, digits, ''.'', ''_'' and ''-'',
+                          at most 32 bytes.'
+                        maxLength: 32
+                        pattern: ^[A-Za-z0-9._-]*$
+                        type: string
+                    required:
+                    - field
+                    type: object
+                  verify:
+                    description: Verify is how a delivery is checked, on its raw bytes,
+                      before anything of it is read.
+                    properties:
+                      header:
+                        description: 'Header holds the signature or the token: an
+                          HTTP header name of at most 64 bytes.'
+                        maxLength: 64
+                        minLength: 1
+                        pattern: ^[-!#$%&'*+.^_|~0-9A-Za-z\x60]+$
+                        type: string
+                      prefix:
+                        description: |-
+                          Prefix comes before the signature or the token in the header, such as "sha256=" or "Bearer ": printable ASCII, at most 32
+                          bytes.
+                        maxLength: 32
+                        pattern: ^[ -~]*$
+                        type: string
+                      scheme:
+                        description: |-
+                          Scheme is hmac-sha256, the hex HMAC-SHA256 of the body under the credentials Secret's webhookSecret, or token, the credentials
+                          Secret's token itself.
+                        enum:
+                        - hmac-sha256
+                        - token
+                        type: string
+                      timestamp:
+                        description: |-
+                          Timestamp, of the hmac-sha256 scheme alone, is a time in the body that must be within window of now, either way. It is read
+                          after the signature passes.
+                        properties:
+                          from:
+                            description: From is the pointer to the time, a JSON number.
+                            maxLength: 256
+                            type: string
+                            x-kubernetes-validations:
+                            - message: must be a JSON Pointer that is not the root
+                              rule: self.matches('^/(?:[^~]|~[01])*$')
+                          unit:
+                            description: Unit is ms or s.
+                            enum:
+                            - ms
+                            - s
+                            type: string
+                          window:
+                            description: 'Window is how far from now the time may
+                              be, either way: above 0 and at most 10m.'
+                            maxLength: 64
+                            pattern: ^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$
+                            type: string
+                            x-kubernetes-validations:
+                            - message: is out of range, must be above 0s and at most
+                                10m
+                              rule: duration(self) > duration('0s') && duration(self)
+                                <= duration('10m')
+                        required:
+                        - from
+                        - unit
+                        - window
+                        type: object
+                    required:
+                    - header
+                    - scheme
+                    type: object
+                    x-kubernetes-validations:
+                    - fieldPath: .timestamp
+                      message: 'is taken by the hmac-sha256 scheme alone: the time
+                        is read after the signature passes'
+                      rule: '!has(self.timestamp) || self.scheme == ''hmac-sha256'''
+                required:
+                - actor
+                - channel
+                - verify
+                type: object
+                x-kubernetes-validations:
+                - fieldPath: .identity
+                  message: 'is required unless actor.none is true: the agent''s own
+                    events are dropped by it'
+                  rule: (has(self.actor.none) && self.actor.none) || (has(self.identity)
+                    && self.identity != "")
+                - fieldPath: .identity
+                  message: is set, but actor.none turns the self-drop off, which alone
+                    reads it
+                  rule: '!(has(self.actor.none) && self.actor.none) || !has(self.identity)
+                    || self.identity == ""'
+                - fieldPath: .thread.field
+                  message: must be the name of an id field of fields
+                  rule: '!has(self.thread) || (has(self.fields) && self.fields.exists(f,
+                    f.name == self.thread.field && has(f.kind) && f.kind == ''id''))'
+                - fieldPath: .fields
+                  message: a field reads a credential header (verify.header, Authorization,
+                    Proxy-Authorization or Cookie)
+                  rule: '!has(self.fields) || self.fields.all(f, !has(f.header) ||
+                    f.header.lowerAscii() != self.verify.header.lowerAscii())'
+                - fieldPath: .delivery.header
+                  message: reads a credential header (verify.header, Authorization,
+                    Proxy-Authorization or Cookie)
+                  rule: '!has(self.delivery) || self.delivery.header.lowerAscii()
+                    != self.verify.header.lowerAscii()'
             required:
             - credentialsSecretRef
             - platform
@@ -184,6 +474,12 @@ spec:
               message: 'is required on a teams connection: it names the tenant and
                 the app'
               rule: self.platform != 'teams' || has(self.teams)
+            - fieldPath: .webhook
+              message: is set, but only a webhook connection has one
+              rule: '!has(self.webhook) || self.platform == ''webhook'''
+            - fieldPath: .webhook
+              message: is required on a webhook connection
+              rule: self.platform != 'webhook' || has(self.webhook)
         required:
         - spec
         type: object

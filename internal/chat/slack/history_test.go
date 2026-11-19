@@ -133,7 +133,7 @@ func TestHistoryErrorsDoNotCarryTheToken(t *testing.T) {
 
 // Slack does not carry a thread's root with a person's first mention in it (chat.Caps.RootContext): an alert's post reaches a
 // botMessage trigger, which starts its session with the post itself, so the first turn of a session opened inside a thread goes with
-// the person's message alone, as it always has (spec 8.2, D55).
+// the person's message alone, as it always has (spec 8.2, D56).
 func TestSlackCarriesNoRootWithAFirstMention(t *testing.T) {
 	if slack.NewPlatform(slack.New(clientConfig(newFake(t))), "ns/conn").Capabilities().RootContext {
 		t.Error("Slack carries a thread's root with a person's first mention")

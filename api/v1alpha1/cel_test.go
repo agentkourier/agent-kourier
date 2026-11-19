@@ -202,11 +202,92 @@ func TestCELLiteralsEqualTheBrokersConstants(t *testing.T) {
 		for _, f := range messageFields() {
 			want = append(want, string(f))
 		}
+		// The rule is on the trigger, where it can read the type: a webhookEvent trigger's keys are its connection's fields.
 		for _, field := range []string{"match", "exclude"} {
-			names := listed(t, ruleWith(t, bindings.at(t, trigger+"."+field), "in ["))
-			if !slices.Equal(names, want) {
+			rule := ruleWith(t, bindings.at(t, trigger), "self."+field+".all(k, k in [")
+			if names := listed(t, rule); !slices.Equal(names, want) {
 				t.Errorf("%s: the rule lists %v, messageFields has %v", field, names, want)
 			}
+			if !strings.HasPrefix(rule, "self.type == 'webhookEvent' || ") {
+				t.Errorf("%s: the rule does not leave a webhookEvent trigger out: %s", field, rule)
+			}
+		}
+	})
+
+	t.Run("webhook field names", func(t *testing.T) {
+		// A webhookEvent trigger's keys, and a connection's field names, are webhookFieldName, at most maxWebhookFieldNameLen bytes;
+		// key and state are reserved.
+		matches := regexp.MustCompile(`matches\('([^']*)'\)`)
+		for _, field := range []string{"match", "exclude"} {
+			rule := ruleWith(t, bindings.at(t, trigger), "self."+field+".all(k, k.matches(")
+			if m := matches.FindStringSubmatch(rule); m == nil || m[1] != webhookFieldName.String() {
+				t.Errorf("%s: rule %q, webhookFieldName %q", field, rule, webhookFieldName)
+			}
+			if !strings.HasPrefix(rule, "self.type != 'webhookEvent' || ") {
+				t.Errorf("%s: the rule is not gated on webhookEvent: %s", field, rule)
+			}
+			if got := limit(t, ruleWith(t, bindings.at(t, trigger+"."+field), "size(k)")); got != maxWebhookFieldNameLen {
+				t.Errorf("%s: rule %d, maxWebhookFieldNameLen %d", field, got, maxWebhookFieldNameLen)
+			}
+		}
+		conns := crdSchema(t, "chatconnections")
+		if names := listed(t, ruleWith(t, conns.at(t, "spec.webhook.fields[].name"), "in [")); !slices.Equal(names, webhookReservedNames) {
+			t.Errorf("the rule reserves %v, webhookReservedNames is %v", names, webhookReservedNames)
+		}
+	})
+
+	t.Run("webhook connection", func(t *testing.T) {
+		conns := crdSchema(t, "chatconnections")
+		if PlatformWebhook != "webhook" || string(WebhookHMACSHA256) != "hmac-sha256" || string(WebhookKindID) != "id" {
+			t.Fatal("a name that the rules write out as a literal has changed: update the rules")
+		}
+		ruleWith(t, conns.at(t, "spec"), "has(self.webhook)", "self.platform == 'webhook'")
+		ruleWith(t, conns.at(t, "spec"), "self.platform != 'webhook' || has(self.webhook)")
+		// Every pointer list holds its pointers to webhookPointer.
+		matches := regexp.MustCompile(`matches\('([^']*)'\)`)
+		for _, path := range []string{"spec.webhook.channel.from", "spec.webhook.actor.from", "spec.webhook.fields[].from", "spec.webhook.verify.timestamp.from"} {
+			rule := ruleWith(t, conns.at(t, path), "matches(")
+			if m := matches.FindStringSubmatch(rule); m == nil || m[1] != webhookPointer.String() {
+				t.Errorf("%s: rule %q, webhookPointer %q", path, rule, webhookPointer)
+			}
+		}
+		// The credential headers that a field and the delivery may not read are credentialHeaders, and neither may read verify.header.
+		for _, path := range []string{"spec.webhook.fields[].header", "spec.webhook.delivery.header"} {
+			if names := listed(t, ruleWith(t, conns.at(t, path), "lowerAscii")); !slices.Equal(names, credentialHeaders) {
+				t.Errorf("%s: the rule lists %v, credentialHeaders is %v", path, names, credentialHeaders)
+			}
+		}
+		webhook := conns.at(t, "spec.webhook")
+		ruleWith(t, webhook, "self.fields.all(f, !has(f.header) || f.header.lowerAscii() != self.verify.header.lowerAscii())")
+		ruleWith(t, webhook, "self.delivery.header.lowerAscii() != self.verify.header.lowerAscii()")
+		ruleWith(t, webhook, "f.name == self.thread.field", "f.kind == 'id'")
+		if got := durationLiterals(t, ruleWith(t, conns.at(t, "spec.webhook.verify.timestamp.window"), "<=")); !slices.Equal(got, []time.Duration{MaxWebhookTimestampWindow}) {
+			t.Errorf("timestamp window: the rule names %v, MaxWebhookTimestampWindow is %v", got, MaxWebhookTimestampWindow)
+		}
+		ruleWith(t, conns.at(t, "spec.webhook.verify"), "!has(self.timestamp) || self.scheme == 'hmac-sha256'")
+	})
+
+	t.Run("channel and output of a webhook Binding", func(t *testing.T) {
+		// The channel is a chat platform's (channelID, the union of Slack's and Microsoft Teams'), or a webhook channel on a Binding
+		// whose triggers are all webhookEvent; the field's maxLength bounds both, and is both caps. Output none is a webhook
+		// Binding's alone.
+		chat := bindings.at(t, "spec.chat")
+		rule := ruleWith(t, chat, "self.channel.matches(")
+		literals := regexp.MustCompile(`matches\(r?'([^']*)'\)`).FindAllStringSubmatch(rule, -1)
+		if len(literals) != 2 || literals[0][1] != channelID.String() || literals[1][1] != webhookChannel.String() {
+			t.Errorf("the channel rule copies %q, want channelID %q and webhookChannel %q", literals, channelID, webhookChannel)
+		}
+		for name, want := range map[string]int{"maxChannelIDLen": maxChannelIDLen, "maxWebhookChannelLen": maxWebhookChannelLen} {
+			if got := bindings.at(t, "spec.chat.channel").num("maxLength"); got != want {
+				t.Errorf("channel: maxLength %d, %s %d", got, name, want)
+			}
+		}
+		webhookOnly := "has(self.triggers) && size(self.triggers) > 0 && self.triggers.all(t, t.type == 'webhookEvent')"
+		if !strings.Contains(rule, webhookOnly) {
+			t.Errorf("the channel rule does not take a webhook channel on a Binding whose triggers are all webhookEvent alone: %s", rule)
+		}
+		if rule := ruleWith(t, chat, "self.output != 'none'"); !strings.Contains(rule, webhookOnly) {
+			t.Errorf("the output rule does not take none on a Binding whose triggers are all webhookEvent alone: %s", rule)
 		}
 	})
 
@@ -251,12 +332,12 @@ func TestCELLiteralsEqualTheBrokersConstants(t *testing.T) {
 	})
 
 	t.Run("names the rules compare to", func(t *testing.T) {
-		if string(TriggerMention) != "mention" || string(TriggerBotMessage) != "botMessage" || string(TriggerPersonMessage) != "personMessage" ||
+		if string(TriggerMention) != "mention" || string(TriggerBotMessage) != "botMessage" || string(TriggerPersonMessage) != "personMessage" || string(TriggerWebhookEvent) != "webhookEvent" ||
 			string(FieldText) != "text" || string(ThreadByKey) != "key" || extractKey != "key" {
 			t.Fatal("a name that the rules write out as a literal has changed: update the rules")
 		}
 		node := bindings.at(t, trigger)
-		for _, f := range []string{"'mention'", "'botMessage'", "'personMessage'", "k == 'text'", "thread.by == 'key'", "'key' in self.extract"} {
+		for _, f := range []string{"'mention'", "'botMessage'", "'personMessage'", "'webhookEvent'", "k == 'text'", "thread.by == 'key'", "'key' in self.extract"} {
 			if !slices.ContainsFunc(node.rules(), func(r celRule) bool { return strings.Contains(r.Rule, f) }) {
 				t.Errorf("no rule of the trigger has %s", f)
 			}

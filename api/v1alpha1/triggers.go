@@ -62,7 +62,8 @@ func messageFields() []MessageField {
 }
 
 // The CEL rules on a trigger copy rules of Validate and refuse nothing that Validate accepts. A rule that forbids a field
-// is gated on the type mention or personMessage, and one that requires a field on the type botMessage or personMessage; the thread rules (by key, closeWhen
+// is gated on the type mention, personMessage or webhookEvent, and one that requires a field on the type botMessage, personMessage or
+// webhookEvent; the keys of match and exclude are message fields on every type but webhookEvent, whose are field names; the thread rules (by key, closeWhen
 // keys, the ranges) hold for every type, since Validate refuses those fields on a mention trigger anyway. A value that
 // Validate reads as unset counts as unset here: a missing field, an empty list or map, a zero duration (CEL's duration()
 // parses as time.ParseDuration does: spec D50). A field absent from the object is read with has(), since the apiserver
@@ -91,27 +92,42 @@ func messageFields() []MessageField {
 // +kubebuilder:validation:XValidation:rule=`self.type != 'personMessage' || (has(self.promptTemplate) && self.promptTemplate != "")`,message="required with type: personMessage",fieldPath=".promptTemplate"
 // +kubebuilder:validation:XValidation:rule="self.type != 'personMessage' || (has(self.limits) && has(self.limits.rateLimit))",message="required with type: personMessage: set maxRuns, per and maxConcurrent",fieldPath=".limits.rateLimit"
 // +kubebuilder:validation:XValidation:rule="self.type != 'personMessage' || (has(self.limits) && has(self.limits.maxRunsPerDay))",message="required with type: personMessage: set the cap for a day, or 0 for no cap",fieldPath=".limits.maxRunsPerDay"
+// +kubebuilder:validation:XValidation:rule="self.type == 'webhookEvent' || !has(self.match) || self.match.all(k, k in ['text', 'title', 'link', 'fallback', 'footer', 'body'])",message="unsupported message field, must be one of text, title, link, fallback, footer, body",fieldPath=".match"
+// +kubebuilder:validation:XValidation:rule="self.type == 'webhookEvent' || !has(self.exclude) || self.exclude.all(k, k in ['text', 'title', 'link', 'fallback', 'footer', 'body'])",message="unsupported message field, must be one of text, title, link, fallback, footer, body",fieldPath=".exclude"
+// +kubebuilder:validation:XValidation:rule="self.type != 'webhookEvent' || !has(self.match) || self.match.all(k, k.matches('^[a-z][A-Za-z0-9]*$'))",message="invalid field name: a lower-case letter, then letters and digits",fieldPath=".match"
+// +kubebuilder:validation:XValidation:rule="self.type != 'webhookEvent' || !has(self.exclude) || self.exclude.all(k, k.matches('^[a-z][A-Za-z0-9]*$'))",message="invalid field name: a lower-case letter, then letters and digits",fieldPath=".exclude"
+// +kubebuilder:validation:XValidation:rule="self.type != 'webhookEvent' || !has(self.from)",message="not allowed with type: webhookEvent",fieldPath=".from"
+// +kubebuilder:validation:XValidation:rule="self.type != 'webhookEvent' || !has(self.extract) || size(self.extract) == 0",message="not allowed with type: webhookEvent",fieldPath=".extract"
+// +kubebuilder:validation:XValidation:rule=`self.type != 'webhookEvent' || !has(self.thread) || !((has(self.thread.by) && self.thread.by != "") || (has(self.thread.cooldown) && duration(self.thread.cooldown) != duration('0s')) || (has(self.thread.maxIdle) && duration(self.thread.maxIdle) != duration('0s')) || (has(self.thread.closeWhen) && size(self.thread.closeWhen) > 0))`,message="not allowed with type: webhookEvent",fieldPath=".thread"
+// +kubebuilder:validation:XValidation:rule=`self.type != 'webhookEvent' || (has(self.promptTemplate) && self.promptTemplate != "")`,message="required with type: webhookEvent",fieldPath=".promptTemplate"
+// +kubebuilder:validation:XValidation:rule="self.type != 'webhookEvent' || (has(self.limits) && has(self.limits.rateLimit))",message="required with type: webhookEvent: set maxRuns, per and maxConcurrent",fieldPath=".limits.rateLimit"
+// +kubebuilder:validation:XValidation:rule="self.type != 'webhookEvent' || (has(self.limits) && has(self.limits.maxRunsPerDay))",message="required with type: webhookEvent: set the cap for a day, or 0 for no cap",fieldPath=".limits.maxRunsPerDay"
 // +kubebuilder:validation:XValidation:rule="!(has(self.thread) && has(self.thread.by) && self.thread.by == 'key') || (has(self.extract) && 'key' in self.extract)",message=`thread.by: key requires an extract named "key"`,fieldPath=".thread.by"
 // +kubebuilder:validation:XValidation:rule="!has(self.thread) || !has(self.thread.closeWhen) || self.thread.closeWhen.all(k, has(self.extract) && k in self.extract)",message="every key must be the name of an entry of extract",fieldPath=".thread.closeWhen"
 type Trigger struct {
-	// Type is mention, a person @mentioning Agent Kourier, botMessage, a message a bot posts, or personMessage, a
-	// top-level message a person posts. A mention trigger takes no other field. The key is type, not on: YAML 1.1 reads a bare
-	// on as the boolean true, and the loader's decoder follows it.
-	// +kubebuilder:validation:Enum=mention;botMessage;personMessage
+	// Type is mention, a person @mentioning Agent Kourier, botMessage, a message a bot posts, personMessage, a
+	// top-level message a person posts, or webhookEvent, an event of a webhook connection, whose Bindings take no other type. A
+	// mention trigger takes no other field. The key is type, not on: YAML 1.1 reads a bare on as the boolean true, and the loader's
+	// decoder follows it.
+	// +kubebuilder:validation:Enum=mention;botMessage;personMessage;webhookEvent
 	Type TriggerType `json:"type"`
 	// From names the sender a botMessage trigger accepts. Required for botMessage.
 	From *BotSource `json:"from,omitempty"`
+	// The match and exclude keys are bounded by a rule of each map, and their values by a rule on the trigger, which knows the type:
+	// a message field on the other triggers, and a field name of the connection on webhookEvent. (Not in the doc comments below,
+	// which the reference pages print.)
+
 	// Match maps a message field to a regex it must match. Every entry must match. A personMessage trigger has the
-	// field text alone.
+	// field text alone. A webhookEvent trigger names fields of its connection's spec.webhook.fields instead, at most 6.
 	// +kubebuilder:validation:MaxProperties=6
-	// +kubebuilder:validation:XValidation:rule="self.all(k, k in ['text', 'title', 'link', 'fallback', 'footer', 'body'])",message="unsupported message field, must be one of text, title, link, fallback, footer, body"
+	// +kubebuilder:validation:XValidation:rule="self.all(k, size(k) <= 63)",message="a field name is longer than the 63 byte limit"
 	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) > 0)",message="a regular expression is required"
 	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) <= 512)",message="a regular expression is longer than the 512 byte limit"
 	Match map[MessageField]string `json:"match,omitempty"`
 	// Exclude maps a message field to a regex; a message matching any entry is ignored. A personMessage trigger has
-	// the field text alone.
+	// the field text alone. A webhookEvent trigger names fields of its connection's spec.webhook.fields instead, at most 6.
 	// +kubebuilder:validation:MaxProperties=6
-	// +kubebuilder:validation:XValidation:rule="self.all(k, k in ['text', 'title', 'link', 'fallback', 'footer', 'body'])",message="unsupported message field, must be one of text, title, link, fallback, footer, body"
+	// +kubebuilder:validation:XValidation:rule="self.all(k, size(k) <= 63)",message="a field name is longer than the 63 byte limit"
 	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) > 0)",message="a regular expression is required"
 	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) <= 512)",message="a regular expression is longer than the 512 byte limit"
 	Exclude map[MessageField]string `json:"exclude,omitempty"`
@@ -128,12 +144,13 @@ type Trigger struct {
 	// +optional
 	Thread TriggerThread `json:"thread,omitzero"`
 	// PromptTemplate is a Go template over the trigger's view of the message (.Channel,
-	// .State, .Key, .Fields, .Link, .Source). Required for botMessage and personMessage. At most 8192 bytes; it has no loops,
+	// .State, .Key, .Fields, .Link, .Source). Required for botMessage, personMessage and webhookEvent, whose template reads
+	// .Channel and the id fields of its connection alone. At most 8192 bytes; it has no loops,
 	// variables or defined templates, and calls only and, eq, ge, gt, index, le, len, lt, ne, not, or and slice.
 	// +kubebuilder:validation:MaxLength=8192
 	PromptTemplate string `json:"promptTemplate,omitempty"`
 	// Limits bounds how many investigations the trigger starts (rate, concurrency and a daily cap). Required
-	// for botMessage and personMessage: both rateLimit and maxRunsPerDay.
+	// for botMessage, personMessage and webhookEvent: both rateLimit and maxRunsPerDay.
 	// +optional
 	Limits TriggerLimits `json:"limits,omitzero"`
 }

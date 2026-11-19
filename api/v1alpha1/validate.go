@@ -307,7 +307,7 @@ func (c *ChatConnection) Validate() error {
 	var p problems
 	p.meta(c.ObjectMeta)
 	s := &c.Spec
-	p.oneOf("spec.platform", s.Platform, PlatformSlack, PlatformTeams)
+	p.oneOf("spec.platform", s.Platform, platforms()...)
 	p.name("spec.credentialsSecretRef.name", s.CredentialsSecretRef.Name)
 	p.namespaces("spec.allowedNamespaces", s.AllowedNamespaces)
 	if s.Slack != nil {
@@ -326,6 +326,17 @@ func (c *ChatConnection) Validate() error {
 		p.teams(s.Teams, c.Namespace, c.Name)
 	case s.Platform == PlatformTeams:
 		p.add("spec.teams", "is required on a teams connection: it names the tenant and the app")
+	}
+	// A webhook block on another platform is checked too, as the slack block is, and as the schema's rules on it run whatever the
+	// platform.
+	switch {
+	case s.Webhook != nil:
+		if s.Platform != PlatformWebhook {
+			p.add("spec.webhook", "is set, but only a webhook connection has one")
+		}
+		p.webhook(s.Webhook)
+	case s.Platform == PlatformWebhook:
+		p.add("spec.webhook", "is required on a webhook connection")
 	}
 	return errors.Join(p...)
 }
@@ -406,14 +417,25 @@ func (b *Binding) Validate() error {
 	p.maxBytes("spec.identity.userId", s.Identity.UserID, maxUserIDLen)
 	p.secretRef("spec.identity.tokenSecretRef", s.Identity.TokenSecretRef)
 	p.objectRef("spec.chat.connectionRef", &s.Chat.ConnectionRef)
-	if c := s.Chat.Channel; c == "" {
+	// A Binding whose triggers are all webhookEvent takes a webhook channel and output none, which its connection's platform holds it
+	// to when the broker reads the two together (PlatformMismatches); any other takes a chat platform's (Slack's or Microsoft Teams'),
+	// and live or final.
+	webhook := s.Chat.webhookEventsOnly()
+	switch c := s.Chat.Channel; {
+	case c == "":
 		p.add("spec.chat.channel", "required")
-	} else if len(c) > maxChannelIDLen {
+	case webhook:
+		p.webhookChannel("spec.chat.channel", c)
+	case len(c) > maxChannelIDLen:
 		p.maxBytes("spec.chat.channel", c, maxChannelIDLen) // not shown: the channel is in the messages that name a conflict
-	} else if !channelID.MatchString(c) {
+	case !channelID.MatchString(c):
 		p.add("spec.chat.channel", "invalid channel %q: must be a channel ID such as C0123456789 (Slack) or 19:…@thread.tacv2 (Microsoft Teams), not a name", c)
 	}
-	p.oneOf("spec.chat.output", string(s.Chat.Output), string(OutputLive), string(OutputFinal))
+	outputs := []string{string(OutputLive), string(OutputFinal)}
+	if webhook {
+		outputs = append(outputs, string(OutputNone))
+	}
+	p.oneOf("spec.chat.output", string(s.Chat.Output), outputs...)
 	p.oneOf("spec.chat.progress", string(s.Chat.Progress), string(ProgressSteps), string(ProgressStepsAndActivity), string(ProgressActivity))
 	p.oneOf("spec.chat.threadReplies", string(s.Chat.ThreadReplies), string(ThreadRepliesAll), string(ThreadRepliesMention))
 	p.oneOf("spec.chat.botMentions", string(s.Chat.BotMentions), string(BotMentionsAny), string(BotMentionsNone))
@@ -596,8 +618,10 @@ func (p *problems) triggers(path string, ts []Trigger) {
 }
 
 func (p *problems) trigger(path string, t *Trigger, b *regexBudget) {
-	p.oneOf(path+".type", string(t.Type), string(TriggerMention), string(TriggerBotMessage), string(TriggerPersonMessage))
+	p.oneOf(path+".type", string(t.Type), string(TriggerMention), string(TriggerBotMessage), string(TriggerPersonMessage), string(TriggerWebhookEvent))
 	switch t.Type {
+	case TriggerWebhookEvent:
+		p.webhookEventTrigger(path, t, b)
 	case TriggerMention:
 		p.mentionTrigger(path, t)
 	case TriggerBotMessage:

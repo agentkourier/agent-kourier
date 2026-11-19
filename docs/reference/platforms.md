@@ -1,8 +1,11 @@
 # What each platform supports
 
-A Binding names its chat platform through its ChatConnection, whose `spec.platform` says which: `slack`, or `teams`, Microsoft
-Teams. This page lists, for each platform, the shape of the chat IDs a Binding names and the features of a Binding that the platform
-serves.
+A Binding names its chat platform through its ChatConnection, whose `spec.platform` says which: `slack`; `teams`, Microsoft Teams;
+or `webhook`. This page lists, for each platform, the shape of the chat IDs a Binding names, the trigger types and outputs it takes,
+and the features of a Binding that the platform serves. The broker runs Slack and Microsoft Teams connections. The API server and the
+load take a `webhook` ChatConnection and its Bindings, but this release's broker does not run one: as the broker's own connection it
+stops the start with a wiring error, and a team's connection is not started, with a log line that the broker has no adapter for its
+platform.
 
 The broker runs a teams connection ([ChatConnection](chatconnection.md)) in `http` mode, the default, on its chat listener
 (`AGENTKOURIER_CHAT_LISTEN`): only the leader takes Teams' requests, at `POST /chat/teams/<namespace>/<name>`, and it posts, replies
@@ -51,26 +54,43 @@ cannot read shows as `@someone`. There are no live
 progress streams, ephemeral messages or reactions. Questions, tool approvals and the useful and not-useful buttons are Adaptive
 Cards, which a person presses ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)).
 
-A Binding is checked against its platform when the broker reads it with its ChatConnection: the API server and the broker's load
-check only that each ID has the shape of some platform's ID and is within the field's cap, which is the largest of the platforms'. A
-Binding that names an ID of another platform's shape, or an ID of its platform's shape that is longer than its platform's cap, or asks
-for a feature that its platform does not serve, is refused then, as a Binding that fails validation is:
+The API server and the broker's load check only that each chat ID of a Binding has the shape of a chat platform's ID, Slack's or
+Microsoft Teams', and is within the field's cap, which is the largest of the two platforms'; the channel of a Binding whose triggers
+are all `webhookEvent` they hold to a webhook channel's instead (see [Chat IDs](#chat-ids)). A Binding that names a channel's name
+such as `general`, or a bot's name such as `alertmanager` as a sender, is refused when it is applied: the API server refuses it on
+`kubectl apply`, `--dry-run=server` included, and on any other client that writes it. On the files route the load refuses it, and
+so does `agent-kourier dry-run`:
 
-- with custom resources its `Accepted` condition is `False` with the reason `InvalidPlatformID` or `UnsupportedOnPlatform`
-  ([Binding status](binding-status.md#accepted)). A Binding that had a good generation keeps serving it, and the message says which
-  (`serving generation 1`), so an edit with an ID of the wrong platform does not take; a new Binding is not served. The other
-  Bindings keep running;
+```text
+spec.chat.channel: invalid channel "general": must be a channel ID such as C0123456789 (Slack) or 19:…@thread.tacv2 (Microsoft Teams), not a name
+```
+
+The API server refuses it too, with a message that also says what a Binding of `webhookEvent` triggers takes.
+
+The broker checks the Binding against its platform once more when it reads the Binding with its ChatConnection. That check refuses a
+chat ID that does not have the shape of the platform's IDs, or has it and is longer than the platform's cap (`InvalidPlatformID`),
+and a feature, trigger type or output that the platform does not serve (`UnsupportedOnPlatform`). A Microsoft Teams channel on a
+Slack connection, a Slack channel on a teams connection, and a Binding of `webhookEvent` triggers with the channel `acme/widgets` on
+either, for example, pass the API server and are refused then. With Slack, which serves every feature in [Features](#features), a
+Binding of Slack's triggers and IDs is not refused. A Binding it refuses is refused as a Binding that fails validation is:
+
+- with custom resources its `Accepted` condition is `False` with that reason ([Binding status](binding-status.md#accepted)). A Binding
+  that had a good generation keeps serving it, and the message says which (`serving generation 1`), so an edit with an ID of the
+  wrong platform does not take; a new Binding is not served. The other Bindings keep running;
 - on the files route the whole config fails, with the same message: at start the broker exits with code 2, and on a reload it keeps
   its last good config.
 
 `agent-kourier dry-run`, which reads only Slack, holds the Binding to Slack's shapes too, and refuses a Microsoft Teams ID with the
 same problem and fix.
 
-The message names the field, the value, the platform, the ChatConnection and what to write instead, and links this page, for example:
+Its message names the field, the value, the platform, the ChatConnection and what to write instead, and links this page, for
+example:
 
 ```text
 spec.chat.channel: "19:a1b2c3d4e5f6@thread.tacv2" is not a channel ID on Slack, the platform of ChatConnection agent-kourier-system/slack-main: use the channel's ID, such as C0123456789 (G… for an older private channel), not its name (see https://agentkourier.dev/reference/platforms/)
 ```
+
+When a Binding has several such problems, the reason is that of the first, in the order of the fields.
 
 A Binding that its ChatConnection does not admit (in another namespace that `allowedNamespaces` does not list) is told
 `NamespaceNotAllowed` and nothing of the platform.
@@ -411,31 +431,40 @@ out of time before any page came back are tried again later.
 
 ## Chat IDs
 
-| Field | Slack | Microsoft Teams |
-|---|---|---|
-| `chat.channel` | A channel ID: `C`, or `G` for an older private channel, then capitals and digits, at most 32 bytes, such as `C0123456789`. Not the channel's name. | A channel ID: `19:`, then letters, digits, `.`, `_` and `-`, then `@thread.tacv2` or `@thread.skype`, at most 140 bytes, such as `19:a1b2c3d4e5f6@thread.tacv2`. Not the channel's name. |
-| A `botMessage` trigger's `from.id` | A bot ID: `B`, then capitals and digits, at most 32 bytes, such as `B0123456789`. Not the bot's name. | The Microsoft Entra application ID of the app that posts, a GUID in lowercase hex, such as `11111111-2222-3333-4444-555555555555`. |
-| A `chat.mentions` entry's `user` | A user ID: `U` or `W`, then 2 to 20 capitals and digits, such as `U0123456789`. | The person's Microsoft Entra object ID, a GUID in lowercase hex. |
-| An entry of `interactions.approverGroups` | A user group ID: `S`, then capitals and digits, at most 32 bytes, such as `S0123456789`. | None: `approverGroups` is refused (see [Features](#features)). |
+| Field | Slack | Microsoft Teams | `webhook` |
+|---|---|---|---|
+| `chat.channel` | A channel ID: `C`, or `G` for an older private channel, then capitals and digits, at most 32 bytes, such as `C0123456789`. Not the channel's name. | A channel ID: `19:`, then letters, digits, `.`, `_` and `-`, then `@thread.tacv2` or `@thread.skype`, at most 140 bytes, such as `19:a1b2c3d4e5f6@thread.tacv2`. Not the channel's name. | The channel as the connection reads it from an event: letters, digits, `.`, `_` and `-`, starting with a letter or a digit, with `/` between parts, at most 140 bytes, such as `acme/widgets` or `OPS`. |
+| A `botMessage` trigger's `from.id` | A bot ID: `B`, then capitals and digits, at most 32 bytes, such as `B0123456789`. Not the bot's name. | The Microsoft Entra application ID of the app that posts, a GUID in lowercase hex, such as `11111111-2222-3333-4444-555555555555`. | None: the platform takes no `botMessage` trigger. |
+| A `chat.mentions` entry's `user` | A user ID: `U` or `W`, then 2 to 20 capitals and digits, such as `U0123456789`. | The person's Microsoft Entra object ID, a GUID in lowercase hex. | None: `chat.mentions` is refused, `UnsupportedOnPlatform`. |
+| An entry of `interactions.approverGroups` | A user group ID: `S`, then capitals and digits, at most 32 bytes, such as `S0123456789`. | None: `approverGroups` is refused, `UnsupportedOnPlatform` (see [Features](#features)). | None: `interactions.approverGroups` is refused, `UnsupportedOnPlatform`. |
 
 A GUID is taken in lowercase hex alone. The broker compares chat IDs byte for byte, so a GUID in capitals would load and then match
 no message; the API server and the load refuse it, and the message says to write it in lowercase.
 
-What the API server and the load take is wider: for each field, the shape of either platform's. A value that has neither, such as the
-channel name `general`, is refused when it is applied, and so is a value past the field's cap: 140 bytes for a channel, 36 for a
-sender and a mention's user, 32 for an approver group. A Microsoft Teams channel on a Slack connection, a Slack channel on a teams
-connection, and a Slack channel or bot ID longer than Slack's 32 bytes (up to 140 for a channel and 36 for a sender) are refused by the
-broker with `InvalidPlatformID`, as above, and not when they are applied. A Slack user ID cannot pass Slack's cap, since its pattern
-bounds it at 21, and neither can an approver group, whose field's cap is Slack's 32. The length caps of each field are in
-[Limits](limits.md#write-a-binding-an-agentbackend-or-a-chatconnection).
+What the API server and the load take is wider: for each field, the shape of either chat platform's, Slack's or Microsoft Teams',
+and for `chat.channel` the rule that takes a webhook channel instead on a Binding whose triggers are all `webhookEvent`. A value that
+has none of them, such as the channel name `general`, is refused when it is applied, and so is a value past the field's cap: 140
+bytes for a channel, 36 for a sender and a mention's user, 32 for an approver group. A Microsoft Teams channel on a Slack connection,
+a Slack channel on a teams connection, and a Slack channel or bot ID longer than Slack's 32 bytes (up to 140 for a channel and 36 for
+a sender) are refused by the broker with `InvalidPlatformID`, as above, and not when they are applied. A Slack user ID cannot pass
+Slack's cap, since its pattern bounds it at 21, and neither can an approver group, whose field's cap is Slack's 32. The length caps of
+each field are in [Limits](limits.md#write-a-binding-an-agentbackend-or-a-chatconnection).
+
+## Triggers and output
+
+| Field | Slack | Microsoft Teams | `webhook` |
+|---|---|---|---|
+| `chat.triggers[].type` | `mention`, `botMessage` and `personMessage`. A `webhookEvent` trigger is refused, `UnsupportedOnPlatform`. | As on Slack. | `webhookEvent` alone. A Binding with a trigger of any other type, or one that lists no triggers and so has `[{type: mention}]`, is refused. With a webhook channel such as `acme/widgets` or `OPS`, the API server refuses it when it is applied and the load refuses it as invalid (with custom resources, `InvalidSpec`), since only a Binding whose triggers are all `webhookEvent` takes that channel. With a channel of Slack's or Microsoft Teams' shape it passes both, and the broker refuses it on the webhook connection, `UnsupportedOnPlatform`. |
+| A `webhookEvent` trigger's `match` and `exclude` keys, and the `.Fields` its `promptTemplate` reads | None. | None. | Names of the connection's `spec.webhook.fields`; the template reads `.Channel` and the connection's `id` fields alone. A name the connection lacks, or a `text` field the template reads, is refused, `UnsupportedOnPlatform`; a template that reads `.Key`, `.State`, `.Link` or `.Source` is refused by the broker's validation (with custom resources, `InvalidSpec`), and not by the API server. |
+| `chat.output` | `live` (the default) or `final`. `none` is refused: by the API server and the load on a Binding of Slack's triggers, and `UnsupportedOnPlatform` on one of `webhookEvent` triggers. | As on Slack. | `none` alone: write it, since the default is `live`. `live` and `final` are refused, `UnsupportedOnPlatform`. |
 
 ## Features
 
-| Feature | Slack | Microsoft Teams | On a platform without it |
-|---|---|---|---|
-| Questions to a person: `interactions.askUser` | Works: Agent Kourier asks in the thread with buttons. | Works: the question is a card that a member of the channel's team presses ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
-| Tool approvals: `interactions.toolApprovals`, and `interactions.approverGroups`, which requires it | Works: Agent Kourier asks in the thread with buttons. | `toolApprovals` works: the approval is a card that a member of the channel's team presses ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). `approverGroups` is refused: `UnsupportedOnPlatform`. Remove it. | Refused: `UnsupportedOnPlatform`. Set `toolApprovals` to `false` and remove `approverGroups`. |
-| The useful and not-useful buttons: `feedback.enabled` | Works. | Works: the buttons are a card of their own, posted after the reply, and a vote of a member of the channel's team is counted ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
-| Alert triggers: a `botMessage` trigger in `chat.triggers` | Works. | Works, in either `spec.teams.mode`: Microsoft Teams does not send a bot the posts of another app (measured on a test tenant in November 2026), so the broker reads them through Microsoft Graph, by its notifications of the bound channels on a connection with a `spec.teams.notificationURL`, and by polling them on one without ([Alerts on Microsoft Teams](#alerts-on-microsoft-teams)). | Refused: `UnsupportedOnPlatform`. Remove the trigger. |
-| The earlier replies a mentioned turn carries: `chat.threadReplies: mention`, the thread of a `personMessage` trigger, and a bot's mention | Works. | Works for a person's mention, read through Microsoft Graph ([Earlier replies on Microsoft Teams](#earlier-replies-on-microsoft-teams)). The first turn of a session that a person's mention starts in a thread also carries the thread's first message, such as an alert's card, whatever `chat.threadReplies` says. A bot's mention reaches it through Microsoft Graph, by its notifications or by polling ([Alerts on Microsoft Teams](#alerts-on-microsoft-teams)), since Teams sends a bot no other app's posts. | Served: the turn carries the mentioned message alone. |
-| The acknowledgment reaction: `chat.acknowledgment` | Works. With no `emoji` the reaction is `hourglass_flowing_sand`. | Taken, and no reaction is shown, as on a platform without it. | Served, and no reaction is shown. A Binding whose acknowledgment is enabled and names an `emoji` has the condition `AcknowledgmentShown`, `False` with the reason `NoReactions` ([Binding status](binding-status.md#acknowledgmentshown)). |
+| Feature | Slack | Microsoft Teams | `webhook` | On a platform without it |
+|---|---|---|---|---|
+| Questions to a person: `interactions.askUser` | Works: Agent Kourier asks in the thread with buttons. | Works: the question is a card that a member of the channel's team presses ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). | Not served. | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
+| Tool approvals: `interactions.toolApprovals`, and `interactions.approverGroups`, which requires it | Works: Agent Kourier asks in the thread with buttons. | `toolApprovals` works: the approval is a card that a member of the channel's team presses ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). `approverGroups` is refused: `UnsupportedOnPlatform`. Remove it. | Not served. | Refused: `UnsupportedOnPlatform`. Set `toolApprovals` to `false` and remove `approverGroups`. |
+| The useful and not-useful buttons: `feedback.enabled` | Works. | Works: the buttons are a card of their own, posted after the reply, and a vote of a member of the channel's team is counted ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). | Not served. | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
+| Alert triggers: a `botMessage` trigger in `chat.triggers` | Works. | Works, in either `spec.teams.mode`: Microsoft Teams does not send a bot the posts of another app (measured on a test tenant in November 2026), so the broker reads them through Microsoft Graph, by its notifications of the bound channels on a connection with a `spec.teams.notificationURL`, and by polling them on one without ([Alerts on Microsoft Teams](#alerts-on-microsoft-teams)). | Not served: the platform takes `webhookEvent` triggers alone ([Triggers and output](#triggers-and-output)). | Refused: `UnsupportedOnPlatform`. Use a trigger type that the platform takes. |
+| The earlier replies a mentioned turn carries: `chat.threadReplies: mention`, the thread of a `personMessage` trigger, and a bot's mention | Works. | Works for a person's mention, read through Microsoft Graph ([Earlier replies on Microsoft Teams](#earlier-replies-on-microsoft-teams)). The first turn of a session that a person's mention starts in a thread also carries the thread's first message, such as an alert's card, whatever `chat.threadReplies` says. A bot's mention reaches it through Microsoft Graph, by its notifications or by polling ([Alerts on Microsoft Teams](#alerts-on-microsoft-teams)), since Teams sends a bot no other app's posts. | The broker does not run the platform yet. | Served: the turn carries the mentioned message alone. |
+| The acknowledgment reaction: `chat.acknowledgment` | Works. With no `emoji` the reaction is `hourglass_flowing_sand`. | Taken, and no reaction is shown, as on a platform without it. | The broker does not run the platform yet. | Served, and no reaction is shown. A Binding whose acknowledgment is enabled and names an `emoji` has the condition `AcknowledgmentShown`, `False` with the reason `NoReactions` ([Binding status](binding-status.md#acknowledgmentshown)). |

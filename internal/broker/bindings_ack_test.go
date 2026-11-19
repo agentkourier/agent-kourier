@@ -21,7 +21,7 @@ func (c capsFake) Capabilities() chat.Caps {
 }
 
 // A Binding's backend carries a thread's root (session.Backend.RootContext) where its own connection's platform does: a platform that
-// does not, and a connection that no platform runs now, give false, so the session asks nothing for a first turn there (D55).
+// does not, and a connection that no platform runs now, give false, so the session asks nothing for a first turn there (D56).
 func TestABindingCarriesRootsWhereItsConnectionsPlatformDoes(t *testing.T) {
 	f := newFixture(t)
 	f.snaps.p.Store(twoConnections(t))

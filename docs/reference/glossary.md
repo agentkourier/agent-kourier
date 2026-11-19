@@ -107,7 +107,9 @@ Outbox
     be looked for is posted again, and may show twice.
 
 Platform
-:   A chat platform behind the `chat.Platform` interface. Slack is the only platform a broker runs today; the API also takes a ChatConnection of Microsoft Teams, which no broker runs yet.
+:   A chat platform behind the `chat.Platform` interface, which a ChatConnection's `spec.platform` names. The API takes `slack`,
+    `teams` and `webhook`; the broker runs Slack and Microsoft Teams, and refuses a webhook connection until its adapter lands
+    ([What each platform supports](platforms.md)).
 
 Post
 :   A message Agent Kourier writes into a channel or thread.

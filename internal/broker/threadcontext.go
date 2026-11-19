@@ -20,7 +20,7 @@ import (
 // it (session.Config.ThreadContext) once for each turn it sends; this is what answers: read the thread through the platform,
 // leave out what is not a person's unmentioned reply, name the authors, and render the block (render.ThreadRepliesCounted). The
 // first turn of a session that a person's mention opened inside a thread carries the thread's root instead, on a platform that
-// carries roots (chat.Caps.RootContext, D55; render.ThreadRoot).
+// carries roots (chat.Caps.RootContext, D56; render.ThreadRoot).
 const (
 	// threadFetchLimit is how many messages of the window the read asks for. The platform's limit and its count of what it
 	// left out are of every message, Agent Kourier's own, other bots' and those that were turns included, so a window holds

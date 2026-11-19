@@ -239,8 +239,8 @@ func TestTeamsIDShapes(t *testing.T) {
 			t.Errorf("Teams' %s shape Matches(%q) = %v, want %v", tc.name, tc.in, got, tc.want)
 		}
 	}
-	if p.Group.Taken() || p.Groups {
-		t.Errorf("Teams has a Group shape or Groups: %+v; want neither, as it has no approver groups", p)
+	if p.Group.Taken() {
+		t.Errorf("Teams has a Group shape: %+v; want none, as it has no approver groups", p)
 	}
 	slackP := slack(t)
 	for _, tc := range []struct {
@@ -259,26 +259,27 @@ func TestTeamsIDShapes(t *testing.T) {
 	}
 }
 
-// Groups and BotTriggers on each platform: Slack reads its user groups and takes botMessage triggers; Microsoft Teams has no
-// groups, and takes botMessage triggers in either mode, with or without a notification URL. Every platform with Groups has a Group
-// shape to hold the groups to.
-func TestTheGroupsAndBotTriggersOfEachPlatform(t *testing.T) {
+// The approver groups and the trigger types of each platform: Slack reads its user groups, and Microsoft Teams has none; both take
+// mention, botMessage and personMessage triggers, Teams in either mode and with or without a notification URL. Every platform with
+// a Group shape takes tool approvals, for the groups to decide.
+func TestTheGroupsAndTriggersOfEachPlatform(t *testing.T) {
+	chat := []TriggerType{TriggerMention, TriggerBotMessage, TriggerPersonMessage}
 	for _, tc := range []struct {
-		name                string
-		spec                ChatConnectionSpec
-		groups, botTriggers bool
+		name   string
+		spec   ChatConnectionSpec
+		groups bool
 	}{
-		{"slack", slackSpec, true, true},
-		{"teams", teamsSpec, false, true},
-		{"teams with a notification URL", teamsAlertsSpec, false, true},
-		{"teams in socket mode", ChatConnectionSpec{Platform: PlatformTeams, Teams: &TeamsConnectionSpec{TenantID: testTenant, AppID: testApp, Mode: TeamsModeSocket}}, false, true},
+		{"slack", slackSpec, true},
+		{"teams", teamsSpec, false},
+		{"teams with a notification URL", teamsAlertsSpec, false},
+		{"teams in socket mode", ChatConnectionSpec{Platform: PlatformTeams, Teams: &TeamsConnectionSpec{TenantID: testTenant, AppID: testApp, Mode: TeamsModeSocket}}, false},
 	} {
 		p := platformOf(t, tc.spec)
-		if p.Groups != tc.groups || p.BotTriggers != tc.botTriggers {
-			t.Errorf("%s: Groups %v, BotTriggers %v; want %v, %v", tc.name, p.Groups, p.BotTriggers, tc.groups, tc.botTriggers)
+		if p.Group.Taken() != tc.groups || !slices.Equal(p.Triggers, chat) {
+			t.Errorf("%s: Group taken %v, Triggers %v; want %v, %v", tc.name, p.Group.Taken(), p.Triggers, tc.groups, chat)
 		}
-		if p.Groups && !p.Group.Taken() {
-			t.Errorf("%s: Groups with no Group shape", tc.name)
+		if p.Group.Taken() && !p.ToolApprovals {
+			t.Errorf("%s: a Group shape with no tool approvals", tc.name)
 		}
 	}
 }

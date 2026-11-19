@@ -396,7 +396,7 @@ func (m *Manager) wantsThreadContext(r store.Reply, b Backend) bool {
 		(r.UserID != SystemUser && (b.ThreadReplies == v1alpha1.ThreadRepliesMention || mayTakeRoot(r, b))))
 }
 
-// mayTakeRoot reports whether the turn r, if it is its session's first, carries the thread's root (D55): its Backend's platform carries
+// mayTakeRoot reports whether the turn r, if it is its session's first, carries the thread's root (D56): its Backend's platform carries
 // roots, and its message is a reply in the thread, not the message that opened it.
 func mayTakeRoot(r store.Reply, b Backend) bool {
 	return b.RootContext && !r.WholeThread && r.MessageRef != r.Key.Thread
@@ -405,7 +405,7 @@ func mayTakeRoot(r store.Reply, b Backend) bool {
 // readWindow finds where the window of the turn r opens, which is the message of the row before it in the session's
 // queue, delivered or not, and keeps it for the turn. A turn that carries the thread reads back to the last that did: a turn
 // between them carried no bot's post. A person's turn with no row before it that may take the thread's root (mayTakeRoot) has a
-// window with no lower bound, for the root (D55); in a Binding that is not mention-only, a later turn has none, as every reply was a
+// window with no lower bound, for the root (D56); in a Binding that is not mention-only, a later turn has none, as every reply was a
 // turn. It is read from stored rows, so it is the same on every attempt,
 // after a restart and after a failover. A turn with no row before it has no window. What a turn takes is decided at its first send
 // and kept for its resends, so a Backend that says otherwise at a resend (its connection's platform down, or back) changes nothing: a

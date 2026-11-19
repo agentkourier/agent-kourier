@@ -254,7 +254,7 @@ func reactionsOf(platforms chat.Resolver[platformCaps], conn string) platformRea
 }
 
 // rootContextOf says whether the platform that platforms gives for conn ("namespace/name") carries a thread's root
-// (chat.Caps.RootContext, D55). A connection that no platform runs now, or nil platforms, gives false: its first turns ask for nothing.
+// (chat.Caps.RootContext, D56). A connection that no platform runs now, or nil platforms, gives false: its first turns ask for nothing.
 func rootContextOf(platforms chat.Resolver[platformCaps], conn string) bool {
 	if platforms == nil {
 		return false

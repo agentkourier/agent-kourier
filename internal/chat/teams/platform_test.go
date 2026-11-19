@@ -517,7 +517,7 @@ func TestNewRefusesAnIncompleteConfig(t *testing.T) {
 }
 
 // Teams carries a thread's root with a person's first mention in it (chat.Caps.RootContext): Teams sends a bot no other app's posts, so
-// an alert that Workflows posted reaches no trigger, and the person's mention is the first turn that can show it to the agent (D55).
+// an alert that Workflows posted reaches no trigger, and the person's mention is the first turn that can show it to the agent (D56).
 func TestTeamsCarriesTheRootWithAFirstMention(t *testing.T) {
 	t.Parallel()
 	if !newClientTest(t).c.Capabilities().RootContext {

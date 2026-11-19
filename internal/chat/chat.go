@@ -125,7 +125,7 @@ type Caps struct {
 	// Unreact say ErrNoReactions, a message shows no acknowledgment, and a Binding that names a reaction is told it is not shown.
 	AckReaction string
 	// RootContext says that the first turn of a session that a person's mention opened inside a thread carries the message that
-	// opened the thread, whoever wrote it, read through the platform's ThreadReader (spec 8.2, D55). It is for a platform where an
+	// opened the thread, whoever wrote it, read through the platform's ThreadReader (spec 8.2, D56). It is for a platform where an
 	// alert's post reaches no trigger (Microsoft Teams sends a bot no other app's posts), so a person asks about an alert that no turn
 	// has carried. Without it such a turn carries the person's message alone.
 	RootContext bool

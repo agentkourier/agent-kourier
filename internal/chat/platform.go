@@ -109,7 +109,7 @@ type ThreadReader interface {
 
 // RootReader is an optional interface of a ThreadReader that reads the message that opened a thread alone, in fewer calls than
 // ThreadFromStart, which reads the replies with it: what the first turn of a session that a person's mention opened inside a thread
-// carries (Caps.RootContext, spec 8.2, D55). A caller that finds a platform without it reads ThreadFromStart and keeps its first
+// carries (Caps.RootContext, spec 8.2, D56). A caller that finds a platform without it reads ThreadFromStart and keeps its first
 // message.
 type RootReader interface {
 	// ThreadRoot returns the message that opened the thread t.Thread, decoded as ThreadFromStart decodes it, and false, with no

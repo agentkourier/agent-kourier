@@ -151,7 +151,7 @@ func TestThreadContextIsAppendedToAMentionedTurn(t *testing.T) {
 
 // The hook is asked for a mention-only Binding's turn that a person wrote, that is not pinned to a question, and that has a turn
 // before it; and, in either mode, on a Backend that carries a thread's root (RootContext), for the first turn of a session that a
-// person's mention opened inside a thread (D55). Anything else is sent as it was queued, and the hook is never called.
+// person's mention opened inside a thread (D56). Anything else is sent as it was queued, and the hook is never called.
 func TestThreadContextIsAskedOnlyWhereItBelongs(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

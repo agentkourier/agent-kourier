@@ -16,7 +16,7 @@ import (
 
 // The first turn of a session that a person's mention opened inside an existing thread asks with no lower bound and not for the whole
 // thread (session.Config.ThreadContext): on a platform that carries a thread's root (chat.Caps.RootContext), the turn carries the
-// message that opened the thread, whoever wrote it, and nothing else of the thread (spec 8.2, D55).
+// message that opened the thread, whoever wrote it, and nothing else of the thread (spec 8.2, D56).
 
 // rootFirstTurn asks the thread context of the world for the first turn of a session opened inside the thread, by a mention at
 // "100.000900", over the platform p.

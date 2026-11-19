@@ -57,6 +57,14 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Count(t, "extractName", maxExtractNameLen)
 	limitsdoc.Count(t, "closeWhenValue", maxCloseWhenValueLen)
 	limitsdoc.Count(t, "durationText", maxDurationTextLen)
+	limitsdoc.Count(t, "webhookChannel", maxWebhookChannelLen)
+	limitsdoc.Count(t, "webhookFields", MaxWebhookFields)
+	limitsdoc.Count(t, "webhookFieldName", maxWebhookFieldNameLen)
+	limitsdoc.Count(t, "webhookFrom", MaxWebhookFrom)
+	limitsdoc.Count(t, "webhookPointerLen", MaxWebhookPointerLen)
+	limitsdoc.Count(t, "webhookHeaderName", maxWebhookHeaderNameLen)
+	limitsdoc.Count(t, "webhookPrefix", MaxWebhookPrefixLen)
+	limitsdoc.Count(t, "webhookIdentity", MaxWebhookIdentityLen)
 
 	limitsdoc.Duration(t, "cooldownMin", minThreadCooldown)
 	limitsdoc.Duration(t, "cooldownMax", maxThreadCooldown)
@@ -70,6 +78,7 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Duration(t, "interactionTimeoutMax", MaxInteractionTimeout)
 	limitsdoc.Duration(t, "threadTTL", DefaultThreadTTL)
 	limitsdoc.Duration(t, "threadTTLMax", MaxThreadTTL)
+	limitsdoc.Duration(t, "webhookTimestampWindow", MaxWebhookTimestampWindow)
 
 	limitsdoc.Text(t, "templateFuncs", allowedFuncList())
 	limitsdoc.Bytes(t, "promptOutput", MaxPromptOutput)

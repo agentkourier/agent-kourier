@@ -89,7 +89,7 @@ func ThreadMessagesCounted(entries []ThreadReply, pinned, dropped int) (section 
 }
 
 // ThreadRoot returns the section that the first turn of a session opened inside a thread carries of the message that opened the
-// thread (spec 8.2, D55): the sentence and a block of that one message, whoever wrote it, a person or another app, cut as a reply is.
+// thread (spec 8.2, D56): the sentence and a block of that one message, whoever wrote it, a person or another app, cut as a reply is.
 // It says nothing of the thread's other messages, which the turn does not carry. It returns "" if the message has nothing to show.
 func ThreadRoot(root ThreadReply) string {
 	section, _ := untrustedBlock{

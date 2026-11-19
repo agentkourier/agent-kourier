@@ -39,6 +39,8 @@ const (
 
 	OutputLive  OutputMode = "live"
 	OutputFinal OutputMode = "final"
+	// OutputNone posts nothing of the agent's work, on a platform where the agent posts with its own tools (a webhook connection).
+	OutputNone OutputMode = "none"
 
 	ProgressSteps            ProgressMode = "steps"
 	ProgressStepsAndActivity ProgressMode = "steps-and-activity"
@@ -56,9 +58,14 @@ const (
 	TeamsModeHTTP   TeamsMode = "http"
 	TeamsModeSocket TeamsMode = "socket"
 
-	PlatformSlack = "slack"
-	PlatformTeams = "teams"
+	PlatformSlack   = "slack"
+	PlatformTeams   = "teams"
+	PlatformWebhook = "webhook"
 )
+
+// platforms returns the platforms a ChatConnection may name, in the order of the Enum marker of spec.platform: another platform is
+// one more name here and in the marker.
+func platforms() []string { return []string{PlatformSlack, PlatformTeams, PlatformWebhook} }
 
 // ObjectRef names a resource in a namespace. An empty namespace means the namespace of the
 // referring object. A Binding's agent.backendRef and chat.connectionRef may name an AgentBackend or a
@@ -271,15 +278,21 @@ type ChatConnectionList struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.slack) || self.platform == 'slack'",message="is set, but only a slack connection has one",fieldPath=".slack"
 // +kubebuilder:validation:XValidation:rule="!has(self.teams) || self.platform == 'teams'",message="is set, but only a teams connection has one",fieldPath=".teams"
 // +kubebuilder:validation:XValidation:rule="self.platform != 'teams' || has(self.teams)",message="is required on a teams connection: it names the tenant and the app",fieldPath=".teams"
+// +kubebuilder:validation:XValidation:rule="!has(self.webhook) || self.platform == 'webhook'",message="is set, but only a webhook connection has one",fieldPath=".webhook"
+// +kubebuilder:validation:XValidation:rule="self.platform != 'webhook' || has(self.webhook)",message="is required on a webhook connection",fieldPath=".webhook"
 type ChatConnectionSpec struct {
-	// Platform is the chat platform: slack, or teams, Microsoft Teams. A broker runs a teams connection in http or socket mode
-	// (spec.teams.mode). One in http mode, or with a spec.teams.notificationURL in either mode, needs the broker's chat listener: on a
-	// broker with none, the broker's own connection stops its start, and a team one is not started.
-	// +kubebuilder:validation:Enum=slack;teams
+	// Platform is the chat platform: slack; teams, Microsoft Teams; or webhook, which takes signed JSON webhooks from a service such
+	// as a code host or an issue tracker (spec.webhook) and posts nothing there: the agent posts on the service with its own tools. A
+	// broker runs a teams connection in http or socket mode (spec.teams.mode). One in http mode, or with a spec.teams.notificationURL
+	// in either mode, needs the broker's chat listener: on a broker with none, the broker's own connection stops its start, and a team
+	// one is not started. The broker does not run a webhook connection yet: it refuses one as a wiring error, so that one as the
+	// broker's own stops its start, and a team's is not started.
+	// +kubebuilder:validation:Enum=slack;teams;webhook
 	Platform string `json:"platform"`
 	// CredentialsSecretRef names one Secret whose keys are fixed by the platform and its mode. A Slack connection in Socket Mode needs
 	// botToken and appToken; one in HTTP mode needs botToken and signingSecret. A teams connection needs clientSecret, the client
-	// secret of its Microsoft Entra application.
+	// secret of its Microsoft Entra application. A webhook connection needs webhookSecret with the hmac-sha256 scheme, and token
+	// with the token scheme.
 	CredentialsSecretRef SecretRef `json:"credentialsSecretRef"`
 	// AllowedNamespaces lists the other namespaces whose Bindings may reference this connection. Each is a DNS-1123 label.
 	// An empty list permits references only from the connection's own namespace. At most 256.
@@ -295,6 +308,10 @@ type ChatConnectionSpec struct {
 	// Teams holds the settings of a teams connection. A connection whose platform is teams must set it, and no other may.
 	// +optional
 	Teams *TeamsConnectionSpec `json:"teams,omitempty"`
+	// Webhook is how a webhook connection reads a delivery. A connection whose platform is webhook requires it, and every other
+	// refuses it.
+	// +optional
+	Webhook *WebhookSpec `json:"webhook,omitempty"`
 }
 
 // SlackMode returns the mode of a Slack connection: spec.slack.mode, or socket when it is unset. The API fills in no default (spec
@@ -458,20 +475,32 @@ type Identity struct {
 	TokenSecretRef *SecretKeyRef `json:"tokenSecretRef,omitempty"`
 }
 
+// The rules below copy Validate: a Binding whose triggers are all webhookEvent takes a webhook channel and output none, and any other
+// Binding takes a chat platform's channel (Slack's or Microsoft Teams') and live or final. The two literals are channelID, the union of
+// the chat platforms' channels, and webhookChannel; the field's maxLength, 140, is both maxChannelIDLen and maxWebhookChannelLen
+// (TestCELLiteralsEqualTheBrokersConstants). (Not in the doc comment below, which the reference pages print.)
+
 // ChatBinding places the Binding in a channel.
+//
+// +kubebuilder:validation:XValidation:rule=`self.channel.matches(r'^(?:[CG][A-Z0-9]+|19:[A-Za-z0-9._-]+@thread\.(?:tacv2|skype))$') || (has(self.triggers) && size(self.triggers) > 0 && self.triggers.all(t, t.type == 'webhookEvent') && self.channel.matches('^[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9._-]+)*$'))`,message="must be a channel ID such as C0123456789 (Slack) or 19:…@thread.tacv2 (Microsoft Teams), not a name; a Binding whose triggers are all webhookEvent takes a webhook channel: letters, digits, '.', '_' and '-', with '/' between parts",fieldPath=".channel"
+// +kubebuilder:validation:XValidation:rule="!has(self.output) || self.output != 'none' || (has(self.triggers) && size(self.triggers) > 0 && self.triggers.all(t, t.type == 'webhookEvent'))",message="none is taken only by a Binding whose triggers are all webhookEvent",fieldPath=".output"
 type ChatBinding struct {
 	ConnectionRef ObjectRef `json:"connectionRef"`
 	// Channel is the platform's channel ID, not its name: on Slack `C…` or `G…`, capitals and digits, at most 32 bytes; on Microsoft
 	// Teams `19:…@thread.tacv2` (or `@thread.skype`), at most 140 bytes. The API server takes either platform's shape, and refuses
 	// a name such as `general`, which has neither. The broker holds the channel to the shape of its connection's platform when it
 	// reads the Binding with its connection, and refuses a Binding whose channel has the other shape as it refuses an invalid one,
-	// with the reason InvalidPlatformID.
+	// with the reason InvalidPlatformID. A Binding whose triggers are all webhookEvent takes a webhook channel instead, as its
+	// connection reads it from an event: letters, digits, '.', '_' and '-', starting with a letter or a digit, with '/' between
+	// parts, such as acme/widgets or OPS, at most 140 bytes.
 	// +kubebuilder:validation:MaxLength=140
-	// +kubebuilder:validation:Pattern=`^(?:[CG][A-Z0-9]+|19:[A-Za-z0-9._-]+@thread\.(?:tacv2|skype))$`
 	Channel string `json:"channel"`
-	// Output says what Agent Kourier posts of the agent's work: live, the reply as it is written, or final, the finished reply
-	// alone. Defaults to live.
-	// +kubebuilder:validation:Enum=live;final;""
+	// Output says what Agent Kourier posts of the agent's work: live, the reply as it is written; final, the finished reply
+	// alone; or none, nothing, which only a Binding whose triggers are all webhookEvent takes. Defaults to live. Slack and Microsoft
+	// Teams serve live and final. A webhook connection serves none alone, since the agent posts on the service with its own tools: its Bindings
+	// write output: none, and one with live or final, the default included, is refused when the broker reads it with its
+	// connection, with the reason UnsupportedOnPlatform.
+	// +kubebuilder:validation:Enum=live;final;none;""
 	// +kubebuilder:default=live
 	// +optional
 	Output OutputMode `json:"output"`

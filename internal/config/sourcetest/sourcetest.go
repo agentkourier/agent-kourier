@@ -399,11 +399,11 @@ const chatOnlyRoute = "sre/chat-only -> agent-kourier-system/kagent-pilot on age
 
 // chatIDCase is a change to a Binding of the spec corpus that gives it a chat ID that its connection's platform does not take, with
 // the reason that the Binding is told and the problem; how a Snapshot serves the field, before the change; and the routing table of
-// the rest. The schema and Validate hold each chat ID to the union of the platforms' shapes, so Validate refuses an ID that no
-// platform has (InvalidSpec), and the broker's check against the platform (InvalidPlatformID, which resolution and the custom
-// resource source make) refuses an ID of another platform's shape, such as a Microsoft Teams channel on a Slack connection:
-// TestPlatformIDs and TestRefusedOnPlatform in internal/config cover that check with a table of their own. An edit to either thus
-// does not take, on either route.
+// the rest. The schema and Validate hold each chat ID of a Binding with chat triggers to the union of the chat platforms' shapes, so
+// Validate refuses an ID that no platform has (InvalidSpec), and the broker's check against the platform (InvalidPlatformID, which
+// resolution and the custom resource source make) refuses an ID of another platform's shape, such as a Microsoft Teams channel on a
+// Slack connection: TestPlatformIDs and TestRefusedOnPlatform in internal/config cover that check with a table of their own. An edit
+// to either thus does not take, on either route.
 type chatIDCase struct {
 	name     string
 	doc      int    // the Binding's document in the corpus

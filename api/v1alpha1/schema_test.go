@@ -13,9 +13,20 @@ import (
 	"time"
 	"unicode/utf8"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/yaml"
 )
+
+// hookConn is a row of the enum table: the broker's answer for the webhook connection fixture, changed by f.
+func hookConn(f func(*WebhookSpec)) func(*testing.T) error {
+	return func(t *testing.T) error {
+		o := load[ChatConnection](t, "webhook/connection.yaml")
+		f(o.Spec.Webhook)
+		o.Default()
+		return o.Validate()
+	}
+}
 
 // A schema marker is a fast-fail copy of a rule Validate enforces, so the generated schema must never refuse an object
 // Validate accepts. These tests read the committed CRDs (which TestCommittedCRDsMatchGeneration holds equal to the
@@ -280,6 +291,12 @@ func TestSchemaEnumsListTheEmptyValueExactlyWhereTheBrokerAcceptsIt(t *testing.T
 			return o.Validate()
 		}},
 		{bindings.at(t, trigger+".type"), "trigger type", binding(func(o *Binding) { bot(o).Type = "" })},
+		{conns.at(t, "spec.webhook.verify.scheme"), "webhook scheme", hookConn(func(w *WebhookSpec) { w.Verify.Scheme = "" })},
+		{conns.at(t, "spec.webhook.verify.timestamp.unit"), "webhook timestamp unit", hookConn(func(w *WebhookSpec) {
+			w.Verify.Timestamp = &WebhookTimestamp{From: "/t", Window: metav1.Duration{Duration: time.Minute}}
+		})},
+		{conns.at(t, "spec.webhook.actor.whenMissing"), "webhook actor whenMissing", hookConn(func(w *WebhookSpec) { w.Actor.WhenMissing = "" })},
+		{conns.at(t, "spec.webhook.fields[].kind"), "webhook field kind", hookConn(func(w *WebhookSpec) { w.Fields[3].Kind = "" })},
 		{bindings.at(t, trigger+".extract.{}.field"), "extract field", binding(func(o *Binding) {
 			e := bot(o).Extract["state"]
 			e.Field = ""
@@ -329,23 +346,35 @@ func countEnums(v any) int {
 }
 
 // TestSchemaPatternsEqualTheGoLiterals holds each pattern marker to the regex literal of the rule it copies. The
-// comments on those literals say they must be equal; this is what makes it so.
+// comments on those literals say they must be equal; this is what makes it so. An optional field that Validate reads as unset
+// when it is empty has the literal wrapped as ^(…)?$, so that the schema takes "" too (D50: the schema refuses nothing the broker
+// accepts). The channel of a Binding is a CEL rule's (TestCELLiteralsEqualTheBrokersConstants).
 func TestSchemaPatternsEqualTheGoLiterals(t *testing.T) {
+	optional := func(re *regexp.Regexp) string {
+		s := re.String()
+		return "^(" + strings.TrimSuffix(strings.TrimPrefix(s, "^"), "$") + ")?$"
+	}
 	for _, tc := range []struct {
-		plural, path string
-		re           *regexp.Regexp
+		plural, path, want string
 	}{
-		{"bindings", "spec.chat.channel", channelID},
-		{"bindings", "spec.chat.triggers[].from.id", senderID},
-		{"bindings", "spec.chat.mentions[].name", mentionName},
-		{"bindings", "spec.chat.mentions[].user", mentionUser},
-		{"bindings", "spec.interactions.approverGroups[]", slackGroupID},
-		{"chatconnections", "spec.teams.tenantID", entraIDPattern},
-		{"chatconnections", "spec.teams.appID", entraIDPattern},
+		{"bindings", "spec.chat.triggers[].from.id", senderID.String()},
+		{"bindings", "spec.chat.mentions[].name", mentionName.String()},
+		{"bindings", "spec.chat.mentions[].user", mentionUser.String()},
+		{"bindings", "spec.interactions.approverGroups[]", slackGroupID.String()},
+		{"chatconnections", "spec.teams.tenantID", entraIDPattern.String()},
+		{"chatconnections", "spec.teams.appID", entraIDPattern.String()},
+		{"chatconnections", "spec.webhook.identity", optional(webhookIdentity)},
+		{"chatconnections", "spec.webhook.verify.header", httpHeaderName.String()},
+		{"chatconnections", "spec.webhook.verify.prefix", webhookPrefix.String()},
+		{"chatconnections", "spec.webhook.channel.value", optional(webhookChannel)},
+		{"chatconnections", "spec.webhook.thread.prefix", webhookThreadPrefix.String()},
+		{"chatconnections", "spec.webhook.fields[].name", webhookFieldName.String()},
+		{"chatconnections", "spec.webhook.fields[].header", optional(httpHeaderName)},
+		{"chatconnections", "spec.webhook.delivery.header", httpHeaderName.String()},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
-			if got := crdSchema(t, tc.plural).at(t, tc.path).str("pattern"); got != tc.re.String() {
-				t.Errorf("schema pattern = %q, Go rule = %q", got, tc.re.String())
+			if got := crdSchema(t, tc.plural).at(t, tc.path).str("pattern"); got != tc.want {
+				t.Errorf("schema pattern = %q, Go rule = %q", got, tc.want)
 			}
 		})
 	}
@@ -368,7 +397,9 @@ func TestSchemaCapsEqualTheBrokersCaps(t *testing.T) {
 		// The broker counts bytes and the schema characters, so the schema is never the stricter of the two.
 		{"backend url", backends.at(t, "spec.url"), "maxLength", maxURLLen},
 		{"header value", backends.at(t, "spec.headers[].value"), "maxLength", maxHeaderValueLen},
+		// The field's cap is both a chat platform's channel's (maxChannelIDLen, Microsoft Teams') and a webhook channel's.
 		{"channel", bindings.at(t, "spec.chat.channel"), "maxLength", maxChannelIDLen},
+		{"webhook channel", bindings.at(t, "spec.chat.channel"), "maxLength", maxWebhookChannelLen},
 		{"sender ID", bindings.at(t, trigger+".from.id"), "maxLength", maxSenderIDLen},
 		{"approver group", bindings.at(t, "spec.interactions.approverGroups[]"), "maxLength", maxApproverGroupIDLen},
 		{"teams notification url", connections.at(t, "spec.teams.notificationURL"), "maxLength", maxURLLen},
@@ -395,6 +426,23 @@ func TestSchemaCapsEqualTheBrokersCaps(t *testing.T) {
 		// The broker counts bytes and the schema characters, so the schema is never the stricter of the two.
 		{"extract regex", bindings.at(t, trigger+".extract.{}.regex"), "maxLength", maxTriggerRegexLen},
 		{"extract regex minimum", bindings.at(t, trigger+".extract.{}.regex"), "minLength", 1},
+		{"webhook identity", connections.at(t, "spec.webhook.identity"), "maxLength", MaxWebhookIdentityLen},
+		{"webhook verify header", connections.at(t, "spec.webhook.verify.header"), "maxLength", maxWebhookHeaderNameLen},
+		{"webhook verify prefix", connections.at(t, "spec.webhook.verify.prefix"), "maxLength", MaxWebhookPrefixLen},
+		{"webhook timestamp pointer", connections.at(t, "spec.webhook.verify.timestamp.from"), "maxLength", MaxWebhookPointerLen},
+		{"webhook channel pointers", connections.at(t, "spec.webhook.channel.from"), "maxItems", MaxWebhookFrom},
+		{"webhook channel pointer", connections.at(t, "spec.webhook.channel.from[]"), "maxLength", MaxWebhookPointerLen},
+		{"webhook channel value", connections.at(t, "spec.webhook.channel.value"), "maxLength", maxWebhookChannelLen},
+		{"webhook actor pointers", connections.at(t, "spec.webhook.actor.from"), "maxItems", MaxWebhookFrom},
+		{"webhook actor pointer", connections.at(t, "spec.webhook.actor.from[]"), "maxLength", MaxWebhookPointerLen},
+		{"webhook thread field", connections.at(t, "spec.webhook.thread.field"), "maxLength", maxWebhookFieldNameLen},
+		{"webhook thread prefix", connections.at(t, "spec.webhook.thread.prefix"), "maxLength", MaxWebhookPrefixLen},
+		{"webhook fields", connections.at(t, "spec.webhook.fields"), "maxItems", MaxWebhookFields},
+		{"webhook field name", connections.at(t, "spec.webhook.fields[].name"), "maxLength", maxWebhookFieldNameLen},
+		{"webhook field pointers", connections.at(t, "spec.webhook.fields[].from"), "maxItems", MaxWebhookFrom},
+		{"webhook field pointer", connections.at(t, "spec.webhook.fields[].from[]"), "maxLength", MaxWebhookPointerLen},
+		{"webhook field header", connections.at(t, "spec.webhook.fields[].header"), "maxLength", maxWebhookHeaderNameLen},
+		{"webhook delivery header", connections.at(t, "spec.webhook.delivery.header"), "maxLength", maxWebhookHeaderNameLen},
 	} {
 		if got := tc.node.num(tc.key); got != tc.want {
 			t.Errorf("%s: schema %s = %d, Go rule = %d", tc.name, tc.key, got, tc.want)
