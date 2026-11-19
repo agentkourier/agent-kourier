@@ -40,9 +40,9 @@ func TestNewPlatformIsChosenByThePlatformOfTheConnection(t *testing.T) {
 	}
 }
 
-// The API takes a webhook ChatConnection before this broker has its adapter: one that Validate accepts, with its Secret in place, is
-// a wiring error that names the platform, and no Secret is read for it, so the supervisor reports it as having no adapter and does
-// not wait on a Secret to start it.
+// The API takes a webhook ChatConnection before this broker has its adapter: one that Validate accepts is a wiring error that names
+// the platform, and no Secret is read for it, so the supervisor reports it as having no adapter and does not wait on a Secret to
+// start it. The reader has no values: a read would fail with an empty value, which is not errNoAdapter.
 func TestAWebhookConnectionIsAWiringErrorUntilItsAdapterLands(t *testing.T) {
 	c := &v1alpha1.ChatConnection{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "platform", Name: "github"},
@@ -60,8 +60,7 @@ func TestAWebhookConnectionIsAWiringErrorUntilItsAdapterLands(t *testing.T) {
 	if err := c.Validate(); err != nil {
 		t.Fatalf("the webhook connection is refused: %v", err)
 	}
-	secrets := &reader{vals: map[string]string{"platform/github-webhook/" + v1alpha1.WebhookSecretKey: "fake-webhook-secret"}}
-	_, err := connectionOf(t.Context(), c, secrets)
+	_, err := connectionOf(t.Context(), c, &reader{})
 	if !errors.Is(err, ErrWiring) || !errors.Is(err, errNoAdapter) {
 		t.Fatalf("connectionOf(webhook) = %v; want a wiring error for a platform with no adapter", err)
 	}

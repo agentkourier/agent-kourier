@@ -399,7 +399,7 @@ const chatOnlyRoute = "sre/chat-only -> agent-kourier-system/kagent-pilot on age
 
 // chatIDCase is a change to a Binding of the spec corpus that gives it a chat ID that its connection's platform does not take, with
 // the reason that the Binding is told and the problem; how a Snapshot serves the field, before the change; and the routing table of
-// the rest. The schema and Validate hold each chat ID to Slack's shape, Slack being the only platform, so Validate refuses each case
+// the rest. The schema and Validate hold each chat ID of a Binding with Slack's triggers to Slack's shape, so Validate refuses each case
 // (InvalidSpec) before the broker's check against the platform (InvalidPlatformID, which resolution and the custom resource source
 // make) would: TestPlatformIDs and TestRefusedOnPlatform in internal/config cover that check with a table of their own. A Slack ID
 // typo in an edit thus does not take, on either route.

@@ -186,6 +186,9 @@ func TestWhatEachPlatformServes(t *testing.T) {
 		{slackSpec, "Slack", "Slack", true, true, true, true},
 	} {
 		p := platformOf(t, tc.spec)
+		if want := []TriggerType{TriggerMention, TriggerBotMessage, TriggerPersonMessage}; !slices.Equal(p.Triggers, want) {
+			t.Errorf("%s takes the trigger types %v, want %v", tc.name, p.Triggers, want)
+		}
 		if !p.Channel.Taken() || !p.Sender.Taken() || !p.User.Taken() || !p.Group.Taken() {
 			t.Errorf("%s does not take every kind of chat ID: %+v", tc.name, p)
 		}

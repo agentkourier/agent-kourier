@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strings"
 )
 
 // The chat IDs of a Binding (spec D42) are checked in two places. The schema and Validate hold each ID field to a shape and its
@@ -71,11 +72,12 @@ type ChatPlatform struct {
 	ToolApprovals bool
 	// Feedback says whether the platform can show the useful and not-useful buttons and take a press (spec.feedback.enabled).
 	Feedback bool
-	// Webhook says that the platform is a webhook connection's: its Bindings take webhookEvent triggers alone, which name the
-	// connection's fields (WebhookFields). No other platform takes a webhookEvent trigger.
-	Webhook bool
+	// Triggers are the trigger types that the platform's Bindings take (spec.chat.triggers[].type), in the order a message names
+	// them: Slack takes mention, botMessage and personMessage, and a webhook connection webhookEvent alone. A trigger of any other type
+	// is refused with UnsupportedOnPlatform, so a platform added without them takes none.
+	Triggers []TriggerType
 	// WebhookFields are the fields of the webhook connection (spec.webhook.fields), a copy: what a webhookEvent trigger may match and
-	// exclude on, and whose id fields its template may read.
+	// exclude on, and whose id fields its template may read. Nil on a platform that is not a webhook connection.
 	WebhookFields []WebhookField
 }
 
@@ -108,6 +110,7 @@ func ChatPlatformOf(spec ChatConnectionSpec) (ChatPlatform, bool) {
 			Group: IDShape{pattern: slackGroupID, maxLen: maxChatIDLen, What: "a user group ID",
 				Fix: "use the user group's ID, such as S0123456789"},
 			Replies: true, AskUser: true, ToolApprovals: true, Feedback: true,
+			Triggers: []TriggerType{TriggerMention, TriggerBotMessage, TriggerPersonMessage},
 		}, true
 	case PlatformWebhook:
 		if spec.Webhook == nil {
@@ -119,10 +122,22 @@ func ChatPlatformOf(spec ChatConnectionSpec) (ChatPlatform, bool) {
 			Name: "webhook", ActorName: "webhook",
 			Channel: IDShape{pattern: webhookChannel, maxLen: maxWebhookChannelLen, What: "a webhook channel",
 				Fix: "use the channel as the connection reads it from an event, such as acme/widgets or OPS"},
-			Webhook: true, WebhookFields: slices.Clone(spec.Webhook.Fields),
+			Triggers: []TriggerType{TriggerWebhookEvent}, WebhookFields: slices.Clone(spec.Webhook.Fields),
 		}, true
 	}
 	return ChatPlatform{}, false
+}
+
+// orList writes the trigger types as a message lists them: "webhookEvent", or "mention, botMessage or personMessage".
+func orList(types []TriggerType) string {
+	s := make([]string, len(types))
+	for i, t := range types {
+		s[i] = string(t)
+	}
+	if len(s) < 2 {
+		return strings.Join(s, "")
+	}
+	return strings.Join(s[:len(s)-1], ", ") + " or " + s[len(s)-1]
 }
 
 // PlatformMismatch is one thing a Binding names or uses that the platform of its connection does not take.
@@ -174,11 +189,15 @@ func (s *BindingSpec) PlatformMismatches(p ChatPlatform) []PlatformMismatch {
 	for i, t := range s.Chat.Triggers {
 		at := fmt.Sprintf("spec.chat.triggers[%d]", i)
 		switch {
-		case p.Webhook && t.Type != TriggerWebhookEvent:
-			unsupported(at+".type", fmt.Sprintf("%q is not supported", t.Type),
-				"use type webhookEvent: a webhook connection takes no other (a Binding that lists no triggers has [{type: mention}])")
-		case !p.Webhook && t.Type == TriggerWebhookEvent:
-			unsupported(at+".type", fmt.Sprintf("%q is not supported", t.Type), "use it on a connection of the webhook platform alone")
+		case !slices.Contains(p.Triggers, t.Type):
+			fix := "use a type the platform takes: " + orList(p.Triggers)
+			if t.Type == TriggerMention {
+				fix += " (a Binding that lists no triggers has [{type: mention}])"
+			}
+			if len(p.Triggers) == 0 {
+				fix = "remove it: the platform takes no triggers"
+			}
+			unsupported(at+".type", fmt.Sprintf("%q is not supported", t.Type), fix)
 		case t.Type == TriggerWebhookEvent:
 			out = append(out, webhookTriggerMismatches(at, t, p.WebhookFields)...)
 		case t.Type == TriggerBotMessage && t.From != nil:

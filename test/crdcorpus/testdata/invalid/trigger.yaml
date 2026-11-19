@@ -2955,3 +2955,22 @@ spec:
       - type: webhookEvent
         limits: {rateLimit: {maxRuns: 20, per: 1h, maxConcurrent: 2}, maxRunsPerDay: 100}
         promptTemplate: "Review {{ .Channel"
+---
+# rule: trigger/webhookEvent: promptTemplate that reads .Key
+# want: spec.chat.triggers[0].promptTemplate: invalid template: reads .Key, which a webhookEvent trigger does not have
+# schema: accepts
+# broker-only: the schema does not parse templates, so it cannot see what one reads
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: pr-review, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: pr-reviewer, namespace: kagent}
+  identity: {userId: agent-kourier-pr-review}
+  chat:
+    connectionRef: {name: github}
+    channel: acme/widgets
+    output: none
+    triggers:
+      - type: webhookEvent
+        limits: {rateLimit: {maxRuns: 20, per: 1h, maxConcurrent: 2}, maxRunsPerDay: 100}
+        promptTemplate: "Review {{ .Channel }} for {{ .Key }}."

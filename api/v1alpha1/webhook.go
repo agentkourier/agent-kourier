@@ -42,7 +42,9 @@ const (
 	// WebhookMissingKeep keeps such an event.
 	WebhookMissingKeep WebhookWhenMissing = "keep"
 
-	WebhookUnitMillis  WebhookTimeUnit = "ms"
+	// WebhookUnitMillis reads a body timestamp as milliseconds since the Unix epoch.
+	WebhookUnitMillis WebhookTimeUnit = "ms"
+	// WebhookUnitSeconds reads a body timestamp as seconds since the Unix epoch.
 	WebhookUnitSeconds WebhookTimeUnit = "s"
 
 	// TriggerWebhookEvent is a trigger on an event of a webhook connection: it matches the connection's named fields. It is the only
@@ -548,6 +550,12 @@ func checkWebhookPromptTemplate(name, text string) error {
 	refs, err := TemplateRefs(tmpl)
 	if err != nil {
 		return err
+	}
+	// An event has a channel and the connection's fields, and none of a message's state, key, link or source.
+	for _, v := range refs.View {
+		if v != "Channel" {
+			return fmt.Errorf("reads .%s, which a webhookEvent trigger does not have: it reads .Channel and .Fields.<name> alone", v)
+		}
 	}
 	extract := make(map[string]Extract, len(refs.Fields))
 	for _, f := range refs.Fields {

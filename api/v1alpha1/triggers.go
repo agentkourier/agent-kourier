@@ -144,8 +144,8 @@ type Trigger struct {
 	// +optional
 	Thread TriggerThread `json:"thread,omitzero"`
 	// PromptTemplate is a Go template over the trigger's view of the message (.Channel,
-	// .State, .Key, .Fields, .Link, .Source). Required for botMessage, personMessage and webhookEvent, whose template reads only
-	// the id fields of its connection. At most 8192 bytes; it has no loops,
+	// .State, .Key, .Fields, .Link, .Source). Required for botMessage, personMessage and webhookEvent, whose template reads
+	// .Channel and the id fields of its connection alone. At most 8192 bytes; it has no loops,
 	// variables or defined templates, and calls only and, eq, ge, gt, index, le, len, lt, ne, not, or and slice.
 	// +kubebuilder:validation:MaxLength=8192
 	PromptTemplate string `json:"promptTemplate,omitempty"`

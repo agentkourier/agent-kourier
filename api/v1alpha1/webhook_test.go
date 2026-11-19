@@ -220,6 +220,15 @@ func TestWebhookEventTriggerValidate(t *testing.T) {
 			at + ".promptTemplate: invalid template: promptTemplate:1:9: range is not allowed: a prompt template has no loops"},
 		{"a template that will not run", set(func(t *Trigger) { t.PromptTemplate = "{{ slice .Fields.number 0 100 }}" }),
 			at + `.promptTemplate: invalid template: template: promptTemplate:1:3: executing "promptTemplate" at <slice .Fields.number 0 100>: error calling slice: index out of range: 100`},
+		{"a template that reads .Channel behind $ ok", set(func(t *Trigger) { t.PromptTemplate = "{{ $.Channel }} {{ index .Fields \"number\" }}" }), ""},
+		{"a template that reads .Key", set(func(t *Trigger) { t.PromptTemplate = "{{ .Channel }} {{ .Key }}" }),
+			at + ".promptTemplate: invalid template: reads .Key, which a webhookEvent trigger does not have: it reads .Channel and .Fields.<name> alone"},
+		{"a template that reads .State", set(func(t *Trigger) { t.PromptTemplate = "{{ .State }}" }),
+			at + ".promptTemplate: invalid template: reads .State, which a webhookEvent trigger does not have: it reads .Channel and .Fields.<name> alone"},
+		{"a template that reads .Link behind $", set(func(t *Trigger) { t.PromptTemplate = "{{ $.Link }}" }),
+			at + ".promptTemplate: invalid template: reads .Link, which a webhookEvent trigger does not have: it reads .Channel and .Fields.<name> alone"},
+		{"a template that reads .Source in an if", set(func(t *Trigger) { t.PromptTemplate = "{{ if .Source }}x{{ end }}" }),
+			at + ".promptTemplate: invalid template: reads .Source, which a webhookEvent trigger does not have: it reads .Channel and .Fields.<name> alone"},
 		{"a template over the cap", set(func(t *Trigger) { t.PromptTemplate = strings.Repeat("a", maxPromptTemplateLen+1) }),
 			at + ".promptTemplate: is 8193 bytes, longer than the 8192 byte limit"},
 		{"a sender", set(func(t *Trigger) { t.From = &BotSource{ID: "B0123456789", Kind: SenderKindBot} }),
@@ -287,7 +296,7 @@ func TestWebhookBindingChannelAndOutput(t *testing.T) {
 func TestTheWebhookPlatform(t *testing.T) {
 	c := load[ChatConnection](t, "webhook/connection.yaml")
 	p := platformOf(t, c.Spec)
-	if p.Name != "webhook" || p.ActorName != "webhook" || p.Replies || !p.Webhook || p.AskUser || p.ToolApprovals || p.Feedback {
+	if p.Name != "webhook" || p.ActorName != "webhook" || p.Replies || !slices.Equal(p.Triggers, []TriggerType{TriggerWebhookEvent}) || p.AskUser || p.ToolApprovals || p.Feedback {
 		t.Errorf("the webhook platform is %+v; want no replies, no buttons, webhookEvent triggers", p)
 	}
 	if !p.Channel.Taken() || p.Sender.Taken() || p.User.Taken() || p.Group.Taken() {
@@ -323,7 +332,8 @@ func TestTheWebhookPlatform(t *testing.T) {
 func TestWebhookPlatformMismatches(t *testing.T) {
 	webhook := platformOf(t, load[ChatConnection](t, "webhook/connection.yaml").Spec)
 	write := "set it to none: on this platform the agent posts with its own tools and Agent Kourier posts nothing (left out, it is live)"
-	onWebhook := "use type webhookEvent: a webhook connection takes no other (a Binding that lists no triggers has [{type: mention}])"
+	onWebhook := "use a type the platform takes: webhookEvent"
+	onSlack := "use a type the platform takes: mention, botMessage or personMessage"
 	noField := "name a field of the connection's spec.webhook.fields"
 	for _, tc := range []struct {
 		name     string
@@ -364,7 +374,7 @@ func TestWebhookPlatformMismatches(t *testing.T) {
 			b.Spec.Interactions.ApproverGroups = []string{"S0123456789"}
 		}, []PlatformMismatch{
 			{Path: "spec.chat.output", Unsupported: true, Problem: `"live" is not supported`, Fix: write},
-			{Path: "spec.chat.triggers[0].type", Unsupported: true, Problem: `"mention" is not supported`, Fix: onWebhook},
+			{Path: "spec.chat.triggers[0].type", Unsupported: true, Problem: `"mention" is not supported`, Fix: onWebhook + " (a Binding that lists no triggers has [{type: mention}])"},
 			{Path: "spec.chat.triggers[1].type", Unsupported: true, Problem: `"botMessage" is not supported`, Fix: onWebhook},
 			{Path: "spec.chat.mentions", Unsupported: true, Problem: "mentions are not supported",
 				Fix: "remove it: Agent Kourier posts nothing on the platform, so it notifies nobody"},
@@ -379,15 +389,16 @@ func TestWebhookPlatformMismatches(t *testing.T) {
 			b.Spec.Chat.Channel = "C0123456789"
 			b.Spec.Chat.Output = OutputLive
 		}, []PlatformMismatch{
-			{Path: "spec.chat.triggers[0].type", Unsupported: true, Problem: `"webhookEvent" is not supported`,
-				Fix: "use it on a connection of the webhook platform alone"},
+			{Path: "spec.chat.triggers[0].type", Unsupported: true, Problem: `"webhookEvent" is not supported`, Fix: onSlack},
+		}},
+		{"a platform that takes no triggers", ChatPlatform{Channel: webhook.Channel}, "webhook/binding.yaml", func(*Binding) {}, []PlatformMismatch{
+			{Path: "spec.chat.triggers[0].type", Unsupported: true, Problem: `"webhookEvent" is not supported`, Fix: "remove it: the platform takes no triggers"},
 		}},
 		{"a webhook Binding on Slack", slack(t), "webhook/binding.yaml", func(*Binding) {}, []PlatformMismatch{
 			{Path: "spec.chat.channel", Problem: `"acme/widgets" is not a channel ID`,
 				Fix: "use the channel's ID, such as C0123456789 (G… for an older private channel), not its name"},
 			{Path: "spec.chat.output", Unsupported: true, Problem: `"none" is not supported`, Fix: "set it to live or final, or leave it out for live"},
-			{Path: "spec.chat.triggers[0].type", Unsupported: true, Problem: `"webhookEvent" is not supported`,
-				Fix: "use it on a connection of the webhook platform alone"},
+			{Path: "spec.chat.triggers[0].type", Unsupported: true, Problem: `"webhookEvent" is not supported`, Fix: onSlack},
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
