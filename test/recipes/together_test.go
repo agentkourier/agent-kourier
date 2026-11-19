@@ -47,21 +47,96 @@ func TestRecipesApplyTogether(t *testing.T) {
 	if len(recipes) == 0 {
 		t.Skipf("no recipes under %s: nothing to apply together", recipesDir)
 	}
-	t.Run("every platform", func(t *testing.T) {
-		if err := checkAcross(t.Context(), recipes); err != nil {
-			t.Error(err)
-		}
-	})
-	byPlatform, err := recipesByPlatform(t.Context(), recipes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, platform := range slices.Sorted(maps.Keys(byPlatform)) {
-		t.Run(platform, func(t *testing.T) {
-			if err := checkTogether(t.Context(), byPlatform[platform]); err != nil {
+	results, err := checkAll(t.Context(), recipes)
+	for _, name := range slices.Sorted(maps.Keys(results)) {
+		t.Run(name, func(t *testing.T) {
+			if err := results[name]; err != nil {
 				t.Error(err)
 			}
 		})
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// everyPlatform is the name, in checkAll's results, of the pass of checkAcross over the recipes of every platform.
+const everyPlatform = "every platform"
+
+// checkAll runs over the recipes at dirs the checks of TestRecipesApplyTogether, and returns the error of each by its
+// name, nil for one that passed: checkAcross over all of them (everyPlatform), then checkTogether over the recipes of
+// each platform (the platform). A failure to group the recipes by platform is its error, with the result of the pass
+// over every platform.
+func checkAll(ctx context.Context, dirs []string) (map[string]error, error) {
+	results := map[string]error{everyPlatform: checkAcross(ctx, dirs)}
+	byPlatform, err := recipesByPlatform(ctx, dirs)
+	if err != nil {
+		return results, err
+	}
+	for platform, group := range byPlatform {
+		results[platform] = checkTogether(ctx, group)
+	}
+	return results, nil
+}
+
+// TestCheckAll runs the checks of TestRecipesApplyTogether on a Slack recipe and a Teams recipe built here that ship
+// one AgentBackend: each platform's recipes apply together, so only the pass over every platform refuses them.
+func TestCheckAll(t *testing.T) {
+	const backend = `apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: { name: agents, namespace: recipe }
+spec: { dialect: a2a, url: "http://agent.recipe:8080" }
+`
+	recipe := func(name, spec, channel string) map[string]string {
+		return map[string]string{
+			"b.yaml": backend,
+			"c.yaml": fmt.Sprintf(`apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: { name: chat, namespace: recipe }
+spec: { %s, credentialsSecretRef: { name: chat } }
+`, spec),
+			"x.yaml": fmt.Sprintf(`apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: { name: %[1]s, namespace: recipe }
+spec:
+  agent: { backendRef: { name: agents }, name: helper, namespace: recipe }
+  identity: { userId: agent-kourier-%[1]s }
+  chat: { connectionRef: { name: chat }, channel: "%[2]s" }
+`, name, channel),
+		}
+	}
+	root := t.TempDir()
+	var dirs []string
+	for name, files := range map[string]map[string]string{
+		"a": recipe("a", "platform: slack", "CAAAAAAAA"),
+		"b": recipe("b", "platform: teams, teams: { tenantID: 11111111-1111-4111-8111-111111111111, appID: 22222222-2222-4222-8222-222222222222 }",
+			"19:recipe-channel@thread.tacv2"),
+	} {
+		dir := filepath.Join(root, name)
+		dirs = append(dirs, dir)
+		if err := os.MkdirAll(filepath.Join(dir, "kourier"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		for file, content := range files {
+			if err := os.WriteFile(filepath.Join(dir, "kourier", file), []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	results, err := checkAll(t.Context(), dirs)
+	if err != nil {
+		t.Fatalf("checkAll: %v", err)
+	}
+	if got, want := slices.Sorted(maps.Keys(results)), []string{everyPlatform, "slack", "teams"}; !slices.Equal(got, want) {
+		t.Fatalf("checkAll ran %q, want %q", got, want)
+	}
+	if err := results[everyPlatform]; err == nil || !strings.Contains(err.Error(), "recipe b: AgentBackend recipe/agents is in recipe a too") {
+		t.Errorf("check %q = %v, want the AgentBackend that both recipes ship refused", everyPlatform, err)
+	}
+	for _, platform := range []string{"slack", "teams"} {
+		if err := results[platform]; err != nil {
+			t.Errorf("check %q = %v, want the recipe of the platform to apply", platform, err)
+		}
 	}
 }
 
