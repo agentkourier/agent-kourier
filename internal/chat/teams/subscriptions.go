@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"net/url"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -226,21 +227,33 @@ func (s *subscriber) reconcile(ctx context.Context, lister chat.ChannelLister) {
 	for _, ch := range bound {
 		want[ch] = true
 	}
+	creates := true
 	if !s.listed {
 		if err := s.adopt(ctx, want); err != nil {
+			// A listing after a 409 has the run's subscriptions known already (ready): those held are still renewed, and only the makes
+			// wait for a listing that succeeds, so that a listing that keeps failing does not let every channel's subscription lapse.
+			relisting := s.ready.Load()
 			if ctx.Err() == nil && !s.listFailing {
-				s.log.WarnContext(ctx, "teams: the app's Microsoft Graph subscriptions could not be listed; nothing is subscribed until they are, "+
-					"and they are listed again at each reconcile", "error", err.Error())
+				what := "nothing is subscribed until they are"
+				if relisting {
+					what = "no subscription is made until they are, and those held are still renewed"
+				}
+				s.log.WarnContext(ctx, "teams: the app's Microsoft Graph subscriptions could not be listed; "+what+
+					", and they are listed again at each reconcile", "error", err.Error())
 			}
 			s.listFailing = ctx.Err() == nil
-			s.setGauges(ctx, 0, 0, len(want))
-			return
+			if !relisting {
+				s.setGauges(ctx, 0, 0, len(want))
+				return
+			}
+			creates = false
+		} else {
+			if s.listFailing {
+				s.listFailing = false
+				s.log.InfoContext(ctx, "teams: the app's Microsoft Graph subscriptions were listed again")
+			}
+			s.listed = true
 		}
-		if s.listFailing {
-			s.listFailing = false
-			s.log.InfoContext(ctx, "teams: the app's Microsoft Graph subscriptions were listed again")
-		}
-		s.listed = true
 	}
 	s.ready.Store(true)
 	s.mu.Lock()
@@ -272,7 +285,7 @@ func (s *subscriber) reconcile(ctx context.Context, lister chat.ChannelLister) {
 		if ctx.Err() != nil {
 			return
 		}
-		s.keep(ctx, ch)
+		s.keep(ctx, ch, creates)
 	}
 	subscribed, waiting, failing := 0, 0, 0
 	for _, ch := range bound {
@@ -289,9 +302,12 @@ func (s *subscriber) reconcile(ctx context.Context, lister chat.ChannelLister) {
 	s.setGauges(ctx, subscribed, waiting, failing)
 }
 
-// keep makes, remakes or renews the subscription of the bound channel ch, as it needs.
-func (s *subscriber) keep(ctx context.Context, ch string) {
+// keep makes, remakes or renews the subscription of the bound channel ch, as it needs; with creates false it only renews one it holds.
+func (s *subscriber) keep(ctx context.Context, ch string, creates bool) {
 	sub, held := s.snapshot(ch)
+	if !creates && (!held || sub.recreate) {
+		return // a remake deletes before it makes: left whole until the subscriptions are listed again
+	}
 	if held && sub.recreate {
 		if err := s.remove(ctx, sub.id); err != nil {
 			s.failed(ctx, ch, "deleted to be made anew", err)
@@ -503,10 +519,20 @@ func (s *subscriber) adopt(ctx context.Context, want map[string]bool) error {
 			s.log.WarnContext(ctx, "teams: a bound channel cannot be subscribed to: the app has a Microsoft Graph subscription to its messages "+
 				"for another notification URL, and Graph lets an app have one. Delete that subscription, or wait for it to expire; the "+
 				"channel is tried again every "+s.conflictRetry.String()+" until then", "channel", ch,
-				"otherNotificationURL", other.NotificationURL, "otherExpires", other.ExpirationDateTime)
+				"otherNotificationURL", urlForLog(other.NotificationURL), "otherExpires", other.ExpirationDateTime)
 		}
 	}
 	return nil
+}
+
+// urlForLog is link's scheme, host and path, for a log line: a URL that another tool of the app subscribed with may carry a credential
+// in its query or its user information, and the broker logs none of that.
+func urlForLog(link string) string {
+	u, err := url.Parse(link)
+	if err != nil {
+		return "(not a URL)"
+	}
+	return quote((&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}).String())
 }
 
 // subscriptionChangeTypes are the change types of a subscription: an edit is notified too, and dropped (push.go), so that one listing

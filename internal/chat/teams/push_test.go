@@ -1148,14 +1148,15 @@ func TestGraphListingAfterAConflictKeepsTheHeldSubscriptions(t *testing.T) {
 
 // A bound channel whose resource the app has a subscription to on another URL (a changed notificationURL, or another broker of the
 // app) is not a loop of creates that Graph refuses: the listing that shows it holds the channel back, failing, told once at WARN with
-// the fix and the other subscription's expiry (and never a clientState), until subscriptionConflictRetry has passed; a 409 then lists
+// the fix, the other subscription's URL without its query and its expiry (and never a clientState), until subscriptionConflictRetry has passed; a 409 then lists
 // again at the next reconcile, and not at once. Once the other subscription is gone the channel is subscribed.
 func TestGraphConflictWithAnotherURLIsNotALoop(t *testing.T) {
 	pt := newPushTest(t, false)
 	clock := &fakeClock{t: time.Now()}
 	pt.c.push.subs.now = clock.now
 	pt.c.push.subs.every = time.Hour // only the test's pokes reconcile
-	other := "https://another.example.test/chat/teams/ns/other"
+	const otherPath = "https://another.example.test/chat/teams/ns/other"
+	other := "https://tool:fake-userinfo-secret@another.example.test/chat/teams/ns/other?token=fake-query-token"
 	otherExpires := time.Now().Add(20 * time.Hour)
 	pt.f.putSub("sub-other", testChannel, other, other, otherExpires)
 	pt.record(t, testChannel, testChannel)
@@ -1163,12 +1164,7 @@ func TestGraphConflictWithAnotherURLIsNotALoop(t *testing.T) {
 	subs := pt.c.push.subs
 	pt.run(t)
 	testutil.Eventually(t, "the first reconcile", func() bool { return subs.rounds.Load() >= 1 })
-	round := func() {
-		t.Helper()
-		n := subs.rounds.Load()
-		subs.poke()
-		testutil.Eventually(t, "a reconcile", func() bool { return subs.rounds.Load() >= n+1 })
-	}
+	round := func() { t.Helper(); pt.reconcileNow(t) }
 	quiet := func(what string, want ...string) {
 		t.Helper()
 		n := subs.rounds.Load()
@@ -1206,10 +1202,13 @@ func TestGraphConflictWithAnotherURLIsNotALoop(t *testing.T) {
 	if n := strings.Count(logs, "level=WARN msg=\"teams: a bound channel's Microsoft Graph subscription could not be made"); n != 0 {
 		t.Errorf("the 409 was written at WARN %d times; want only the WARN with the fix", n)
 	}
-	for _, s := range []string{pt.state, "from-another-run"} {
+	for _, s := range []string{pt.state, "from-another-run", "fake-userinfo-secret", "fake-query-token"} {
 		if strings.Contains(logs, s) {
-			t.Errorf("the logs hold a clientState %q", s)
+			t.Errorf("the logs hold %q, a clientState or a credential of the other URL", s)
 		}
+	}
+	if !strings.Contains(logs, "otherNotificationURL="+otherPath+" ") {
+		t.Errorf("the WARN does not name the other URL's scheme, host and path %q:\n%s", otherPath, logs)
 	}
 
 	pt.f.mu.Lock()
@@ -1347,5 +1346,87 @@ func TestGraphForbiddenNamesThePermissionOnlyForAChannel(t *testing.T) {
 		if got := strings.Contains(err.Error(), "ChannelMessage.Read.Group"); got != tc.fix {
 			t.Errorf("%s: err = %q; names the permission's fix: %v, want %v", tc.operation, err, got, tc.fix)
 		}
+	}
+}
+
+// reconcileNow asks the subscriber of a run whose reconcile period is long for one reconcile, and waits until it has ended.
+func (pt *pushTest) reconcileNow(t *testing.T) {
+	t.Helper()
+	subs := pt.c.push.subs
+	n := subs.rounds.Load()
+	subs.poke()
+	testutil.Eventually(t, "a reconcile", func() bool { return subs.rounds.Load() >= n+1 })
+}
+
+// A channel that the app's subscription for another URL holds is tried again when that subscription expires, if it expires before
+// subscriptionConflictRetry has passed.
+func TestGraphConflictWithAnotherURLIsTriedAgainAtItsExpiry(t *testing.T) {
+	pt := newPushTest(t, false)
+	clock := &fakeClock{t: time.Now()}
+	pt.c.push.subs.now = clock.now
+	pt.c.push.subs.every = time.Hour // only the test's pokes reconcile
+	other := "https://another.example.test/chat/teams/ns/other"
+	soon := subscriptionConflictRetry / 4
+	pt.f.putSub("sub-other", testChannel, other, other, clock.now().Add(soon))
+	pt.record(t, testChannel, testChannel)
+	pt.sink.bind(testChannel)
+	pt.run(t)
+	testutil.Eventually(t, "the first reconcile", func() bool { return pt.c.push.subs.rounds.Load() >= 1 })
+	pt.f.subCalls()
+	clock.advance(soon - time.Second)
+	pt.reconcileNow(t)
+	if calls := pt.f.subCalls(); len(calls) != 0 {
+		t.Errorf("calls before the other subscription expires = %v; want none", calls)
+	}
+	pt.f.mu.Lock()
+	delete(pt.f.graph.subs.byID, "sub-other") // Graph drops it at its expiry
+	pt.f.mu.Unlock()
+	clock.advance(2 * time.Second)
+	pt.reconcileNow(t)
+	if pt.subOf(testChannel) == "" {
+		t.Errorf("the channel is not subscribed once the other subscription expired, %v before subscriptionConflictRetry", subscriptionConflictRetry-soon)
+	}
+}
+
+// A listing after a 409 that keeps failing does not stop the renews: the subscriptions the run holds are still renewed in their window,
+// and only the make of the channel that conflicted waits for a listing that succeeds.
+func TestGraphHeldSubscriptionsAreRenewedWhileAListingAfterAConflictFails(t *testing.T) {
+	pt := newPushTest(t, false)
+	clock := &fakeClock{t: time.Now()}
+	pt.c.push.subs.now = clock.now
+	pt.f.setGraph(func(g *fakeGraph) { g.subs.expiresIn = time.Hour }) // renewed once half of it has passed
+	pt.subscribed(t, testChannel)
+	held := pt.subOf(testChannel)
+	pt.f.setGraph(func(g *fakeGraph) {
+		g.fail = func(r *http.Request) (int, string, bool) {
+			return http.StatusForbidden, `{"error":{"code":"Forbidden"}}`, r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/subscriptions")
+		}
+	})
+	other := "https://another.example.test/chat/teams/ns/other"
+	pt.f.putSub("sub-other", testGraphChannel, other, other, time.Now().Add(20*time.Hour)) // the 409 of the second channel's make
+	pt.record(t, testGraphChannel, testChannel)
+	pt.sink.bind(testChannel, testGraphChannel)
+	testutil.Eventually(t, "the listing after the 409 failing", func() bool {
+		return pt.obs.series(t, "agentkourier_chat_api_calls_total", "ListSubscriptions", "api_error") >= 2
+	})
+	clock.advance(31 * time.Minute)
+	testutil.Eventually(t, "the held subscription renewed", func() bool { return countOf(pt.f.subCalls(), "/subscriptions/"+held) > 0 })
+	pt.settle(t)
+	if s, _ := pt.c.push.subs.snapshot(testChannel); s.id != held {
+		t.Errorf("the held subscription is %q; want %q, kept", s.id, held)
+	}
+	pt.f.mu.Lock()
+	makes := 0
+	for _, b := range pt.f.graph.subs.bodies {
+		if strings.Contains(str(b["resource"]), testGraphChannel) {
+			makes++
+		}
+	}
+	pt.f.mu.Unlock()
+	if makes != 1 {
+		t.Errorf("makes of the conflicting channel = %d; want the one refused with 409, and none while the listing fails", makes)
+	}
+	if n := strings.Count(pt.logs.String(), "those held are still renewed"); n != 1 {
+		t.Errorf("the WARN of the failing listing was written %d times; want once", n)
 	}
 }

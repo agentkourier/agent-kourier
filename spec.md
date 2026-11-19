@@ -652,9 +652,10 @@ Rules:
   with the Bindings every minute. A channel whose `aadGroupId` the store does not hold waits, logged once at WARN with the fix and
   counted. At the start of each run, with nothing bound too, the app's subscriptions are listed: those to the connection's URL with its lifecycle URL, change
   types, a bound channel and a future expiry are adopted (one per channel), the rest to that URL deleted, and those to other URLs left;
-  a 409 on a create lists again at the next reconcile (not at once), keeping what the run holds. Graph lets an app have one subscription
+  a 409 on a create lists again at the next reconcile (not at once), keeping what the run holds; while that listing fails, the held
+  subscriptions are still renewed and only creates wait. Graph lets an app have one subscription
   per resource, so one to another URL (a changed `notificationURL`, another broker of the app) blocks a bound channel: failing, one WARN
-  with its URL and expiry and the fix, tried again after 10 min or at its expiry; no alerts of that channel until it expires (up to
+  with its URL (scheme, host, path) and expiry and the fix, tried again after 10 min or at its expiry; no alerts of that channel until it expires (up to
   24 h) or is deleted. The `clientState` is HKDF-SHA256 of the client secret under `agent-kourier/teams/graph-client-state/v1`
   and the connection, the same on every replica and across a failover (a listing gives it back as null, so it cannot be read again),
   compared in constant time; a mismatch is dropped, counted, and remakes the subscription it names (a secret's rotation). Each `created`
