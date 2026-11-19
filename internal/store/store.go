@@ -64,6 +64,7 @@ type Store interface {
 	Attribution
 	ConnectionServing
 	TeamsConversations
+	TeamsPollPositions
 	TriggerThreads
 	TriggerRuns
 	ReplyQueue

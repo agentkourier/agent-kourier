@@ -37,6 +37,7 @@ var (
 	okSession     = store.Session{Key: key, Binding: "ns/b", LastActivity: t0}
 	okInteraction = store.Interaction{ID: "i1", Key: key, TaskID: "t1", Kind: store.InteractionAskUser, CreatedAt: t0, Deadline: t0.Add(time.Hour)}
 	okTeams       = store.TeamsConversation{Connection: "ns/teams", Channel: "19:c@thread.tacv2", ServiceURL: "https://smba.example.test/", UpdatedAt: t0}
+	okPoll        = store.TeamsPollPosition{Connection: "ns/teams", Channel: "19:c@thread.tacv2", DeltaLink: "https://graph.example.test/delta", PolledAt: t0}
 	okPress       = store.Press{InteractionID: "i1", User: "U1", Channel: "C1", MessageRef: "1.2", PressedAt: t0}
 	okReply       = store.Reply{ID: "r1", Key: key, UserID: "U1", MessageRef: "1.2", EnqueuedAt: t0}
 	okRun         = store.TriggerRun{Binding: "ns/b", Trigger: 0, Key: key, At: t0}
@@ -246,6 +247,25 @@ func getTeamsConversation(connection, channel string) call {
 	return func(ctx context.Context, s store.Store) error {
 		_, err := s.GetTeamsConversation(ctx, connection, channel)
 		return err
+	}
+}
+
+func saveTeamsPollPosition(f func(*store.TeamsPollPosition)) call {
+	return func(ctx context.Context, s store.Store) error {
+		return s.SaveTeamsPollPosition(ctx, mut(okPoll, f))
+	}
+}
+
+func getTeamsPollPosition(connection, channel string) call {
+	return func(ctx context.Context, s store.Store) error {
+		_, err := s.GetTeamsPollPosition(ctx, connection, channel)
+		return err
+	}
+}
+
+func deleteTeamsPollPosition(connection, channel string) call {
+	return func(ctx context.Context, s store.Store) error {
+		return s.DeleteTeamsPollPosition(ctx, connection, channel)
 	}
 }
 
@@ -594,6 +614,24 @@ func specs() []spec {
 		{"DeleteTeamsConversations", func(ctx context.Context, s store.Store) error { return s.DeleteTeamsConversations(ctx, "ns/teams") }, map[string]call{
 			"no connection": func(ctx context.Context, s store.Store) error { return s.DeleteTeamsConversations(ctx, "") },
 		}},
+		{"SaveTeamsPollPosition", saveTeamsPollPosition(nil), map[string]call{
+			"no Connection":     saveTeamsPollPosition(func(p *store.TeamsPollPosition) { p.Connection = "" }),
+			"no Channel":        saveTeamsPollPosition(func(p *store.TeamsPollPosition) { p.Channel = "" }),
+			"no DeltaLink":      saveTeamsPollPosition(func(p *store.TeamsPollPosition) { p.DeltaLink = "" }),
+			"no PolledAt":       saveTeamsPollPosition(func(p *store.TeamsPollPosition) { p.PolledAt = time.Time{} }),
+			"PolledAt at epoch": saveTeamsPollPosition(func(p *store.TeamsPollPosition) { p.PolledAt = epoc }),
+		}},
+		{"GetTeamsPollPosition", getTeamsPollPosition("ns/teams", "19:c@thread.tacv2"), map[string]call{
+			"no connection": getTeamsPollPosition("", "19:c@thread.tacv2"),
+			"no channel":    getTeamsPollPosition("ns/teams", ""),
+		}},
+		{"DeleteTeamsPollPosition", deleteTeamsPollPosition("ns/teams", "19:c@thread.tacv2"), map[string]call{
+			"no connection": deleteTeamsPollPosition("", "19:c@thread.tacv2"),
+			"no channel":    deleteTeamsPollPosition("ns/teams", ""),
+		}},
+		{"DeleteTeamsPollPositions", func(ctx context.Context, s store.Store) error { return s.DeleteTeamsPollPositions(ctx, "ns/teams") }, map[string]call{
+			"no connection": func(ctx context.Context, s store.Store) error { return s.DeleteTeamsPollPositions(ctx, "") },
+		}},
 		{"AttributeConnection", attributeConnection("slack"), map[string]call{"no connection": attributeConnection("")}},
 		{"UnattributedRows", func(ctx context.Context, s store.Store) error { _, err := s.UnattributedRows(ctx); return err }, nil},
 		{"PendingPresses", pendingPresses("i1", t0), map[string]call{
@@ -746,7 +784,10 @@ func specs() []spec {
 
 // timeCalls are the calls that check a time with validTime, each with the time put in the argument that is checked.
 var timeCalls = map[string]func(time.Time) call{
-	"AbandonOutbox":       abandonOutbox,
+	"AbandonOutbox": abandonOutbox,
+	"SaveTeamsPollPosition": func(at time.Time) call {
+		return saveTeamsPollPosition(func(p *store.TeamsPollPosition) { p.PolledAt = at })
+	},
 	"AdmitTriggerRun":     func(at time.Time) call { return admitTriggerRun(func(r *store.TriggerRun) { r.At = at }, okRunLimits) },
 	"ListTriggerDigests":  listTriggerDigests,
 	"MarkTriggerDigested": func(at time.Time) call { return markTriggerDigested("ns/b", 0, at) },

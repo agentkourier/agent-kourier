@@ -70,6 +70,28 @@ func (f *fakeAdapter) DeleteTeamsConversations(_ context.Context, a1 string) err
 	return f.err
 }
 
+func (f *fakeAdapter) SaveTeamsPollPosition(_ context.Context, a1 store.TeamsPollPosition) error {
+	f.record("SaveTeamsPollPosition")
+	f.row = a1
+	return f.err
+}
+
+func (f *fakeAdapter) GetTeamsPollPosition(_ context.Context, _, _ string) (store.TeamsPollPosition, error) {
+	f.record("GetTeamsPollPosition")
+	return zero[store.TeamsPollPosition](), f.err
+}
+
+func (f *fakeAdapter) DeleteTeamsPollPosition(_ context.Context, _, _ string) error {
+	f.record("DeleteTeamsPollPosition")
+	return f.err
+}
+
+func (f *fakeAdapter) DeleteTeamsPollPositions(_ context.Context, a1 string) error {
+	f.record("DeleteTeamsPollPositions")
+	f.row = a1
+	return f.err
+}
+
 func (f *fakeAdapter) AttributeConnection(_ context.Context, _ string) (store.AttributedRows, error) {
 	f.record("AttributeConnection")
 	return zero[store.AttributedRows](), f.err
