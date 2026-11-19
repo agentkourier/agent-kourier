@@ -133,7 +133,7 @@ Either way Agent Kourier calls Slack's Web API with the bot token to post, so it
         on one installation reached through a tunnel: the URL check, a mention, a button press, a bot message that a trigger
         matched, requests with a wrong, missing or old signature (answered 401), and a message sent while the only replica was being replaced.
         What this tab says of Slack's settings pages comes from that test. Slack's retry schedule, and when Slack gives up on an
-        app, come from Slack's documentation. It needs a release later than 0.4.0: the 0.4.0 chart's values schema refuses
+        app, come from Slack's documentation. It needs 0.5.0 or later: the 0.4.0 chart's values schema refuses
         `chatListener` and `networkPolicy.chatFrom`, and its broker does not know `spec.slack.mode`.
 
     In HTTP mode Slack sends the app's events and button presses to Agent Kourier as HTTPS requests, and Agent Kourier

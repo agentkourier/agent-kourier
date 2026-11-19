@@ -80,7 +80,7 @@ On a ConfigMap, the files of several recipes go in one directory under names tha
 
 Every recipe connects to Slack over Socket Mode, where Agent Kourier opens a WebSocket to Slack. Any of them can use
 Slack's Events API instead, where Slack sends the app's events and button presses to Agent Kourier as signed HTTPS
-requests. HTTP mode is experimental and needs a release later than 0.4.0: the 0.4.0 chart's values schema refuses
+requests. HTTP mode is experimental and needs 0.5.0 or later: the 0.4.0 chart's values schema refuses
 `chatListener`, and its broker does not know `spec.slack.mode`. The Bindings, the agents and the checks stay as they are;
 four things change, and
 [Configure Slack](../../docs/how-to/configure-slack.md), on its **Events API (HTTP)** tab, has each step in full:
