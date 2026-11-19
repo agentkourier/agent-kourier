@@ -45,8 +45,9 @@ Microsoft's global route, `https://smba.trafficmanager.net/teams/`.
 
 A message on Microsoft Teams shows the agent's reply in Teams' markdown, with what the agent, a person or an alert wrote shown as
 text: no `<at>` in it becomes a mention, and no HTML or markdown link in it is acted on (a bare URL still links). A mention that Agent Kourier makes in a message names a person by
-their Microsoft Entra object ID and shows as `@someone`; only the card that ends a question or an approval names its decider
-([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). There are no live
+their Microsoft Entra object ID and shows the person's name, which the broker reads from the members of the channel's team as it
+does for the decider that ends a question or an approval ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)); a name it
+cannot read shows as `@someone`. There are no live
 progress streams, ephemeral messages or reactions. Questions, tool approvals and the useful and not-useful buttons are Adaptive
 Cards, which a person presses ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)).
 
@@ -140,7 +141,8 @@ into a thread that was already open, an edit that posts or edits the card, a rat
 desktop clients.
 
 The ending names who decided with a mention, which Teams styles and which notifies the person. Teams shows the text that Agent
-Kourier writes in the mention, not the person's name, so when it edits the card the broker reads the name from the Bot Connector's
+Kourier writes in the mention, not the person's name, so when it edits the card, and when it posts or edits a message that mentions
+a person, the broker reads the name from the Bot Connector's
 list of the members of the channel's team, or uses the name it read of the person in the last hour, and writes it there: the ending
 reads, for example, `Alex Example answered.` It writes only the name's letters, marks, digits, `.`, `-` and `'`, and at most 64 units
 of it ([Limits](limits.md)). A name that cannot be read, because the list cannot be read or no longer lists the person, is written

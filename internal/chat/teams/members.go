@@ -212,10 +212,38 @@ func (c *Client) knownTeams() []Conversation {
 	return out
 }
 
-// deciderName is the name of the person aad, who decided a prompt in channel, for the mention of the prompt's ending: the kept
-// account's, or the one in the channel's roster, read within rosterTimeout and rosterMaxPages; "" when it cannot be had, which the ending shows as
-// someone, keeping the mention. A failed read is logged, and does not fail the edit.
-func (c *Client) deciderName(ctx context.Context, channel, aad string) string {
+// mentionNames are the names of the people that o mentions, by Microsoft Entra object ID (personName): the decider of an ending, and the
+// person of each mention of a message (chat.Mention), each looked up once. A person whose name cannot be had is left out, which the
+// mention shows as someone. A user of another shape is no mention, and is not looked up.
+func (c *Client) mentionNames(ctx context.Context, channel string, o chat.Outgoing) map[string]string {
+	var people []string
+	switch {
+	case o.Ending != nil:
+		people = append(people, o.Ending.By)
+	case o.Message != nil:
+		for _, p := range o.Message.Parts {
+			if m, ok := p.(chat.Mention); ok {
+				people = append(people, m.User)
+			}
+		}
+	}
+	var names map[string]string
+	for _, aad := range people {
+		if _, done := names[aad]; done || !entraID.MatchString(aad) {
+			continue
+		}
+		if names == nil {
+			names = map[string]string{}
+		}
+		names[aad] = c.personName(ctx, channel, aad)
+	}
+	return names
+}
+
+// personName is the name of the person aad, whom a message in channel mentions (the decider of a prompt's ending, or a chat.Mention): the
+// kept account's, or the one in the channel's roster, read within rosterTimeout and rosterMaxPages; "" when it cannot be had, which the
+// mention shows as someone, keeping it. A failed read is logged, and does not fail the post or the edit.
+func (c *Client) personName(ctx context.Context, channel, aad string) string {
 	if a, ok := c.names.get(aad); ok {
 		return a.Name
 	}
@@ -228,11 +256,11 @@ func (c *Client) deciderName(ctx context.Context, channel, aad string) string {
 	a, found, err := c.findIn(rctx, &pages, c.serviceURL(ctx, channel), channel, aad)
 	switch {
 	case err != nil:
-		c.log.WarnContext(ctx, "teams: the name of who decided a prompt could not be read; its ending names them as someone",
+		c.log.WarnContext(ctx, "teams: the name of a person a message mentions could not be read; the mention names them as someone",
 			"error", err.Error())
 		return ""
 	case !found:
-		c.log.DebugContext(ctx, "teams: the channel's roster does not list who decided a prompt; its ending names them as someone")
+		c.log.DebugContext(ctx, "teams: the channel's roster does not list a person a message mentions; the mention names them as someone")
 		return ""
 	}
 	return a.Name

@@ -285,7 +285,7 @@ func (b *cardBuilder) toolPrompt(p chat.Prompt) (map[string]any, error) {
 // words, as text, for any other; and alone, the line to say when no one is named. The mention works in a card (styled, and the person
 // notified, on a test tenant, web client, channel thread, November 2026), and Teams shows the entity's own text and puts in no name, so
 // the tag and the entity hold the decider's name (b.decider, cleaned by mentionName), or mentionLabel with none. The name is read by
-// Update from the roster (deciderName): the invoke's from.name is not carried, since the press reaches the ending as chat.Interaction
+// Update from the roster (mentionNames): the invoke's from.name is not carried, since the press reaches the ending as chat.Interaction
 // and the interaction's Decider, which hold the user's ID alone. That the tag shows a name as written was not measured.
 func (b *cardBuilder) who(by, words, alone string) {
 	switch {

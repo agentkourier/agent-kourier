@@ -84,13 +84,14 @@ type outMessage struct {
 // of their own; a message of buttons and no text as their card alone; a prompt, and the ending that replaces it, as a card alone
 // (card.go). Its error wraps chat.ErrInvalid for an Outgoing that is not valid and one that shows nothing (errEmpty); and
 // chat.ErrTooLarge for a message over the budget even with its Body cut to minBodyUnits, a card of buttons over it, a prompt over it,
-// or one with a tool that would be shown cut. An ending is never too large: its texts are cut until it fits. Its decider is shown as
-// someone (renderWith).
-func render(o chat.Outgoing) (outMessage, error) { return renderWith(o, "") }
+// or one with a tool that would be shown cut. An ending is never too large: its texts are cut until it fits. Its decider, and each
+// person a message mentions, is shown as someone (renderWith).
+func render(o chat.Outgoing) (outMessage, error) { return renderWith(o, nil) }
 
-// renderWith is render with an ending's decider, a Microsoft Entra object ID, mentioned by the name decider, cleaned (mentionName):
-// someone when it is "", or nothing is left of it.
-func renderWith(o chat.Outgoing, decider string) (outMessage, error) {
+// renderWith is render with names, the names of people by Microsoft Entra object ID: an ending's decider, and each person a message's
+// mention (chat.Mention) names, is mentioned by the name names gives, cleaned (mentionName), and as someone when it gives none, or
+// nothing is left of it.
+func renderWith(o chat.Outgoing, names map[string]string) (outMessage, error) {
 	if err := o.Validate(); err != nil {
 		return outMessage{}, err
 	}
@@ -100,21 +101,22 @@ func renderWith(o chat.Outgoing, decider string) (outMessage, error) {
 	case o.Prompt != nil:
 		a, err = renderPrompt(*o.Prompt)
 	case o.Ending != nil:
-		a, err = renderEnding(*o.Ending, decider)
+		a, err = renderEnding(*o.Ending, names[o.Ending.By])
 	default:
-		return renderMessage(*o.Message)
+		return renderMessage(*o.Message, names)
 	}
 	return outMessage{activity: a}, err
 }
 
 // renderMessage is m as text, cut further when it is over the budget, with its buttons to go under it as a card of their own; or, for
 // a message of buttons that has no text, their card alone, which a press names by its own ID. The card is sized as it names a text of
-// the longest ID (maxActivityID), with a MAC on each button, and no cut of the text makes it smaller.
-func renderMessage(m chat.Message) (outMessage, error) {
+// the longest ID (maxActivityID), with a MAC on each button, and no cut of the text makes it smaller. A mention names its person by names
+// (renderWith).
+func renderMessage(m chat.Message, names map[string]string) (outMessage, error) {
 	buttons := buttonsOf(m)
 	for body := maxBodyUnits; ; body /= 2 {
 		var r renderer
-		r.caps, r.body = capabilities(), max(body, minBodyUnits)
+		r.caps, r.body, r.names = capabilities(), max(body, minBodyUnits), names
 		r.message(m)
 		a := r.activity()
 		switch {
@@ -238,6 +240,7 @@ type renderer struct {
 	paras    []string
 	entities []mentionEntity
 	fallback string
+	names    map[string]string // the names of the people that mentions name, by Microsoft Entra object ID
 }
 
 func (r *renderer) activity() outActivity {
@@ -288,15 +291,17 @@ func (r *renderer) textOf(w chat.Where, s string) string {
 }
 
 // mentionLine adds a line that names user and then says the literal words, cut so that the line is within the limit of w. A user
-// that is a Microsoft Entra object ID is a mention, "<at>someone</at>" with its entity; any other is the word "someone", as text.
+// that is a Microsoft Entra object ID is a mention, "<at>name</at>" with its entity, its name the one r.names gives, cleaned
+// (mentionName), or someone; any other is the word "someone", as text.
 func (r *renderer) mentionLine(w chat.Where, user, words string) {
 	if !entraID.MatchString(user) {
 		r.line(w, mentionLabel+" ", words)
 		return
 	}
-	tag := "<at>" + mentionLabel + "</at>"
-	r.entities = append(r.entities, mentionEntity{Type: "mention", Text: tag, Mentioned: mentioned{ID: user, Name: mentionLabel}})
-	room := max(r.caps.Limit(w)-chat.Units(mentionLabel+" "), 0)
+	name := cmp.Or(mentionName(r.names[user]), mentionLabel)
+	tag := "<at>" + name + "</at>"
+	r.entities = append(r.entities, mentionEntity{Type: "mention", Text: tag, Mentioned: mentioned{ID: user, Name: name}})
+	room := max(r.caps.Limit(w)-chat.Units(name+" "), 0)
 	r.add(strings.TrimSpace(tag + " " + escapeLine(chat.Truncate(chat.Clean(words, true), room))))
 }
 

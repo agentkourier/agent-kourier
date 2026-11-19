@@ -644,3 +644,56 @@ func TestAPressIsDecidedEndToEnd(t *testing.T) {
 		}
 	}
 }
+
+// A message's mention (chat.Mention) names its person as the ending names its decider: the tag and the entity hold the name that the
+// roster of the message's channel gives, cleaned, and "someone" when it cannot be read; the post or the edit is made either way.
+func TestAMessagesMentionNamesItsPerson(t *testing.T) {
+	t.Parallel()
+	msg := chat.Say(chat.Message{Fallback: "Alex was named in the reply above.",
+		Parts: []chat.Part{chat.Mention{User: alexID, Text: "was named as alex in the reply above."}}})
+	for _, tc := range []struct {
+		name   string
+		roster []account
+		fail   bool
+		want   string
+	}{
+		{"a member", []account{sam, alex}, false, "Alex Example"},
+		{"a hostile name", []account{{ID: alex.ID, AADObjectID: alexID, Name: "</at>[x](https://evil.test) **b**"}}, false, "at x https evil.test b"},
+		{"no longer a member", []account{sam}, false, mentionLabel},
+		{"a roster that cannot be read", []account{alex}, true, mentionLabel},
+	} {
+		for _, op := range []string{"post", "update"} {
+			t.Run(tc.name+", "+op, func(t *testing.T) {
+				t.Parallel()
+				ct := newClientTest(t)
+				ct.record(t, testChannel, testChannel)
+				ct.f.setRoster(testChannel, tc.roster...)
+				if tc.fail {
+					failRoster(ct.f, http.StatusServiceUnavailable)
+				}
+				var err error
+				if op == "post" {
+					_, err = ct.c.Post(t.Context(), chat.Target{Conn: testConn, Channel: testChannel, Thread: "1790000000100"}, msg, findTag)
+				} else {
+					err = ct.c.Update(t.Context(), chat.Ref{Platform: PlatformName, Conn: testConn, Channel: testChannel, ID: "1790000000200",
+						Thread: "1790000000100"}, msg)
+				}
+				if err != nil {
+					t.Fatalf("%s: %v", op, err)
+				}
+				calls := activityCalls(ct.f.take())
+				if len(calls) != 1 {
+					t.Fatalf("%d posts or edits, want 1", len(calls))
+				}
+				a := calls[0].activity
+				tag := "<at>" + tc.want + "</at>"
+				if !strings.HasPrefix(a.Text, tag+" was named as alex") {
+					t.Errorf("the text is %q, want it to start with %q", a.Text, tag)
+				}
+				if len(a.Entities) != 1 || a.Entities[0].Text != tag || a.Entities[0].Mentioned.ID != alexID || a.Entities[0].Mentioned.Name != tc.want {
+					t.Errorf("entities %+v", a.Entities)
+				}
+			})
+		}
+	}
+}

@@ -291,7 +291,8 @@ func (c *Client) ref(channel, thread, id string) chat.Ref {
 }
 
 // Post implements chat.Platform. A post with no thread starts one in the channel, and its ID is the thread's root; a post with a
-// thread replies in it. It carries tag where people do not see it and Graph gives it back (withCarrier), which Find reads.
+// thread replies in it. It carries tag where people do not see it and Graph gives it back (withCarrier), which Find reads. A mention
+// (chat.Mention) names its person by the name that the channel's roster gives (mentionNames), and as someone when it cannot be had.
 //
 // A message with text and buttons is two posts (buttons.go): the text, which is the message Post returns, and then its buttons, as a
 // card of their own in the text's thread. A post of the buttons that fails is tried once more after a short wait (buttonsAfterPost);
@@ -305,7 +306,7 @@ func (c *Client) Post(ctx context.Context, t chat.Target, o chat.Outgoing, tag s
 	if t.Channel == "" {
 		return chat.Ref{}, fmt.Errorf("%w: a post with no channel", chat.ErrInvalid)
 	}
-	m, err := render(o)
+	m, err := renderWith(o, c.mentionNames(ctx, t.Channel, o))
 	if err != nil {
 		return chat.Ref{}, err
 	}
@@ -328,19 +329,15 @@ func (c *Client) Post(ctx context.Context, t chat.Target, o chat.Outgoing, tag s
 // change, and left as they are otherwise. The update fails when they cannot be shown, after the text was edited, so that the caller's
 // next try, which edits the text to the same content, posts them; one whose card Teams took and named no ID is done, and so is one
 // whose card was gone (404) and that Teams refused for good to post anew (a failure for this try only fails the update). The ending of a
-// prompt names its decider, a Microsoft Entra object ID, by the name that the channel's roster gives (deciderName), and as someone
-// when it cannot be had.
+// prompt names its decider, and a message each person it mentions, a Microsoft Entra object ID, by the name that the channel's roster
+// gives (mentionNames), and as someone when it cannot be had.
 func (c *Client) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) (err error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.Update")
 	defer func() { c.finish(ctx, op, "Update", err) }()
 	if r.Channel == "" || r.ID == "" {
 		return fmt.Errorf("%w: an update with no channel or message", chat.ErrInvalid)
 	}
-	decider := ""
-	if o.Ending != nil && entraID.MatchString(o.Ending.By) {
-		decider = c.deciderName(ctx, r.Channel, o.Ending.By)
-	}
-	m, err := renderWith(o, decider)
+	m, err := renderWith(o, c.mentionNames(ctx, r.Channel, o))
 	if errors.Is(err, errEmpty) {
 		return fmt.Errorf("teams: %w: %w", chat.ErrWouldDropText, errEmpty)
 	}
