@@ -38,6 +38,9 @@ Microsoft Teams ChatConnections](how-to/upgrade.md#upgrade-to-the-release-that-t
   series at 0 from when the connection's run starts; `agentkourier_webhook_ack_duration_seconds`, how long each request took to answer,
   by `outcome` and `connection`; and `agentkourier_webhook_last_accepted_timestamp_seconds`, the time of the connection's last delivery
   answered `accepted`, for a rule that finds a service that stopped sending. Each verified delivery is logged at INFO, `webhook: delivery answered`.
+- **A span for each webhook request**, `agentkourier.webhook.request`, with the connection, the outcome and reason, and, once verified,
+  the event's ID and the delivery ID. The intake's span is its child and the turn it starts is in its trace, and the delivery's log
+  lines carry its `trace_id`, so a delivery is found by its delivery ID in the trace backend.
 - **`agentkourier_chat_listener_requests_total` has two new labels**: `platform` (`slack`, `teams`, `webhook` or `other`) and `connection` (the
   ChatConnection the path names, while the leader serves it, else `unknown`). A rule that sums the counter reads as before.
 - **Four recipes**: `webhook-github`, `webhook-jira`, `webhook-bitbucket` and `webhook-linear`, each a ChatConnection, a Binding and an
