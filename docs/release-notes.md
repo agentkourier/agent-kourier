@@ -9,7 +9,8 @@ A ChatConnection can take signed JSON webhooks from another service, such as Git
 sessions of an agent from them: `spec.platform: webhook`, on the chat listener. The webhook platform is experimental. Agent Kourier posts
 nothing on such a connection; the agent answers on the service with its own tools. [Start agents from webhooks](how-to/receive-webhooks.md)
 has the setup, and a page for each of the four services. [Upgrade to the release that takes webhooks](how-to/upgrade.md#upgrade-to-the-release-that-takes-webhooks)
-has the upgrade, and how to roll it back.
+has the upgrade, and how to roll it back. The release also takes Microsoft Teams ChatConnections: [Upgrade to the release that takes
+Microsoft Teams ChatConnections](how-to/upgrade.md#upgrade-to-the-release-that-takes-microsoft-teams-chatconnections) has its upgrade.
 
 ### Breaking changes
 

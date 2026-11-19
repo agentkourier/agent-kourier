@@ -81,7 +81,7 @@ step runs. The connection counts each response once on `agentkourier_webhook_req
 | | Taken. | `200`, `accepted`, `none` |
 
 The channel is read before the actor, so an event of the agent's own that has no channel counts as `unmapped`, not `self`. The
-`Retry-After` of the connection's own `503` is `1` second. The chat listener also responds `503`, with `Retry-After`,, before the
+`Retry-After` of the connection's own `503` is `1` second. The chat listener also responds `503` with `Retry-After` before the
 connection is called, for a connection that does not run on that replica (`no_route`: a standby, or a connection that has not started)
 and when it already runs as many requests as it may (`busy`); it counts them on `agentkourier_chat_listener_requests_total`, with
 `platform="webhook"`, and not on the connection's counter. The connection's name is the `connection` label only while the leader serves a
@@ -248,7 +248,7 @@ bounds.
 
 ## Follow a delivery
 
-The broker logs JSON lines, from the leader. Each delivery that is verified is logged once at INFO, once its response is sent:
+The broker logs JSON lines, from the leader. Each delivery that is verified is logged once at INFO, as its response is written:
 
 ```text
 {"time":"…","level":"INFO","msg":"webhook: delivery answered","connection":"acme-webhooks/github","outcome":"accepted","reason":"none","delivery":"<the service's delivery ID>","event":"<SHA-256 of the body>","bytes":8123,"duration_ms":4}

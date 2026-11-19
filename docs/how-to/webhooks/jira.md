@@ -171,7 +171,7 @@ not name every field of the form, so the fields below other than **Exclude body*
 | Issue related events: the JQL filter | `project = OPS`, with your project's key. |
 | Issue | **created** and **updated**. |
 | Comment | **created**, so that the agent's own comments arrive and count as `self`, and for a trigger on comments ([below](#change-what-starts-a-turn)). The recipe has no trigger on comments, so a person's comment is `accepted` and starts nothing. |
-| **Exclude body** | Unchecked. Checked, Jira leaves the body out (Atlassian's documentation), and the connection has nothing to read. Whether Jira then signs the empty body is not known (not tried): if it does, every delivery is refused as `malformed`, `schema`; if it does not, as `unverified`, `unsigned`. |
+| **Exclude body** | Unchecked. Checked, Jira leaves the body out (Atlassian's documentation), and the connection has nothing to read. Whether Jira then signs the empty body is not known (not tried): if it does, every delivery is refused with `400`, `malformed`, `schema`; if it does not, with `401`, `unverified`, `unsigned`. |
 
 Create it. No test delivery from Jira is known to this page (not verified): make its first real event the test.
 
