@@ -55,7 +55,7 @@ access tokens.
 
 The connection's `spec.webhook.identity` is the token's bot user's `account_id`, such as `712020:…`. In the run the token was refused
 on `GET /2.0/user` (403), so learn the ID from something the token writes: post one comment on an open pull request, read its author
-from the answer, and delete it. **Pull requests: Write** covers both calls. Open a pull request for the check if the repository has
+from the response, and delete it. **Pull requests: Write** covers both calls. Open a pull request for the check if the repository has
 none; the webhook is not on yet (step 6), so nothing reaches the broker. The token is read from the header file of step 1:
 
 ```sh
@@ -68,7 +68,7 @@ echo "$resp" | jq -r .user.account_id
 curl -s -o /dev/null -w '%{http_code}\n' -X DELETE -H @"$H" "$API/pullrequests/$PR/comments/$(echo "$resp" | jq -r .id)"
 ```
 
-The first answer is the identity. The delete answers `204` when it worked. The run made this check with a comment on a commit, with a
+The first response holds the identity. The delete returns `204` when it worked. The run made this check with a comment on a commit, with a
 token that also had **Repositories: Write**; the pull request comment, with the permissions of step 1, was *not run*.
 
 ## 3. Make the Secret
@@ -251,8 +251,8 @@ webhooks only on a repository. One connection for a whole workspace was not trie
 | `unverified`, `bad_signature`, on every delivery | The webhook's secret is not the Secret's `webhookSecret`. Set it on the webhook again from the file of step 3. |
 | A review on every edit of the description | `pullrequest:updated` ([above](#change-what-starts-a-turn)). |
 | A comment that mentions the agent starts nothing | The regex wants `@` and the token's name. The bot user may not be offered in Bitbucket's mention list (not verified), so type the name: the comment's raw text then holds it as written. |
-| `accepted`, and no review | The pull request is a draft, or `agentkourier_trigger_limited_total{binding="acme-webhooks/bitbucket-reviews"}` rose: with `maxConcurrent: 1`, a second pull request while a review runs is stopped, and the answer was `200`, so Bitbucket does not send it again, and the event is lost; the WARN line names its delivery. Raise `maxConcurrent`. |
-| A delivery failed | Atlassian's documentation says Bitbucket waits 10 seconds for an answer, and tries a delivery that got a `5xx`, such as the broker's `503`, up to two more times. |
+| `accepted`, and no review | The pull request is a draft, or `agentkourier_trigger_limited_total{binding="acme-webhooks/bitbucket-reviews"}` rose: with `maxConcurrent: 1`, a second pull request while a review runs is stopped, and the broker's response was `200`, so Bitbucket does not send it again, and the event is lost; the WARN line names its delivery. Raise `maxConcurrent`. |
+| A delivery failed | Atlassian's documentation says Bitbucket waits 10 seconds for a response, and tries a delivery that got a `5xx`, such as the broker's `503`, up to two more times. |
 | A turn, and nothing on Bitbucket | The agent's tools: an expired token, or one without **Pull requests: Write**. |
 
 ## What Bitbucket sends

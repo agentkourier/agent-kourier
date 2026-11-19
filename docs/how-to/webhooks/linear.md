@@ -25,7 +25,8 @@ session of its own, and the agent comments on Linear as the application's own us
 - What [Start agents from webhooks](../receive-webhooks.md#before-you-start) lists for every source: the chat listener on HTTPS, a
   broker that admits the namespace `acme-webhooks` and reads the Secret `linear-webhook`, and an A2A agent.
 - Admin rights in the Linear workspace: Linear's documentation says the API settings page needs them.
-- A broker clock within seconds of the right time: the recipe answers `401` to a delivery whose time is more than a minute from it.
+- A broker clock within seconds of the right time: the connection refuses a delivery whose time is more than a minute from it
+  (`unverified`, `stale`).
 - `kubectl`, `curl` and `jq`.
 
 ## 1. Create the OAuth application
@@ -103,8 +104,8 @@ The recipe's prompts ask the agent to do these, with a client-credentials token 
 
 The tools get their token as step 2 does, with the scopes they need: Linear's documentation lists `read`, and `comments:create` for
 creating comments (or `write`); the run did not record which it used. Linear's documentation says a client-credentials token is valid
-for 30 days and has no refresh token, and that a `401` means asking for a new one: the tools must get a new token before then, or on
-that answer.
+for 30 days and has no refresh token, and that Linear's API refuses an expired one: the tools must get a new token before then, or
+when Linear refuses it.
 
 The run used a small MCP server of its own, with one tool for each operation, held to the test team
 ([Tools for the agent](../receive-webhooks.md#tools-for-the-agent)).
@@ -160,7 +161,7 @@ Edit the OAuth application, and turn its webhook on:
 | Resource types | Issues and Comments. |
 
 Save. The webhook's detail page shows its signing secret: copy it, paste it into a file, and make the Secret from it, with the key
-`webhookSecret`. Until the connection runs, the chat listener answers a delivery to its URL `503`, and takes none of them.
+`webhookSecret`. Until the connection runs, the chat listener responds `503` to a delivery to its URL, and takes none of them.
 
 ```sh
 umask 077
@@ -251,8 +252,8 @@ starts nothing.
 | `unverified`, `bad_signature`, on every delivery | The Secret's `webhookSecret` is not the webhook's signing secret: copy it again from the webhook's detail page, and make the Secret again. |
 | A description edit starts nothing | `/updatedFrom` holds the earlier values of what changed. An issue whose description was empty before may carry no earlier text there (not seen in the run); the field reads as empty, and the trigger does not match. |
 | A comment that names the application starts nothing | The regex wants the application's name as a word, with or without the `@`. The application may not be offered in Linear's mention list (not verified), so type its name. |
-| `accepted`, and no plan | `agentkourier_trigger_limited_total{binding="acme-webhooks/linear-plans"}` rose: with `maxConcurrent: 1`, an issue created while another plan runs is stopped. The answer was `200`, so Linear does not send it again, and the event is lost; the WARN line names its delivery. Raise `maxConcurrent`. |
-| A delivery failed | Linear's documentation says it waits 5 seconds for a `200`, counts any other answer as a failure, such as the broker's `503`, tries again after 1 minute, 1 hour and 6 hours, and may turn off a webhook that keeps failing. Whether a try carries a new `webhookTimestamp` is not verified: one that carries the first attempt's time is answered `401`, `stale`, once that time is more than a minute old, and never reaches a trigger. |
+| `accepted`, and no plan | `agentkourier_trigger_limited_total{binding="acme-webhooks/linear-plans"}` rose: with `maxConcurrent: 1`, an issue created while another plan runs is stopped. The broker's response was `200`, so Linear does not send it again, and the event is lost; the WARN line names its delivery. Raise `maxConcurrent`. |
+| A delivery failed | Linear's documentation says it waits 5 seconds for a `200`, counts any other response as a failure, such as the broker's `503`, tries again after 1 minute, 1 hour and 6 hours, and may turn off a webhook that keeps failing. Whether a try carries a new `webhookTimestamp` is not verified: one that carries the first attempt's time is refused as `unverified`, `stale`, once that time is more than a minute old, and never reaches a trigger. |
 | A turn, and nothing on Linear | The agent's tools: a token older than 30 days, or one without a scope to comment. |
 
 ## What Linear sends
@@ -260,7 +261,8 @@ starts nothing.
 What was seen in the run's deliveries:
 
 - Linear signs with `Linear-Signature: <hex>`, with no prefix, and puts the time of the delivery in `/webhookTimestamp`, in
-  milliseconds. The recipe answers `401` to one more than a minute from the broker's clock, as Linear's documentation advises.
+  milliseconds. The connection refuses one more than a minute from the broker's clock (`unverified`, `stale`), as Linear's
+  documentation advises.
 - An Issue event carries the team's key in `/data/team/key` and the issue's identifier, such as `ENG-12`, in `/data/identifier`; a
   Comment event carries them in `/data/issue/team/key` and `/data/issue/identifier`.
 - The actor is `/actor/id`; for what the application did, it is the application user's ID.

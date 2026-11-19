@@ -72,7 +72,7 @@ JIRA="https://api.atlassian.com/ex/jira/$CLOUD_ID/rest/api/3"
 curl -s -K ~/.config/webhooks/jira-agent.curlrc "$JIRA/myself" | jq '{accountId, accountType}'
 ```
 
-In the run the answer's `accountType` was `app`. Check that the account can work in the project:
+In the run the response's `accountType` was `app`. Check that the account can work in the project:
 
 ```sh
 PROJECT=OPS                                                     # your project's key
@@ -171,7 +171,7 @@ not name every field of the form, so the fields below other than **Exclude body*
 | Issue related events: the JQL filter | `project = OPS`, with your project's key. |
 | Issue | **created** and **updated**. |
 | Comment | **created**, so that the agent's own comments arrive and count as `self`, and for a trigger on comments ([below](#change-what-starts-a-turn)). The recipe has no trigger on comments, so a person's comment is `accepted` and starts nothing. |
-| **Exclude body** | Unchecked. Checked, Jira leaves the body out (Atlassian's documentation), and the connection has nothing to read. Whether Jira then signs the empty body is not known (not tried): if it does, every delivery is answered `400`, `malformed`, `schema`; if it does not, `401`, `unverified`, `unsigned`. |
+| **Exclude body** | Unchecked. Checked, Jira leaves the body out (Atlassian's documentation), and the connection has nothing to read. Whether Jira then signs the empty body is not known (not tried): if it does, every delivery is refused as `malformed`, `schema`; if it does not, as `unverified`, `unsigned`. |
 
 Create it. No test delivery from Jira is known to this page (not verified): make its first real event the test.
 
@@ -258,8 +258,8 @@ the first changed field is read: see [Troubleshooting](#troubleshooting).
 | `malformed`, `schema`, or `unverified`, `unsigned`, with the right secret | **Exclude body** may be checked. |
 | An edit starts nothing, and the field's name holds a space | `changed` is an `id` field, and a field name such as `Fix Version` is not an identifier, so the field is marked invalid and the second trigger, which matches it, misses. The event is still taken: a trigger that does not name `changed` can take it. A new issue carries a changelog too, which the first trigger does not read. |
 | An edit of the description starts nothing | `/changelog/items/0/field` is only the first field that the edit changed. An edit of several fields at once can put `description` second, and the trigger does not match it. Edit the description alone. |
-| `accepted`, and no plan | `agentkourier_trigger_limited_total{binding="acme-webhooks/jira-plans"}` rose: with `maxConcurrent: 1`, an issue created while another plan runs is stopped. The answer was `200`, so Jira does not send it again, and the event is lost; the WARN line names its delivery. Raise `maxConcurrent`. |
-| A delivery failed | Atlassian's documentation says Jira tries a failed delivery up to five more times, 5 to 15 minutes apart, on a `5xx` answer such as the broker's `503`. It shows no delivery log; its REST API lists failed webhooks. |
+| `accepted`, and no plan | `agentkourier_trigger_limited_total{binding="acme-webhooks/jira-plans"}` rose: with `maxConcurrent: 1`, an issue created while another plan runs is stopped. The broker's response was `200`, so Jira does not send it again, and the event is lost; the WARN line names its delivery. Raise `maxConcurrent`. |
+| A delivery failed | Atlassian's documentation says Jira tries a failed delivery up to five more times, 5 to 15 minutes apart, on a `5xx` response such as the broker's `503`. It shows no delivery log; its REST API lists failed webhooks. |
 | A turn, and nothing on the issue | The agent's tools: a token called on the site's URL instead of the gateway, an expired token, or a role without Add comments. Run the checks of step 2 again. |
 
 ## What Jira sends

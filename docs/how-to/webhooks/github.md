@@ -80,7 +80,7 @@ curl -s -H @"$HOME/.config/webhooks/github-app-jwt.header" -H 'Accept: applicati
   https://api.github.com/app | jq -r '.slug + "[bot]"'
 ```
 
-The answer, such as `acme-review-agent[bot]`, is the identity. The mention that the recipe's reply trigger matches is the slug with
+The response, such as `acme-review-agent[bot]`, is the identity. The mention that the recipe's reply trigger matches is the slug with
 an `@`: `@acme-review-agent`.
 
 The agent's tools need the installation's ID to get tokens. With the same header file:
@@ -284,7 +284,7 @@ all naming the same connection. One webhook serves them all; an event of a repos
 | `unverified`, `bad_signature`, on every delivery | The App's **Webhook secret** is not the Secret's `webhookSecret`. Set it on the App again from the file of step 3. |
 | `malformed`, `schema` | A repository webhook with the content type `application/x-www-form-urlencoded`, which GitHub's REST documentation gives as the default for one. Set it to `application/json`, or use the App's webhook. |
 | `unmapped` only | `no_channel`: the App's events have no repository (`ping`, `installation`). `no_thread`: an event with neither `/pull_request/number` nor `/issue/number`. |
-| `accepted`, and no review | The pull request is a draft (the first trigger excludes it), or `agentkourier_trigger_limited_total{binding="acme-webhooks/github-reviews"}` rose: with `maxConcurrent: 1`, a second pull request opened while a review runs is stopped, the answer was `200`, and GitHub does not send it again. The WARN line names its delivery: redeliver it once the first review is done, or raise `maxConcurrent`. |
+| `accepted`, and no review | The pull request is a draft (the first trigger excludes it), or `agentkourier_trigger_limited_total{binding="acme-webhooks/github-reviews"}` rose: with `maxConcurrent: 1`, a second pull request opened while a review runs is stopped, the broker's response was `200`, and GitHub does not send it again. The WARN line names its delivery: redeliver it once the first review is done, or raise `maxConcurrent`. |
 | A comment that mentions the App starts nothing | The regex wants `@` and the slug, not the App's name and not `[bot]`. A comment on a plain issue is turned away by `url: '/pull/'`. |
 | A turn, and nothing on GitHub | The agent's tools: an installation token older than an hour, an App not installed on the repository, or a missing permission. Check the agent's logs. |
 
