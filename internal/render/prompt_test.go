@@ -579,7 +579,7 @@ func TestPromptTemplateSeesOnlyTheValuesItNames(t *testing.T) {
 	v.Key = "unchecked text with spaces"
 	v.Source = "unchecked text with spaces"
 	p := newPrompt(t, "{{ .State }} {{ .Fields.alertname }}")
-	safe, err := p.safeView(v)
+	safe, err := p.safeView(v, false)
 	if err != nil {
 		t.Fatal(err)
 	}

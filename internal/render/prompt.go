@@ -2,6 +2,7 @@ package render
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"text/template"
 
@@ -32,6 +33,9 @@ import (
 // (chat.Clean), and the footer, which is a line of identifiers such as "agent-kourier-key: ns/alertname", read as identifier
 // text (redact.IdentifierText: the tokens taken out, a "name: value" pair kept). The cost of the escaping is that Slack's
 // own markup, "<url|text>" and "&amp;", is escaped a second time.
+//
+// An event of a webhook connection has no such fields: its block holds the event's actor and its named fields, in the
+// connection's order (RenderWebhook, untrustedWebhook).
 
 // Caps on a prompt, in UTF-16 units as chat.Truncate counts them. What is cut ends in
 // chat.Truncated, so the agent can see it.
@@ -107,7 +111,41 @@ func NewPrompt(name, text string) (*Prompt, error) {
 // long, and fails here, so the caller treats a render error as it does a refusal and starts no
 // turn.
 func (p *Prompt) Render(view v1alpha1.PromptView, msg TriggerMessage) (string, error) {
-	safe, err := p.safeView(view)
+	return p.render(view, false, func() string { return untrustedSection(msg) })
+}
+
+// RenderWebhook is Render for an event of a webhook connection (spec 8.2, "Webhook events"). The template reads .Channel and the
+// connection's id fields (.Fields.<name>), which resolution holds it to, in place of the name shape: .Channel to the webhook
+// channel rule (checkWebhookChannel, at most 140 bytes, as a Binding names it), and the id fields to the .Key rule (ASCII letters,
+// digits and "_.-:/", at most 128 bytes), so that a repository's owner/name and a URL render. The values of
+// .Fields are ev's, not view's: an id field the event has no value for is empty. One the template reads that is Invalid (it had
+// values and none passed the id check) refuses the render, with ReasonInvalid, so that its absence is never shown for a value; one
+// that is not an id field of ev, which resolution refuses, fails it. The untrusted block holds the event's actor and then each field
+// that has a value, id and text, in the connection's order, under its name; a field that does not fit is left out whole, never
+// cut, and a last line names it (untrustedWebhook). No error holds a value of the event.
+func (p *Prompt) RenderWebhook(view v1alpha1.PromptView, ev *chat.WebhookEvent) (string, error) {
+	var fields []chat.WebhookField
+	if ev != nil {
+		fields = ev.Fields
+	}
+	view.Fields = make(map[string]string, len(p.refs.Fields))
+	for _, name := range p.refs.Fields {
+		i := slices.IndexFunc(fields, func(f chat.WebhookField) bool { return f.Name == name })
+		switch {
+		case i < 0 || !fields[i].ID:
+			return "", fmt.Errorf("prompt template reads .Fields.%s, which is not an id field of the event", name)
+		case fields[i].Invalid:
+			return "", &RefusedError{Ref: "Fields." + name, Reason: ReasonInvalid}
+		}
+		view.Fields[name] = fields[i].Value
+	}
+	return p.render(view, true, func() string { return untrustedWebhook(ev) })
+}
+
+// render is Render and RenderWebhook: the template's output over the checked view, cut, a blank line, and the untrusted section that
+// section writes, once the view has passed. wide holds .Channel and .Fields to the .Key rule.
+func (p *Prompt) render(view v1alpha1.PromptView, wide bool, section func() string) (string, error) {
+	safe, err := p.safeView(view, wide)
 	if err != nil {
 		return "", err
 	}
@@ -117,14 +155,20 @@ func (p *Prompt) Render(view v1alpha1.PromptView, msg TriggerMessage) (string, e
 	}
 	instruction := chat.Truncate(strings.TrimSpace(out), MaxInstructionUnits)
 	if instruction == "" {
-		return untrustedSection(msg), nil
+		return section(), nil
 	}
-	return instruction + "\n\n" + untrustedSection(msg), nil
+	return instruction + "\n\n" + section(), nil
 }
 
 // safeView checks the values of view that the template reads, and returns a view that holds
-// only those. So whatever the template does with the view, an unchecked value is not in it.
-func (p *Prompt) safeView(view v1alpha1.PromptView) (v1alpha1.PromptView, error) {
+// only those. So whatever the template does with the view, an unchecked value is not in it. wide,
+// for an event of a webhook connection, holds .Channel to the webhook channel rule and the .Fields
+// values to the .Key rule.
+func (p *Prompt) safeView(view v1alpha1.PromptView, wide bool) (v1alpha1.PromptView, error) {
+	idRule, channelRule := checkName, checkName
+	if wide {
+		idRule, channelRule = checkKey, checkWebhookChannel
+	}
 	var safe v1alpha1.PromptView
 	for _, name := range p.refs.View {
 		var src string
@@ -132,7 +176,7 @@ func (p *Prompt) safeView(view v1alpha1.PromptView) (v1alpha1.PromptView, error)
 		rule := checkName
 		switch name {
 		case "Channel":
-			src, dst = view.Channel, &safe.Channel
+			src, dst, rule = view.Channel, &safe.Channel, channelRule
 		case "State":
 			src, dst = view.State, &safe.State
 		case "Key":
@@ -155,7 +199,7 @@ func (p *Prompt) safeView(view v1alpha1.PromptView) (v1alpha1.PromptView, error)
 		if !ok {
 			return v1alpha1.PromptView{}, fmt.Errorf("prompt template reads .Fields.%s, which the view lacks", name)
 		}
-		if err := check("Fields."+name, value, checkName); err != nil {
+		if err := check("Fields."+name, value, idRule); err != nil {
 			return v1alpha1.PromptView{}, err
 		}
 		safe.Fields[name] = value
@@ -200,6 +244,42 @@ func untrustedSection(msg TriggerMessage) string {
 			alertItem(v1alpha1.FieldLink, msg.Link, kindWindow, true),
 			alertItem(v1alpha1.FieldFooter, msg.Footer, kindIdentifier, false),
 		},
+	}.render()
+	return section
+}
+
+// webhookLeftOut starts the last line of a webhook event's block that left fields out, before their names.
+const webhookLeftOut = "Left out, too long to show here:"
+
+// untrustedWebhook returns the sentence and the block for a webhook event, in at most MaxUntrustedUnits: its actor, then each field
+// that has a value, in the connection's order, under its name, an id field read as identifier text and a text field through a window
+// as a message's body is, each in at most MaxFieldUnits. A field that is Invalid or absent has no value and is not there. A field that
+// does not fit, in its own cap or in the room that is left, is left out whole, and a last line names it (wholePolicy): a part of a
+// comment could say what the whole does not. The actor is named actor unless the connection has a field of that name, which is shown
+// in its place. A field's name is the connection's (a lower-case letter, then letters and digits), never the event's.
+func untrustedWebhook(ev *chat.WebhookEvent) string {
+	var items []untrustedItem
+	if ev != nil {
+		if ev.Actor != "" && !slices.ContainsFunc(ev.Fields, func(f chat.WebhookField) bool { return f.Name == "actor" }) {
+			items = append(items, untrustedItem{Fields: []untrustedField{{Name: "actor", Value: ev.Actor, Kind: kindIdentifier, Cap: MaxFieldUnits}}})
+		}
+		for _, f := range ev.Fields {
+			if !f.Present {
+				continue
+			}
+			field := untrustedField{Name: f.Name, Value: f.Value, Kind: kindWindow, Cap: MaxFieldUnits, Window: alertWindowBytes}
+			if f.ID {
+				field.Kind = kindIdentifier
+			}
+			items = append(items, untrustedItem{Fields: []untrustedField{field}})
+		}
+	}
+	section, _ := untrustedBlock{
+		Opening:   "The webhook event that triggered this",
+		TagPrefix: untrustedDataPrefix,
+		MaxUnits:  MaxUntrustedUnits,
+		Whole:     &wholePolicy{Lead: webhookLeftOut},
+		Items:     items,
 	}.render()
 	return section
 }

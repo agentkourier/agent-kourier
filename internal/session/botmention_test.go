@@ -180,6 +180,9 @@ func TestTheTurnOfATaskSaysWhetherItIsAMentions(t *testing.T) {
 		{"a person's turn", tstate{r: store.Reply{ID: "p", MessageRef: "1.9"}}, ""},
 		{"a task found again as a mention's", tstate{began: store.TaskTurn{ID: "m", MessageRef: "1.9", Mention: "1.5"}}, "1.5"},
 		{"a task found again as a person's", tstate{began: store.TaskTurn{ID: "p", MessageRef: "1.9"}}, ""},
+		// Every turn of a webhook event's session is an event's start, the first and the later ones of its thread alike.
+		{"a webhook event's turn", tstate{key: Key{Thread: "pr-42"}, sess: store.Session{Origin: store.Origin{Source: store.OriginWebhookEvent}},
+			r: store.Reply{ID: "w", MessageRef: "e2"}}, "e2"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.t.outputTurn().Mention; got != tc.want {

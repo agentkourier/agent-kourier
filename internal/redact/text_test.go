@@ -420,6 +420,56 @@ func TestFreeTextWholeSaysWhetherTheTextWasCut(t *testing.T) {
 	}
 }
 
+// FreeTextCutWhole and FreeTextCutLineWhole say whether any of their input was cut, at limit or at the raw read, with the text
+// FreeTextCut and FreeTextCutLine return. A text that is cut and then shrinks, once its invisible characters are deleted, to
+// within limit is still cut: what followed them was never read.
+func TestFreeTextCutWholeSaysWhetherTheTextWasCut(t *testing.T) {
+	const limit = 100
+	for _, tc := range []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"short", "short value", true},
+		{"exactly the limit", strings.Repeat("a", limit), true},
+		{"one byte over", strings.Repeat("a", limit+1), false},
+		{"shrinks under the limit", strings.Repeat("\xe2\x80\x8b", limit) + "ok", true},
+		{"over the raw read, under the limit once normalized", "Please merge. " + strings.Repeat("\xe2\x80\x8b", 4*limit) + " Do not merge.", false},
+	} {
+		text, whole := FreeTextCutWhole(tc.in, limit)
+		if whole != tc.want || text != FreeTextCut(tc.in, limit) {
+			t.Errorf("%s: FreeTextCutWhole = %q, %v; want %v, and FreeTextCut's text", tc.name, text, whole, tc.want)
+		}
+		line, whole := FreeTextCutLineWhole(tc.in, limit)
+		if whole != tc.want || line != FreeTextCutLine(tc.in, limit) {
+			t.Errorf("%s: FreeTextCutLineWhole = %q, %v; want %v, and FreeTextCutLine's text", tc.name, line, whole, tc.want)
+		}
+	}
+}
+
+// IdentifierTextWhole and FreeTextLineWhole say whether any of their input was cut, with the text IdentifierText and FreeTextLine
+// return: a text past the raw read is cut, though it is a word once its invisible characters are deleted.
+func TestIdentifierTextAndFreeTextLineSayWhetherTheTextWasCut(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"short", "octocat", true},
+		{"invisible padding within the raw read", "octocat" + strings.Repeat("\xe2\x80\x8b", 1000), true},
+		{"over the raw read, a word once normalized", "octocat" + strings.Repeat("\xe2\x80\x8b", 6144), false},
+	} {
+		id, whole := IdentifierTextWhole(tc.in)
+		if whole != tc.want || id != IdentifierText(tc.in) {
+			t.Errorf("%s: IdentifierTextWhole = %q, %v; want %v, and IdentifierText's text", tc.name, id, whole, tc.want)
+		}
+		line, whole := FreeTextLineWhole(tc.in)
+		if whole != tc.want || line != FreeTextLine(tc.in) {
+			t.Errorf("%s: FreeTextLineWhole = %q, %v; want %v, and FreeTextLine's text", tc.name, line, whole, tc.want)
+		}
+	}
+}
+
 func TestRuneBoundary(t *testing.T) {
 	const s = "a€b" // '€' is the three bytes at 1, 2 and 3
 	tests := []struct {

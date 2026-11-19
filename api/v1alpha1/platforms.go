@@ -120,7 +120,7 @@ func ChatPlatformOf(spec ChatConnectionSpec) (ChatPlatform, bool) {
 		// post carries (a question, a tool approval, the feedback buttons, a mention), and no sender, user or group to name.
 		return ChatPlatform{
 			Name: "webhook", ActorName: "webhook",
-			Channel: IDShape{pattern: webhookChannel, maxLen: maxWebhookChannelLen, What: "a webhook channel",
+			Channel: IDShape{pattern: webhookChannel, maxLen: MaxWebhookChannelLen, What: "a webhook channel",
 				Fix: "use the channel as the connection reads it from an event, such as acme/widgets or OPS"},
 			Triggers: []TriggerType{TriggerWebhookEvent}, WebhookFields: slices.Clone(spec.Webhook.Fields),
 		}, true

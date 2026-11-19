@@ -3,6 +3,8 @@ package render
 import (
 	"fmt"
 	"net/url"
+
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 )
 
 // The rules a value of a PromptView must pass to reach a prompt's instruction part (spec R2).
@@ -31,10 +33,13 @@ const (
 	ReasonTooLong Reason = "is too long"
 	// ReasonNotLink is a Link that is no http or https URL with a host and no credentials.
 	ReasonNotLink Reason = "is not an http or https URL"
+	// ReasonInvalid is an id field of a webhook event that is Invalid: the event has values for it, and none passed the id check, so
+	// it has no value that may be shown, and an empty one would read as its absence (spec D55).
+	ReasonInvalid Reason = "is an id field none of whose values passed its check"
 )
 
 // Code is the reason as a short word from a closed set, for a metric label and an audit entry: "characters",
-// "too_long" or "not_link"; "other" for any reason added without one.
+// "too_long", "not_link" or "invalid"; "other" for any reason added without one.
 func (r Reason) Code() string {
 	switch r {
 	case ReasonCharacters:
@@ -43,6 +48,8 @@ func (r Reason) Code() string {
 		return "too_long"
 	case ReasonNotLink:
 		return "not_link"
+	case ReasonInvalid:
+		return "invalid"
 	}
 	return "other"
 }
@@ -83,6 +90,19 @@ func checkName(s string) Reason { return checkShape(s, maxNameBytes, "_.-:") }
 // payments", as the Alertmanager example extracts) is refused if a template reads .Key: such a
 // template should read the entries it needs from .Fields.
 func checkKey(s string) Reason { return checkShape(s, maxKeyBytes, "_.-:/") }
+
+// checkWebhookChannel is the rule of a webhook event's Channel: the webhook channel shape (v1alpha1.ValidWebhookChannel), letters,
+// digits, ".", "_" and "-" in parts with "/" between them, at most v1alpha1.MaxWebhookChannelLen bytes, which a Binding of the
+// connection may name and the connection resolves from an event.
+func checkWebhookChannel(s string) Reason {
+	switch {
+	case len(s) > v1alpha1.MaxWebhookChannelLen:
+		return ReasonTooLong
+	case !v1alpha1.ValidWebhookChannel(s):
+		return ReasonCharacters
+	}
+	return ""
+}
 
 // checkShape returns ReasonTooLong if s is longer than limit bytes, and ReasonCharacters if
 // it holds a byte that is no ASCII letter or digit and not among extra.

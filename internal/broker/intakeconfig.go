@@ -64,6 +64,6 @@ func newIntakeConfig(p intakeParts) (trigger.IntakeConfig, error) {
 	return trigger.IntakeConfig{
 		Connection: p.conn, Snapshot: p.snapshot, Submitter: p.submitter, Logger: p.log,
 		Interactions: p.interactions, Notice: p.notice,
-		TriggerThreads: p.threads, TriggerRuns: p.runs, OnStart: p.starter.OnStart, OnLimited: p.starter.Limited, TakesBotMention: p.starter.TakesBotMention, TurnQueued: p.replies.HasReply,
+		TriggerThreads: p.threads, TriggerRuns: p.runs, OnStart: p.starter.OnStart, OnLimited: p.starter.Limited, TakesBotMention: p.starter.TakesBotMention, TakesTurn: p.starter.TakesTurn, TurnQueued: p.replies.HasReply,
 	}, nil
 }

@@ -69,6 +69,12 @@ const (
 // logs its own reason. Any other error of OnStart is transient: it is returned, and the redelivery asks again.
 var ErrNotStarted = errors.New("chat: the trigger's turn was not started")
 
+// ErrWithheld is ErrNotStarted for a webhook event's start that the session of its thread cannot take yet: its ended session's
+// replacement is withheld while the old session may still be at work. OnStart returns it, itself or wrapped. It is decided
+// not_started as ErrNotStarted is, but the event is not remembered, as a limited one is not: the session settles, and the sender's
+// redelivery of it is decided again.
+var ErrWithheld = fmt.Errorf("chat: the session cannot take the turn yet: %w", ErrNotStarted)
+
 // reservationGrace is how long a thread that reserved its key, and whose turn has not started, is left to start
 // before a later message of the key may take the key over. A turn that is starting takes milliseconds, and a
 // failed one is asked for again by its redelivery within seconds, so a minute tells the two apart.
@@ -87,6 +93,7 @@ type decided struct {
 	decision Decision
 	keyHash  string // the first eight characters of the hash of the key; empty if the match has none
 	thread   string // the thread the decision is about, if known
+	withheld bool   // not_started because the session cannot take the turn yet (ErrWithheld, or IntakeConfig.TakesTurn)
 }
 
 // decide applies the thread rules of a match to the store, and carries out what they say:
@@ -236,9 +243,13 @@ func (in *Intake) closeThread(ctx context.Context, m Match, hash string, out dec
 }
 
 // unthreaded is decide for a match that has no thread to apply the rules to: its trigger threads by nothing, or
-// by a key that came out empty. A close is unknown, and a fire starts a turn of its own, with no cooldown.
+// by a key that came out empty. A close is unknown, and a fire starts a turn of its own, with no cooldown. The thread the decision
+// is about is the session's: for a webhook event the thread the connection derived, not the event's ID.
+//
+// A webhook event that a limit stopped is logged at WARN each time it is stopped, a redelivery too, with the sender's delivery ID:
+// it is lost unless it is delivered again, and the operator finds it in the sender's log by that ID (spec D55). It is counted once.
 func (in *Intake) unthreaded(ctx context.Context, m Match, closing bool) (decided, error) {
-	out := decided{decision: DecisionStarted, thread: m.Message.At.ID}
+	out := decided{decision: DecisionStarted, thread: m.sessionThread()}
 	switch {
 	case closing:
 		return decided{decision: DecisionCloseUnknown}, nil
@@ -256,13 +267,15 @@ func (in *Intake) unthreaded(ctx context.Context, m Match, closing bool) (decide
 		if !adm.Again { // a redelivery that lost what remembers it was counted and told then
 			in.countLimited(ctx, m, adm.Limit)
 			in.tellLimited(ctx, m, adm.Limit)
+		} else if m.Webhook {
+			in.logLimited(ctx, m, adm.Limit)
 		}
 		out.decision = DecisionLimited
 		return out, nil
 	}
 	err := in.start(ctx, m)
 	if errors.Is(err, ErrNotStarted) {
-		out.decision, err = DecisionNotStarted, nil
+		out.decision, out.withheld, err = DecisionNotStarted, errors.Is(err, ErrWithheld), nil
 	}
 	return out, err
 }
