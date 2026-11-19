@@ -79,3 +79,34 @@ func TestTheAnswerLineCarriesNoSinkError(t *testing.T) {
 		t.Errorf("the log holds the Sink's error:\n%s", buf.String())
 	}
 }
+
+// The duration observed for a request runs from when the handler is called to its answer, so it holds the time the handler takes
+// before the take and the wait for the Sink: an accepted event that the handler took a while to reach the Sink with, and a timeout,
+// which is observed at no less than the wait. The time of the last accepted request is the Config's clock at the answer.
+func TestTheAckDurationRunsFromTheHandlerCallToTheAnswer(t *testing.T) {
+	const before, wait = 30 * time.Millisecond, 40 * time.Millisecond
+	rec := &recorder{}
+	p := newPlatform(t, config(rec, nil))
+	p.SetAckWait(time.Hour)
+	p.SetAfterLoad(func() { time.Sleep(before) })
+	running(t, p, &sink{})
+	if w := serve(t, p, request(event, true)); w.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200", w.Code)
+	}
+	slow := newPlatform(t, config(rec, nil))
+	slow.SetAckWait(wait)
+	running(t, slow, &sink{block: true})
+	if w := serve(t, slow, request(event, true)); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d, want 503", w.Code)
+	}
+	got := rec.observations()
+	if obs := got["accepted"]; len(obs) != 1 || obs[0] < before {
+		t.Errorf("accepted observed %v, want one of at least %v", obs, before)
+	}
+	if obs := got["timeout"]; len(obs) != 1 || obs[0] < wait {
+		t.Errorf("timeout observed %v, want one of at least %v", obs, wait)
+	}
+	if at := rec.acceptedAt(); len(at) != 1 || !at[0].Equal(epoch) {
+		t.Errorf("the last accepted request was given as %v, want once at %v", at, epoch)
+	}
+}
