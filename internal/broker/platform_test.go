@@ -16,8 +16,8 @@ import (
 )
 
 // The adapter is chosen by ChatConnection.platform: slack builds the Slack adapter over a client of its own, teams the Microsoft
-// Teams adapter (the Teams tests), and any other value, webhook among them until its adapter lands, is a wiring error, which no
-// retry mends.
+// Teams adapter (the Teams tests), and any other value is a wiring error, which no retry mends: webhook among them, since the broker
+// does not run a webhook connection yet.
 func TestNewPlatformIsChosenByThePlatformOfTheConnection(t *testing.T) {
 	slackConn := Connection{
 		Ref: v1alpha1.ObjectRef{Namespace: "platform", Name: "slack"}, Platform: v1alpha1.PlatformSlack,

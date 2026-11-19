@@ -151,9 +151,9 @@ upstream webhook trigger stays compatible with Agent Kourier.
 - Chat platforms other than Slack and Microsoft Teams, and alert sources other than Alertmanager.
   The broker runs Slack and Microsoft Teams connections (section 7); the chat interface and the
   `botMessage` trigger (8.2) allow more. The API also takes the `webhook` platform (D55), which is
-  not a chat platform: it takes events and posts nothing. The broker has no adapter for it yet and
-  refuses a webhook ChatConnection as a wiring error (`ErrWiring`, "no adapter"): as the broker's own
-  connection it stops the start, and a team's is not started.
+  not a chat platform: it takes events and posts nothing. The broker does not run a webhook
+  connection yet (`internal/chat/webhook` is not wired into it) and refuses one as a wiring error
+  (`ErrWiring`): as the broker's own connection it stops the start, and a team's is not started.
 - A direct Alertmanager webhook receiver. Dropped for good, not deferred (D39). Alertmanager
   is not a supported source of the `webhook` platform either: alerts enter only through
   `chat.triggers` (D55).
