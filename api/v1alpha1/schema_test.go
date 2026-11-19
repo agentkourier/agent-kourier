@@ -283,6 +283,13 @@ func TestSchemaEnumsListTheEmptyValueExactlyWhereTheBrokerAcceptsIt(t *testing.T
 			o.Default()
 			return o.Validate()
 		}},
+		{conns.at(t, "spec.teams.mode"), "teams mode", func(t *testing.T) error {
+			o := load[ChatConnection](t, "chatconnection.yaml")
+			teamsConn(o, "")
+			o.Spec.Teams.Mode = ""
+			o.Default()
+			return o.Validate()
+		}},
 		{bindings.at(t, trigger+".type"), "trigger type", binding(func(o *Binding) { bot(o).Type = "" })},
 		{conns.at(t, "spec.webhook.verify.scheme"), "webhook scheme", hookConn(func(w *WebhookSpec) { w.Verify.Scheme = "" })},
 		{conns.at(t, "spec.webhook.verify.timestamp.unit"), "webhook timestamp unit", hookConn(func(w *WebhookSpec) {
@@ -350,10 +357,12 @@ func TestSchemaPatternsEqualTheGoLiterals(t *testing.T) {
 	for _, tc := range []struct {
 		plural, path, want string
 	}{
-		{"bindings", "spec.chat.triggers[].from.id", slackBotID.String()},
+		{"bindings", "spec.chat.triggers[].from.id", senderID.String()},
 		{"bindings", "spec.chat.mentions[].name", mentionName.String()},
-		{"bindings", "spec.chat.mentions[].user", slackUserID.String()},
+		{"bindings", "spec.chat.mentions[].user", mentionUser.String()},
 		{"bindings", "spec.interactions.approverGroups[]", slackGroupID.String()},
+		{"chatconnections", "spec.teams.tenantID", entraIDPattern.String()},
+		{"chatconnections", "spec.teams.appID", entraIDPattern.String()},
 		{"chatconnections", "spec.webhook.identity", optional(webhookIdentity)},
 		{"chatconnections", "spec.webhook.verify.header", httpHeaderName.String()},
 		{"chatconnections", "spec.webhook.verify.prefix", webhookPrefix.String()},
@@ -388,10 +397,14 @@ func TestSchemaCapsEqualTheBrokersCaps(t *testing.T) {
 		// The broker counts bytes and the schema characters, so the schema is never the stricter of the two.
 		{"backend url", backends.at(t, "spec.url"), "maxLength", maxURLLen},
 		{"header value", backends.at(t, "spec.headers[].value"), "maxLength", maxHeaderValueLen},
-		// Slack's cap of 32 is the CEL rule's (TestCELLiteralsEqualTheBrokersConstants); the field's is a webhook channel's.
-		{"channel", bindings.at(t, "spec.chat.channel"), "maxLength", MaxWebhookChannelLen},
-		{"sender ID", bindings.at(t, trigger+".from.id"), "maxLength", maxChatIDLen},
-		{"approver group", bindings.at(t, "spec.interactions.approverGroups[]"), "maxLength", maxChatIDLen},
+		// The field's cap is both a chat platform's channel's (maxChannelIDLen, Microsoft Teams') and a webhook channel's.
+		{"channel", bindings.at(t, "spec.chat.channel"), "maxLength", maxChannelIDLen},
+		{"webhook channel", bindings.at(t, "spec.chat.channel"), "maxLength", MaxWebhookChannelLen},
+		{"sender ID", bindings.at(t, trigger+".from.id"), "maxLength", maxSenderIDLen},
+		{"approver group", bindings.at(t, "spec.interactions.approverGroups[]"), "maxLength", maxApproverGroupIDLen},
+		{"teams notification url", connections.at(t, "spec.teams.notificationURL"), "maxLength", maxURLLen},
+		{"teams tenant", connections.at(t, "spec.teams.tenantID"), "maxLength", entraIDLen},
+		{"teams app", connections.at(t, "spec.teams.appID"), "maxLength", entraIDLen},
 		{"emoji", bindings.at(t, "spec.chat.acknowledgment.emoji"), "maxLength", maxEmojiLen},
 		{"mention name", bindings.at(t, "spec.chat.mentions[].name"), "maxLength", maxMentionNameLen},
 		{"mention user", bindings.at(t, "spec.chat.mentions[].user"), "maxLength", maxMentionUserLen},

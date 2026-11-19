@@ -148,6 +148,17 @@ type ThreadReader interface {
 	ThreadFromStart(ctx context.Context, t Target, before string, limit int) (msgs []HistoryMessage, dropped int, err error)
 }
 
+// RootReader is an optional interface of a ThreadReader that reads the message that opened a thread alone, in fewer calls than
+// ThreadFromStart, which reads the replies with it: what the first turn of a session that a person's mention opened inside a thread
+// carries (Caps.RootContext, spec 8.2, D56). A caller that finds a platform without it reads ThreadFromStart and keeps its first
+// message.
+type RootReader interface {
+	// ThreadRoot returns the message that opened the thread t.Thread, decoded as ThreadFromStart decodes it, and false, with no
+	// error, if the platform no longer has it. Its errors are a ThreadReader's: ErrNoThreadReads for a platform that cannot read a
+	// thread, ErrInvalid for a target that names no thread, and the platform's own, which Classify reads (OpOther).
+	ThreadRoot(ctx context.Context, t Target) (msg HistoryMessage, found bool, err error)
+}
+
 // Sink receives what Platform.Run decodes. A platform may call it from several goroutines at once, so a Sink is safe for
 // concurrent use; a platform keeps the events of one channel in order and calls for one channel one at a time.
 type Sink interface {
@@ -175,6 +186,39 @@ type BotFilter interface {
 type BotMentionFilter interface {
 	// AcceptsBotMention says whether a mention by the bot botID in channel is to be taken.
 	AcceptsBotMention(channel, botID string) bool
+}
+
+// ChannelLister is an optional interface of a Sink that names the channels bound to its connection now: the channels of the
+// Bindings that name the connection. A platform that must ask its service for each bound channel's messages (Microsoft Teams'
+// Graph subscriptions) asks it again and again, since Bindings come and go; a Sink that does not implement it binds no channel, and
+// the platform asks for none. The answer is a routing question, so the adapter holds no copy of the config.
+type ChannelLister interface {
+	// BoundChannels returns the channels of the connection that a Binding names, sorted, each once. The slice is the caller's.
+	BoundChannels() []string
+}
+
+// InlineDecider is an optional interface of a Sink, for a platform that answers a press in the press's own request and can show the
+// presser alone what that answer says (Microsoft Teams shows the answer to an Adaptive Card's press as a banner under the card). Such
+// a platform asks it in place of Interaction, and tells the presser what it returns; a Sink that does not implement it is given the
+// press by Interaction. A platform that answers a press before it hands it on (Slack) never asks it, so its presses take
+// Interaction's path as they always have.
+type InlineDecider interface {
+	// DecidePress takes i as Interaction does, an error meaning it was not taken, and then waits, until ctx ends, for i to be
+	// decided where Interaction's presses are decided (the press worker), which decides it once whether or not anyone waits. It
+	// returns what it knows when the decision is made, or when ctx ends: an outcome that is not Decided if the decision was not
+	// made in time, or is not final (the press is tried again later). The wait never decides a press itself.
+	DecidePress(ctx context.Context, i Interaction) (PressOutcome, error)
+}
+
+// PressOutcome is what became of a press, as InlineDecider.DecidePress knows it when it returns.
+type PressOutcome struct {
+	// Decided says the press was decided for good: Text then says what it came to. False says the press was taken and is still to
+	// be decided, later and once, so the presser cannot be told the outcome yet.
+	Decided bool
+	// Text is what the presser is to be told of a press that was Decided, in fixed words that hold nothing an agent or a person
+	// wrote: refused (and why), taken, or already recorded. Empty when the decision has nothing to tell them (a press that names
+	// another message than its prompt's is dropped without a word), and always empty when the press is not Decided.
+	Text string
 }
 
 // Stream is a message that grows while an agent writes it. The markdown that Append and Stop take is
@@ -281,7 +325,8 @@ type Access struct {
 	Archived bool
 }
 
-// Platform is a chat platform: Slack today. An adapter implements it, and nothing else in Agent Kourier names
+// Platform is a chat platform: Slack, Microsoft Teams, or a webhook connection's sender (whose adapter the broker does not run
+// yet). An adapter implements it, and nothing else in Agent Kourier names
 // the platform it adapts. Every method is safe for concurrent use.
 //
 // Every method that sends text keeps the contract of the package comment, and the adapter passes

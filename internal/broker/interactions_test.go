@@ -28,10 +28,11 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
-// pressed is a presser that answers with the error the test sets, and counts its presses.
+// pressed is a presser that answers with the error the test sets, and counts its presses. A press it decides in the wait comes to out.
 type pressed struct {
 	err error
 	n   *int
+	out chat.PressOutcome
 }
 
 func (p pressed) Press(context.Context, chat.Interaction) error {
@@ -39,6 +40,10 @@ func (p pressed) Press(context.Context, chat.Interaction) error {
 		*p.n++
 	}
 	return p.err
+}
+
+func (p pressed) DecidePress(ctx context.Context, i chat.Interaction) (chat.PressOutcome, error) {
+	return p.out, p.Press(ctx, i)
 }
 
 // The handler of buttons tells the outcomes of a press apart: a button of someone else's is dropped
@@ -62,20 +67,44 @@ func TestInteractionsHandlerDropsOtherButtonsAcksALimitAndReturnsTheRest(t *test
 		{"any other failure", boom, nil, boom, "", 0},
 		{"a feedback press that fails", interact.ErrNotInteraction, boom, boom, "", 1},
 	} {
-		out := &logBuffer{}
-		var fbPresses int
-		h := interactionsHandler(pressed{err: tc.err}, pressed{err: tc.fbErr, n: &fbPresses}, slog.New(slog.NewTextHandler(out, nil)))
+		for _, wait := range []bool{false, true} {
+			out := &logBuffer{}
+			var fbPresses int
+			decided := chat.PressOutcome{Decided: true, Text: "Your answer was recorded."}
+			fbDecided := chat.PressOutcome{Decided: true, Text: "Your vote is already recorded as useful."}
+			h := interactionsHandler(pressed{err: tc.err, out: decided}, pressed{err: tc.fbErr, n: &fbPresses, out: fbDecided}, slog.New(slog.NewTextHandler(out, nil)))
 
-		err := h(t.Context(), chat.Interaction{At: chat.Ref{Channel: "C1"}, PromptID: "x"})
+			press := chat.Interaction{At: chat.Ref{Channel: "C1"}, PromptID: "x"}
+			var err error
+			var got chat.PressOutcome
+			if wait {
+				got, err = h.DecidePress(t.Context(), press)
+			} else {
+				err = h.Interaction(t.Context(), press)
+			}
+			name := fmt.Sprintf("%s (waited %t)", tc.name, wait)
 
-		if !errors.Is(err, tc.want) || (tc.want == nil && err != nil) {
-			t.Errorf("%s: handler = %v, want %v", tc.name, err, tc.want)
-		}
-		if (tc.wantLog == "") != (out.String() == "") || !strings.Contains(out.String(), tc.wantLog) {
-			t.Errorf("%s: logged %q, want a line with %q (or nothing)", tc.name, out.String(), tc.wantLog)
-		}
-		if fbPresses != tc.wantFeedback {
-			t.Errorf("%s: %d presses reached the feedback handler, want %d", tc.name, fbPresses, tc.wantFeedback)
+			if !errors.Is(err, tc.want) || (tc.want == nil && err != nil) {
+				t.Errorf("%s: handler = %v, want %v", name, err, tc.want)
+			}
+			if (tc.wantLog == "") != (out.String() == "") || !strings.Contains(out.String(), tc.wantLog) {
+				t.Errorf("%s: logged %q, want a line with %q (or nothing)", name, out.String(), tc.wantLog)
+			}
+			if fbPresses != tc.wantFeedback {
+				t.Errorf("%s: %d presses reached the feedback handler, want %d", name, fbPresses, tc.wantFeedback)
+			}
+			// A press waited for comes to what its own handler decided, and a press dropped or refused here to no decision.
+			want := chat.PressOutcome{}
+			switch {
+			case !wait || tc.want != nil || tc.wantLog != "":
+			case tc.err == nil:
+				want = decided
+			case tc.fbErr == nil:
+				want = fbDecided
+			}
+			if wait && tc.want == nil && got != want {
+				t.Errorf("%s: outcome %+v, want %+v", name, got, want)
+			}
 		}
 	}
 }

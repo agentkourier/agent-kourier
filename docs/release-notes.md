@@ -31,11 +31,11 @@ has the upgrade, and how to roll it back.
 - **New trigger type `webhookEvent`**, the only one a webhook connection's Bindings take. It matches and excludes on the connection's
   fields, and its `promptTemplate` reads the id fields. Its `limits` are required. A start that a limit stops is answered 200, logged at WARN
   with the delivery ID, and lost unless the event is delivered again.
-- **New output `none`**, the only output a webhook connection takes, and one that Slack refuses. A Binding of a webhook connection must set
-  `chat.output: none`, and its channel is the value the connection reads from an event, such as `acme/widgets` or `OPS`, not a Slack ID.
+- **New output `none`**, the only output a webhook connection takes, and one that Slack and Microsoft Teams refuse. A Binding of a webhook connection must set
+  `chat.output: none`, and its channel is the value the connection reads from an event, such as `acme/widgets` or `OPS`, not a chat platform's ID.
 - **New metric `agentkourier_webhook_requests_total`**, by `outcome`, `reason` and `connection`, with every series at 0 from when the
   connection's run starts. Each verified delivery is logged at INFO, `webhook: delivery answered`.
-- **`agentkourier_chat_listener_requests_total` has two new labels**: `platform` (`slack`, `webhook` or `other`) and `connection` (the
+- **`agentkourier_chat_listener_requests_total` has two new labels**: `platform` (`slack`, `teams`, `webhook` or `other`) and `connection` (the
   ChatConnection the path names, while the leader serves it, else `unknown`). A rule that sums the counter reads as before.
 - **Four recipes**: `webhook-github`, `webhook-jira`, `webhook-bitbucket` and `webhook-linear`, each a ChatConnection, a Binding and an
   AgentBackend for an A2A agent of your own.

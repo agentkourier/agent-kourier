@@ -1,0 +1,64 @@
+# prompt-agent-teams: the prompt agent in a Microsoft Teams channel. A mention of the bot starts a thread and a session.
+# An alert card that Alertmanager posts to the channel through a Workflows webhook starts an investigation in that alert's
+# thread. Replace 19:REPLACE-prompt-teams@thread.tacv2 with the channel's ID (19:…@thread.tacv2), not its name.
+#
+# The mention trigger comes first. Teams sends the bot a person's mention as an activity, and a reply in the thread
+# continues the session (chat.threadReplies defaults to all).
+#
+# The botMessage trigger reads posts of Workflows, whose Microsoft Entra application ID, 358f0194-6b0e-4dd3-af35-c24fe8a9ec87,
+# is the sender of every post that a Workflows flow makes (measured on a test tenant in November 2026). Teams does not send
+# a bot another app's posts, so the broker reads them from Microsoft Graph. On Teams the text of a post's cards is the field
+# body: one line for each TextBlock. The regexes read the card of Alertmanager's msteamsv2 receiver with its default
+# templates. Its first TextBlock is the title, [FIRING:<n>] or [RESOLVED] followed by the group labels' values. Its second
+# lists each alert's labels, one "  - name = value" line each. Every flow posts as Workflows, so match narrows the trigger
+# to Alertmanager's cards, and exclude turns away the Watchdog heartbeat. One thread per alert group (the key is the group
+# labels' values), with a 4h cooldown, and a RESOLVED card closes it.
+#
+# interactions.askUser lets the agent ask the thread a question: on Teams the question is an Adaptive Card that a member
+# of the channel's team answers.
+#
+# identity.tokenSecretRef names the Secret prompt-agent-bearer, key token, in namespace agent-kourier, as in the
+# prompt-agent recipe: the agent checks it against its own copy. See that recipe's kourier/binding.yaml.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: teams-prompt-chat, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {name: teams-prompt-agents}
+    name: prompt-agent         # on the a2a dialect the backend url alone selects the agent and these are labels;
+    namespace: prompt-agent    # the Binding needs them either way
+  identity:
+    tokenSecretRef: {name: prompt-agent-bearer}
+  chat:
+    connectionRef: {name: teams}
+    channel: 19:REPLACE-prompt-teams@thread.tacv2
+    triggers:
+      - type: mention
+      - type: botMessage
+        from: {id: 358f0194-6b0e-4dd3-af35-c24fe8a9ec87}
+        match:
+          body: '^\[(?:FIRING:\d+|RESOLVED)\] '
+        exclude:
+          body: '^\[[A-Z]+(?::\d+)?\] Watchdog\b'
+        extract:
+          state:
+            field: body
+            regex: '^\[(?P<state>FIRING|RESOLVED)'
+          key:
+            field: body
+            regex: '^\[[A-Z]+(?::\d+)?\] (?P<key>[^(\n]*[^(\s])'
+          alertname:
+            field: body
+            regex: '(?m)^\s*- alertname = (?P<alertname>\S+)'
+        thread:
+          by: key
+          cooldown: 4h
+          closeWhen: {state: RESOLVED}
+        limits:
+          rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}
+          maxRunsPerDay: 40
+        promptTemplate: |
+          An alert is {{ .State }}: {{ .Fields.alertname }}.
+          Look into it with your tools. Report the likely cause, the evidence you checked,
+          and the next steps a person should take.
+  interactions: {askUser: true}

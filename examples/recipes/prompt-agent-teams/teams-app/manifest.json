@@ -1,0 +1,47 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.30/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.30",
+  "version": "1.0.0",
+  "id": "33333333-3333-4333-8333-333333333333",
+  "developer": {
+    "name": "Example Platform Team",
+    "websiteUrl": "https://example.com",
+    "privacyUrl": "https://example.com/privacy",
+    "termsOfUseUrl": "https://example.com/terms"
+  },
+  "name": {
+    "short": "Agent Kourier"
+  },
+  "description": {
+    "short": "Agents in your team's channels",
+    "full": "Mention the bot in a channel and an agent answers in the thread. Alerts posted to the channel can start an investigation."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#FFFFFF",
+  "supportsChannelFeatures": "tier1",
+  "bots": [
+    {
+      "botId": "22222222-2222-4222-8222-222222222222",
+      "scopes": ["team"],
+      "isNotificationOnly": false,
+      "supportsFiles": false
+    }
+  ],
+  "webApplicationInfo": {
+    "id": "22222222-2222-4222-8222-222222222222"
+  },
+  "authorization": {
+    "permissions": {
+      "resourceSpecific": [
+        {
+          "name": "ChannelMessage.Read.Group",
+          "type": "Application"
+        }
+      ]
+    }
+  },
+  "validDomains": []
+}

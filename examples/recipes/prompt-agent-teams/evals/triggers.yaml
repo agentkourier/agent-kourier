@@ -1,0 +1,114 @@
+# What the teams-prompt-chat Binding makes of the posts in its channel, one message at a time. `go test ./test/recipes`
+# runs it. Cooldown, the thread per alert group, the close on RESOLVED and the limits are not evaluated here.
+#
+# The bot is Workflows' Microsoft Entra application ID, as in kourier/binding.yaml. The body is what the Microsoft Teams
+# adapter reads of a post that a flow made from an Alertmanager card: the text of each TextBlock, one after the other, each
+# on a line of its own (cardText in internal/chat/teams/graphtext.go). The cards are those of Alertmanager's msteamsv2
+# receiver with its default templates (msteamsv2.default.title and msteamsv2.default.text in Alertmanager's
+# template/default.tmpl), grouped by alertname and namespace. They were written from those templates, not recorded from a
+# live post. The first case is a whole card's text; the others are trimmed from the template's output: they leave out
+# lines that the trigger's regexes do not read (annotations, the source link, some labels). The post's own text is
+# empty for a Workflows card: its HTML body holds only an <attachment> tag.
+# --8<-- [start:first-case]
+cases:
+  - name: a firing alert
+    binding: agent-kourier/teams-prompt-chat
+    message:
+      bot: 358f0194-6b0e-4dd3-af35-c24fe8a9ec87
+      body: |
+        [FIRING:1] KubePodCrashLooping shop (checkout-7d9f8b6c5-x2x4k critical)
+
+
+        # Alerts Firing:
+
+        Labels:
+          - alertname = KubePodCrashLooping
+          - namespace = shop
+          - pod = checkout-7d9f8b6c5-x2x4k
+          - severity = critical
+
+        Annotations:
+          - summary = Pod shop/checkout-7d9f8b6c5-x2x4k is crash looping.
+
+        Source: http://prometheus.example.com/graph?g0.expr=kube_pod_container_status_restarts_total
+    expect:
+      outcome: matched
+      trigger: 1
+      fields: { state: FIRING, alertname: KubePodCrashLooping, key: KubePodCrashLooping shop }
+# --8<-- [end:first-case]
+
+  - name: a resolved alert
+    binding: agent-kourier/teams-prompt-chat
+    message:
+      bot: 358f0194-6b0e-4dd3-af35-c24fe8a9ec87
+      body: |
+        [RESOLVED] KubePodCrashLooping shop (checkout-7d9f8b6c5-x2x4k critical)
+
+
+        # Alerts Resolved:
+
+        Labels:
+          - alertname = KubePodCrashLooping
+          - namespace = shop
+          - pod = checkout-7d9f8b6c5-x2x4k
+          - severity = critical
+
+        Annotations:
+
+        Source: http://prometheus.example.com/graph?g0.expr=kube_pod_container_status_restarts_total
+    expect:
+      outcome: matched
+      trigger: 1
+      fields: { state: RESOLVED, alertname: KubePodCrashLooping, key: KubePodCrashLooping shop }
+
+  - name: a group whose alerts share no label but the group's ends its title in a space
+    binding: agent-kourier/teams-prompt-chat
+    message:
+      bot: 358f0194-6b0e-4dd3-af35-c24fe8a9ec87
+      body: "[FIRING:2] KubePodNotReady shop \n\n\n# Alerts Firing:\n\nLabels:\n  - alertname = KubePodNotReady\n  - namespace = shop\n  - pod = search-6f7d8c9b-1a2b3\n\nLabels:\n  - alertname = KubePodNotReady\n  - namespace = shop\n  - pod = catalog-5b6c7d8e-4c5d6\n"
+    expect:
+      outcome: matched
+      trigger: 1
+      fields: { state: FIRING, alertname: KubePodNotReady, key: KubePodNotReady shop }
+
+  - name: the Watchdog heartbeat is excluded
+    binding: agent-kourier/teams-prompt-chat
+    message:
+      bot: 358f0194-6b0e-4dd3-af35-c24fe8a9ec87
+      body: |
+        [FIRING:1] Watchdog (none)
+
+
+        # Alerts Firing:
+
+        Labels:
+          - alertname = Watchdog
+          - severity = none
+    expect:
+      outcome: excluded
+
+  - name: another flow's card is not an alert
+    binding: agent-kourier/teams-prompt-chat
+    message:
+      bot: 358f0194-6b0e-4dd3-af35-c24fe8a9ec87
+      body: |
+        Daily standup reminder
+        Post your update in this thread.
+    expect:
+      outcome: unmatched
+
+  - name: another app's post
+    binding: agent-kourier/teams-prompt-chat
+    message:
+      bot: 44444444-4444-4444-8444-444444444444
+      body: '[FIRING:1] KubePodCrashLooping shop (critical)'
+    expect:
+      outcome: other_bot
+
+  - name: a person's post without a mention
+    binding: agent-kourier/teams-prompt-chat
+    message:
+      user: 55555555-5555-4555-8555-555555555555
+      text: Is checkout down for anyone else?
+    expect:
+      outcome: person

@@ -54,4 +54,9 @@ type Step struct {
 	Detail string
 	// State is how far the step has got.
 	State StepState
+	// Call says the step is a tool call as it was made: Title is the tool's name and Detail the summary of its arguments, which
+	// a platform may word as it words the status line of a call (ToolLine: "Ran get_pods(ns=prod)"). A step that is not a
+	// call, such as a card that stands for time or a call retitled to say that it waits for an approval, has a title that
+	// says what it is, and a platform shows the title as it is.
+	Call bool
 }

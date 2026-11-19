@@ -113,12 +113,14 @@ The five minutes and the 200 pages are constants of the binary (`agent.DefaultLo
 agent-kourier: slack rejected the tokens: invalid_auth
 ```
 
-Slack refused a token of the broker's own connection for good, so Agent Kourier stops rather than retry. A broker with no own connection
-never ends this way: every connection it serves is a team connection. (A team ChatConnection whose
-token Slack refuses does not end the process: that connection stops, its `agentkourier_chat_connected` says 0, the log has a WARN that
-names it and Slack's code, and its Bindings show `ChatCredentialsRejected` on `ChannelJoined`. It starts again by itself when its Secret
-or ChatConnection changes.) The word at the end is Slack's own code: `invalid_auth`, `not_authed`, `token_revoked`, `token_expired` or `account_inactive`. The usual cause is a token copied incompletely or
-from another Slack app, or one that has been revoked since.
+The chat platform (Slack; for a Teams connection, Microsoft Entra or the Bot Connector) refused the credentials of the broker's own
+connection for good, so Agent Kourier stops rather than retry. A broker with no own connection never ends this way: every connection
+it serves is a team connection. (A team ChatConnection whose credentials the platform refuses does not end the process: that
+connection stops, its `agentkourier_chat_connected` says 0, the log has a WARN that names it and the platform's code, and its Bindings
+show `ChatCredentialsRejected` on `ChannelJoined`. It starts again by itself when its Secret or ChatConnection changes.)
+
+**Slack.** The word at the end is Slack's own code: `invalid_auth`, `not_authed`, `token_revoked`, `token_expired` or
+`account_inactive`. The usual cause is a token copied incompletely or from another Slack app, or one that has been revoked since.
 
 In HTTP mode only the bot token is sent to Slack: the signing secret is never checked by Slack, and a wrong one shows as Slack's
 requests answered 401 ([below](#slacks-requests-are-answered-401)), not as this exit.
@@ -133,6 +135,23 @@ Replace the Secret with the right tokens, then restart rather than wait out the 
 ```sh
 kubectl -n agent-kourier create secret generic slack \
   --from-literal=botToken="$SLACK_BOT_TOKEN" --from-literal=appToken="$SLACK_APP_TOKEN" \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n agent-kourier rollout restart deploy/agent-kourier
+```
+
+**Microsoft Teams.** The line reads `agent-kourier: teams rejected the tokens: <code>`, with `(reported by a call)` after it when a
+post or another call found the refusal rather than the connection's start. The broker asks Microsoft Entra for the bot's token as the
+connection starts, so a client secret, `spec.teams.appID` or `spec.teams.tenantID` that Entra refuses (a 400 or a 401) ends the start;
+the code is Entra's OAuth error code. The same exit follows when the Bot Connector refuses the bot's token (401) or answers that an
+admin disabled the app (403 `BotDisabledByAdmin`), with the Bot Connector's code, and in socket mode when the socket's connect call is
+answered 401, with no code. Entra's refusal of the token for Microsoft Graph does not end the process. A client secret stored with a
+newline at its end is sent with it ([Store the client secret](configure-teams.md#2-store-the-client-secret)). The dry run reads only
+Slack, so it does not test these credentials. Write the right value in the file as that step says, replace the Secret `teams` from it, then
+restart, and delete the file:
+
+```sh
+kubectl -n agent-kourier create secret generic teams \
+  --from-env-file="$HOME/.config/agent-kourier/teams-secret.env" \
   --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n agent-kourier rollout restart deploy/agent-kourier
 ```
@@ -529,11 +548,11 @@ generation that its ChatConnection's platform does not take). A Binding with no 
 | `BackendRejected` | The AgentBackend it names is invalid. If it had a good generation, that one is what runs, and `message` says which. | Fix the AgentBackend. In your own namespace `message` carries its problems. For one of another namespace it does not, so ask its owner. |
 | `ConnectionNotFound` | `spec.chat.connectionRef` names a ChatConnection that does not exist. No broker owns the Binding, so the leader of any broker that sees it writes this. | Check the name and the namespace. |
 | `ConnectionRejected` | The ChatConnection it names is invalid, as for `BackendRejected`. | Ask the owner of the ChatConnection. |
-| `ConnectionNotServed` | `spec.chat.connectionRef` names a ChatConnection that exists, and this broker does not serve it: it stopped serving it, it serves at most 16 chat connections and left this one out, or the connection is a second connection of a Slack app that an older one uses. `message` says which. | Ask the platform team whether another broker serves the ChatConnection, or whether its namespace is meant to be served here. For a second connection of an app, see [Two connections of one Slack app](team-slack-app.md#two-connections-of-one-slack-app). A broker that does serve it writes its own status over this one. After a restart or a change of leader, this status can appear for up to about 10 seconds over a Binding that another broker serves, until that broker writes its own words again. |
+| `ConnectionNotServed` | `spec.chat.connectionRef` names a ChatConnection that exists, and this broker does not serve it: it stopped serving it, it serves at most 16 chat connections and left this one out, or the connection is a second connection of a Slack or Microsoft Teams app that an older one uses. `message` says which. | Ask the platform team whether another broker serves the ChatConnection, or whether its namespace is meant to be served here. For a second connection of an app, see [Two connections of one Slack app](team-slack-app.md#two-connections-of-one-slack-app). A broker that does serve it writes its own status over this one. After a restart or a change of leader, this status can appear for up to about 10 seconds over a Binding that another broker serves, until that broker writes its own words again. |
 | `NamespaceNotAllowed` | The AgentBackend or ChatConnection is in another namespace and its `allowedNamespaces` does not list the Binding's. The answer is the same whether the object is valid or not. | Ask the owner to list your namespace, or use an object of your own. |
 | `AgentNamespaceNotAllowed` | The AgentBackend it names sets `agents`, and `spec.agent.namespace` is not a namespace it allows: `spec.agent.namespace: AgentBackend team-a/kagent does not allow agents in namespace kagent`. The Binding is not served. The limit applied is that of the AgentBackend generation being served, which is an older one if the latest is invalid, and `message` then says so. | Name an agent in a namespace the AgentBackend allows. If the agent is in the Binding's own namespace, ask the owner to set `agents.sameNamespace: true`; otherwise ask the owner to list the agent's namespace in `agents.namespaces`. |
-| `InvalidPlatformID` | A chat ID does not have the shape of its ChatConnection's platform's IDs, and `message` names the field, the value, the platform and the shape to use. The API server and the broker's load hold each chat ID to Slack's shape, but the channel of a Binding whose triggers are all `webhookEvent`, which they hold to a webhook channel's: a channel's name such as `general` is refused by the API server when it is applied, and by the load on the files route. This reason is for a Binding that passed with another platform's channel, such as a `webhookEvent` Binding with the channel `acme/widgets` on a Slack connection; a Binding of Slack's triggers and IDs on Slack never has it. The last good generation, if there is one, stays served. | Write the ID that `message` asks for. [What each platform supports](../reference/platforms.md#chat-ids) has each platform's shapes. |
-| `UnsupportedOnPlatform` | The Binding asks for a feature, a trigger type or an output that the platform of its ChatConnection does not serve, and `message` names the field and what to change. Slack serves every feature that the broker checks, so a Binding of Slack's triggers on Slack never has it. The last good generation, if there is one, stays served. | Change the field as `message` says, or use a ChatConnection of a platform that serves the feature ([What each platform supports](../reference/platforms.md#features)). |
+| `InvalidPlatformID` | A chat ID that the schema takes does not fit its ChatConnection's platform: it has the shape of another platform's ID and not this one's, or it has this platform's shape and is longer than this platform's cap (on Slack, a channel or a bot ID over 32 bytes: `spec.chat.channel: is 33 bytes, longer than the 32 byte limit of a channel ID on Slack, …`). For example, `spec.chat.channel: "19:a1b2c3d4e5f6@thread.tacv2" is not a channel ID on Slack, the platform of ChatConnection team-a/slack: use the channel's ID, such as C0123456789 (G… for an older private channel), not its name (see https://agentkourier.dev/reference/platforms/)`. The API server and the broker's load hold each chat ID to Slack's or Microsoft Teams' shape, but the channel of a Binding whose triggers are all `webhookEvent`, which they hold to a webhook channel's: a value with none of those shapes, such as a channel's name `general`, or one past the field's cap, is refused by the API server when it is applied, and by the load on the files route. A `webhookEvent` Binding with the channel `acme/widgets` on a Slack connection has this reason too. The last good generation, if there is one, stays served. | Write the ID that `message` asks for. [What each platform supports](../reference/platforms.md#chat-ids) has each platform's shapes. |
+| `UnsupportedOnPlatform` | The Binding asks for a feature, a trigger type or an output that the platform of its ChatConnection does not serve, and `message` names the field and what to change. Slack serves every feature that the broker checks, so a Binding of Slack's triggers on Slack never has it; on a teams connection `interactions.approverGroups` has it. The last good generation, if there is one, stays served. | Change the field as `message` says, or use a ChatConnection of a platform that serves the feature ([What each platform supports](../reference/platforms.md#features)). |
 | `ChannelConflict` | Another Binding on the same ChatConnection holds the channel. The older one holds it, by `creationTimestamp`. If that Binding is in another namespace, `message` says only `a Binding in another namespace`. | Choose another channel. To find the holder, the operator reads the log line: it names it. [Who holds a channel](../explanation/config-routes.md#who-holds-a-channel) says how it is decided. |
 
 ## A team's connection is not served on a label selector
@@ -569,7 +588,7 @@ kubectl get namespaces -l 'agentkourier.dev/serve=true'
   right is taken away while the broker runs, it keeps the labels it last read, so a namespace labelled since is not admitted and one whose label was
   removed since stays admitted, and `agentkourier_config_stale` is 1. Check the right as the pod's ServiceAccount:
   `kubectl auth can-i watch namespaces --as system:serviceaccount:agent-kourier:<serviceaccount>`.
-- **The namespace is admitted, and the connection is still not served.** It is past the 16 the broker serves, or a second connection of a Slack app
+- **The namespace is admitted, and the connection is still not served.** It is past the 16 the broker serves, or a second connection of a Slack or Microsoft Teams app
   that an older connection uses: its Bindings say `ConnectionNotServed`, and `message` says which. Or it is served and has not started, because its
   Secret cannot be read: its Bindings say `ChatUnavailable`. [What the team sees in its Binding's status](team-slack-app.md#what-the-team-sees-in-its-bindings-status) has each.
 

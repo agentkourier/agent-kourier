@@ -1,12 +1,16 @@
 package slack
 
-import "time"
+import (
+	"time"
+
+	"github.com/agentkourier/agent-kourier/internal/chat/lanes"
+)
 
 // MaxChannelBacklog is the events a channel's lane holds, for the external tests that fill one.
-const MaxChannelBacklog = maxChannelBacklog
+const MaxChannelBacklog = lanes.PerChannel
 
 // MaxPendingEvents is the events all lanes hold.
-const MaxPendingEvents = maxPendingEvents
+const MaxPendingEvents = lanes.Total
 
 // HTTPAckWait is how long the handler of a request in HTTP mode waits for the sink by default.
 const HTTPAckWait = httpAckWait
@@ -19,22 +23,7 @@ func (c *Client) SetHTTPAckWait(d time.Duration) { c.ackWait = d }
 // before Run has begun.
 func (c *Client) PendingEvents() int {
 	if l := c.lanes.Load(); l != nil {
-		return l.held()
-	}
-	return 0
-}
-
-// PendingOn is the events the lane of channel holds in the Run that is going: the one being handled and those waiting behind
-// it. It is zero when the channel has no lane, or before Run has begun.
-func (c *Client) PendingOn(channel string) int {
-	l := c.lanes.Load()
-	if l == nil {
-		return 0
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if ln := l.byChannel[channel]; ln != nil {
-		return ln.held
+		return l.Held()
 	}
 	return 0
 }

@@ -371,8 +371,8 @@ them, for a person to read the agent's answers against.
   trigger harness can say about this recipe. It judges a `botMessage` trigger, and this Binding has none: it starts from
   a mention, and the harness does not evaluate a mention (a person's message is always `person`). So the file does not
   pretend to test the mention trigger. See [Writing or changing a recipe](../README.md#writing-or-changing-a-recipe).
-- `evals/scenarios/` holds ten questions: seven the documentation answers, each with the page that answers it, and three
-  it does not (Microsoft Teams, Discord, pricing). The module's tests check what a program can: for an answerable
+- `evals/scenarios/` holds ten questions: eight the documentation answers, each with the page that answers it, and two
+  it does not (Discord, pricing). The module's tests check what a program can: for an answerable
   question, the page exists in `docs/` and the keyword search puts it among the first five hits; for the others, the
   term appears on no page (`absent:` in the evidence). Whether the model then answers well, names the page and admits
   the gap is for a person to read against each scenario's `cause`. Nothing grades it. The `app` field is the corpus.

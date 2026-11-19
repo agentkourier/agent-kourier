@@ -41,6 +41,8 @@ var (
 	_ chat.Sink             = botGuard{}
 	_ chat.BotFilter        = botGuard{}
 	_ chat.BotMentionFilter = botGuard{}
+	_ chat.InlineDecider    = botGuard{}
+	_ chat.ChannelLister    = botGuard{}
 )
 
 // other says whether botID is the bot of a served connection on self's platform that is not self.
@@ -75,8 +77,16 @@ func (g botGuard) Interaction(ctx context.Context, i chat.Interaction) error {
 	return g.in.Interaction(ctx, i)
 }
 
+// DecidePress is the Intake's.
+func (g botGuard) DecidePress(ctx context.Context, i chat.Interaction) (chat.PressOutcome, error) {
+	return g.in.DecidePress(ctx, i)
+}
+
 // AcceptsBot is the Intake's: a botMessage trigger that names the bot is the only way a bot's message is taken, another connection's included.
 func (g botGuard) AcceptsBot(channel, botID string) bool { return g.in.AcceptsBot(channel, botID) }
+
+// BoundChannels is the Intake's: the channels that the connection's Bindings name.
+func (g botGuard) BoundChannels() []string { return g.in.BoundChannels() }
 
 // AcceptsBotMention is the Intake's, and no for the bot of another served connection.
 func (g botGuard) AcceptsBotMention(channel, botID string) bool {

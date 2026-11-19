@@ -79,15 +79,15 @@ func TestARecordedAnswerSentAgainDoesNotAnswerALaterQuestion(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := question("req-A", "status-A")
-	if err := d.Decide(t.Context(), decision(t, a, b, "UALICE1", p.clk.now())); err != nil {
+	if _, err := d.Decide(t.Context(), decision(t, a, b, "UALICE1", p.clk.now())); err != nil {
 		t.Fatalf("Alice's press on A = %v", err)
 	}
 	q := question("req-B", "status-B") // the answer to A continued the task, which asks B
 
-	if err := d.Decide(t.Context(), decision(t, a, b, "UALICE1", p.clk.now())); err != nil {
+	if _, err := d.Decide(t.Context(), decision(t, a, b, "UALICE1", p.clk.now())); err != nil {
 		t.Fatalf("Alice's press on A again = %v; want it done", err)
 	}
-	if err := d.Decide(t.Context(), decision(t, q, b, "UBOB22", p.clk.now())); err != nil {
+	if _, err := d.Decide(t.Context(), decision(t, q, b, "UBOB22", p.clk.now())); err != nil {
 		t.Fatalf("Bob's press on B = %v; want it decided and sent", err)
 	}
 	testutil.Eventually(t, "the task to complete", func() bool { return !p.mgr.HoldsTask(key, "task-1") }, testutil.Within(10*time.Second), testutil.Every(2*time.Millisecond))

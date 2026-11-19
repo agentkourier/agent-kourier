@@ -5,7 +5,7 @@ site_url: https://agentkourier.dev/
 site_description: >-
   Write the agent, not the chat integration. Agent Kourier is a Kubernetes-native broker that carries chat messages
   and the alerts posted there to streaming A2A agents, including one that is suspended until it is called, and posts
-  the answers in the thread. Slack today; more platforms planned.
+  the answers in the thread, on Slack, and experimentally on Microsoft Teams.
 repo_url: https://github.com/agentkourier/agent-kourier
 repo_name: agentkourier/agent-kourier
 edit_uri: edit/main/docs/
@@ -136,6 +136,7 @@ nav:
       - how-to/index.md
       - Install with Helm: how-to/install-with-helm.md
       - Configure Slack: how-to/configure-slack.md
+      - Configure Microsoft Teams: how-to/configure-teams.md
       - Create the Binding identity: how-to/create-binding-identity.md
       - Write a Binding: how-to/write-a-binding.md
       - Let a team bring its own Slack app: how-to/team-slack-app.md

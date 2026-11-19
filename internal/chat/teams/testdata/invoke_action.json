@@ -1,0 +1,68 @@
+{
+  "name": "adaptiveCard/action",
+  "type": "invoke",
+  "timestamp": "2026-11-18T01:20:00.000Z",
+  "localTimestamp": "2026-11-18T01:20:00.000Z",
+  "id": "f:00000000-0000-4000-8000-0000000000c3",
+  "channelId": "msteams",
+  "serviceUrl": "https://smba.trafficmanager.net/amer/11111111-2222-4333-8444-555555555555/",
+  "from": {
+    "id": "29:1test-user-not-a-real-id",
+    "name": "Test User",
+    "aadObjectId": "00000000-0000-4000-8000-000000000001"
+  },
+  "conversation": {
+    "isGroup": true,
+    "conversationType": "channel",
+    "tenantId": "11111111-2222-4333-8444-555555555555",
+    "id": "19:KourierStandInChannelForTestsOnly0000000000a@thread.tacv2;messageid=1790000000100"
+  },
+  "recipient": {
+    "id": "28:22222222-3333-4444-8555-666666666666",
+    "name": "Agent Kourier"
+  },
+  "entities": [
+    {
+      "locale": "en-US",
+      "country": "US",
+      "platform": "Web",
+      "timezone": "UTC",
+      "type": "clientInfo"
+    }
+  ],
+  "channelData": {
+    "channel": {
+      "id": "19:KourierStandInChannelForTestsOnly0000000000a@thread.tacv2"
+    },
+    "team": {
+      "id": "19:KourierStandInChannelForTestsOnly0000000000a@thread.tacv2"
+    },
+    "tenant": {
+      "id": "11111111-2222-4333-8444-555555555555"
+    },
+    "source": {
+      "name": "message"
+    },
+    "replyChain": {
+      "id": "1790000000100"
+    },
+    "legacy": {
+      "replyToId": "1:KourierStandInLegacyIDForTestsOnly0000000a"
+    }
+  },
+  "replyToId": "1790000000200",
+  "value": {
+    "action": {
+      "type": "Action.Execute",
+      "title": "Press",
+      "data": {
+        "delay": 0,
+        "nonce": "000000000000"
+      },
+      "verb": "press"
+    },
+    "trigger": "manual"
+  },
+  "locale": "en-US",
+  "localTimezone": "UTC"
+}

@@ -27,6 +27,10 @@ type words struct {
 	unrecorded string
 	// firstNone is told when someone else decided first and is not named; firstWords follows the mention of the one who did.
 	firstNone, firstWords string
+	// taken and already are never told on a platform that tells a person alone (the prompt's replacement says it there): they are
+	// the words for a platform that answers the press itself (chat.InlineDecider). taken says the press decided, and already that
+	// the same person's decision was recorded before and stands.
+	taken, already string
 }
 
 // wordsOf is the wording for a request of kind k. Every kind but a tool approval is worded as a question.
@@ -47,11 +51,14 @@ func wordsOf(k dialect.Kind) words {
 			gaveUp:       "Couldn't process your decision. Please press again.",
 			firstNone:    "Someone else decided this request first.",
 			firstWords:   "decided this request first.",
+			taken:        "Your decision was recorded.",
+			already:      "Your decision on this request is already recorded.",
 		}
 	}
 	return words{
 		gone: textGone, notReady: textNotReady, notMember: textNotMember, late: textLate, invalid: textInvalid,
 		timedOut: textTimedOut, closed: textClosed, gaveUp: textGaveUp, unrecorded: textUnrecorded, firstNone: textFirstNone, firstWords: textFirstWords,
+		taken: textTaken, already: textAlready,
 	}
 }
 

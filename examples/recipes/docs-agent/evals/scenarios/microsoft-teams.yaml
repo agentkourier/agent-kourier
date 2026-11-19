@@ -1,8 +1,7 @@
-# Not answerable from the documentation. "absent:" names a term that no page of the corpus holds; the module's tests check it.
-name: Microsoft Teams (not in the documentation)
+name: Microsoft Teams (experimental, http or socket mode)
 app: agent-kourier-docs
 question: Can Agent Kourier post to Microsoft Teams?
-cause: 'The documentation does not cover Microsoft Teams. A good answer says so plainly, and does not claim support or lack of support. It may say that the documentation describes Slack.'
+cause: 'Yes, experimentally, and only in a release later than 0.5.0. A ChatConnection with platform teams names a bot registered in one Microsoft Entra tenant, whose Teams app is installed in the team with the resource-specific permission ChannelMessage.Read.Group. It runs in http mode, where Teams sends activities to the leader''s chat listener over public HTTPS, or in socket mode, a Microsoft preview with no public endpoint, where what Teams sends while no socket is ready is lost as an activity. Mentions and posts in a channel start sessions; a live reply is one edited message; questions, tool approvals and feedback are Adaptive Cards that a member of the team presses. Alerts and other apps'' posts, such as an Alertmanager card posted through a Workflows webhook, come through Microsoft Graph, by notifications at spec.teams.notificationURL or by polling, and a botMessage trigger reads the card''s text as body. approverGroups is refused, and there is no acknowledgment reaction and no dry run on Teams.'
 evidence:
-  - 'absent: Microsoft Teams'
-  - 'The answer says the documentation does not cover it and cites no page for the claim.'
+  - how-to/configure-teams.md
+  - reference/platforms.md

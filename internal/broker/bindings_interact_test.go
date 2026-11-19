@@ -131,6 +131,31 @@ func TestBindingRefusesADialectThatIsNotBuilt(t *testing.T) {
 	}
 }
 
+// FeedbackEnabled is the Binding's feedback.enabled, which the feedback handler asks before it takes a vote on an answer; a Binding
+// the config has not got is session.ErrUnknownBinding, and so is no config yet not.
+func TestFeedbackEnabledIsTheBindingsSetting(t *testing.T) {
+	f := newFixture(t)
+	f.snaps.p.Store(nil)
+	if _, err := f.b.FeedbackEnabled("sre/oncall"); err == nil || errors.Is(err, session.ErrUnknownBinding) {
+		t.Errorf("FeedbackEnabled before a config = %v, want an error that is not the sentinel", err)
+	}
+	for _, enabled := range []bool{true, false} {
+		snap := snapshot(t, f.url, v1alpha1.DialectA2A, time.Hour) // the dialect does not matter to the setting
+		rb, _ := snap.Binding("sre", "oncall")
+		rb.Binding.Spec.Feedback.Enabled = enabled
+		f.snaps.p.Store(snap)
+
+		if on, err := f.b.FeedbackEnabled("sre/oncall"); err != nil || on != enabled {
+			t.Errorf("FeedbackEnabled = %t, %v; want %t from spec.feedback.enabled", on, err, enabled)
+		}
+	}
+	for _, name := range []string{"sre/other", "oncall"} {
+		if _, err := f.b.FeedbackEnabled(name); !errors.Is(err, session.ErrUnknownBinding) {
+			t.Errorf("FeedbackEnabled(%q) = %v, want session.ErrUnknownBinding", name, err)
+		}
+	}
+}
+
 // feedback.enabled of the Binding reaches the session as Backend.Feedback, which makes the final message of an answer carry the
 // buttons (spec 8.7).
 func TestBackendCarriesTheBindingsFeedbackSetting(t *testing.T) {

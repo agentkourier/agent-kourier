@@ -455,7 +455,7 @@ func TestHTTPModeDoesNotHandOnAnEventWhoseAnswerHasGone(t *testing.T) {
 		t.Errorf("the event behind it: answered %d; want 503", code)
 	}
 	open()
-	testutil.Eventually(t, "the lane of C1 to empty", func() bool { return c.PendingOn("C1") == 0 }, testutil.Within(5*time.Second))
+	testutil.Eventually(t, "the lane of C1 to empty", func() bool { return c.PendingEvents() == 0 }, testutil.Within(5*time.Second))
 	if got := sk.messages(); len(got) != 1 || got[0].TS != "1.1" {
 		t.Errorf("the sink was given %+v; want the first event alone", got)
 	}
@@ -478,7 +478,7 @@ func TestHTTPModeShedsAnEventPastTheChannelBacklog(t *testing.T) {
 		body := eventBody(message(map[string]any{"ts": fmt.Sprintf("%d.1", i+1), "event_ts": fmt.Sprintf("%d.1", i+1)}))
 		go func() { codes <- post(t, handler, jsonType, body).Code }()
 	}
-	testutil.Eventually(t, "the lane of C1 did not fill", func() bool { return c.PendingOn("C1") == slack.MaxChannelBacklog }, testutil.Within(5*time.Second))
+	testutil.Eventually(t, "the lane of C1 did not fill", func() bool { return c.PendingEvents() == slack.MaxChannelBacklog }, testutil.Within(5*time.Second))
 	if rec := post(t, handler, jsonType, eventBody(message(map[string]any{"ts": "99.1", "event_ts": "99.1"}))); rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("past the backlog: answered %d; want 503", rec.Code)
 	}

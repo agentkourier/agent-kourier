@@ -105,6 +105,13 @@ type failStop struct {
 	exit func(code int)
 	// before, if set, runs just before exit: the chat listener drops its routes (chatRoutes.close), so that no request is taken by a
 	// replica that knows it no longer leads, even for the moment the exit takes.
+	//
+	// It does not close a Microsoft Teams connection's sockets (socket mode) with a close frame first, on purpose. The exit follows at
+	// once, and the process's end closes every TCP connection it holds, so Microsoft sees the sockets end no later than a close frame
+	// would tell it; a close written first, each bounded by its write deadline, could only hold the exit back, which the fail-stop must
+	// not wait on. And it would save nothing: an activity sent on a socket of a replica that has stopped leading is lost either way,
+	// as far as is known (that Teams does not send it again on another socket was not measured; internal/chat/teams/socket.go), and
+	// the next leader's socket takes the region's traffic once it opens.
 	before func()
 	once   sync.Once
 }

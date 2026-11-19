@@ -148,9 +148,12 @@ upstream webhook trigger stays compatible with Agent Kourier.
 - kagent 0.10.x support. The pilot uses a separate kagent 1.0 alpha environment (D24).
 - Replacing existing alert notifications or sitting in the paging path. A mention an agent asks for is a convenience post, and no user group can be mentioned (D48).
 - Tool approvals before a write-capable agent is bound (Phase 5).
-- Chat platforms other than Slack, and alert sources other than Alertmanager. The
-  chat interface and the `botMessage` trigger (8.2) allow them; v1 does not ship them.
-  The `webhook` platform (D55) is not a chat platform: it takes events and posts nothing.
+- Chat platforms other than Slack and Microsoft Teams, and alert sources other than Alertmanager.
+  The broker runs Slack and Microsoft Teams connections (section 7); the chat interface and the
+  `botMessage` trigger (8.2) allow more. The API also takes the `webhook` platform (D55), which is
+  not a chat platform: it takes events and posts nothing. The broker runs a webhook connection on
+  its chat listener; a broker with no chat listener refuses one as a wiring error (`ErrWiring`):
+  as the broker's own connection it fails the start, and a team's is not started.
 - A direct Alertmanager webhook receiver. Dropped for good, not deferred (D39). Alertmanager
   is not a supported source of the `webhook` platform either: alerts enter only through
   `chat.triggers` (D55).
@@ -219,6 +222,7 @@ upstream webhook trigger stays compatible with Agent Kourier.
 | D53 | Optional own connection | Decided 2026-11-09 (owner), for 0.3.0. Amends D50 (6) and D52. On the custom-resource route a broker may have no ChatConnection of its own: with `AGENTKOURIER_CHAT_CONNECTION` unset (the chart's `config.chatConnection` empty) it serves the ChatConnections of the namespaces in `AGENTKOURIER_CONNECTION_NAMESPACES`, each as D52 serves a team connection; with it set nothing changes. Neither set is a start failure (exit 2): the list is read at start, so such a broker could serve nothing. **Amended by D54:** neither set (and no selector) now serves every namespace, and the chart renders that when `config.chatConnections` has no entry. The file route keeps its one connection and still refuses both variables. **Failure.** Without an own connection no chat failure ends the process and readiness is unchanged: with every token rejected the broker stays up and Ready, each connection's `agentkourier_chat_connected` is 0 and its Bindings say `ChatCredentialsRejected`, and the docs give an alert rule on the metric. Readiness never depended on a connection, so a standby, which holds none, needs no rule of its own. **Rows with no connection** (written before D52's migration, or by an older image after a rollback) are the own connection's when there is one; without one the leader refuses to start while any exist (exit 2), and says to set the own connection once so they get an owner and then unset it. A broker that never had an own connection has none. **Hold.** None without an own connection: its connections are team connections, which D52 leaves unheld, and the rollback the hold exists for (custom resources to a ConfigMap, D50 (6)) is not a move such a broker can make in place. **Order.** The own connection, if there is one, takes the first of the 16 places and claims its Slack app first; otherwise all 16 places and every claim go by age (`creationTimestamp`, then namespace and name). **Served set.** A connection this broker served and no longer does, while it exists, is told `ConnectionNotServed` as D52 says, a former own connection included, unless its namespace is admitted, when it is served as a team connection. **Chart.** An empty `config.chatConnection` with a non-empty `config.connectionNamespaces` renders no variable, and the chart refuses a rendered ChatConnection outside the admitted namespaces; with both empty, the one rendered ChatConnection is the own one, as before. **Rejected.** Readiness tied to a connected chat connection (a standby holds none); an exit when no connection is up (a restart mends no rejected token, and hides which team's is at fault); dropping the rows with no connection (settled ones would never be purged, since the session retention names the connection); a variable that names a default connection for them; an explicit chart switch for "no own connection" (the empty value says it). |
 | D54 | Namespace admission by selector, and all by default | Decided 2026-11-14 (owner), for 0.4.0 (issue 260). Amends D52 (the list is no longer the only admission) and D53 (neither set is no longer a start failure). **Selector.** Beside `AGENTKOURIER_CONNECTION_NAMESPACES`, `AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR` holds a `metav1.LabelSelector` as JSON (the chart's `config.connectionNamespaceSelector`, rendered with `toJson`). JSON because `{}`, which selects every namespace, must differ from unset, and an empty variable reads as unset. It is decoded strictly (an unknown field is refused) and validated as Kubernetes validates a selector; an error says what is wrong and never shows the value. A namespace is admitted when it is on the list or its labels match the selector. The list stays read at start; the selector is read live, from an informer on `namespaces` (list and watch, never get, in the ClusterRole only when a selector is set). A namespace that gains a matching label is admitted at the next read, and one that loses it stops being admitted: its connections are told `ConnectionNotServed` as D52 says (`stopped`), with no restart. The admitted set is part of the source's fingerprint, so a label change reloads at the next poll, and part of each read's listing, so the read and its fingerprint agree. A namespace cache that cannot reach the API server keeps its last state, as the three kinds' caches do: an outage is not every label removed. **All.** With no own connection, an empty list and no selector, the broker serves the ChatConnections of every namespace; an explicit `{}` means all too, with or without an own connection. Nothing that worked before changes meaning: that combination was a start failure. With an own connection and nothing else, the broker serves its own alone, as before. The cap of 16 then applies across the cluster, by the order of D53, and a connection past it is told so in its Bindings' status. **Several brokers.** "All" is a single-broker setting, documented and not enforced: a second broker in the cluster, even one with only an own connection, has its connection served by the "all" broker too, two Socket Mode connections of one app splitting its events. The status put-back detection (`agentkourier_binding_status_writes_total{result="put_back"}` and its log line) already shows two brokers serving one Binding, and the troubleshooting page names "all" as a cause. **Consent.** Under "all" the gate on attaching a Slack app is the right to create a ChatConnection, which the chart aggregates to no `admin` or `edit` role, and the team's own Role granting its Secret to the broker; the security page says so. **Chart.** With no own connection, no list and no selector: no `config.chatConnections` entry renders "all"; exactly one is the own connection, as before (owner, 2026-11-14), and the docs warn that adding a sole entry to an "all" install makes it "own alone"; two or more are refused, as before. The sole entry is read as the own connection only when the list and the selector are both unset. A rendered team ChatConnection is checked against the list only when no selector is set and the install is not "all", since labels are unknown at render. `agent-kourier init` writes a values file of comments only. **Rejected.** A regex on namespace names (an unanchored pattern matches more than meant, a name is no one's consent, and it is awkward in a comma-separated variable); `*` in the list; requiring an explicit `{}` for all (it keeps a line in the quick install that does nothing on a one-broker cluster); an opt-out namespace label to fence a second broker (cost without a user who asked); the kubectl selector string in the variable (it cannot say "everything" in a non-empty value). |
 | D55 | The webhook platform | Decided 2026-11-17 and 2026-11-18 (owner). Amends D39 and D42. A ChatConnection with `spec.platform: webhook` takes signed JSON webhooks of one service (GitHub, Jira Cloud, Bitbucket Cloud, Linear: a recipe each) on the broker's chat listener and turns them into agent sessions. The agent posts on the service with its own tools; Agent Kourier posts nothing there (`chat.output: none`, 8.2). **API (D42).** `spec.webhook` holds `identity` (the agent's own account on the service), `verify` (`scheme: hmac-sha256` over the raw body, with an optional `prefix` and an optional body `timestamp` within a window of at most 10 minutes, or `scheme: token`, a header that must hold the prefix and then the Secret's `token`; a signature is in hex, after the prefix), `channel` (a first-of list of JSON Pointers, or a fixed `value`), `actor` (a first-of list of pointers, `whenMissing: drop` or `keep`, or `none: true`), `thread` (an `id` field, with an optional prefix), `fields` (at most 32, each from a first-of list of pointers or a header, `kind: id` or `text`) and `delivery` (the header that names a delivery, read for the logs alone). A header that carries a credential (`verify.header`, `Authorization`, `Proxy-Authorization`, `Cookie`) is never a field or the delivery header. The language is JSON Pointer and a first-of list, nothing more: client-go JSONPath parses the whole body and CRD CEL cannot check it, CEL is a new dependency, and JSONata is rejected. No new kind holds a mapping: the recipes give the reuse. **Steps.** Before the connection sees a request, the chat listener answers 413 to a body over its cap, and the connection answers 400 (malformed, `unreadable`) to a body it cannot read. Then a request goes through these, in order, and no step runs after one that ends it: (1) verify the raw bytes, and then the body timestamp if the connection has one (401, unverified: `unsigned`, `bad_signature` or `stale`); (2) parse, in one pass that collects only the named pointers, with a depth cap and a duplicate key on the way to a wanted value refused (400, malformed: `schema`, `depth` or `duplicate_key`); (3) the channel, the first of its pointers that resolves or the fixed value, which must have the channel shape (200, unmapped `no_channel` when it does not); (4) the actor, for the self-drop below (200: outcome `self` when an actor value is `identity`, ignored `no_actor` when none resolves and `whenMissing` is `drop`); (5) the fields, then the thread from its field (200, unmapped: `bad_id` when the thread's field has no value that passes the id check, or the thread, with its prefix, holds `:`, which chat message IDs join with; `no_thread` when it does not resolve); (6) the Sink, after the connection's events before it (200, accepted, once it has taken the event; 503 with a `Retry-After` when it has not: `not_running`, `withheld`, `timeout`, or `cancelled` when the sender hung up). Every outcome after parsing answers 200 except that 503, since a service such as Linear counts any other answer as a failure (the spike's reading of Linear's docs, not measured here). **Self-drop.** The agent posts with the service account `identity` names, and the service sends a webhook for that post too; so before the Sink an event whose actor equals `identity` (ASCII case-insensitive, no other folding) is dropped, and one with no actor value is dropped (`whenMissing: drop`, the default) or kept (`keep`). `actor: {none: true}` turns the self-drop off and then takes no `identity`, `from` or `whenMissing`; otherwise `identity` and `actor.from` are required. **Invalid id fields.** An `id` field's value must pass the prompt's key set (ASCII letters, digits and `_.-:/`, within a byte cap). The first-of list moves past a value that does not; a field whose every value fails is `Invalid`, not absent. Only an invalid thread field unmaps the event (`bad_id`); an `Invalid` field named in a trigger's `match` or `exclude` makes that trigger miss (it fails closed), and one the prompt template reads refuses the start. A text field reaches the agent only in the untrusted block, so a template reads `.Channel` and id fields alone: `Validate` refuses one that reads `.Key`, `.State`, `.Link` or `.Source`, which an event does not have, and resolution one that reads a text field or a name the connection lacks. **A limited event.** An event that a trigger's limits stop is answered 200 and logged at WARN with the delivery ID, the Binding, the trigger, the limit and the thread; the body is not remembered, so a redelivery is decided again, and the docs say the event is lost. So is an event whose thread's session withholds its replacement (8.2, "Webhook events"): it is not_started, and not remembered. No digest line is posted, since the platform has no replies. **Alertmanager** is not a supported source (D39): alerts enter only through `chat.triggers`. **Rejected.** Profiles of a `web` platform (one platform and profile field for `kourier-v1` and webhooks, which differ in kind: withdrawn 2026-11-17, D42); a kind of its own for a mapping; fixed caps in place of required trigger limits. |
+| D56 | The root of a thread a person's mention opens | Decided 2026-11-18 (owner, "Root only, any mode"). The first turn of a session that a person's mention opened inside an existing thread carries the message that opened the thread, whoever wrote it, a person or another app, on a platform that declares it (`chat.Caps.RootContext`, which the broker gives the session with each Binding's backend from the platform of its connection): Microsoft Teams, where an alert is a card that another app (Workflows) posts and that Teams never sends the bot, so no trigger takes it and the person's mention is the first turn that can show it to the agent. The first turn is the session's turn with no row before it in the reply queue, a person's, whose message is not the thread's root, not a bot's mention (D49). It carries the root alone, in an untrusted block of its own (R2), whatever `chat.threadReplies` says: no reply of the thread, a person's or another app's, goes with it, and a later person's turn reads at most what came after the turn before it, so no later person's turn carries the root again (a bot's mention reads back to the last turn that carried the thread, or the thread's start, and may carry it, D49). The root is left out if it is Agent Kourier's own, a message the adapter would drop, blank once its invisible characters are deleted, or a turn already. Where the platform does not declare it (Slack, whose alerts reach `botMessage` triggers, which start their session with the alert itself), the turn goes with the person's message alone, as before: the session does not ask for the root, so the platform is not read and the turn is not counted, and a turn reads from the store only what it read before. On Teams the root is read alone, in one call to Microsoft Graph (`chat.RootReader`), whatever the thread's length. Whether a turn takes the root is decided at its first send and kept for its resends, and the window is read from stored rows, which a restart reads again. Rejected: including other apps' replies as well (they stay out, D36), and keying the rule on the platform's name in the broker. |
 
 ## 6. Architecture
 
@@ -249,7 +253,7 @@ Only Socket Mode is served today; the Events API over HTTP, which the diagram al
 
 | Component | Responsibility |
 |---|---|
-| Ingress adapters | Authenticate the inbound request, normalize it to an internal event, persist it, acknowledge fast. Slack requires a response within 3 seconds, so no agent call happens on the request path. For chat messages the persist step is the session manager's `Submit`: a local, idempotent (by messageId) write of the turn, after which the adapter acknowledges; a failed Submit is not acknowledged, so Slack redelivers (WP-29). The Slack adapter hands each event to its sink on a lane of the event's channel (`internal/chat/slack/lanes.go`): the events of one channel are handled one at a time and in the order they arrived, and those of different channels at the same time, so a sink that is slow for one channel holds up that channel's events and not the reading of the connection. A lane holds 16 events (the one being handled and those waiting) and all lanes 256, past which a channel that already has an event held is refused another; a channel with none always gets its first. An event that is refused is not queued but left unacknowledged, so Slack may send it again and it can be lost; it is counted in `agentkourier_slack_events_shed_total`. |
+| Ingress adapters | Authenticate the inbound request, normalize it to an internal event, persist it, acknowledge fast. Slack requires a response within 3 seconds, so no agent call happens on the request path. For chat messages the persist step is the session manager's `Submit`: a local, idempotent (by messageId) write of the turn, after which the adapter acknowledges; a failed Submit is not acknowledged, so Slack redelivers (WP-29). The Slack adapter hands each event to its sink on a lane of the event's channel (`internal/chat/lanes`, which the Teams adapter shares): the events of one channel are handled one at a time and in the order they arrived, and those of different channels at the same time, so a sink that is slow for one channel holds up that channel's events and not the reading of the connection. A lane holds 16 events (the one being handled and those waiting) and all lanes 256, past which a channel that already has an event held is refused another; a channel with none always gets its first. An event that is refused is not queued but left unacknowledged, so Slack may send it again and it can be lost; it is counted in `agentkourier_slack_events_shed_total`. The Microsoft Teams adapter (`internal/chat/teams`), which the broker runs for a ChatConnection in either mode (`spec.teams.mode`: `http`, on its chat listener, or `socket`, on the outbound sockets the leader opens, section 7), and refuses as a wiring error only when the broker has no chat listener and the connection is in http mode or sets `spec.teams.notificationURL` (`needsChatListener`, `internal/broker/platform.go`), acknowledges first and persists after: Teams gives a message activity about 25 seconds and an invoke about 14, and, measured on a test tenant on 2026-11-18, never sends again an activity answered 200 or one whose request it held until it gave up, and sends one answered 503 at once again once, about 0.6 seconds later (other status codes were not measured). So the adapter answers 200 once the token, tenant and dedup checks pass and the activity is on its channel's lane, and the lane hands it to the session manager after, retrying a `Submit` that fails a bounded number of times, since no redelivery will; an activity it sheds is answered 503 and its dedup key released, so the one redelivery can be taken. |
 | Event queue | Durable table in the store, with a worker, for at-least-once processing across restarts. It was built for the webhook; since D39 no ingress adapter writes to it, and a chat message persists through the session manager's `Submit` (above). It is not in the diagram for that reason. |
 | Config loader | Validates references and builds the in-memory routing table. Two sources, picked by `AGENTKOURIER_CONFIG_SOURCE` (D50). `files` (the default): reads YAML files and reloads on change, and a problem in the config is a load error (7). `crds`: informers on the three kinds, and the elected leader writes `Binding.status` conditions (D40); a problem with one Binding is a condition on it, and the rest keep serving; a problem with a backend or connection is a condition on each Binding that refers to it. There is no separate controller. The `crds` source is built (CK-8), and so is the leader's writing of the status (CK-9). Both produce the same Go types and run the same `Default`, `Validate` and resolution code. |
 | Router | Finds the Binding for a message, then applies the trigger's cooldown, rate limits, and daily cap. In the code the chat intake does this for a trigger (8.2). |
@@ -562,8 +566,197 @@ Rules:
   `valueSecretRef`) takes an optional `key` that defaults to `token`. `ChatConnection.spec.credentialsSecretRef` names one Secret with
   keys fixed per platform and mode (D42); Slack's are `botToken` and `appToken` in Socket Mode and `botToken` and `signingSecret`
   in HTTP mode. Non-secret settings of a platform go in a `spec.<platform>` block that is added along with the platform (D42);
-  Slack's is `spec.slack`, whose `mode` is `socket` or `http` and is Socket Mode when unset (D40). A webhook connection's
-  Secret has one key, by `spec.webhook.verify.scheme`: `webhookSecret` for `hmac-sha256` and `token` for `token` (D55).
+  Slack's is `spec.slack`, whose `mode` is `socket` or `http` and is Socket Mode when unset (D40). Microsoft Teams' Secret key is
+  `clientSecret`, the Microsoft Entra app's client secret, in either mode. A webhook connection's Secret has one key, by
+  `spec.webhook.verify.scheme`: `webhookSecret` for `hmac-sha256` and `token` for `token` (D55).
+- **Microsoft Teams.** `ChatConnection.spec.platform` takes `teams` (owner, 2026-11-16; scope revised 2026-11-17). Its
+  `spec.teams` block is required on a teams connection and refused on any other: `tenantID` and `appID`, each a GUID in lowercase hex,
+  are required; `mode` is `http` or `socket` and is `http` when unset, because Microsoft recommends an HTTPS messaging endpoint in
+  production and calls Socket mode a public preview (Microsoft's "Connect an agent without the SDK" page, read 2026-11-17): in `http` Teams
+  sends activities to `POST /chat/teams/<namespace>/<name>` on the chat listener, and in `socket` the broker opens an outbound WebSocket
+  and needs no public endpoint. `notificationURL` is optional in either mode, an `https` URL (Microsoft Graph's subscription resource
+  requires https) whose path must be the connection's own route, `/chat/teams/<namespace>/<name>`; set, alerts arrive by Graph
+  change notifications (TEAMS-7, below), and unset, the leader polls Graph for them (TEAMS-7P, below). A Binding of a teams connection takes questions, tool approvals, feedback and
+  `botMessage` triggers in either mode, and is refused `approverGroups` and `webhookEvent` triggers (`UnsupportedOnPlatform`). The
+  chat IDs of a Binding are held, by the schema and `Validate`, to the union of Slack's and Teams' shapes (a channel
+  `19:…@thread.tacv2` or `@thread.skype`; a sender, the posting app's Microsoft Entra application ID; a mention's user, the person's
+  Microsoft Entra object ID), with the union's caps: 140 bytes for a channel, 36 for a sender and a user, 32 for an approver group,
+  which keeps Slack's shape alone; the channel of a Binding whose triggers are all `webhookEvent` takes a webhook channel's instead
+  (D55). GUIDs are lowercase hex
+  only, since chat IDs are compared byte for byte. Which platform's shape an ID must have is checked where the broker has the
+  connection (`InvalidPlatformID`, D42). The broker runs a teams connection in either mode, and posts, replies and edits through the
+  Bot Connector with a token that Microsoft Entra issues for `clientSecret`. In `http` mode it needs a chat listener, and the leader
+  takes Teams' requests on the connection's route; with no chat listener the broker's own teams connection is a wiring error at start
+  and a team's is not started. In `socket` mode (TEAMS-2S, built 2026-11-18) the leader alone opens a socket in each region (`amer`,
+  `emea`, `apac`): the region's `/v3/websockets/connect` with the bot's token, Azure SignalR's negotiate and its JSON hub protocol,
+  SocketReady within 30 s, each `Activity` envelope handed to the same take as an HTTPS request (no JWT: the socket is the
+  authentication) and answered in its reply frame within the envelope's `deadlineMs`, an invoke's body in the frame. A socket is
+  replaced a minute before its token expires (600 s measured) by one that names it in `x-ms-socket-replaces-connection-id`, and the
+  old is closed once its envelopes are answered. Connects back off 1, 2, 4, 8, then 15 s with jitter; a 429 waits its `Retry-After`;
+  a 401 is a rejected credential; a 403 (measured: `apac` on the test tenant) is retried every 5 minutes, and ends the run only when every
+  region's last answer is a 403 and none is ready; the run is then retried as any transient failure. A region's socket is closed when the
+  run's context ends, so a leader that loses its Lease (the process exits) or stops stops its sockets. What Teams sends while no
+  region's socket is ready is lost (measured, 2026-11-18: the newest socket takes all traffic, and nothing is queued for later); each
+  such interval is logged (the first, from the run's start, as the time to the first ready socket; each later one with its start and
+  end), observed in `agentkourier_teams_socket_gap_seconds`, and given to
+  `teams.Config.OnSocketGap`; a connection with no `notificationURL` reads every channel back to the gap's start (TEAMS-7P, below). A change of mode is an edit of the
+  ChatConnection: a team's connection is restarted in the new mode, and the broker's own takes it when the broker restarts (as any
+  edit of it). A run told to stop closes a socket still in its handshake at once, so a stopped run's socket never becomes ready after
+  the next run's and takes its traffic. A failed replacement waits as a connect does after the same failure (a 429's Retry-After, a
+  403's slow wait), and a connect that answers no positive `expiresIn` is a failure. An envelope past the 32 being handled is answered
+  503 and counted in `agentkourier_teams_activities_shed_total` as `socket_busy`. A question, a tool approval and a message's
+  buttons are Adaptive Cards 1.5 whose `Action.Execute` Teams sends as an `adaptiveCard/action` invoke, which Teams does not send
+  again (measured on a test tenant, November 2026). Its service holds the invoke's request about 13.9 s, but the client shows an
+  answer only up to 12.5–13 s after the invoke reached the server, and past that shows the presser "Something went wrong" (test
+  tenant, web client, 2026-11-18). The chat listener gives the Teams route an 8 s handler deadline in place of 3 s
+  (`chat.HTTPDeadline`): with its 2 s read and 1 s write, 11 s, a margin for the network; a token still waits for the signing keys at
+  most 3 s. The adapter hands the press to the sink in the request, which records it and waits up to 6 s for the press worker to
+  decide it (`chat.InlineDecider`: the worker stays the only decider, and publishes each press's outcome to the waits for it; at
+  most 16 wait at once, and all are let go, undecided, as the chat listener begins its drain at shutdown), and answers with a
+  message response for the presser: what the press came to when it was decided in the wait and the decision has words (recorded,
+  already recorded, not a member, not an approver, gone, answered by another, invalid, not recorded); received, when it was not
+  decided in the wait or is to be tried again; may not be recorded; or not a press of Agent Kourier's. The roster read that decides
+  membership keeps its 10 s bound on the worker's own context, so a slower read is decided after a "received" answer. The card's
+  replacement is the outbox's PUT, apart from the answer: the banner attached in either order, and a press whose answer came too
+  late for the client was still recorded and decided and its card replaced (test tenant, web client, 2026-11-18). The message response (`application/vnd.microsoft.activity.message`) shows the presser a banner under the card
+  and resets its inputs; TextRuns and choice titles show literally (no mention, markdown or link); the input styles, the
+  positive and destructive actions and the verb render or arrive as sent; a choice of several arrives comma-joined; the
+  ending's PUT replaces the card ("Edited"); the decider's mention notifies the person and shows the entity's text, so the adapter
+  writes the decider's name in it, read from the roster of the channel's team, and "someone" when it cannot be read
+  (all measured on a test tenant, web client, channel thread, November 2026, except a name in the mention, which was not shown). A PUT that omits `text` keeps the message's old
+  text, so every Teams edit sends its text; whether one with no attachments drops a card is not measured. Refusals decided by
+  the press worker after the answer reach nobody, as there are no ephemeral messages. The press worker decides a press
+  as on Slack: the adapter's IsMember reads the Bot Connector's roster of the channel's conversation (`pagedmembers`, the team's
+  members) at each press, uncached, by the presser's Entra object ID; IsBot and ResolveUser read the account from the rosters of the
+  teams the bot has heard from (a 28: Teams ID is a bot), kept an hour. The roster's paging, shape and errors are Microsoft's
+  documentation, not measured. A channel's archive is not known on Teams. There are no streams, reactions or ephemeral messages.
+  A thread's earlier messages (the thread context of 8.2) are read through Microsoft Graph with a second token of the same app and
+  client secret (scope `https://graph.microsoft.com/.default`), kept by the Bot Framework token's rules and sent to Graph alone:
+  `GET /teams/{group}/channels/{channel}/messages/{root}/replies`, `$top` 50, paged by `@odata.nextLink` (a link off Graph's own
+  scheme, host and path, or one already read, fails the read), at most 20 pages, 8 MiB an answer and 10 s a read, under the
+  resource-specific permission `ChannelMessage.Read.Group` that the manifest asks for and the team grants at install. The group is the
+  team's Microsoft Entra group ID (`aadGroupId`) that the receiver stores from the channel's activities (`teams_conversations`); a
+  channel none of whose activities named it is not readable, and the turn goes with the fixed line (it is an error, not
+  `chat.ErrNoThreadReads`). Graph bounds the replies by page size alone, so the adapter reads the whole thread and cuts the window by
+  message ID, compared as a number; a thread past 20 pages is `chat.ErrThreadTooLong` whatever the window. A message is decoded as live:
+  the bot's own app's is Own, a person's (from.user) carries its HTML read as text and Mentioned from Graph's mentions list, another
+  app's (from.application, Workflows' alert card) is a bot's message whose body is its Adaptive Cards' text, and a system event, a
+  deleted message or one with no sender is Ignored.
+  Teams carries a thread's root (`chat.Caps.RootContext`, D56): the first turn of a session that a person's mention opened in a thread
+  carries the message that opened it, so an alert's card that Workflows posted goes with the first mention in its thread. The adapter
+  reads it alone (`chat.RootReader`): one `GET /teams/{group}/channels/{channel}/messages/{root}` and no page of replies, within the same
+  10 s and 8 MiB, a 404 being a root that is gone (nothing to carry), classified as the thread read is.
+  No refusal of Graph is FatalAuth, since a
+  thread read must not stop the connection: Graph's 404 is ChannelGone; its 401, 403 and 400, and Entra's refusal of the Graph token
+  alone (a scope or a consent), are Permanent (the 403's error names the permission and the install); a 429 is Transient with its
+  Retry-After (at least a second), and a 5xx Transient. A wrong or revoked client secret is still FatalAuth, through the bot's token.
+  Alerts reach a teams connection through Graph change notifications when `notificationURL` is set (TEAMS-7, built 2026-11-18): Teams
+  sends a bot no other app's post, Workflows' among them, and Graph tells of every post. The URL needs the chat listener in either mode
+  (`needsChatListener`), and the connection's route serves Graph's requests in both: in `http` mode before the Receiver, which takes
+  the rest, and in `socket` mode alone, anything else 400. Graph's requests are told apart without a token, since Graph sends none: the
+  validation handshake by its `validationToken` query (200, the token decoded, `text/plain`, whether or not the run is up), and a body
+  of notifications by its shape (`{"value":[…]}` with no `type`, which every activity has), capped at 256 KiB and 1000 notifications
+  (400 past it, since anyone may send one; a clientState mismatch is one WARN line a body, paced as the Receiver's token refusals). The leader, while it
+  runs the connection, keeps one subscription per bound channel (`chat.ChannelLister`: the channels of the Bindings that name the
+  connection) on `/teams/{group}/channels/{channel}/messages`, `created,updated`, `includeResourceData` false, the notification and
+  the lifecycle URL both `notificationURL` (Microsoft documents that they may be the same; the lifecycle body has `lifecycleEvent`),
+  24 h, renewed within 12 h of its expiry or half the lifetime Graph granted if shorter, each call cut at 30 s (create 8.0 s and renew 7.1 s measured, the handshake's time), compared
+  with the Bindings every minute. A channel whose `aadGroupId` the store does not hold waits, logged once at WARN with the fix and
+  counted. At the start of each run, with nothing bound too, the app's subscriptions are listed: those to the connection's URL with its lifecycle URL, change
+  types, a bound channel and a future expiry are adopted (one per channel), the rest to that URL deleted, and those to other URLs left;
+  a 409 on a create lists again at the next reconcile (not at once), keeping what the run holds; while that listing fails, the held
+  subscriptions are still renewed and only creates wait. Graph lets an app have one subscription
+  per resource, so one to another URL (a changed `notificationURL`, another broker of the app) blocks a bound channel: failing, one WARN
+  with its URL (scheme, host, path) and expiry and the fix, tried again after 10 min or at its expiry; no alerts of that channel until it expires (up to
+  24 h) or is deleted. The `clientState` is HKDF-SHA256 of the client secret under `agent-kourier/teams/graph-client-state/v1`
+  and the connection, the same on every replica and across a failover (a listing gives it back as null, so it cannot be read again),
+  compared in constant time; a mismatch is dropped, counted, and remakes the subscription it names (a secret's rotation). Each `created`
+  is answered 202 and put on its channel's lane, where its message is read (`GET …/messages/{id}`, or `…/messages/{root}/replies/{id}`)
+  and decoded as a thread's message is (historyOf): Own and Ignored (a system event's `unknownFutureValue`, a deleted message) are
+  dropped, another app's post is a bot's message handed on only if the sink's BotFilter (BotMentionFilter for a mention) takes it,
+  and a person's is the person's; `updated` and `deleted` are dropped. A message is deduplicated with its activity by one key
+  (`message`, channel, ID) in the receiver's recent set: the Graph intake checks it before the read and claims it after, so a read that
+  fails takes nothing from the activity, and an activity that comes second still records its channel. Lifecycle: `reauthorizationRequired`
+  renews at once, `subscriptionRemoved` remakes, and `missed` is logged, told to `teams.Config.OnNotificationsMissed`, and
+  starts one catch-up read of that channel (TEAMS-7P). A notification that comes before the run, before the listing, or that its lane sheds is 503, for
+  Graph to send again; a read that fails after 3 tries (429, 5xx, timeout) is dropped and counted.
+  Polling (TEAMS-7P): with no `notificationURL`, the leader reads each bound channel every 10 s through Graph's channel
+  `messages/delta`. A run's first reads page to the `deltaLink`, at most 5 pages a poll and 500 in all, keeping none of the pages'
+  messages; until the channel has its `deltaLink`, each poll makes a catch-up read of it, and past 500 pages the channel is failing and
+  read by its catch-up read alone. Each poll reads the newest replies of the 3 newest threads it saw begin within the last hour, and of
+  those read at the poll before (at most 6 reads); a reply is new when no read gave it and it was made at most 30 s before the newest
+  read in its thread. Reads are one at a time, 250 ms apart, and a 429 pauses them all. The read position of each channel is kept in the
+  store (`teams_poll_positions`, TEAMS-PP, built 2026-11-19; it was in memory only before): the `deltaLink` of the channel's last delta
+  read whose messages the channel's lane has handed on, and when that poll began, written by the leader (fenced) at most once a minute
+  while the `deltaLink` changes and once its stored time is 10 minutes old while it does not. A run's first poll of a channel resumes its
+  delta from the stored position, unless it is more than an hour old or its time more than the 30 s skew ahead of the broker's clock (then
+  WARN, and the channel is read anew); a stored `deltaLink` that Graph refuses is a reset, as at any poll. A stored position that cannot
+  be read fails the poll (backoff); a write refused because the broker no longer leads stops the polls (`teams.ErrNotLeader` over
+  `store.ErrDeposed`); another failed write is a WARN, retried a minute later. A read put on the lane before Graph refused the channel's
+  `deltaLink` is not recorded after the reset (a generation per channel), nor a read that Serve's stop cut. The poller deletes an
+  unbound channel's position, and, at a run's first round, those of the connection's channels that no Binding names
+  (`DeleteTeamsPollPositionsExcept`, fenced; a failure, of it or of one channel's delete, is a WARN, retried a minute later and each
+  minute while it fails, and never holds the polls; a channel that no Binding named at the run's first round, or whose delete failed, is
+  read anew when bound in the run); the leader deletes a deleted ChatConnection's with its `teams_conversations`. The replies read of each thread stay in memory: a run's start, a
+  socket gap's end and a `missed` notification each make a catch-up read of the 20 newest threads with their replies and hand on what
+  was posted within the last 10 minutes (the receiver's dedup window), never further back, a retried catch-up included; at a run's start
+  it is kept beside a resumed delta, which gives no reply in an older thread. A repeat (the stored position is a minute or more behind what
+  was handed on) is dropped by the receiver's recent set and, across a restart, in the store: a keyed trigger finds its thread
+  (`DecisionDedup`); an unthreaded start's `Submit` carries `MessageID = chat.MessageID(ref)`, and `reply_queue`'s `ON CONFLICT (id) DO
+  NOTHING` queues no second turn (`intake_total{reply_queue,duplicate}`); a limited start is `Again`. No trigger fires a second
+  investigation; `trigger_matched_total` and `trigger_decisions_total` count the re-read again.
+  Post carries its tag where people do not see it: `kourier` and the first 16 bytes of the tag's SHA-256 in hex, as an empty
+  `<span title>` in a paragraph of its own at the end of a text (after the closing fence of a block; a zero-width tag at the start
+  changed how Teams parsed the first line, and the span was measured only at the end), or as the `id` of the first element of a card's
+  body that has none when the post is a card alone (a prompt's and an ending's first element is a RichTextBlock or a TextBlock, the two
+  types whose `id` was measured). A message with text and buttons is two posts (owner, 2026-11-18): Teams answers one activity of
+  text and a card 202 with no ID and shows it as two messages, the text with the span and the buttons' card with no tag (measured), so
+  Post sends the text alone (its ID is the Ref, it keeps its markdown and carries the tag), then the buttons as a card alone in the
+  text's thread, whose actions' data name the text (`of`) with `mac`, an HMAC-SHA256 of the connection, channel, card's thread root,
+  text ID and button value (each length-prefixed), keyed by HKDF-SHA256 of the connection's client secret with the info
+  `agent-kourier/teams/button-mac/v1`, never logged or stored (review, 2026-11-18: the data comes from the presser's
+  client, so `of` is bound to the card with no lookup, and the bind holds after a restart and on every replica). A press of that card
+  whose MAC is not the one the Client computes makes no press ("cannot take this press"); a rotation of the client secret refuses the
+  presses of the cards posted before it. A press that is taken is an Interaction whose At is the text, in the card's thread, so that
+  the feedback check of the press's message against the outbox row holds; the press's key stays the invoke's. The feedback handler
+  also refuses a vote on an answer while its Binding's `feedback.enabled` is off (an investigation's vote does not depend on it; a
+  Binding the config no longer has takes votes as before), on every platform. A text ID that a card cannot name (longer than 64 bytes,
+  or with `:`) gets no buttons, with a WARN. A message of buttons and no text is one card post, as a prompt is. Each post has the
+  80 KiB budget; the card is sized naming a text ID of the longest (64 bytes) and the longest MAC, and one over it refuses the message
+  before any post. A post of the buttons that fails for this try only is tried once more after its 429's wait, when that is at most
+  5 s, or 1 s when it names none; one that still fails is logged at WARN and counted as `PostButtons`, and Post returns the text with
+  no error (an error would have the outbox adopt the text and post nothing more); a crash between the posts leaves the text, which the
+  lookup adopts. Update edits the text with no attachment and shows its buttons once, by the cards the Client remembers (4096, in
+  memory, oldest first out): posted by the first update that has them (a live reply's last edit), PUT when they change, no call when
+  they are the same; a failed post fails the update, which the caller retries; a card Teams took with no ID is remembered. A PUT that
+  Teams answers 404 forgets the card and posts it anew; if Teams refuses that for good, the update logs it at WARN and succeeds, since
+  the text was edited, and a failure for this try only fails the update, whose retry posts the card. After a restart, on another replica or past the bound, an update with buttons posts them again. A message has one writer at
+  a time (the turn's live run), so the cards' record takes no lock per message. No edit follows a button's press (the presser's words are the invoke's answer), and nothing takes buttons off.
+  Measured on a test tenant (web client, November 2026) for a post that opens a thread: the text and the card each got an ID, the
+  card went in as the text's reply, and the client showed the text, then the card (the reply only after a page reload). The card's
+  press came with replyToId the card's ID, the conversation naming the text's thread, and the data whole (button, value, of, mac);
+  the press check took it as the text's and refused it with `of` changed; the invoke's answer showed as a banner under the card.
+  Not measured: a post into a thread already open, an Update that posts or PUTs the card, a 429 on the card, mobile and desktop
+  clients.
+  No `<` of the agent's, a person's or an alert's text reaches Teams raw, so only the adapter writes a span. Find reads the thread's
+  replies with the same bounds, or for a post with no thread the channel's messages (`GET …/channels/{channel}/messages`, at most 4
+  pages, the first that Graph gives: Microsoft documents them as sorted by each thread's last change, not in which direction, and the
+  order was not measured), stops
+  at the page that holds the post, and matches only a message of the bot's own app (`from.application.id`), by a span tag in its
+  body's HTML (not the text, which has no tags) or an id among its cards' body elements. Update sends no tag: the outbox looks a post up
+  only before its ID is recorded, and nothing edits a post before that. What no retry mends (a post past the pages, a channel whose
+  team is not known, a read cut by its time after a page came back, a next page off Graph or already read, an answer past 8 MiB, a
+  Permanent refusal of Graph or of its token) is not found, logged at WARN, so the post is sent and may show twice rather than
+  abandoned; a Transient error (a 429, a 5xx, an answer that is not JSON, a read cut before any page) is returned and the outbox looks
+  again. Measured on a test tenant, November 2026, web client: the span and the `id` of a TextBlock and of a RichTextBlock come back
+  through the replies list and a message's GET, the span after a PUT that sent the tag again, and a root's span through the channel's
+  messages; a reply was in the replies at the first look, 1.4 s after it was posted; channelData, entities, summary, an HTML comment, `data-` attributes, an attachment's name and a card's unknown keys are
+  dropped; the client shows no carrier, and the span's paragraph adds a little space. Not measured: Teams' mobile and desktop clients,
+  screen readers, and Teams' search and notifications. Measured on a test tenant, November 2026: the Graph token, a 200 for a channel's messages under the
+  permission alone, the path form, the message shapes (HTML body, from.user and from.application, a card's JSON as a string, a system
+  event), and message IDs that were each post's time in milliseconds. Microsoft's documentation, not measured: the replies endpoint,
+  its `$top`, paging and order (the adapter sorts and does not rely on it), its errors and the body of its 403, the HTML of other
+  formatting, and that message IDs order as their posts (Microsoft calls them opaque).
 - **Webhook connection (D55).** `spec.platform: webhook` requires `spec.webhook`, which no other platform takes. Its fields
   map an event onto a channel (`channel.from`, the first JSON Pointer that resolves, or a fixed `channel.value`), an actor
   for the self-drop (`identity` and `actor.from`, or `actor: {none: true}`), a thread (`thread.field`, an `id` field) and
@@ -655,7 +848,7 @@ them (below the table).
 |---|---|
 | @mention in a bound channel (not in a thread) | New thread, new session |
 | Reply in a thread Agent Kourier owns | Continues that session. With `chat.threadReplies: mention` (D38), only a reply that @mentions Agent Kourier does; the rest are ignored, except a typed answer to a pending question that takes text replies (8.4). A thread that a bot's mention (D49) or a person's message (D51) began goes so whatever the mode |
-| @mention inside a thread Agent Kourier doesn't own, in a bound channel | New session anchored to that thread; Agent Kourier owns it from then on |
+| @mention inside a thread Agent Kourier doesn't own, in a bound channel | New session anchored to that thread; Agent Kourier owns it from then on. On a platform that carries a thread's root (Microsoft Teams), its first turn carries the message that opened the thread (D56) |
 | Reply without an @mention in any other thread | Ignored |
 | Any message posted by Agent Kourier itself (including `message_changed` from its own edits) | Ignored, always: Agent Kourier would otherwise answer itself without end |
 | A message posted by any other bot or app | Ignored, unless a `botMessage` trigger names its sender (`from.id` and `from.kind`; D36, D42): bot text is untrusted (R2) |
@@ -1010,8 +1203,20 @@ themselves turns or answers, and replies that are blank once their invisible cha
 6000 for the block with its lead sentence, are kept; the block says how many were left out. The window comes from the
 reply queue, so it is the same after a restart or a failover, and a reply posted after a mention falls in the next
 mention's window. A platform that cannot read a thread sends the mentioned message alone; a read that fails, or a
-thread whose window is longer than the adapter reads (on Slack, more than 5 pages, 1000 messages), sends it with a fixed
+thread whose window is longer than the adapter reads (on Slack, more than 5 pages, 1000 messages; on Microsoft Teams, a thread of
+more than 20 pages of 50 replies, whatever the window), sends it with a fixed
 line saying the earlier replies could not be read (`agentkourier_thread_context_total{binding,outcome}`).
+The first turn of a session that a person's mention opened inside an existing thread (no row before it in the reply queue, and its
+message is not the thread's root) has no previous turn, and carries no reply. On a platform that carries a thread's root
+(`chat.Caps.RootContext`: Microsoft Teams), whatever `chat.threadReplies` says, it carries the message that opened the thread, a
+person's or another app's, in a `thread-replies` block of that one message whose lead sentence says so, cleaned and cut as a reply is
+(D56); Agent Kourier's own post, a message the adapter would drop, a blank one and one that was a turn are left out. A platform that
+reads a root alone (`chat.RootReader`; Microsoft Teams, in one call, reading no reply) is asked for it alone; any other is read from the
+thread's start up to the mention, for one reply, which is left out, where a thread too long to read whose root came back carries the
+root and no line. A root the platform no longer has is nothing to carry; a read that fails, or a thread too long whose root did not
+come back, carries the line; a short rate limit is waited out once, as for the replies. What a turn takes is decided at its first send
+and kept for its resends. On a platform that does not (Slack) the turn carries the person's message alone: it does not ask for the root, the
+platform is not read and the turn is not counted.
 In `mention`, the final message of each turn (not one that ends in a question, not a turn with no output) carries, under
 its text and above the feedback question when there is one (8.7), the context line "Mention me in this thread to ask a
 follow-up." (owner's decision 6b; added with TM-9).
@@ -1084,7 +1289,9 @@ making the prefix optional breaks multi-turn context.
   step per tool call (`render.Step`, the line's redacted, capped name and summary), begun when the call is made and
   ended or failed when its result arrives, in call order, the final update included. It holds the latest 20 steps;
   when there are more, a `chat.Context` line above them counts the earlier ones (`k earlier steps are not shown.`), so a
-  long run never crowds out the text or the buttons. An update with no fallback of its own takes the status line while the
+  long run never crowds out the text or the buttons. A platform with progress steps and no streams (Microsoft Teams) has every
+  live reply, a mention's as an alert's, on this edit path, so its step list is shown in the edits of the reply; Teams writes
+  it under the text, as a quoted list. An update with no fallback of its own takes the status line while the
   turn shows one, or else the last step's title, so a stale line is not left as the message's text. A platform that refuses such an update as
   content it cannot show gets it again without the steps, and the turn shows the line from then on. On a platform
   without steps every write shows the line: a returned call's line is written even when no text has arrived, so a line
@@ -1411,7 +1618,12 @@ this with an outbox:
    holding the outbox ID).
 3. On recovery, an outbox row with no recorded message ref is reconciled first: Agent Kourier
    reads recent channel or thread history with metadata included and adopts a matching
-   message instead of posting again.
+   message instead of posting again. Any queued row is looked up this way before it is posted,
+   except one that the leader queued itself since its drain loop started and has not tried yet:
+   a lookup can find a message only after an attempt, or after another process delivered the row,
+   so such a row is posted at once. The row stops being one when its first attempt begins, so a
+   row whose attempt failed or timed out is looked up before the next. Which rows are untried is
+   kept in memory, so after a crash or a takeover every row queued before it is looked up.
 4. Edits (`chat.update`) are naturally idempotent and need no reconciliation. Reactions
    (role `reaction`, e.g. the acknowledgment marker of 8.2) also go through the outbox for
    durability but need no reconciliation: `reactions.add` on a message that already has
@@ -2106,3 +2318,16 @@ What changed in this document:
 | D42 and this section, "the broker refuses a webhook connection as a wiring error until its adapter lands" | The broker runs a webhook connection on its chat listener; a broker with no chat listener refuses one as a wiring error (its own fails the start, a team's is not started) |
 | Section 7, the Secret keys rule | Adds the webhook keys, and a rule for a webhook connection |
 | Section 8.2, the trigger types, and the thread lifetime paragraph | `webhookEvent`, and a paragraph on webhook events, with the no-replies rule restored for the webhook platform |
+
+### The root of a thread a person's mention opens (2026-11-18)
+
+On Microsoft Teams an alert is a card that Workflows posts, which Teams never sends the bot, so a person's mention in the alert's thread
+opened a session whose first turn carried the person's text alone, and the agent never saw the alert. The owner chose D56 ("Root only,
+any mode"): such a first turn carries the thread's root, on a platform that declares it. What changed in this document:
+
+| Earlier text | Now |
+|---|---|
+| D56 | New: the first turn of a session opened inside a thread carries its root where the platform declares it; root only, any mode, once among a person's turns |
+| 8.2, the trigger table's "@mention inside a thread Agent Kourier doesn't own" | Its first turn carries the root on such a platform |
+| Section 7, Microsoft Teams | Teams carries the root: an alert's card goes with the first mention in its thread |
+| 8.2, `chat.threadReplies`, a mentioned turn's context | The first turn of a session opened inside a thread: the root alone, how it is read, what is left out, Slack unchanged |

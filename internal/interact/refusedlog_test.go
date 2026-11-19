@@ -30,7 +30,7 @@ func TestARefusedAnswerIsLoggedWithoutItsValue(t *testing.T) {
 	r.pending(t)
 	pd := r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")
 	pd.Answer = dialect.Answer{RequestID: "req-1", Answers: [][]string{{typed}}}
-	if err := d.Decide(t.Context(), pd); err != nil {
+	if _, err := d.Decide(t.Context(), pd); err != nil {
 		t.Fatal(err)
 	}
 

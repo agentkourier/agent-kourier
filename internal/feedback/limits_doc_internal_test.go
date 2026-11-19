@@ -21,7 +21,7 @@ func (noEphemeral) Ephemeral(context.Context, chat.Target, string, chat.Message)
 // it and holds none: New only checks that one is set, and nothing is called.
 func TestLimitsPageOfThePressLimits(t *testing.T) {
 	h, err := New(Config{
-		Store: struct{ Store }{}, Sessions: struct{ interact.SessionReader }{}, Authorizers: chattest.Same[interact.Authorizer](struct{ interact.Authorizer }{}),
+		Store: struct{ Store }{}, Sessions: struct{ interact.SessionReader }{}, Bindings: struct{ Bindings }{}, Authorizers: chattest.Same[interact.Authorizer](struct{ interact.Authorizer }{}),
 		Ephemerals: chattest.Same[interact.Ephemeral](noEphemeral{}), Auditor: struct{ Auditor }{}, Notify: func(store.Press) {},
 	})
 	if err != nil {

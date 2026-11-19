@@ -2,7 +2,10 @@ package testhooks_test
 
 import (
 	"bytes"
+	"encoding/pem"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,17 +29,21 @@ func build(t *testing.T, tagged bool) string {
 	return bin
 }
 
-// run runs the probe with both hooks armed in its environment.
+// run runs the probe with every hook armed in its environment.
 func run(t *testing.T, bin string) (string, error) {
 	t.Helper()
+	srv := httptest.NewTLSServer(http.NotFoundHandler()) // only its certificate is used: the fake Teams service's CA
+	srv.Close()
+	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
 	cmd := exec.CommandContext(t.Context(), bin)
-	cmd.Env = append(os.Environ(), "AGENTKOURIER_FAULT=crash-after-post", "AGENTKOURIER_SLACK_API_URL=http://fake.test")
+	cmd.Env = append(os.Environ(), "AGENTKOURIER_FAULT=crash-after-post", "AGENTKOURIER_SLACK_API_URL=http://fake.test",
+		"AGENTKOURIER_TEAMS_URL=https://faketeams.test", "AGENTKOURIER_TEAMS_CA="+string(ca))
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
 
-// traces reports which traces of the hooks the binary at bin holds: the crash function's symbol, and
-// the names of the two environment variables, which only the testhooks files refer to.
+// traces reports which traces of the hooks the binary at bin holds: the crash and send-gate functions' symbols, the transport that keeps
+// a Teams connection on the fake, and the names of the environment variables, which only the testhooks files refer to.
 func traces(t *testing.T, bin string) map[string]bool {
 	t.Helper()
 	nm, err := exec.CommandContext(t.Context(), "go", "tool", "nm", bin).Output()
@@ -52,6 +59,9 @@ func traces(t *testing.T, bin string) map[string]bool {
 		"the crash function (symbol)":         strings.Contains(string(nm), "testhooks.crashSelf"),
 		"the AGENTKOURIER_FAULT name":         bytes.Contains(raw, []byte("AGENTKOURIER_FAULT")),
 		"the AGENTKOURIER_SLACK_API_URL name": bytes.Contains(raw, []byte("AGENTKOURIER_SLACK_API_URL")),
+		"the fake Teams transport (symbol)":   strings.Contains(string(nm), "testhooks.onlyHost"),
+		"the AGENTKOURIER_TEAMS_URL name":     bytes.Contains(raw, []byte("AGENTKOURIER_TEAMS_URL")),
+		"the AGENTKOURIER_TEAMS_CA name":      bytes.Contains(raw, []byte("AGENTKOURIER_TEAMS_CA")),
 	}
 }
 
@@ -75,10 +85,12 @@ func TestDefaultBuildHasNeitherHook(t *testing.T) {
 			var exit *exec.ExitError
 			crashed := errors.As(err, &exit) && exit.ExitCode() == 137
 			switch {
-			case tc.tagged && (!crashed || !strings.Contains(out, `slack="http://fake.test"`)):
-				t.Errorf("tagged probe with both hooks armed: err %v, output %q; want the override applied, then exit 137", err, out)
-			case !tc.tagged && (err != nil || !strings.Contains(out, `slack=""`) || !strings.Contains(out, "after-post-returned")):
-				t.Errorf("default probe with both hooks armed: err %v, output %q; want no override and no crash", err, out)
+			case tc.tagged && (!crashed || !strings.Contains(out, `slack="http://fake.test"`) ||
+				!strings.Contains(out, `teams="https://faketeams.test/v1.0" err=<nil>`)):
+				t.Errorf("tagged probe with every hook armed: err %v, output %q; want the overrides applied, then exit 137", err, out)
+			case !tc.tagged && (err != nil || !strings.Contains(out, `slack=""`) || !strings.Contains(out, `teams="" err=<nil>`) ||
+				!strings.Contains(out, "after-post-returned")):
+				t.Errorf("default probe with every hook armed: err %v, output %q; want no override and no crash", err, out)
 			}
 		})
 	}

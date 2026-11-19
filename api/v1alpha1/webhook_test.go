@@ -259,9 +259,10 @@ func webhookMatch(n int) map[MessageField]string {
 }
 
 // The channel and the output of a Binding whose triggers are all webhookEvent take the webhook's shapes, and those of any other Binding
-// Slack's, as before: a Slack Binding is refused output none and a webhook channel as it was.
+// a chat platform's (Slack's or Microsoft Teams'): a chat Binding is refused output none and a webhook channel, and a webhook Binding
+// a Teams channel.
 func TestWebhookBindingChannelAndOutput(t *testing.T) {
-	slackChannel := `spec.chat.channel: invalid channel "acme/widgets": must be a channel ID such as C0123456789, not a name`
+	slackChannel := `spec.chat.channel: invalid channel "acme/widgets": must be a channel ID such as C0123456789 (Slack) or 19:…@thread.tacv2 (Microsoft Teams), not a name`
 	runMutations[Binding](t, "webhook/binding.yaml", []mutation[Binding]{
 		{"a project key ok", func(o *Binding) { o.Spec.Chat.Channel = "OPS" }, ""},
 		{"a Slack channel ID ok", func(o *Binding) { o.Spec.Chat.Channel = "C0123456789" }, ""},
@@ -280,6 +281,13 @@ func TestWebhookBindingChannelAndOutput(t *testing.T) {
 			o.Spec.Chat.Triggers = append(o.Spec.Chat.Triggers, Trigger{Type: TriggerMention})
 			o.Spec.Chat.Output = OutputLive
 		}, slackChannel},
+		{"a Teams channel", func(o *Binding) { o.Spec.Chat.Channel = testTeamsChannel },
+			`spec.chat.channel: invalid channel "` + testTeamsChannel + `": letters, digits, '.', '_' and '-', starting with a letter or a digit, with '/' between parts`},
+		{"a mention trigger beside the webhookEvent trigger: a Teams channel ok", func(o *Binding) {
+			o.Spec.Chat.Triggers = append(o.Spec.Chat.Triggers, Trigger{Type: TriggerMention})
+			o.Spec.Chat.Channel = testTeamsChannel
+			o.Spec.Chat.Output = OutputLive
+		}, ""},
 		{"no triggers: Slack's channel", func(o *Binding) {
 			o.Spec.Chat.Triggers = nil
 			o.Spec.Chat.Output = OutputLive
