@@ -14,13 +14,13 @@ and `ghcr.io/agentkourier/agent-kourier-echo-agent` (linux/amd64 and linux/arm64
    (`release-version`), so the pull request cannot go green with a page left behind. The chart's golden files carry
    the version in a label: refresh them with `go test ./test/chart -update` (with `helm` installed). For a new minor
    version (`X.Y.0`), also add `"X.Y"` at the top of `hack/docs/versions.yaml`, so the documentation site publishes
-   the new release line's tags; until its first tag exists the site skips it. The first release that publishes the
-   agents' images (the first after 0.3.2) also points `image:` in `examples/recipes/prompt-agent/agent/manifests/deployment.yaml`
-   and `examples/recipes/echo-agent/agent/manifests/deployment.yaml` at `ghcr.io/agentkourier/agent-kourier-<agent>:vX.Y.Z`,
-   with `imagePullPolicy` and the comments to match, and rewords the sentences that say releases do not publish the
-   prompt agent's image (in `examples/recipes/prompt-agent/README.md` and `docs/how-to/recipes.md`); from then on
-   `release-version` holds those tags to the chart's version. Merge it. Skip this for a prerelease tag
-   (`vX.Y.Z-rc.1`): while one is tried, the chart and the docs keep naming the last release.
+   the new release line's tags; until its first tag exists the site skips it. The same pull request points the
+   recipes' agents at the images this release publishes: `image:` in `examples/recipes/prompt-agent/agent/manifests/deployment.yaml`
+   and `examples/recipes/echo-agent/agent/manifests/deployment.yaml` names `ghcr.io/agentkourier/agent-kourier-<agent>:vX.Y.Z`,
+   and so does every page that names one of those tags (today `examples/recipes/prompt-agent/README.md`). A tag left
+   behind deploys the last release's agent; `release-version` checks these tags against the chart's version too, so
+   it fails the pull request. Merge it. Skip this for a prerelease tag (`vX.Y.Z-rc.1`): while one is tried, the chart
+   and the docs keep naming the last release.
 3. Before tagging, confirm that `ci.yml`, `security.yml` and `codeql.yml` have completed successfully for that
    exact commit from a push to `main`. The release gate checks the same commit and the latest attempt again; a
    missing, pending, failed or pull-request-only run blocks the release.
@@ -265,9 +265,9 @@ are applied now:
 3. Actions: Workflow permissions "Read repository contents" by default (the workflows ask for more by job).
    Optionally add a `release` environment with required reviewers and move the `build` job into it, which
    puts a human approval between a tag and a push.
-4. After the first release: Packages, `agent-kourier` and `charts/agent-kourier`, link them to this repository and set
-   visibility (public if the cluster pulls without a pull secret). After the first release that publishes the agents'
-   images, the same for `agent-kourier-prompt-agent` and `agent-kourier-echo-agent`.
+4. Once, after the release that first publishes a package: Packages, `agent-kourier`, `charts/agent-kourier`,
+   `agent-kourier-prompt-agent` and `agent-kourier-echo-agent`, link them to this repository and set visibility
+   (public if the cluster pulls without a pull secret).
 
 The release workflow refuses a tag that is not on `main`, so what ships has passed the `main` ruleset. Cut a
 release tag only from a commit that GitHub signed when it squash-merged a pull request (the commit shows as
