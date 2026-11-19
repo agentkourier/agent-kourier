@@ -120,6 +120,12 @@ If your cluster's Secrets come from a secrets manager, create `teams` with the k
 Secret without the key, or with it empty, stops the broker's own connection from starting (exit code 2:
 [Troubleshoot](troubleshoot.md#the-pod-exits-with-code-2)).
 
+Agent Kourier sends the value to Microsoft Entra as the Secret holds it, and trims nothing: a value written with
+`echo "$S" > file` and stored with `--from-file=clientSecret=file` ends in a newline, which is sent as part of the secret.
+Entra then refuses the token (not checked here), and a broker whose own connection this is exits with code 1 and
+`agent-kourier: teams rejected the tokens: <code>`, where `<code>` is Entra's OAuth error code. If you make the Secret
+with `--from-file`, write the file with `printf '%s'`, which adds no newline.
+
 ## 3. Write the app package
 
 The bot reaches a team as a Teams app: a zip of `manifest.json` and two icons. This manifest is the one the
