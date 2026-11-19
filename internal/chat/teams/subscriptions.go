@@ -153,8 +153,9 @@ func (s *subscriber) poke() {
 	}
 }
 
-// hold records sub as the subscription of its channel.
+// hold records sub as the subscription of its channel, and its group as that of the channel's team (knowGroup).
 func (s *subscriber) hold(sub *subscription) {
+	s.c.knowGroup(sub.channel, sub.group)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if old, ok := s.held[sub.channel]; ok {

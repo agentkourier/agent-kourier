@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
@@ -101,10 +102,12 @@ type Client struct {
 	threadTimeout time.Duration                             // threadTimeout; a test shortens it
 	log           *slog.Logger
 	onConnection  func(bool)
-	posted        *recent  // the posts this Client made, by messageKey, within the dedup's window: Graph's notification of one is not read
-	sockets       *sockets // the connection's sockets in socket mode, nil in http mode
-	push          *push    // the Graph intake of a connection with a notificationURL, nil without one
-	poll          *poller  // the Graph intake of a connection with no notificationURL, nil with one
+	posted        *recent // the posts this Client made, by messageKey, within the dedup's window: Graph's notification of one is not read
+	groupMu       sync.Mutex
+	groups        map[string]string // by channel: the team's Microsoft Entra group that the Graph intake read for it in this run; guarded by groupMu
+	sockets       *sockets          // the connection's sockets in socket mode, nil in http mode
+	push          *push             // the Graph intake of a connection with a notificationURL, nil without one
+	poll          *poller           // the Graph intake of a connection with no notificationURL, nil with one
 }
 
 // New returns the Client of cfg. It refuses a config with no connection, tenant, app or secret.
@@ -142,7 +145,8 @@ func New(cfg Config) (*Client, error) {
 	}
 	c := &Client{conn: cfg.Connection, tenant: cfg.TenantID, app: cfg.AppID, convs: convs, log: log, onConnection: cfg.OnConnection,
 		api: &connector{client: direct, tokens: tokens, now: now}, graph: graph, names: newNameCache(now), cards: newButtonCards(), rosterTimeout: rosterTimeout,
-		pressWait: pressWait, threadTimeout: threadTimeout, buttonKey: key, buttonsWait: waitFor, posted: newRecent(now)}
+		pressWait: pressWait, threadTimeout: threadTimeout, buttonKey: key, buttonsWait: waitFor, posted: newRecent(now),
+		groups: map[string]string{}}
 	recv, err := NewReceiver(ReceiverConfig{Connection: cfg.Connection, TenantID: cfg.TenantID, AppID: cfg.AppID,
 		MetadataURL: cfg.MetadataURL, HTTPClient: client, Conversations: convs, Logger: log, Now: now, Invokes: c})
 	if err != nil {
@@ -484,20 +488,38 @@ func (c *Client) Fits(p chat.Prompt) error {
 // Capabilities implements chat.Platform.
 func (c *Client) Capabilities() chat.Caps { return capabilities() }
 
-// Permalink implements chat.Permalinker from what the receiver has recorded of the channel, with no call: a link needs the team's
-// Microsoft Entra group, which only an activity of the channel tells, so a channel that none has come from in this run has none.
+// Permalink implements chat.Permalinker with no call, as the interface asks: a link needs the team's Microsoft Entra group, which it takes
+// from what the receiver recorded of the channel in this run, or else from what the Graph intake read for it in this run (knowGroup): the
+// store's record, or the group that an adopted subscription names. So a bound channel that no activity has come from in this run has a
+// link once the intake has polled or subscribed it, and another channel has none until an activity of it comes.
 func (c *Client) Permalink(r chat.Ref) (string, bool) {
 	if r.Platform != PlatformName || r.Conn != c.conn || r.Channel == "" || r.ID == "" {
 		return "", false
 	}
 	c.recv.recMu.Lock()
-	rec, ok := c.recv.recorded[r.Channel]
+	group := c.recv.recorded[r.Channel].AADGroupID
 	c.recv.recMu.Unlock()
-	if !ok || rec.AADGroupID == "" {
+	if group == "" {
+		c.groupMu.Lock()
+		group = c.groups[r.Channel]
+		c.groupMu.Unlock()
+	}
+	if group == "" {
 		return "", false
 	}
-	q := url.Values{"tenantId": {c.tenant}, "groupId": {rec.AADGroupID}, "parentMessageId": {cmp.Or(r.Thread, r.ID)}}
+	q := url.Values{"tenantId": {c.tenant}, "groupId": {group}, "parentMessageId": {cmp.Or(r.Thread, r.ID)}}
 	return "https://teams.microsoft.com/l/message/" + url.PathEscape(r.Channel) + "/" + url.PathEscape(r.ID) + "?" + q.Encode(), true
+}
+
+// knowGroup keeps group as the Microsoft Entra group of channel's team, which the Graph intake read, for Permalink. It keeps one for each
+// channel that the intake read, which are the bound channels.
+func (c *Client) knowGroup(channel, group string) {
+	if channel == "" || group == "" {
+		return
+	}
+	c.groupMu.Lock()
+	c.groups[channel] = group
+	c.groupMu.Unlock()
 }
 
 // MarkBusy implements chat.BusyMarker: Teams shows no busy mark in a channel.

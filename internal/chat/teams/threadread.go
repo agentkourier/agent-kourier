@@ -157,7 +157,8 @@ func isNotFound(err error) bool {
 	return errors.As(err, &ge) && ge.Status == http.StatusNotFound
 }
 
-// teamGroup is the Microsoft Entra group of the team of channel, as the channel's record names it, which Graph names the team by.
+// teamGroup is the Microsoft Entra group of the team of channel, as the channel's record names it, which Graph names the team by. It
+// keeps the group for Permalink (knowGroup).
 func (c *Client) teamGroup(ctx context.Context, channel string) (string, error) {
 	rec, ok, err := c.convs.Lookup(ctx, c.conn, channel)
 	switch {
@@ -166,6 +167,7 @@ func (c *Client) teamGroup(ctx context.Context, channel string) (string, error) 
 	case !ok || rec.AADGroupID == "":
 		return "", errTeamNotKnown
 	}
+	c.knowGroup(channel, rec.AADGroupID)
 	return rec.AADGroupID, nil
 }
 

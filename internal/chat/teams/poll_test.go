@@ -1105,3 +1105,19 @@ func TestPollReadsANewlyBoundChannelAtTheNextRound(t *testing.T) {
 		t.Errorf("polls{started} at the round after the Binding = %v; want 1", got)
 	}
 }
+
+// A channel that no activity has come from in this run, whose record the store holds from before, has a permalink once the Graph intake
+// has read the record to poll it: the link needs no call of its own.
+func TestPermalinkOfAChannelKnownThroughGraph(t *testing.T) {
+	pt := newPollTest(t)
+	ref := pt.c.RefAt(testChannel, "", "1700000000009")
+	pt.bound(t, testChannel) // the store's record, from an earlier run; this receiver recorded nothing
+	if _, ok := pt.c.Permalink(ref); ok {
+		t.Fatal("a link before anything read the channel's record")
+	}
+	pt.round(t)
+	link, ok := pt.c.Permalink(ref)
+	if !ok || !strings.Contains(link, "groupId="+testGroup) {
+		t.Errorf("link = %q, %t; want one with the team's group", link, ok)
+	}
+}

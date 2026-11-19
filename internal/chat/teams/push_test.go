@@ -1508,3 +1508,16 @@ func TestGraphSubscribesAtOnceOnABindingOrAGroup(t *testing.T) {
 	testutil.Eventually(t, "the subscription of the channel whose group is now known", func() bool { return pt.subOf(waiting) != "" },
 		testutil.Within(5*time.Second))
 }
+
+// A channel whose subscription was adopted from an earlier run has a permalink, from the group its subscription names, though no
+// activity of it came in this run and its record was never read.
+func TestPermalinkOfAnAdoptedSubscriptionsChannel(t *testing.T) {
+	pt := newPushTest(t, false)
+	pt.f.putSub("sub-adopted", testChannel, pt.url, pt.url, time.Now().Add(20*time.Hour))
+	pt.sink.bind(testChannel)
+	pt.run(t)
+	testutil.Eventually(t, "the adoption", func() bool { _, held := pt.c.push.subs.snapshot(testChannel); return held })
+	if link, ok := pt.c.Permalink(pt.c.RefAt(testChannel, "", "1700000000009")); !ok || !strings.Contains(link, "groupId="+testGroup) {
+		t.Errorf("link = %q, %t; want one with the team's group", link, ok)
+	}
+}
