@@ -365,7 +365,9 @@ func TestTheWebhookPlatformCountsOnTheBrokersInstruments(t *testing.T) {
 		return rec.Code == http.StatusUnauthorized
 	})
 	stop()
-	<-ran
+	if err := <-ran; !errors.Is(err, context.Canceled) {
+		t.Errorf("Run = %v after its context ended; want context.Canceled", err)
+	}
 	families, err := reg.Gather()
 	if err != nil {
 		t.Fatal(err)
