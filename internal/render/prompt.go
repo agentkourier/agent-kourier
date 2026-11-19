@@ -132,7 +132,7 @@ func (p *Prompt) safeView(view v1alpha1.PromptView) (v1alpha1.PromptView, error)
 		rule := checkName
 		switch name {
 		case "Channel":
-			src, dst = view.Channel, &safe.Channel
+			src, dst, rule = view.Channel, &safe.Channel, checkChannel
 		case "State":
 			src, dst = view.State, &safe.State
 		case "Key":

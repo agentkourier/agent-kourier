@@ -190,8 +190,10 @@ The template sees:
 
 `.Fields`, `.State` and `.Key` come out of the sender's message, so each value the template reads is checked before it
 reaches the instruction part: the alert-name shape (ASCII letters, digits and `_.-:`, at most 128 bytes) for fields,
-state, channel and source; the same plus `/` for the key; and a plain `http` or `https` URL of at most 256 bytes for
-the link. A value that fails refuses the turn (`not_started`). A key that holds spaces, such as the
+state, channel and source, or for the channel the shape of a Microsoft Teams channel ID (`19:…@thread.tacv2` or
+`@thread.skype`, at most 140 bytes); the same plus `/` for the key; and a plain `http` or `https` URL of at most 256
+bytes for the link, whose only `@` may be the one of a path segment that is a Teams channel ID, as Teams' permalink
+has. A value that fails refuses the turn (`not_started`). A key that holds spaces, such as the
 Alertmanager example's, fails this check, so a template should read `.Fields` entries, not `.Key`.
 
 After the rendered template, the whole message follows, normalized and with its secrets redacted, inside a block
