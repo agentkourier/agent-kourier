@@ -2,9 +2,10 @@
 
 A Binding names its platform through its ChatConnection, whose `spec.platform` says which. This page lists, for each
 platform, the shape of the chat IDs a Binding names, the trigger types and outputs it takes, and the features of a Binding that
-the platform serves. The platforms are `slack` and `webhook`. The API server and the load take a `webhook` ChatConnection and its
-Bindings, but this release's broker does not run one: as the broker's own connection it stops the start with a wiring error, and a
-team's connection is not started, with a log line that the broker has no adapter for its platform.
+the platform serves. The platforms are `slack` and `webhook`. The broker takes a `webhook` connection's deliveries on its chat
+listener (`AGENTKOURIER_CHAT_LISTEN`, the chart's `chatListener`) at `POST /chat/webhook/<namespace>/<name>`. A broker with no chat
+listener does not run one: as the broker's own connection it stops the start with a wiring error, and a team's connection is not
+started.
 
 The API server and the broker's load hold each chat ID of a Binding to Slack's shape, but the channel of a Binding whose triggers
 are all `webhookEvent`, which they hold to a webhook channel's (see [Chat IDs](#chat-ids)). A Binding that names a channel's name
@@ -63,4 +64,4 @@ that chooses Slack's shape or the webhook channel's by the Binding's triggers (t
 | Questions to a person: `interactions.askUser` | Works: Agent Kourier asks in the thread with buttons. | Not served. | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
 | Tool approvals: `interactions.toolApprovals`, and `interactions.approverGroups`, which requires it | Works: Agent Kourier asks in the thread with buttons. | Not served. | Refused: `UnsupportedOnPlatform`. Set `toolApprovals` to `false` and remove `approverGroups`. |
 | The useful and not-useful buttons: `feedback.enabled` | Works. | Not served. | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
-| The acknowledgment reaction: `chat.acknowledgment` | Works. With no `emoji` the reaction is `hourglass_flowing_sand`. | The broker does not run the platform yet. | Served, and no reaction is shown. A Binding whose acknowledgment is enabled and names an `emoji` has the condition `AcknowledgmentShown`, `False` with the reason `NoReactions` ([Binding status](binding-status.md#acknowledgmentshown)). |
+| The acknowledgment reaction: `chat.acknowledgment` | Works. With no `emoji` the reaction is `hourglass_flowing_sand`. | The platform has no reactions. | Served, and no reaction is shown. A Binding whose acknowledgment is enabled and names an `emoji` has the condition `AcknowledgmentShown`, `False` with the reason `NoReactions` ([Binding status](binding-status.md#acknowledgmentshown)). |
