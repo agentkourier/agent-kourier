@@ -124,8 +124,8 @@ The last two rules are for a connection whose service sends events every day; na
 how often its service sends them. `agentkourier_webhook_last_accepted_timestamp_seconds` is the time of the connection's last request
 answered `accepted`. Only the leader sets it, and a broker that has just started has no series of it until its first, so the rule
 reads it with `max_over_time` over a range longer than the threshold: the value from before a restart or a change of leader still
-counts. Use `max`, not `sum`: the value is a time. An event dropped as `self`, `ignored` or `unmapped` does not set it, as no
-Binding saw it; the unmapped rule above, and `agentkourier_webhook_requests_total` by `outcome`, say which it was. Each answer is
+counts. Use `max`, not `sum`: the value is a time. An event dropped as `self`, `ignored` or `unmapped` does not set it, as the
+broker never took it; the unmapped rule above, and `agentkourier_webhook_requests_total` by `outcome`, say which it was. Each answer is
 also a log line, `webhook: delivery answered`, with the delivery ID that the sender's own log shows
 ([Follow a delivery](receive-webhooks.md#follow-a-delivery)).
 
