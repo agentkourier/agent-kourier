@@ -284,7 +284,8 @@ channel whose group the broker does not know yet waits, logged once at WARN with
   ([Catch-up reads](#catch-up-reads)), the first of what was posted in the 10 minutes before, so a channel with a long history hands on
   its new posts while it is read to its `deltaLink`. Nothing older than the 10 minutes is read on a start, so an old alert does not fire
   a trigger. A channel whose delta names no `deltaLink` within 500 pages counts as `failing`, logged once at WARN, and is read by its
-  catch-up read alone, each interval, until the connection restarts. A channel that no Binding names any longer is forgotten.
+  catch-up read alone, each interval, until the run ends (a restart or a change of leader) or no Binding names it and one names it again,
+  when it is read to its `deltaLink` anew. A channel that no Binding names any longer is forgotten.
 - **Errors.** Graph's 429 pauses every read of the connection for its `Retry-After`, since Graph throttles an app in a tenant, and ends the
   channel's poll. A 403 (the app may not read the channel's messages: install or update the app in the team), a 401, a 404 or a 400 of
   a channel's delta or catch-up read ends the channel's poll and counts the channel as `failing`, logged once at WARN. Another failure is
@@ -294,8 +295,9 @@ channel whose group the broker does not know yet waits, logged once at WARN with
   measured) is logged at WARN, and the channel is read to a new `deltaLink` as at a start, with a catch-up read of what was posted since
   the last poll, within the 10 minutes.
 - **Cost.** A connection makes at most 4 reads a second, one at a time. Once it has its `deltaLink`, a channel costs one delta read and 3
-  reads of replies each 10 seconds, 6 at a poll that finds a new thread: 24 to 42 reads a minute. While it is read to its `deltaLink`, a
-  poll adds up to 5 pages and a catch-up read. [Limits](limits.md#run-the-broker) has the budget. On a test tenant, 22 reads at 5 seconds
+  reads of replies each 10 seconds; at a poll that finds new threads, 4 to 6 reads of replies (6 when three or more threads begin): 24 to
+  42 reads a minute. While it is read to its `deltaLink`, a poll of it makes at most 5 pages, 3 reads of replies and a catch-up read, 9
+  reads. [Limits](limits.md#run-the-broker) has the budget. On a test tenant, 22 reads at 5 seconds
   apart drew no 429; the throttle of a channel's messages is not measured.
 
 ### Catch-up reads

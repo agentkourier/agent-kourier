@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/backoff"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/lanes"
 	"github.com/agentkourier/agent-kourier/internal/secret"
@@ -698,6 +699,7 @@ func TestPollSyncSpreadsItsPagesOverPolls(t *testing.T) {
 	pt := newPollTest(t)
 	pt.f.setGraph(func(g *fakeGraph) { g.deltaPages[testChannel] = 2 * pt.p.syncPages }) // 12 pages: 5, 5 and 2
 	pt.bound(t, testChannel, testGraphChannel)
+	pt.f.putMessage(testChannel, made(person("1794971800129", "", testUser, "<p>before the start</p>"), pt.ago(time.Minute)))
 	pt.round(t)
 	if got := deltaReads(pt.calls(), testChannel); got != pt.p.syncPages {
 		t.Errorf("delta reads of the first poll = %d; want %d", got, pt.p.syncPages)
@@ -734,6 +736,17 @@ func TestPollSyncSpreadsItsPagesOverPolls(t *testing.T) {
 	}
 	if got := pt.sink.callsOf("1794971800130"); got != 1 {
 		t.Errorf("the post made while the channel synced was handed on %d times in all; want once", got)
+	}
+	// Each catch-up read of the sync reads from the last one's start, less the skew, and not the whole look-back: the post handed on by
+	// the start's is old to the two after, and the post handed on by the second is a duplicate to the third alone.
+	if got := pt.sink.callsOf("1794971800129"); got != 1 {
+		t.Errorf("the post made before the start was handed on %d times; want once, by the start's catch-up read", got)
+	}
+	if got := pt.read(t, readOld); got != 2 {
+		t.Errorf("read_messages{old} = %v; want 2", got)
+	}
+	if got := pt.read(t, notifiedDuplicate); got != 1 {
+		t.Errorf("read_messages{duplicate} = %v; want 1", got)
 	}
 }
 
@@ -993,5 +1006,65 @@ func TestPollKeepsPostsAloneAndForgetsARefusedRoot(t *testing.T) {
 	}
 	if got := pt.obs.series(t, "agentkourier_teams_graph_channels", channelPolling); got != 1 {
 		t.Errorf("channels{polling} = %v; want 1", got)
+	}
+}
+
+// A delta read that fails in a way that may pass does not end the poll: the replies of the channel's threads are read in it all the same.
+// The poll counts failed, and the channel is read again after the backoff.
+func TestPollADeltaReadThatFailsLeavesTheRestOfThePoll(t *testing.T) {
+	pt := newPollTest(t)
+	pt.bound(t, testChannel)
+	pt.round(t)
+	pt.f.putMessage(testChannel, made(person("1794971800270", "", testUser, "<p>root</p>"), pt.clk.now().Add(time.Second)))
+	pt.next(t)
+	pt.f.putMessage(testChannel, made(person("1794971800271", "1794971800270", testUser, "<p>reply</p>"), pt.clk.now().Add(time.Second)))
+	failed := false
+	pt.f.setGraph(func(g *fakeGraph) {
+		g.fail = func(r *http.Request) (int, string, bool) {
+			if !failed && strings.HasSuffix(r.URL.Path, "/delta") {
+				failed = true
+				return http.StatusServiceUnavailable, `{"error":{"code":"ServiceUnavailable"}}`, true
+			}
+			return 0, "", false
+		}
+	})
+	pt.next(t)
+	if got := pt.sink.callsOf("1794971800271"); got != 1 {
+		t.Errorf("the reply was handed on %d times in the poll whose delta read failed; want once", got)
+	}
+	if got := pt.polls(t, polledFailed); got != 1 {
+		t.Errorf("polls{failed} = %v; want 1", got)
+	}
+	pt.calls()
+	pt.clk.advance(backoff.Doubling(pt.p.interval, pt.p.failMax, 1) - time.Second)
+	pt.round(t)
+	if calls := pt.calls(); len(calls) != 0 {
+		t.Errorf("reads before the backoff passed = %v; want none", calls)
+	}
+	pt.clk.advance(2 * time.Second)
+	pt.round(t)
+	if got := deltaReads(pt.calls(), testChannel); got != 1 {
+		t.Errorf("delta reads once the backoff passed = %d; want 1", got)
+	}
+	if got := pt.polls(t, polledRead); got != 2 {
+		t.Errorf("polls{polled} = %v; want 2: the poll before the failure and the one after", got)
+	}
+}
+
+// A root forgets the replies read that were made more than the skew before its newest: the time bounds those, and the set holds only
+// what the bound would take again.
+func TestRootSawForgetsRepliesPastTheSkew(t *testing.T) {
+	t0 := time.Now()
+	rt := newRoot(t0)
+	rt.saw("1794971800280", t0, pollSkew)
+	rt.saw("1794971800281", t0.Add(pollSkew/2), pollSkew)
+	rt.saw("1794971800282", t0.Add(pollSkew+time.Second), pollSkew)
+	if !rt.newest.Equal(t0.Add(pollSkew + time.Second)) {
+		t.Errorf("newest = %v; want the newest reply's time", rt.newest)
+	}
+	for id, want := range map[string]bool{"1794971800280": false, "1794971800281": true, "1794971800282": true} {
+		if _, ok := rt.read[id]; ok != want {
+			t.Errorf("read holds %s: %v; want %v", id, ok, want)
+		}
 	}
 }

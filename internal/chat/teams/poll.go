@@ -462,8 +462,8 @@ func (p *poller) syncDelta(ctx context.Context, group, ch string, st *polled, st
 			st.capped, st.sync = true, ""
 			st.state, st.warned = channelFailing, true
 			p.log.WarnContext(ctx, "teams: the delta of a bound channel's messages named no deltaLink within the pages the broker reads; "+
-				"the channel's new posts are read by its catch-up read alone (its newest threads, each interval) until the connection "+
-				"restarts", "channel", ch, "pages", p.maxPages)
+				"the channel's new posts are read by its catch-up read alone (its newest threads, each interval) until the run ends (a "+
+				"restart or a change of leader) or the channel is bound anew", "channel", ch, "pages", p.maxPages)
 			return or(polledTooLong), nil
 		}
 		st.sync = link
