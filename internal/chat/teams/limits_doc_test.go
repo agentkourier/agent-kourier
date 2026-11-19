@@ -73,6 +73,7 @@ func TestLimitsPage(t *testing.T) {
 	// The polls of a connection with no notificationURL, read from the poller that New built.
 	limitsdoc.Duration(t, "teamsPollInterval", c.poll.interval)
 	limitsdoc.Count(t, "teamsPollPages", c.poll.maxPages)
+	limitsdoc.Count(t, "teamsPollSyncPages", c.poll.syncPages)
 	limitsdoc.Duration(t, "teamsPollSkew", c.poll.skew)
 	limitsdoc.Count(t, "teamsPollRoots", c.poll.rootCap)
 	limitsdoc.Duration(t, "teamsPollRootWindow", c.poll.rootWindow)

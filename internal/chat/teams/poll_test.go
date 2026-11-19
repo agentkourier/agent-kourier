@@ -291,6 +291,15 @@ func TestPollThrottlingPausesTheWholeConnection(t *testing.T) {
 	if got := pt.polls(t, polledStarted); got != 1 {
 		t.Errorf("polls{started} = %v; want 1: the other channel is read after the pause", got)
 	}
+	n := 0
+	for _, c := range pt.calls() {
+		if strings.Contains(c, testChannel) {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("reads of the throttled channel in the round = %d; want 1: a 429 ends its poll", n)
+	}
 }
 
 // A 403 marks the channel failing, told once at WARN with the fix of the resource-specific permission; the other channels are polled.
@@ -625,5 +634,364 @@ func TestPollKeepsTheDeltaLinkAfterTheHandOff(t *testing.T) {
 	pt.round(t)
 	if got := pt.sink.callsOf("1794971800091"); got != 1 {
 		t.Errorf("the post read while the lane was full was handed on %d times; want once, by the read made again", got)
+	}
+}
+
+// deltaReads is how many of calls read the delta of channel ch.
+func deltaReads(calls []string, ch string) int {
+	n := 0
+	for _, c := range calls {
+		if strings.Contains(c, "/channels/"+ch+"/messages/delta?") {
+			n++
+		}
+	}
+	return n
+}
+
+// A channel whose delta names no deltaLink within the pages the broker reads is failing, told once at WARN, and its delta is not read
+// again; its catch-up read goes on each interval, so a new post in it is still handed on.
+func TestPollPageCapMarksTheChannelFailingAndReadsItsNewPosts(t *testing.T) {
+	pt := newPollTest(t)
+	pt.p.maxPages = 3
+	pt.f.setGraph(func(g *fakeGraph) { g.deltaPages[testChannel] = 1000 })
+	pt.bound(t, testChannel)
+	pt.f.putMessage(testChannel, made(person("1794971800120", "", testUser, "<p>recent</p>"), pt.ago(time.Minute)))
+	pt.round(t)
+	if got := deltaReads(pt.calls(), testChannel); got != pt.p.maxPages {
+		t.Errorf("delta reads = %d; want %d, the cap", got, pt.p.maxPages)
+	}
+	if got := pt.polls(t, polledTooLong); got != 1 {
+		t.Errorf("polls{too_long} = %v; want 1", got)
+	}
+	if got := pt.sink.callsOf("1794971800120"); got != 1 {
+		t.Errorf("the recent post was handed on %d times; want once, by the start's catch-up read", got)
+	}
+	pt.f.putMessage(testChannel, made(person("1794971800121", "", testUser, "<p>new</p>"), pt.clk.now().Add(time.Second)))
+	pt.next(t)
+	pt.next(t)
+	if got := pt.sink.callsOf("1794971800121"); got != 1 {
+		t.Errorf("a new post of the failing channel was handed on %d times; want once, by its catch-up read", got)
+	}
+	if got := deltaReads(pt.calls(), testChannel); got != 0 {
+		t.Errorf("delta reads past the cap = %d; want none", got)
+	}
+	if got := pt.obs.series(t, "agentkourier_teams_graph_channels", channelFailing); got != 1 {
+		t.Errorf("channels{failing} = %v; want 1", got)
+	}
+	if got := pt.obs.series(t, "agentkourier_teams_graph_channels", channelPolling); got != 0 {
+		t.Errorf("channels{polling} = %v; want 0", got)
+	}
+	if got := pt.obs.series(t, "agentkourier_teams_graph_catchups_total", catchUpSyncing, catchUpRead); got != 2 {
+		t.Errorf("catchups{syncing,read} = %v; want 2", got)
+	}
+	if n := strings.Count(pt.logs.String(), "level=WARN msg=\"teams: the delta of a bound channel's messages named no deltaLink"); n != 1 {
+		t.Errorf("WARN lines of the cap = %d; want 1", n)
+	}
+	if got := pt.polls(t, polledTooLong); got != 3 {
+		t.Errorf("polls{too_long} = %v; want 3, one each poll", got)
+	}
+}
+
+// A long history is synced over several polls, at most pollSyncPages pages each, so the other channels are read in the same rounds, and
+// a post made while it syncs is handed on by the catch-up read that each of its polls makes.
+func TestPollSyncSpreadsItsPagesOverPolls(t *testing.T) {
+	pt := newPollTest(t)
+	pt.f.setGraph(func(g *fakeGraph) { g.deltaPages[testChannel] = 2 * pt.p.syncPages }) // 12 pages: 5, 5 and 2
+	pt.bound(t, testChannel, testGraphChannel)
+	pt.round(t)
+	if got := deltaReads(pt.calls(), testChannel); got != pt.p.syncPages {
+		t.Errorf("delta reads of the first poll = %d; want %d", got, pt.p.syncPages)
+	}
+	pt.f.putMessage(testChannel, made(person("1794971800130", "", testUser, "<p>while it syncs</p>"), pt.clk.now().Add(time.Second)))
+	pt.next(t)
+	calls := pt.calls()
+	if got := deltaReads(calls, testChannel); got != pt.p.syncPages {
+		t.Errorf("delta reads of the second poll = %d; want %d", got, pt.p.syncPages)
+	}
+	if got := deltaReads(calls, testGraphChannel); got == 0 {
+		t.Error("the other channel was not read in the round of the sync")
+	}
+	if got := pt.sink.callsOf("1794971800130"); got != 1 {
+		t.Errorf("the post made while the channel syncs was handed on %d times; want once", got)
+	}
+	pt.next(t)
+	if got := deltaReads(pt.calls(), testChannel); got != 2 {
+		t.Errorf("delta reads of the third poll = %d; want 2", got)
+	}
+	if pt.p.chans[testChannel].link == "" {
+		t.Fatal("the sync did not reach the deltaLink")
+	}
+	if got := pt.polls(t, polledSyncing); got != 2 {
+		t.Errorf("polls{syncing} = %v; want 2", got)
+	}
+	if got := pt.polls(t, polledStarted); got != 2 {
+		t.Errorf("polls{started} = %v; want 2, one each channel", got)
+	}
+	pt.f.putMessage(testChannel, made(person("1794971800131", "", testUser, "<p>after the sync</p>"), pt.clk.now().Add(time.Second)))
+	pt.next(t)
+	if got := pt.sink.callsOf("1794971800131"); got != 1 {
+		t.Errorf("a post after the sync was handed on %d times; want once, by the delta", got)
+	}
+	if got := pt.sink.callsOf("1794971800130"); got != 1 {
+		t.Errorf("the post made while the channel synced was handed on %d times in all; want once", got)
+	}
+}
+
+// A gap of the sockets that ends while a channel syncs a long history is acted on in the next round: the channel that syncs reads its
+// pages for one poll alone, and the other channels' catch-up reads are made in the same round.
+func TestPollLongSyncDoesNotDelayAGapCatchUp(t *testing.T) {
+	pt := newPollTest(t)
+	pt.f.setGraph(func(g *fakeGraph) { g.deltaPages[testChannel] = 1_000_000 })
+	pt.bound(t, testChannel, testGraphChannel)
+	pt.round(t)
+	pt.next(t)
+	pt.calls()
+	pt.clk.advance(time.Second)
+	gapStart := pt.clk.now()
+	pt.f.putMessage(testGraphChannel, made(person("1794971800140", "", testUser, "<p>in the gap</p>"), gapStart.Add(time.Second)))
+	pt.clk.advance(2 * time.Second)
+	before := pt.clk.now()
+	pt.p.gap(Gap{Start: gapStart, End: pt.clk.now()})
+	pt.round(t)
+	if got := deltaReads(pt.calls(), testChannel); got > pt.p.syncPages {
+		t.Errorf("delta reads of the syncing channel in the gap's round = %d; want at most %d", got, pt.p.syncPages)
+	}
+	if got := pt.obs.series(t, "agentkourier_teams_graph_catchups_total", catchUpGap, catchUpRead); got != 2 {
+		t.Errorf("catchups{socket_gap,read} = %v; want 2, both channels in the gap's round", got)
+	}
+	if got := pt.sink.callsOf("1794971800140"); got != 1 {
+		t.Errorf("the post of the gap was handed on %d times; want once", got)
+	}
+	// At most a sync's pages, the replies and a catch-up read for each channel: the round is not held by the history.
+	if took := pt.clk.now().Sub(before); took > time.Duration(2*(pt.p.syncPages+2*pt.p.rootCap+2))*pt.p.callGap {
+		t.Errorf("the gap's round took %v of the poller's paced reads; want it bounded by one poll of each channel", took)
+	}
+}
+
+// A reply to a root that a new root pushes out of the newest pollRootCap in the same interval is read once more, at the poll that finds
+// the new root: the replies of the roots kept before the delta read are read too, at most twice pollRootCap reads.
+func TestPollReadsTheRepliesOfARootThatANewRootPushesOut(t *testing.T) {
+	pt := newPollTest(t)
+	pt.bound(t, testChannel)
+	pt.round(t)
+	for _, id := range []string{"1794971800101", "1794971800102", "1794971800103"} {
+		pt.f.putMessage(testChannel, made(person(id, "", testUser, "<p>root</p>"), pt.clk.now().Add(time.Second)))
+	}
+	pt.next(t)
+	pt.calls()
+	pt.f.putMessage(testChannel, made(person("1794971800110", "1794971800101", testUser, "<p>reply to R1</p>"), pt.clk.now().Add(time.Second)))
+	pt.f.putMessage(testChannel, made(person("1794971800104", "", testUser, "<p>R4</p>"), pt.clk.now().Add(2*time.Second)))
+	pt.next(t)
+	replies := 0
+	for _, c := range pt.calls() {
+		if strings.Contains(c, "/replies?") {
+			replies++
+		}
+	}
+	if replies != 4 || replies > 2*pt.p.rootCap {
+		t.Errorf("reads of replies at the poll that found R4 = %d; want 4 (R1 to R4), at most %d", replies, 2*pt.p.rootCap)
+	}
+	pt.next(t)
+	pt.next(t)
+	if got := pt.sink.callsOf("1794971800110"); got != 1 {
+		t.Errorf("the reply to the root pushed out was handed on %d times; want once", got)
+	}
+	if _, ok := pt.p.chans[testChannel].roots["1794971800101"]; ok {
+		t.Error("the root pushed out is still kept")
+	}
+}
+
+// A reply that Graph shows after a newer one, with a lower ID, is handed on: a root's replies are bounded by when they were made, less
+// the skew, and not by their IDs.
+func TestPollHandsOnAReplyThatGraphShowsLate(t *testing.T) {
+	pt := newPollTest(t)
+	pt.bound(t, testChannel)
+	pt.round(t)
+	pt.f.putMessage(testChannel, made(person("1794971800201", "", testUser, "<p>root</p>"), pt.clk.now().Add(time.Second)))
+	pt.next(t)
+	pt.f.putMessage(testChannel, made(person("1794971800211", "1794971800201", testUser, "<p>B</p>"), pt.clk.now().Add(time.Second)))
+	pt.next(t)
+	b := pt.p.chans[testChannel].roots["1794971800201"].newest // when B was made
+	if b.IsZero() {
+		t.Fatal("the read of the root's replies kept no newest reply")
+	}
+	pt.f.putMessage(testChannel, made(person("1794971800210", "1794971800201", testUser, "<p>A, seen late</p>"), pt.clk.now().Add(-time.Second)))
+	pt.f.putMessage(testChannel, made(person("1794971800209", "1794971800201", testUser, "<p>made 20s before B</p>"), b.Add(-20*time.Second)))
+	pt.f.putMessage(testChannel, made(person("1794971800208", "1794971800201", testUser, "<p>made 40s before B</p>"), b.Add(-40*time.Second)))
+	pt.next(t)
+	for id, want := range map[string]int{"1794971800210": 1, "1794971800209": 1, "1794971800208": 0} {
+		if got := pt.sink.callsOf(id); got != want {
+			t.Errorf("the late reply %s was handed on %d times; want %d: within the skew of the newest, and not past it", id, got, want)
+		}
+	}
+}
+
+// What a read of a root's replies gave is not handed on again, nor read as new, however long after (past the dedup's window), and a
+// reply that a catch-up read found older than the root's newest, less the skew, is not handed on by a read of the replies.
+func TestPollRepliesWatermarkHoldsPastTheDedupWindow(t *testing.T) {
+	pt := newPollTest(t)
+	pt.bound(t, testChannel)
+	pt.f.putMessage(testChannel, made(person("1794971800220", "", testUser, "<p>older root</p>"), pt.ago(30*time.Minute)))
+	pt.f.putMessage(testChannel, made(person("1794971800221", "1794971800220", testUser, "<p>old reply</p>"), pt.ago(20*time.Minute)))
+	pt.f.putMessage(testChannel, made(person("1794971800222", "1794971800220", testUser, "<p>recent reply</p>"), pt.ago(2*time.Minute)))
+	pt.round(t)
+	pt.f.putMessage(testChannel, made(person("1794971800223", "1794971800220", testUser, "<p>new reply</p>"), pt.clk.now().Add(time.Second)))
+	pt.next(t)
+	pt.clk.advance(dedupWindow + time.Minute)
+	pt.round(t)
+	pt.next(t)
+	for id, want := range map[string]int{"1794971800221": 0, "1794971800222": 1, "1794971800223": 1} {
+		if got := pt.sink.callsOf(id); got != want {
+			t.Errorf("the sink was given %s %d times; want %d", id, got, want)
+		}
+	}
+	if got := pt.read(t, notifiedDuplicate); got != 0 {
+		t.Errorf("read_messages{duplicate} = %v; want 0: a reply read once is not read as new again", got)
+	}
+}
+
+// A catch-up read that fails and is made again after the look-back has passed hands on nothing made before the look-back of the read
+// that succeeds, which the dedup may have forgotten.
+func TestPollCatchUpRetriedPastTheLookbackHandsOnNothingOlder(t *testing.T) {
+	pt := newPollTest(t)
+	failing := true
+	pt.f.setGraph(func(g *fakeGraph) {
+		g.fail = func(r *http.Request) (int, string, bool) {
+			if failing && r.URL.Query().Has("$expand") {
+				return http.StatusServiceUnavailable, `{"error":{"code":"ServiceUnavailable"}}`, true
+			}
+			return 0, "", false
+		}
+	})
+	pt.bound(t, testChannel)
+	pt.f.putMessage(testChannel, made(person("1794971800230", "", testUser, "<p>before the start</p>"), pt.ago(time.Minute)))
+	for range 20 {
+		pt.round(t)
+		pt.clk.advance(time.Minute)
+	}
+	pt.f.setGraph(func(*fakeGraph) { failing = false })
+	pt.clk.advance(pollFailMax)
+	pt.round(t)
+	if got := pt.obs.series(t, "agentkourier_teams_graph_catchups_total", catchUpStart, catchUpRead); got != 1 {
+		t.Fatalf("catchups{start,read} = %v; want 1 at last", got)
+	}
+	if got := pt.sink.callsOf("1794971800230"); got != 0 {
+		t.Errorf("a post made before the look-back of the read that succeeded was handed on %d times; want never", got)
+	}
+	if got := pt.read(t, readOld); got < 1 {
+		t.Errorf("read_messages{old} = %v; want the post counted old", got)
+	}
+}
+
+// A post made up to pollSkew before the last poll began, which that poll's delta did not give, is new to the next poll; one made before
+// that is not.
+func TestPollKeepsAPostMadeWithinTheSkew(t *testing.T) {
+	pt := newPollTest(t)
+	pt.bound(t, testChannel)
+	pt.round(t)
+	prev := pt.p.chans[testChannel].prev
+	pt.f.putMessage(testChannel, made(person("1794971800240", "", testUser, "<p>late by 20s</p>"), prev.Add(-20*time.Second)))
+	pt.f.putMessage(testChannel, made(person("1794971800241", "", testUser, "<p>late by 40s</p>"), prev.Add(-40*time.Second)))
+	pt.next(t)
+	if got := pt.sink.callsOf("1794971800240"); got != 1 {
+		t.Errorf("a post made 20s before the last poll was handed on %d times; want once", got)
+	}
+	if got := pt.sink.callsOf("1794971800241"); got != 0 {
+		t.Errorf("a post made 40s before the last poll was handed on %d times; want never", got)
+	}
+}
+
+// The catch-up read of a gap looks back no further than the look-back, however long ago the gap began.
+func TestPollGapCatchUpIsBoundedByTheLookback(t *testing.T) {
+	pt := newPollTest(t)
+	pt.bound(t, testChannel)
+	pt.f.putMessage(testChannel, made(person("1794971800250", "", testUser, "<p>in a long gap, long ago</p>"), pt.ago(30*time.Minute)))
+	pt.round(t)
+	pt.clk.advance(time.Second)
+	pt.p.gap(Gap{Start: pt.ago(time.Hour), End: pt.clk.now()})
+	pt.round(t)
+	if got := pt.obs.series(t, "agentkourier_teams_graph_catchups_total", catchUpGap, catchUpRead); got != 1 {
+		t.Fatalf("catchups{socket_gap,read} = %v; want 1", got)
+	}
+	if got := pt.sink.callsOf("1794971800250"); got != 0 {
+		t.Errorf("a post made before the look-back was handed on %d times by the gap's catch-up read; want never", got)
+	}
+}
+
+// A run starts from nothing: what the last run read of a channel, and a gap told after it ended, are dropped.
+func TestPollANewRunStartsFromNothing(t *testing.T) {
+	pt := newPollTest(t)
+	pt.bound(t, testChannel)
+	pt.round(t)
+	pt.p.gap(Gap{Start: pt.ago(time.Minute), End: pt.clk.now()})
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	pt.p.run(ctx, pt.sink)
+	pt.p.mu.Lock()
+	gapFrom := pt.p.gapFrom
+	pt.p.mu.Unlock()
+	if len(pt.p.chans) != 0 || !gapFrom.IsZero() || len(pt.p.wake) != 0 {
+		t.Fatalf("after a run: channels %d, gap %v, wake %d; want none of them", len(pt.p.chans), gapFrom, len(pt.p.wake))
+	}
+	pt.round(t)
+	if got := pt.polls(t, polledStarted); got != 2 {
+		t.Errorf("polls{started} = %v; want 2: the second run syncs the channel anew", got)
+	}
+	if got := pt.obs.series(t, "agentkourier_teams_graph_catchups_total", catchUpStart, catchUpRead); got != 2 {
+		t.Errorf("catchups{start,read} = %v; want 2", got)
+	}
+	if got := pt.obs.series(t, "agentkourier_teams_graph_catchups_total", catchUpGap, catchUpRead); got != 0 {
+		t.Errorf("catchups{socket_gap,read} = %v; want 0: the gap was told before the run", got)
+	}
+}
+
+// A poll keeps for their replies the roots that are posts alone (not a system event); drops a message that does not name itself by a
+// message ID, counted ignored; takes a message whose createdDateTime it cannot read as old, logged at DEBUG; and forgets a root whose
+// replies Graph refuses to read, while the channel is polled on.
+func TestPollKeepsPostsAloneAndForgetsARefusedRoot(t *testing.T) {
+	pt := newPollTest(t)
+	pt.bound(t, testChannel)
+	pt.round(t)
+	at := pt.clk.now().Add(time.Second)
+	event := made(person("1794971800260", "", testUser, "<p>joined</p>"), at)
+	event["messageType"] = "systemEventMessage"
+	pt.f.putMessage(testChannel, event)
+	pt.f.putMessage(testChannel, made(person("1794971800261", "", testUser, "<p>a post</p>"), at))
+	pt.f.putMessage(testChannel, made(person("not-an-id", "", testUser, "<p>a bad ID</p>"), at))
+	pt.f.putMessage(testChannel, person("1794971800262", "", testUser, "<p>no date</p>"))
+	pt.next(t)
+	roots := pt.p.chans[testChannel].roots
+	if _, ok := roots["1794971800260"]; ok {
+		t.Error("a system event is kept as a root")
+	}
+	if _, ok := roots["1794971800261"]; !ok {
+		t.Fatal("a post is not kept as a root")
+	}
+	if got := pt.read(t, notifiedIgnored); got != 2 {
+		t.Errorf("read_messages{ignored} = %v; want 2: the system event and the message with a bad ID", got)
+	}
+	if pt.sink.has("not-an-id") || pt.sink.has("1794971800262") {
+		t.Error("a message with a bad ID, or with no date, was handed on")
+	}
+	if !strings.Contains(pt.logs.String(), "has no createdDateTime that the broker reads") {
+		t.Error("the message with no date was not logged")
+	}
+	pt.f.setGraph(func(g *fakeGraph) {
+		g.fail = func(r *http.Request) (int, string, bool) {
+			if strings.Contains(r.URL.Path, "/messages/1794971800261/replies") {
+				return http.StatusForbidden, `{"error":{"code":"Forbidden"}}`, true
+			}
+			return 0, "", false
+		}
+	})
+	pt.next(t)
+	if _, ok := pt.p.chans[testChannel].roots["1794971800261"]; ok {
+		t.Error("a root whose replies Graph refused is kept")
+	}
+	if got := pt.polls(t, polledRefused); got != 0 {
+		t.Errorf("polls{refused} = %v; want 0: one root's refusal does not fail the channel", got)
+	}
+	if got := pt.obs.series(t, "agentkourier_teams_graph_channels", channelPolling); got != 1 {
+		t.Errorf("channels{polling} = %v; want 1", got)
 	}
 }

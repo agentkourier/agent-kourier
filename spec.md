@@ -668,12 +668,17 @@ Rules:
   starts one catch-up read of that channel (TEAMS-7P). A notification that comes before the run, before the listing, or that its lane sheds is 503, for
   Graph to send again; a read that fails after 3 tries (429, 5xx, timeout) is dropped and counted.
   Polling (TEAMS-7P): with no `notificationURL`, the leader reads each bound channel every 10 s through Graph's channel
-  `messages/delta` (a run's first read follows the delta to its `deltaLink` and hands on nothing), and the newest replies of the 3
-  newest threads it saw begin within the last hour; reads are one at a time, 250 ms apart, and a 429 pauses them all. The read
-  position lives in memory only: a run's start, a socket gap's end and a `missed` notification each make a catch-up read of the 20
-  newest threads with their replies and hand on what was posted within the last 10 minutes (the receiver's dedup window). A repeat is
-  dropped by the receiver's recent set and, across a restart, by the session's MessageID dedup and the trigger thread's own message;
-  an unthreaded trigger that opens no session can fire again for a post re-read within the look-back after a restart.
+  `messages/delta`. A run's first reads page to the `deltaLink`, at most 5 pages a poll and 500 in all, keeping none of the pages'
+  messages; until the channel has its `deltaLink`, each poll makes a catch-up read of it, and past 500 pages the channel is failing and
+  read by its catch-up read alone. Each poll reads the newest replies of the 3 newest threads it saw begin within the last hour, and of
+  those read at the poll before (at most 6 reads); a reply is new when no read gave it and it was made at most 30 s before the newest
+  read in its thread. Reads are one at a time, 250 ms apart, and a 429 pauses them all. The read position lives in memory only: a run's
+  start, a socket gap's end and a `missed` notification each make a catch-up read of the 20 newest threads with their replies and hand
+  on what was posted within the last 10 minutes (the receiver's dedup window), never further back, a retried catch-up included. A
+  repeat is dropped by the receiver's recent set and, across a restart, in the store: a keyed trigger finds its thread
+  (`DecisionDedup`); an unthreaded start's `Submit` carries `MessageID = chat.MessageID(ref)`, and `reply_queue`'s `ON CONFLICT (id) DO
+  NOTHING` queues no second turn (`intake_total{reply_queue,duplicate}`); a limited start is `Again`. No trigger fires a second
+  investigation; `trigger_matched_total` and `trigger_decisions_total` count the re-read again.
   Post carries its tag where people do not see it: `kourier` and the first 16 bytes of the tag's SHA-256 in hex, as an empty
   `<span title>` in a paragraph of its own at the end of a text (after the closing fence of a block; a zero-width tag at the start
   changed how Teams parsed the first line, and the span was measured only at the end), or as the `id` of the first element of a card's

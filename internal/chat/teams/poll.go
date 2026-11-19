@@ -1,7 +1,6 @@
 package teams
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -22,8 +21,8 @@ import (
 // This file reads the bound channels' new messages from Microsoft Graph by polling, the alert route of a Teams connection with no
 // notificationURL (in either mode): Teams sends a bot no other bot's post, an alert's card that Workflows posted among them, while Graph
 // gives every post. The leader alone polls, while the connection runs. It also holds the catch-up read that both routes share: at the
-// start of a run, after a gap of the sockets (socket mode), and after Graph's lifecycle notification missed (push.go). What it has read
-// is held in memory only: a run begins anew, with a catch-up read of the look-back.
+// start of a run, while a channel has no deltaLink yet, after a gap of the sockets (socket mode), and after Graph's lifecycle
+// notification missed (push.go). What it has read is held in memory only: a run begins anew, with a catch-up read of the look-back.
 //
 // Measured on a test tenant in November 2026: GET /teams/{group}/channels/{channel}/messages/delta under the resource-specific permission
 // alone, its first read slow (1.3 s) and paged by @odata.nextLink to an @odata.deltaLink, and each read of the deltaLink after about 110
@@ -33,17 +32,27 @@ import (
 // sync anew; the replies of a root, GET …/messages/{root}/replies, newest first (its example), $top at most 50; the order of the
 // channel's messages in a read of them (taken here as newest first, as the replies'); and Graph's throttle of a channel's messages, which
 // a summary read in November 2026 put at 1 request a second for a channel and 20 for an app in a tenant (not seen on Microsoft's page).
+//
+// The first read of a channel's delta pages through its whole history to the deltaLink, which on a long-lived channel is many pages:
+// a sync reads at most pollSyncPages of them at each poll and none of their messages is kept. Two options of Graph's delta queries
+// could make it one read, and are left for the live check because neither is verified for a channel's messages: $deltatoken=latest
+// (a deltaLink from now, with no history) and $filter=lastModifiedDateTime gt {time} (the history since a time). Neither is used.
 
 // The bounds of a poll. Each bound channel is read every pollInterval, the first reads of the channels that a round finds new spread over
 // one interval, through the deltaLink of its last read. The connection's reads go one at a time, pollCallGap apart at the least, so a
-// connection reads at most 4 a second, well inside the 20 a second for an app in a tenant. A delta read follows at most pollMaxPages pages.
-// The replies of the pollRootCap newest roots that the run read, among those posted within pollRootWindow, are read each poll, each its
-// newest graphPageTop (one page). A message is new to a delta read when it was made at most pollSkew before the last read began, which
-// covers a clock that runs ahead of Graph's and a post that a read sees late. A channel whose poll fails is read again after pollInterval,
-// twice as long after each further failure, up to pollFailMax.
+// connection reads at most 4 a second, well inside the 20 a second for an app in a tenant. A channel with no deltaLink yet (a sync: the
+// run's first read of it, or a read anew after Graph refused its deltaLink) reads at most pollSyncPages pages of its delta at each poll,
+// at most pollMaxPages in all, past which it is failing and read by its catch-up read alone; a read of the deltaLink follows at most
+// pollMaxPages pages too. The replies of the pollRootCap newest roots that the run read, among those posted within pollRootWindow, are
+// read each poll, each its newest graphPageTop (one page), with those of the roots read at the poll before (so at most twice pollRootCap
+// reads). A message is new to a delta read when it was made at most pollSkew before the last read began, and a reply is new to a root
+// when no read gave it and it was made at most pollSkew before the newest reply that a read gave: that covers a clock that runs ahead of
+// Graph's and a post that a read sees late. A channel whose poll fails is read again after pollInterval, twice as long after each further
+// failure, up to pollFailMax.
 const (
 	pollInterval   = 10 * time.Second
 	pollCallGap    = 250 * time.Millisecond
+	pollSyncPages  = 5
 	pollMaxPages   = 500
 	pollRootCap    = 3
 	pollRootWindow = time.Hour
@@ -64,9 +73,11 @@ const (
 
 // The outcomes of a channel's poll, the label of agentkourier_teams_graph_polls_total: a closed set.
 const (
-	polledStarted   = "started"   // the run's first read of the channel: its deltaLink fetched, nothing handed on from it
+	polledStarted   = "started"   // a sync reached the channel's deltaLink: nothing handed on from its pages
+	polledSyncing   = "syncing"   // a sync read its pages for the poll, with no deltaLink yet; a catch-up read covered the channel
+	polledTooLong   = "too_long"  // the channel's sync passed pollMaxPages: it is failing, and read by its catch-up read alone
 	polledRead      = "polled"    // a read of the deltaLink, its new messages handed on
-	polledReset     = "reset"     // Graph refused the deltaLink: read anew from now, nothing handed on from that read
+	polledReset     = "reset"     // Graph refused the deltaLink: a sync anew from now, nothing handed on from it
 	polledThrottled = "throttled" // Graph answered 429: every read of the connection waits for its Retry-After
 	polledFailed    = "failed"    // a read failed in a way that may pass (a 5xx, a timeout, a full lane)
 	polledRefused   = "refused"   // Graph refused the read for good (401, 403, 404, 400): the channel is failing
@@ -74,9 +85,10 @@ const (
 
 // The triggers of a catch-up read, a label of agentkourier_teams_graph_catchups_total.
 const (
-	catchUpStart  = "start"      // the run's first poll of the channel, or a read anew after Graph refused its deltaLink
-	catchUpGap    = "socket_gap" // socket mode: a gap of the sockets ended
-	catchUpMissed = "missed"     // a notificationURL: Graph's lifecycle notification missed
+	catchUpStart   = "start"      // the run's first poll of the channel, or a read anew after Graph refused its deltaLink
+	catchUpSyncing = "syncing"    // a later poll of a channel with no deltaLink: it syncs still, or its sync passed pollMaxPages
+	catchUpGap     = "socket_gap" // socket mode: a gap of the sockets ended
+	catchUpMissed  = "missed"     // a notificationURL: Graph's lifecycle notification missed
 )
 
 // The outcomes of a catch-up read, the other label of agentkourier_teams_graph_catchups_total.
@@ -98,22 +110,46 @@ const channelPolling = "polling"
 
 // polled is what the poller holds of one bound channel, in memory.
 type polled struct {
-	link     string    // the deltaLink of the last read, "" before the first; never logged, since it carries Graph's state token
-	prev     time.Time // when the last read whose messages were handed on began
-	next     time.Time // when it is read next
-	roots    map[string]*root
-	state    string // channelPolling, channelWaitingGroup or channelFailing
-	warned   bool   // its failing or waiting was told at WARN
+	link    string    // the deltaLink of the last read, "" while the channel syncs; never logged, since it carries Graph's state token
+	sync    string    // the page at which the channel's sync goes on, "" for its first; never logged
+	pages   int       // the pages that the channel's sync has read, over its polls
+	capped  bool      // its sync passed maxPages: the channel is failing, read by its catch-up read alone
+	prev    time.Time // when the poll began whose delta read was last handed on, or whose sync reached the deltaLink
+	covered time.Time // when the poll began whose catch-up read last succeeded
+	next    time.Time // when it is read next
+	roots   map[string]*root
+	state   string // channelPolling, channelWaitingGroup or channelFailing
+	warned  bool   // its failing or waiting was told at WARN
+	// failures counts the polls that failed since the last that did not.
 	failures int
 	// catchUp, if not zero, is the start of a catch-up read that the channel's next poll makes, for the trigger catchUpWhy.
 	catchUp    time.Time
 	catchUpWhy string
 }
 
-// root is a thread whose replies a poll reads: when its root was made, and the newest reply that a read saw (its ID), "" before any.
+// root is a thread whose replies a poll reads: when its root was made, when the newest reply that a read gave was made (zero before
+// any), and the replies read that were made at most the skew before that one, by ID: a reply in the set, or made before the skew, is
+// not handed on again.
 type root struct {
 	created time.Time
-	after   string
+	newest  time.Time
+	read    map[string]time.Time
+}
+
+func newRoot(created time.Time) *root { return &root{created: created, read: map[string]time.Time{}} }
+
+// saw records that a read gave the reply id, made at made, and forgets the replies made more than skew before the newest.
+func (rt *root) saw(id string, made time.Time, skew time.Duration) {
+	if made.After(rt.newest) {
+		rt.newest = made
+	}
+	rt.read[id] = made
+	floor := rt.newest.Add(-skew)
+	for k, t := range rt.read {
+		if t.Before(floor) {
+			delete(rt.read, k)
+		}
+	}
 }
 
 // poller polls the bound channels of a connection with no notificationURL. run polls them on its own goroutine; gap is told of a gap of
@@ -122,7 +158,7 @@ type poller struct {
 	c                                                      *Client
 	interval, callGap, rootWindow, skew, failMax, lookback time.Duration
 	tick                                                   time.Duration
-	rootCap, maxPages                                      int
+	rootCap, syncPages, maxPages                           int
 	now                                                    func() time.Time
 	sleep                                                  func(context.Context, time.Duration) bool // waitFor; a test's moves its clock
 	log                                                    *slog.Logger
@@ -140,8 +176,8 @@ type poller struct {
 
 func newPoller(c *Client) *poller {
 	return &poller{c: c, interval: pollInterval, callGap: pollCallGap, rootWindow: pollRootWindow, skew: pollSkew, failMax: pollFailMax,
-		lookback: pollLookback, tick: pollTick, rootCap: pollRootCap, maxPages: pollMaxPages, now: c.graph.now, sleep: waitFor, log: c.log,
-		wake: make(chan struct{}, 1), chans: map[string]*polled{}}
+		lookback: pollLookback, tick: pollTick, rootCap: pollRootCap, syncPages: pollSyncPages, maxPages: pollMaxPages, now: c.graph.now,
+		sleep: waitFor, log: c.log, wake: make(chan struct{}, 1), chans: map[string]*polled{}}
 }
 
 // gap is told of a gap of the sockets that ended (Config.OnSocketGap): every channel is read at once, with a catch-up read of what was
@@ -163,10 +199,17 @@ func (p *poller) gap(g Gap) {
 }
 
 // run polls the channels that lister names until ctx ends: a round every tick, and at once when a gap asks. It starts from nothing
-// held. With no lister nothing is bound, and nothing is read.
+// held, a gap told after the last run ended included. With no lister nothing is bound, and nothing is read.
 func (p *poller) run(ctx context.Context, lister chat.ChannelLister) {
 	clear(p.chans)
 	p.lastCall, p.paused = time.Time{}, time.Time{}
+	p.mu.Lock()
+	p.gapFrom = time.Time{}
+	p.mu.Unlock()
+	select {
+	case <-p.wake:
+	default:
+	}
 	t := time.NewTicker(p.tick)
 	defer t.Stop()
 	defer p.setGauges(ctx, 0, 0, 0)
@@ -216,12 +259,11 @@ func (p *poller) round(ctx context.Context, lister chat.ChannelLister) {
 	gapFrom := p.gapFrom
 	p.gapFrom = time.Time{}
 	p.mu.Unlock()
-	if !gapFrom.IsZero() {
-		from := later(gapFrom, now.Add(-p.lookback))
+	if !gapFrom.IsZero() { // catchUpDue bounds the read by the look-back
 		for _, st := range p.chans {
 			st.next = now
-			if st.catchUp.IsZero() || from.Before(st.catchUp) {
-				st.catchUp, st.catchUpWhy = from, catchUpGap
+			if st.catchUp.IsZero() || gapFrom.Before(st.catchUp) {
+				st.catchUp, st.catchUpWhy = gapFrom, catchUpGap
 			}
 		}
 	}
@@ -256,8 +298,11 @@ func (p *poller) setGauges(ctx context.Context, polling, waiting, failing int) {
 	telemetry.SetGauge(ctx, "agentkourier_teams_graph_channels", float64(failing), channelFailing, p.c.conn)
 }
 
-// poll reads channel ch once: its delta, the replies of its recent roots, and the catch-up read it is due, each handed on on its lane. A
-// channel whose team's Microsoft Entra group is not known waits, told once at WARN with the fix.
+// poll reads channel ch once: its delta (or the next pages of its sync), the replies of its recent roots, and the catch-up read it is
+// due, each handed on on its lane. A channel with no deltaLink makes a catch-up read at each poll, so that a channel that syncs still, or
+// whose sync passed its pages, hands on its new posts. A read that fails stops the poll only when Graph throttled it or refused it for
+// good; another failure leaves the rest of the poll to be made, and the poll is counted failed. A channel whose team's Microsoft Entra
+// group is not known waits, told once at WARN with the fix.
 func (p *poller) poll(ctx context.Context, s *serving, ch string, st *polled) {
 	start := p.now()
 	group, err := p.c.teamGroup(ctx, ch)
@@ -275,19 +320,23 @@ func (p *poller) poll(ctx context.Context, s *serving, ch string, st *polled) {
 		p.failed(ctx, ch, st, err)
 		return
 	}
-	outcome, err := p.readDelta(ctx, s, group, ch, st, start)
-	if err == nil {
-		err = p.readReplies(ctx, s, group, ch, st)
+	before := slices.Collect(maps.Keys(st.roots))
+	outcome := ""
+	if st.link != "" {
+		outcome, err = p.readDelta(ctx, s, ch, st, start)
 	}
-	if err == nil && !st.catchUp.IsZero() {
-		err = p.catchUp(ctx, s, group, ch, st)
-		o := catchUpRead
-		if err != nil {
-			o = catchUpFailed
-		}
-		p.c.countCatchUp(ctx, st.catchUpWhy, o)
-		if err == nil {
-			st.catchUp, st.catchUpWhy = time.Time{}, ""
+	syncing := st.link == ""
+	if err == nil && syncing && !st.capped {
+		outcome, err = p.syncDelta(ctx, group, ch, st, start, outcome)
+	}
+	if st.capped && outcome == "" {
+		outcome = polledTooLong
+	}
+	if !p.halts(ctx, err) {
+		rerr := p.readReplies(ctx, s, group, ch, st, before)
+		err = firstError(err, rerr)
+		if !p.halts(ctx, rerr) && (syncing || !st.catchUp.IsZero()) {
+			err = firstError(err, p.catchUpDue(ctx, s, group, ch, st, start))
 		}
 	}
 	if err != nil {
@@ -295,14 +344,35 @@ func (p *poller) poll(ctx context.Context, s *serving, ch string, st *polled) {
 		return
 	}
 	p.count(ctx, outcome)
-	if st.state != channelPolling && st.warned {
-		p.log.InfoContext(ctx, "teams: a bound channel's messages are polled again", "channel", ch)
+	if !st.capped {
+		if st.state != channelPolling && st.warned {
+			p.log.InfoContext(ctx, "teams: a bound channel's messages are polled again", "channel", ch)
+		}
+		st.state, st.warned = channelPolling, false
 	}
-	st.state, st.warned, st.failures = channelPolling, false, 0
+	st.failures = 0
 	st.next = st.next.Add(p.interval)
 	if st.next.Before(start) {
 		st.next = start.Add(p.interval)
 	}
+}
+
+// halts says whether a read that failed with err stops the rest of the poll: the poll's context ended, Graph throttled the connection
+// (the next read would wait out its Retry-After), or Graph refused the read for good.
+func (p *poller) halts(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	v := p.c.Classify(chat.OpOther, err)
+	return ctx.Err() != nil || v.RetryAfter > 0 || v.Class == chat.Permanent
+}
+
+// firstError is a, or b if a is nil.
+func firstError(a, b error) error {
+	if a != nil {
+		return a
+	}
+	return b
 }
 
 // failed records that the poll of ch failed with err: a 429 has paused the connection already (call); one that Graph refused for good
@@ -341,11 +411,17 @@ func (p *poller) count(ctx context.Context, outcome string) {
 	telemetry.Count(ctx, "agentkourier_teams_graph_polls_total", outcome, p.c.conn)
 }
 
-// deltaPage is a page of a read of a channel's delta.
+// deltaPage is a page of a read of a channel's deltaLink.
 type deltaPage struct {
 	Value     []graphMessage `json:"value"`
 	NextLink  string         `json:"@odata.nextLink"`
 	DeltaLink string         `json:"@odata.deltaLink"`
+}
+
+// syncPage is a page of a sync: its links alone, for its messages are history, and none is kept.
+type syncPage struct {
+	NextLink  string `json:"@odata.nextLink"`
+	DeltaLink string `json:"@odata.deltaLink"`
 }
 
 // errNoDeltaLink is a delta read whose pages end with no deltaLink, or go past the pages it may read.
@@ -366,32 +442,67 @@ func isResync(err error) bool {
 		(strings.Contains(code, "resync") || strings.Contains(code, "syncstate") || strings.Contains(code, "deltatoken")))
 }
 
-// readDelta reads the delta of ch from its deltaLink, hands on, on the channel's lane, each message made at most skew before the last
-// read began, and then keeps the new deltaLink, so that a read whose messages could not be put on the lane is made again. A new root is
-// kept for its replies. The run's first read of a channel (no deltaLink yet), and a read anew after Graph refused the deltaLink (logged at
-// WARN), hand on nothing: what was posted before is history, of which the catch-up read hands on the look-back.
-func (p *poller) readDelta(ctx context.Context, s *serving, group, ch string, st *polled, start time.Time) (string, error) {
-	first := p.c.graph.resource("teams", group, "channels", ch, "messages", "delta")
-	if st.link == "" {
-		link, _, err := p.delta(ctx, first)
-		if err != nil {
+// syncDelta reads, for a channel with no deltaLink, at most syncPages pages of its delta toward the deltaLink, from the page at which the
+// last poll left it, keeping none of their messages: they are history, of which the catch-up read hands on the look-back. Reaching the
+// deltaLink, the channel is polled from it (polledStarted, unless outcome names the poll already). Past maxPages in all, the channel is
+// failing, told once at WARN, and is read by its catch-up read alone until the run ends or no Binding names it.
+func (p *poller) syncDelta(ctx context.Context, group, ch string, st *polled, start time.Time, outcome string) (string, error) {
+	or := func(o string) string {
+		if outcome != "" {
+			return outcome
+		}
+		return o
+	}
+	link := st.sync
+	if link == "" {
+		link = p.c.graph.resource("teams", group, "channels", ch, "messages", "delta")
+	}
+	for range p.syncPages {
+		if st.pages >= p.maxPages {
+			st.capped, st.sync = true, ""
+			st.state, st.warned = channelFailing, true
+			p.log.WarnContext(ctx, "teams: the delta of a bound channel's messages named no deltaLink within the pages the broker reads; "+
+				"the channel's new posts are read by its catch-up read alone (its newest threads, each interval) until the connection "+
+				"restarts", "channel", ch, "pages", p.maxPages)
+			return or(polledTooLong), nil
+		}
+		st.sync = link
+		var page syncPage
+		if err := p.call(ctx, "PollDelta", link, &page); err != nil {
 			return "", err
 		}
-		st.link, st.prev = link, start
-		return polledStarted, nil
+		st.pages++
+		switch {
+		case page.DeltaLink != "":
+			st.link, st.prev, st.sync, st.pages = page.DeltaLink, start, "", 0
+			return or(polledStarted), nil
+		case page.NextLink == "":
+			st.sync = "" // made again from its first page; the pages read count still
+			return "", errNoDeltaLink
+		case page.NextLink == link:
+			st.sync = ""
+			return "", errPageCycle
+		}
+		link = page.NextLink
 	}
+	st.sync = link
+	return or(polledSyncing), nil
+}
+
+// readDelta reads the delta of ch from its deltaLink, hands on, on the channel's lane, each message made at most skew before the last
+// read began, and then keeps the new deltaLink, so that a read whose messages could not be put on the lane is made again. A new root is
+// kept for its replies. A deltaLink that Graph no longer takes (logged at WARN) leaves the channel to sync anew, from this poll, with a
+// catch-up read of what was posted since the last read, within the look-back.
+func (p *poller) readDelta(ctx context.Context, s *serving, ch string, st *polled, start time.Time) (string, error) {
 	link, msgs, err := p.delta(ctx, st.link)
 	if isResync(err) {
 		p.log.WarnContext(ctx, "teams: Microsoft Graph no longer takes the channel's delta link; it is read anew from now, and a catch-up "+
 			"read hands on what was posted since the last poll, within the look-back", "channel", ch, "lookback", p.lookback.String())
-		if link, _, err = p.delta(ctx, first); err != nil {
-			return "", err
-		}
-		from := later(st.prev.Add(-p.skew), start.Add(-p.lookback))
+		from := st.prev.Add(-p.skew) // catchUpDue bounds the read by the look-back
 		if st.catchUp.IsZero() || from.Before(st.catchUp) {
 			st.catchUp, st.catchUpWhy = from, catchUpStart
 		}
-		st.link, st.prev = link, start
+		st.link, st.sync, st.pages = "", "", 0
 		return polledReset, nil
 	}
 	if err != nil {
@@ -400,11 +511,18 @@ func (p *poller) readDelta(ctx context.Context, s *serving, group, ch string, st
 	floor := st.prev.Add(-p.skew)
 	var fresh []found
 	for _, m := range msgs {
-		old := m.CreatedDateTime.Before(floor)
-		if m.ReplyToID == "" && !old {
+		if !p.c.readable(ctx, m) {
+			continue
+		}
+		old := p.c.madeBefore(ctx, ch, m, floor)
+		if !old && threadable(m) {
 			p.track(st, m.ID, m.CreatedDateTime.Time, start)
 		}
-		fresh = append(fresh, found{root: cmp.Or(m.ReplyToID, m.ID), m: m, old: old})
+		root := m.ReplyToID
+		if root == "" {
+			root = m.ID
+		}
+		fresh = append(fresh, found{root: root, m: m, old: old})
 	}
 	if err := p.c.handOnAll(ctx, s, ch, fresh); err != nil {
 		return "", err
@@ -437,15 +555,44 @@ func (p *poller) delta(ctx context.Context, link string) (string, []graphMessage
 	return "", nil, fmt.Errorf("%w within %d pages", errNoDeltaLink, p.maxPages)
 }
 
-// track keeps the root id, made at created, for its replies, if it was made within the window of now; the newest rootCap are kept.
+// threadable says whether m is a root whose replies a poll may read: a post, not a system event and not deleted, with a message ID. A
+// root with no text is one (a person's image, say), since its replies may mention the bot.
+func threadable(m graphMessage) bool {
+	return m.ReplyToID == "" && m.MessageType == "message" && m.DeletedDateTime == nil && isMessageID(m.ID)
+}
+
+// readable says whether m names itself and its root by message IDs, as a notified message's resource must (push.go); one that does not
+// is dropped, counted as ignored.
+func (c *Client) readable(ctx context.Context, m graphMessage) bool {
+	if isMessageID(m.ID) && (m.ReplyToID == "" || isMessageID(m.ReplyToID)) {
+		return true
+	}
+	c.countRead(c.recv.telemetryContext(ctx), notifiedIgnored)
+	return false
+}
+
+// madeBefore says whether m was made before t. A message whose createdDateTime Graph gave in no form that the broker reads (the zero
+// time) was, and is logged at DEBUG.
+func (c *Client) madeBefore(ctx context.Context, ch string, m graphMessage, t time.Time) bool {
+	if !m.CreatedDateTime.Before(t) {
+		return false
+	}
+	if m.CreatedDateTime.IsZero() {
+		c.log.DebugContext(ctx, "teams: a message that Microsoft Graph gave has no createdDateTime that the broker reads; it is taken as "+
+			"old and not handed on", "channel", ch, "message", m.ID)
+	}
+	return true
+}
+
+// track keeps the root id, made at created, for its replies, if it was made within the window of now. readReplies prunes the roots
+// after it has read them, so that a root that a new one pushes out of the newest rootCap has its replies read once more.
 func (p *poller) track(st *polled, id string, created, now time.Time) {
-	if !isMessageID(id) || created.Before(now.Add(-p.rootWindow)) {
+	if created.Before(now.Add(-p.rootWindow)) {
 		return
 	}
 	if _, ok := st.roots[id]; !ok {
-		st.roots[id] = &root{created: created}
+		st.roots[id] = newRoot(created)
 	}
-	p.prune(st, now)
 }
 
 // prune forgets the roots made before the window of now, and those past the newest rootCap.
@@ -462,69 +609,116 @@ func newestFirst(roots map[string]*root) []string {
 	return slices.SortedFunc(maps.Keys(roots), func(a, b string) int { return compareIDs(b, a) })
 }
 
-// readReplies reads the replies of each root that ch keeps, newest root first, one page each, and hands on those newer than the newest
-// reply that a read of the root saw before; a root that Graph no longer has (404) is forgotten.
-func (p *poller) readReplies(ctx context.Context, s *serving, group, ch string, st *polled) error {
-	p.prune(st, p.now())
+// goneRoot says whether Graph refused a read of a root's replies for that root alone (400, 403 or 404): the root is forgotten.
+func goneRoot(err error) bool {
+	var ge *GraphError
+	return errors.As(err, &ge) &&
+		(ge.Status == http.StatusNotFound || ge.Status == http.StatusForbidden || ge.Status == http.StatusBadRequest)
+}
+
+// readReplies reads, newest root first, one page each, the replies of the newest rootCap roots that ch keeps within the window and of
+// those it kept before the poll's delta read (before), and hands on those that no read of the root gave and that were made at most skew
+// before the newest that one did. A root that Graph refuses to read (goneRoot) is forgotten. It prunes the roots after.
+func (p *poller) readReplies(ctx context.Context, s *serving, group, ch string, st *polled, before []string) error {
+	now := p.now()
+	defer p.prune(st, now)
+	want := map[string]bool{}
+	for _, id := range before {
+		want[id] = true
+	}
+	var ids []string
 	for _, id := range newestFirst(st.roots) {
+		if st.roots[id].created.Before(now.Add(-p.rootWindow)) {
+			continue
+		}
+		if len(ids) < p.rootCap || want[id] {
+			ids = append(ids, id)
+		}
+	}
+	for _, id := range ids {
 		rt := st.roots[id]
 		var page graphPage
 		link := p.c.graph.resource("teams", group, "channels", ch, "messages", id, "replies") + fmt.Sprintf("?$top=%d", graphPageTop)
 		err := p.call(ctx, "PollReplies", link, &page)
-		if isNotFound(err) {
+		if goneRoot(err) {
+			p.log.DebugContext(ctx, "teams: Microsoft Graph refused a read of a thread's replies; the thread's replies are not read again",
+				"channel", ch, "thread", id, "error", err.Error())
 			delete(st.roots, id)
 			continue
 		}
 		if err != nil {
 			return err
 		}
+		floor := rt.newest.Add(-p.skew)
 		var fresh []found
-		after := rt.after
 		for _, m := range page.Value {
-			if !isMessageID(m.ID) || (rt.after != "" && compareIDs(m.ID, rt.after) <= 0) {
+			if !p.c.readable(ctx, m) {
 				continue
 			}
-			if after == "" || compareIDs(m.ID, after) > 0 {
-				after = m.ID
+			if _, ok := rt.read[m.ID]; ok {
+				continue
+			}
+			if !rt.newest.IsZero() && p.c.madeBefore(ctx, ch, m, floor) {
+				continue
 			}
 			fresh = append(fresh, found{root: id, m: m})
 		}
 		if err := p.c.handOnAll(ctx, s, ch, fresh); err != nil {
 			return err
 		}
-		rt.after = after
+		for _, f := range fresh {
+			rt.saw(f.m.ID, f.m.CreatedDateTime.Time, p.skew)
+		}
 	}
 	return nil
 }
 
-// catchUp makes the catch-up read that ch is due, hands on what it read that was made since the catch-up's start, and keeps the roots it
-// read that are within the window for their replies, each from the newest reply that the read gave.
-func (p *poller) catchUp(ctx context.Context, s *serving, group, ch string, st *polled) error {
+// catchUpDue makes the catch-up read that ch is due, from its start, or, with none, from the last catch-up read that succeeded less the
+// skew (a channel with no deltaLink), and never from before the look-back: a read that failed and is made again later hands on nothing
+// that the dedup has forgotten. It is counted for its trigger.
+func (p *poller) catchUpDue(ctx context.Context, s *serving, group, ch string, st *polled, start time.Time) error {
+	since, why := st.catchUp, st.catchUpWhy
+	if since.IsZero() {
+		since, why = st.covered.Add(-p.skew), catchUpSyncing
+	}
+	since = later(since, start.Add(-p.lookback))
+	err := p.catchUp(ctx, s, group, ch, st, since)
+	outcome := catchUpRead
+	if err != nil {
+		outcome = catchUpFailed
+	}
+	p.c.countCatchUp(ctx, why, outcome)
+	if err == nil {
+		st.catchUp, st.catchUpWhy, st.covered = time.Time{}, "", start
+	}
+	return err
+}
+
+// catchUp makes a catch-up read of ch, hands on what it read that was made since since, and keeps the roots it read that are within the
+// window for their replies, each with the replies that the read gave as read.
+func (p *poller) catchUp(ctx context.Context, s *serving, group, ch string, st *polled, since time.Time) error {
 	roots, err := p.c.readRecent(ctx, p.call, group, ch)
 	if err != nil {
 		return err
 	}
-	if err := p.c.handOnAll(ctx, s, ch, recentSince(roots, st.catchUp)); err != nil {
+	if err := p.c.handOnAll(ctx, s, ch, p.c.recentSince(ctx, ch, roots, since)); err != nil {
 		return err
 	}
 	now := p.now()
 	for _, r := range roots {
-		if !isMessageID(r.ID) || r.CreatedDateTime.Before(now.Add(-p.rootWindow)) {
+		if !threadable(r) || r.CreatedDateTime.Before(now.Add(-p.rootWindow)) {
 			continue
 		}
-		after := ""
+		rt, ok := st.roots[r.ID]
+		if !ok {
+			rt = newRoot(r.CreatedDateTime.Time)
+			st.roots[r.ID] = rt
+		}
 		for _, m := range r.Replies {
-			if isMessageID(m.ID) && (after == "" || compareIDs(m.ID, after) > 0) {
-				after = m.ID
+			if isMessageID(m.ID) {
+				rt.saw(m.ID, m.CreatedDateTime.Time, p.skew)
 			}
 		}
-		if rt, ok := st.roots[r.ID]; ok {
-			if after != "" && (rt.after == "" || compareIDs(after, rt.after) > 0) {
-				rt.after = after
-			}
-			continue
-		}
-		st.roots[r.ID] = &root{created: r.CreatedDateTime.Time, after: after}
 	}
 	p.prune(st, now)
 	return nil
@@ -568,13 +762,19 @@ func (c *Client) readRecent(ctx context.Context, get func(context.Context, strin
 	return page.Value, nil
 }
 
-// recentSince is what a catch-up read gave, each root and each of its replies with its root, marked old when it was made before since.
-func recentSince(roots []graphMessage, since time.Time) []found {
+// recentSince is what a catch-up read of ch gave, each root and each of its replies with its root, marked old when it was made before
+// since; a message that does not name itself or its root by message IDs (readable) is dropped.
+func (c *Client) recentSince(ctx context.Context, ch string, roots []graphMessage, since time.Time) []found {
 	var out []found
 	for _, r := range roots {
-		out = append(out, found{root: r.ID, m: r, old: r.CreatedDateTime.Before(since)})
+		if !c.readable(ctx, r) || r.ReplyToID != "" {
+			continue
+		}
+		out = append(out, found{root: r.ID, m: r, old: c.madeBefore(ctx, ch, r, since)})
 		for _, m := range r.Replies {
-			out = append(out, found{root: r.ID, m: m, old: m.CreatedDateTime.Before(since)})
+			if c.readable(ctx, m) {
+				out = append(out, found{root: r.ID, m: m, old: c.madeBefore(ctx, ch, m, since)})
+			}
 		}
 	}
 	return out
@@ -654,7 +854,7 @@ func (p *push) readMissed(s *serving, sub subscription, since time.Time) {
 		c.countCatchUp(tctx, catchUpMissed, catchUpFailed)
 		return
 	}
-	items := recentSince(roots, since)
+	items := c.recentSince(s.ctx, sub.channel, roots, since)
 	slices.SortStableFunc(items, func(a, b found) int { return compareIDs(a.m.ID, b.m.ID) })
 	c.handOnFound(s, sub.channel, items)
 	c.countCatchUp(tctx, catchUpMissed, catchUpRead)

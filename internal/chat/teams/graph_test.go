@@ -50,10 +50,14 @@ type fakeGraph struct {
 	seq       int
 	changed   map[string]int
 	deltaGone bool
+	// deltaPages, by channel ID, is the number of empty pages that a first read of the channel's delta gives after its first, each
+	// naming the next, before the page with the deltaLink: a long history.
+	deltaPages map[string]int
 }
 
 func newFakeGraph() fakeGraph {
-	return fakeGraph{msgs: map[string]map[string]any{}, subs: fakeSubs{byID: map[string]map[string]any{}}, changed: map[string]int{}}
+	return fakeGraph{msgs: map[string]map[string]any{}, subs: fakeSubs{byID: map[string]map[string]any{}}, changed: map[string]int{},
+		deltaPages: map[string]int{}}
 }
 
 // graphURL is the fake's Microsoft Graph, as Config.GraphURL takes it.
@@ -237,6 +241,13 @@ func (f *fakeConnector) serveDelta(w http.ResponseWriter, r *http.Request, chann
 		since, _ = strconv.Atoi(q.Get("$deltatoken"))
 	}
 	page := map[string]any{"value": []map[string]any{}}
+	base := strings.TrimSuffix(channelPath, "/messages")
+	ch := base[strings.LastIndex(base, "/")+1:]
+	if skip, err := strconv.Atoi(q.Get("$skiptoken")); err == nil && skip <= f.graph.deltaPages[ch] {
+		page["@odata.nextLink"] = fmt.Sprintf("%s?$skiptoken=%d", self, skip+1)
+		_ = json.NewEncoder(w).Encode(page)
+		return
+	}
 	if !q.Has("$deltatoken") && !q.Has("$skiptoken") {
 		var roots []map[string]any
 		for p, m := range f.graph.msgs {

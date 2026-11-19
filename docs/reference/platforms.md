@@ -266,46 +266,61 @@ channel whose group the broker does not know yet waits, logged once at WARN with
 - **New posts.** Each channel is read every 10 seconds through Graph's delta of its messages (`…/messages/delta`, then the `deltaLink` it
   gives), so a new post reaches the broker within about one interval after Graph shows it. A post is new when it was made at most 30 seconds
   before the channel's last read began; an edit, a reaction or another change of an older post, which the delta gives again, is not handed on.
-- **Replies.** The delta does not give a reply in an existing thread (measured on a test tenant in November 2026). The broker reads the
-  replies of the 3 newest threads of each channel that it has seen begin, within the last hour, at each poll (`…/messages/{id}/replies`,
-  its newest 50), and hands on each reply newer than the last one it read. **A reply in an older thread, or in a thread past the newest 3,
-  is not read by polling.** A person's mention there still comes as an activity; another app's reply there does not reach the broker.
+- **Replies.** The delta does not give a reply in an existing thread (measured on a test tenant in November 2026). At each poll the
+  broker reads the replies (`…/messages/{id}/replies`, the newest 50) of the 3 newest threads of each channel that it has seen begin
+  within the last hour, and of the threads it read at the poll before, so a thread that a new one pushes out of the 3 has its replies
+  read once more: at most 6 reads. It hands on each reply that no read of the thread gave before and that was made at most 30 seconds
+  before the newest reply it read there, so a reply that Graph shows late, within those 30 seconds, is still handed on. **A reply in an
+  older thread, or in a thread past the newest 3, is not read by polling.** A person's mention there still comes as an activity; another
+  app's reply there does not reach the broker. A thread whose replies Graph refuses to read (a 400, 403 or 404) is no longer read; the
+  channel is polled on.
 - **What it hands on.** Each message goes the way of a notified message (above): another app's post is a bot's message when a `botMessage`
   trigger names its app, a person's post is the person's, Agent Kourier's own posts, system events and deleted messages are dropped, and a
   post that also came as an activity is handed on once, whichever comes first. What a read gives goes on its channel's lane, and the
   read's `deltaLink` is kept only after that, so a read whose lane had no room is made again.
-- **What it holds.** The `deltaLink` and the newest reply read of each thread are kept in memory. A run begins anew: its first read of a
-  channel fetches a fresh `deltaLink` and hands on nothing from it, then a catch-up read hands on what was posted in the 10 minutes
-  before ([Catch-up reads](#catch-up-reads)). Nothing older than that is read on a start, so an old alert does not fire a trigger. A channel
-  that no Binding names any longer is forgotten.
-- **Errors.** Graph's 429 pauses every read of the connection for its `Retry-After`, since Graph throttles an app in a tenant. A 403 (the app
-  may not read the channel's messages: install or update the app in the team), a 401, a 404 or a 400 counts the channel as `failing`, logged
-  once at WARN; another failure is logged at DEBUG. A channel whose poll fails is read again after 10 seconds, twice as long after each further
-  failure, up to 5 minutes; the other channels go on. A `deltaLink` that Graph no longer takes (410, or a 400 that asks for a new sync, by
-  Microsoft's documentation; not measured) is logged at WARN and read anew from now, and a catch-up read hands on what was posted since the
-  last poll, within the 10 minutes.
-- **Cost.** A connection makes at most 4 reads a second, one at a time. A channel costs one delta read and up to 3 reads of replies each
-  10 seconds: 24 reads a minute at most. [Limits](limits.md#run-the-broker) has the budget. On a test tenant, 22 reads at 5 seconds apart
-  drew no 429; the throttle of a channel's messages is not measured.
+- **What it holds.** The `deltaLink` and the replies read of each thread are kept in memory. A run begins anew: its first reads of a
+  channel page through Graph's delta to a fresh `deltaLink`, at most 5 pages at each poll and 500 in all, and hand on nothing from those
+  pages, which hold the channel's history. Until the channel has its `deltaLink`, each of its polls makes a catch-up read
+  ([Catch-up reads](#catch-up-reads)), the first of what was posted in the 10 minutes before, so a channel with a long history hands on
+  its new posts while it is read to its `deltaLink`. Nothing older than the 10 minutes is read on a start, so an old alert does not fire
+  a trigger. A channel whose delta names no `deltaLink` within 500 pages counts as `failing`, logged once at WARN, and is read by its
+  catch-up read alone, each interval, until the connection restarts. A channel that no Binding names any longer is forgotten.
+- **Errors.** Graph's 429 pauses every read of the connection for its `Retry-After`, since Graph throttles an app in a tenant, and ends the
+  channel's poll. A 403 (the app may not read the channel's messages: install or update the app in the team), a 401, a 404 or a 400 of
+  a channel's delta or catch-up read ends the channel's poll and counts the channel as `failing`, logged once at WARN. Another failure is
+  logged at DEBUG, and the rest of the poll is made: a delta read that fails still leaves the channel's replies and its due catch-up read
+  to be read. A channel whose poll fails is read again after 10 seconds, twice as long after each further failure, up to 5 minutes; the
+  other channels go on. A `deltaLink` that Graph no longer takes (410, or a 400 that asks for a new sync, by Microsoft's documentation; not
+  measured) is logged at WARN, and the channel is read to a new `deltaLink` as at a start, with a catch-up read of what was posted since
+  the last poll, within the 10 minutes.
+- **Cost.** A connection makes at most 4 reads a second, one at a time. Once it has its `deltaLink`, a channel costs one delta read and 3
+  reads of replies each 10 seconds, 6 at a poll that finds a new thread: 24 to 42 reads a minute. While it is read to its `deltaLink`, a
+  poll adds up to 5 pages and a catch-up read. [Limits](limits.md#run-the-broker) has the budget. On a test tenant, 22 reads at 5 seconds
+  apart drew no 429; the throttle of a channel's messages is not measured.
 
 ### Catch-up reads
 
 A catch-up read is one read of a channel's 20 newest threads with their replies (`…/messages?$top=20&$expand=replies`), of which the
 messages made since a given time are handed on as a poll's are, through the same memory of what was handed on. It looks back 10 minutes
-at most, the window in which that memory holds a message, so nothing that was handed on already in this run is handed on again. A reply in
-a thread past the 20 newest is not recovered, nor anything posted earlier than the look-back.
+at most, the window in which that memory holds a message, so nothing that was handed on already in this run is handed on again; a
+catch-up read that fails is made at the channel's next poll, looking back 10 minutes from then. A reply in a thread past the 20 newest is
+not recovered, nor anything posted earlier than the look-back.
 
 - **At the start of a run**, on a connection that polls: what was posted in the 10 minutes before. That covers a change of leader and a
   restart, in `socket` mode the activities that came while no socket was connected included.
+- **While a channel has no `deltaLink`** (its first reads in a run, a new sync after Graph refused its `deltaLink`, or a channel past the 500
+  pages): at each poll, what was posted since the last catch-up read of the channel began, less 30 seconds.
 - **When a gap of the sockets ends** (`socket` mode): with no `notificationURL`, every channel is read at once, its delta and its recent
   threads' replies as at a poll, and a catch-up read back to the gap's start, at most 10 minutes. With a `notificationURL` nothing more is
   read: Graph notified the posts of the gap all the same (measured on a test tenant in November 2026), mentions included.
 - **On Graph's `missed`** (a `notificationURL`): what was posted in the channel in the 10 minutes before.
 
 **After a restart.** What a run handed on is held in memory, so a post that a catch-up read gives again after a restart is handed on
-again. The broker keeps in its store what such a post did, and drops it there: a turn of a session is named by its message, a trigger
-that threads by key finds the thread the message already opened, and a trigger's note is one row whatever asks for it. A metric of the
-intake, `agentkourier_trigger_matched_total` say, counts it again.
+again. The broker keeps in its store what such a post did, and drops it there: a trigger that threads by key finds the thread the message
+already opened; a trigger that starts a turn of its own finds that turn, which is named by the message, queued already, and starts no
+second investigation; a start that a trigger's limits stopped is not counted or told again; and a trigger's note is one row whatever asks
+for it. The intake's metrics count the post again: `agentkourier_trigger_matched_total` and `agentkourier_trigger_decisions_total`, and,
+for a turn, `agentkourier_intake_total` with `source="reply_queue",disposition="duplicate"`.
 
 ## Earlier replies on Microsoft Teams
 
