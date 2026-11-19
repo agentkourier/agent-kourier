@@ -16,7 +16,7 @@ so does `agent-kourier dry-run`:
 spec.chat.channel: invalid channel "general": must be a channel ID such as C0123456789, not a name
 ```
 
-The API server's message for the channel says the same, and adds what a Binding of `webhookEvent` triggers takes instead.
+The API server refuses it too, with a message that also says what a Binding of `webhookEvent` triggers takes.
 
 The broker checks the Binding against its platform once more when it reads the Binding with its ChatConnection. That check refuses a
 chat ID that does not have the shape of the platform's IDs (`InvalidPlatformID`), and a feature, trigger type or output that the
@@ -52,7 +52,7 @@ that chooses Slack's shape or the webhook channel's by the Binding's triggers (t
 
 | Field | Slack | `webhook` |
 |---|---|---|
-| `chat.triggers[].type` | `mention`, `botMessage` and `personMessage`. A `webhookEvent` trigger is refused, `UnsupportedOnPlatform`. | `webhookEvent` alone. Any other type is refused, `UnsupportedOnPlatform`, and so is a Binding that lists no triggers, which has `[{type: mention}]`. |
+| `chat.triggers[].type` | `mention`, `botMessage` and `personMessage`. A `webhookEvent` trigger is refused, `UnsupportedOnPlatform`. | `webhookEvent` alone. A Binding with a trigger of any other type, or one that lists no triggers and so has `[{type: mention}]`, is refused. With a webhook channel such as `acme/widgets` or `OPS`, the API server refuses it when it is applied and the load refuses it as invalid (with custom resources, `InvalidSpec`), since only a Binding whose triggers are all `webhookEvent` takes that channel. With a channel of Slack's shape it passes both, and the broker refuses it on the webhook connection, `UnsupportedOnPlatform`. |
 | A `webhookEvent` trigger's `match` and `exclude` keys, and the `.Fields` its `promptTemplate` reads | None. | Names of the connection's `spec.webhook.fields`; the template reads `.Channel` and the connection's `id` fields alone. A name the connection lacks, or a `text` field the template reads, is refused, `UnsupportedOnPlatform`; a template that reads `.Key`, `.State`, `.Link` or `.Source` is refused by the broker's validation (with custom resources, `InvalidSpec`), and not by the API server. |
 | `chat.output` | `live` (the default) or `final`. `none` is refused: by the API server and the load on a Binding of Slack's triggers, and `UnsupportedOnPlatform` on one of `webhookEvent` triggers. | `none` alone: write it, since the default is `live`. `live` and `final` are refused, `UnsupportedOnPlatform`. |
 
