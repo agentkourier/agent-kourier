@@ -132,6 +132,8 @@ func (p *Platform) take(reqCtx context.Context, start time.Time, m chat.Inbound)
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	// Defence in depth: hand's early check of the context stops the take of a Run that has ended as well, since closed is set only
+	// once the Run's context is done.
 	if r.closed {
 		return result{outcomeNotRunning, reasonNone}
 	}

@@ -182,8 +182,9 @@ func TestARepeatedDeliveryKeepsItsMessageID(t *testing.T) {
 }
 
 // A handler that loaded the Run just before the Run ended hands its event to no Sink: the Sink of a Run that returned is the broker's
-// no longer. A hook holds the handler between the load and the check while the Run ends. The race is run many times, since without
-// the check the handler reaches the Sink only when its wait for the order loses to the Run's ended context, about half the time.
+// no longer. A hook holds the handler between the load and the take while the Run ends. Two checks stop it, and either is enough: the
+// Run's closed flag, and hand's check of the context before it waits for the order. The race is run many times, since without both
+// the handler reaches the Sink only when its wait for the order loses to the Run's ended context, about half the time.
 func TestAHandlerHandsNoEventToARunThatEnded(t *testing.T) {
 	for i := range 32 {
 		rec := &recorder{}
