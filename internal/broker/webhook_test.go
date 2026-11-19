@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -14,6 +15,10 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -273,8 +278,8 @@ func runWebhookRecipe(t *testing.T, rc whRecipe, flow whFlow) {
 }
 
 // startWebhookRecipe starts a broker on rc's recipe, with the stub agent in place of the recipe's agent and a vendor that sends to it,
-// and waits until the connection takes requests.
-func startWebhookRecipe(t *testing.T, rc whRecipe) *whRun {
+// and waits until the connection takes requests. Each of opts changes the broker's config before it starts.
+func startWebhookRecipe(t *testing.T, rc whRecipe, opts ...func(*RunConfig)) *whRun {
 	t.Helper()
 	w := &whRun{t: t, rc: rc, stub: stubagent.New(), logs: &syncBuffer{}}
 	t.Cleanup(w.stub.Close)
@@ -300,6 +305,9 @@ func startWebhookRecipe(t *testing.T, rc whRecipe) *whRun {
 		Data: map[string][]byte{v1alpha1.WebhookSecretKey: []byte(whSigningSecret)}})
 	sink := &spySink{}
 	c.sink = sink
+	for _, o := range opts {
+		o(&c)
+	}
 	t.Cleanup(func() {
 		if got := sink.seen(); len(got) != 0 {
 			t.Errorf("the renderer's sink was given %q; want nothing of a connection with output: none", got)
@@ -392,6 +400,57 @@ func (w *whRun) step(i int, st whStep, turns int) int {
 		}
 	}
 	return turns
+}
+
+// A delivery's span is the parent of the intake's, and the turn it starts is in its trace. The request's span ends with its answer,
+// while the turn goes on: the turn's span is restored from the trace context the intake stored with the turn, as a Slack envelope's
+// turn is, so that one trace holds the delivery, its intake and the turn it started.
+func TestAWebhookDeliverysSpanIsTheParentOfItsIntakeAndTurn(t *testing.T) {
+	t.Parallel()
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	rc := whRecipe{vendor: fakevendors.GitHub, binding: "github-reviews", identity: whGitHubAgent}
+	w := startWebhookRecipe(t, rc, func(c *RunConfig) { c.TracerProvider = provider })
+	d := fakevendors.GitHubPR{Action: "opened", Repo: "acme/widgets", Number: 42, Title: "Bound the retry", Body: "It retried forever.",
+		HeadSHA: whHeadSHA, BaseSHA: whBaseSHA, HeadRef: "fix/retry", Sender: "octocat"}.Delivery()
+	w.step(0, whStep{send: d, post: []string{"Review of acme/widgets#42"}, kind: "review", target: "acme/widgets#42"}, 0)
+
+	var request tracetest.SpanStub
+	var found int
+	for _, s := range exporter.GetSpans() {
+		attrs := map[attribute.Key]string{}
+		for _, a := range s.Attributes {
+			attrs[a.Key] = a.Value.String()
+		}
+		if s.Name == "agentkourier.webhook.request" && attrs["agentkourier.webhook.delivery"] == d.ID() {
+			request, found = s, found+1
+			if attrs["agentkourier.outcome"] != "accepted" || attrs["agentkourier.connection"] != rc.connection() || s.SpanKind != trace.SpanKindServer {
+				t.Errorf("the delivery's span is %s with %v; want an accepted server span of %s", s.SpanKind, attrs, rc.connection())
+			}
+		}
+	}
+	if found != 1 {
+		t.Fatalf("%d spans of the delivery %s, want 1", found, d.ID())
+	}
+	under := func(name string, of trace.SpanContext) func() bool {
+		return func() bool {
+			for _, s := range exporter.GetSpans() {
+				if s.Name == name && s.SpanContext.TraceID() == of.TraceID() && (name != "agentkourier.intake" || s.Parent.SpanID() == of.SpanID()) {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	if !under("agentkourier.intake", request.SpanContext)() {
+		t.Errorf("no intake span is a child of the delivery's span %s", request.SpanContext.SpanID())
+	}
+	testutil.Eventually(t, "a turn attempt in the delivery's trace", under("agentkourier.turn.attempt", request.SpanContext))
+	w.r.cancel()
+	if err := w.r.wait(); err != nil {
+		t.Fatalf("Run = %v after its context ended; want nil", err)
+	}
 }
 
 // series is the series of agentkourier_webhook_requests_total of the recipe's connection with outcome and reason, as /metrics writes it.

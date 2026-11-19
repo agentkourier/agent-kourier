@@ -320,3 +320,27 @@ func TestForgetConnectionLeavesOtherSeries(t *testing.T) {
 		t.Fatalf("series after ForgetConnection = %v; want the reconnect and the trigger series kept", seen)
 	}
 }
+
+// Tracer is the broker's tracer, the one Start's spans come from: a span it starts in the Observer's context is exported with them,
+// and a span of Start under it is its child. With no Observer in the context, it is a tracer that records nothing.
+func TestTracerIsTheObserversOrOneThatRecordsNothing(t *testing.T) {
+	ctx, exporter, _ := traced(t)
+	tctx, span := Tracer(ctx).Start(ctx, "agentkourier.test.root", trace.WithSpanKind(trace.SpanKindServer))
+	_, op := Start(tctx, "agentkourier.intake")
+	op.Finish(nil)
+	span.End()
+	spans := exporter.GetSpans()
+	if len(spans) != 2 {
+		t.Fatalf("%d spans exported, want the tracer's and Start's", len(spans))
+	}
+	child, root := spans[0], spans[1]
+	if root.Name != "agentkourier.test.root" || root.SpanKind != trace.SpanKindServer || child.Parent.SpanID() != root.SpanContext.SpanID() {
+		t.Errorf("exported %s (kind %s) and %s under %s; want the tracer's server span the parent of Start's", root.Name, root.SpanKind,
+			child.Name, child.Parent.SpanID())
+	}
+	_, none := Tracer(context.Background()).Start(context.Background(), "agentkourier.test.root")
+	if none.IsRecording() || none.SpanContext().IsValid() {
+		t.Error("with no Observer, Tracer's span records, or has a valid span context; want one that records nothing")
+	}
+	none.End()
+}

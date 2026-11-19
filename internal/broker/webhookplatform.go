@@ -15,15 +15,16 @@ import (
 // Secret that its verify scheme reads (v1alpha1.CredentialKeys). Its requests reach it on the chat listener, at
 // /chat/webhook/<namespace>/<name>, and it records each answer through telemetry.WebhookRecorder, on the broker's instruments in ctx:
 // agentkourier_webhook_requests_total, agentkourier_webhook_ack_duration_seconds and
-// agentkourier_webhook_last_accepted_timestamp_seconds. Any error is a wiring error, which no retry mends: no spec.webhook, or a spec or credential the platform refuses. A credential it
-// refuses (empty, a control character such as a trailing newline, a token that is too short) is named by its Secret and key, never by its
-// value.
+// agentkourier_webhook_last_accepted_timestamp_seconds. It traces each answer with the broker's tracer in ctx (telemetry.Tracer), so
+// that the spans of the intake and of the turn it starts are in the request's trace. Any error is a wiring error, which no retry
+// mends: no spec.webhook, or a spec or credential the platform refuses. A credential it refuses (empty, a control character such as a
+// trailing newline, a token that is too short) is named by its Secret and key, never by its value.
 func newWebhookPlatform(ctx context.Context, conn Connection, log *slog.Logger, onConnection func(connected bool)) (builtPlatform, error) {
 	cfg, err := webhookConfig(conn)
 	if err != nil {
 		return builtPlatform{}, err
 	}
-	cfg.Recorder = telemetry.WebhookRecorder(ctx, cfg.Connection)
+	cfg.Recorder, cfg.Tracer = telemetry.WebhookRecorder(ctx, cfg.Connection), telemetry.Tracer(ctx)
 	cfg.OnConnection, cfg.Logger = onConnection, log
 	p, err := webhook.New(cfg)
 	if err != nil {
@@ -48,7 +49,7 @@ func checkWebhookConnection(conn Connection) error {
 
 // webhookConfig maps conn's spec.webhook onto the platform's Config: the API's names onto the platform's, the scheme's key of the
 // credentials onto the verify secret, with the Secret and key that an error names, and the API's channel shape (ValidWebhookChannel), so
-// that the platform and the Bindings hold one shape. The Recorder, OnConnection and Logger are the caller's.
+// that the platform and the Bindings hold one shape. The Recorder, Tracer, OnConnection and Logger are the caller's.
 func webhookConfig(conn Connection) (webhook.Config, error) {
 	name := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
 	spec := conn.Webhook
