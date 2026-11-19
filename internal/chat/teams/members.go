@@ -19,8 +19,8 @@ import (
 )
 
 // This file reads people on Microsoft Teams: who is in a channel's team (IsMember), whether a user is a bot (IsBot), and a person's
-// name (ResolveUser, and the people a post or an edit mentions: the decider an ending names, and each chat.Mention of a message). Every read is of the Bot Connector's roster of a conversation,
-// GET /v3/conversations/{id}/pagedmembers, page by page: its query (pageSize, continuationToken), its answer (members, each with id,
+// name (ResolveUser, and the people a post or an edit mentions: the decider an ending names, and each chat.Mention of a message).
+// Every read is of the Bot Connector's roster of a conversation, GET /v3/conversations/{id}/pagedmembers, page by page: its query (pageSize, continuationToken), its answer (members, each with id,
 // name and aadObjectId, and the continuationToken of the next page), that the roster of a team's standard channel is the team's
 // members, and its errors and throttling are Microsoft's documentation ("Get Teams specific context for your bot", read 2026-11-18),
 // not measured: no roster was read on a test tenant.
