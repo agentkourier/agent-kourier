@@ -222,6 +222,7 @@ var connectionSeries = []struct {
 	{"agentkourier_chat_api_calls_total", []string{"Post", "success"}},
 	{"agentkourier_slack_events_shed_total", []string{"channel_backlog"}},
 	{"agentkourier_slack_ack_duration_seconds", []string{"acked"}},
+	{"agentkourier_webhook_requests_total", []string{"accepted", "none"}},
 }
 
 // seriesOf returns the values of the connection label of every series of the named family.

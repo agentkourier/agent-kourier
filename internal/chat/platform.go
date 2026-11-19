@@ -27,6 +27,47 @@ type Inbound struct {
 	// Bot is set when a bot posted the message, and only then. A platform forwards a bot's message only
 	// if the Sink takes it (BotFilter), and never Agent Kourier's own.
 	Bot *BotMessage
+	// Webhook is set when the message is an event of a webhook connection, and only then: the delivery that carried it and its
+	// named fields, which a webhookEvent trigger's regexes read and the untrusted block shows. Such a message has no Text, is not
+	// Mentioned, and its thread is the one the connection derives.
+	Webhook *WebhookEvent
+}
+
+// WebhookEvent is what an event of a webhook connection carries beyond a message: the sender's ID of its delivery, who caused it,
+// and its named fields, in the connection's order. Every value is the sender's, and untrusted.
+type WebhookEvent struct {
+	// Delivery is the sender's ID of the delivery that carried the event, read from the connection's delivery header, for the log
+	// lines that name the event; it is not the event's ID (At.ID), and a redelivery may carry another. It is empty when the
+	// connection names no delivery header, or the request's value is missing or fails the id check that an id field's value passes.
+	Delivery string
+	// Actor is the first actor value that resolved, for the untrusted block; empty when none did.
+	Actor string
+	// Fields are the event's named values, one for each field of the connection.
+	Fields []WebhookField
+}
+
+// WebhookField is one named field of a webhook event. A field is in one of three states, and Present and Invalid are never both
+// set:
+//
+//   - Present: a value resolved and, for an id field, passed the id check. Value is it: an id field's an identifier, a text field's
+//     the raw, untrusted text. An empty value resolves and passes the id check, so a field can be Present with an empty Value; it
+//     ends the first-of list as any other value does.
+//   - Invalid: an id field one of whose sources resolved, but only to values that fail the id check. Value is empty. It is not
+//     absent: a reader that would act on the field's absence fails closed instead.
+//   - absent (neither): nothing resolved. Value is empty.
+type WebhookField struct {
+	Name, Value          string
+	ID, Present, Invalid bool
+}
+
+// Value returns the value of the field name: empty for a field that is absent or Invalid, or that the event does not have.
+func (e *WebhookEvent) Value(name string) string {
+	for _, f := range e.Fields {
+		if f.Name == name {
+			return f.Value
+		}
+	}
+	return ""
 }
 
 // BotMessage is what a bot's message carries beyond a person's: the sender, by its ID and kind and never its display name

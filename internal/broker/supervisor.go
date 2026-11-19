@@ -154,7 +154,7 @@ func (s *supervisor) ownRef() v1alpha1.ObjectRef {
 // connection of an app is stopped before the older one starts.
 func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 	s.refusedNow = nil
-	defer func() { s.publish(desired) }()
+	defer func() { s.nameRoutes(desired); s.publish(desired) }()
 	present := map[string]bool{}
 	for _, t := range desired {
 		present[t.Name()] = true
@@ -454,6 +454,23 @@ func (s *supervisor) say(ctx context.Context, name, msg string, err error) {
 		return
 	}
 	s.log.WarnContext(ctx, msg, "connection", name)
+}
+
+// nameRoutes tells the chat listener's counter (Metrics.ChatListenerServes) every connection the broker is configured to serve: the own connection,
+// if there is one, and each connection of desired that is not refused, whether it runs or not, so that a request to the route of one that never
+// started (its Secret cannot be used, its credentials were rejected, its platform has no adapter) is counted under its name. It runs at the end of
+// the pass, on its goroutine, after the removals: a connection that was removed is not in desired, and a refused one, which was removed when it
+// was refused, is left out, so nothing gives back a name that Metrics.ConnectionRemoved took away.
+func (s *supervisor) nameRoutes(desired []TeamConnection) {
+	if s.own != nil {
+		s.host.metrics.ChatListenerServes(s.own.Platform, v1alpha1.NamespacedName(s.own.Ref.Namespace, s.own.Ref.Name))
+	}
+	for _, t := range desired {
+		if st := s.teams[t.Name()]; st != nil && st.refused {
+			continue
+		}
+		s.host.metrics.ChatListenerServes(t.Platform, t.Name())
+	}
 }
 
 // publish makes the list of connections the verification of the Bindings goes by: the own connection, if there is one, with its credentials, and every team
