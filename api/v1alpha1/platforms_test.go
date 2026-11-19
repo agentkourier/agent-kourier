@@ -35,7 +35,7 @@ func shapes(p ChatPlatform) map[string]struct {
 	for name, f := range map[string]struct {
 		shape IDShape
 		cap   int
-	}{"channel": {p.Channel, maxChatIDLen}, "sender": {p.Sender, maxChatIDLen}, "user": {p.User, maxMentionUserLen}, "group": {p.Group, maxChatIDLen}} {
+	}{"channel": {p.Channel, maxWebhookChannelLen}, "sender": {p.Sender, maxChatIDLen}, "user": {p.User, maxMentionUserLen}, "group": {p.Group, maxChatIDLen}} {
 		if f.shape.Taken() {
 			out[name] = f
 		}
@@ -45,7 +45,8 @@ func shapes(p ChatPlatform) map[string]struct {
 
 // An ID of each kind that each platform takes, from which TestEveryPlatformsShapesAreWithinTheSchema makes others.
 var exampleIDs = map[string]map[string]string{
-	"Slack": {"channel": "C0123456789", "sender": "B0123456789", "user": "U0123456789", "group": "S0123456789"},
+	"Slack":   {"channel": "C0123456789", "sender": "B0123456789", "user": "U0123456789", "group": "S0123456789"},
+	"webhook": {"channel": "acme/widgets"},
 }
 
 // setID puts id in a Binding's field of the kind of chat ID that field names, as shapes names it.
@@ -63,15 +64,22 @@ var setID = map[string]func(b *Binding, id string){
 // (TestSchemaPatternsEqualTheGoLiterals, TestSchemaCapsEqualTheBrokersCaps): no ID that resolution takes on its platform is refused
 // when it is applied or loaded. Each shape's cap is within its field's, and IDs near the shape's example are tried: every byte of
 // ASCII and a few runes outside it (a letter, a space that is not ASCII's, a mark that turns the text and one that is not seen), at
-// every place of the example, and the example made as long as the shape's cap.
+// every place of the example, and the example made as long as the shape's cap. Each platform's IDs go in a Binding fixture of
+// its own, since a webhook connection's Bindings take webhookEvent triggers alone.
 func TestEveryPlatformsShapesAreWithinTheSchema(t *testing.T) {
 	var chars []string
 	for c := range 128 {
 		chars = append(chars, string(rune(c)))
 	}
 	chars = append(chars, "é", "\u00a0", "\u202e", "\u200b", "\u0430")
-	for _, spec := range []ChatConnectionSpec{slackSpec} {
-		p := platformOf(t, spec)
+	for _, tc := range []struct {
+		spec    ChatConnectionSpec
+		binding string
+	}{
+		{slackSpec, "binding.yaml"},
+		{load[ChatConnection](t, "webhook/connection.yaml").Spec, "webhook/binding.yaml"},
+	} {
+		p := platformOf(t, tc.spec)
 		for field, f := range shapes(p) {
 			if f.shape.maxLen > f.cap {
 				t.Errorf("%s: %s's cap %d is over the schema's %d", field, p.Name, f.shape.maxLen, f.cap)
@@ -90,7 +98,7 @@ func TestEveryPlatformsShapesAreWithinTheSchema(t *testing.T) {
 				if !f.shape.Matches(id) {
 					continue
 				}
-				b := load[Binding](t, "binding.yaml")
+				b := load[Binding](t, tc.binding)
 				setID[field](b, id)
 				if err := b.Validate(); err != nil {
 					t.Errorf("%s: %s's shape takes %q, which Validate refuses: %v", field, p.Name, id, err)
@@ -144,31 +152,45 @@ func TestSlackIDShapes(t *testing.T) {
 // Every platform that a ChatConnection may name has rules for its Bindings, and no other has: a platform added to Validate without
 // a case in ChatPlatformOf fails here, before resolution can meet a connection whose Bindings it cannot check.
 func TestChatPlatformOfAnswersThePlatformsValidateAccepts(t *testing.T) {
-	for _, platform := range []string{PlatformSlack, "web", "github", "teams", "Slack", ""} {
-		c := load[ChatConnection](t, "chatconnection.yaml")
-		c.Spec.Platform = platform
-		accepted := c.Validate() == nil
-		if _, ok := ChatPlatformOf(c.Spec); ok != accepted {
-			t.Errorf("platform %q: ChatPlatformOf answers %v, and Validate accepts the connection: %v", platform, ok, accepted)
+	for _, fixture := range []string{"chatconnection.yaml", "webhook/connection.yaml"} {
+		for _, platform := range append(platforms(), "web", "github", "teams", "Slack", "") {
+			c := load[ChatConnection](t, fixture)
+			c.Spec.Platform = platform
+			if platform == PlatformSlack && c.Spec.Webhook != nil {
+				continue // Validate refuses a webhook block on Slack, and resolution asks no rules of a refused connection
+			}
+			accepted := c.Validate() == nil
+			if _, ok := ChatPlatformOf(c.Spec); ok != accepted {
+				t.Errorf("%s, platform %q: ChatPlatformOf answers %v, and Validate accepts the connection: %v", fixture, platform, ok, accepted)
+			}
+		}
+	}
+	for _, platform := range platforms() {
+		fixture := map[string]string{PlatformSlack: "chatconnection.yaml", PlatformWebhook: "webhook/connection.yaml"}[platform]
+		if fixture == "" {
+			t.Fatalf("platform %q has no fixture connection", platform)
+		}
+		if err := load[ChatConnection](t, fixture).Validate(); err != nil {
+			t.Errorf("%s: the fixture of %s is refused: %v", fixture, platform, err)
 		}
 	}
 }
 
-// What each platform serves of a Binding: Slack everything.
+// What each platform serves of a Binding: Slack everything (the webhook platform, TestTheWebhookPlatform).
 func TestWhatEachPlatformServes(t *testing.T) {
 	for _, tc := range []struct {
-		spec                             ChatConnectionSpec
-		name, actor                      string
-		askUser, toolApprovals, feedback bool
+		spec                                      ChatConnectionSpec
+		name, actor                               string
+		replies, askUser, toolApprovals, feedback bool
 	}{
-		{slackSpec, "Slack", "Slack", true, true, true},
+		{slackSpec, "Slack", "Slack", true, true, true, true},
 	} {
 		p := platformOf(t, tc.spec)
 		if !p.Channel.Taken() || !p.Sender.Taken() || !p.User.Taken() || !p.Group.Taken() {
 			t.Errorf("%s does not take every kind of chat ID: %+v", tc.name, p)
 		}
-		if p.Name != tc.name || p.ActorName != tc.actor || p.AskUser != tc.askUser || p.ToolApprovals != tc.toolApprovals || p.Feedback != tc.feedback {
-			t.Errorf("%s: %+v; want actor %q, askUser %v, toolApprovals %v, feedback %v", tc.name, p, tc.actor, tc.askUser, tc.toolApprovals, tc.feedback)
+		if p.Name != tc.name || p.ActorName != tc.actor || p.Replies != tc.replies || p.AskUser != tc.askUser || p.ToolApprovals != tc.toolApprovals || p.Feedback != tc.feedback {
+			t.Errorf("%s: %+v; want actor %q, replies %v, askUser %v, toolApprovals %v, feedback %v", tc.name, p, tc.actor, tc.replies, tc.askUser, tc.toolApprovals, tc.feedback)
 		}
 	}
 }

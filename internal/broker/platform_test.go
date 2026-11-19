@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
@@ -27,13 +30,43 @@ func TestNewPlatformIsChosenByThePlatformOfTheConnection(t *testing.T) {
 	if got := built.Capabilities(); !got.Streams || got.AckReaction == "" {
 		t.Errorf("the adapter's capabilities are %+v; want Slack's", got)
 	}
-	for _, name := range []string{"teams", "", "Slack"} {
+	for _, name := range []string{v1alpha1.PlatformWebhook, "teams", "", "Slack"} {
 		bad := slackConn
 		bad.Platform = name
 		built, err := cfg.newPlatform(bad, nil, nil)
 		if !errors.Is(err, ErrWiring) || built.Platform != nil {
 			t.Errorf("newPlatform(%q) = %+v, %v; want a wiring error and no platform", name, built, err)
 		}
+	}
+}
+
+// The API takes a webhook ChatConnection before this broker has its adapter: one that Validate accepts, with its Secret in place, is
+// a wiring error that names the platform, and no Secret is read for it, so the supervisor reports it as having no adapter and does
+// not wait on a Secret to start it.
+func TestAWebhookConnectionIsAWiringErrorUntilItsAdapterLands(t *testing.T) {
+	c := &v1alpha1.ChatConnection{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "platform", Name: "github"},
+		Spec: v1alpha1.ChatConnectionSpec{
+			Platform:             v1alpha1.PlatformWebhook,
+			CredentialsSecretRef: v1alpha1.SecretRef{Name: "github-webhook"},
+			Webhook: &v1alpha1.WebhookSpec{
+				Identity: "pr-reviewer[bot]",
+				Verify:   v1alpha1.WebhookVerify{Scheme: v1alpha1.WebhookHMACSHA256, Header: "X-Hub-Signature-256", Prefix: "sha256="},
+				Channel:  v1alpha1.WebhookChannel{From: []string{"/repository/full_name"}},
+				Actor:    v1alpha1.WebhookActor{From: []string{"/sender/login"}},
+			},
+		},
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("the webhook connection is refused: %v", err)
+	}
+	secrets := &reader{vals: map[string]string{"platform/github-webhook/" + v1alpha1.WebhookSecretKey: "fake-webhook-secret"}}
+	_, err := connectionOf(t.Context(), c, secrets)
+	if !errors.Is(err, ErrWiring) || !errors.Is(err, errNoAdapter) {
+		t.Fatalf("connectionOf(webhook) = %v; want a wiring error for a platform with no adapter", err)
+	}
+	if !strings.Contains(err.Error(), `"webhook"`) {
+		t.Errorf("the error %q does not name the platform", err)
 	}
 }
 

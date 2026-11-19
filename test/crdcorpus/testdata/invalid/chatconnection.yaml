@@ -406,3 +406,583 @@ spec:
     name: slack
   slack:
     mode: HTTP
+---
+# rule: chatconnection/spec.webhook: missing on the webhook platform
+# want: spec.webhook: is required on a webhook connection
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+---
+# rule: chatconnection/spec.webhook: on the slack platform
+# want: spec.webhook: is set, but only a webhook connection has one
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: slack
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: token, header: X-Token}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+---
+# rule: chatconnection/spec.webhook.verify.scheme: unsupported
+# want: spec.webhook.verify.scheme: unsupported value "hmac-sha1"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: hmac-sha1, header: X-Hub-Signature}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+---
+# rule: chatconnection/spec.webhook.verify.header: empty
+# want: spec.webhook.verify.header: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: token, header: ""}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+---
+# rule: chatconnection/spec.webhook.verify.header: not a header name
+# want: spec.webhook.verify.header: invalid header name "X Token"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: token, header: X Token}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+---
+# rule: chatconnection/spec.webhook.verify.header: over 64 bytes
+# want: spec.webhook.verify.header: is 65 bytes, longer than the 64 byte limit
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: token, header: X-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+---
+# rule: chatconnection/spec.webhook.verify.prefix: a control character
+# want: spec.webhook.verify.prefix: must be printable ASCII
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: token, header: X-Token, prefix: "Bearer\t"}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+---
+# rule: chatconnection/spec.webhook.verify.timestamp: on the token scheme
+# want: spec.webhook.verify.timestamp: is taken by the hmac-sha256 scheme alone
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: token, header: X-Token, timestamp: {from: /ts, unit: s, window: 5m}}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+---
+# rule: chatconnection/spec.webhook.verify.timestamp.window: over 10m
+# want: spec.webhook.verify.timestamp.window: 11m0s is out of range, must be above 0s and at most 10m0s
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: hmac-sha256, header: X-Signature, timestamp: {from: /ts, unit: s, window: 11m}}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+---
+# rule: chatconnection/spec.webhook.verify.timestamp.window: zero
+# want: spec.webhook.verify.timestamp.window: 0s is out of range, must be above 0s and at most 10m0s
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: hmac-sha256, header: X-Signature, timestamp: {from: /ts, unit: s, window: 0s}}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+---
+# rule: chatconnection/spec.webhook.verify.timestamp.from: not a JSON Pointer
+# want: spec.webhook.verify.timestamp.from: must be a JSON Pointer that is not the root
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: hmac-sha256, header: X-Signature, timestamp: {from: ts, unit: s, window: 5m}}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+---
+# rule: chatconnection/spec.webhook.verify.timestamp.unit: unsupported
+# want: spec.webhook.verify.timestamp.unit: unsupported value "ns"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: hmac-sha256, header: X-Signature, timestamp: {from: /ts, unit: ns, window: 5m}}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+---
+# rule: chatconnection/spec.webhook.channel: from and value
+# want: spec.webhook.channel: set from or value, and not both
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: token, header: X-Token}
+    channel: {from: [/repository/full_name], value: acme/widgets}
+    actor: {from: [/sender/login]}
+---
+# rule: chatconnection/spec.webhook.channel: neither from nor value
+# want: spec.webhook.channel: set from or value, and not both
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: token, header: X-Token}
+    channel: {}
+    actor: {from: [/sender/login]}
+---
+# rule: chatconnection/spec.webhook.channel.from: not a JSON Pointer
+# want: spec.webhook.channel.from[0]: must be a JSON Pointer that is not the root
+# field: spec.webhook.channel.from
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: token, header: X-Token}
+    channel: {from: [repository/full_name]}
+    actor: {from: [/sender/login]}
+---
+# rule: chatconnection/spec.webhook.channel.from: over 8 pointers
+# want: spec.webhook.channel.from: has 9 items, maximum is 8
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: token, header: X-Token}
+    channel: {from: [/a, /b, /c, /d, /e, /f, /g, /h, /i]}
+    actor: {from: [/sender/login]}
+---
+# rule: chatconnection/spec.webhook.channel.value: an empty part
+# want: spec.webhook.channel.value: invalid channel "acme//widgets"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: token, header: X-Token}
+    channel: {value: acme//widgets}
+    actor: {from: [/sender/login]}
+---
+# rule: chatconnection/spec.webhook.identity: missing
+# want: spec.webhook.identity: is required unless actor.none is true
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    verify: {scheme: token, header: X-Token}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+---
+# rule: chatconnection/spec.webhook.identity: with actor.none
+# want: spec.webhook.identity: is set, but actor.none turns the self-drop off
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: token, header: X-Token}
+    channel: {from: [/repository/full_name]}
+    actor: {none: true}
+---
+# rule: chatconnection/spec.webhook.identity: over 128 bytes
+# want: spec.webhook.identity: is 129 bytes, longer than the 128 byte limit
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    verify: {scheme: token, header: X-Token}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+---
+# rule: chatconnection/spec.webhook.identity: a space
+# want: spec.webhook.identity: invalid identity "pr reviewer"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr reviewer
+    verify: {scheme: token, header: X-Token}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+---
+# rule: chatconnection/spec.webhook.actor.from: with actor.none
+# want: spec.webhook.actor.from: is set, but actor.none turns the self-drop off
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    verify: {scheme: token, header: X-Token}
+    channel: {from: [/repository/full_name]}
+    actor: {none: true, from: [/sender/login]}
+---
+# rule: chatconnection/spec.webhook.actor.from: missing
+# want: spec.webhook.actor.from: is required unless actor.none is true
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: token, header: X-Token}
+    channel: {from: [/repository/full_name]}
+    actor: {whenMissing: keep}
+---
+# rule: chatconnection/spec.webhook.actor.whenMissing: with actor.none
+# want: spec.webhook.actor.whenMissing: is set, but actor.none turns the self-drop off
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    verify: {scheme: token, header: X-Token}
+    channel: {from: [/repository/full_name]}
+    actor: {none: true, whenMissing: keep}
+---
+# rule: chatconnection/spec.webhook.actor.whenMissing: unsupported
+# want: spec.webhook.actor.whenMissing: unsupported value "ignore"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: token, header: X-Token}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login], whenMissing: ignore}
+---
+# rule: chatconnection/spec.webhook.fields[].name: reserved
+# want: spec.webhook.fields[0].name: "key" is reserved
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: token, header: X-Token}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+    fields: [{name: key, from: [/key]}]
+---
+# rule: chatconnection/spec.webhook.fields[].name: not a field name
+# want: spec.webhook.fields[0].name: invalid name "Event"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: token, header: X-Token}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+    fields: [{name: Event, header: X-GitHub-Event}]
+---
+# rule: chatconnection/spec.webhook.fields[].name: duplicate
+# want: spec.webhook.fields[1].name: duplicate of index 0
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: token, header: X-Token}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+    fields: [{name: event, header: X-GitHub-Event}, {name: event, from: [/action]}]
+---
+# rule: chatconnection/spec.webhook.fields: over 32 fields
+# want: spec.webhook.fields: has 33 items, maximum is 32
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: token, header: X-Token}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+    fields: [{name: f1, from: [/a]}, {name: f2, from: [/a]}, {name: f3, from: [/a]}, {name: f4, from: [/a]}, {name: f5, from: [/a]}, {name: f6, from: [/a]}, {name: f7, from: [/a]}, {name: f8, from: [/a]}, {name: f9, from: [/a]}, {name: f10, from: [/a]}, {name: f11, from: [/a]}, {name: f12, from: [/a]}, {name: f13, from: [/a]}, {name: f14, from: [/a]}, {name: f15, from: [/a]}, {name: f16, from: [/a]}, {name: f17, from: [/a]}, {name: f18, from: [/a]}, {name: f19, from: [/a]}, {name: f20, from: [/a]}, {name: f21, from: [/a]}, {name: f22, from: [/a]}, {name: f23, from: [/a]}, {name: f24, from: [/a]}, {name: f25, from: [/a]}, {name: f26, from: [/a]}, {name: f27, from: [/a]}, {name: f28, from: [/a]}, {name: f29, from: [/a]}, {name: f30, from: [/a]}, {name: f31, from: [/a]}, {name: f32, from: [/a]}, {name: f33, from: [/a]}]
+---
+# rule: chatconnection/spec.webhook.fields[]: from and header
+# want: spec.webhook.fields[0]: set from or header, and not both
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: token, header: X-Token}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+    fields: [{name: event, header: X-GitHub-Event, from: [/action]}]
+---
+# rule: chatconnection/spec.webhook.fields[].from: not a JSON Pointer
+# want: spec.webhook.fields[0].from[0]: must be a JSON Pointer that is not the root
+# field: spec.webhook.fields[0].from
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: token, header: X-Token}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+    fields: [{name: action, from: [action]}]
+---
+# rule: chatconnection/spec.webhook.fields[].header: a credential header
+# want: spec.webhook.fields[0].header: reads a credential header
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: token, header: X-Token}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+    fields: [{name: auth, header: authorization}]
+---
+# rule: chatconnection/spec.webhook.fields[].header: the verifier's header
+# want: spec.webhook.fields[0].header: reads a credential header
+# field: spec.webhook.fields
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: token, header: X-Token}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+    fields: [{name: token, header: x-token}]
+---
+# rule: chatconnection/spec.webhook.fields[].kind: unsupported
+# want: spec.webhook.fields[0].kind: unsupported value "number"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: token, header: X-Token}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+    fields: [{name: number, from: [/number], kind: number}]
+---
+# rule: chatconnection/spec.webhook.thread.field: not an id field
+# want: spec.webhook.thread.field: "title" is not an id field
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: token, header: X-Token}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+    thread: {field: title}
+    fields: [{name: title, from: [/title]}]
+---
+# rule: chatconnection/spec.webhook.thread.prefix: a colon
+# want: spec.webhook.thread.prefix: invalid prefix "pr:"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: token, header: X-Token}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+    thread: {field: number, prefix: "pr:"}
+    fields: [{name: number, from: [/number], kind: id}]
+---
+# rule: chatconnection/spec.webhook.delivery.header: the verifier's header
+# want: spec.webhook.delivery.header: reads a credential header
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: token, header: X-Token}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+    delivery: {header: X-TOKEN}
+---
+# rule: chatconnection/spec.webhook.delivery.header: a credential header
+# want: spec.webhook.delivery.header: reads a credential header
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: token, header: X-Token}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+    delivery: {header: Cookie}
