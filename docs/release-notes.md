@@ -3,6 +3,44 @@
 What changed in each release, newest first, and what you must do about it. The steps for an upgrade are in
 [Upgrade](how-to/upgrade.md), which has a section for each change that needs one; this page says what changed and points to it.
 
+## Version 0.6.0 (unreleased)
+
+A ChatConnection can take signed JSON webhooks from another service, such as GitHub, Jira Cloud, Bitbucket Cloud or Linear, and start
+sessions of an agent from them: `spec.platform: webhook`, on the chat listener. The webhook platform is experimental. Agent Kourier posts
+nothing on such a connection; the agent answers on the service with its own tools. [Start agents from webhooks](how-to/receive-webhooks.md)
+has the setup, and a page for each of the four services. [Upgrade to the release that takes webhooks](how-to/upgrade.md#upgrade-to-the-release-that-takes-webhooks)
+has the upgrade, and how to roll it back. The release also takes Microsoft Teams ChatConnections: [Upgrade to the release that takes
+Microsoft Teams ChatConnections](how-to/upgrade.md#upgrade-to-the-release-that-takes-microsoft-teams-chatconnections) has its upgrade.
+
+### Breaking changes
+
+- **Apply the CRDs again.** The ChatConnection CRD changes for `spec.webhook` and the platform `webhook`, and the Binding CRD for the trigger
+  type `webhookEvent`, the output `none` and the channel of a webhook Binding; the AgentBackend CRD is unchanged. The chart applies them with
+  the release when `crds.install` is true, or unset on `config.source: crds`. If you apply them yourself, apply
+  `charts/agent-kourier/files/crds` of this release. Until then the API server refuses the new fields and values, and a broker on custom
+  resources logs at WARN `the schema hash of a CRD is not the one this broker was built with` and sets
+  `agentkourier_crd_schema_state{state="mismatch"}` to 1 for the two CRDs. A config of Slack connections alone loads as before.
+
+### Webhooks (experimental)
+
+- **New platform `webhook`** on a ChatConnection, with `spec.webhook`: `identity` (the service's ID of the agent's own account, whose events
+  are dropped), `verify` (HMAC-SHA256 of the raw body, or a fixed token, in a header, with an optional timestamp in the body), and JSON
+  Pointers for the `channel`, the `actor`, the `thread` and the `fields` that triggers read, and the `delivery` header that names each
+  delivery in the logs. The credentials Secret holds `webhookSecret` for the HMAC scheme or `token` for the token scheme; one with a control character, such as a trailing
+  newline, is refused, and so is a token under 32 bytes. The connection takes `POST /chat/webhook/<namespace>/<name>` on the chat listener,
+  which only the leader serves; a broker with no chat listener does not run it.
+- **New trigger type `webhookEvent`**, the only one a webhook connection's Bindings take. It matches and excludes on the connection's
+  fields, and its `promptTemplate` reads the id fields. Its `limits` are required. A start that a limit stops is answered 200, logged at WARN
+  with the delivery ID, and lost unless the event is delivered again.
+- **New output `none`**, the only output a webhook connection takes, and one that Slack and Microsoft Teams refuse. A Binding of a webhook connection must set
+  `chat.output: none`, and its channel is the value the connection reads from an event, such as `acme/widgets` or `OPS`, not a chat platform's ID.
+- **New metric `agentkourier_webhook_requests_total`**, by `outcome`, `reason` and `connection`, with every series at 0 from when the
+  connection's run starts. Each verified delivery is logged at INFO, `webhook: delivery answered`.
+- **`agentkourier_chat_listener_requests_total` has two new labels**: `platform` (`slack`, `teams`, `webhook` or `other`) and `connection` (the
+  ChatConnection the path names, while the leader serves it, else `unknown`). A rule that sums the counter reads as before.
+- **Four recipes**: `webhook-github`, `webhook-jira`, `webhook-bitbucket` and `webhook-linear`, each a ChatConnection, a Binding and an
+  AgentBackend for an A2A agent of your own.
+
 ## Version 0.5.0
 
 A Slack ChatConnection can take its events and button presses over HTTP, as Events API and interactivity requests that Slack signs,

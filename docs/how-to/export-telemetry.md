@@ -83,6 +83,41 @@ histogram_quantile(0.95,
 `/readyz` does not say whether Slack is connected, on purpose: a Slack outage must not take Agent Kourier out of
 service or restart it. Watch `agentkourier_chat_connected` instead.
 
+### Alert on webhook deliveries
+
+For a [webhook connection](receive-webhooks.md), the sender sees the answer and Agent Kourier does not post anything, so these
+counts are where a failure shows. Each series of `agentkourier_webhook_requests_total` is at 0 from when the connection's run
+starts, on the replica that leads; the rules sum over the replicas, so that a change of leader does not read as a fall to 0:
+
+```promql
+# Deliveries answered 503 by the connection: the sender sends them again on its own schedule, or gives up
+sum by (connection) (increase(agentkourier_webhook_requests_total{outcome=~"not_running|withheld|timeout|cancelled"}[15m])) > 0
+
+# Deliveries answered 503 or 413 by the chat listener, before the connection saw them
+sum by (connection, outcome) (increase(agentkourier_chat_listener_requests_total{platform="webhook",outcome=~"no_route|busy|too_large"}[15m])) > 0
+
+# Signed with the wrong secret, or outside the timestamp window. `unsigned` is left out: anyone who finds the URL can send one
+sum by (connection, reason) (increase(agentkourier_webhook_requests_total{outcome="unverified",reason=~"bad_signature|stale"}[15m])) > 0
+
+# The sender's payload no longer fits the mapping: a thread that is not an identifier, or not there at all
+sum by (connection, reason) (increase(agentkourier_webhook_requests_total{outcome="unmapped",reason=~"bad_id|no_thread"}[1h])) > 0
+
+# Events a limit stopped. On a webhook connection they were answered 200 and are lost unless delivered again; the WARN line names each delivery.
+# The counter has no connection label: name the webhook Bindings, here the recipes'
+sum by (binding, limit) (increase(agentkourier_trigger_limited_total{binding=~"acme-webhooks/.*"}[30m])) > 0
+
+# A first prompt that failed its check, such as an id field with no valid value: no turn, and on a webhook connection no note either.
+# No connection label here either: filter by binding
+sum by (binding, reason) (increase(agentkourier_trigger_refused_total{binding=~"acme-webhooks/.*"}[30m])) > 0
+
+# No event taken for a day: the webhook may be off at the sender, or point elsewhere
+sum by (connection) (increase(agentkourier_webhook_requests_total{outcome="accepted"}[24h])) == 0
+```
+
+The last rule has a value only because the series start at 0. Pick its window from how often the service sends events. Each
+answer is also a log line, `webhook: delivery answered`, with the delivery ID that the sender's own log shows
+([Follow a delivery](receive-webhooks.md#follow-a-delivery)).
+
 ## Export traces
 
 Set the OpenTelemetry environment through the chart's `extraEnv`. Take credentials from a Secret:

@@ -1013,6 +1013,35 @@ Binding that 0.4.0 took loads as it did. What changes:
 
 **Roll back.** No stored object depends on this release: the chat ID rules are 0.4.0's. The CRDs of 0.4.0 have neither column.
 
+## Upgrade to the release that takes webhooks
+
+A ChatConnection can take signed webhooks from another service: `spec.platform: webhook`, on the chat listener
+([Start agents from webhooks](receive-webhooks.md)). The platform is experimental. A config of Slack connections loads as it did in 0.5.0.
+What changes for every install:
+
+- **Apply the CRDs again.** The ChatConnection CRD changes for the platform `webhook` and `spec.webhook`, and the Binding CRD for the
+  trigger type `webhookEvent`, the output `none` and a webhook Binding's channel; their schema hashes change with them. The chart applies
+  them with the release when `crds.install` is true, or unset on `config.source: crds`. If you apply the CRDs yourself, apply
+  `charts/agent-kourier/files/crds` again. Until then the API server refuses a webhook ChatConnection, and a broker on custom resources
+  logs at WARN `the schema hash of a CRD is not the one this broker was built with` and sets `agentkourier_crd_schema_state{state="mismatch"}`
+  to 1 for the two CRDs.
+- **`agentkourier_chat_listener_requests_total` has two new labels**, `platform` and `connection` ([Metrics](../reference/metrics.md)). A
+  rule that sums the counter, or selects by `outcome` alone, reads as before. A rule or a recording rule that keeps every label gets more
+  series: one for each platform and connection the leader serves, and `unknown`.
+- **Webhooks add no database migration** and no chart value; the migrations of this release are Microsoft Teams' ([below](#upgrade-to-the-release-that-takes-microsoft-teams-chatconnections)).
+
+### Roll back from the release that takes webhooks
+
+- **Delete the webhook ChatConnections and their Bindings first**, and turn the webhooks off at each service, which otherwise send to a URL
+  that no longer runs. On the ConfigMap route, take them out of the config in the same change. A broker of 0.5.0 takes `spec.platform`
+  `slack` alone, and neither the trigger type `webhookEvent` nor the output `none`: on the ConfigMap route it does not load a config that
+  holds them and exits with [code 2](troubleshoot.md#the-pod-exits-with-code-2); on custom resources it refuses the connection and the
+  Bindings that name it, and the refused connection still takes one of the 16 places (read in the source of 0.5.0, not run).
+- **Then roll back the broker and the CRDs.** The CRDs of 0.5.0 do not have the platform `webhook`, so the API server refuses a webhook
+  ChatConnection written after they are applied. What it does with one that is still stored is Kubernetes's own behaviour, not checked here.
+- **Rules that select the listener counter by `platform` or `connection`** match nothing on 0.5.0, which has neither label.
+- **The sessions that webhook events started stay in the store**, as the sessions of any deleted Binding do; 0.5.0 has no table to undo.
+
 ## Upgrade to the release that takes Microsoft Teams ChatConnections
 
 A ChatConnection may now say `spec.platform: teams`, with a `spec.teams` block ([ChatConnection](../reference/chatconnection.md)), and

@@ -1,7 +1,8 @@
-# Linear: a workspace webhook with a signing secret, for issues and comments. Its URL is
+# Linear: a webhook with a signing secret, of an OAuth application or of the workspace, for issues and comments. Its URL is
 # https://<host>/chat/webhook/acme-webhooks/linear. The Secret linear-webhook, in namespace acme-webhooks, holds the key
 # webhookSecret, the webhook's signing secret; you make it, and no secret belongs in this file.
-# Replace the identity with the user ID the agent's API key acts as, so its own comments are dropped.
+# Replace the identity with the user ID the agent acts as (the OAuth application's user, or an API key's), so its own
+# comments are dropped.
 apiVersion: agentkourier.dev/v1alpha1
 kind: ChatConnection
 metadata: {name: linear, namespace: acme-webhooks}
@@ -9,7 +10,7 @@ spec:
   platform: webhook
   credentialsSecretRef: {name: linear-webhook}
   webhook:
-    identity: "00000000-0000-0000-0000-000000000002"   # the user ID of the agent's API key
+    identity: "00000000-0000-0000-0000-000000000002"   # the user ID the agent acts as
     verify:
       scheme: hmac-sha256
       header: Linear-Signature                         # the hex signature, with no prefix

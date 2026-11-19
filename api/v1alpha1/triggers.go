@@ -123,6 +123,7 @@ type Trigger struct {
 	// +kubebuilder:validation:XValidation:rule="self.all(k, size(k) <= 63)",message="a field name is longer than the 63 byte limit"
 	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) > 0)",message="a regular expression is required"
 	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) <= 512)",message="a regular expression is longer than the 512 byte limit"
+	// +doc:keysOf=a botMessage trigger
 	Match map[MessageField]string `json:"match,omitempty"`
 	// Exclude maps a message field to a regex; a message matching any entry is ignored. A personMessage trigger has
 	// the field text alone. A webhookEvent trigger names fields of its connection's spec.webhook.fields instead, at most 6.
@@ -130,6 +131,7 @@ type Trigger struct {
 	// +kubebuilder:validation:XValidation:rule="self.all(k, size(k) <= 63)",message="a field name is longer than the 63 byte limit"
 	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) > 0)",message="a regular expression is required"
 	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) <= 512)",message="a regular expression is longer than the 512 byte limit"
+	// +doc:keysOf=a botMessage trigger
 	Exclude map[MessageField]string `json:"exclude,omitempty"`
 	// Extract names the values to pull out of a message. A message in which one of these
 	// regexes does not match does not match the trigger. At most 32, each named in at most 63 bytes. A
