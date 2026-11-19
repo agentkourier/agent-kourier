@@ -7,7 +7,9 @@
 // The server stops on SIGINT or SIGTERM.
 //
 // It also serves the agents of ScenarioAgents, for the E2E scenarios; the stubagent package doc
-// of ScenarioAgents maps each scenario to its agent.
+// of ScenarioAgents maps each scenario to its agent. With -webhook-vendor-api it serves the webhook
+// recipes' agent too (stubagent.WebhookAgent), as agents/<vendor> for each vendor of test/fakevendors,
+// posting on the vendor API at that URL.
 package main
 
 import (
@@ -19,6 +21,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -37,8 +40,13 @@ func main() {
 	tick := flag.Duration("tick", defaultTick, "pause between the text chunks of a turn; the slow agent needs it long enough for a client to act between chunks")
 	requireAuth := flag.Bool("require-auth", false, "answer 401 to a request with no bearer token, as kagent in OIDC mode does")
 	uniqueIDs := flag.Bool("unique-ids", false, "put a tag of this start in every id, so that a restart never makes an id of an earlier run that a client stored; the ids then differ from run to run")
+	vendorAPI := flag.String("webhook-vendor-api", "", "serve the webhook recipes' agent as agents/<vendor>, posting on the vendor API at this URL (scheme and host: test/fakevendors)")
 	flag.Parse()
-	if err := run(*addr, *tick, *requireAuth, *uniqueIDs); err != nil {
+	if err := checkVendorAPI(*vendorAPI); err != nil {
+		fmt.Fprintln(os.Stderr, "stubagent: -webhook-vendor-api:", err)
+		os.Exit(2)
+	}
+	if err := run(*addr, *tick, *requireAuth, *uniqueIDs, *vendorAPI); err != nil {
 		fmt.Fprintln(os.Stderr, "stubagent:", err)
 		os.Exit(1)
 	}
@@ -56,8 +64,28 @@ func idTag(unique bool) (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// newStub returns the server with every agent the command serves. idTag, if not empty, is in every id it makes.
-func newStub(tick time.Duration, requireAuth bool, idTag string) *stubagent.Server {
+// webhookAgentNamespace is the namespace of the webhook recipes' agents, which a Binding of the a2a dialect reaches at
+// /agents/agents/<vendor>; webhookVendors are their names, the vendors of test/fakevendors.
+const webhookAgentNamespace = "agents"
+
+var webhookVendors = []string{"github", "bitbucket", "jira", "linear"}
+
+// checkVendorAPI says whether api is a value -webhook-vendor-api takes: empty (no webhook agents), or an absolute http or https URL of a
+// host with no path, which stubagent.WebhookAgent puts the vendor's API paths after.
+func checkVendorAPI(api string) error {
+	if api == "" {
+		return nil
+	}
+	u, err := url.Parse(api)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return errors.New("want an http or https URL of a host, with no path, query or fragment")
+	}
+	return nil
+}
+
+// newStub returns the server with every agent the command serves. idTag, if not empty, is in every id it makes. vendorAPI, if not
+// empty, is the vendor API the webhook recipes' agents post on (checkVendorAPI).
+func newStub(tick time.Duration, requireAuth bool, idTag, vendorAPI string) *stubagent.Server {
 	opts := []stubagent.Option{stubagent.WithTick(tick), stubagent.WithIDTag(idTag)}
 	if requireAuth {
 		opts = append(opts, stubagent.WithRequiredAuth())
@@ -65,6 +93,11 @@ func newStub(tick time.Duration, requireAuth bool, idTag string) *stubagent.Serv
 	stub := stubagent.NewHandler(opts...)
 	stubagent.SpikeAgents(stub)
 	stubagent.ScenarioAgents(stub)
+	if vendorAPI != "" {
+		for _, vendor := range webhookVendors {
+			stubagent.WebhookAgent(stub, webhookAgentNamespace, vendor, strings.TrimSuffix(vendorAPI, "/"), nil)
+		}
+	}
 	return stub
 }
 
@@ -94,12 +127,12 @@ func withControl(stub *stubagent.Server) http.Handler {
 	})
 }
 
-func run(addr string, tick time.Duration, requireAuth, uniqueIDs bool) error {
+func run(addr string, tick time.Duration, requireAuth, uniqueIDs bool, vendorAPI string) error {
 	tag, err := idTag(uniqueIDs)
 	if err != nil {
 		return err
 	}
-	stub := newStub(tick, requireAuth, tag)
+	stub := newStub(tick, requireAuth, tag, vendorAPI)
 	defer stub.Close()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

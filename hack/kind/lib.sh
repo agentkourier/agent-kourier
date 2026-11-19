@@ -147,23 +147,23 @@ build_doubles_image() {
     *) die "unsupported Docker architecture" ;;
   esac
   BUILD=$(mktemp -d)
-  for double in fakeslack stubagent sink signaler hitlagent; do
+  for double in fakeslack stubagent sink signaler hitlagent fakevendors; do
     GOOS=linux GOARCH=${goarch} CGO_ENABLED=0 go build -C "${ROOT}" -o "${BUILD}/${double}" "./test/${double}/cmd/${double}"
   done
   docker build -q -f "${HERE}/fast/Dockerfile" --build-arg "RUNTIME_IMAGE=${RUNTIME_IMAGE}" -t "${DOUBLES_IMAGE}" "${BUILD}" >/dev/null
   kind load docker-image "${DOUBLES_IMAGE}" --name "${CLUSTER}"
 }
 
-# apply_doubles: the fake Slack, stub agent and sink in namespace e2e, and Alertmanager (with its
+# apply_doubles: the fake Slack, stub agent, sink and fake vendors in namespace e2e, and Alertmanager (with its
 # route to the sink) in monitoring; needs install_operator first. None is published: the fake
-# Slack's /_control/ has no authentication. E2E_SLACK_MODE says how the fake Slack sends its default app's events and presses (fake_slack_mode_patch).
+# Slack's /_control/ has no authentication, nor have the fake vendors'. E2E_SLACK_MODE says how the fake Slack sends its default app's events and presses (fake_slack_mode_patch).
 apply_doubles() {
   require_slack_mode
   "${K[@]}" apply -f "${HERE}/fast/doubles.yaml" >/dev/null
   "${K[@]}" -n e2e patch deploy/fakeslack --type=strategic -p "$(fake_slack_mode_patch)" >/dev/null
   # Restart so a rebuilt image (same tag) is picked up.
-  "${K[@]}" -n e2e rollout restart deploy/fakeslack deploy/stubagent deploy/hitlagent deploy/sink >/dev/null
-  "${K[@]}" -n e2e rollout status deploy/fakeslack deploy/stubagent deploy/hitlagent deploy/sink --timeout=180s
+  "${K[@]}" -n e2e rollout restart deploy/fakeslack deploy/stubagent deploy/hitlagent deploy/sink deploy/fakevendors >/dev/null
+  "${K[@]}" -n e2e rollout status deploy/fakeslack deploy/stubagent deploy/hitlagent deploy/sink deploy/fakevendors --timeout=180s
   "${K[@]}" apply -f "${HERE}/fast/alertmanager.yaml" >/dev/null
   "${K[@]}" -n monitoring wait --for=condition=Available alertmanager/agent-kourier --timeout=180s
 }
@@ -242,8 +242,8 @@ assert_app_unpublished() {
 
 assert_never_published() {
   local app ingresses ports hostports apiserver='^6443/tcp -> 127\.0\.0\.1:[0-9]+$'
-  echo "== never published: the fake Slack's /_control/ and the stub agent's /_control/release/ have no authentication, nor has hitlagent"
-  for app in fakeslack stubagent hitlagent; do
+  echo "== never published: the fake Slack's /_control/, the stub agent's /_control/release/ and the fake vendors' /_control/ have no authentication, nor has hitlagent"
+  for app in fakeslack stubagent hitlagent fakevendors; do
     assert_app_unpublished e2e "${app}"
   done
   ingresses=$("${K[@]}" -n e2e get ingress -o name)
@@ -531,6 +531,68 @@ deploy_two_apps() {
     die "the broker never connected team-a's Slack app to the fake Slack; is team-a in config.connectionNamespaces, and does team-a's Role name its Secret?"
   }
   echo "ok: team-a's Slack app is connected to the fake Slack"
+}
+
+# The fast tier's webhook connections (hack/kind/fast/webhook, custom resources only): FAKE_WEBHOOK_SECRETS is the fake webhook secret of each
+# recipe's connection, vendor=secret, which deploy_webhook puts in the Secret <vendor>-webhook that the recipe's ChatConnection names and the fake
+# vendors (fast/doubles.yaml, the Deployment fakevendors) sign with. WEBHOOK_AGENT_TOKEN is the Secret of the agent token each recipe's Binding is
+# given here, an unsigned JWT of WEBHOOK_AGENT_EMAIL: the tier's stub agent asks for a bearer, as kagent in OIDC mode does. Fake constants, made into
+# Secrets here and never committed; test/kindmanifests pins that they agree with the fake's command and the recipes.
+FAKE_WEBHOOK_SECRETS=(github=fake-webhook-github-secret bitbucket=fake-webhook-bitbucket-secret jira=fake-webhook-jira-secret linear=fake-webhook-linear-secret)
+WEBHOOK_NAMESPACE=acme-webhooks
+WEBHOOK_AGENT_TOKEN=webhook-agent-token
+WEBHOOK_AGENT_EMAIL=acme-webhooks@example.test
+
+# webhook_binding: a recipe's Binding, as JSON on stdin, on stdout with WEBHOOK_AGENT_TOKEN as its identity's tokenSecretRef, and nothing else
+# changed: the recipes are written for an agent that asks for no token, and the tier's stub agent asks for one. Needs jq.
+webhook_binding() {
+  jq -c --arg secret "${WEBHOOK_AGENT_TOKEN}" '.spec.identity.tokenSecretRef = {name: $secret}'
+}
+
+# deploy_webhook: the tier's webhook connections on custom resources: the namespace WEBHOOK_NAMESPACE, which hack/kind/webhook-values.yaml admits,
+# the Secret of each connection (FAKE_WEBHOOK_SECRETS) and of the agent token, hack/kind/fast/webhook/webhook.yaml (the Role that grants them to the
+# broker, and the AgentBackends of the stub agent's webhook agents), and each recipe of examples/recipes/webhook-<vendor>: its ChatConnection as it
+# is, and its Binding through webhook_binding. It returns once the broker says the four connections are up (agentkourier_chat_connected, read from
+# its metrics Service by a probe pod), and dies if they are not in three minutes. The Secrets are made with apply from a pipe, as
+# deploy_agentkourier makes the tier's. Needs HERE, ROOT, K, CURL_IMAGE, jq, and the CRDs served (deploy_agentkourier with crds).
+deploy_webhook() {
+  local pod=probe-webhook-${RANDOM} metrics=http://agent-kourier.agent-kourier.svc.cluster.local:8080/metrics pair vendor recipe conns=()
+  "${K[@]}" create namespace "${WEBHOOK_NAMESPACE}" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  for pair in "${FAKE_WEBHOOK_SECRETS[@]}"; do
+    vendor=${pair%%=*}
+    "${K[@]}" -n "${WEBHOOK_NAMESPACE}" create secret generic "${vendor}-webhook" --from-literal=webhookSecret="${pair#*=}" \
+      --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  done
+  "${K[@]}" -n "${WEBHOOK_NAMESPACE}" create secret generic "${WEBHOOK_AGENT_TOKEN}" --from-literal=token="$(unsigned_jwt "${WEBHOOK_AGENT_EMAIL}")" \
+    --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" apply --dry-run=server -f "${HERE}/fast/webhook/webhook.yaml" >/dev/null
+  "${K[@]}" apply -f "${HERE}/fast/webhook/webhook.yaml" >/dev/null
+  for pair in "${FAKE_WEBHOOK_SECRETS[@]}"; do
+    vendor=${pair%%=*}
+    recipe=${ROOT}/examples/recipes/webhook-${vendor}/kourier
+    "${K[@]}" apply -f "${recipe}/chatconnection.yaml" >/dev/null
+    "${K[@]}" create --dry-run=client -o json -f "${recipe}/binding.yaml" | webhook_binding | "${K[@]}" apply -f - >/dev/null
+    conns+=("${WEBHOOK_NAMESPACE}/${vendor}")
+  done
+  # shellcheck disable=SC2016 # the script runs in the pod
+  "${K[@]}" -n e2e run "${pod}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" --command -- sh -c '
+    metrics=$1
+    shift
+    end=$(( $(date +%s) + 180 ))
+    while [ "$(date +%s)" -lt "${end}" ]; do
+      m=$(curl -s -m 5 "${metrics}")
+      up=1
+      for c in "$@"; do
+        printf %s "$m" | grep -q "^agentkourier_chat_connected{connection=\"$c\"} 1$" || up=
+      done
+      [ -z "${up}" ] || exit 0
+      sleep 2
+    done
+    exit 1' sh "${metrics}" "${conns[@]}" >/dev/null || {
+    "${K[@]}" -n agent-kourier logs deploy/agent-kourier --tail=40 >&2 || true
+    die "the broker never said its webhook connections in ${WEBHOOK_NAMESPACE} are up; is ${WEBHOOK_NAMESPACE} in config.connectionNamespaces, with the chat listener on (hack/kind/webhook-values.yaml)?"
+  }
+  echo "ok: the webhook connections ${conns[*]} are up"
 }
 
 # runner_admission DIR: the broker's admission (spec D54) for the E2E runner, as the Deployment agent-kourier has it: its AGENTKOURIER_CHAT_CONNECTION,
