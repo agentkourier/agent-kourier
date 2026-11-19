@@ -234,7 +234,8 @@ func (m *Manager) replyFacts(ctx context.Context, in Inbound, now time.Time) (Re
 		}
 	}
 	if f.MayReplace() {
-		// Read under the intake lock, with the facts above, so that no turn is queued between the reads and the decision.
+		// From Submit, read under the intake lock, with the facts above, so that no turn is queued between the reads and the
+		// decision. Takes holds no lock, so there it is an estimate that a turn queued meanwhile can make stale.
 		unsettled, err := m.unsettled(ctx, in)
 		if err != nil {
 			return ReplyFacts{}, "", err

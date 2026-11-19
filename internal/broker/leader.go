@@ -164,7 +164,8 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	if cfg.sink != nil {
 		sink = cfg.sink
 	}
-	// Nothing is rendered or queued for a connection whose platform has no replies (the webhook platform): it posts nothing.
+	// Nothing is rendered or queued for a connection whose platform has no replies (the webhook platform): it posts nothing. What
+	// writes to the outbox for a connection goes through the quiet sink, the interactions' quiet outbox or the digest's NoReplies.
 	noReplies := noRepliesIn(boot.Reloader.Current)
 	sink = quietSink{renderSink: sink, quiet: noReplies}
 	// The manager's sink is the tap, which hands the pauses of its turns to the interactions' intake; the
@@ -173,7 +174,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	// them, and the manager, which they feed.
 	stops := stopList{trace: cfg.stopTrace}
 	sd.add(stepInteractions, stops.run)
-	parts := interactionDeps{st: st, ob: ob, platforms: platforms, auditor: auditor, bindings: bindings, metrics: metrics, log: log, trace: cfg.startTrace, sweepEvery: cfg.sweepEvery, orphanGrace: cfg.orphanGrace}
+	parts := interactionDeps{st: st, ob: quietOutbox{Sender: ob, quiet: noReplies}, platforms: platforms, auditor: auditor, bindings: bindings, metrics: metrics, log: log, trace: cfg.startTrace, sweepEvery: cfg.sweepEvery, orphanGrace: cfg.orphanGrace}
 	ix, err := parts.build(sink)
 	if err != nil {
 		return nil, err

@@ -14,7 +14,6 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/feedback"
 	"github.com/agentkourier/agent-kourier/internal/interact"
-	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/retention"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -69,7 +68,7 @@ func (l *lateSession) Abandon(ctx context.Context, key store.ConversationKey, id
 // (check names the one that is missing).
 type interactionDeps struct {
 	st        store.Store
-	ob        *outbox.Outbox
+	ob        interact.Sender              // the outbox (Run's is quietOutbox over *outbox.Outbox): every post of the interactions goes through it
 	platforms chat.Resolver[chat.Platform] // the chat platform of each connection: prompts, edits, who may answer, and what a person is told go through it
 	auditor   *audit.Writer
 	bindings  *Bindings
