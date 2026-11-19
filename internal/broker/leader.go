@@ -52,9 +52,10 @@ type leaderHalf struct {
 // makes (the outbox's posts and reactions, the renderer's streams and edits, the interactions' prompts, edits and ephemerals)
 // goes through the platform that this returns, and nothing else builds one. The platform's logger names the connection, as the broker's other
 // lines of a connection do ("connection", "namespace/name"), so that the lines of the Socket Mode connection of two connections can be told apart.
-func (h *leaderHalf) openPlatform(conn Connection, onConnection func(connected bool)) (builtPlatform, error) {
+// ctx holds the broker's instruments, which a platform that counts its own requests (the webhook platform) records on.
+func (h *leaderHalf) openPlatform(ctx context.Context, conn Connection, onConnection func(connected bool)) (builtPlatform, error) {
 	log := h.log.With("connection", v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name))
-	p, err := h.cfg.newPlatform(conn, log, onConnection)
+	p, err := h.cfg.newPlatform(ctx, conn, log, onConnection)
 	if err != nil {
 		return builtPlatform{}, err
 	}

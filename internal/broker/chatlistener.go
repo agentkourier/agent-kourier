@@ -91,7 +91,7 @@ var chatOutcomes = []string{chatServed, chatNotFound, chatMethod, chatNoRoute, c
 // chatPlatforms are the platforms whose connections take requests on the chat listener, the values of the platform label of
 // agentkourier_chat_listener_requests_total besides "other": a closed set, in the order docs/reference/metrics.md lists them. A platform
 // whose adapter offers a handler (chat.HTTPReceiver) is one more entry here.
-var chatPlatforms = []string{v1alpha1.PlatformSlack}
+var chatPlatforms = []string{v1alpha1.PlatformSlack, v1alpha1.PlatformWebhook}
 
 // chatCounter is what the chat listener reports to: Metrics.
 type chatCounter interface {
