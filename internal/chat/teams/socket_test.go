@@ -161,6 +161,15 @@ func (st *socketTest) up(t *testing.T, want bool) {
 	})
 }
 
+// countedOnce waits until agentkourier_teams_socket_envelopes_total{typ,outcome} is counted: the envelope is counted once its reply
+// frame is sent (reply), so a test that has read the frame may read the series before the count.
+func countedOnce(t *testing.T, st *socketTest, typ, outcome string) {
+	t.Helper()
+	testutil.Eventually(t, "the envelope to be counted", func() bool {
+		return st.series(t, "agentkourier_teams_socket_envelopes_total", typ, outcome) >= 1
+	})
+}
+
 // series is st's observed series (observed.series).
 func (st *socketTest) series(t *testing.T, name string, labels ...string) float64 {
 	t.Helper()
@@ -215,6 +224,7 @@ func TestSocketModeTakesAMessageAndAcknowledgesItAtOnce(t *testing.T) {
 	}
 	close(st.sink.block)
 	testutil.Eventually(t, "the sink to take the post", func() bool { return len(st.sink.got()) == 1 })
+	countedOnce(t, st, "activity", "accepted")
 	if got := st.series(t, "agentkourier_teams_socket_envelopes_total", "activity", "accepted"); got != 1 {
 		t.Errorf("envelopes{activity,accepted} = %v; want 1", got)
 	}
@@ -267,6 +277,7 @@ func TestSocketModeAnswersAnInvokeInItsFrame(t *testing.T) {
 	if fr.Status != http.StatusOK || string(fr.Body) != string(st.invokes.answer.Body) {
 		t.Errorf("the invoke's frame = status %d body %s; want 200 and the handler's answer", fr.Status, fr.Body)
 	}
+	countedOnce(t, st, "invoke", "invoke")
 	if got := st.series(t, "agentkourier_teams_socket_envelopes_total", "invoke", "invoke"); got != 1 {
 		t.Errorf("envelopes{invoke,invoke} = %v; want 1", got)
 	}
@@ -304,6 +315,7 @@ func TestSocketModeAnswersBusyPastItsPlaces(t *testing.T) {
 	if fr := result(t, sock, id); fr.Status != http.StatusServiceUnavailable {
 		t.Errorf("the envelope past the places was answered %d; want 503", fr.Status)
 	}
+	countedOnce(t, st, "activity", "busy")
 	if got := st.series(t, "agentkourier_teams_socket_envelopes_total", "activity", "busy"); got != 1 {
 		t.Errorf("envelopes{activity,busy} = %v; want 1", got)
 	}
