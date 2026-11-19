@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -111,15 +112,17 @@ func TestSupervisorWarnsOnceOfAnOwnWebhookSpecThatDriftedFromTheRunningOne(t *te
 	}
 }
 
-// Nothing is said of a connection that is not the own webhook connection: an own Slack connection, a broker with no own connection, and a
-// snapshot that does not hold the own connection (on the files a directory whose one connection was renamed) have no running spec.webhook to
-// differ from.
+// Nothing is said of a connection that is not the own webhook connection: an own Slack connection (even one of the name of the snapshot's
+// webhook connection), a broker with no own connection, and a snapshot that does not hold the own connection (on the files a directory whose
+// one connection was renamed; a connection of its name in another namespace is not it) have no running spec.webhook to differ from.
 func TestSupervisorSaysNothingOfASpecWebhookThatIsNotTheOwnRunningOne(t *testing.T) {
 	edited := webhookSpec()
 	edited.Fields = edited.Fields[:1]
 	cases := map[string]func(t *testing.T) (*supWorld, *config.Snapshot){
-		"an own Slack connection": func(t *testing.T) (*supWorld, *config.Snapshot) {
-			return newSupWorld(t), ownWebhookSnapshot(t, edited)
+		"an own Slack connection of the same name": func(t *testing.T) (*supWorld, *config.Snapshot) {
+			w := newSupWorld(t)
+			w.sup.own.Ref = v1alpha1.ObjectRef{Namespace: "ns", Name: "github"} // no spec.webhook, over a snapshot whose ns/github has one
+			return w, ownWebhookSnapshot(t, edited)
 		},
 		"no own connection": func(t *testing.T) (*supWorld, *config.Snapshot) {
 			return newTeamOnlySupWorld(t), ownWebhookSnapshot(t, edited)
@@ -128,6 +131,11 @@ func TestSupervisorSaysNothingOfASpecWebhookThatIsNotTheOwnRunningOne(t *testing
 			w := newSupWorld(t)
 			own := webhookConn("gitlab", webhookSpec(), fakeWebhookSecret)
 			w.sup.own = &own
+			return w, ownWebhookSnapshot(t, edited)
+		},
+		"a connection of the same name in another namespace": func(t *testing.T) (*supWorld, *config.Snapshot) {
+			w := ownWebhookWorld(t, webhookSpec())
+			w.sup.own.Ref.Namespace = "other"
 			return w, ownWebhookSnapshot(t, edited)
 		},
 		"no snapshot": func(t *testing.T) (*supWorld, *config.Snapshot) {
@@ -163,18 +171,26 @@ func TestSupervisorWarnsOnceOfAnOwnWebhookConnectionWhoseSpecWebhookIsGone(t *te
 	}
 }
 
-// drifted says whether logs hold the drift WARN of the connection conn.
-func drifted(logs, conn string) bool {
+// logged says whether logs hold a line of level with msg that names the connection conn.
+func logged(logs, level, msg, conn string) bool {
 	for line := range strings.Lines(logs) {
-		if strings.Contains(line, "level=WARN") && strings.Contains(line, `msg="`+ownWebhookDrifted+`"`) && strings.Contains(line, "connection="+conn) {
+		if strings.Contains(line, "level="+level) && strings.Contains(line, `msg="`+msg+`"`) && strings.Contains(line, "connection="+conn) {
 			return true
 		}
 	}
 	return false
 }
 
+// drifted says whether logs hold the drift WARN of the connection conn.
+func drifted(logs, conn string) bool { return logged(logs, "WARN", ownWebhookDrifted, conn) }
+
+// matchesAgain says whether logs hold the INFO that the spec.webhook of the connection conn is the running one again.
+func matchesAgain(logs, conn string) bool { return logged(logs, "INFO", ownWebhookMatches, conn) }
+
 // On the custom resources an edit of the own webhook connection's ChatConnection that adds a field to spec.webhook reaches the broker at the
-// next reload, and the leader WARNs that the running connection still uses the spec.webhook it started with.
+// next reload, and the leader WARNs that the running connection still uses the spec.webhook it started with. The edit taken back is the
+// INFO that the spec matches again: the spec.webhook that the informer's object decodes to is the one the platform was built with, so the
+// object as it was is no drift.
 func TestRunWarnsOfAnEditOfTheOwnWebhookConnectionOnTheCustomResources(t *testing.T) {
 	w := newConnWorld(t, nil)
 	runsAlongside(&w.c)
@@ -202,6 +218,7 @@ func TestRunWarnsOfAnEditOfTheOwnWebhookConnectionOnTheCustomResources(t *testin
 		t.Fatalf("a drift WARN before any edit:\n%s", w.logs.String())
 	}
 
+	original := conn.DeepCopy()
 	fields, _, _ := unstructured.NestedSlice(conn.Object, "spec", "webhook", "fields")
 	fields = append(fields, map[string]any{"name": "merged", "from": []any{"/pull_request/merged"}})
 	if err := unstructured.SetNestedSlice(conn.Object, fields, "spec", "webhook", "fields"); err != nil {
@@ -212,13 +229,22 @@ func TestRunWarnsOfAnEditOfTheOwnWebhookConnectionOnTheCustomResources(t *testin
 		t.Fatal(err)
 	}
 	w.eventually("the drift WARN of the own connection", func() bool { return drifted(w.logs.String(), whNamespace+"/github") })
+
+	original.SetGeneration(3)
+	if err := w.dyn.Tracker().Update(crConnections, original, whNamespace); err != nil {
+		t.Fatal(err)
+	}
+	w.eventually("the INFO that the own connection's spec.webhook matches again", func() bool {
+		return matchesAgain(w.logs.String(), whNamespace+"/github")
+	})
 	if strings.Contains(w.logs.String(), whSigningSecret) {
 		t.Error("the log holds the connection's secret")
 	}
 }
 
 // On the files the same edit, in the directory's one ChatConnection, is the same WARN: the chart rolls the pod on it, but not when its ConfigMap
-// is not the chart's or rolling is off, and the broker runs on the spec.webhook it started with until then.
+// is not the chart's or rolling is off, and the broker runs on the spec.webhook it started with until then. The file put back is the INFO that
+// the spec matches again: the file read again decodes to the spec.webhook the platform was built with.
 func TestRunWarnsOfAnEditOfTheOwnWebhookConnectionOnTheFiles(t *testing.T) {
 	rc := whRecipe{vendor: fakevendors.GitHub}
 	logs := &syncBuffer{}
@@ -241,10 +267,15 @@ func TestRunWarnsOfAnEditOfTheOwnWebhookConnectionOnTheFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b = append(b, []byte("      - {name: merged, from: [/pull_request/merged]}\n")...)
-	if err := os.WriteFile(path, b, 0o600); err != nil {
+	if err := os.WriteFile(path, append(slices.Clone(b), []byte("      - {name: merged, from: [/pull_request/merged]}\n")...), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	testutil.Eventually(t, "the drift WARN of the own connection", func() bool { return drifted(logs.String(), rc.connection()) },
+		testutil.Within(40*time.Second), testutil.Every(5*time.Millisecond))
+
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	testutil.Eventually(t, "the INFO that the own connection's spec.webhook matches again", func() bool { return matchesAgain(logs.String(), rc.connection()) },
 		testutil.Within(40*time.Second), testutil.Every(5*time.Millisecond))
 }
