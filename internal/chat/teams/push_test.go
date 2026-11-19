@@ -1430,3 +1430,25 @@ func TestGraphHeldSubscriptionsAreRenewedWhileAListingAfterAConflictFails(t *tes
 		t.Errorf("the WARN of the failing listing was written %d times; want once", n)
 	}
 }
+
+// A message read through Graph that the sink does not take in its tries is lost under a reason of its own, graph_not_taken, and not
+// counted with the activities that were not taken.
+func TestGraphPostNotTakenIsCountedApartFromActivities(t *testing.T) {
+	pt := newPushTest(t, false)
+	pt.subscribed(t, testChannel)
+	const id = "1794971777720"
+	pt.f.putMessage(testChannel, person(id, "", testUser, "<p>is it down?</p>"))
+	pt.sink.mu.Lock()
+	pt.sink.failing = map[string]int{id: failAlways}
+	pt.sink.mu.Unlock()
+	if status, body := pt.notify(t, pt.change(pt.subOf(testChannel), testChannel, "created", "", id)); status != http.StatusAccepted {
+		t.Fatalf("status = %d %s; want 202", status, body)
+	}
+	testutil.Eventually(t, "the message counted not taken", func() bool { return pt.counted(t, notifyChange, notifiedNotTaken) == 1 })
+	if got := pt.obs.series(t, "agentkourier_teams_activities_lost_total", lostGraphNotTaken); got != 1 {
+		t.Errorf("lost{%s} = %v; want 1", lostGraphNotTaken, got)
+	}
+	if got := pt.obs.series(t, "agentkourier_teams_activities_lost_total", lostNotTaken); got != 0 {
+		t.Errorf("lost{%s} = %v; want 0: a Graph message is no activity", lostNotTaken, got)
+	}
+}

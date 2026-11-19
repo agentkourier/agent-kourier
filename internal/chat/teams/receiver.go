@@ -99,11 +99,15 @@ const (
 	shedSocketBusy = "socket_busy" // socket mode: the connection's sockets were handling as many envelopes as they may (socketMaxInFlight)
 )
 
-// The reasons an activity answered 200 was lost, the label of agentkourier_teams_activities_lost_total: a closed set. Teams does not
-// send again an activity it was answered 200 for, so each is gone.
+// The reasons a message was lost after it was taken, the label of agentkourier_teams_activities_lost_total: a closed set. Teams does not
+// send again an activity it was answered 200 for, nor Graph a notification it was answered 202 for, and a poll does not read a message
+// again, so each is gone. A message read through Graph (push.go, poll.go) that the sink does not take has a reason of its own, so that the
+// loss of the alert route is told apart from that of the activities; one still on its lane at the stop is counted as stopped with them,
+// since the drain counts what the lanes hold and not what it is.
 const (
-	lostStopped  = "stopped"   // accepted, and still on its lane when the drain at the stop ran out
-	lostNotTaken = "not_taken" // the sink did not take it in sinkAttempts tries
+	lostStopped       = "stopped"         // accepted, and still on its lane when the drain at the stop ran out
+	lostNotTaken      = "not_taken"       // an activity's post that the sink did not take in sinkAttempts tries
+	lostGraphNotTaken = "graph_not_taken" // a message read through Graph that the sink did not take in sinkAttempts tries
 )
 
 // ReceiverConfig configures a Receiver.
@@ -298,14 +302,15 @@ func (r *Receiver) handle(s *serving, w work) {
 		r.remember(s.ctx, *w.conv)
 	}
 	if w.msg != nil {
-		r.deliver(s, w)
+		r.deliver(s, w, lostNotTaken)
 	}
 }
 
 // deliver gives w's post to s's sink, again after a failure, up to sinkAttempts times in all or until the work's context ends, and says
 // whether the sink took it. A post the sink never takes is dropped: its dedup key is released, so that the same activity is taken if it
-// comes again, and the drop is logged at WARN. It is counted as not taken unless the stop cut it, which Serve counts as stopped.
-func (r *Receiver) deliver(s *serving, w work) bool {
+// comes again, and the drop is logged at WARN. It is counted as lost for the reason lost (lostNotTaken, or lostGraphNotTaken for a message
+// read through Graph) unless the stop cut it, which Serve counts as stopped.
+func (r *Receiver) deliver(s *serving, w work, lost string) bool {
 	for attempt := 1; ; attempt++ {
 		err := s.sink.Message(s.ctx, *w.msg)
 		if err == nil {
@@ -314,7 +319,7 @@ func (r *Receiver) deliver(s *serving, w work) bool {
 		if attempt == sinkAttempts || s.ctx.Err() != nil || !waitFor(s.ctx, backoff.Doubling(r.sinkRetryBase, sinkRetryMax, attempt)) {
 			r.release(w)
 			if s.ctx.Err() == nil { // one that the drain at the stop cut is counted there, as stopped
-				r.count(s.ctx, "agentkourier_teams_activities_lost_total", lostNotTaken)
+				r.count(s.ctx, "agentkourier_teams_activities_lost_total", lost)
 			}
 			r.log.WarnContext(s.ctx, "teams: the sink did not take a message, which is dropped",
 				"channel", quote(w.msg.At.Channel), "message", w.msg.At.ID, "attempts", attempt, "error", err.Error())

@@ -462,7 +462,7 @@ func (c *Client) handOn(s *serving, channel, root string, m graphMessage) string
 	if !r.seen.claim(key) {
 		return notifiedDuplicate
 	}
-	if r.deliver(s, work{msg: &msg, key: key}) {
+	if r.deliver(s, work{msg: &msg, key: key}, lostGraphNotTaken) {
 		return notifiedTaken
 	}
 	return notifiedNotTaken
