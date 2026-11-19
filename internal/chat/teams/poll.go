@@ -215,11 +215,14 @@ type poller struct {
 	stopped  bool      // the store refused a write because this broker no longer leads: the run reads nothing more
 	// The positions that the run deletes of the channels that no Binding names (pruneUnbound): pruned says it is done, pruneAt when it
 	// is tried again after a failure, pruneWarned that the failure was told at WARN, and stale the channels whose position a failed
-	// delete left in the store (forget), which a Binding that names them again in the run does not resume.
+	// delete left in the store (forget), which a Binding that names them again in the run does not resume. firstBound is the channels
+	// bound at the run's first round, whose stored positions the prune keeps; a channel bound later in the run is not resumed either: the
+	// store holds no position of it, or one from before it was unbound that the prune, made or still to be made again, deletes.
 	pruned      bool
 	pruneAt     time.Time
 	pruneWarned bool
 	stale       map[string]bool
+	firstBound  map[string]bool
 }
 
 // newPoller returns the poller of c, which keeps each channel's read position in positions (nil: in memory alone).
@@ -270,7 +273,7 @@ func (p *poller) groupKnown(channel string) {
 func (p *poller) run(ctx context.Context, lister chat.ChannelLister) {
 	clear(p.chans)
 	p.lastCall, p.paused, p.stopped = time.Time{}, time.Time{}, false
-	p.pruned, p.pruneAt, p.pruneWarned, p.stale = false, time.Time{}, false, map[string]bool{}
+	p.pruned, p.pruneAt, p.pruneWarned, p.stale, p.firstBound = false, time.Time{}, false, map[string]bool{}, nil
 	p.mu.Lock()
 	p.gapFrom, p.grouped = time.Time{}, nil
 	p.mu.Unlock()
@@ -319,10 +322,13 @@ func (p *poller) round(ctx context.Context, lister chat.ChannelLister) {
 			added = append(added, ch)
 		}
 	}
+	if p.firstBound == nil {
+		p.firstBound = maps.Clone(want)
+	}
 	for _, ch := range slices.Sorted(maps.Keys(p.chans)) {
 		if !want[ch] {
 			delete(p.chans, ch)
-			if !p.forget(ctx, ch) {
+			if !p.forget(ctx, ch, now) {
 				return
 			}
 		}
@@ -331,7 +337,8 @@ func (p *poller) round(ctx context.Context, lister chat.ChannelLister) {
 		st := &polled{roots: map[string]*root{}, state: channelPolling,
 			next:    now.Add(p.interval * time.Duration(i) / time.Duration(len(added))),
 			catchUp: now.Add(-p.lookback), catchUpWhy: catchUpStart}
-		if p.stale[ch] { // its position is the one from before it was unbound: it is read anew, and the next write replaces it
+		// Its position, if the store has one, is from before it was unbound: it is read anew, and the next write replaces it.
+		if p.stale[ch] || !p.firstBound[ch] {
 			st.loaded = true
 			delete(p.stale, ch)
 		}
@@ -765,8 +772,8 @@ func (p *poller) save(ctx context.Context, ch string, st *polled, now time.Time)
 // forget deletes the stored position of ch, a channel that no Binding names any longer, so that a Binding that names it later does not
 // resume from where it stood: what was posted while it was not bound is not handed on. It says false when the store refused the delete
 // because this broker no longer leads, which stops the poller (stop). A delete that fails otherwise is logged at WARN; the channel is
-// then stale, read anew if a Binding names it again in the run, and the delete is made again by pruneUnbound.
-func (p *poller) forget(ctx context.Context, ch string) bool {
+// then stale, read anew if a Binding names it again in the run, and the delete is made again by pruneUnbound, saveEvery after now.
+func (p *poller) forget(ctx context.Context, ch string, now time.Time) bool {
 	if p.positions == nil {
 		return true
 	}
@@ -776,7 +783,7 @@ func (p *poller) forget(ctx context.Context, ch string) bool {
 		p.stop(ctx, err)
 		return false
 	case err != nil:
-		p.stale[ch], p.pruned = true, false
+		p.stale[ch], p.pruned, p.pruneAt = true, false, now.Add(p.saveEvery)
 		if ctx.Err() == nil {
 			p.log.WarnContext(ctx, "teams: the stored read position of a channel that no Binding names any longer could not be deleted; "+
 				"the delete is made again, and a Binding that names the channel again reads it anew", "channel", ch, "error", err.Error())

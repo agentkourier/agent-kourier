@@ -453,10 +453,6 @@ func TestPollStopsWhenTheStoreSaysThisBrokerNoLongerLeads(t *testing.T) {
 			pos.set(func(m *memPositions) { m.forgetErr = errDeposed })
 			pt.sink.bind()
 		},
-		"a delete of the channels no Binding names": func(pt *pollTest, pos *memPositions) {
-			pos.set(func(m *memPositions) { m.forgetErr, m.unboundErr = errStoreDown, errDeposed }) // a failed delete makes it again
-			pt.sink.bind()
-		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			pos := &memPositions{}
@@ -544,7 +540,7 @@ func TestPollReadsAnewAChannelUnboundWhileNoRunPolled(t *testing.T) {
 
 // A delete of an unbound channel's position that fails leaves the channel stale: a Binding that names it again in the run reads it anew,
 // not from the position the store still keeps, and the polls go on while the delete fails. The delete of the unbound channels' positions
-// is made again saveEvery later, told once at WARN until it succeeds (told at INFO).
+// is made again saveEvery later, and each saveEvery while it fails, told once at WARN until it succeeds (told at INFO).
 func TestPollReadsAnewAChannelWhosePositionCouldNotBeDeleted(t *testing.T) {
 	pt, pos := newPositionTest(t)
 	pos.set(func(m *memPositions) { m.forgetErr, m.unboundErr = errStoreDown, errStoreDown })
@@ -554,8 +550,8 @@ func TestPollReadsAnewAChannelWhosePositionCouldNotBeDeleted(t *testing.T) {
 	if _, ok := pos.get(); !ok {
 		t.Fatal("the failing store deleted the position")
 	}
-	if _, calls := unboundOf(pos); calls != before+1 {
-		t.Errorf("ForgetUnbound calls after the failed delete = %d; want %d", calls, before+1)
+	if _, calls := unboundOf(pos); calls != before {
+		t.Errorf("ForgetUnbound calls in the round of the failed delete = %d; want %d: it is made again saveEvery later", calls, before)
 	}
 	const during = "1794971800310"
 	pt.f.putMessage(testChannel, made(person(during, "", testUser, "<p>posted while the channel was not bound</p>"), pt.ago(time.Second)))
@@ -566,8 +562,17 @@ func TestPollReadsAnewAChannelWhosePositionCouldNotBeDeleted(t *testing.T) {
 		t.Errorf("syncs anew of the channel bound again = %d; want 1, not a resume from the position left in the store", got)
 	}
 	pt.next(t)
+	if _, calls := unboundOf(pos); calls != before {
+		t.Errorf("ForgetUnbound calls within saveEvery of the failed delete = %d; want %d", calls, before)
+	}
+	pt.clk.advance(pt.p.saveEvery)
+	pt.round(t)
 	if _, calls := unboundOf(pos); calls != before+1 {
-		t.Errorf("ForgetUnbound calls within saveEvery of the failure = %d; want %d", calls, before+1)
+		t.Errorf("ForgetUnbound calls saveEvery after the failed delete = %d; want %d", calls, before+1)
+	}
+	pt.next(t)
+	if _, calls := unboundOf(pos); calls != before+1 {
+		t.Errorf("ForgetUnbound calls within saveEvery of its failure = %d; want %d", calls, before+1)
 	}
 	pos.set(func(m *memPositions) { m.forgetErr, m.unboundErr = nil, nil })
 	pt.clk.advance(pt.p.saveEvery)
@@ -700,5 +705,53 @@ func TestPollDoesNotRecordAReadThatTheStopOfServeCut(t *testing.T) {
 	}
 	if got := pt.sink.callsOf(id); got != 0 {
 		t.Errorf("the cut read's message was handed on %d times; want never", got)
+	}
+}
+
+// A run whose first round's delete of the unbound channels' positions the store refuses because this broker no longer leads stops.
+func TestPollStopsWhenTheStoreRefusesTheDeleteOfTheUnboundPositions(t *testing.T) {
+	pos := &memPositions{unboundErr: errDeposed}
+	pt := newPollTestWith(t, func(c *Config) { c.Positions = pos })
+	pt.bound(t, testChannel)
+	pt.p.tick = time.Millisecond
+	done := make(chan struct{})
+	go func() { defer close(done); pt.p.run(t.Context(), pt.sink) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the poller ran on after the store refused its delete")
+	}
+	if n := strings.Count(pt.logs.String(), "the polls of the connection's channels stop"); n != 1 {
+		t.Errorf("WARN lines of the stop = %d; want 1", n)
+	}
+	if got := freshSyncs(pt.calls()); got != 0 {
+		t.Errorf("syncs of the stopped run = %d; want none", got)
+	}
+}
+
+// A channel that a Binding names again while the run's delete of the unbound channels' positions waits to be made again is read anew:
+// its stored position may be one from before it was unbound, which that delete was to remove. A channel bound at the run's first round
+// resumes as ever.
+func TestPollReadsAnewAChannelBoundWhileTheDeleteOfUnboundPositionsWaits(t *testing.T) {
+	pt, pos := newPositionTest(t)
+	pos.set(func(m *memPositions) { m.unboundErr = errStoreDown })
+	pt.sink.bind() // the Binding goes while no run polls
+	pt.restart(t)
+	pt.clk.advance(30 * time.Minute)
+	const during = "1794971800350"
+	pt.f.putMessage(testChannel, made(person(during, "", testUser, "<p>posted while the channel was not bound</p>"), pt.ago(20*time.Minute)))
+	pt.round(t) // the run's first round: the delete fails, and the position stays
+	if _, ok := pos.get(); !ok {
+		t.Fatal("the failing store deleted the position")
+	}
+	pt.sink.bind(testChannel)
+	pt.calls()
+	pt.next(t)
+	pt.next(t)
+	if got := freshSyncs(pt.calls()); got != 1 {
+		t.Errorf("syncs anew of the channel bound again = %d; want 1, not a resume from the position the delete was to remove", got)
+	}
+	if got := pt.sink.callsOf(during); got != 0 {
+		t.Errorf("the post made while the channel was not bound was handed on %d times; want never", got)
 	}
 }
