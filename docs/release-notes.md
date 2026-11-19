@@ -27,7 +27,7 @@ have the upgrade, and how to roll it back.
 - **Apply the CRDs again.** The Binding CRD changes for its new column, and the ChatConnection CRD for its column and `spec.slack`; the
   AgentBackend CRD is unchanged. The chart applies them with the release when `crds.install` is true, or unset on `config.source: crds`. If
   you apply them yourself, apply `charts/agent-kourier/files/crds` of 0.5.0. Until then `kubectl get` shows the old columns, the API server
-  does not take `spec.slack`, and a broker on custom resources logs at WARN
+  refuses `spec.slack`, or drops it for a client that does not ask for strict field validation, and a broker on custom resources logs at WARN
   `the schema hash of a CRD is not the one this broker was built with` and sets `agentkourier_crd_schema_state{state="mismatch"}` to 1 for
   the two CRDs.
 - **A Deployment of your own that sets `AGENTKOURIER_POD_NAMESPACE` without `AGENTKOURIER_CHAT_LISTEN` exits with code 2.** The variable is
@@ -109,11 +109,6 @@ have the upgrade, and how to roll it back.
 - **An answer is taken only on the question its task is paused on.** A press decided again (a redelivery after its key was purged, a press
   with no key, or a second press on a prompt that was never replaced) could answer a later question of the same task with the earlier
   answer. Now an answer to another question is dropped with no notice, and logged at info.
-- **A prompt the chat platform reports as invalid is refused at once**, as one too large for a message was. It was retried in silence
-  until the pause timed out. Now the task gets the unusable-pause refusal: the notice "The agent paused for input in a way Agent Kourier
-  cannot use, so Agent Kourier is cancelling the task.", the interaction closed, the task cancelled, and one `unusable_pause` audit entry.
-  On Slack it is not expected to show: the Slack adapter calls a prompt invalid only when it has no ID, both questions and tools or
-  neither, or an ID over 2000 units, and the dialects build none of those.
 - **`agentkourier_trigger_decisions_total` counts a decision once its start is taken.** It was counted as soon as the decision was made,
   so a start that then failed counted `started`, and its redelivery counted again: `started` for a trigger with no thread rules, and `dedup`
   for a keyed one, though that delivery started the turn. A failed attempt now counts nothing here (it counts as
@@ -135,6 +130,11 @@ have the upgrade, and how to roll it back.
 
 ### Other changes
 
+- **No change on Slack: a prompt the chat platform reports as invalid is refused at once**, as one too large for a message was. It was retried in silence
+  until the pause timed out. Now the task gets the unusable-pause refusal: the notice "The agent paused for input in a way Agent Kourier
+  cannot use, so Agent Kourier is cancelling the task.", the interaction closed, the task cancelled, and an `unusable_pause` audit entry, then `unusable_pause_cancel`.
+  On Slack it is not expected to show: the Slack adapter calls a prompt invalid only when it has no ID, both questions and tools or
+  neither, or an ID over 2000 units, and the dialects build none of those.
 - **Internal changes, with no change in behaviour on Slack:**
     - each chat platform supplies its own app identity;
     - code that is not Slack's names the chat platform rather than Slack;
@@ -151,9 +151,9 @@ have the upgrade, and how to roll it back.
     - The README, the landing page and the glossary say Slack is the only platform today, and the README lists Microsoft Teams as
       planned.
 
-- **The release gate** runs the fast kind tier in HTTP mode on the custom resource route twice: on one replica, and on Postgres with two
+- **Before a tag, the release checklist** runs the fast kind tier in HTTP mode on the custom resource route twice: on one replica, and on Postgres with two
   replicas, where the failover tests check that a press sent while the leader is dead or frozen is sent again and decided by the new
-  leader. A release that changes HTTP mode also runs a probe against an install that Slack itself reaches.
+  leader. For a release that changes HTTP mode, it also runs a probe against an install that Slack itself reaches.
 
 ### Dependencies
 
