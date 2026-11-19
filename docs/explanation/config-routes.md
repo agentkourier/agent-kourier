@@ -22,7 +22,10 @@ supported. [Move the config between a ConfigMap and custom resources](../how-to/
 A change that is read is not always applied then. The broker builds the platform of its own ChatConnection when it starts and when a
 replica takes the lead, so an edit to that connection's `spec.teams` or `spec.webhook` applies when Agent Kourier
 restarts: on files that is the chart's roll (unless `config.existingConfigMap` is set or `config.rollOnChange` is `false`), and on
-custom resources a restart of the Deployment. A team connection restarts by itself when its ChatConnection changes.
+custom resources a restart of the Deployment. Until then the leader logs, once for each edit of `spec.webhook` it reads that
+leaves the spec other than the one the connection runs on, a WARN that names the connection in its `connection` attribute:
+`chat connection: its spec.webhook was edited, and the running connection still uses the spec.webhook it started with; a restart of the broker applies the edit`.
+A team connection restarts by itself when its ChatConnection changes.
 
 The two are never merged and there is no fallback. A broker on `files` ignores any custom resources in the cluster, and a broker on
 `crds` has no config directory. The route is chosen at start: a reload cannot change it, so moving is an upgrade of the release.
