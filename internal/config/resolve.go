@@ -136,8 +136,9 @@ const (
 	ReasonAgentNamespaceNotAllowed RejectionReason = "AgentNamespaceNotAllowed"
 	// ReasonInvalidPlatformID: a chat ID of the Binding (its channel, a botMessage trigger's sender, a mention's user or an
 	// approver group) does not have the shape of the IDs of its ChatConnection's platform (v1alpha1.BindingSpec.PlatformMismatches).
-	// Validate holds each chat ID to Slack's shape, the only platform's, so a Binding that loaded is not given this reason today: the
-	// check is a second line, for a platform whose IDs the schema takes besides Slack's.
+	// Validate holds each chat ID to Slack's shape, except the channel of a Binding whose triggers are all webhookEvent, which it holds
+	// to a webhook channel's: such a Binding on a Slack connection (channel acme/widgets) is given this reason. A Slack Binding with
+	// Slack's IDs on a Slack connection never is.
 	ReasonInvalidPlatformID RejectionReason = "InvalidPlatformID"
 	// ReasonUnsupportedOnPlatform: the Binding asks for a feature that the platform of its ChatConnection does not serve, such as
 	// tool approvals on a platform that cannot ask for them.
@@ -219,8 +220,9 @@ type problem struct {
 }
 
 // PlatformRules returns the rules of the chat platform of a ChatConnection's spec, and false for one that has none:
-// v1alpha1.ChatPlatformOf, or a test's own table. Slack, the only platform, serves every feature and its shapes are the schema's,
-// so a test that needs the platform to refuse something gives a table of its own.
+// v1alpha1.ChatPlatformOf, or a test's own table. Slack serves every feature and its shapes are the schema's; a webhook connection
+// takes webhookEvent triggers and output none alone, and serves no feature that a post carries. A test that needs a platform to
+// refuse something else gives a table of its own.
 type PlatformRules func(spec v1alpha1.ChatConnectionSpec) (v1alpha1.ChatPlatform, bool)
 
 // PlatformsPage is the reference page that says what each platform supports, which the message of a rejection for the platform
