@@ -297,10 +297,17 @@ at the next poll round, within a second, once an activity has told the group.
   other channels go on. A `deltaLink` that Graph no longer takes (410, or a 400 that asks for a new sync, by Microsoft's documentation; not
   measured) is logged at WARN, and the channel is read to a new `deltaLink` as at a start, with a catch-up read of what was posted since
   the last poll, within the 10 minutes.
-- **Cost.** A connection makes at most 4 reads a second, one at a time. Once it has its `deltaLink`, a channel costs one delta read and 3
-  reads of replies each 10 seconds; at a poll that finds new threads, 4 to 6 reads of replies (6 when three or more threads begin): 24 to
-  42 reads a minute. While it is read to its `deltaLink`, a poll of it makes at most 5 pages, 3 reads of replies and a catch-up read, 9
-  reads. [Limits](limits.md#run-the-broker) has the budget. On a test tenant, 22 reads at 5 seconds
+- **Cost.** A connection makes at most 4 reads a second, one at a time, at least 250 milliseconds apart: 240 reads a minute, which no
+  setting changes. Once it has its `deltaLink`, a channel costs one delta read and 3 reads of replies each 10 seconds; at a poll that
+  finds new threads, 4 to 6 reads of replies (6 when three or more threads begin): 24 to 42 reads a minute. While it is read to its
+  `deltaLink`, a poll of it makes at most 5 pages, 3 reads of replies and a catch-up read, 9 reads. [Limits](limits.md#run-the-broker)
+  has the budget.
+- **How many channels fit.** One connection polls up to 10 bound channels every 10 seconds when no thread begins in them, 8 when one
+  begins in each at every poll, and 5 when three or more do. Past that, nothing is skipped and no read is dropped: the reads wait their
+  turn, so each channel's polls come later than every 10 seconds, the more so the more channels are bound, and a new post is found
+  that much later. A delta read still finds every new post. Replies are where a long interval costs: a poll reads the replies of a
+  channel's 3 newest threads, so when more threads begin between two polls, the replies of the older ones are not read. For more
+  channels, give the connection a `notificationURL`: its notifications cost no poll. On a test tenant, 22 reads at 5 seconds
   apart drew no 429; the throttle of a channel's messages is not measured.
 
 ### Catch-up reads
