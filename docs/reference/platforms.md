@@ -317,7 +317,11 @@ at the next poll round once an activity has told the group: at once, or as soon 
   does not fire a trigger. A channel whose delta names no `deltaLink` within 500 pages counts as `failing`, logged once at WARN, and is
   read by its catch-up read alone, each interval, until the run ends (a restart or a change of leader) or no Binding names it and one
   names it again, when it is read to its `deltaLink` anew. A channel that no Binding names any longer is forgotten, and its stored
-  position deleted: a Binding that names it again reads it anew, and what was posted meanwhile is not handed on.
+  position deleted. The first round of each run deletes too the stored positions of the connection's channels that no Binding names
+  then, so a Binding removed while no broker polled, or one whose delete failed, leaves none. A Binding that names the channel again
+  reads it anew, and what was posted meanwhile is not handed on. A delete that fails is logged once at WARN and made again a minute
+  later, and the polls go on; a channel whose delete failed is read anew if a Binding names it again in the run. A Binding removed and
+  added back while no broker ran is not seen: the channel resumes from its stored position, as one that stayed bound does.
 - **Errors.** Graph's 429 pauses every read of the connection for its `Retry-After`, since Graph throttles an app in a tenant, and ends the
   channel's poll. A 403 (the app may not read the channel's messages: install or update the app in the team), a 401, a 404 or a 400 of
   a channel's delta or catch-up read ends the channel's poll and counts the channel as `failing`, logged once at WARN. Another failure is
@@ -366,8 +370,9 @@ not recovered, nor anything posted earlier than the look-back.
 - **On Graph's `missed`** (a `notificationURL`): what was posted in the channel in the 10 minutes before.
 
 **After a restart.** What a run handed on is held in memory, so a post that a catch-up read, or a delta resumed from the stored
-position, gives again after a restart is handed on again: the stored position is the last one written, up to a minute behind what the
-run had handed on. The broker keeps in its store what such a post did, and drops it there: a trigger that threads by key finds the thread the message
+position, gives again after a restart is handed on again: the stored position is the last one written, a minute or more behind what
+the run had handed on (a write is made at a poll, at most once a minute, once the lane has handed on the read; longer while writes
+fail). The broker keeps in its store what such a post did, and drops it there: a trigger that threads by key finds the thread the message
 already opened; a trigger that starts a turn of its own finds that turn, which is named by the message, queued already, and starts no
 second investigation; a start that a trigger's limits stopped is not counted or told again; and a trigger's note is one row whatever asks
 for it. The intake's metrics count the post again: `agentkourier_trigger_matched_total` and `agentkourier_trigger_decisions_total`, and,

@@ -692,11 +692,14 @@ Rules:
   delta from the stored position, unless it is more than an hour old or its time more than the 30 s skew ahead of the broker's clock (then
   WARN, and the channel is read anew); a stored `deltaLink` that Graph refuses is a reset, as at any poll. A stored position that cannot
   be read fails the poll (backoff); a write refused because the broker no longer leads stops the polls (`teams.ErrNotLeader` over
-  `store.ErrDeposed`); another failed write is a WARN, retried a minute later. The poller deletes an unbound channel's position, and the
-  leader a deleted ChatConnection's with its `teams_conversations`. The replies read of each thread stay in memory: a run's start, a
+  `store.ErrDeposed`); another failed write is a WARN, retried a minute later. A read put on the lane before Graph refused the channel's
+  `deltaLink` is not recorded after the reset (a generation per channel), nor a read that Serve's stop cut. The poller deletes an
+  unbound channel's position, and, at a run's first round, those of the connection's channels that no Binding names
+  (`DeleteTeamsPollPositionsExcept`, fenced; a failure is a WARN, retried a minute later, and never holds the polls; a channel whose
+  delete failed is read anew if bound again in the run); the leader deletes a deleted ChatConnection's with its `teams_conversations`. The replies read of each thread stay in memory: a run's start, a
   socket gap's end and a `missed` notification each make a catch-up read of the 20 newest threads with their replies and hand on what
   was posted within the last 10 minutes (the receiver's dedup window), never further back, a retried catch-up included; at a run's start
-  it is kept beside a resumed delta, which gives no reply in an older thread. A repeat (the stored position is up to a minute behind what
+  it is kept beside a resumed delta, which gives no reply in an older thread. A repeat (the stored position is a minute or more behind what
   was handed on) is dropped by the receiver's recent set and, across a restart, in the store: a keyed trigger finds its thread
   (`DecisionDedup`); an unthreaded start's `Submit` carries `MessageID = chat.MessageID(ref)`, and `reply_queue`'s `ON CONFLICT (id) DO
   NOTHING` queues no second turn (`intake_total{reply_queue,duplicate}`); a limited start is `Again`. No trigger fires a second
