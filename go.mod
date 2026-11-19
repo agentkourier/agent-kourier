@@ -8,7 +8,7 @@ tool (
 )
 
 require (
-	github.com/a2aproject/a2a-go/v2 v2.8.0
+	github.com/a2aproject/a2a-go/v2 v2.9.0
 	github.com/go-logr/logr v1.4.4
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/jackc/pgx/v5 v5.13.0
