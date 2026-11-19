@@ -34,8 +34,10 @@ Microsoft Teams ChatConnections](how-to/upgrade.md#upgrade-to-the-release-that-t
   with the delivery ID, and lost unless the event is delivered again.
 - **New output `none`**, the only output a webhook connection takes, and one that Slack and Microsoft Teams refuse. A Binding of a webhook connection must set
   `chat.output: none`, and its channel is the value the connection reads from an event, such as `acme/widgets` or `OPS`, not a chat platform's ID.
-- **New metric `agentkourier_webhook_requests_total`**, by `outcome`, `reason` and `connection`, with every series at 0 from when the
-  connection's run starts. Each verified delivery is logged at INFO, `webhook: delivery answered`.
+- **New metrics for webhook connections**: `agentkourier_webhook_requests_total`, by `outcome`, `reason` and `connection`, with every
+  series at 0 from when the connection's run starts; `agentkourier_webhook_ack_duration_seconds`, how long each request took to answer,
+  by `outcome` and `connection`; and `agentkourier_webhook_last_accepted_timestamp_seconds`, the time of the connection's last delivery
+  answered `accepted`, for a rule that finds a service that stopped sending. Each verified delivery is logged at INFO, `webhook: delivery answered`.
 - **`agentkourier_chat_listener_requests_total` has two new labels**: `platform` (`slack`, `teams`, `webhook` or `other`) and `connection` (the
   ChatConnection the path names, while the leader serves it, else `unknown`). A rule that sums the counter reads as before.
 - **Four recipes**: `webhook-github`, `webhook-jira`, `webhook-bitbucket` and `webhook-linear`, each a ChatConnection, a Binding and an

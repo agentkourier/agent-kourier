@@ -111,6 +111,7 @@ func New(reg prometheus.Registerer, provider trace.TracerProvider) (*Observer, e
 		{"agentkourier_agent_first_text_duration_seconds", "Execution attempt to its first nonempty text event; recovered snapshots excluded.", []string{"operation"}},
 		{"agentkourier_outbox_delivery_duration_seconds", "Durable row creation to successful delivery or adoption.", []string{"role", "mode"}},
 		{"agentkourier_interaction_wait_seconds", "Interaction creation to its first durable resolution.", []string{"kind", "outcome"}},
+		{webhookAckDuration, webhookAckDurationHelp, []string{"outcome", ConnectionLabel}},
 		{"agentkourier_teams_socket_gap_seconds", "Intervals in which no socket of a teams connection in socket mode was ready, from the start of its run or the end of its last ready socket to the next ready one, or to the end of the run. Teams delivers nothing in them, and does not send it later.", []string{ConnectionLabel}},
 	} {
 		h := prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: d.name, Help: d.help, Buckets: durationBuckets()}, d.labels)
@@ -129,6 +130,7 @@ func New(reg prometheus.Registerer, provider trace.TracerProvider) (*Observer, e
 		{"agentkourier_sessions_active", "Conversation runners currently active in this process.", nil},
 		{"agentkourier_sessions_paused", "Conversation runners currently awaiting input in this process.", nil},
 		{"agentkourier_teams_socket_ready", "Whether a teams connection in socket mode has a ready socket in the region (1) or not (0).", []string{"region", ConnectionLabel}},
+		{webhookLastAccepted, webhookLastAcceptedHelp, []string{ConnectionLabel}},
 		{"agentkourier_teams_graph_channels", "Bound channels of a teams connection, by the state of their Microsoft Graph intake: subscribed (a notificationURL) or polling (none), waiting_group (the Microsoft Entra group of the channel's team is not known yet) or failing (the last call to make or renew its subscription failed, or the app's subscription to the channel for another URL holds it; or Graph refused its poll for good).", []string{"state", ConnectionLabel}},
 	} {
 		g := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: d.name, Help: d.help}, d.labels)
@@ -255,28 +257,42 @@ func Count(ctx context.Context, name string, labels ...string) {
 	}
 }
 
-// webhookRequests is the counter of the requests to a webhook connection, which WebhookRequests records.
-const webhookRequests = "agentkourier_webhook_requests_total"
+// The instruments of a webhook connection, which WebhookRequests records.
+const (
+	// webhookRequests is the counter of the requests to a webhook connection.
+	webhookRequests = "agentkourier_webhook_requests_total"
+	// webhookAckDuration is the histogram of the time a webhook connection took to answer a request.
+	webhookAckDuration     = "agentkourier_webhook_ack_duration_seconds"
+	webhookAckDurationHelp = "Requests to a webhook connection from when its handler was called to their answer, by outcome (the outcomes of agentkourier_webhook_requests_total), including the wait for the broker to take the event."
+	// webhookLastAccepted is the gauge of when a webhook connection last answered a request accepted.
+	webhookLastAccepted     = "agentkourier_webhook_last_accepted_timestamp_seconds"
+	webhookLastAcceptedHelp = "Unix time of the last request a webhook connection answered accepted (200: verified, mapped and taken by the broker, or dropped as one it already had); no series until the first since the broker started."
+)
 
-// WebhookRequests records agentkourier_webhook_requests_total for one webhook connection: the platform is given it when it is built,
-// and counts each answer it gives through it, with no context of the request's or of a Run's. The zero value records nothing.
+// WebhookRequests records the requests of one webhook connection: agentkourier_webhook_requests_total,
+// agentkourier_webhook_ack_duration_seconds and agentkourier_webhook_last_accepted_timestamp_seconds. The platform is given it when it
+// is built, and records each answer it gives through it, with no context of the request's or of a Run's. The zero value records
+// nothing.
 type WebhookRequests struct {
 	vec        *prometheus.CounterVec
+	ack        *prometheus.HistogramVec
+	last       *prometheus.GaugeVec
 	connection string
 }
 
-// WebhookRecorder returns the recorder of agentkourier_webhook_requests_total for connection ("namespace/name"), on the broker's
-// instruments in ctx; with none there, it records nothing. Its series are the connection's, which ForgetConnection deletes.
+// WebhookRecorder returns the recorder of the requests of connection ("namespace/name"), on the broker's instruments in ctx; with none
+// there, it records nothing. Its series are the connection's, which ForgetConnection deletes.
 func WebhookRecorder(ctx context.Context, connection string) WebhookRequests {
 	o := observer(ctx)
 	if o == nil {
 		return WebhookRequests{}
 	}
-	return WebhookRequests{vec: o.counts[webhookRequests], connection: connection}
+	return WebhookRequests{vec: o.counts[webhookRequests], ack: o.histograms[webhookAckDuration], last: o.gauges[webhookLastAccepted],
+		connection: connection}
 }
 
-// Init makes the series of outcome and reason exist, at zero if it did not, so that a rule over it has a value before the first
-// such request. outcome and reason come from the platform's closed sets.
+// Init makes the counter's series of outcome and reason exist, at zero if it did not, so that a rule over it has a value before the
+// first such request. outcome and reason come from the platform's closed sets. It makes no series of the histogram or the gauge.
 func (w WebhookRequests) Init(outcome, reason string) {
 	if w.vec != nil {
 		w.vec.WithLabelValues(outcome, reason, w.connection)
@@ -287,6 +303,20 @@ func (w WebhookRequests) Init(outcome, reason string) {
 func (w WebhookRequests) Count(outcome, reason string) {
 	if w.vec != nil {
 		w.vec.WithLabelValues(outcome, reason, w.connection).Inc()
+	}
+}
+
+// Observe records d, how long a request answered with outcome took, on the histogram; a negative d counts as zero.
+func (w WebhookRequests) Observe(outcome string, d time.Duration) {
+	if w.ack != nil {
+		w.ack.WithLabelValues(outcome, w.connection).Observe(max(d.Seconds(), 0))
+	}
+}
+
+// Accepted sets the gauge to at, as Unix seconds: the time of the connection's last request answered accepted.
+func (w WebhookRequests) Accepted(at time.Time) {
+	if w.last != nil {
+		w.last.WithLabelValues(w.connection).Set(float64(at.Unix()) + float64(at.Nanosecond())/1e9)
 	}
 }
 

@@ -13,8 +13,9 @@ import (
 
 // newWebhookPlatform builds the webhook platform of conn (internal/chat/webhook) from its spec.webhook and the one key of its credentials
 // Secret that its verify scheme reads (v1alpha1.CredentialKeys). Its requests reach it on the chat listener, at
-// /chat/webhook/<namespace>/<name>, and it counts each answer on agentkourier_webhook_requests_total through the broker's instruments in
-// ctx. Any error is a wiring error, which no retry mends: no spec.webhook, or a spec or credential the platform refuses. A credential it
+// /chat/webhook/<namespace>/<name>, and it records each answer through telemetry.WebhookRecorder, on the broker's instruments in ctx:
+// agentkourier_webhook_requests_total, agentkourier_webhook_ack_duration_seconds and
+// agentkourier_webhook_last_accepted_timestamp_seconds. Any error is a wiring error, which no retry mends: no spec.webhook, or a spec or credential the platform refuses. A credential it
 // refuses (empty, a control character such as a trailing newline, a token that is too short) is named by its Secret and key, never by its
 // value.
 func newWebhookPlatform(ctx context.Context, conn Connection, log *slog.Logger, onConnection func(connected bool)) (builtPlatform, error) {

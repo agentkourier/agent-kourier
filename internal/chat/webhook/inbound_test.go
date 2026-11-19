@@ -223,8 +223,10 @@ type failingReader struct{}
 
 func (failingReader) Read([]byte) (int, error) { return 0, errors.New("the client went away") }
 
-// Each answer of the handler is counted exactly once, under its outcome and reason, on the Config's Recorder: before the first Run as
-// well as during and after one. Every outcome and reason the platform has is driven here, so a new one without a case fails.
+// Each answer of the handler is counted exactly once, under its outcome and reason, on the Config's Recorder, and its duration observed
+// once under its outcome; only an accepted one sets the time of the last accepted request, to the Config's clock. That holds before
+// the first Run as well as during and after one. Every outcome and reason the platform has is driven here, so a new one without a
+// case fails.
 func TestEveryOutcomeAndReasonIsCountedOnce(t *testing.T) {
 	rec := &recorder{}
 	cfg := config(rec, nil)
@@ -271,18 +273,18 @@ func TestEveryOutcomeAndReasonIsCountedOnce(t *testing.T) {
 		if s.before != nil {
 			s.before()
 		}
-		before := rec.snapshot()
+		before := rec.recorded()
 		if w := serve(t, p, s.req()); w.Code != s.code {
 			t.Errorf("%s: status %d, want %d", s.series, w.Code, s.code)
 		}
-		checkOneMore(t, s.series, before, rec.snapshot())
+		checkAnswered(t, s.series, before, rec.recorded())
 		covered[s.series] = true
 	}
-	before := rec.snapshot()
+	before := rec.recorded()
 	if w := serve(t, stale, request(`{"ts":1}`, true)); w.Code != http.StatusUnauthorized {
 		t.Errorf("unverified stale: status %d, want 401", w.Code)
 	}
-	checkOneMore(t, "unverified stale", before, rec.snapshot())
+	checkAnswered(t, "unverified stale", before, rec.recorded())
 	covered["unverified stale"] = true
 	// cancelled: a platform whose wait does not end, and a Sink that holds the event until the sender goes away, which it makes
 	// happen, so that nothing but the cancel can end the take.
@@ -291,21 +293,21 @@ func TestEveryOutcomeAndReasonIsCountedOnce(t *testing.T) {
 	held := newPlatform(t, config(rec, nil))
 	held.SetAckWait(time.Hour)
 	running(t, held, &sink{block: true, hook: cancelReq})
-	before = rec.snapshot()
+	before = rec.recorded()
 	if w := serve(t, held, request(event, true).WithContext(reqCtx)); w.Code != http.StatusServiceUnavailable {
 		t.Errorf("cancelled: status %d, want 503", w.Code)
 	}
-	checkOneMore(t, "cancelled none", before, rec.snapshot())
+	checkAnswered(t, "cancelled none", before, rec.recorded())
 	covered["cancelled none"] = true
 	// timeout: a platform with a short wait and a Sink that holds the event, so that nothing but the wait can end the take.
 	slow := newPlatform(t, config(rec, nil))
 	slow.SetAckWait(20 * time.Millisecond)
 	running(t, slow, &sink{block: true})
-	before = rec.snapshot()
+	before = rec.recorded()
 	if w := serve(t, slow, request(event, true)); w.Code != http.StatusServiceUnavailable {
 		t.Errorf("timeout: status %d, want 503", w.Code)
 	}
-	checkOneMore(t, "timeout none", before, rec.snapshot())
+	checkAnswered(t, "timeout none", before, rec.recorded())
 	covered["timeout none"] = true
 	for _, s := range webhook.Series() {
 		if !covered[s] {
@@ -331,6 +333,34 @@ func checkOneMore(t *testing.T, series string, before, after map[string]int) {
 	}
 	if _, ok := after[series]; !ok {
 		t.Errorf("%s: not counted", series)
+	}
+}
+
+// checkAnswered fails t unless one answer of series ("outcome reason") was recorded between before and after: counted once under
+// series (checkOneMore), observed once under its outcome and under no other, and given as the last accepted request's at the Config's
+// clock (epoch) when, and only when, its outcome is accepted.
+func checkAnswered(t *testing.T, series string, before, after recorded) {
+	t.Helper()
+	checkOneMore(t, series, before.counts, after.counts)
+	outcome, _, _ := strings.Cut(series, " ")
+	for _, k := range slices.Sorted(maps.Keys(after.observed)) {
+		want := len(before.observed[k])
+		if k == outcome {
+			want++
+		}
+		if got := len(after.observed[k]); got != want {
+			t.Errorf("%s: %d durations observed under %q, want %d", series, got, k, want)
+		}
+	}
+	if obs := after.observed[outcome]; len(obs) == 0 || obs[len(obs)-1] < 0 {
+		t.Errorf("%s: no nonnegative duration observed under %q: %v", series, outcome, obs)
+	}
+	added := after.accepted[len(before.accepted):]
+	switch {
+	case outcome == "accepted" && (len(added) != 1 || !added[0].Equal(epoch)):
+		t.Errorf("%s: the last accepted request was given as %v, want once at %v", series, added, epoch)
+	case outcome != "accepted" && len(added) != 0:
+		t.Errorf("%s: the last accepted request was given as %v, want nothing for outcome %s", series, added, outcome)
 	}
 }
 
@@ -507,7 +537,8 @@ func TestTheHandlerLogsNoBodyAndNoSignature(t *testing.T) {
 	}
 }
 
-// A request that is not a POST, which the chat listener refuses before it reaches here, is answered 405 and not counted.
+// A request that is not a POST, which the chat listener refuses before it reaches here, is answered 405 and not counted, observed or
+// taken as accepted.
 func TestAMethodOtherThanPostIsRefusedAndNotCounted(t *testing.T) {
 	rec := &recorder{}
 	p := newPlatform(t, config(rec, nil))
@@ -516,7 +547,7 @@ func TestAMethodOtherThanPostIsRefusedAndNotCounted(t *testing.T) {
 	if w := serve(t, p, req); w.Code != http.StatusMethodNotAllowed || w.Header().Get("Allow") != http.MethodPost {
 		t.Errorf("status %d, Allow %q; want 405 and POST", w.Code, w.Header().Get("Allow"))
 	}
-	if got := rec.snapshot(); len(got) != 0 {
-		t.Errorf("counted %v, want nothing", got)
+	if got := rec.recorded(); len(got.counts) != 0 || len(got.observed) != 0 || len(got.accepted) != 0 {
+		t.Errorf("recorded %+v, want nothing", got)
 	}
 }

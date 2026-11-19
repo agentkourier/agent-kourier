@@ -13,11 +13,17 @@ import (
 // count of the events whose handling failed, which the platform delivers again.
 func (h *triggered) intakeErrors(t *testing.T) float64 {
 	t.Helper()
+	return h.intakeCount(t, "error")
+}
+
+// intakeCount reads agentkourier_intake_total{source="message"} of the connection of the test's Intake and the disposition.
+func (h *triggered) intakeCount(t *testing.T, disposition string) float64 {
+	t.Helper()
 	families, err := h.reg.Gather()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{"source": "message", "disposition": "error", "connection": v1alpha1.NamespacedName(h.cfg.Connection.Namespace, h.cfg.Connection.Name)}
+	want := map[string]string{"source": "message", "disposition": disposition, "connection": v1alpha1.NamespacedName(h.cfg.Connection.Namespace, h.cfg.Connection.Name)}
 	for _, f := range families {
 		if f.GetName() != "agentkourier_intake_total" {
 			continue

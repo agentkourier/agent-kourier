@@ -46,7 +46,8 @@ The connection's `spec.webhook` says how to read a delivery:
 Each value is read with a [JSON Pointer](https://www.rfc-editor.org/rfc/rfc6901) into the body, such as `/pull_request/number`, or
 a list of them, where the first that resolves wins. A string resolves to its text, a number to the number as written, and `true` and
 `false` to those words; `null`, an object or an array does not resolve. A field can also be read from a request header, which the
-signature does not cover.
+signature does not cover. So a trigger that matches a header field must also match or exclude a body field that tells its events
+apart: a signed body can be sent again under any header, and the broker remembers only a body whose start was made or refused.
 
 Agent Kourier posts nothing on the service. The Binding's `chat.output` must be `none`: the CRD's default is `live`, and the broker
 refuses `live` and `final` on a webhook connection (`UnsupportedOnPlatform`). Its triggers are all `type: webhookEvent`. The agent
@@ -103,11 +104,11 @@ body, so the same body delivered again is the same event:
 - **A body that started a turn** starts no second one when it comes again. The broker counts it on `agentkourier_intake_total` with
   `disposition="duplicate"` (or `source="reply_queue"`, `disposition="duplicate"` after a restart, when the session finds its turn
   already queued).
-- **A body that matched no trigger** is remembered too: when it comes again it is `duplicate` and starts nothing, even once a
-  trigger has been changed to match it. So after you fix a trigger, a delivery sent again from the service's log starts nothing
-  until the broker has forgotten the body: it remembers a connection's recent events in memory, and forgets them at a restart, at a
-  change of leader, at a restart of a team connection (an edit of its ChatConnection, say), or after enough later events
-  ([Limits](../reference/limits.md#start-investigations-triggers-rates-and-probes)). Test a fixed trigger with a new event.
+- **A body that matched no trigger** starts nothing and is not remembered. The broker counts it on `agentkourier_intake_total` with
+  `disposition="trigger_unmatched"` and on `agentkourier_trigger_unmatched_total` of the Binding, and logs it at DEBUG,
+  `chat: webhook event matched no trigger`. When it comes again it is tried against the triggers again, and counted again if it still
+  matches none. So after you fix a trigger, the same delivery sent again from the service's log is decided again, and starts the
+  turn unless the trigger's limits, the session of its thread or a refused prompt stop it, as below.
 - **An event of a channel that no Binding names** starts nothing and is not remembered: once a Binding names the channel, the same
   body delivered again is tried against its triggers.
 - **A start that a trigger's limits stopped** gets a `200` response all the same. No turn starts, no digest line is posted (the platform
@@ -272,7 +273,10 @@ the first unverified request at least `1m` after the last WARN logs, with `since
 
 With Prometheus, `sum by (outcome, reason) (increase(agentkourier_webhook_requests_total{connection="acme-webhooks/github"}[1h]))`
 shows what the connection responded. Each of its series exists at 0 from when the connection's run starts, so a rule on it has a value
-after a restart. [Export metrics and traces](export-telemetry.md#alert-on-webhook-deliveries) has rules for webhook connections.
+after a restart. `time() - agentkourier_webhook_last_accepted_timestamp_seconds{connection="acme-webhooks/github"}` is how many
+seconds ago the connection last responded `accepted`; the series exists from the first such delivery after the broker starts.
+`agentkourier_webhook_ack_duration_seconds` is how long the connection took to respond, by `outcome`: for a verified delivery, the
+time that its line gives as `duration_ms`. [Export metrics and traces](export-telemetry.md#alert-on-webhook-deliveries) has rules for webhook connections.
 
 ## When nothing happens
 
@@ -283,7 +287,7 @@ The counts below are on the leader's `/metrics` ([Export metrics and traces](exp
 | The connection's series of `agentkourier_webhook_requests_total` are missing | The connection does not run. The log says why at WARN: `the ChatConnection cannot be started`, with an error that names the Secret and the key for a credential that is empty, holds a control character such as a trailing newline, or is a token shorter than 32 bytes. Make the Secret again from a file with no newline. |
 | Every series at 0 | The deliveries did not reach the connection. `agentkourier_chat_listener_requests_total` says what the listener did. The likely mistake is a URL whose namespace or name is wrong: it gets the response `503`, `no_route`, counted with `platform="webhook"` and `connection="unknown"`, and each try the service makes of it gets that response again, until the URL is fixed. The connection's own name is the label only while the leader serves that name, so `no_route` under it is a connection the leader serves that does not run yet. The other outcomes: `busy` a full listener (503), `too_large` a body over `1 MiB` (413), `unreadable` a body the listener could not read whole (400), `method` a method other than `POST` (405, under `connection="unknown"`), and `not_found` a path that is not `/chat/<platform>/<namespace>/<name>`, such as one without `/chat/webhook/` (404, under `platform="other"` and `connection="unknown"`). With no count there either, nothing reached the listener: the service's webhook is not active, or the listener is not exposed. |
 | The service shows `413` | The body is over `1 MiB`: `too_large` on `agentkourier_chat_listener_requests_total`. The connection never sees it, and no setting raises the bound. |
-| The service shows `503` | The connection's counter says which: `not_running` (the run is not taking requests; `agentkourier_chat_connected{connection="<namespace>/<name>"}` is not 1), `withheld` (the broker could not take the event; the intake logs why), `timeout` (not taken within `2s`) or `cancelled` (the service hung up first). With none of those, the listener responded: `no_route` or `busy` above. With neither counter, something in front of the chat Service responded: no replica leads, or the leader's pod is not labelled yet. The [table above](#what-a-taken-event-does) says what each service then does. |
+| The service shows `503` | The connection's counter says which: `not_running` (the run is not taking requests; `agentkourier_chat_connected{connection="<namespace>/<name>"}` is not 1), `withheld` (the broker could not take the event; the intake logs why), `timeout` (not taken within `2s`; `agentkourier_webhook_ack_duration_seconds{outcome="accepted"}` shows whether the events taken come near it) or `cancelled` (the service hung up first). With none of those, the listener responded: `no_route` or `busy` above. With neither counter, something in front of the chat Service responded: no replica leads, or the leader's pod is not labelled yet. The [table above](#what-a-taken-event-does) says what each service then does. |
 | `unverified`, `unsigned` | The request has no verify header: the service sends no signature (its secret is not set), or `verify.header` is not the header it signs in. |
 | `unverified`, `bad_signature` | The secret is not the service's, or `verify.prefix` is not the text before the signature. Copy the secret into the service again from the file the Secret was made from. |
 | `unverified`, `stale` | With `verify.timestamp`, the delivery's time is outside the window of the broker's clock, or the body has no time there: check the node's time sync, or widen the window (at most `10m`). A delivery that the service sends again with its first time is refused so once the window has passed. |
@@ -293,5 +297,5 @@ The counts below are on the leader's `/metrics` ([Export metrics and traces](exp
 | `unmapped`, `bad_id` or `no_thread` | The thread's field is not an identifier, holds a `:`, or is missing: an event the connection's thread does not fit, such as a comment on a plain issue where the thread is a pull request's number. |
 | `self` for a person's event | `identity` is a person's, or one of `actor.from` names someone other than who caused the event. |
 | `ignored`, `no_actor` | No actor pointer resolved. |
-| `accepted`, and no turn | `agentkourier_intake_total{connection="<namespace>/<name>"}` says what the intake did: `ignored` is a channel that no Binding of the connection names, `trigger_unmatched` an event that no trigger matched (`agentkourier_trigger_unmatched_total` of the Binding counts it too, and the DEBUG log names it), and `duplicate` a body the connection already took, whether it started a turn or matched no trigger, so a body sent again after a fix of its trigger is `duplicate` too, until the broker forgets it ([above](#what-a-taken-event-does)). A trigger's limits can stop it: `agentkourier_trigger_limited_total` rises, and the WARN line above names the delivery, which is lost unless it is delivered again. A refused prompt counts on `agentkourier_trigger_refused_total`. |
+| `accepted`, and no turn | `agentkourier_intake_total{connection="<namespace>/<name>"}` says what the intake did: `ignored` is a channel that no Binding of the connection names, `trigger_unmatched` an event that no trigger matched (`agentkourier_trigger_unmatched_total` of the Binding counts it too, and the DEBUG log names it), and `duplicate` a body that already started a turn, or whose start was refused. A body that matched no trigger is not remembered, so once its trigger is fixed, the same delivery sent again is decided again ([above](#what-a-taken-event-does)). A trigger's limits can stop it: `agentkourier_trigger_limited_total` rises, and the WARN line above names the delivery, which is lost unless it is delivered again. A refused prompt counts on `agentkourier_trigger_refused_total`. |
 | A turn, and nothing on the service | The agent's tools or its account: check the agent's own logs. Agent Kourier posts nothing on the service. |

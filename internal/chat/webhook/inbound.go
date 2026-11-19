@@ -77,13 +77,13 @@ func (p *Platform) serve(w http.ResponseWriter, req *http.Request) {
 	body, err := io.ReadAll(req.Body) // the chat listener has read it whole and capped it: this reads memory
 	if err != nil {
 		p.log.DebugContext(ctx, "webhook: a request was refused: its body could not be read", "connection", p.conn)
-		p.answer(w, result{outcomeMalformed, reasonUnreadable})
+		p.answer(w, start, result{outcomeMalformed, reasonUnreadable})
 		return
 	}
 	if reason := p.v.verify(req.Header, body, p.now()); reason != "" {
 		p.log.DebugContext(ctx, "webhook: a request was refused: it is not verified", "connection", p.conn, "reason", reason, "bytes", len(body))
 		p.unverifiedSummary(ctx, reason)
-		p.answer(w, result{outcomeUnverified, reason})
+		p.answer(w, start, result{outcomeUnverified, reason})
 		return
 	}
 	sum := sha256.Sum256(body)
@@ -95,12 +95,18 @@ func (p *Platform) serve(w http.ResponseWriter, req *http.Request) {
 	// The Sink's error is not logged: the intake logs its own failures, and an error from further down may quote a value.
 	p.log.InfoContext(ctx, "webhook: delivery answered", "connection", p.conn, "outcome", res.outcome, "reason", res.reason,
 		"delivery", delivery, "event", id, "bytes", len(body), "duration_ms", time.Since(start).Milliseconds())
-	p.answer(w, res)
+	p.answer(w, start, res)
 }
 
-// answer counts res and writes its answer.
-func (p *Platform) answer(w http.ResponseWriter, res result) {
+// answer records res and writes its answer: it counts res, observes the time since start (when the handler was called) under its
+// outcome, and, for accepted, gives the clock's time as the last accepted request's. It records before it writes, so that what the
+// sender sees has been recorded; the answer is a status line and a short body, which the handler's return sends.
+func (p *Platform) answer(w http.ResponseWriter, start time.Time, res result) {
 	p.rec.Count(res.outcome, res.reason)
+	p.rec.Observe(res.outcome, time.Since(start))
+	if res.outcome == outcomeAccepted {
+		p.rec.Accepted(p.now())
+	}
 	code := http.StatusOK
 	switch res.outcome {
 	case outcomeUnverified:
