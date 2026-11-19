@@ -685,10 +685,19 @@ Rules:
   messages; until the channel has its `deltaLink`, each poll makes a catch-up read of it, and past 500 pages the channel is failing and
   read by its catch-up read alone. Each poll reads the newest replies of the 3 newest threads it saw begin within the last hour, and of
   those read at the poll before (at most 6 reads); a reply is new when no read gave it and it was made at most 30 s before the newest
-  read in its thread. Reads are one at a time, 250 ms apart, and a 429 pauses them all. The read position lives in memory only: a run's
-  start, a socket gap's end and a `missed` notification each make a catch-up read of the 20 newest threads with their replies and hand
-  on what was posted within the last 10 minutes (the receiver's dedup window), never further back, a retried catch-up included. A
-  repeat is dropped by the receiver's recent set and, across a restart, in the store: a keyed trigger finds its thread
+  read in its thread. Reads are one at a time, 250 ms apart, and a 429 pauses them all. The read position of each channel is kept in the
+  store (`teams_poll_positions`, TEAMS-PP, built 2026-11-19; it was in memory only before): the `deltaLink` of the channel's last delta
+  read whose messages the channel's lane has handed on, and when that poll began, written by the leader (fenced) at most once a minute
+  while the `deltaLink` changes and once its stored time is 10 minutes old while it does not. A run's first poll of a channel resumes its
+  delta from the stored position, unless it is more than an hour old or its time more than the 30 s skew ahead of the broker's clock (then
+  WARN, and the channel is read anew); a stored `deltaLink` that Graph refuses is a reset, as at any poll. A stored position that cannot
+  be read fails the poll (backoff); a write refused because the broker no longer leads stops the polls (`teams.ErrNotLeader` over
+  `store.ErrDeposed`); another failed write is a WARN, retried a minute later. The poller deletes an unbound channel's position, and the
+  leader a deleted ChatConnection's with its `teams_conversations`. The replies read of each thread stay in memory: a run's start, a
+  socket gap's end and a `missed` notification each make a catch-up read of the 20 newest threads with their replies and hand on what
+  was posted within the last 10 minutes (the receiver's dedup window), never further back, a retried catch-up included; at a run's start
+  it is kept beside a resumed delta, which gives no reply in an older thread. A repeat (the stored position is up to a minute behind what
+  was handed on) is dropped by the receiver's recent set and, across a restart, in the store: a keyed trigger finds its thread
   (`DecisionDedup`); an unthreaded start's `Submit` carries `MessageID = chat.MessageID(ref)`, and `reply_queue`'s `ON CONFLICT (id) DO
   NOTHING` queues no second turn (`intake_total{reply_queue,duplicate}`); a limited start is `Again`. No trigger fires a second
   investigation; `trigger_matched_total` and `trigger_decisions_total` count the re-read again.

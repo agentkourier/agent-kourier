@@ -1054,6 +1054,10 @@ its chat listener, or in `socket` mode, with what [What each platform supports](
   teams connection, and on custom resources deletes a connection's rows when its ChatConnection is deleted. It only adds a table. A broker of
   an earlier release, after a rollback, does not read the table or delete from it, and logs at start that the database schema is newer than
   its build.
+- **A database migration, 0032, runs at the first start.** On SQLite and on Postgres it adds the table `teams_poll_positions`, which keeps
+  where the polls of each channel of a teams connection with no `notificationURL` stand, so that a restart or a change of leader resumes
+  them ([Stored data](../reference/stored-data.md)). It only adds a table. A broker of an earlier release, after a rollback, does not read
+  it or delete from it, and logs at start that the database schema is newer than its build.
 
 ### Roll back from the release that takes Microsoft Teams ChatConnections
 
@@ -1064,4 +1068,4 @@ not served; a teams ChatConnection, which has no status, is refused when the bro
 start (exit code 2), and as a team's it is not served and each of its Bindings says `ConnectionRejected`. The CRDs of an earlier release do not
 have `spec.teams` and hold each chat ID to Slack's shape and caps, so the API server refuses a new write of such an object. No other stored
 object depends on this release. On custom resources, a teams ChatConnection deleted while this release still runs also takes its rows of
-`teams_conversations` with it; on the ConfigMap route, and for one deleted after the rollback, the rows stay, and an earlier release does not read them.
+`teams_conversations` and `teams_poll_positions` with it; on the ConfigMap route, and for one deleted after the rollback, the rows stay, and an earlier release does not read them.

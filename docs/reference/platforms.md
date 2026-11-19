@@ -303,22 +303,32 @@ at the next poll round once an activity has told the group: at once, or as soon 
   trigger names its app, a person's post is the person's, Agent Kourier's own posts, system events and deleted messages are dropped, and a
   post that also came as an activity is handed on once, whichever comes first. What a read gives goes on its channel's lane, and the
   read's `deltaLink` is kept only after that, so a read whose lane had no room is made again.
-- **What it holds.** The `deltaLink` and the replies read of each thread are kept in memory. A run begins anew: its first reads of a
-  channel page through Graph's delta to a fresh `deltaLink`, at most 5 pages at each poll and 500 in all, and hand on nothing from those
-  pages, which hold the channel's history. Until the channel has its `deltaLink`, each of its polls makes a catch-up read
-  ([Catch-up reads](#catch-up-reads)), the first of what was posted in the 10 minutes before, so a channel with a long history hands on
-  its new posts while it is read to its `deltaLink`. Nothing older than the 10 minutes is read on a start, so an old alert does not fire
-  a trigger. A channel whose delta names no `deltaLink` within 500 pages counts as `failing`, logged once at WARN, and is read by its
-  catch-up read alone, each interval, until the run ends (a restart or a change of leader) or no Binding names it and one names it again,
-  when it is read to its `deltaLink` anew. A channel that no Binding names any longer is forgotten.
+- **What it holds.** Where each channel's delta stands, the `deltaLink` of its last read whose messages the lane has handed on and when
+  that poll began, is kept in the broker's store ([Stored data](stored-data.md)), written at most once a minute while the `deltaLink`
+  changes and every 10 minutes while it does not ([Limits](limits.md#run-the-broker)). The replies read of each thread are kept in
+  memory. A run's first poll of a channel reads its stored position and resumes the delta from it, so a post made while no broker polled
+  (a restart, a change of leader) is handed on if it was made no earlier than 30 seconds before the stored poll began. A run reads the
+  channel anew when it has no stored position, when the position is more than an hour old, or when its time is more than 30 seconds
+  ahead of the broker's clock (the last two logged at WARN): its first reads page through Graph's delta to a fresh `deltaLink`, at most 5
+  pages at each poll and 500 in all, and hand on nothing from those pages, which hold the channel's history. Until the channel has its
+  `deltaLink`, each of its polls makes a catch-up read ([Catch-up reads](#catch-up-reads)), the first of what was posted in the 10
+  minutes before, so a channel with a long history hands on its new posts while it is read to its `deltaLink`. A channel read anew hands
+  on nothing older than the 10 minutes, and a resumed one nothing posted before its stored poll, at most an hour back, so an old alert
+  does not fire a trigger. A channel whose delta names no `deltaLink` within 500 pages counts as `failing`, logged once at WARN, and is
+  read by its catch-up read alone, each interval, until the run ends (a restart or a change of leader) or no Binding names it and one
+  names it again, when it is read to its `deltaLink` anew. A channel that no Binding names any longer is forgotten, and its stored
+  position deleted: a Binding that names it again reads it anew, and what was posted meanwhile is not handed on.
 - **Errors.** Graph's 429 pauses every read of the connection for its `Retry-After`, since Graph throttles an app in a tenant, and ends the
   channel's poll. A 403 (the app may not read the channel's messages: install or update the app in the team), a 401, a 404 or a 400 of
   a channel's delta or catch-up read ends the channel's poll and counts the channel as `failing`, logged once at WARN. Another failure is
   logged at DEBUG, and the rest of the poll is made: a delta read that fails still leaves the channel's replies and its due catch-up read
   to be read. A channel whose poll fails is read again after 10 seconds, twice as long after each further failure, up to 5 minutes; the
-  other channels go on. A `deltaLink` that Graph no longer takes (410, or a 400 that asks for a new sync, by Microsoft's documentation; not
-  measured) is logged at WARN, and the channel is read to a new `deltaLink` as at a start, with a catch-up read of what was posted since
-  the last poll, within the 10 minutes.
+  other channels go on. A `deltaLink` that Graph no longer takes, the stored one included (410, or a 400 that asks for a new sync, by
+  Microsoft's documentation; not measured), is logged at WARN, and the channel is read to a new `deltaLink` as at a start, with a
+  catch-up read of what was posted since the last poll, within the 10 minutes. A stored position that cannot be read fails the channel's
+  poll, which is made again after the same backoff. A write of a position that fails is logged once at WARN, until one succeeds, and
+  tried again a minute later; the channel is polled on. A write that the store refuses because the broker no longer leads stops the
+  connection's polls; on Postgres the process then exits, as on any write a replaced leader makes.
 - **Cost.** A connection makes at most 4 reads a second, one at a time, at least 250 milliseconds apart: 240 reads a minute, which no
   setting changes. Once it has its `deltaLink`, a channel costs one delta read and 3 reads of replies each 10 seconds; at a poll that
   finds new threads, 4 to 6 reads of replies (6 when three or more threads begin): 24 to 42 reads a minute. While it is read to its
@@ -343,8 +353,11 @@ at most, the window in which that memory holds a message, so nothing that was ha
 catch-up read that fails is made at the channel's next poll, looking back 10 minutes from then. A reply in a thread past the 20 newest is
 not recovered, nor anything posted earlier than the look-back.
 
-- **At the start of a run**, on a connection that polls: what was posted in the 10 minutes before. That covers a change of leader and a
-  restart, in `socket` mode the activities that came while no socket was connected included.
+- **At the start of a run**, on a connection that polls: what was posted in the 10 minutes before, whether the channel's delta resumes
+  from its stored position or not. The resumed delta gives the new threads posted while no broker polled, but not the replies in threads
+  that began earlier, and the threads whose replies a poll reads are held in memory: this read gives those replies, within the 10
+  minutes, and the threads to read the replies of. That covers a change of leader and a restart, in `socket` mode the activities that came
+  while no socket was connected included.
 - **While a channel has no `deltaLink`** (its first reads in a run, a new sync after Graph refused its `deltaLink`, or a channel past the 500
   pages): at each poll, what was posted since the last catch-up read of the channel began, less 30 seconds.
 - **When a gap of the sockets ends** (`socket` mode): with no `notificationURL`, every channel is read at once, its delta and its recent
@@ -352,8 +365,9 @@ not recovered, nor anything posted earlier than the look-back.
   read: Graph notified the posts of the gap all the same (measured on a test tenant in November 2026), mentions included.
 - **On Graph's `missed`** (a `notificationURL`): what was posted in the channel in the 10 minutes before.
 
-**After a restart.** What a run handed on is held in memory, so a post that a catch-up read gives again after a restart is handed on
-again. The broker keeps in its store what such a post did, and drops it there: a trigger that threads by key finds the thread the message
+**After a restart.** What a run handed on is held in memory, so a post that a catch-up read, or a delta resumed from the stored
+position, gives again after a restart is handed on again: the stored position is the last one written, up to a minute behind what the
+run had handed on. The broker keeps in its store what such a post did, and drops it there: a trigger that threads by key finds the thread the message
 already opened; a trigger that starts a turn of its own finds that turn, which is named by the message, queued already, and starts no
 second investigation; a start that a trigger's limits stopped is not counted or told again; and a trigger's note is one row whatever asks
 for it. The intake's metrics count the post again: `agentkourier_trigger_matched_total` and `agentkourier_trigger_decisions_total`, and,

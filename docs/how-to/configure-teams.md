@@ -35,8 +35,11 @@ because they decide whether you need a public HTTPS route to the broker.
       broker reads nothing back when its run starts. What was posted meanwhile reaches it only if Graph sends again the
       notifications it could not deliver, which Microsoft's documentation says it does for up to 4 hours (not measured),
       or if Graph reports them as `missed`, after which the broker reads the channel's last 10 minutes.
-    - When it polls, the broker reads back up to the last 10 minutes of the gap, and at the start of a run the
-      10 minutes before it ([Catch-up reads](../reference/platforms.md#catch-up-reads)).
+    - When it polls, the broker reads back up to the last 10 minutes of the gap. At the start of a run it resumes each
+      channel's delta from the position that the last run stored, for up to an hour, so the threads begun meanwhile, a
+      mention that begins one included, come back; replies in older threads come back from the 10 minutes before the run
+      ([Polling without a notificationURL](../reference/platforms.md#polling-without-a-notificationurl),
+      [Catch-up reads](../reference/platforms.md#catch-up-reads)).
 
 **How the broker reads other apps' posts**, such as an alert card that Workflows posts: `spec.teams.notificationURL`.
 Teams sends a bot no post of another app, in either mode (measured, and Microsoft's documentation says so), so the broker
