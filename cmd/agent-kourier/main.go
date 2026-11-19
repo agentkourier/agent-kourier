@@ -38,6 +38,12 @@
 //	                       timings (defaults 15s, 10s and 2s). A standby takes over about a lease duration after the leader's
 //	                       last renewal; the leader gives up renewing after the renew deadline
 //	AGENTKOURIER_LISTEN         the address of /healthz, /readyz and /metrics (default :8080)
+//	AGENTKOURIER_CHAT_LISTEN    the address of the chat listener, which a chat platform sends its requests to (POST
+//	                       /chat/<platform>/<namespace>/<name>); unset, the broker opens no such port. It is apart from
+//	                       AGENTKOURIER_LISTEN so that /metrics is never on the port a platform reaches
+//	AGENTKOURIER_POD_NAMESPACE  with AGENTKOURIER_CHAT_LISTEN, optional: the pod's namespace, which, with AGENTKOURIER_POD_NAME (then
+//	                       required, with either store), has the leader label its own pod agentkourier.dev/role=leader for the chat
+//	                       listener's Service; every replica takes the label off its pod as it starts. Refused without a chat listener
 //	AGENTKOURIER_SYNC_TIMEOUT   how long to wait for the Secret caches (default 30s)
 //	AGENTKOURIER_KLOG_V         client-go's verbosity, held below 8 (default 0)
 //	AGENTKOURIER_LOG_LEVEL      debug, info, warn or error (default info)
@@ -91,11 +97,11 @@ var version = "dev"
 
 // The exit codes.
 const (
-	exitOK        = 0
-	exitSlackAuth = 1 // Slack rejected the tokens of the broker's own connection: a restart would be rejected again
-	exitUsage     = 2 // the config, the wiring or an environment variable is wrong
-	exitRBAC      = 3 // the API server denied access to Secrets or, with crds, to the custom resources
-	exitFailure   = 4 // anything else: a dependency failed
+	exitOK       = 0
+	exitChatAuth = 1 // the chat platform rejected the credentials of the broker's own connection: a restart would be rejected again
+	exitUsage    = 2 // the config, the wiring or an environment variable is wrong
+	exitRBAC     = 3 // the API server denied access to Secrets or, with crds, to the custom resources
+	exitFailure  = 4 // anything else: a dependency failed
 )
 
 func main() {
@@ -107,8 +113,8 @@ func exitCode(err error) int {
 	switch {
 	case err == nil:
 		return exitOK
-	case errors.Is(err, broker.ErrSlackAuth):
-		return exitSlackAuth
+	case errors.Is(err, broker.ErrChatAuth):
+		return exitChatAuth
 	case errors.Is(err, k8ssecrets.ErrAccessDenied), errors.Is(err, crsource.ErrAccessDenied):
 		return exitRBAC
 	case errors.Is(err, broker.ErrWiring):
@@ -120,6 +126,8 @@ func exitCode(err error) int {
 // envConfig is what the environment says.
 type envConfig struct {
 	configDir, dbPath, listen   string
+	chatListen                  string        // the chat listener's address, "" for none
+	leaderPod                   broker.PodRef // the pod the leader labels for the chat Service, zero for none
 	configSource                broker.ConfigSource
 	chatConnection              v1alpha1.ObjectRef // with crds only: the broker's own ChatConnection, zero when it has none (spec D53)
 	connectionNamespaces        []string           // with crds only: the admission list, none when unset
@@ -138,7 +146,7 @@ func (c envConfig) runConfig() broker.RunConfig {
 	return broker.RunConfig{
 		ConfigSource: c.configSource, ChatConnection: c.chatConnection, ConnectionNamespaces: c.connectionNamespaces, ConnectionNamespaceSelector: c.connectionNamespaceSelector,
 		ConfigDir: c.configDir, DBPath: c.dbPath, Store: c.store, Election: c.election, SyncTimeout: c.syncTimeout, KlogVerbosity: c.klogV,
-		Telemetry: c.telemetry, AuditRetention: c.auditRetention,
+		Telemetry: c.telemetry, AuditRetention: c.auditRetention, LeaderPod: c.leaderPod,
 	}
 }
 
@@ -151,7 +159,8 @@ func loadEnv(getenv func(string) string) (envConfig, error) {
 		}
 		return def
 	}
-	c := envConfig{configDir: get("AGENTKOURIER_CONFIG_DIR", "/etc/agent-kourier"), dbPath: get("AGENTKOURIER_DB_PATH", "/data/agent-kourier.db"), listen: get("AGENTKOURIER_LISTEN", ":8080")}
+	c := envConfig{configDir: get("AGENTKOURIER_CONFIG_DIR", "/etc/agent-kourier"), dbPath: get("AGENTKOURIER_DB_PATH", "/data/agent-kourier.db"), listen: get("AGENTKOURIER_LISTEN", ":8080"),
+		chatListen: getenv("AGENTKOURIER_CHAT_LISTEN")}
 	bad := func(key string, want string, err error) error {
 		return fmt.Errorf("%w: %s is %q, want %s: %w", broker.ErrWiring, key, getenv(key), want, err)
 	}
@@ -189,6 +198,9 @@ func loadEnv(getenv func(string) string) (envConfig, error) {
 		return c, err
 	}
 	if c.election, err = loadElectionEnv(getenv, c.store.Kind); err != nil {
+		return c, err
+	}
+	if c.leaderPod, err = loadLeaderPodEnv(getenv, c.chatListen); err != nil {
 		return c, err
 	}
 	c.telemetry, err = telemetry.LoadConfig(getenv)
@@ -421,6 +433,25 @@ func loadElectionEnv(getenv func(string) string, kind broker.StoreKind) (broker.
 	return c, nil
 }
 
+// loadLeaderPodEnv reads the pod the leader labels for the chat Service: AGENTKOURIER_POD_NAMESPACE, which turns the label on, and
+// AGENTKOURIER_POD_NAME, the pod's own name as the downward API gives it (not the election's identity, which run makes unique to the
+// process). Unset, no pod is labeled. The label is for the chat listener's Service alone, so a namespace without a chat listener is
+// refused, as a variable that would be ignored, and so is a namespace without a name.
+func loadLeaderPodEnv(getenv func(string) string, chatListen string) (broker.PodRef, error) {
+	ns := getenv("AGENTKOURIER_POD_NAMESPACE")
+	if ns == "" {
+		return broker.PodRef{}, nil
+	}
+	if chatListen == "" {
+		return broker.PodRef{}, fmt.Errorf("%w: AGENTKOURIER_POD_NAMESPACE is set without AGENTKOURIER_CHAT_LISTEN: the leader labels its pod only for the chat listener's Service, so set both or unset it", broker.ErrWiring)
+	}
+	name := getenv("AGENTKOURIER_POD_NAME")
+	if name == "" {
+		return broker.PodRef{}, fmt.Errorf("%w: AGENTKOURIER_POD_NAME is required with AGENTKOURIER_POD_NAMESPACE: it names the pod the leader labels", broker.ErrWiring)
+	}
+	return broker.PodRef{Namespace: ns, Name: name}, nil
+}
+
 // uniqueIdentity makes the pod's name the name of this process: a container that restarts in the same pod is a new
 // process, and must not take the Lease its predecessor held for its own (broker.ElectionConfig.Identity).
 func uniqueIdentity(pod string) (string, error) {
@@ -469,6 +500,13 @@ func run(args []string, ver string, stdout, stderr io.Writer, getenv func(string
 		return fail(stderr, fmt.Errorf("listen on %s: %w", env.listen, err))
 	}
 	defer func() { _ = ln.Close() }()
+	var chatLn net.Listener
+	if env.chatListen != "" {
+		if chatLn, err = (&net.ListenConfig{}).Listen(context.Background(), "tcp", env.chatListen); err != nil {
+			return fail(stderr, fmt.Errorf("listen on %s: %w", env.chatListen, err))
+		}
+		defer func() { _ = chatLn.Close() }()
+	}
 
 	if env.store.Kind == broker.StorePostgres {
 		if env.election.Identity, err = uniqueIdentity(env.election.Identity); err != nil {
@@ -476,7 +514,7 @@ func run(args []string, ver string, stdout, stderr io.Writer, getenv func(string
 		}
 	}
 	cfg := env.runConfig()
-	cfg.Listener, cfg.Logger, cfg.ServiceVersion = ln, log, ver
+	cfg.Listener, cfg.ChatListener, cfg.Logger, cfg.ServiceVersion = ln, chatLn, log, ver // chatLn is nil when unset: no chat listener
 	applyTestHooks(log)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

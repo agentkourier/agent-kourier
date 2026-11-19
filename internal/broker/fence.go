@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
@@ -226,6 +227,11 @@ func (p fencedPlatform) MarkBusy(ctx context.Context, t chat.Target, busy bool) 
 	}
 	return p.Platform.MarkBusy(ctx, t, busy)
 }
+
+// HTTPHandler passes the handler of p's inbound requests through (chat.HTTPReceiver), and false when p offers none. A request that
+// comes in is no write to the chat: it is served only while the connection runs on the leader (runtimeHost.route), and what the
+// handler then writes goes through the store, whose epoch fences it, and through this platform.
+func (p fencedPlatform) HTTPHandler() (http.Handler, bool) { return receiverOf(p.Platform) }
 
 type fencedStream struct {
 	chat.Stream

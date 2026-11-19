@@ -79,8 +79,67 @@ func TestDeliversSubmittedInputs(t *testing.T) {
 		{User: "U1", Channel: "C1", MessageTS: ts, ThreadTS: root.TS, ActionID: "submit", BlockID: "act", Value: "int-1", Inputs: unanswered},
 		{User: "U2", Channel: "C1", MessageTS: ts, ThreadTS: root.TS, ActionID: "submit", BlockID: "act", Value: "int-1", Inputs: answered},
 	}
-	if got := sk.interactions(); !reflect.DeepEqual(got, want) {
+	got := sk.interactions()
+	if len(got) != 2 || got[0].Delivery == "" || got[0].Delivery == got[1].Delivery {
+		t.Fatalf("interactions = %+v; want two, each with a delivery key of its own", got)
+	}
+	for i := range got {
+		got[i].Delivery = ""
+	}
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("interactions =\n%+v\nwant\n%+v", got, want)
+	}
+}
+
+// TestAPressDeliveredAgainHasTheSameKey: a press is keyed by who pressed, the message, the button and the action's action_ts, so a
+// payload delivered twice gives one key, and another click, the same person's on the same button included, another. An action with
+// no action_ts has no key.
+func TestAPressDeliveredAgainHasTheSameKey(t *testing.T) {
+	fake, sk := setup(t)
+	action := func(ts string) []any {
+		return []any{map[string]any{"type": "button", "action_id": "go", "block_id": "b", "value": "v", "action_ts": ts}}
+	}
+	payloads := []map[string]any{
+		press(map[string]any{"actions": action("1700000000.000100")}), // one press, delivered twice
+		press(map[string]any{"actions": action("1700000000.000100")}),
+		press(map[string]any{"actions": action("1700000000.000200")}),                                     // the same person's second click
+		press(map[string]any{"user": map[string]any{"id": "U2"}, "actions": action("1700000000.000100")}), // another person, at that time
+		press(nil), // no action_ts
+	}
+	for _, p := range payloads {
+		waitAck(t, fake, sendInteraction(t, fake, p))
+	}
+	got := sk.interactions()
+	if len(got) != len(payloads) {
+		t.Fatalf("%d interactions; want %d", len(got), len(payloads))
+	}
+	if got[0].Delivery == "" || got[1].Delivery != got[0].Delivery {
+		t.Errorf("one payload delivered twice has the keys %q and %q; want one key", got[0].Delivery, got[1].Delivery)
+	}
+	if got[2].Delivery == "" || got[3].Delivery == "" || got[2].Delivery == got[0].Delivery || got[3].Delivery == got[0].Delivery || got[2].Delivery == got[3].Delivery {
+		t.Errorf("the keys of a second click and of another person are %q and %q, beside %q; want each its own", got[2].Delivery, got[3].Delivery, got[0].Delivery)
+	}
+	if got[4].Delivery != "" {
+		t.Errorf("a press with no action_ts has the key %q; want none", got[4].Delivery)
+	}
+}
+
+// TestTwoClicksByOnePersonHaveTwoKeys: over Socket Mode, the same person's two clicks of one button are two presses, each with a
+// key of its own (the fake Slack gives each click an action_ts of its own, as Slack is assumed to).
+func TestTwoClicksByOnePersonHaveTwoKeys(t *testing.T) {
+	fake, sk := setup(t)
+	ts := prompt(t, fake)
+	var ids []string
+	for range 2 {
+		id, err := fake.Click("U1", ts, "submit", "int-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	waitAck(t, fake, ids...)
+	if got := sk.interactions(); len(got) != 2 || got[0].Delivery == "" || got[0].Delivery == got[1].Delivery {
+		t.Errorf("interactions = %+v; want two, with two keys", got)
 	}
 }
 

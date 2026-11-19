@@ -52,6 +52,11 @@ type Target struct {
 	// away removes the condition (and calls OnDrop), and an edit that changes the groups is probed at the next pass like any other
 	// change of the Revision. The checker is given the slice as it is: it must not change it.
 	ApproverGroups []string
+	// AcknowledgmentUnshown says that the Binding's acknowledgment is enabled and names a reaction, and that the platform of its
+	// connection has no reactions, so no message shows it. The Prober then holds an AcknowledgmentShown condition for the Binding,
+	// False with NoReactions, which it sets at each pass with no probe of its own; it reads the field at each Tick as it reads
+	// ApproverGroups, so an edit that sets it makes the condition Pending and one that clears it removes the condition (OnDrop).
+	AcknowledgmentUnshown bool
 }
 
 // AgentChecker probes the agent backend of a Binding. It sets BackendReachable.
@@ -189,10 +194,10 @@ type Options struct {
 	// Every OnTransition call for a Binding comes before the OnPrune call that names it, and none follows it. It
 	// must not block, for the reason given at OnTransition, and a panic is recovered and reported to OnProbeError.
 	OnPrune func(names []string)
-	// OnDrop is called on Run's goroutine with the key (namespace/name) of a Binding and the type of a condition (ApproversReadable) that
-	// the Prober has removed from the State because the Binding no longer asks for it: an edit took its groups away, or the Binding was
-	// deleted and made again without them. It is for a consumer that keeps something for each condition, such as a series. Every
-	// OnTransition call for that condition of that Binding comes before the OnDrop call, and none follows it until the Binding gains groups again, when the condition is new and its transitions begin anew. The change of Ready that
+	// OnDrop is called on Run's goroutine with the key (namespace/name) of a Binding and the type of a condition (ApproversReadable or AcknowledgmentShown) that
+	// the Prober has removed from the State because it no longer applies to the Binding: an edit took its groups away, or made its
+	// acknowledgment shown, or the Binding was deleted and made again without them. It is for a consumer that keeps something for each condition, such as a series. Every
+	// OnTransition call for that condition of that Binding comes before the OnDrop call, and none follows it until the condition applies again, when the condition is new and its transitions begin anew. The change of Ready that
 	// the removal causes is reported to OnTransition first (when the removal leaves the Binding with no probed condition, it leaves the State, OnDrop
 	// fires with no Ready transition, and a consumer's Ready series is left as it was; the broker always sets the agent and channel checkers, so it cannot
 	// reach this), and a Binding that leaves Targets is pruned (OnPrune) and not dropped. It must not
@@ -225,12 +230,17 @@ type Prober struct {
 	known map[string]knownTarget // what was seen of each Binding at the last Tick, by key; owned by Run's goroutine
 }
 
-// knownTarget is what the Prober remembers of a Binding between Ticks: the object, and whether it had approver groups (and so an
-// ApproversReadable condition).
+// knownTarget is what the Prober remembers of a Binding between Ticks: the object, whether it had approver groups (and so an
+// ApproversReadable condition), and whether its acknowledgment was not shown (and so it had an AcknowledgmentShown condition).
 type knownTarget struct {
-	uid    string
-	groups bool
+	uid     string
+	groups  bool
+	unshown bool
 }
+
+// unshownOutcome is the AcknowledgmentShown result of a Target whose acknowledgment is not shown (Target.AcknowledgmentUnshown).
+var unshownOutcome = Outcome{Status: False, Reason: ReasonNoReactions,
+	Message: "the chat platform of the Binding's connection has no reactions, so the reaction that chat.acknowledgment.emoji names is never shown: leave emoji empty, or set enabled to false"}
 
 // probeKey identifies a probe: a condition type and a Binding's key.
 type probeKey struct {
@@ -404,10 +414,11 @@ func (p *Prober) hook(name string, cond ConditionType, target Target, fn func())
 	}
 }
 
-// sync brings the State in line with targets and reports whether a Binding is new since the last call, or has gained approver
-// groups. It drops repeated Binding keys, marks a new Binding's conditions Pending, and prunes the Bindings that are gone. A Binding of
-// the same object (UID) that gains groups gets a Pending ApproversReadable, and one that loses them has it removed (OnDrop); the
-// change of Ready that either causes is reported to OnTransition, which a new Binding's Pending conditions are not.
+// sync brings the State in line with targets and reports whether a Binding is new since the last call, or has gained a condition
+// that applies to some Bindings only (approver groups, or an acknowledgment that is not shown). It drops repeated Binding keys, marks a
+// new Binding's conditions Pending, and prunes the Bindings that are gone. A Binding of the same object (UID) that gains groups gets a
+// Pending ApproversReadable, and one that loses them has it removed (OnDrop), and so for AcknowledgmentShown; the change of Ready that
+// either causes is reported to OnTransition, which a new Binding's Pending conditions are not.
 func (p *Prober) sync(targets []Target) ([]Target, bool) {
 	var (
 		changed bool
@@ -423,22 +434,33 @@ func (p *Prober) sync(targets []Target) ([]Target, bool) {
 		seen[t.Binding] = true
 		kept, names = append(kept, t), append(names, t.Binding)
 		groups := p.o.Groups != nil && len(t.ApproverGroups) > 0
+		unshown := t.AcknowledgmentUnshown
 		prev, ok := p.known[t.Binding]
-		p.known[t.Binding] = knownTarget{uid: t.UID, groups: groups}
-		switch {
-		case ok && prev.uid == t.UID && prev.groups == groups:
-		case ok && prev.uid == t.UID && groups:
-			changed = true
-			p.report(t, p.state.Set(t.Binding, at, p.pending(ApproversReadable, true, t.Generation, t.UID)))
-		case ok && prev.uid == t.UID:
-			p.drop(t, at)
-		default:
-			changed = true
-			p.state.Set(t.Binding, at, p.pending(BackendReachable, p.o.Agents != nil, t.Generation, t.UID), p.pending(ChannelJoined, p.o.Channels != nil, t.Generation, t.UID),
-				p.pending(ApproversReadable, groups, t.Generation, t.UID))
-			if !groups {
-				p.drop(t, at) // another object of the name may have had some
+		p.known[t.Binding] = knownTarget{uid: t.UID, groups: groups, unshown: unshown}
+		if ok && prev.uid == t.UID {
+			for _, c := range [...]struct {
+				typ     ConditionType
+				was, is bool
+			}{{ApproversReadable, prev.groups, groups}, {AcknowledgmentShown, prev.unshown, unshown}} {
+				switch {
+				case c.was == c.is:
+				case c.is:
+					changed = true
+					p.report(t, p.state.Set(t.Binding, at, p.pending(c.typ, true, t.Generation, t.UID)))
+				default:
+					p.drop(t, at, c.typ)
+				}
 			}
+			continue
+		}
+		changed = true
+		p.state.Set(t.Binding, at, p.pending(BackendReachable, p.o.Agents != nil, t.Generation, t.UID), p.pending(ChannelJoined, p.o.Channels != nil, t.Generation, t.UID),
+			p.pending(ApproversReadable, groups, t.Generation, t.UID), p.pending(AcknowledgmentShown, unshown, t.Generation, t.UID))
+		if !groups {
+			p.drop(t, at, ApproversReadable) // another object of the name may have had some
+		}
+		if !unshown {
+			p.drop(t, at, AcknowledgmentShown)
 		}
 	}
 	for name := range p.known {
@@ -462,17 +484,17 @@ func (p *Prober) report(t Target, trs []Transition) {
 	}
 }
 
-// drop removes the ApproversReadable condition of t from the State if it has one, reports the change of Ready, and then calls OnDrop.
-// A new Binding's conditions were set Pending by the caller, which does not report them, so the change of Ready is reported only when the
-// condition was there before.
-func (p *Prober) drop(t Target, at time.Time) {
-	removed, trs := p.state.Remove(t.Binding, at, ApproversReadable)
+// drop removes the condition cond (ApproversReadable or AcknowledgmentShown) of t from the State if it has one, reports the change of
+// Ready, and then calls OnDrop. A new Binding's conditions were set Pending by the caller, which does not report them, so the change of
+// Ready is reported only when the condition was there before.
+func (p *Prober) drop(t Target, at time.Time, cond ConditionType) {
+	removed, trs := p.state.Remove(t.Binding, at, cond)
 	if !removed {
 		return
 	}
 	p.report(t, trs)
 	if p.o.OnDrop != nil {
-		p.hook("OnDrop", ApproversReadable, t, func() { p.o.OnDrop(t.Binding, ApproversReadable) })
+		p.hook("OnDrop", cond, t, func() { p.o.OnDrop(t.Binding, cond) })
 	}
 }
 
@@ -484,11 +506,17 @@ func (p *Prober) pending(t ConditionType, tracked bool, generation int64, uid st
 	return Condition{Type: t, Status: Unknown, Reason: ReasonPending, ObservedGeneration: generation, UID: uid}
 }
 
-// pass probes every target once, p.o.Concurrency at a time, and returns when all the probes have ended. Each target
+// pass probes every target once, p.o.Concurrency at a time, and returns when all the probes have ended. It first sets the
+// AcknowledgmentShown of each target whose acknowledgment is not shown, which needs no probe. Each target
 // gets its own agent probe and its own channel probe, even when targets share a channel, and a target that has approver groups
 // one probe for all of them, made with the pass's own checker when Groups is a PassGroupChecker. The three kinds alternate, so backends
 // that hang do not hold every channel or group probe back.
 func (p *Prober) pass(ctx context.Context, targets []Target) {
+	for _, t := range targets {
+		if t.AcknowledgmentUnshown { // known from the Target: no probe, and so no job
+			p.record(ctx, AcknowledgmentShown, t, probeResult{out: unshownOutcome})
+		}
+	}
 	var agentJobs, channelJobs, groupJobs []func(context.Context)
 	if p.o.Agents != nil {
 		for _, t := range targets {

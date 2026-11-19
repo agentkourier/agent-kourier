@@ -77,6 +77,13 @@ type Subject struct {
 	// next state. The suite arranges GroupUnknown, then GroupReadable, and asks about the two groups together, so arranging a state
 	// may reset the others but must not make the unknown group readable.
 	Groups func(GroupState) string
+	// AbsentChannels and AbsentGroups are the states of a channel and of a group that the platform has none of, each with the reason,
+	// which a reviewer reads: a platform with no archive has no archived channel, and one with no user groups no group to read. The
+	// suite does not ask Channels or Groups for such a state, and does not check it. The states the other checks rest on cannot be
+	// absent, since every platform has them: a joined channel, an unknown channel and an unknown group. Naming one of those, or giving
+	// no reason, is a setup violation. With no readable group, the unknown group is asked about alone.
+	AbsentChannels map[ChannelState]string
+	AbsentGroups   map[GroupState]string
 	// MentionUser is a user ID the platform shows as a mention, in a chat.Mention part, or "" if the platform has
 	// none: then a Mention shows its user as nothing but text. The checks send it, and require exactly one mention
 	// of it and nothing else the platform acts on; every other user ID they send is forged, and must never act.
@@ -265,6 +272,18 @@ func checkShard(ctx context.Context, s Subject, opts Options, places []placement
 			return []Violation{{Rule: RuleSetup, Where: cc.Where, Case: "concession", Detail: "a concession needs kinds and a reason"}}
 		}
 	}
+	for st, why := range s.AbsentChannels {
+		if why == "" || st == ChannelJoined || st == ChannelUnknown {
+			return []Violation{{Rule: RuleSetup, Method: "ChannelAccess", Case: st.String(),
+				Detail: "an absent channel state needs a reason, and a joined channel and an unknown channel cannot be absent"}}
+		}
+	}
+	for st, why := range s.AbsentGroups {
+		if why == "" || st == GroupUnknown {
+			return []Violation{{Rule: RuleSetup, Method: "GroupsReadable", Case: st.String(),
+				Detail: "an absent group state needs a reason, and an unknown group cannot be absent"}}
+		}
+	}
 	c := &checker{ctx: ctx, s: s, caps: s.Platform.Capabilities(), opts: opts, target: cmp.Or(s.Target, defaultTarget)}
 	if contract {
 		c.contract()
@@ -317,8 +336,14 @@ func (c *checker) contract() {
 	if c.caps.MaxText <= len(chat.Truncated) {
 		c.add(RuleContract, 0, "Capabilities", "limits", "MaxText is %d, which cannot hold even the truncation marker", c.caps.MaxText)
 	}
-	if c.caps.AckReaction == "" || strings.ContainsAny(c.caps.AckReaction, ": \t\n") {
+	if strings.ContainsAny(c.caps.AckReaction, ": \t\n") {
 		c.add(RuleContract, 0, "Capabilities", "acknowledgment", "AckReaction is %q, want the platform's own reaction name, without colons: a Binding that names no reaction gets it, and React takes it", c.caps.AckReaction)
+	}
+	if c.caps.AckReaction == "" {
+		c.noReactions()
+	}
+	if !c.caps.Ephemeral {
+		c.noEphemeral()
 	}
 	for w, n := range c.caps.Limits {
 		if n <= len(chat.Truncated) {
@@ -362,9 +387,6 @@ func (c *checker) contract() {
 			c.add(RuleContract, chat.WhereStream, "Stream", "no streams", "a platform with Streams false gave %v, want chat.ErrNoStreams", err)
 		}
 	}
-	if c.caps.Steps && !c.caps.Streams {
-		c.add(RuleContract, chat.WhereStepTitle, "Capabilities", "steps", "Steps is true and Streams is false: a step is shown in a stream")
-	}
 	if c.caps.Streams {
 		c.zeroStop()
 		c.stepContract()
@@ -385,7 +407,7 @@ func (c *checker) contract() {
 // can force on every platform, wraps neither sentinel and leaves the Access zero if it fails the call. The suite does not ask
 // Classify about it, or check other failures. Classify(OpOther) agrees with the sentinels: Permanent for both, with
 // ReasonChannelGone for a channel not found, so a caller that does not retry them is not told to by Classify. The states are
-// reached through Subject.Channels, which every subject sets.
+// reached through Subject.Channels, which every subject sets, but for those it says are absent.
 func (c *checker) accessContract(ctx context.Context) {
 	p := c.s.Platform
 	// classified checks that Classify(OpOther) agrees with the sentinel err wraps: Permanent, as the contract says a caller
@@ -417,6 +439,9 @@ func (c *checker) accessContract(ctx context.Context) {
 	a, err := p.ChannelAccess(ctx, "")
 	failed("no channel", a, err, chat.ErrChannelNotFound)
 	channelIn := func(st ChannelState) (string, bool) {
+		if _, absent := c.s.AbsentChannels[st]; absent {
+			return "", false
+		}
 		ch := c.s.Channels(st)
 		if ch == "" {
 			c.add(RuleSetup, 0, "ChannelAccess", st.String(), "Subject.Channels named no channel for the state")
@@ -467,13 +492,16 @@ func (c *checker) accessContract(ctx context.Context) {
 // and the first group it cannot read ends the call with a *chat.GroupError that names it and wraps chat.ErrGroupsMisconfigured, and
 // also chat.ErrGroupNotFound for a group that is not there and chat.ErrMissingScope for an app without the permission, and neither
 // of those for the other. A cancelled context, the one other failure the suite can force on every platform, wraps none of the three.
-// The states are reached through Subject.Groups, which every subject sets.
+// The states are reached through Subject.Groups, which every subject sets, but for those it says are absent.
 func (c *checker) groupsContract(ctx context.Context) {
 	p := c.s.Platform
 	if err := p.GroupsReadable(ctx, nil); err != nil {
 		c.add(RuleContract, 0, "GroupsReadable", "no groups", "gave %v, want nil: no groups is no call and no error", err)
 	}
 	groupIn := func(st GroupState) (string, bool) {
+		if _, absent := c.s.AbsentGroups[st]; absent {
+			return "", false
+		}
 		g := c.s.Groups(st)
 		if g == "" {
 			c.add(RuleSetup, 0, "GroupsReadable", st.String(), "Subject.Groups named no group for the state")
@@ -509,8 +537,11 @@ func (c *checker) groupsContract(ctx context.Context) {
 			c.add(RuleContract, 0, "GroupsReadable", GroupReadable.String(), "failed: %v, want nil for a group that may be read", err)
 		}
 	}
-	if ok && okUnknown {
+	switch {
+	case ok && okUnknown:
 		failed(GroupUnknown.String(), []string{readable, unknown, readable}, unknown, chat.ErrGroupNotFound)
+	case okUnknown && c.absentGroup(GroupReadable):
+		failed(GroupUnknown.String(), []string{unknown}, unknown, chat.ErrGroupNotFound)
 	}
 	if scope, ok := groupIn(GroupScopeMissing); ok {
 		failed(GroupScopeMissing.String(), []string{scope}, scope, chat.ErrMissingScope)
@@ -524,6 +555,12 @@ func (c *checker) groupsContract(ctx context.Context) {
 			c.add(RuleContract, 0, "GroupsReadable", "cancelled context", "gave %v, want an error that wraps none of the sentinels of GroupsReadable", err)
 		}
 	}
+}
+
+// absentGroup says whether the subject says the platform has no group in the state st.
+func (c *checker) absentGroup(st GroupState) bool {
+	_, absent := c.s.AbsentGroups[st]
+	return absent
 }
 
 // busyContract checks what a platform promises of the busy mark (chat.BusyMarker). A platform whose Caps.Busy is false says
@@ -552,6 +589,47 @@ func (c *checker) busyContract() {
 		}
 	}
 	c.s.Sent()
+	_ = c.s.Inert()
+}
+
+// noReactions checks a platform with no reactions (an empty AckReaction): React and Unreact say chat.ErrNoReactions, which
+// Classify(OpReact) calls Permanent so that the outbox does not retry it, and nothing is shown. Without it an adapter could
+// leave AckReaction empty and still take reactions, or have a reaction that can never be made retried for ever.
+func (c *checker) noReactions() {
+	p := c.s.Platform
+	c.s.Sent()
+	ref := p.RefAt(c.target.Channel, c.target.Thread, c.target.Thread)
+	for method, call := range map[string]func(context.Context, chat.Ref, string) error{"React": p.React, "Unreact": p.Unreact} {
+		err := call(c.ctx, ref, "eyes")
+		if !errors.Is(err, chat.ErrNoReactions) {
+			c.add(RuleContract, 0, method, "no reactions", "a platform with no AckReaction gave %v, want chat.ErrNoReactions: it has no reactions", err)
+			continue
+		}
+		if v := p.Classify(chat.OpReact, err); v.Class != chat.Permanent {
+			c.add(RuleContract, 0, "Classify", "no reactions", "chat.ErrNoReactions of %s is %+v, want Permanent: no retry makes a reaction the platform has none of", method, v)
+		}
+	}
+	if shown := c.s.Sent(); len(shown) > 0 {
+		c.add(RuleContract, 0, "React", "no reactions", "a platform with no reactions showed %d texts, want none", len(shown))
+	}
+	_ = c.s.Inert()
+}
+
+// noEphemeral checks a platform with no ephemeral messages (Caps.Ephemeral false): Ephemeral says chat.ErrNoEphemeral, which
+// Classify(OpPost) calls Permanent, and nothing is shown. Without it a caller could not tell a platform that has none from one that
+// failed, and would warn of every press on it; or a platform could leave the cap unset and still show a message to one person.
+func (c *checker) noEphemeral() {
+	p := c.s.Platform
+	c.s.Sent()
+	err := p.Ephemeral(c.ctx, c.target, "U1", chat.Message{Fallback: "only you"})
+	if !errors.Is(err, chat.ErrNoEphemeral) {
+		c.add(RuleContract, 0, "Ephemeral", "no ephemeral messages", "a platform with Ephemeral false gave %v, want an error wrapping chat.ErrNoEphemeral", err)
+	} else if v := p.Classify(chat.OpPost, err); v.Class != chat.Permanent {
+		c.add(RuleContract, 0, "Classify", "no ephemeral messages", "chat.ErrNoEphemeral is %+v, want Permanent: no retry shows a message the platform has no way to show", v)
+	}
+	if shown := c.s.Sent(); len(shown) > 0 {
+		c.add(RuleContract, 0, "Ephemeral", "no ephemeral messages", "a platform with no ephemeral messages showed %d texts, want none", len(shown))
+	}
 	_ = c.s.Inert()
 }
 

@@ -269,9 +269,9 @@ type purgingDecider struct {
 	at    time.Time
 }
 
-func (p purgingDecider) Decide(ctx context.Context, pd interact.PressDecision) error {
+func (p purgingDecider) Decide(ctx context.Context, pd interact.PressDecision) (string, error) {
 	if _, err := p.st.PurgePresses(ctx, p.at, time.Hour); err != nil {
-		return err
+		return "", err
 	}
 	return p.inner.Decide(ctx, pd)
 }

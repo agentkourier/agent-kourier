@@ -22,10 +22,10 @@ import (
 )
 
 var (
-	// ErrSlackAuth is wrapped by the error RunPlatform returns when the chat platform rejected the credentials for good
-	// (Slack, in v1, which the name keeps for the exit code that cmd/agent-kourier maps it to):
-	// the process exits, with the code in the error, because no retry would help.
-	ErrSlackAuth = errors.New("slack rejected the tokens")
+	// ErrChatAuth is wrapped by the error RunPlatform returns when the chat platform rejected the credentials for good: for the
+	// broker's own connection the process exits (cmd/agent-kourier maps it to its exit code), with the platform and its code in the
+	// error, because no retry would help. Its own text is the one of a platform that is not named; the error that wraps it names it.
+	ErrChatAuth = errors.New("the chat platform rejected the tokens")
 	// ErrWiring is wrapped by an error that means the broker was put together wrongly, or its
 	// config is invalid or asks for what v1 does not do: a usage error, not a failure of a dependency.
 	ErrWiring = errors.New("the broker cannot be wired")
@@ -59,6 +59,9 @@ type RunPolicy struct {
 	Now    func() time.Time
 	After  func(time.Duration) <-chan time.Time
 	Logger *slog.Logger // slog.Default() if nil
+	// Platform is the connection's platform as ChatConnection.spec.platform spells it ("slack"), which the warning of a connection that
+	// ended and the error of a rejection name. Empty, they say the chat platform.
+	Platform string
 	// Random is the jitter's source: a number in [0, 1). The wait is the pause cut by that share of its upper half, so
 	// between half the pause and the pause. A test injects its own, one per connection when it runs several, and a Random
 	// of 0 cuts nothing. Default: math/rand/v2's Float64. A number outside [0, 1) is held to its bounds.
@@ -68,7 +71,7 @@ type RunPolicy struct {
 // RunPlatform runs the chat connection for as long as ctx lives. An adapter reconnects by itself only for a refresh that
 // the platform asks for and for the first attempt after a loss, so when Run returns, the connection was lost and could not
 // be opened again, or never opened. An error that the platform classifies as credentials it rejects (chat.FatalAuth) ends
-// RunPlatform at once with ErrSlackAuth, since no retry cures it. Any other error is retried after a wait. The pause
+// RunPlatform at once with ErrChatAuth, naming p.Platform, since no retry cures it. Any other error is retried after a wait. The pause
 // doubles from Base to Max and starts over from Base once a run has lasted ResetAfter; the wait is the pause cut at random
 // by up to half of it, so that connections that fail together (a network that blips) do not retry together. Max is the
 // longest wait, except for a wait the platform asks for (Classify's RetryAfter, as for a rate limit), which is waited
@@ -94,20 +97,21 @@ func RunPlatform(ctx context.Context, runner PlatformRunner, sink chat.Sink, p R
 		started := now()
 		err := runner.Run(ctx, sink)
 		if ctx.Err() != nil {
-			return stopped(ctx)
+			return stopped(ctx, p.Platform)
 		}
 		v := runner.Classify(chat.OpOther, err)
 		if v.Class == chat.FatalAuth {
-			return &authRejected{code: v.Code}
+			return &authRejected{platform: p.Platform, code: v.Code}
 		}
 		if now().Sub(started) >= reset {
 			pause = min(base, limit)
 		}
 		wait := max(jittered(pause, random()), min(v.RetryAfter, retryAfterMax))
-		log.WarnContext(ctx, "slack connection ended; connecting again", "error", err, "after", wait)
+		// The platform is in the message, not in an attribute, so that a Slack connection's line stays the one that log alerts match.
+		log.WarnContext(ctx, cmp.Or(p.Platform, "chat")+" connection ended; connecting again", "error", err, "after", wait)
 		select {
 		case <-ctx.Done():
-			return stopped(ctx)
+			return stopped(ctx, p.Platform)
 		case <-after(wait):
 		}
 		pause = min(pause*2, limit)
@@ -121,11 +125,11 @@ func jittered(pause time.Duration, cut float64) time.Duration {
 }
 
 // ChooseConnection returns the ChatConnection this broker runs, with the keys of its credentials Secret that its
-// platform needs (platformKeys) read through secrets. With the custom resources own is the broker's own connection
+// platform needs (v1alpha1.CredentialKeys) read through secrets. With the custom resources own is the broker's own connection
 // (RunConfig.ChatConnection), found by its reference: the snapshot may hold the ChatConnections of the admitted namespaces
 // besides it, and this reads none of their Secrets and cannot fail for them (ChooseConnections reads them). With the files
 // own is the zero value, and the directory must hold exactly one ChatConnection, as the broker serves one. The connection must be on a platform that has
-// an adapter (Slack, in Socket Mode). Anything else is an error wrapping ErrWiring. The tokens are those of the snapshot at the call: Run reads them at start, and again when the
+// an adapter (platformFor knows it). Anything else is an error wrapping ErrWiring. The tokens are those of the snapshot at the call: Run reads them at start, and again when the
 // leader half starts, since a standby may lead long after it started. A change of the connection or of its Secret applies
 // to a running leader on restart, and nothing flags it as a failed reload (the stale flag is for reloads that failed): the
 // verification of the Bindings tells of tokens that differ from these (ChatCredentialsChanged), and logs a Binding that a reload moved
@@ -152,13 +156,23 @@ func ChooseConnection(ctx context.Context, snap *config.Snapshot, own v1alpha1.O
 	return connectionOf(ctx, conns[0], secrets)
 }
 
-// connectionOf is the Connection of c with its credentials read through secrets. A platform with no adapter is an error wrapping
-// ErrWiring, and so is a Secret, key or value that is missing; a Secret that cannot be read just now is not.
+// errNoAdapter is wrapped by the error of a ChatConnection whose platform this broker has no adapter for (platformFor does not know it).
+var errNoAdapter = errors.New("a platform this broker has no adapter for")
+
+// connectionOf is the Connection of c with the credentials of its platform and mode (v1alpha1.CredentialKeys) read through secrets. A
+// platform with no adapter is an error wrapping ErrWiring and errNoAdapter, and a Secret, key or value that is missing one wrapping
+// ErrWiring; a Secret that cannot be read just now is not. A Microsoft Teams connection carries its spec.teams, in either mode.
 func connectionOf(ctx context.Context, c *v1alpha1.ChatConnection, secrets identity.SecretReader) (Connection, error) {
 	name := v1alpha1.NamespacedName(c.Namespace, c.Name)
-	spec, ok := platformFor(c.Spec.Platform)
-	if !ok {
-		return Connection{}, fmt.Errorf("%w: ChatConnection %s is %q, and v1 serves Slack in Socket Mode", ErrWiring, name, c.Spec.Platform)
+	if _, ok := platformFor(c.Spec.Platform); !ok {
+		return Connection{}, fmt.Errorf("%w: ChatConnection %s is %q, %w", ErrWiring, name, c.Spec.Platform, errNoAdapter)
+	}
+	var teamsSpec v1alpha1.TeamsConnectionSpec
+	if c.Spec.Platform == v1alpha1.PlatformTeams {
+		if c.Spec.Teams == nil { // Validate refuses it; this keeps the adapter from a connection with no tenant
+			return Connection{}, fmt.Errorf("%w: ChatConnection %s is a Microsoft Teams connection with no spec.teams", ErrWiring, name)
+		}
+		teamsSpec = *c.Spec.Teams
 	}
 	read := func(key string) (secret.Value, error) {
 		v, err := secrets.Value(ctx, c.Namespace, c.Spec.CredentialsSecretRef.Name, key)
@@ -177,14 +191,46 @@ func connectionOf(ctx context.Context, c *v1alpha1.ChatConnection, secrets ident
 		return v, nil
 	}
 	creds := map[string]secret.Value{}
-	for _, key := range spec.Keys {
+	for _, key := range v1alpha1.CredentialKeys(c.Spec) { // in its order: the first key missing is the one the error names
 		v, err := read(key)
 		if err != nil {
 			return Connection{}, err
 		}
 		creds[key] = v
 	}
-	return Connection{Ref: v1alpha1.ObjectRef{Namespace: c.Namespace, Name: c.Name}, Platform: c.Spec.Platform, Credentials: creds}, nil
+	return Connection{Ref: v1alpha1.ObjectRef{Namespace: c.Namespace, Name: c.Name}, Platform: c.Spec.Platform,
+		Secret: v1alpha1.NamespacedName(c.Namespace, c.Spec.CredentialsSecretRef.Name), Credentials: creds, Teams: teamsSpec,
+		Webhook: cloneWebhook(c.Spec.Webhook)}, nil
+}
+
+// cloneWebhook is a copy of s that shares nothing with it, so that a Connection keeps what its ChatConnection said when it was read
+// whatever later becomes of the snapshot's object, or nil. It is written by hand, as the API has no generated DeepCopy: every field
+// of v1alpha1.WebhookSpec that is a pointer or a slice, at any depth, is copied here, and TestCloneWebhookSharesNothing fails for a
+// field that is added and not.
+func cloneWebhook(s *v1alpha1.WebhookSpec) *v1alpha1.WebhookSpec {
+	if s == nil {
+		return nil
+	}
+	c := *s
+	if ts := s.Verify.Timestamp; ts != nil {
+		t := *ts
+		c.Verify.Timestamp = &t
+	}
+	c.Channel.From = slices.Clone(s.Channel.From)
+	c.Actor.From = slices.Clone(s.Actor.From)
+	if th := s.Thread; th != nil {
+		t := *th
+		c.Thread = &t
+	}
+	c.Fields = slices.Clone(s.Fields)
+	for i := range c.Fields {
+		c.Fields[i].From = slices.Clone(s.Fields[i].From)
+	}
+	if d := s.Delivery; d != nil {
+		dd := *d
+		c.Delivery = &dd
+	}
+	return &c
 }
 
 // Connections are the ChatConnections a broker runs: its own, if it has one, and the team connections it serves besides (spec D52, D53).
@@ -206,8 +252,8 @@ type TeamConnection struct {
 	UID        string
 	Generation int64
 	Created    time.Time
-	// Err is why its credentials could not be read, or its platform is not one the broker has an adapter for. It is no failure of the
-	// broker: the connection is left to start later, when the Secret is there, or left out. It holds no Secret value.
+	// Err is why its credentials could not be read, or its platform is not one the broker has an adapter for. It is no failure of the broker: the connection is left to start
+	// later, when the Secret is there, or left out. It holds no Secret value.
 	Err error
 }
 

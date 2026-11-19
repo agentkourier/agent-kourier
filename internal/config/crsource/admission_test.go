@@ -210,7 +210,7 @@ func TestTheOldestTeamConnectionsAreServedUpToTheCap(t *testing.T) {
 	// are the connection's, whatever they hold.
 	extra = append(extra, bindingOn(objs, "sre", "on-c01", "teams", "c01"))
 	broken := bindingOn(objs, "payments", "broken-on-c01", "teams", "c01")
-	_ = unstructured.SetNestedField(broken.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(broken.Object, "#general alerts", "spec", "chat", "channel")
 	extra = append(extra, broken)
 	src, logs := newCluster(t, append(objs, extra...)...).startAdmitted(t, nil, "teams")
 
@@ -287,7 +287,7 @@ func TestAnInvalidConnectionHoldsItsPlaceUnderTheCap(t *testing.T) {
 	for i := 1; i <= crsource.MaxServedConnections; i++ { // c01 is the oldest, c16 the youngest
 		extra = append(extra, teamConnection(objs, "teams", fmt.Sprintf("c%02d", i), created.Add(time.Duration(i)*time.Hour)))
 	}
-	_ = unstructured.SetNestedField(extra[0].Object, "teams", "spec", "platform") // c01: invalid, from the start
+	_ = unstructured.SetNestedField(extra[0].Object, "discord", "spec", "platform") // c01: invalid, from the start
 	src, _ := newCluster(t, append(objs, extra...)...).startAdmitted(t, nil, "teams")
 
 	s, _ := set(t, src)
@@ -313,7 +313,7 @@ func TestATeamConnectionThatBecomesInvalidKeepsItsLastGoodGeneration(t *testing.
 
 	bad := team.DeepCopy()
 	bad.SetGeneration(2)
-	_ = unstructured.SetNestedField(bad.Object, "teams", "spec", "platform")
+	_ = unstructured.SetNestedField(bad.Object, "discord", "spec", "platform")
 	until(t, func() { c.apply(bad) }, func() bool { return src.Fingerprint(t.Context()) != fp })
 	s, _ := set(t, src)
 	if got := connectionNames(s); !slices.Equal(got, []string{"agent-kourier-system/slack-main", "team-a/slack"}) {
@@ -501,7 +501,7 @@ func TestConnectionBindingsNamesTheBindingsOfAnyConnection(t *testing.T) {
 	leakCheck(t)
 	objs := corpus(t)
 	broken := bindingOn(objs, "payments", "broken-on-c", "team-c", "slack")
-	_ = unstructured.SetNestedField(broken.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(broken.Object, "#general alerts", "spec", "chat", "channel")
 	extra := []*unstructured.Unstructured{
 		teamConnection(objs, "team-a", "slack", created),
 		teamConnection(objs, "team-c", "slack", created, "sre"), // not admitted to the broker, and allows sre only

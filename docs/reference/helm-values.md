@@ -251,13 +251,35 @@ With crds the chart also makes a ClusterRole (list and watch on the three kinds,
 
 ## service
 
-A ClusterIP Service on the metrics port (/metrics, and the health paths). Never published; there is nothing else to serve yet.
+A ClusterIP Service on the metrics port (/metrics, and the health paths), which selects every pod, a standby's included. Never published. Chat requests never come through it: the chat listener has a Service of its own (chatListener below).
 
 | Key | Default | Description |
 |---|---|---|
 | `service.enabled` | `false` |  |
 | `service.port` | `8080` |  |
 | `service.annotations` | `{}` |  |
+
+## chatListener
+
+The chat listener (AGENTKOURIER_CHAT_LISTEN): a port of its own, apart from the metrics port, that a chat platform sends its requests to, POST /chat/&lt;platform&gt;/&lt;namespace&gt;/&lt;name&gt;. A Slack ChatConnection with spec.slack.mode http needs it, and so does a Microsoft Teams one in http mode (spec.teams.mode unset or http) or with a spec.teams.notificationURL in either mode, for Microsoft Graph's notifications. Slack's Socket Mode, and Teams' socket mode without a notificationURL, do not. A connection that needs it on a broker without it is not run: the broker's own connection fails the start. Off by default, and then the broker opens no such port.
+
+Switched on, the chart passes the pod's name and namespace from the downward API (AGENTKOURIER_POD_NAME, AGENTKOURIER_POD_NAMESPACE). Every replica takes the label agentkourier.dev/role=leader off its own pod as it starts, and is not Ready until a write of the label has succeeded, that removal or the label put on (so a replica whose patches of its pod keep failing, while the API server answers its reads, is out of every Service until one succeeds); the leader puts it on once it leads, and takes it off at shutdown. With SQLite the one replica leads, and carries it. podLabels may not set it. The chat Service, &lt;fullname&gt;-chat, selects the Deployment's pods that carry the label, so it sends requests to the leader alone; while no replica leads (a takeover) it has no endpoint, and the platform's requests fail until one does.
+
+With rbac.create the chart grants the label with a Role in the release namespace: patch on pods. A Deployment's pods are named by its ReplicaSet, so the chart cannot name the pod in resourceNames, and the Role covers every pod of the release namespace. With it the chart installs a ValidatingAdmissionPolicy and its binding (cluster-scoped) that let the broker's ServiceAccount change only that label, and only on the pod its token is bound to. Keep Agent Kourier in a namespace of its own all the same. With networkPolicy.enabled the chart admits networkPolicy.chatFrom to this port, which it then requires.
+
+| Key | Default | Description |
+|---|---|---|
+| `chatListener.enabled` | `false` |  |
+| `chatListener.port` | `8081` | The container port; AGENTKOURIER_CHAT_LISTEN is :&lt;port&gt;. It must differ from listen.port. |
+| `chatListener.service.type` | `ClusterIP` | ClusterIP, NodePort or LoadBalancer. Behind the Ingress below, ClusterIP is enough. |
+| `chatListener.service.port` | `8081` |  |
+| `chatListener.service.annotations` | `{}` |  |
+| `chatListener.ingress` |  | An Ingress, &lt;fullname&gt;-chat, that sends the path prefix /chat/ to the chat Service, and nothing else. Needs chatListener.enabled. |
+| `chatListener.ingress.enabled` | `false` |  |
+| `chatListener.ingress.className` | `""` | The IngressClass; empty leaves it to the cluster's default class. |
+| `chatListener.ingress.annotations` | `{}` |  |
+| `chatListener.ingress.host` | `""` | The host its rule matches; empty matches every host. |
+| `chatListener.ingress.tls` | `[]` | In Kubernetes' own form, for example [{hosts: [chat.example.com], secretName: chat-tls}]. |
 
 ## serviceMonitor
 
@@ -273,7 +295,7 @@ A prometheus-operator ServiceMonitor for the Service (needs service.enabled).
 
 ## networkPolicy
 
-Fences Agent Kourier's network. Egress is the Kubernetes API server, DNS, Slack on 443 and what extraEgress adds (the agent backend, an OTLP collector); ingress is the metrics scrape and nothing else. Needs a CNI that enforces NetworkPolicy.
+Fences Agent Kourier's network. Egress is the Kubernetes API server, DNS, Slack on 443 and what extraEgress adds (the agent backend, an OTLP collector); ingress is the metrics scrape and, with chatListener.enabled, chatFrom to the chat port, and nothing else. Needs a CNI that enforces NetworkPolicy.
 
 | Key | Default | Description |
 |---|---|---|
@@ -282,12 +304,13 @@ Fences Agent Kourier's network. Egress is the Kubernetes API server, DNS, Slack 
 | `networkPolicy.kubeApiServer.ports` | `[443, 6443]` |  |
 | `networkPolicy.dns.namespaceSelector` | `{matchLabels: {kubernetes.io/metadata.name: kube-system}}` |  |
 | `networkPolicy.dns.podSelector` | `{matchLabels: {k8s-app: kube-dns}}` |  |
-| `networkPolicy.slack.cidrs` | `["0.0.0.0/0"]` | A NetworkPolicy cannot name a host, so Slack (slack.com, wss-\*.slack.com, files.slack.com) is port 443 to anywhere outside the private ranges. Put an egress proxy's address in extraEgress and narrow this to [] to close it. |
+| `networkPolicy.slack.cidrs` | `["0.0.0.0/0"]` | A NetworkPolicy cannot name a host, so Slack (slack.com, wss-\*.slack.com, files.slack.com) is port 443 to anywhere outside the private ranges. The same rule lets a Microsoft Teams connection reach Microsoft Entra, the Bot Connector, Microsoft Graph and, in socket mode, Teams' sockets, all on 443. Put an egress proxy's address in extraEgress and narrow this to [] to close it. |
 | `networkPolicy.slack.except` | `["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16"]` |  |
 | `networkPolicy.postgres` |  | The Postgres database (store.type postgres), as NetworkPolicyPeers: required when this policy is enabled with Postgres, since the Slack rule excludes private ranges and is 443 only. An ipBlock for a managed database, or the pods of an in-cluster one: to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: db}}, podSelector: {matchLabels: {app: postgres}}}] Egress is on `port` (the server's, 5432 by default). Behind a pooler, name the pooler. |
 | `networkPolicy.postgres.to` | `[]` |  |
 | `networkPolicy.postgres.port` | `5432` |  |
 | `networkPolicy.metricsFrom` | `[]` | Who may scrape the metrics port: NetworkPolicyPeers, for example the Prometheus pods: - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: monitoring}} podSelector: {matchLabels: {app.kubernetes.io/name: prometheus}} Empty admits nobody. Kubelet's probes are node traffic, which the CNIs we know admit regardless. |
+| `networkPolicy.chatFrom` | `[]` | Who may reach the chat port (chatListener.enabled): NetworkPolicyPeers, for example the ingress controller's pods: - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}} or an ipBlock for a load balancer that keeps the client's address. Required when this policy and the chat listener are both enabled, since nobody could reach the port without it; refused without the chat listener, which would ignore it. |
 | `networkPolicy.extraEgress` | `[]` | More egress rules, in Kubernetes' own form. The agent backend goes here, for example the front door: - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kagent}}, podSelector: {matchLabels: {app.kubernetes.io/name: kagent-frontdoor}}}] ports: [{port: 4180}] |
 
 ## podDisruptionBudget

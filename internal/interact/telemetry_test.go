@@ -52,7 +52,7 @@ func TestPressProcessingContinuesTheTraceOfThePressAcrossARestart(t *testing.T) 
 		seen <- trace.SpanContextFromContext(ctx)
 		return interact.Done, nil
 	}}
-	w, err := interact.NewWorker(interact.WorkerConfig{Processor: proc, Now: func() time.Time { return d0 }, Logger: testutil.DiscardLogger()})
+	w, err := interact.NewWorker(interact.WorkerConfig{Processor: proc, Presses: st, Now: func() time.Time { return d0 }, Logger: testutil.DiscardLogger()})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -305,6 +305,12 @@ func snapshotWithUIDs(t *testing.T, generations map[string]int64, uids map[strin
 // where it has none.
 func snapshotWith(t *testing.T, generations map[string]int64, uids map[string]string, groups map[string][]string) *config.Snapshot {
 	t.Helper()
+	return snapshotWithAcks(t, generations, uids, groups, nil)
+}
+
+// snapshotWithAcks is snapshotWith with the chat.acknowledgment of each Binding of acks.
+func snapshotWithAcks(t *testing.T, generations map[string]int64, uids map[string]string, groups map[string][]string, acks map[string]*v1alpha1.ChatAcknowledgment) *config.Snapshot {
+	t.Helper()
 	set := &config.Set{
 		AgentBackends:   []v1alpha1.AgentBackend{{ObjectMeta: metav1.ObjectMeta{Namespace: "sre", Name: "agent"}, Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectA2A}}},
 		ChatConnections: []v1alpha1.ChatConnection{{ObjectMeta: metav1.ObjectMeta{Namespace: "sre", Name: "slack"}}},
@@ -318,6 +324,7 @@ func snapshotWith(t *testing.T, generations map[string]int64, uids map[string]st
 		if g := groups[key]; len(g) > 0 {
 			b.Spec.Interactions.ToolApprovals, b.Spec.Interactions.ApproverGroups = true, g
 		}
+		b.Spec.Chat.Acknowledgment = acks[key]
 		set.Bindings = append(set.Bindings, b)
 	}
 	set.AgentBackends[0].Spec.AllowedNamespaces = []string{"sre", "other"}
@@ -1130,6 +1137,20 @@ func TestSeveralRejectionsGiveOneAcceptedReasonInAFixedOrder(t *testing.T) {
 			[]config.Rejection{rej(config.ReasonAgentNamespaceNotAllowed, 2)}, 0,
 			metav1.ConditionFalse, "AgentNamespaceNotAllowed", "spec.agentnamespacenotallowed", 2,
 		},
+		"the platform's IDs and features come after the agent namespace, and before the channel": {
+			[]config.Rejection{rej(config.ReasonChannelConflict, 2), rej(config.ReasonUnsupportedOnPlatform, 2), rej(config.ReasonInvalidPlatformID, 2),
+				rej(config.ReasonAgentNamespaceNotAllowed, 2)}, 0,
+			metav1.ConditionFalse, "AgentNamespaceNotAllowed",
+			"spec.agentnamespacenotallowed; spec.invalidplatformid; spec.unsupportedonplatform; " + channelConflictMessage, 2,
+		},
+		"an ID of another platform's shape": {
+			[]config.Rejection{rej(config.ReasonInvalidPlatformID, 2)}, 0,
+			metav1.ConditionFalse, "InvalidPlatformID", "spec.invalidplatformid", 2,
+		},
+		"a feature the platform does not serve": {
+			[]config.Rejection{rej(config.ReasonUnsupportedOnPlatform, 2)}, 0,
+			metav1.ConditionFalse, "UnsupportedOnPlatform", "spec.unsupportedonplatform", 2,
+		},
 		"a reason that is not known": {
 			[]config.Rejection{rej("Weird Reason!", 2)}, 0, metav1.ConditionFalse, "Rejected", "spec.weird reason!", 2,
 		},
@@ -1248,8 +1269,10 @@ func TestOnlyTheOwnedTypesAreWrittenAndTheyAreUnderTheSchemasCap(t *testing.T) {
 	r.set(sreAlerts, conds...)
 	r.reconcile()
 	got := c.last(t).conds()
-	if len(got) != len(statusTypes)-1 { // ApproversReadable is not written: the Binding names no approver groups
-		t.Errorf("conditions written = %d, want %d", len(got), len(statusTypes)-1)
+	// ApproversReadable and AcknowledgmentShown are not written: the Binding names no approver groups, and the Prober holds no
+	// AcknowledgmentShown for it.
+	if len(got) != len(statusTypes)-2 {
+		t.Errorf("conditions written = %d, want %d", len(got), len(statusTypes)-2)
 	}
 	for typ := range got {
 		if strings.HasPrefix(typ, "Extra") {
@@ -1493,7 +1516,7 @@ func TestTheBrokersProberTellsTheStatusWriterAtTheEndOfEachPass(t *testing.T) {
 
 // The Prober is given each Binding's generation, so that what it stamps is the generation the Binding had when the pass began.
 func TestBindingTargetsCarryTheGeneration(t *testing.T) {
-	got := bindingTargets(snapshotWithUIDs(t, map[string]int64{sreAlerts: 7}, map[string]string{sreAlerts: "uid-7"}), []v1alpha1.ObjectRef{sreSlack})
+	got := bindingTargets(snapshotWithUIDs(t, map[string]int64{sreAlerts: 7}, map[string]string{sreAlerts: "uid-7"}), []v1alpha1.ObjectRef{sreSlack}, nil)
 	if want := []bindingcheck.Target{{Binding: sreAlerts, Connection: "sre/slack", Channel: "C-alerts", Generation: 7, UID: "uid-7"}}; !reflect.DeepEqual(got, want) {
 		t.Errorf("targets = %v, want %v", got, want)
 	}
@@ -2161,5 +2184,62 @@ func TestAReporterWritesAgainWhenTheStatusHoldsNoneOfItsTypes(t *testing.T) {
 	}
 	if c.count() != 2 {
 		t.Errorf("applies = %d, want 2", c.count())
+	}
+}
+
+// unshownProbe is probe(generation) with the AcknowledgmentShown the Prober holds for a Binding whose acknowledgment is not shown, and
+// the Ready it derived with it.
+func unshownProbe(generation int64) []bindingcheck.Condition {
+	conds := probe(generation)
+	conds[len(conds)-1].Status, conds[len(conds)-1].Reason = bindingcheck.False, "AcknowledgmentShown:NoReactions"
+	return append(conds, bindingcheck.Condition{Type: bindingcheck.AcknowledgmentShown, Status: bindingcheck.False, Reason: bindingcheck.ReasonNoReactions,
+		Message: "the platform has no reactions", ObservedGeneration: generation, LastTransitionTime: statusT0.Add(time.Minute)})
+}
+
+// serveAcks makes the report's Snapshot serve the Bindings of generations, each with its acknowledgment of acks.
+func (r *statusRig) serveAcks(generations map[string]int64, acks map[string]*v1alpha1.ChatAcknowledgment) {
+	r.mu.Lock()
+	r.report.Snapshot = snapshotWithAcks(r.t, generations, nil, nil, acks)
+	r.mu.Unlock()
+}
+
+// An AcknowledgmentShown that the Prober holds for a Binding that names a reaction is written as it is, and Ready with it. An edit that
+// makes the Binding name none (emoji taken away, or enabled: false) writes a status without it at once, and a Ready that cites it is Pending
+// until the Prober has seen the edit, as for approver groups. The guard reads the spec alone, so it holds the same for a Binding made again
+// under a new UID that names none (the Prober's side of that is tested in internal/bindingcheck).
+func TestAnAcknowledgmentShownIsWrittenOnlyWhileTheBindingNamesAReaction(t *testing.T) {
+	off := false
+	eyes := map[string]*v1alpha1.ChatAcknowledgment{sreAlerts: {Emoji: "eyes"}}
+	for name, acks := range map[string]map[string]*v1alpha1.ChatAcknowledgment{
+		"emoji taken away":          {sreAlerts: {}},
+		"acknowledgment turned off": {sreAlerts: {Emoji: "eyes", Enabled: &off}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := newStatusCluster(t, storedBinding(sreAlerts, 1))
+			r := newStatusRig(t, c, nil)
+			r.serveAcks(map[string]int64{sreAlerts: 1}, eyes)
+			r.set(sreAlerts, unshownProbe(1)...)
+			r.reconcile()
+			got := c.stored(t, sreAlerts)
+			if a := got["AcknowledgmentShown"]; a.Status != metav1.ConditionFalse || a.Reason != "NoReactions" || a.ObservedGeneration != 1 {
+				t.Fatalf("AcknowledgmentShown = %+v; want False/NoReactions at generation 1", a)
+			}
+			if ready := got["Ready"]; ready.Status != metav1.ConditionFalse || ready.Reason != "AcknowledgmentShown:NoReactions" {
+				t.Fatalf("Ready = %+v; want False/AcknowledgmentShown:NoReactions", ready)
+			}
+
+			c.edit(t, sreAlerts, 2)
+			r.serveAcks(map[string]int64{sreAlerts: 2}, acks)
+			r.set(sreAlerts, unshownProbe(1)...) // the Prober has not yet seen the edit
+			r.advance(11 * time.Second)
+			r.reconcile()
+			applied := c.last(t).conds()
+			if _, has := applied["AcknowledgmentShown"]; has {
+				t.Errorf("the status written after the edit still says %v", applied["AcknowledgmentShown"])
+			}
+			if ready := applied["Ready"]; ready["status"] != "Unknown" || ready["reason"] != "Pending" || ready["observedGeneration"] != int64(2) {
+				t.Errorf("Ready = %v; want Unknown/Pending at generation 2 until the Prober has seen the edit, not held back by a condition the Binding no longer has", ready)
+			}
+		})
 	}
 }

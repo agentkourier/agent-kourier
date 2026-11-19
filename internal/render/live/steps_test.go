@@ -748,7 +748,7 @@ func TestStepsAreShownThroughTheNeutralSeamOfAnyPlatform(t *testing.T) {
 	run.Handle(agent.FinalEvent{})
 	e.finish(t, run)
 	m := fake.Messages()[0]
-	want := []chat.Step{{ID: "s1", Title: "search", Detail: `q="up"`, State: chat.StepDone}}
+	want := []chat.Step{{ID: "s1", Title: "search", Detail: `q="up"`, State: chat.StepDone, Call: true}}
 	if !slices.Equal(m.Steps, want) || m.Streaming || m.Streamed != "ok" {
 		t.Fatalf("message %+v; want the step %+v, done, and the text", m, want)
 	}

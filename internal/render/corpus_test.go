@@ -216,7 +216,7 @@ func TestOneLineFieldsTakeWhatALineBreakHides(t *testing.T) {
 		c.Check(t, threadReplies([]ThreadReply{{UserID: c.Text, Name: "Ada", Text: "ok"}}, 0))
 		for _, kind := range []fieldKind{kindFreeText, kindWindow} {
 			f := untrustedField{Kind: kind, OneLine: true, Window: 4096}
-			got := f.clean(c.Text)
+			got, _ := f.clean(c.Text)
 			c.Check(t, got)
 			if strings.ContainsAny(got, "\n\t") {
 				t.Errorf("%s: kind %d: %q is not one line", c.Name, kind, got)

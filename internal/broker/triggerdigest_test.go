@@ -287,6 +287,49 @@ func TestADigestThatCannotBeQueuedIsTriedAgain(t *testing.T) {
 	}
 }
 
+// A connection whose platform has no replies (webhook) posts nothing, so the window of its stopped starts is marked digested and no
+// line is queued, which the outbox could only abandon; the window of a connection with replies, in the same pass, still has its
+// line. A mark that fails is tried again at the next pass, still with no line.
+func TestTheDigestOfAConnectionWithNoRepliesIsMarkedAndNotQueued(t *testing.T) {
+	const webhookConn = "team-hooks/github"
+	var marks *markFails
+	w := newDigestWorld(t, func(s digestStore) digestStore { marks = &markFails{digestStore: s, n: 1}; return marks })
+	var asked []string
+	d, err := newTriggerDigest(triggerDigestConfig{Store: marks, Queue: w.q, Now: w.now, Logger: slog.New(slog.NewTextHandler(w.logs, nil)),
+		NoReplies: func(conn string) bool { asked = append(asked, conn); return conn == webhookConn }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, thread := range []string{"pr-1", "pr-2", "pr-3"} { // the first goes ahead, the rest are stopped
+		run := store.TriggerRun{Binding: "team-hooks/pr-review", At: w.now(), Key: store.ConversationKey{Connection: webhookConn, Channel: "acme/widgets", Thread: thread}}
+		if _, err := w.st.AdmitTriggerRun(t.Context(), run, store.TriggerRunLimits{MaxRuns: 1, Per: time.Hour, DigestWindow: 10 * time.Minute}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w.advance(11 * time.Minute)
+
+	d.pass(t.Context()) // the mark of the webhook window fails
+	if got := w.q.got(); len(got) != 0 {
+		t.Fatalf("posts = %+v; want no line for a connection with no replies", got)
+	}
+	if !strings.Contains(w.logs.String(), "could not be recorded as digested") {
+		t.Errorf("the log %q; want a warning for the failed mark", w.logs.String())
+	}
+	w.storm(t, 2) // the Slack connection's window opens now and ends 10 minutes later
+	w.advance(11 * time.Minute)
+	d.pass(t.Context())
+	got := w.q.got()
+	if len(got) != 1 || got[0].Connection != digestConn {
+		t.Fatalf("posts = %+v; want the line of %s alone", got, digestConn)
+	}
+	if left, err := w.st.ListTriggerDigests(t.Context(), w.now()); err != nil || len(left) != 0 {
+		t.Errorf("windows left to digest %+v, %v; want both marked", left, err)
+	}
+	if !slices.Contains(asked, webhookConn) || !slices.Contains(asked, digestConn) {
+		t.Errorf("NoReplies was asked of %q; want each window's connection", asked)
+	}
+}
+
 // purgeSpy wraps the store and records the cutoffs it is asked to purge runs at.
 type purgeSpy struct {
 	digestStore

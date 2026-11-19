@@ -1,0 +1,23 @@
+# A webhook fixture, in a directory of its own: tests copy testdata/ as one Slack config, which a webhook connection would
+# change (its Secret is not there). The CRD corpus walks into this directory, so the schema is held to it too.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: { name: pr-review, namespace: sre }
+spec:
+  agent:
+    backendRef: { namespace: agent-kourier-system, name: kagent-pilot }
+    name: pr-reviewer
+    namespace: kagent
+  identity:
+    userId: agent-kourier-pr-review
+  chat:
+    connectionRef: { namespace: agent-kourier-system, name: github }
+    channel: acme/widgets            # the repository, as the connection's channel pointer reads it
+    output: none                     # the agent posts on the source itself
+    triggers:
+      - type: webhookEvent
+        match: { event: '^pull_request$', action: '^(opened|reopened|synchronize)$' }
+        limits:
+          rateLimit: { maxRuns: 20, per: 1h, maxConcurrent: 2 }
+          maxRunsPerDay: 100
+        promptTemplate: "Review pull request #{{ .Fields.number }} of {{ .Channel }}."

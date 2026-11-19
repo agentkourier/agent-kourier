@@ -155,7 +155,8 @@ func (s *Server) channelType(channel string) string {
 // preceded by an app_mention if it mentions a bot outside a direct message. The
 // events go to the apps that are in the channel (recipients), each over its own
 // connection, and an app_mention only to the apps mentioned.
-// Nothing happens if no app that would get the events has a client connected.
+// Nothing happens if no app that would get the events has a client connected (anyConnected; an app in HTTP mode
+// that is not revoked always counts).
 // If the clients leave after that check, the message stays stored and the error
 // is ErrNoConnection: the event is lost, as it would be in Slack. An event that
 // reaches some apps and not others is lost for the others without an error, and
@@ -231,11 +232,16 @@ func (m *UserMessage) addEnvelopes(s *Server, ids map[string]string) {
 	}
 }
 
-// anyConnected says whether any of apps has a Socket Mode client connected.
+// anyConnected says whether any of apps would be sent an event: one that has a Socket Mode client connected, or
+// one in HTTP mode that is not revoked, which is sent its events whether or not its URL answers, as Slack sends
+// them.
 func (s *Server) anyConnected(apps []App) bool {
+	if slices.ContainsFunc(apps, func(a App) bool { return a.overHTTP() && !s.isRevoked(a.AppID) }) {
+		return true
+	}
 	s.sock.mu.Lock()
 	defer s.sock.mu.Unlock()
-	return slices.ContainsFunc(apps, func(a App) bool { return s.sock.countLocked(a.AppID) > 0 })
+	return slices.ContainsFunc(apps, func(a App) bool { return !a.overHTTP() && s.sock.countLocked(a.AppID) > 0 })
 }
 
 // deliver sends event to each of apps, as an events_api envelope made for that
@@ -273,7 +279,8 @@ func (s *Server) eventCallbackTo(app App, event map[string]any) (string, error) 
 	s.events++
 	eventID, eventTime := fmt.Sprintf("Ev%08d", s.events), s.now().Unix()
 	s.mu.Unlock()
-	return s.sendEnvelope(app.AppID, "events_api", map[string]any{
+	channel, _ := event["channel"].(string)
+	return s.sendEnvelope(app.AppID, channel, "events_api", map[string]any{
 		"type": "event_callback", "team_id": app.TeamID, "api_app_id": app.AppID,
 		"event": event, "event_id": eventID, "event_time": eventTime,
 		"authorizations": []map[string]any{{"team_id": app.TeamID, "user_id": app.BotUser, "is_bot": true}},

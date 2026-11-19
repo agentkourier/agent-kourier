@@ -1,0 +1,81 @@
+# The fake Microsoft Teams service of the fast tier (E2E_TEAMS=1 in up-fast.sh; test/faketeams): Microsoft Entra's token endpoint, the Bot Framework's
+# metadata and keys, the Bot Connector and Microsoft Graph over TLS on 8443, which the broker's Teams connections reach through the test hooks
+# (AGENTKOURIER_TEAMS_URL and AGENTKOURIER_TEAMS_CA, hack/kind/teams-values.yaml), and the same with the unauthenticated /_control/ API on 8080, which the
+# TEAMS_ tests drive. Published nowhere. lib.sh's deploy_fake_teams makes its certificate (the Secret faketeams-tls) and applies this file.
+#
+# It hosts the bots of the two ChatConnections of hack/kind/fast/teams/teams.yaml and sends their activities to the broker's chat listener through the
+# Service that selects the leader (agent-kourier-chat). Graph's notifications for their https notificationURL are sent over plain HTTP (-deliver-http), as
+# an ingress in front of the listener would. The IDs are fake constants, and test/e2e's teams.go names the same ones.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: faketeams
+  namespace: e2e
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: faketeams}
+  template:
+    metadata:
+      labels: {app: faketeams}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: faketeams
+          image: agent-kourier-e2e/fast-doubles:dev
+          imagePullPolicy: Never
+          command:
+            - /faketeams
+            - -addr
+            - 0.0.0.0:8080
+            - -tls-addr
+            - 0.0.0.0:8443
+            - -tls-cert
+            - /tls/tls.crt
+            - -tls-key
+            - /tls/tls.key
+            - -public-url
+            - https://faketeams.e2e.svc.cluster.local:8443
+            - -tenant
+            - 7e2e7ea5-0000-4000-8000-000000000001
+            - -team
+            - 19:kourier-e2e-general@thread.tacv2
+            - -group
+            - 7e2e7ea5-0000-4000-8000-0000000000c1
+            - -client-secret
+            - fake-teams-client-secret
+            - -bot
+            - 7e2e7ea5-0000-4000-8000-0000000000a1=http://agent-kourier-chat.agent-kourier.svc.cluster.local:8081/chat/teams/teams-e2e/teams-push
+            - -bot
+            - 7e2e7ea5-0000-4000-8000-0000000000a2=http://agent-kourier-chat.agent-kourier.svc.cluster.local:8081/chat/teams/teams-e2e/teams-poll
+            - -channel
+            - 19:teams-mention@thread.tacv2
+            - -channel
+            - 19:teams-approval@thread.tacv2
+            - -channel
+            - 19:teams-alert-push@thread.tacv2
+            - -channel
+            - 19:teams-alert-poll@thread.tacv2
+            - -channel
+            - 19:teams-failover@thread.tacv2
+            - -deliver-http
+          ports: [{containerPort: 8080}, {containerPort: 8443}]
+          readinessProbe: {httpGet: {path: /_control/healthz, port: 8080}}
+          volumeMounts: [{name: tls, mountPath: /tls, readOnly: true}]
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+      volumes:
+        - name: tls
+          secret: {secretName: faketeams-tls}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: faketeams
+  namespace: e2e
+spec:
+  type: ClusterIP
+  selector: {app: faketeams}
+  ports:
+    - {name: control, port: 8080, targetPort: 8080}
+    - {name: microsoft, port: 8443, targetPort: 8443}

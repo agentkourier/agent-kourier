@@ -1,10 +1,11 @@
 # The fast tier's test doubles, from the one image up-fast.sh builds and loads. Every Service is
 # ClusterIP and stays that way: the fake Slack's /_control/ and the stub agent's
 # /_control/release/ have no authentication, so their ports are never published (no NodePort,
-# Ingress, LoadBalancer or hostPort). verify.sh checks that for both, and for hitlagent, which checks no credential.
+# Ingress, LoadBalancer or hostPort). verify.sh checks that for both, for the fake vendors' /_control/, and for hitlagent, which checks no credential.
 # Agent Kourier reaches them at fakeslack.e2e.svc.cluster.local:8080 (slack-go API URL plus "/"),
 # stubagent.e2e.svc.cluster.local:8080/agents/kagent/<agent>, hitlagent.e2e.svc.cluster.local:8080/ (an A2A agent
-# written from the agent contract alone, test/hitlagent) and sink.e2e.svc.cluster.local:8080.
+# written from the agent contract alone, test/hitlagent) and sink.e2e.svc.cluster.local:8080; the stub agent's webhook agents reach
+# fakevendors.e2e.svc.cluster.local:8080/vendor/ (the vendors' APIs).
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -60,6 +61,8 @@ spec:
 # restart: with the counter begun again at 1, a task id of an earlier run (and so the interaction id derived from it) met a row
 # that was already decided, and a prompt was never posted; and a context id made after the restart matched one the stub had
 # adopted from Agent Kourier before it, so that a new thread joined an old session and saw its turns.
+# -webhook-vendor-api: the webhook recipes' agents, agents/<vendor>, which the tier's webhook connections reach (hack/kind/fast/webhook), post
+# on the fake vendors' APIs.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -79,7 +82,7 @@ spec:
         - name: stubagent
           image: agent-kourier-e2e/fast-doubles:dev
           imagePullPolicy: Never
-          command: ["/stubagent", "-addr", "0.0.0.0:8080", "-require-auth", "-unique-ids"]
+          command: ["/stubagent", "-addr", "0.0.0.0:8080", "-require-auth", "-unique-ids", "-webhook-vendor-api", "http://fakevendors.e2e.svc.cluster.local:8080"]
           ports: [{containerPort: 8080}]
           readinessProbe: {tcpSocket: {port: 8080}}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
@@ -161,4 +164,57 @@ metadata:
 spec:
   type: ClusterIP
   selector: {app: sink}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+# The far side of the tier's webhook connections (test/fakevendors; hack/kind/fast/webhook, which only the tier on custom resources serves): it signs
+# the deliveries the WH_ tests ask for as each vendor does and POSTs them to the broker's chat Service, at the route of the vendor's connection; and it
+# is the vendors' APIs the stub agent's webhook agents post on, each post sent back as the vendor's delivery with the agent's own account as its
+# actor. Its /_control/ has no authentication, so its port is never published (verify.sh checks it). The secrets are fake constants, the same that
+# lib.sh's deploy_webhook puts in the connections' Secrets (FAKE_WEBHOOK_SECRETS), and each identity is its recipe's spec.webhook.identity:
+# test/kindmanifests pins that they agree.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fakevendors
+  namespace: e2e
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: fakevendors}
+  template:
+    metadata:
+      labels: {app: fakevendors}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: fakevendors
+          image: agent-kourier-e2e/fast-doubles:dev
+          imagePullPolicy: Never
+          command:
+            - /fakevendors
+            - -addr
+            - 0.0.0.0:8080
+            - -chat-url
+            - http://agent-kourier-chat.agent-kourier.svc.cluster.local:8081
+            - -source
+            - vendor=github,path=/chat/webhook/acme-webhooks/github,identity=acme-review-agent[bot],secret=fake-webhook-github-secret
+            - -source
+            - vendor=bitbucket,path=/chat/webhook/acme-webhooks/bitbucket,identity=712020:00000000-0000-0000-0000-000000000001,secret=fake-webhook-bitbucket-secret
+            - -source
+            - vendor=jira,path=/chat/webhook/acme-webhooks/jira,identity=712020:00000000-0000-0000-0000-000000000000,secret=fake-webhook-jira-secret
+            - -source
+            - vendor=linear,path=/chat/webhook/acme-webhooks/linear,identity=00000000-0000-0000-0000-000000000002,secret=fake-webhook-linear-secret
+          ports: [{containerPort: 8080}]
+          readinessProbe: {tcpSocket: {port: 8080}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fakevendors
+  namespace: e2e
+spec:
+  type: ClusterIP
+  selector: {app: fakevendors}
   ports: [{port: 8080, targetPort: 8080}]

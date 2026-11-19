@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
@@ -22,28 +23,16 @@ type Enqueuer interface {
 	EnqueueUnreaction(ctx context.Context, r outbox.Reaction) (string, error)
 }
 
-// Reactions is what a thread's messages show of the state of their turns, which is the one place that says it:
-// the sink asks it what a notice does to a message's reactions, and nothing else names an emoji. A name is the
-// platform's bare emoji name.
-type Reactions struct {
-	// Queued marks a reply that waits (spec 8.2). It goes on when the reply is queued behind a task or a
-	// turn, and comes off when the turn is sent or ends.
-	Queued string
-}
-
-// DefaultReactions returns the reactions Agent Kourier uses unless it is told otherwise.
-func DefaultReactions() Reactions { return Reactions{Queued: "hourglass_flowing_sand"} }
-
-// of says what a notice of kind does to the reactions of the message it is about: put an emoji on, or take it
-// off. ok is false for a kind that is not about a reaction.
-func (r Reactions) of(kind session.NoticeKind) (name string, remove, ok bool) {
+// queuedKind says what a notice of kind does to the queued reaction of the message it is about (spec 8.2): put it on when the reply
+// is queued behind a task or a turn, or take it off (remove) when the turn is sent or ends. ok is false for a kind that is not about it.
+func queuedKind(kind session.NoticeKind) (remove, ok bool) {
 	switch kind {
 	case session.NoticeQueued:
-		return r.Queued, false, true
+		return false, true
 	case session.NoticeDequeued:
-		return r.Queued, true, true
+		return true, true
 	}
-	return "", false, false
+	return false, false
 }
 
 // Sink is the session manager's Sink. A turn's events go to a Run, whose handler never blocks, so
@@ -51,19 +40,37 @@ func (r Reactions) of(kind session.NoticeKind) (name string, remove, ok bool) {
 // it later: Notice is called on Slack's acknowledgement path, where a post would be a call to Slack
 // that Slack waits on.
 type Sink struct {
-	runs      *Renderer
-	queue     Enqueuer
-	log       *slog.Logger
-	reactions Reactions
+	runs  *Renderer
+	queue Enqueuer
+	log   *slog.Logger
+	// queued is the name of each queued reaction this Sink put on, by the notice's ID, until the notice that takes it off: the removal
+	// names the reaction that went on whether or not the connection's platform still runs. The session pairs each queued notice with a
+	// dequeued one in the same process (its marked set is in memory too), which deletes the entry. Guarded by mu.
+	mu     sync.Mutex
+	queued map[string]string
 }
 
-// NewSink returns a Sink that renders turns with runs and queues notices on queue, showing the turns' states
-// with DefaultReactions.
+// NewSink returns a Sink that renders turns with runs and queues notices on queue. The reaction that marks a reply that waits is
+// the platform's own (chat.Caps.AckReaction) of the notice's connection, which runs' Config.Platforms gives; a nil runs knows no
+// platform, and queues no such reaction.
 func NewSink(runs *Renderer, queue Enqueuer, log *slog.Logger) *Sink {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Sink{runs: runs, queue: queue, log: log, reactions: DefaultReactions()}
+	return &Sink{runs: runs, queue: queue, log: log, queued: map[string]string{}}
+}
+
+// queuedReaction is the reaction that marks a reply that waits in a thread of conn: the platform's own (chat.Caps.AckReaction).
+// known is false when no platform runs conn now, and the name is empty, with known true, when the platform has no reactions.
+func (s *Sink) queuedReaction(conn string) (name string, known bool) {
+	if s.runs == nil {
+		return "", false
+	}
+	p, err := s.runs.cfg.Platforms.Platform(conn)
+	if err != nil {
+		return "", false
+	}
+	return p.Capabilities().AckReaction, true
 }
 
 // Turn starts the rendering of a turn and returns its handler. ctx is the turn's own, which ends
@@ -119,11 +126,43 @@ func (s *Sink) Notice(ctx context.Context, key session.Key, n session.Notice) {
 // takes the reaction off again): each is a row too, and is made later, off the acknowledgement path. The
 // two notices share an ID, and the outbox pairs their rows by it, whichever comes first.
 //
+// The queued reaction is the platform's own (chat.Caps.AckReaction) of the notice's connection: a platform with no reactions gets
+// no row, and a connection that no platform runs now is logged and gets none, since the name of the reaction is not known. Its removal
+// names the reaction the queued notice put on, remembered by the notice's ID, so it does not need the platform; with none remembered it
+// asks the platform, and with no platform either it is dropped quietly, as nothing this Sink put on is left.
+//
 // What no retry can mend is logged and is not an error: a kind nobody wrote wording for, and a
 // notice that is no valid row (a reaction on no message).
 func (s *Sink) QueueNotice(ctx context.Context, key session.Key, n session.Notice) error {
 	var err error
-	name, remove, ok := s.reactions.of(n.Kind)
+	var name string
+	remove, ok := queuedKind(n.Kind)
+	if ok {
+		var known bool
+		if remove {
+			s.mu.Lock()
+			name, known = s.queued[n.ID]
+			delete(s.queued, n.ID)
+			s.mu.Unlock()
+		}
+		if !known {
+			name, known = s.queuedReaction(key.Connection)
+		}
+		switch {
+		case !known && remove: // nothing this Sink put on is left: the platform stopped before the reaction was asked for, or never ran
+			s.log.DebugContext(ctx, "live: a removal of the queued reaction was dropped: no platform runs its connection, and no reaction was put on", "connection", key.Connection, "channel", key.Channel)
+			return nil
+		case !known:
+			s.log.WarnContext(ctx, "live: a notice of the queued reaction was dropped: no platform runs its connection now, so the reaction it names is not known", "kind", n.Kind, "connection", key.Connection, "channel", key.Channel)
+			return nil
+		case name == "": // the platform has no reactions: there is nothing to put on or take off
+			return nil
+		case !remove:
+			s.mu.Lock()
+			s.queued[n.ID] = name
+			s.mu.Unlock()
+		}
+	}
 	if n.Kind == session.NoticeAcknowledged || n.Kind == session.NoticeUnacknowledged {
 		name, remove, ok = n.Reaction, n.Kind == session.NoticeUnacknowledged, true
 	}

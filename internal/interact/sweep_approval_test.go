@@ -387,7 +387,7 @@ func TestAnApprovalOnAFlagFalseBindingIsCancelledAgainWhenItsPauseComesAgain(t *
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(in)
-	row := store.Interaction{ID: interact.InteractionID(*in), Key: key, TaskID: "task-1", Kind: store.InteractionToolApproval, Request: raw, CreatedAt: t0, Deadline: t0.Add(timeout)}
+	row := store.Interaction{ID: dialect.InteractionID(*in), Key: key, TaskID: "task-1", Kind: store.InteractionToolApproval, Request: raw, CreatedAt: t0, Deadline: t0.Add(timeout)}
 	if _, err := r.st.CreateInteraction(t.Context(), row); err != nil {
 		t.Fatal(err)
 	}

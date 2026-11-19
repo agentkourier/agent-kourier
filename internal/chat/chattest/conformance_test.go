@@ -45,6 +45,7 @@ type leaks struct {
 	acceptsMalformed                            bool
 	noStreamError                               bool
 	noStepError                                 bool // says it has no steps, and shows one when asked
+	stepsNoStreams                              bool // shows a message's steps and has no streams, as Microsoft Teams does
 	stopRepeats                                 bool // a stop with nothing to add shows the streamed text again
 	tooLargeFits                                bool
 	tooLargeToolsFit                            bool // a prompt of too many tools is said to fit
@@ -56,7 +57,15 @@ type leaks struct {
 	busyNoThread                                bool // a mark of a target with no thread is taken
 	busyUnsaid                                  bool // Busy is false and a mark is taken, with no ErrNoBusy
 	busyShowsText                               bool // a mark shows a message of its own
-	noAckReaction                               bool // says no reaction of its own, so a Binding that names none shows nothing
+	noReactions                                 bool // has no reactions (an empty AckReaction), and says ErrNoReactions as it should
+	reactsAnyway                                bool // has no reactions, and React and Unreact take one with no error
+	noReactionsRetried                          bool // has no reactions, and Classify calls ErrNoReactions Transient
+	noReactionsShows                            bool // has no reactions, says ErrNoReactions, and shows a text in place of the reaction
+	colonReaction                               bool // names its own reaction with the colons around it
+	noEphemeral                                 bool // has no ephemeral messages (Caps.Ephemeral false), and says ErrNoEphemeral as it should
+	ephemeralAnyway                             bool // has no ephemeral messages, and shows one with no error
+	noEphemeralOther                            bool // has no ephemeral messages, and says so with an error of its own, not ErrNoEphemeral
+	noEphemeralRetried                          bool // has no ephemeral messages, and Classify calls ErrNoEphemeral Transient
 
 	// Escaping that does not work for the platform's dialect, the way the suite once passed them.
 	backslashAll      bool // a backslash before every ASCII punctuation: Slack honours none, and the "<" is a token
@@ -98,7 +107,7 @@ func newMarkup(d dialectKind, l leaks) *markupPlatform {
 	f := NewFake()
 	// Small limits, so that the oversize checks send a few hundred characters and not twelve thousand.
 	f.SetCaps(chat.Caps{
-		Streams: true, Steps: true, Ephemeral: true, Edits: true, Inputs: true, Busy: true, MaxText: 300, AckReaction: "hourglass",
+		Streams: true, Steps: true, Ephemeral: true, Busy: true, MaxText: 300, AckReaction: "hourglass",
 		Limits: map[chat.Where]int{chat.WhereHeader: 100, chat.WhereButton: 60, chat.WhereChoice: 80, chat.WhereHint: 100, chat.WhereBody: 600, chat.WhereStream: 600},
 	})
 	return &markupPlatform{FakePlatform: f, dialect: d, leaks: l}
@@ -255,6 +264,32 @@ func (m *markupPlatform) Post(ctx context.Context, t chat.Target, o chat.Outgoin
 	return ref, err
 }
 
+// React and Unreact are the fake's, but for the leaks of a platform with no reactions that takes one, or shows a text instead.
+func (m *markupPlatform) React(ctx context.Context, r chat.Ref, name string) error {
+	switch {
+	case m.leaks.reactsAnyway:
+		return nil
+	case m.leaks.noReactionsShows:
+		m.sent = append(m.sent, m.read(":"+name+":"))
+	}
+	return m.FakePlatform.React(ctx, r, name)
+}
+
+func (m *markupPlatform) Unreact(ctx context.Context, r chat.Ref, name string) error {
+	if m.leaks.reactsAnyway {
+		return nil
+	}
+	return m.FakePlatform.Unreact(ctx, r, name)
+}
+
+// Classify is the fake's, but for the leak that would have the outbox retry a reaction that can never be made.
+func (m *markupPlatform) Classify(op chat.Op, err error) chat.Verdict {
+	if m.leaks.noReactionsRetried && errors.Is(err, chat.ErrNoReactions) || m.leaks.noEphemeralRetried && errors.Is(err, chat.ErrNoEphemeral) {
+		return chat.Verdict{Class: chat.Transient}
+	}
+	return m.FakePlatform.Classify(op, err)
+}
+
 // MarkBusy is the fake's, but for the leaks of the busy mark.
 func (m *markupPlatform) MarkBusy(ctx context.Context, t chat.Target, busy bool) error {
 	switch {
@@ -279,7 +314,15 @@ func (m *markupPlatform) Update(ctx context.Context, r chat.Ref, o chat.Outgoing
 	return err
 }
 
+// Ephemeral is the fake's, but for the leaks of a platform with no ephemeral messages that shows one, or says so in its own words.
 func (m *markupPlatform) Ephemeral(ctx context.Context, t chat.Target, user string, msg chat.Message) error {
+	switch {
+	case m.leaks.ephemeralAnyway:
+		m.record("Ephemeral", MessageFields(msg))
+		return nil
+	case m.leaks.noEphemeralOther:
+		return errors.New("this platform shows no message to one person alone")
+	}
 	err := m.FakePlatform.Ephemeral(ctx, t, user, msg)
 	if err == nil {
 		m.record("Ephemeral", MessageFields(msg))
@@ -378,19 +421,34 @@ func (m *markupPlatform) subject() Subject {
 		s.AllowAutolink = true // Slack makes a bare URL a link that shows itself, and no escape stops it
 	}
 	if m.leaks.noStreamError {
-		m.SetCaps(chat.Caps{MaxText: 4000, Ephemeral: true, Edits: true, AckReaction: "hourglass"})
+		m.SetCaps(chat.Caps{MaxText: 4000, Ephemeral: true, AckReaction: "hourglass"})
 	}
 	if m.leaks.noStepError {
-		m.SetCaps(chat.Caps{Streams: true, MaxText: 4000, Ephemeral: true, Edits: true, AckReaction: "hourglass"})
+		m.SetCaps(chat.Caps{Streams: true, MaxText: 4000, Ephemeral: true, AckReaction: "hourglass"})
+	}
+	if m.leaks.stepsNoStreams {
+		c := m.Capabilities()
+		c.Streams, c.Steps = false, true
+		m.SetCaps(c)
 	}
 	if m.leaks.busyUnsaid {
 		c := m.Capabilities()
 		c.Busy = false
 		m.SetCaps(c)
 	}
-	if m.leaks.noAckReaction {
+	if m.leaks.noReactions || m.leaks.reactsAnyway || m.leaks.noReactionsRetried || m.leaks.noReactionsShows {
 		c := m.Capabilities()
 		c.AckReaction = ""
+		m.SetCaps(c)
+	}
+	if m.leaks.colonReaction {
+		c := m.Capabilities()
+		c.AckReaction = ":hourglass:"
+		m.SetCaps(c)
+	}
+	if m.leaks.noEphemeral || m.leaks.ephemeralAnyway || m.leaks.noEphemeralOther || m.leaks.noEphemeralRetried {
+		c := m.Capabilities()
+		c.Ephemeral = false
 		m.SetCaps(c)
 	}
 	return s
@@ -400,6 +458,10 @@ func TestAnEscapingMarkupAdapterPassesInBothDialects(t *testing.T) {
 	for name, d := range map[string]dialectKind{"slack plain_text": slackPlainText, "commonmark": commonMark} {
 		t.Run(name, func(t *testing.T) { t.Parallel(); Conformance(t, newMarkup(d, leaks{}).subject()) })
 		t.Run(name+" with mentions", func(t *testing.T) { t.Parallel(); Conformance(t, newMarkup(d, leaks{mentions: true}).subject()) })
+		t.Run(name+" with no reactions", func(t *testing.T) { t.Parallel(); Conformance(t, newMarkup(d, leaks{noReactions: true}).subject()) })
+		t.Run(name+" with no ephemeral messages", func(t *testing.T) { t.Parallel(); Conformance(t, newMarkup(d, leaks{noEphemeral: true}).subject()) })
+		// A platform may show a message's steps with no stream to show them in: Steps does not need Streams.
+		t.Run(name+" with steps and no streams", func(t *testing.T) { t.Parallel(); Conformance(t, newMarkup(d, leaks{stepsNoStreams: true}).subject()) })
 	}
 }
 
@@ -428,7 +490,13 @@ func TestEveryWayAnAdapterCanBeUnsafeIsCaught(t *testing.T) {
 		{"no error from a platform with no streams", slackPlainText, leaks{noStreamError: true}, RuleContract, ""},
 		{"a stop with nothing to add that shows the streamed text again", slackPlainText, leaks{stopRepeats: true}, RuleContract, ""},
 		{"a platform with no steps that shows one when asked", slackPlainText, leaks{noStepError: true}, RuleContract, ""},
-		{"a platform that names no reaction of its own", slackPlainText, leaks{noAckReaction: true}, RuleContract, ""},
+		{"a platform with no reactions that takes one", slackPlainText, leaks{reactsAnyway: true}, RuleContract, ""},
+		{"a platform with no reactions that calls ErrNoReactions transient", slackPlainText, leaks{noReactionsRetried: true}, RuleContract, ""},
+		{"a platform with no reactions that shows a text instead", slackPlainText, leaks{noReactionsShows: true}, RuleContract, ""},
+		{"a platform that names its reaction with colons", slackPlainText, leaks{colonReaction: true}, RuleContract, ""},
+		{"a platform with no ephemeral messages that shows one", slackPlainText, leaks{ephemeralAnyway: true}, RuleContract, ""},
+		{"a platform with no ephemeral messages that says so in its own words", slackPlainText, leaks{noEphemeralOther: true}, RuleContract, ""},
+		{"a platform with no ephemeral messages that calls ErrNoEphemeral transient", slackPlainText, leaks{noEphemeralRetried: true}, RuleContract, ""},
 		{"a busy mark that is refused", slackPlainText, leaks{busyRefused: true}, RuleContract, ""},
 		{"a busy mark of a target with no thread that is taken", slackPlainText, leaks{busyNoThread: true}, RuleContract, ""},
 		{"a platform with no busy mark that takes one", slackPlainText, leaks{busyUnsaid: true}, RuleContract, ""},
@@ -1130,5 +1198,72 @@ func TestConformanceAcceptsGroupsThatResetEveryGroup(t *testing.T) {
 		if v.Method == "GroupsReadable" {
 			t.Errorf("violation: %v", v)
 		}
+	}
+}
+
+// A platform that has no such state as an archived channel or a readable group says so, with the reason: the suite does not ask for
+// the state, and checks the others as before.
+func TestConformanceSkipsTheStatesASubjectSaysThePlatformLacks(t *testing.T) {
+	t.Parallel()
+	s := NewFake().Subject()
+	s.AbsentChannels = map[ChannelState]string{ChannelNotJoined: "no membership", ChannelArchived: "no archive", ChannelScopeMissing: "no permissions"}
+	s.AbsentGroups = map[GroupState]string{GroupReadable: "no groups", GroupScopeMissing: "no permissions"}
+	var channels []ChannelState
+	var groups []GroupState
+	arrangeChannel, arrangeGroup := s.Channels, s.Groups
+	s.Channels = func(st ChannelState) string { channels = append(channels, st); return arrangeChannel(st) }
+	s.Groups = func(st GroupState) string { groups = append(groups, st); return arrangeGroup(st) }
+	if vs := CheckWith(t.Context(), s, Options{Short: true}); len(vs) != 0 {
+		t.Fatalf("violations: %v", vs)
+	}
+	// The joined channel is asked for again at the end, for the cancelled context; with no readable group, no group is.
+	if want := []ChannelState{ChannelJoined, ChannelUnknown, ChannelJoined}; !slices.Equal(channels, want) {
+		t.Errorf("the channel states arranged were %v, want %v", channels, want)
+	}
+	if want := []GroupState{GroupUnknown}; !slices.Equal(groups, want) {
+		t.Errorf("the group states arranged were %v, want %v", groups, want)
+	}
+}
+
+// An unknown group is still checked when the readable one is absent: alone, and failing at itself.
+func TestConformanceChecksTheUnknownGroupWithoutAReadableOne(t *testing.T) {
+	t.Parallel()
+	w := &wrongGroups{FakePlatform: NewFake(), leaks: groupLeaks{unknownPlain: true}}
+	s := w.Subject()
+	s.Platform = w
+	s.AbsentGroups = map[GroupState]string{GroupReadable: "no groups"}
+	var found []string
+	for _, v := range CheckWith(t.Context(), s, Options{Short: true}) {
+		if v.Method == "GroupsReadable" {
+			found = append(found, v.Case)
+		}
+	}
+	if !slices.Equal(found, []string{"unknown group"}) {
+		t.Errorf("GroupsReadable violations in %v, want the unknown group's", found)
+	}
+}
+
+// An absence needs a reason, and the states the other checks rest on cannot be absent: a joined channel, an unknown channel and an
+// unknown group, which every platform has.
+func TestConformanceRefusesAnAbsenceItCannotTake(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		channels map[ChannelState]string
+		groups   map[GroupState]string
+	}{
+		"no reason":          {channels: map[ChannelState]string{ChannelArchived: ""}},
+		"no group reason":    {groups: map[GroupState]string{GroupReadable: ""}},
+		"a joined channel":   {channels: map[ChannelState]string{ChannelJoined: "why"}},
+		"an unknown channel": {channels: map[ChannelState]string{ChannelUnknown: "why"}},
+		"an unknown group":   {groups: map[GroupState]string{GroupUnknown: "why"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := NewFake().Subject()
+			s.AbsentChannels, s.AbsentGroups = tc.channels, tc.groups
+			vs := CheckWith(t.Context(), s, Options{Short: true})
+			if len(vs) != 1 || vs[0].Rule != RuleSetup {
+				t.Errorf("violations %v, want one setup violation", vs)
+			}
+		})
 	}
 }

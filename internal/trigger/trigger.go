@@ -1,6 +1,7 @@
 package trigger
 
 import (
+	"cmp"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -15,7 +16,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/config"
 )
 
-// Match is a message that a botMessage or personMessage trigger of a Binding accepted (spec 8.2): which trigger, what
+// Match is a message that a botMessage, personMessage or webhookEvent trigger of a Binding accepted (spec 8.2): which trigger, what
 // it extracted, and the message as it came. The Intake decides what it does to the thread of its key (see
 // Decision), and hands it to IntakeConfig.OnStart if it starts a turn.
 type Match struct {
@@ -49,6 +50,20 @@ type Match struct {
 	// Person says the match is a personMessage trigger's: a person wrote the message, so the turn is theirs, attributed to
 	// Message.User, and it holds its place in the trigger's limits for its own turn alone, as a bot's mention does.
 	Person bool
+	// Webhook says the match is a webhookEvent trigger's (spec 8.2, "Webhook events"): Message is an event of a webhook connection
+	// (Message.Webhook set), whose turn belongs in the thread the connection derived (Message.At.Thread, or the event's own ID when the
+	// connection names no thread). It is nobody's turn, it holds its place in the trigger's limits for its own turn alone, as a bot's
+	// mention does, and Fields is empty: the event's named fields are in Message.Webhook, which the prompt reads.
+	Webhook bool
+}
+
+// sessionThread is the thread of the session that the match's turn is in: the thread a bot's mention or a webhook event is in, and
+// otherwise the message's own, which a bot's message and a person's message open.
+func (m Match) sessionThread() string {
+	if m.Mention || m.Person || m.Webhook {
+		return cmp.Or(m.Message.At.Thread, m.Message.At.ID)
+	}
+	return m.Message.At.ID
 }
 
 // maxMatchedFieldBytes is how much of a message field the regexes of a trigger see: its first 16 KiB, cut on a character
@@ -85,11 +100,12 @@ type extractRegex struct {
 	fieldRegex
 }
 
-// messageTrigger is a botMessage or personMessage trigger with its regexes compiled, which load validated, so a failure to
-// compile here is a trigger that never matches rather than an error to return.
+// messageTrigger is a botMessage, personMessage or webhookEvent trigger with its regexes compiled, which load validated, so a
+// failure to compile here is a trigger that never matches rather than an error to return.
 type messageTrigger struct {
 	index          int                // in the Binding's trigger list
 	person         bool               // a personMessage trigger: it takes a person's message and has no from
+	webhook        bool               // a webhookEvent trigger: it takes an event of a webhook connection, and reads its named fields
 	from           v1alpha1.BotSource // the sender a botMessage trigger accepts
 	thread         v1alpha1.TriggerThread
 	limits         v1alpha1.TriggerLimits
@@ -98,10 +114,11 @@ type messageTrigger struct {
 	extract        []extractRegex
 }
 
-// compileTrigger compiles the regexes of a botMessage or personMessage trigger, in the order of their field names, so that
-// what is tried first does not depend on the order of a map.
+// compileTrigger compiles the regexes of a botMessage, personMessage or webhookEvent trigger, in the order of their field names, so
+// that what is tried first does not depend on the order of a map.
 func compileTrigger(index int, t *v1alpha1.Trigger) (messageTrigger, error) {
-	c := messageTrigger{index: index, person: t.Type == v1alpha1.TriggerPersonMessage, thread: t.Thread, limits: t.Limits, prompt: t.PromptTemplate}
+	c := messageTrigger{index: index, person: t.Type == v1alpha1.TriggerPersonMessage, webhook: t.Type == v1alpha1.TriggerWebhookEvent,
+		thread: t.Thread, limits: t.Limits, prompt: t.PromptTemplate}
 	if t.From != nil {
 		c.from = *t.From
 	}
@@ -142,7 +159,9 @@ func compileTrigger(index int, t *v1alpha1.Trigger) (messageTrigger, error) {
 // every extract finds its group; it returns the extracted values. A regex is a search, not anchored unless it
 // says so, on the raw text of its field, the first maxMatchedFieldBytes bytes of it; a field the message lacks is empty. An extract's value is its group's
 // text, which may be empty if the group took part in the match; a group that took no part (an optional one) is
-// a miss, like a regex that does not match, so that no message gets an empty key by default.
+// a miss, like a regex that does not match, so that no message gets an empty key by default. A webhookEvent trigger's regexes read
+// the event's named fields, and one that names an Invalid field misses, in match and in exclude alike: the field's value is not
+// known, so an exclude cannot be said not to match it (spec D55).
 func (t *messageTrigger) evaluate(m chat.Inbound) (map[string]string, bool) {
 	fields, why := t.check(m)
 	return fields, why.kind == missNone
@@ -173,12 +192,12 @@ func (t *messageTrigger) check(m chat.Inbound) (map[string]string, miss) {
 		return nil, miss{kind: missBot}
 	}
 	for _, f := range t.match {
-		if !f.re.MatchString(matched(m.Field(f.field))) {
+		if v, known := t.value(m, f.field); !known || !f.re.MatchString(matched(v)) {
 			return nil, miss{missMatch, string(f.field)}
 		}
 	}
 	for _, f := range t.exclude {
-		if f.re.MatchString(matched(m.Field(f.field))) {
+		if v, known := t.value(m, f.field); !known || f.re.MatchString(matched(v)) {
 			return nil, miss{missExclude, string(f.field)}
 		}
 	}
@@ -198,21 +217,41 @@ func (t *messageTrigger) check(m chat.Inbound) (map[string]string, miss) {
 
 // takesSender says whether m is from the kind of sender the trigger takes: the one bot a botMessage trigger names, or a
 // person for a personMessage trigger. A person's message is one with no Bot and a user, which the adapter has decided
-// is not Agent Kourier's own.
+// is not Agent Kourier's own. An event of a webhook connection is a webhookEvent trigger's alone, and such a trigger takes nothing
+// else.
 func (t *messageTrigger) takesSender(m chat.Inbound) bool {
-	if t.person {
+	switch {
+	case t.webhook || m.Webhook != nil:
+		return t.webhook && m.Webhook != nil
+	case t.person:
 		return m.Bot == nil && m.User != ""
 	}
 	return m.Bot != nil && m.Bot.IsSender(t.from)
 }
 
-// messageTriggerOf says whether tr is a trigger of the table: a botMessage trigger with its sender, or a personMessage trigger.
-// The intake's table and the dry run's are made of the same.
-func messageTriggerOf(tr *v1alpha1.Trigger) bool {
-	return (tr.Type == v1alpha1.TriggerBotMessage && tr.From != nil) || tr.Type == v1alpha1.TriggerPersonMessage
+// value is the field f of m as the trigger's regexes read it, and whether it is known: a message's field always is (one it lacks
+// is empty), and so is a webhook event's named field, empty when absent, unless it is Invalid.
+func (t *messageTrigger) value(m chat.Inbound, f v1alpha1.MessageField) (string, bool) {
+	if !t.webhook {
+		return m.Field(f), true
+	}
+	for _, wf := range m.Webhook.Fields {
+		if wf.Name == string(f) {
+			return wf.Value, !wf.Invalid
+		}
+	}
+	return "", true
 }
 
-// triggerTable is the botMessage and personMessage triggers of one Binding, compiled, in the order of its list.
+// messageTriggerOf says whether tr is a trigger of the table: a botMessage trigger with its sender, a personMessage trigger, or a
+// webhookEvent trigger. The intake's table and the dry run's are made of the same; the dry run reads Slack's history, whose messages
+// no webhookEvent trigger takes.
+func messageTriggerOf(tr *v1alpha1.Trigger) bool {
+	return (tr.Type == v1alpha1.TriggerBotMessage && tr.From != nil) || tr.Type == v1alpha1.TriggerPersonMessage ||
+		tr.Type == v1alpha1.TriggerWebhookEvent
+}
+
+// triggerTable is the botMessage, personMessage and webhookEvent triggers of one Binding, compiled, in the order of its list.
 type triggerTable []messageTrigger
 
 // match returns the first trigger that matches m, in order, and what it extracted: one that does not match
@@ -244,7 +283,7 @@ type tableEntry struct {
 	table triggerTable
 }
 
-// table returns the compiled botMessage and personMessage triggers of b, which snap holds. A trigger that does not compile,
+// table returns the compiled botMessage, personMessage and webhookEvent triggers of b, which snap holds. A trigger that does not compile,
 // which load should have rejected, is left out and logged at WARN, once per routing table.
 func (c *tableCache) table(snap *config.Snapshot, b *v1alpha1.Binding, log *slog.Logger) triggerTable {
 	c.mu.Lock()
@@ -261,7 +300,7 @@ func (c *tableCache) table(snap *config.Snapshot, b *v1alpha1.Binding, log *slog
 	return e.table
 }
 
-// build compiles the botMessage and personMessage triggers of b.
+// build compiles the botMessage, personMessage and webhookEvent triggers of b.
 func (c *tableCache) build(b *v1alpha1.Binding, log *slog.Logger) triggerTable {
 	compile := compileTrigger
 	if c.compile != nil {

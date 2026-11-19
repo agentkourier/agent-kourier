@@ -89,4 +89,11 @@ func TestPlatformInteractionDecodesTheButtonsOfAnApproval(t *testing.T) {
 			t.Errorf("%s: interaction = %+v, want %+v", tc.name, got, tc.want)
 		}
 	}
+	// The delivery key goes with every press, whichever button it is: the pipeline and the feedback handler both record by it.
+	for _, in := range []Interaction{press("approve_all", "decide", nil), press("submit", "submit", radios), press("feedback_up", "buttons3", nil), press("other", "submit", nil)} {
+		in.Delivery = "key-1"
+		if got := NewPlatform(nil, "ns/conn").interaction(in); got.Delivery != "key-1" {
+			t.Errorf("a press of %s in %s has the delivery key %q; want key-1", in.ActionID, in.BlockID, got.Delivery)
+		}
+	}
 }

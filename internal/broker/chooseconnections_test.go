@@ -1,7 +1,11 @@
 package broker
 
 import (
+	"cmp"
+	"context"
 	"errors"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +20,13 @@ import (
 // agedConnections resolves a snapshot of ChatConnections, each with the creation time given (seconds, 0 for none).
 func agedConnections(t *testing.T, ages map[string]int64) *config.Snapshot {
 	t.Helper()
+	return modedConnections(t, ages, nil)
+}
+
+// modedConnections resolves a snapshot of Slack ChatConnections, each with the creation time given (seconds, 0 for none) and the mode
+// given in modes, if any (none sets no slack block).
+func modedConnections(t *testing.T, ages map[string]int64, modes map[string]v1alpha1.SlackMode) *config.Snapshot {
+	t.Helper()
 	set := &config.Set{}
 	for n, age := range ages {
 		ns, name, _ := strings.Cut(n, "/")
@@ -23,12 +34,13 @@ func agedConnections(t *testing.T, ages map[string]int64) *config.Snapshot {
 		if age > 0 {
 			meta.CreationTimestamp = metav1.NewTime(time.Unix(age, 0))
 		}
-		set.ChatConnections = append(set.ChatConnections, v1alpha1.ChatConnection{
-			ObjectMeta: meta,
-			Spec:       v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformSlack, CredentialsSecretRef: v1alpha1.SecretRef{Name: "creds-" + name}},
-		})
+		spec := v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformSlack, CredentialsSecretRef: v1alpha1.SecretRef{Name: "creds-" + name}}
+		if m, ok := modes[n]; ok {
+			spec.Slack = &v1alpha1.SlackConnectionSpec{Mode: m}
+		}
+		set.ChatConnections = append(set.ChatConnections, v1alpha1.ChatConnection{ObjectMeta: meta, Spec: spec})
 	}
-	snap, err := config.Resolve(t.Context(), set, keys{})
+	snap, err := config.Resolve(t.Context(), set, keysOfBothModes{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,10 +144,109 @@ func TestChooseTeamConnectionsWithNoOwnReturnsEveryConnectionOldestFirst(t *test
 
 // A ChatConnection on a platform with no adapter is a wiring error of its own, and a team connection's is its Err and no more.
 func TestAChatConnectionOnAPlatformWithNoAdapterIsAWiringError(t *testing.T) {
-	c := &v1alpha1.ChatConnection{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "slack"}, Spec: v1alpha1.ChatConnectionSpec{Platform: "teams"}}
+	c := &v1alpha1.ChatConnection{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "slack"}, Spec: v1alpha1.ChatConnectionSpec{Platform: "discord"}}
 	if _, err := connectionOf(t.Context(), c, &reader{vals: map[string]string{}}); !errors.Is(err, ErrWiring) {
 		t.Errorf("connectionOf = %v; want ErrWiring", err)
 	}
+}
+
+// A teams ChatConnection is chosen with its client secret and its spec.teams, its mode with it, as the broker's own connection and as a
+// team one, in either mode.
+func TestATeamsChatConnectionIsChosenInEitherMode(t *testing.T) {
+	const tenant, app = "11111111-2222-4333-8444-555555555555", "22222222-3333-4444-8555-666666666666"
+	for _, mode := range []v1alpha1.TeamsMode{"", v1alpha1.TeamsModeHTTP, v1alpha1.TeamsModeSocket} {
+		t.Run(cmp.Or(string(mode), "unset"), func(t *testing.T) {
+			conn := func(ns string) v1alpha1.ChatConnection {
+				return v1alpha1.ChatConnection{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "teams", CreationTimestamp: metav1.NewTime(time.Unix(2, 0))},
+					Spec: v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformTeams, CredentialsSecretRef: v1alpha1.SecretRef{Name: "creds-teams"},
+						Teams: &v1alpha1.TeamsConnectionSpec{TenantID: tenant, AppID: app, Mode: mode}}}
+			}
+			slack := v1alpha1.ChatConnection{ObjectMeta: metav1.ObjectMeta{Namespace: "platform", Name: "slack", CreationTimestamp: metav1.NewTime(time.Unix(1, 0))},
+				Spec: v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformSlack, CredentialsSecretRef: v1alpha1.SecretRef{Name: "creds-slack"}}}
+			for _, c := range []v1alpha1.ChatConnection{conn("platform"), slack} {
+				if err := c.Validate(); err != nil {
+					t.Fatalf("the connection does not validate: %v", err)
+				}
+			}
+			key := v1alpha1.TeamsClientSecretKey
+			r := &reader{vals: map[string]string{
+				"platform/creds-teams/" + key: "fake-client-secret", "team-a/creds-teams/" + key: "fake-client-secret",
+				"platform/creds-slack/botToken": "xoxb-own", "platform/creds-slack/appToken": "xapp-own",
+			}}
+			resolved := func(conns ...v1alpha1.ChatConnection) *config.Snapshot {
+				snap, err := config.Resolve(t.Context(), &config.Set{ChatConnections: conns}, keysOf{key, "botToken", "appToken"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return snap
+			}
+
+			own, ownErr := ChooseConnections(t.Context(), resolved(conn("platform")), v1alpha1.ObjectRef{Namespace: "platform", Name: "teams"}, r)
+			got, err := ChooseConnections(t.Context(), resolved(slack, conn("team-a")), ownRef, r)
+			if err != nil {
+				t.Fatalf("own Slack connection beside a team teams one: ChooseConnections = %v; want it served", err)
+			}
+			if len(got.Team) != 1 || got.Team[0].Platform != v1alpha1.PlatformTeams {
+				t.Fatalf("team connections = %+v; want the teams one", got.Team)
+			}
+			team := got.Team[0]
+
+			want := v1alpha1.TeamsConnectionSpec{TenantID: tenant, AppID: app, Mode: mode}
+			if ownErr != nil || own.Own == nil || own.Own.Platform != v1alpha1.PlatformTeams || own.Own.Teams != want ||
+				own.Own.Credentials[key].Reveal() != "fake-client-secret" {
+				t.Errorf("own teams connection: ChooseConnections = %+v, %v; want it chosen with its client secret and spec.teams", own.Own, ownErr)
+			}
+			if team.Err != nil || team.Teams != want || team.Credentials[key].Reveal() != "fake-client-secret" {
+				t.Errorf("team teams connection = %+v; want it chosen with its client secret and spec.teams", team)
+			}
+		})
+	}
+}
+
+// keysOf says every Secret has the keys given, as the snapshot builder only checks that they exist.
+type keysOf []string
+
+func (k keysOf) Keys(context.Context, string, string) ([]string, error) { return k, nil }
+
+// A Slack connection in HTTP mode is served with the keys of its mode, the bot token and the signing secret, and no app token is read; a
+// connection in Socket Mode beside it keeps its own keys. A Secret of HTTP mode that has no signingSecret is a wiring error that names the key.
+func TestASlackConnectionInHTTPModeReadsTheKeysOfItsMode(t *testing.T) {
+	r := &reader{vals: map[string]string{
+		"platform/creds-slack/botToken": "xoxb-own", "platform/creds-slack/signingSecret": "fake-signing-own", "platform/creds-slack/appToken": "xapp-unread",
+		"team-a/creds-slack/botToken": "xoxb-a", "team-a/creds-slack/signingSecret": "fake-signing-a",
+		"team-b/creds-slack/botToken": "xoxb-b", "team-b/creds-slack/appToken": "xapp-b",
+		"team-c/creds-slack/botToken": "xoxb-c", "team-c/creds-slack/appToken": "xapp-c",
+	}}
+	modes := map[string]v1alpha1.SlackMode{"platform/slack": v1alpha1.SlackModeHTTP, "team-a/slack": v1alpha1.SlackModeHTTP,
+		"team-b/slack": v1alpha1.SlackModeSocket, "team-c/slack": v1alpha1.SlackModeHTTP}
+	keys := func(c Connection) []string { return slices.Sorted(maps.Keys(c.Credentials)) }
+
+	got, err := ChooseConnections(t.Context(), modedConnections(t, map[string]int64{"platform/slack": 1, "team-a/slack": 2, "team-b/slack": 3, "team-c/slack": 4}, modes), ownRef, r)
+	if err != nil {
+		t.Fatalf("own in HTTP mode: ChooseConnections = %v; want it served", err)
+	}
+	if k := keys(*got.Own); !slices.Equal(k, []string{"botToken", "signingSecret"}) || got.Own.Credentials["signingSecret"].Reveal() != "fake-signing-own" {
+		t.Errorf("own in HTTP mode has the keys %v; want botToken and its signingSecret, and no appToken", k)
+	}
+	if len(got.Team) != 3 {
+		t.Fatalf("Team = %+v; want team-a, team-b and team-c", got.Team)
+	}
+	if a := got.Team[0]; a.Err != nil || !slices.Equal(keys(a.Connection), []string{"botToken", "signingSecret"}) {
+		t.Errorf("team-a in HTTP mode = %v with keys %v; want botToken and signingSecret", a.Err, keys(a.Connection))
+	}
+	if b := got.Team[1]; b.Err != nil || !slices.Equal(keys(b.Connection), []string{"appToken", "botToken"}) {
+		t.Errorf("team-b in Socket Mode = %v with keys %v; want botToken and appToken", b.Err, keys(b.Connection))
+	}
+	if c := got.Team[2]; !errors.Is(c.Err, ErrWiring) || !strings.Contains(c.Err.Error(), "read signingSecret of Secret team-c/creds-slack") {
+		t.Errorf("team-c in HTTP mode with no signingSecret = %v; want a wiring error naming the key", c.Err)
+	}
+}
+
+// keysOfBothModes says every Secret has every key of both Slack modes, as the snapshot builder only checks that they exist.
+type keysOfBothModes struct{}
+
+func (keysOfBothModes) Keys(context.Context, string, string) ([]string, error) {
+	return []string{"token", "botToken", "appToken", "signingSecret"}, nil
 }
 
 // The fingerprint of a team connection changes with its generation, its object and the content of its credentials, and with nothing else, so

@@ -593,8 +593,10 @@ func asksForApprovers(spec v1alpha1.BindingSpec) bool {
 // bindingTargets lists the Bindings to probe: those of snap whose ChatConnection is one of served, each naming its connection
 // ("namespace/name") so that its channel and groups are read with that connection's bot. A Binding on a connection the broker does
 // not serve is left out, as the files route can hold one. A Binding's key is namespace/name, which is what CheckAgent looks it up by.
-// A Binding that asks for tool approvals from user groups (asksForApprovers) carries them in its Target, a copy of its own list.
-func bindingTargets(snap *config.Snapshot, served []v1alpha1.ObjectRef) []bindingcheck.Target {
+// A Binding that asks for tool approvals from user groups (asksForApprovers) carries them in its Target, a copy of its own list. A
+// Binding whose acknowledgment names a reaction that the platform reactions gives for its connection has none of (ackUnshown) says so
+// in its Target; a nil reactions, or a connection it has no platform for, tells nothing.
+func bindingTargets(snap *config.Snapshot, served []v1alpha1.ObjectRef, reactions chat.Resolver[platformCaps]) []bindingcheck.Target {
 	if snap == nil {
 		return nil
 	}
@@ -615,6 +617,7 @@ func bindingTargets(snap *config.Snapshot, served []v1alpha1.ObjectRef) []bindin
 		if asksForApprovers(rb.Binding.Spec) {
 			t.ApproverGroups = slices.Clone(rb.Binding.Spec.Interactions.ApproverGroups)
 		}
+		t.AcknowledgmentUnshown = ackUnshown(rb.Binding.Spec.Chat.Acknowledgment, reactionsOf(reactions, t.Connection))
 		out = append(out, t)
 	}
 	return out
@@ -688,10 +691,14 @@ func (l bindingLog) pruned(names []string) {
 	}
 }
 
-// dropped is bindingcheck.Options.OnDrop: the line for a condition the Prober stops verifying because the Binding no longer asks for it (an
-// edit took its approver groups away). Its series go with it, so an alert on them would resolve without a word; this line is the word.
+// dropped is bindingcheck.Options.OnDrop: the line for a condition the Prober stops verifying because it no longer applies to the Binding
+// (an edit took its approver groups away, or its acknowledgment is shown now). Its series go with it, so an alert on them would resolve without a word; this line is the word.
 func (l bindingLog) dropped(binding string, cond bindingcheck.ConditionType) {
-	l.log.Info("binding verification: stopped verifying a condition of a Binding: the Binding no longer asks for it", "binding", binding, "condition", string(cond))
+	why := "the Binding no longer asks for it"
+	if cond == bindingcheck.AcknowledgmentShown {
+		why = "the Binding names no reaction now, or its connection's platform is not known to lack reactions"
+	}
+	l.log.Info("binding verification: stopped verifying a condition of a Binding: "+why, "binding", binding, "condition", string(cond))
 }
 
 // verification is what the verification of Bindings is built from.
@@ -704,6 +711,10 @@ type verification struct {
 	// read as the bot of the Binding's own connection, looked up at each probe. A connection it has none for (an error wrapping
 	// chat.ErrConnectionDown: it is not running yet, or it stopped) is not called, and the Binding's reads say so (connectionDownOutcome).
 	Platforms chat.Resolver[platformReader]
+	// Reactions gives the platform that runs a connection, by "namespace/name", for what it has of reactions (chat.Caps.AckReaction),
+	// looked up at each Tick: a Binding whose acknowledgment names a reaction on a platform with none has an AcknowledgmentShown
+	// condition (ackUnshown). Nil, or a connection it has no platform for, tells nothing, and the Binding has no such condition.
+	Reactions chat.Resolver[platformCaps]
 	// Own is the broker's own connection. Every other connection is a team connection, which the supervisor restarts by itself, and its
 	// Bindings are told so where the own connection's are told to restart Agent Kourier. The zero value means no connection is a team's.
 	Own v1alpha1.ObjectRef
@@ -942,7 +953,9 @@ func (v verification) newProber() *bindingcheck.Prober {
 	groups := connectionGroups{v: v, timeout: innerBound(timeout)}
 	l := bindingLog{log: v.Log}
 	return bindingcheck.NewProber(bindingcheck.Options{
-		Targets:  func() []bindingcheck.Target { return bindingTargets(v.Snaps.Current(), servedRefs(v.served())) },
+		Targets: func() []bindingcheck.Target {
+			return bindingTargets(v.Snaps.Current(), servedRefs(v.served()), v.Reactions)
+		},
 		Revision: v.Revision,
 		Agents: agentFunc(func(ctx context.Context, binding string) (bindingcheck.Outcome, error) {
 			return v.timed(bindingcheck.BackendReachable, func() (bindingcheck.Outcome, error) { return agents.CheckAgent(ctx, binding) })

@@ -221,7 +221,7 @@ func newDecideRig(t *testing.T) *decideRig {
 	r.aud = &orderedAudit{audits: &audits{}, log: r.calls, all: r.flow}
 	var err error
 	r.d, err = interact.NewDecider(decideCfg(interact.DecideConfig{
-		Store: r.st, Auditor: r.aud, Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Session: r.sess, Sessions: r.st, Replacer: r.rep, Outbox: r.out, Logger: slog.New(slog.NewTextHandler(r.logs, nil)),
+		Store: r.st, Auditor: r.aud, Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Session: r.sess, Sessions: r.st, Replacer: r.rep, Outbox: r.out, Logger: slog.New(slog.NewTextHandler(r.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		OnDecision: func(result string) { r.mu.Lock(); r.hooks = append(r.hooks, result); r.mu.Unlock() },
 		OnApprovalOutcome: func(binding string, o interact.Outcome) {
 			r.mu.Lock()
@@ -292,7 +292,7 @@ func TestDecideBuildsThenAuditsThenSubmits(t *testing.T) {
 	r := newDecideRig(t)
 	r.pending(t)
 	at := d0.Add(time.Minute)
-	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", at, "req-1")); err != nil {
+	if _, err := r.d.Decide(t.Context(), r.press(t, "UALICE1", at, "req-1")); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := r.calls.list(), []string{"audit:answered", "submit"}; !slices.Equal(got, want) {
@@ -318,7 +318,7 @@ func TestDecideBuildsThenAuditsThenSubmits(t *testing.T) {
 func TestAnInTimePressDecidedAfterTheDeadlineStillWins(t *testing.T) {
 	r := newDecideRig(t)
 	r.pending(t)
-	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", deadline.Add(-time.Second), "req-1")); err != nil {
+	if _, err := r.d.Decide(t.Context(), r.press(t, "UALICE1", deadline.Add(-time.Second), "req-1")); err != nil {
 		t.Fatal(err)
 	}
 	if r.row(t).State != store.InteractionAnswered {
@@ -331,7 +331,7 @@ func TestAnInTimePressDecidedAfterTheDeadlineStillWins(t *testing.T) {
 func TestALatePressIsToldSoAndNothingElse(t *testing.T) {
 	r := newDecideRig(t)
 	r.pending(t)
-	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", deadline, "req-1")); err != nil {
+	if _, err := r.d.Decide(t.Context(), r.press(t, "UALICE1", deadline, "req-1")); err != nil {
 		t.Fatal(err)
 	}
 	if len(r.calls.list()) != 0 || r.row(t).State != store.InteractionPending || len(r.aud.got) != 0 {
@@ -347,7 +347,7 @@ func TestALatePressIsToldSoAndNothingElse(t *testing.T) {
 func TestAnAnswerTheDialectRefusesIsNotRecorded(t *testing.T) {
 	r := newDecideRig(t)
 	r.pending(t)
-	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "another-request")); err != nil {
+	if _, err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "another-request")); err != nil {
 		t.Fatal(err)
 	}
 	if len(r.calls.list()) != 0 || r.row(t).State != store.InteractionPending {
@@ -364,14 +364,14 @@ func TestAFailedAuditStopsTheDecision(t *testing.T) {
 	r := newDecideRig(t)
 	r.pending(t)
 	r.aud.err = errBoom
-	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); !errors.Is(err, errBoom) {
+	if _, err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); !errors.Is(err, errBoom) {
 		t.Fatalf("Decide = %v; want the audit's error, for the press to be tried again", err)
 	}
 	if got := r.calls.list(); !slices.Equal(got, []string{"audit:answered"}) || r.row(t).State != store.InteractionPending || len(r.hooked()) != 0 || len(r.eph.list()) != 0 {
 		t.Errorf("calls %q, state %v, hooks %q; want only the failed audit", got, r.row(t).State, r.hooked())
 	}
 	r.aud.err = nil // the retry
-	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil || r.row(t).State != store.InteractionAnswered {
+	if _, err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil || r.row(t).State != store.InteractionAnswered {
 		t.Fatalf("the retry = %v, state %v; want it answered", err, r.row(t).State)
 	}
 }
@@ -381,8 +381,8 @@ func TestAFailedAuditStopsTheDecision(t *testing.T) {
 func TestAPressAfterAnotherAnswerIsSuperseded(t *testing.T) {
 	r := newDecideRig(t)
 	r.pending(t)
-	_ = r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1"))
-	if err := r.d.Decide(t.Context(), r.press(t, "UBOB22", d0.Add(2*time.Minute), "req-1")); err != nil {
+	_, _ = r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1"))
+	if _, err := r.d.Decide(t.Context(), r.press(t, "UBOB22", d0.Add(2*time.Minute), "req-1")); err != nil {
 		t.Fatal(err)
 	}
 	if got := r.eph.list(); len(got) != 1 || got[0] != "UBOB22: @UALICE1 answered this question first." {
@@ -405,7 +405,7 @@ func TestTwoPressesAtOnceGiveOneAnswer(t *testing.T) {
 	for _, user := range []string{"UALICE1", "UBOB22"} {
 		pd := r.press(t, user, d0.Add(time.Minute), "req-1")
 		wg.Go(func() {
-			if err := r.d.Decide(t.Context(), pd); err != nil {
+			if _, err := r.d.Decide(t.Context(), pd); err != nil {
 				t.Error(err)
 			}
 		})
@@ -437,8 +437,8 @@ func TestTwoPressesAtOnceGiveOneAnswer(t *testing.T) {
 func TestTheSameUserAgainIsARetryNotALoss(t *testing.T) {
 	r := newDecideRig(t)
 	r.pending(t)
-	_ = r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1"))
-	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil {
+	_, _ = r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1"))
+	if _, err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil {
 		t.Fatal(err)
 	}
 	if len(r.aud.got) != 1 || len(r.eph.list()) != 0 || !slices.Equal(r.hooked(), []string{"answered"}) || !slices.Equal(r.flow.list(), []string{"audit:answered", "submit", "send", "replace", "send", "replace"}) {
@@ -454,7 +454,7 @@ func TestAQuestionThatIsClosedSaysSo(t *testing.T) {
 		if err := r.st.ResolveInteraction(t.Context(), "ix-1", state, deadline); err != nil {
 			t.Fatal(err)
 		}
-		if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil {
+		if _, err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil {
 			t.Fatal(err)
 		}
 		if got := r.eph.list(); len(got) != 1 || !strings.Contains(got[0], want) || !slices.Equal(r.calls.list(), []string{"audit:superseded"}) {
@@ -468,9 +468,52 @@ func TestAnEphemeralThatFailsDoesNotFailTheDecision(t *testing.T) {
 	r := newDecideRig(t)
 	r.pending(t)
 	r.eph.err = errBoom
-	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", deadline, "req-1")); err != nil {
+	if _, err := r.d.Decide(t.Context(), r.press(t, "UALICE1", deadline, "req-1")); err != nil {
 		t.Fatalf("Decide = %v; want a refused late press to be done even if it could not be told", err)
 	}
+}
+
+// TestAPlatformWithNoEphemeralMessagesIsNotAFault: a platform that shows no message to one person alone says
+// chat.ErrNoEphemeral, which is logged at debug and not as a warning: the person is not told, by design, and nothing is
+// posted for all to see in its place. Any other failure still warns.
+func TestAPlatformWithNoEphemeralMessagesIsNotAFault(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err       error
+		wantLevel string
+	}{
+		"no ephemeral messages": {fmt.Errorf("other: %w", chat.ErrNoEphemeral), "level=DEBUG"},
+		"another failure":       {errBoom, "level=WARN"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newDecideRig(t)
+			r.pending(t)
+			r.eph.err = tc.err
+			if _, err := r.d.Decide(t.Context(), r.press(t, "UALICE1", deadline, "req-1")); err != nil {
+				t.Fatalf("Decide = %v; want the press done", err)
+			}
+			if len(r.eph.list()) != 1 || len(r.out.list()) != 0 {
+				t.Errorf("ephemerals %q, posts %d; want the one ephemeral tried and nothing posted in its place", r.eph.list(), len(r.out.list()))
+			}
+			out := r.logs.String()
+			line := logLine(out, "could not be told")
+			if !strings.Contains(line, tc.wantLevel) || !strings.Contains(line, "ix-1") {
+				t.Errorf("log %q; want %s that the person was not told, naming ix-1", out, tc.wantLevel)
+			}
+			if tc.wantLevel == "level=DEBUG" && strings.Contains(out, "level=WARN") {
+				t.Errorf("log %q; want no warning for a platform that has no ephemeral messages", out)
+			}
+		})
+	}
+}
+
+// logLine is the first line of out that holds text, or "".
+func logLine(out, text string) string {
+	for line := range strings.Lines(out) {
+		if strings.Contains(line, text) {
+			return line
+		}
+	}
+	return ""
 }
 
 func TestNewDeciderNeedsItsParts(t *testing.T) {
@@ -484,10 +527,10 @@ func TestNewDeciderNeedsItsParts(t *testing.T) {
 func TestTheWinnersAnswerIsSentOnce(t *testing.T) {
 	r := newDecideRig(t)
 	r.pending(t)
-	_ = r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1"))
-	_ = r.d.Decide(t.Context(), r.press(t, "UBOB22", d0.Add(2*time.Minute), "req-1")) // lost
-	_ = r.d.Decide(t.Context(), r.press(t, "UCAROL3", deadline, "req-1"))             // late
-	_ = r.d.Decide(t.Context(), r.press(t, "UDAVE44", d0.Add(time.Minute), "wrong"))  // refused
+	_, _ = r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1"))
+	_, _ = r.d.Decide(t.Context(), r.press(t, "UBOB22", d0.Add(2*time.Minute), "req-1")) // lost
+	_, _ = r.d.Decide(t.Context(), r.press(t, "UCAROL3", deadline, "req-1"))             // late
+	_, _ = r.d.Decide(t.Context(), r.press(t, "UDAVE44", d0.Add(time.Minute), "wrong"))  // refused
 	got := r.sess.answers()
 	if len(got) != 1 || got[0].ID != "ix-1/answer" || got[0].TaskID != "task-1" || r.sess.keys[0] != key || got[0].Metadata[kagentv1.HITLExtension] == nil {
 		t.Fatalf("answers sent %+v; want the winner's alone, for task-1 in the thread, under the interaction's message ID", got)
@@ -509,7 +552,7 @@ func TestAnAnswerForATaskThatMovedOnIsToldInTheThread(t *testing.T) {
 	r.pending(t)
 	r.task(t, "task-2") // the thread has moved on to another task
 	r.sess.errs = []error{session.ErrNotPaused}
-	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil {
+	if _, err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil {
 		t.Fatalf("Decide = %v; want the press done: the task is not paused, and no retry would change that", err)
 	}
 	posts := r.out.list()
@@ -528,10 +571,10 @@ func TestASendThatFailsIsRetriedWithoutAnotherDecision(t *testing.T) {
 	r := newDecideRig(t)
 	r.pending(t)
 	r.sess.errs = []error{errBoom}
-	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); !errors.Is(err, errBoom) {
+	if _, err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); !errors.Is(err, errBoom) {
 		t.Fatalf("Decide = %v; want the send's error, for the press to be tried again", err)
 	}
-	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil {
+	if _, err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil {
 		t.Fatal(err)
 	}
 	if got := r.sess.answers(); len(got) != 2 || got[0].ID != got[1].ID {
@@ -548,8 +591,8 @@ func TestARetriedSendForATaskThatMovedOnSaysNothing(t *testing.T) {
 	r := newDecideRig(t)
 	r.pending(t)
 	r.sess.errs = []error{errBoom, session.ErrNotPaused}
-	_ = r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1"))
-	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil || len(r.out.list()) != 0 {
+	_, _ = r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1"))
+	if _, err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil || len(r.out.list()) != 0 {
 		t.Errorf("Decide = %v with %d notices; want it done, and silent", err, len(r.out.list()))
 	}
 }
@@ -562,7 +605,7 @@ func TestALatePressOnAQuestionTheSweepTimedOutIsJustLate(t *testing.T) {
 	if err := r.st.ResolveInteraction(t.Context(), "ix-1", store.InteractionTimedOut, deadline); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", deadline.Add(time.Minute), "req-1")); err != nil {
+	if _, err := r.d.Decide(t.Context(), r.press(t, "UALICE1", deadline.Add(time.Minute), "req-1")); err != nil {
 		t.Fatal(err)
 	}
 	if len(r.calls.list()) != 0 || !slices.Equal(r.hooked(), []string{"late"}) || len(r.eph.list()) != 1 {
@@ -577,9 +620,9 @@ func TestTwoPressesAreTakenOneAtATime(t *testing.T) {
 	r.pending(t)
 	r.aud.gate, r.aud.entered = make(chan struct{}), make(chan struct{})
 	var wg sync.WaitGroup
-	wg.Go(func() { _ = r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")) })
+	wg.Go(func() { _, _ = r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")) })
 	<-r.aud.entered
-	wg.Go(func() { _ = r.d.Decide(t.Context(), r.press(t, "UBOB22", d0.Add(time.Minute), "req-1")) })
+	wg.Go(func() { _, _ = r.d.Decide(t.Context(), r.press(t, "UBOB22", d0.Add(time.Minute), "req-1")) })
 	time.Sleep(50 * time.Millisecond) // the second gets as far as it can while the first is held
 	close(r.aud.gate)
 	wg.Wait()
@@ -598,8 +641,8 @@ func TestTwoPressesAreTakenOneAtATime(t *testing.T) {
 func TestTheWinnerIsOnlyEverNamedInAMentionPart(t *testing.T) {
 	r := newDecideRig(t)
 	r.pending(t)
-	_ = r.d.Decide(t.Context(), r.press(t, "<!channel>", d0.Add(time.Minute), "req-1"))
-	_ = r.d.Decide(t.Context(), r.press(t, "UBOB22", d0.Add(2*time.Minute), "req-1"))
+	_, _ = r.d.Decide(t.Context(), r.press(t, "<!channel>", d0.Add(time.Minute), "req-1"))
+	_, _ = r.d.Decide(t.Context(), r.press(t, "UBOB22", d0.Add(2*time.Minute), "req-1"))
 	r.eph.mu.Lock()
 	defer r.eph.mu.Unlock()
 	if len(r.eph.msgs) != 1 || r.eph.msgs[0].Fallback != "Someone else answered this question first." || len(r.eph.msgs[0].Parts) != 1 || r.eph.msgs[0].Parts[0] != (chat.Mention{User: "<!channel>", Text: "answered this question first."}) {
@@ -631,7 +674,7 @@ func TestADecisionTakenBetweenTheReadAndTheWrite(t *testing.T) {
 			r := newDecideRig(t)
 			r.pending(t)
 			r.st.beforeSubmit = func() { r.st.beforeSubmit = nil; tc.intervene(r, t) }
-			if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil {
+			if _, err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil {
 				t.Fatal(err)
 			}
 			if got, want := r.calls.list(), []string{"audit:answered", "submit", "audit:superseded"}; !slices.Equal(got, want) {
@@ -653,7 +696,7 @@ func TestASessionThatHasEndedTheTaskGetsTheNotice(t *testing.T) {
 			r.task(t, task)
 		}
 		r.sess.errs = []error{session.ErrNotPaused}
-		if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil || len(r.out.list()) != 1 {
+		if _, err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil || len(r.out.list()) != 1 {
 			t.Errorf("%s: Decide = %v with %d notices; want it done, and the thread told", name, err, len(r.out.list()))
 		}
 	}
@@ -667,14 +710,14 @@ func TestAnAnswerBeforeTheTaskIsParkedAgainIsRetriedAndNotDenied(t *testing.T) {
 	r.pending(t)
 	r.task(t, "task-1") // still the thread's task
 	r.sess.errs = []error{session.ErrNotPaused, session.ErrNotPaused}
-	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err == nil {
+	if _, err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err == nil {
 		t.Fatal("Decide = nil; want a retryable error, since the task may yet be parked")
 	}
 	if len(r.out.list()) != 0 {
 		t.Fatalf("notices %+v; want none while the task may yet be parked", r.out.list())
 	}
 	// Decided again as a retry, and still refused: it cannot be known, so it stays silent.
-	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil || len(r.out.list()) != 0 {
+	if _, err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil || len(r.out.list()) != 0 {
 		t.Errorf("the retry = %v with %d notices; want it done, and silent", err, len(r.out.list()))
 	}
 }
@@ -685,7 +728,7 @@ func TestAnAnswerTheSessionCallsInvalidIsFinal(t *testing.T) {
 	r := newDecideRig(t)
 	r.pending(t)
 	r.sess.errs = []error{fmt.Errorf("answer: a message with an ID and a task is required: %w", store.ErrInvalid)}
-	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil {
+	if _, err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil {
 		t.Fatalf("Decide = %v; want it done", err)
 	}
 	if out := r.logs.String(); !strings.Contains(out, "level=ERROR") || !strings.Contains(out, "ix-1") {
@@ -711,7 +754,7 @@ func TestASessionThatCannotBeReadRetriesTheAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.sess.errs = []error{session.ErrNotPaused}
-	if err := d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); !errors.Is(err, errBoom) {
+	if _, err := d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); !errors.Is(err, errBoom) {
 		t.Fatalf("Decide = %v; want the session read's error, for the press to be tried again", err)
 	}
 	if got := r.out.list(); len(got) != 0 {
@@ -724,13 +767,13 @@ func TestASessionThatCannotBeReadRetriesTheAnswer(t *testing.T) {
 func TestTheWinnersPromptIsReplacedOnceTheAnswerIsSent(t *testing.T) {
 	r := newDecideRig(t)
 	r.pending(t)
-	_ = r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1"))
+	_, _ = r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1"))
 	if got, want := r.flow.list(), []string{"audit:answered", "submit", "send", "replace"}; !slices.Equal(got, want) {
 		t.Errorf("calls %q; want the prompt replaced after the answer is sent: %q", got, want)
 	}
-	_ = r.d.Decide(t.Context(), r.press(t, "UBOB22", d0.Add(2*time.Minute), "req-1")) // lost
-	_ = r.d.Decide(t.Context(), r.press(t, "UCAROL3", deadline, "req-1"))             // late
-	_ = r.d.Decide(t.Context(), r.press(t, "UDAVE44", d0.Add(time.Minute), "wrong"))  // refused
+	_, _ = r.d.Decide(t.Context(), r.press(t, "UBOB22", d0.Add(2*time.Minute), "req-1")) // lost
+	_, _ = r.d.Decide(t.Context(), r.press(t, "UCAROL3", deadline, "req-1"))             // late
+	_, _ = r.d.Decide(t.Context(), r.press(t, "UDAVE44", d0.Add(time.Minute), "wrong"))  // refused
 	if got := r.rep.replaced(); !slices.Equal(got, []string{"ix-1"}) {
 		t.Errorf("replaced %q; want the prompt once, for the winner", got)
 	}
@@ -742,7 +785,7 @@ func TestAPromptThatCannotBeReplacedDoesNotUndoTheDecision(t *testing.T) {
 	r := newDecideRig(t)
 	r.pending(t)
 	r.rep.err = errBoom
-	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil {
+	if _, err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil {
 		t.Fatalf("Decide = %v; want the decision done", err)
 	}
 	if out := r.logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "ix-1") || len(r.sess.answers()) != 1 {
@@ -768,7 +811,7 @@ func TestAHungEditDoesNotHoldUpThePress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	withinASecond(t, "Decide", func() { err = d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")) })
+	withinASecond(t, "Decide", func() { _, err = d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")) })
 	if err != nil || len(r.sess.answers()) != 1 || h.count() != 1 {
 		t.Errorf("Decide = %v, %d answers, %d edits; want it done, the answer sent once and the edit tried once", err, len(r.sess.answers()), h.count())
 	}
@@ -785,7 +828,7 @@ func TestAnAnswerIsMarkedDeliveredWhenTheSessionTakesIt(t *testing.T) {
 	if got := r.row(t); !got.DeliveredAt.IsZero() {
 		t.Fatalf("a pending interaction is delivered at %v", got.DeliveredAt)
 	}
-	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil {
+	if _, err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil {
 		t.Fatal(err)
 	}
 	if got := r.row(t); got.State != store.InteractionAnswered || got.DeliveredAt.IsZero() {
@@ -812,7 +855,7 @@ func TestAnAnswerTheSessionDidNotTakeIsNotMarked(t *testing.T) {
 			}
 			r.sess.errs = tc.errs
 			for i, wantErr := range tc.wantErrs {
-				if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); (err != nil) != wantErr {
+				if _, err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); (err != nil) != wantErr {
 					t.Fatalf("Decide %d = %v; want an error: %t", i+1, err, wantErr)
 				}
 			}
@@ -828,8 +871,8 @@ func TestARetriedAnswerTheSessionTakesIsMarked(t *testing.T) {
 	r := newDecideRig(t)
 	r.pending(t)
 	r.sess.errs = []error{errBoom}
-	_ = r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1"))
-	if err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil {
+	_, _ = r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1"))
+	if _, err := r.d.Decide(t.Context(), r.press(t, "UALICE1", d0.Add(time.Minute), "req-1")); err != nil {
 		t.Fatal(err)
 	}
 	if got := r.row(t); got.DeliveredAt.IsZero() {

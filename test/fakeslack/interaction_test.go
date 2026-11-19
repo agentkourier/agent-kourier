@@ -64,6 +64,26 @@ func TestClickDeliversBlockActions(t *testing.T) {
 	waitAcked(t, fake, id)
 }
 
+// TestEachClickHasAnActionTSOfItsOwn: a broker keys a press by its action_ts, so two clicks are never given one, even on a clock that
+// stands still.
+func TestEachClickHasAnActionTSOfItsOwn(t *testing.T) {
+	still := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	fake, smc := newSocket(t, fakeslack.WithoutOwnPostEvents(), fakeslack.WithClock(func() time.Time { return still }))
+	waitEvent(t, smc, socketmode.EventTypeHello)
+	_, ask := postAsk(t, fake)
+	seen := map[string]bool{}
+	for range 3 {
+		if _, err := fake.Click("U1", ask, "approve", "yes"); err != nil {
+			t.Fatal(err)
+		}
+		_, cb := nextInteraction(t, smc)
+		seen[cb.ActionCallback.BlockActions[0].ActionTs] = true
+	}
+	if len(seen) != 3 || seen[""] {
+		t.Errorf("action_ts of three clicks = %v; want three, none empty", seen)
+	}
+}
+
 func TestClickStaleUsesTheSnapshotAfterTheMessageIsEdited(t *testing.T) {
 	fake, smc := connected(t)
 	bot := slack.New(testToken, slack.OptionAPIURL(fake.URL()+"/"))

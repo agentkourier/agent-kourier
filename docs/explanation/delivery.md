@@ -7,7 +7,9 @@ promises across a crash, and the windows it accepts.
 
 Slack expects an acknowledgement within about 3 seconds (documented for HTTP delivery and for interactions), so no agent call happens while a message is being received. The
 adapter writes the turn locally, by its message ID, and only then acknowledges. If the write fails, the event is not
-acknowledged, and Slack delivers it again. Because the write is keyed by the message, a redelivery is the same turn.
+acknowledged, and Slack delivers it again. Because the write is keyed by the message, a redelivery is the same turn. In Socket Mode
+the acknowledgement is a message on the WebSocket; in HTTP mode it is the answer 200, and an event that is not taken within 2 seconds,
+or cannot be taken, is answered 503 ([Limits](../reference/limits.md#run-the-broker)), which Slack treats as a failed delivery (Slack's documentation; not checked here).
 
 The events of one channel are handled one at a time and in the order they arrive, and different channels at the same
 time, so a Binding whose regular expressions are slow to try holds up its own channel's events first. It does not keep the
@@ -28,6 +30,13 @@ post twice. Agent Kourier prevents that with an outbox:
 2. Every post carries Slack message metadata holding that ID.
 3. On recovery, a row with no recorded result is reconciled first: Agent Kourier reads the recent history of the
    channel or thread, with metadata, and adopts a matching message instead of posting again.
+
+A queued post, such as a notice, is looked up the same way before it is posted, unless the leader queued it itself
+and has not tried to post it yet: nothing can have posted it, so it is posted at once, with no lookup. Once an attempt
+has begun, the row is looked up before the next, so a post that failed or timed out, and may have landed all the same,
+is adopted if the lookup finds it rather than sent again (on Microsoft Teams a lookup can miss a post, which is then sent
+and may show twice: see [Finding a post again on Microsoft Teams](../reference/platforms.md#finding-a-post-again-on-microsoft-teams)).
+Which rows are untried is kept in memory, so after a restart or a takeover every row queued before it is looked up first.
 
 Edits are naturally idempotent. Reactions also go through the outbox; adding a reaction that is already there counts
 as delivered. The agent's questions are posts too, and go through the outbox under the interaction's ID.

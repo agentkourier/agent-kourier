@@ -87,7 +87,7 @@ for ns in team-a team-b team-c; do
   "${K[@]}" get namespace "${ns}" >/dev/null 2>&1 || "${K[@]}" create namespace "${ns}" >/dev/null
 done
 # Where Agent Kourier reads its config from now: the Deployment says (the chart sets AGENTKOURIER_CONFIG_SOURCE only for crds), not the tier's bring-up,
-# so a tier moved between the two in place is run as it is. The CR_ tests skip unless it is crds.
+# so a tier moved between the two in place is run as it is. The CR_ and WH_ tests skip unless it is crds.
 config_source=$("${K[@]}" -n agent-kourier get deploy/agent-kourier -o 'jsonpath={.spec.template.spec.containers[0].env[?(@.name=="AGENTKOURIER_CONFIG_SOURCE")].value}' --ignore-not-found) || die "could not read the Deployment agent-kourier to see where it reads its config from; a run that guessed files would skip every CR_ test and pass"
 config_source=${config_source:-files}
 case "${config_source}" in
@@ -95,6 +95,19 @@ case "${config_source}" in
   *) die "the Deployment's AGENTKOURIER_CONFIG_SOURCE is '${config_source}'; want files or crds" ;;
 esac
 echo "config source: ${config_source}"
+# How the fake Slack sends the broker its events and presses now: its Deployment says (the args that lib.sh's fake_slack_mode_patch sets in http
+# mode), not the tier's bring-up, as for the config source. A fake Slack in http mode needs the broker's chat listener: a tier that is half moved
+# is refused rather than run to a timeout. A tier with no fake Slack reads as socket.
+fake_slack_args=$("${K[@]}" -n e2e get deploy/fakeslack -o 'jsonpath={.spec.template.spec.containers[0].args}' --ignore-not-found) || die "could not read the Deployment fakeslack to see how it sends the broker its events"
+case "${fake_slack_args}" in
+  *-request-url*) slack_mode=http ;;
+  *) slack_mode=socket ;;
+esac
+if [ "${slack_mode}" = http ]; then
+  chat_listen=$("${K[@]}" -n agent-kourier get deploy/agent-kourier -o 'jsonpath={.spec.template.spec.containers[0].env[?(@.name=="AGENTKOURIER_CHAT_LISTEN")].value}' --ignore-not-found) || die "could not read the Deployment agent-kourier"
+  [ -n "${chat_listen}" ] || die "the fake Slack is in http mode but Agent Kourier has no chat listener; bring the tier up again with one E2E_SLACK_MODE"
+fi
+echo "slack mode: ${slack_mode}"
 # The broker's admission, as its Deployment says (the chart sets AGENTKOURIER_CHAT_CONNECTION, AGENTKOURIER_CONNECTION_NAMESPACES and
 # AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR only when each is set), and the labels of the namespaces the MC_ tests ask about: the ConfigMap e2e-admission,
 # which the Job's variables read (lib.sh's runner_admission). The MC_ tests skip unless it admits team-a. A Deployment that cannot be read was read above.
@@ -106,7 +119,7 @@ case "${tier}" in
   full) gate_url=http://scenariollm.kagent.svc.cluster.local:8080 ;;
   ax) gate_url=http://ax-gates.e2e.svc.cluster.local:8080 ;;
 esac
-sed -e "s/@TIER@/${tier}/" -e "s|@STUB_URL@|${gate_url}|" -e "s/@CONFIG_SOURCE@/${config_source}/" -e "s/@PHASE@/${E2E_PHASE:-}/" "${HERE}/e2e/runner.yaml" |
+sed -e "s/@TIER@/${tier}/" -e "s|@STUB_URL@|${gate_url}|" -e "s/@CONFIG_SOURCE@/${config_source}/" -e "s/@PHASE@/${E2E_PHASE:-}/" -e "s/@SLACK_MODE@/${slack_mode}/" "${HERE}/e2e/runner.yaml" |
   { if [ -n "${E2E_RUN:-}" ]; then sed -e "s#-test.run=[^\"]*#-test.run=${E2E_RUN}#"; else cat; fi; } |
   "${K[@]}" apply -f - >/dev/null # the tier is fast or full: use_tier checked it
 result=

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -24,15 +25,24 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/secret"
 )
 
-// TestRecipesApplyTogether loads the kourier/ files of every recipe into one config, as copying them all into one
-// config directory would, resolves it, and has the broker pick its ChatConnection. Agent Kourier reads one
-// directory and serves exactly one ChatConnection, so recipes can be applied side by side only if
+// TestRecipesApplyTogether loads the kourier/ files of every recipe of one chat platform into one config, as copying
+// them all into one config directory would, resolves it, and has the broker pick its ChatConnection. Agent Kourier
+// reads one directory and serves exactly one ChatConnection, so the recipes of a platform can be applied side by side
+// only if
 //
 //   - they ship the same ChatConnection, which is kept once;
 //   - no other object (same kind, namespace and name) is in two of them; and
 //   - no two Bindings are on one channel.
 //
-// A new recipe that ships a different ChatConnection, reuses a name or reuses a channel placeholder fails it.
+// A recipe of another platform cannot share that ChatConnection, so it is checked with the recipes of its own platform
+// (recipesByPlatform). The recipes of every platform are still applied to one cluster, so a first pass over all of them
+// (checkAcross) refuses an object other than a ChatConnection that two recipes share, and a channel that two Bindings
+// name. A new recipe that ships a different ChatConnection of its platform, reuses a name or reuses a channel
+// placeholder fails it.
+//
+// A webhook recipe ships a ChatConnection of its own (spec.platform webhook), which is the point of it: one connection for each
+// service that signs its webhooks. It is applied alone, so it is checked alone, and has the broker choose its one ChatConnection;
+// it takes no part in the first pass.
 func TestRecipesApplyTogether(t *testing.T) {
 	recipes, err := recipeDirs(recipesDir)
 	if err != nil {
@@ -41,9 +51,381 @@ func TestRecipesApplyTogether(t *testing.T) {
 	if len(recipes) == 0 {
 		t.Skipf("no recipes under %s: nothing to apply together", recipesDir)
 	}
-	if err := checkTogether(t.Context(), recipes); err != nil {
-		t.Error(err)
+	results, err := checkAll(t.Context(), recipes)
+	for _, name := range slices.Sorted(maps.Keys(results)) {
+		t.Run(name, func(t *testing.T) {
+			if err := results[name]; err != nil {
+				t.Error(err)
+			}
+		})
 	}
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// everyPlatform is the name, in checkAll's results, of the pass of checkAcross over the recipes of every platform but the
+// webhook platform, whose recipes are each applied alone.
+const everyPlatform = "every platform"
+
+// checkAll runs over the recipes at dirs the checks of TestRecipesApplyTogether, and returns the error of each by its
+// name, nil for one that passed: checkAcross over all of them but the webhook recipes (everyPlatform), checkTogether over
+// the recipes of each other platform (the platform), and checkTogether over each webhook recipe alone (its directory's
+// name). A failure to group the recipes by platform is its error, with the result of the pass over every recipe.
+func checkAll(ctx context.Context, dirs []string) (map[string]error, error) {
+	byPlatform, err := recipesByPlatform(ctx, dirs)
+	if err != nil {
+		return map[string]error{everyPlatform: checkAcross(ctx, dirs)}, err
+	}
+	alone := byPlatform[v1alpha1.PlatformWebhook]
+	delete(byPlatform, v1alpha1.PlatformWebhook)
+	shared := slices.DeleteFunc(slices.Clone(dirs), func(dir string) bool { return slices.Contains(alone, dir) })
+	results := map[string]error{everyPlatform: checkAcross(ctx, shared)}
+	for platform, group := range byPlatform {
+		results[platform] = checkTogether(ctx, group)
+	}
+	for _, dir := range alone {
+		results[filepath.Base(dir)] = checkTogether(ctx, []string{dir})
+	}
+	return results, nil
+}
+
+// TestCheckAll runs the checks of TestRecipesApplyTogether on recipes built here, so that each check must run for the test
+// to pass: a Slack recipe and a Teams recipe that ship one AgentBackend, which each platform's check passes and only the
+// pass over every platform refuses; a second Slack recipe whose ChatConnection is of another name, which only the
+// check of the Slack recipes refuses; and two webhook recipes, each with a ChatConnection of its own, that ship that
+// AgentBackend and name one channel, which are each checked alone and pass, and which the pass over every platform leaves out.
+func TestCheckAll(t *testing.T) {
+	const teamsSpec = "platform: teams, teams: { tenantID: 11111111-1111-4111-8111-111111111111, appID: 22222222-2222-4222-8222-222222222222 }"
+	recipe := func(name, backend, connection, spec, channel string) map[string]string {
+		return map[string]string{
+			"b.yaml": fmt.Sprintf(`apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: { name: %s, namespace: recipe }
+spec: { dialect: a2a, url: "http://agent.recipe:8080" }
+`, backend),
+			"c.yaml": fmt.Sprintf(`apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: { name: %[1]s, namespace: recipe }
+spec: { %[2]s, credentialsSecretRef: { name: %[1]s } }
+`, connection, spec),
+			"x.yaml": fmt.Sprintf(`apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: { name: %[1]s, namespace: recipe }
+spec:
+  agent: { backendRef: { name: %[2]s }, name: helper, namespace: recipe }
+  identity: { userId: agent-kourier-%[1]s }
+  chat: { connectionRef: { name: %[3]s }, channel: "%[4]s" }
+`, name, backend, connection, channel),
+		}
+	}
+	// webhookRecipe is a webhook recipe whose ChatConnection is its own, named name, on the channel OPS.
+	webhookRecipe := func(name string) map[string]string {
+		files := recipe(name, "agents", name, "platform: webhook", "OPS")
+		files["c.yaml"] = strings.Replace(files["c.yaml"], "credentialsSecretRef: { name: "+name+" } }",
+			"credentialsSecretRef: { name: "+name+" }, webhook: { identity: agent, verify: { scheme: hmac-sha256, header: X-Signature },"+
+				" channel: { value: OPS }, actor: { from: [/sender] }, fields: [{ name: action, from: [/action], kind: id }] } }", 1)
+		files["x.yaml"] = strings.Replace(files["x.yaml"], `channel: "OPS" }`,
+			`channel: "OPS", output: none, triggers: [{ type: webhookEvent, match: { action: "." }, promptTemplate: "Read the event.",`+
+				` limits: { rateLimit: { maxRuns: 1, per: 1h, maxConcurrent: 1 }, maxRunsPerDay: 1 } }] }`, 1)
+		return files
+	}
+	root := t.TempDir()
+	var dirs []string
+	for name, files := range map[string]map[string]string{
+		"a": recipe("a", "agents", "chat", "platform: slack", "CAAAAAAAA"),
+		"b": recipe("b", "agents", "chat", teamsSpec, "19:recipe-channel@thread.tacv2"),
+		"c": recipe("c", "c-agents", "chat2", "platform: slack", "CCCCCCCCC"),
+		"d": webhookRecipe("d"),
+		"e": webhookRecipe("e"),
+	} {
+		dir := filepath.Join(root, name)
+		dirs = append(dirs, dir)
+		if err := os.MkdirAll(filepath.Join(dir, "kourier"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		for file, content := range files {
+			if err := os.WriteFile(filepath.Join(dir, "kourier", file), []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	results, err := checkAll(t.Context(), dirs)
+	if err != nil {
+		t.Fatalf("checkAll: %v", err)
+	}
+	if got, want := slices.Sorted(maps.Keys(results)), []string{"d", "e", everyPlatform, "slack", "teams"}; !slices.Equal(got, want) {
+		t.Fatalf("checkAll ran %q, want %q", got, want)
+	}
+	if err := results[everyPlatform]; err == nil || !strings.Contains(err.Error(), "recipe b: AgentBackend recipe/agents is in recipe a too") ||
+		strings.Contains(err.Error(), "recipe c") || strings.Contains(err.Error(), "recipe d") || strings.Contains(err.Error(), "recipe e") {
+		t.Errorf("check %q = %v, want the AgentBackend that recipes a and b ship refused, and nothing of recipes c, d and e", everyPlatform, err)
+	}
+	if err := results["slack"]; err == nil || !strings.Contains(err.Error(), "exactly one ChatConnection") {
+		t.Errorf("check %q = %v, want the two ChatConnections of the Slack recipes refused", "slack", err)
+	}
+	if err := results["teams"]; err != nil {
+		t.Errorf("check %q = %v, want the Teams recipe to apply", "teams", err)
+	}
+	for _, name := range []string{"d", "e"} {
+		if err := results[name]; err != nil {
+			t.Errorf("check %q = %v, want the webhook recipe to apply alone", name, err)
+		}
+	}
+}
+
+// TestRecipesByPlatform groups recipes built here by the platform of their ChatConnection, and refuses a recipe whose
+// ChatConnections are of two platforms.
+func TestRecipesByPlatform(t *testing.T) {
+	connection := func(name, platform string) string {
+		spec := "platform: slack"
+		if platform == v1alpha1.PlatformTeams {
+			spec = "platform: teams, teams: { tenantID: 11111111-1111-4111-8111-111111111111, appID: 22222222-2222-4222-8222-222222222222 }"
+		}
+		return fmt.Sprintf(`apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: { name: %s, namespace: recipe }
+spec: { %s, credentialsSecretRef: { name: %[1]s } }
+`, name, spec)
+	}
+	binding := func(name, connection, channel string) string {
+		return fmt.Sprintf(`apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: { name: %[1]s, namespace: recipe }
+spec:
+  agent: { backendRef: { name: agents }, name: helper, namespace: recipe }
+  identity: { userId: agent-kourier-%[1]s }
+  chat: { connectionRef: { name: %[2]s }, channel: "%[3]s" }
+`, name, connection, channel)
+	}
+	const backend = `apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: { name: agents, namespace: recipe }
+spec: { dialect: a2a, url: "http://agent.recipe:8080" }
+`
+	write := func(t *testing.T, root, name string, files map[string]string) string {
+		t.Helper()
+		dir := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Join(dir, "kourier"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		for file, content := range files {
+			if err := os.WriteFile(filepath.Join(dir, "kourier", file), []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return dir
+	}
+	const teamsChannel = "19:recipe-channel@thread.tacv2"
+
+	t.Run("one group for each platform", func(t *testing.T) {
+		root := t.TempDir()
+		a := write(t, root, "a", map[string]string{"c.yaml": connection("slack", "slack"), "b.yaml": backend, "x.yaml": binding("a", "slack", "CAAAAAAAA")})
+		b := write(t, root, "b", map[string]string{"c.yaml": connection("slack", "slack"), "b.yaml": backend, "x.yaml": binding("b", "slack", "CBBBBBBBB")})
+		c := write(t, root, "c", map[string]string{"c.yaml": connection("teams", "teams"), "b.yaml": backend, "x.yaml": binding("c", "teams", teamsChannel)})
+		got, err := recipesByPlatform(t.Context(), []string{a, b, c})
+		if err != nil {
+			t.Fatalf("recipesByPlatform: %v", err)
+		}
+		want := map[string][]string{"slack": {a, b}, "teams": {c}}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("recipesByPlatform = %v, want %v", got, want)
+		}
+	})
+	t.Run("a recipe on two platforms", func(t *testing.T) {
+		root := t.TempDir()
+		mixed := write(t, root, "mixed", map[string]string{
+			"c.yaml": connection("slack", "slack") + "---\n" + connection("teams", "teams"), "b.yaml": backend,
+			"x.yaml": binding("a", "slack", "CAAAAAAAA"),
+		})
+		_, err := recipesByPlatform(t.Context(), []string{mixed})
+		if err == nil || !strings.Contains(err.Error(), "ChatConnections of more than one platform") || !strings.Contains(err.Error(), "mixed") {
+			t.Errorf("recipesByPlatform error = %v, want one naming the recipe and its two platforms", err)
+		}
+	})
+	t.Run("a recipe that does not load", func(t *testing.T) {
+		root := t.TempDir()
+		bad := write(t, root, "bad", map[string]string{"x.yaml": "kind: Nonsense\n"})
+		if _, err := recipesByPlatform(t.Context(), []string{bad}); err == nil {
+			t.Error("recipesByPlatform passed a recipe that does not load; want its error")
+		}
+	})
+}
+
+// recipesByPlatform groups the recipes at dirs by the platform of the ChatConnections their kourier/ directories hold,
+// each group in the order of dirs, so that the recipes of one platform are checked together: they ship the same
+// ChatConnection, and a recipe of another platform cannot. A recipe that does not load, or whose ChatConnections are of
+// more than one platform, is an error. A recipe with no ChatConnection is left out, for checkRecipe to report.
+func recipesByPlatform(ctx context.Context, dirs []string) (map[string][]string, error) {
+	groups := map[string][]string{}
+	for _, dir := range dirs {
+		set, err := loadKourier(ctx, dir)
+		if err != nil {
+			return nil, err
+		}
+		var platforms []string
+		for _, c := range set.ChatConnections {
+			if !slices.Contains(platforms, c.Spec.Platform) {
+				platforms = append(platforms, c.Spec.Platform)
+			}
+		}
+		switch len(platforms) {
+		case 0:
+		case 1:
+			groups[platforms[0]] = append(groups[platforms[0]], dir)
+		default:
+			return nil, fmt.Errorf("%s: ChatConnections of more than one platform %v; a recipe is for one platform", dir, platforms)
+		}
+	}
+	return groups, nil
+}
+
+// TestCheckAcross runs the pass over every recipe on recipes built here: recipes of two platforms that coexist, and
+// the clashes it must refuse across platforms, a recipe with no ChatConnection included.
+func TestCheckAcross(t *testing.T) {
+	backend := func(name string) string {
+		return fmt.Sprintf(`apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: { name: %s, namespace: recipe }
+spec: { dialect: a2a, url: "http://agent.recipe:8080" }
+`, name)
+	}
+	binding := func(name, backend, connection, channel string) string {
+		return fmt.Sprintf(`apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: { name: %[1]s, namespace: recipe }
+spec:
+  agent: { backendRef: { name: %[2]s }, name: helper, namespace: recipe }
+  identity: { userId: agent-kourier-%[1]s }
+  chat: { connectionRef: { name: %[3]s }, channel: "%[4]s" }
+`, name, backend, connection, channel)
+	}
+	const (
+		slackConnection = `apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: { name: slack, namespace: recipe }
+spec: { platform: slack, credentialsSecretRef: { name: slack } }
+`
+		teamsConnection = `apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: { name: teams, namespace: recipe }
+spec: { platform: teams, credentialsSecretRef: { name: teams }, teams: { tenantID: 11111111-1111-4111-8111-111111111111, appID: 22222222-2222-4222-8222-222222222222 } }
+`
+		teamsChannel = "19:recipe-channel@thread.tacv2"
+	)
+	slackRecipe := func(name, backendName, channel string) map[string]string {
+		return map[string]string{"c.yaml": slackConnection, "b.yaml": backend(backendName), "x.yaml": binding(name, backendName, "slack", channel)}
+	}
+	teamsRecipe := func(name, backendName, channel string) map[string]string {
+		return map[string]string{"c.yaml": teamsConnection, "b.yaml": backend(backendName), "x.yaml": binding(name, backendName, "teams", channel)}
+	}
+	// noConnection is a recipe whose Binding names a ChatConnection that another recipe ships, as custom-bot-trigger would.
+	noConnection := func(name, backendName, channel string) map[string]string {
+		return map[string]string{"b.yaml": backend(backendName), "x.yaml": binding(name, backendName, "slack", channel)}
+	}
+
+	tests := []struct {
+		name    string
+		recipes map[string]map[string]string
+		want    []string // substrings of the error; none means the recipes must coexist
+	}{
+		{name: "recipes of two platforms, and one with no ChatConnection", recipes: map[string]map[string]string{
+			"a": slackRecipe("a", "a-agents", "CAAAAAAAA"),
+			"b": teamsRecipe("b", "b-agents", teamsChannel),
+			"c": noConnection("c", "c-agents", "CCCCCCCCC"),
+		}},
+		{name: "an AgentBackend in recipes of two platforms", recipes: map[string]map[string]string{
+			"a": slackRecipe("a", "agents", "CAAAAAAAA"),
+			"b": teamsRecipe("b", "agents", teamsChannel),
+		}, want: []string{"recipe b: AgentBackend recipe/agents is in recipe a too"}},
+		{name: "a Binding in recipes of two platforms", recipes: map[string]map[string]string{
+			"a": slackRecipe("chat", "a-agents", "CAAAAAAAA"),
+			"b": teamsRecipe("chat", "b-agents", teamsChannel),
+		}, want: []string{"recipe b: Binding recipe/chat is in recipe a too"}},
+		{name: "a clash with a recipe that has no ChatConnection", recipes: map[string]map[string]string{
+			"a": slackRecipe("a", "agents", "CAAAAAAAA"),
+			"c": noConnection("c", "agents", "CCCCCCCCC"),
+		}, want: []string{"recipe c: AgentBackend recipe/agents is in recipe a too"}},
+		{name: "one channel in two recipes", recipes: map[string]map[string]string{
+			"a": slackRecipe("a", "a-agents", "CAAAAAAAA"),
+			"c": noConnection("c", "c-agents", "CAAAAAAAA"),
+		}, want: []string{"recipe c: Binding recipe/c is on channel CAAAAAAAA, which Binding recipe/a of recipe a names too"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			var dirs []string
+			for name, fs := range tt.recipes {
+				dir := filepath.Join(root, name)
+				dirs = append(dirs, dir)
+				if err := os.MkdirAll(filepath.Join(dir, "kourier"), 0o750); err != nil {
+					t.Fatal(err)
+				}
+				for file, content := range fs {
+					if err := os.WriteFile(filepath.Join(dir, "kourier", file), []byte(content), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			err := checkAcross(t.Context(), dirs)
+			if len(tt.want) == 0 {
+				if err != nil {
+					t.Fatalf("checkAcross: %v; want the recipes to coexist", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("checkAcross passed; want an error containing %q", tt.want)
+			}
+			for _, w := range tt.want {
+				if !strings.Contains(err.Error(), w) {
+					t.Errorf("error %q lacks %q", err, w)
+				}
+			}
+		})
+	}
+}
+
+// checkAcross loads the kourier/ directory of each recipe at dirs, of every platform and with or without a
+// ChatConnection, and refuses what no two recipes may share when they are applied to one cluster: an AgentBackend or a
+// Binding of the same namespace and name, and a channel that Bindings of two recipes name. ChatConnections are left
+// to checkTogether, which keeps one copy of an identical one within a platform. Duplicates inside one recipe are
+// Load's to refuse, in loadKourier.
+func checkAcross(ctx context.Context, dirs []string) error {
+	objects := map[string]string{}  // "<kind> <namespace>/<name>" to the recipe that holds it
+	channels := map[string]string{} // a channel to "Binding <namespace>/<name> of recipe <recipe>"
+	var errs []error
+	for _, dir := range slices.Sorted(slices.Values(dirs)) {
+		set, err := loadKourier(ctx, dir)
+		if err != nil {
+			return err
+		}
+		recipe := filepath.Base(dir)
+		var ids []string
+		for _, b := range set.AgentBackends {
+			ids = append(ids, "AgentBackend "+b.Namespace+"/"+b.Name)
+		}
+		for _, b := range set.Bindings {
+			ids = append(ids, "Binding "+b.Namespace+"/"+b.Name)
+		}
+		for _, id := range ids {
+			if other, ok := objects[id]; ok {
+				errs = append(errs, fmt.Errorf("recipe %s: %s is in recipe %s too; give it a name of its own", recipe, id, other))
+				continue
+			}
+			objects[id] = recipe
+		}
+		for _, b := range set.Bindings {
+			name := "Binding " + b.Namespace + "/" + b.Name
+			if other, ok := channels[b.Spec.Chat.Channel]; ok {
+				errs = append(errs, fmt.Errorf("recipe %s: %s is on channel %s, which %s names too; give it a channel placeholder of its own",
+					recipe, name, b.Spec.Chat.Channel, other))
+				continue
+			}
+			channels[b.Spec.Chat.Channel] = name + " of recipe " + recipe
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // TestCheckTogether runs the checker on recipes built here: ones that coexist, and the clashes it must refuse.

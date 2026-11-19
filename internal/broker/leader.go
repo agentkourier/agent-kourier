@@ -13,6 +13,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/bindingcheck"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/teams"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
@@ -43,17 +44,31 @@ type leaderHalf struct {
 	status *statusSink
 	// connsServed is the connections served, as the supervisor publishes them: Run made it, and its metrics read it (see Run).
 	connsServed *atomic.Pointer[[]Connection]
+	// routes is the chat listener's route table, which the runtimes put their routes on while they run: Run made it, and it is nil when
+	// the broker has no chat listener.
+	routes *chatRoutes
 }
 
 // openPlatform builds the chat platform of conn, and with an election fences it: every write to the chat that the leader half
 // makes (the outbox's posts and reactions, the renderer's streams and edits, the interactions' prompts, edits and ephemerals)
 // goes through the platform that this returns, and nothing else builds one. The platform's logger names the connection, as the broker's other
 // lines of a connection do ("connection", "namespace/name"), so that the lines of the Socket Mode connection of two connections can be told apart.
-func (h *leaderHalf) openPlatform(conn Connection, onConnection func(connected bool)) (builtPlatform, error) {
+// A Microsoft Teams platform keeps what it learns of its channels, and where its poll of each stands, in the broker's store, whose writes
+// are the leader's alone (on Postgres a write of a replica that no longer leads is store.ErrDeposed, and ends the process, spec D37).
+// ctx holds the broker's instruments, which a platform that counts its own requests (the webhook platform) records on.
+func (h *leaderHalf) openPlatform(ctx context.Context, conn Connection, onConnection func(connected bool)) (builtPlatform, error) {
 	log := h.log.With("connection", v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name))
-	p, err := h.cfg.newPlatform(conn, log, onConnection)
+	var convs teams.ConversationStore
+	var positions teams.PollPositions
+	if h.st != nil {
+		convs, positions = newTeamsConversations(h.st), newTeamsPollPositions(h.st)
+	}
+	p, err := h.cfg.newPlatform(ctx, conn, log, onConnection, convs, positions)
 	if err != nil {
 		return builtPlatform{}, err
+	}
+	if h.cfg.wrapPlatform != nil {
+		p.Platform = h.cfg.wrapPlatform(p.Platform)
 	}
 	if h.leaseFence != nil {
 		p.Platform = fenceChat(p.Platform, h.leaseFence)
@@ -85,13 +100,13 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 		return nil, err
 	}
 	// The chat platform of the own connection, built for its ChatConnection.platform: it posts for the outbox, and a token revoked
-	// mid-run, which a call through the platform sees, ends the run with ErrSlackAuth (WatchAuth, WithAuthFailure): the process exits for the own
+	// mid-run, which a call through the platform sees, ends the run with ErrChatAuth (WatchAuth, WithAuthFailure): the process exits for the own
 	// connection, and only that connection stops for a team's.
 	// agentkourier_chat_connected says 0 from here, and 1 while the connection is up. /readyz does not hold it: see NewHandler.
 	// The parts that every connection shares look the platform up by the connection their row, turn or press names, in the table of the
 	// connections that run, which the supervisor adds the team connections' to and takes them from.
 	table := newRuntimeTable()
-	host := &runtimeHost{cfg: cfg, log: log, metrics: metrics, table: table, open: h.openPlatform, parent: runCtx}
+	host := &runtimeHost{cfg: cfg, log: log, metrics: metrics, table: table, open: h.openPlatform, parent: runCtx, routes: h.routes}
 	var ownRT *connRuntime
 	if own != nil {
 		if ownRT, err = host.build(*own); err != nil {
@@ -158,16 +173,27 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	if cfg.sink != nil {
 		sink = cfg.sink
 	}
+	// Nothing is rendered or queued for a connection whose platform has no replies (the webhook platform): it posts nothing. What
+	// writes to the outbox for a connection goes through the quiet sink, the interactions' quiet outbox or the digest's NoReplies.
+	noReplies := noRepliesIn(boot.Reloader.Current)
+	sink = quietSink{renderSink: sink, quiet: noReplies}
 	// The manager's sink is the tap, which hands the pauses of its turns to the interactions' intake; the
 	// intake answers through the manager, so its session is bound once the manager is built (D2).
 	// Whatever the interactions start adds its stop to stops, which runs between the intake, which feeds
 	// them, and the manager, which they feed.
 	stops := stopList{trace: cfg.stopTrace}
 	sd.add(stepInteractions, stops.run)
-	parts := interactionDeps{st: st, ob: ob, platforms: platforms, auditor: auditor, bindings: bindings, metrics: metrics, log: log, trace: cfg.startTrace, sweepEvery: cfg.sweepEvery, orphanGrace: cfg.orphanGrace}
+	parts := interactionDeps{st: st, ob: quietOutbox{Sender: ob, quiet: noReplies}, platforms: platforms, auditor: auditor, bindings: bindings, metrics: metrics, log: log, trace: cfg.startTrace, sweepEvery: cfg.sweepEvery, orphanGrace: cfg.orphanGrace}
 	ix, err := parts.build(sink)
 	if err != nil {
 		return nil, err
+	}
+	if cfg.outcomesBuilt != nil {
+		cfg.outcomesBuilt(ix.outcomes)
+	}
+	// A press that waits for its decision in its request is let go as the chat listener begins its drain, and answered inside it.
+	if h.routes != nil {
+		h.routes.onDrain(ix.outcomes.Close)
 	}
 	// A mentioned turn of a mention-only Binding carries the replies since the previous turn, which are read through the
 	// platform as it is built here (fenced with an election: the read is not a write, so the fence passes it).
@@ -203,8 +229,9 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	}
 	stops.add("trigger-threads", startLoop(runCtx, sweep.Run))
 	// The digest line of the alerts that a trigger's limits stopped is queued on the outbox, one for each window: the
-	// outbox posts it. The loop stops with the interactions' loops, before the outbox drain and the store.
-	digest, err := newTriggerDigest(triggerDigestConfig{Store: st, Queue: ob, Interval: cfg.digestEvery, Logger: log})
+	// outbox posts it, except for a connection with no replies. The loop stops with the interactions' loops, before the outbox
+	// drain and the store.
+	digest, err := newTriggerDigest(triggerDigestConfig{Store: st, Queue: ob, Interval: cfg.digestEvery, NoReplies: noReplies, Logger: log})
 	if err != nil {
 		return nil, fmt.Errorf("trigger digest: %w", err)
 	}
@@ -218,7 +245,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	var served *servedRecord
 	retentionKnows := bindings.ThreadTTLsAndUnserved
 	if h.status != nil && boot.Source != nil {
-		served = newServedRecord(st, boot.Source.ConnectionBindings, nil)
+		served = leaderServedRecord(st, boot.Source.ConnectionBindings, table)
 		retentionKnows = served.retentionKnows(runCtx, boot.Reloader.Report, log, retentionKnows)
 	}
 	retain, err := retention.New(retention.Config{Store: st, Interval: cfg.retentionEvery, AuditRetention: cfg.AuditRetention, ThreadTTLsAndUnserved: retentionKnows,
@@ -269,7 +296,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 		}
 	}
 	verify := verification{
-		Bindings: bindings, Platforms: chat.Narrow[platformReader](platforms), Conns: func() []Connection { return *connsServed.Load() },
+		Bindings: bindings, Platforms: chat.Narrow[platformReader](platforms), Reactions: chat.Narrow[platformCaps](platforms), Conns: func() []Connection { return *connsServed.Load() },
 		Snaps: boot.Reloader, Revision: func(ctx context.Context) string {
 			return boot.Reloader.Revision(ctx) + "/" + strconv.FormatUint(connsChanged.Load(), 10)
 		}, Secrets: boot.Secrets, Metrics: metrics, Log: log, Interval: cfg.probeEvery, Tick: cfg.probeTick, MinRevisionGap: cfg.probeGap,
@@ -289,7 +316,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	}
 	stops.add("binding-verification", startLoop(runCtx, func(c context.Context) error { prober.Run(c); return nil }))
 
-	interactions, err := parts.start(runCtx, mgr, ix, &stops)
+	presses, err := parts.start(runCtx, mgr, ix, &stops)
 	if err != nil {
 		return nil, err
 	}
@@ -304,19 +331,20 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	}
 	// Each connection has an intake of its own (its table of triggers, the messages it has seen) over the parts that every connection
 	// shares, behind a guard that drops a mention by the bot of another connection this broker runs (botGuard).
-	newIntake := func(ref v1alpha1.ObjectRef) (chat.Sink, error) {
+	newIntake := func(conn Connection) (chat.Sink, error) {
+		ref := conn.Ref
 		intakeCfg, err := newIntakeConfig(intakeParts{
-			conn: ref, snapshot: boot.Reloader.Current, submitter: mgr, interactions: interactions, log: log,
+			conn: ref, snapshot: boot.Reloader.Current, submitter: mgr, interactions: presses.Interaction, decidePress: presses.DecidePress, log: log,
 			notice: sink.QueueNotice, starter: starter, threads: st, runs: st, replies: st,
 		})
 		if err != nil {
 			return nil, err
 		}
-		return botGuard{in: trigger.NewIntake(intakeCfg), self: v1alpha1.NamespacedName(ref.Namespace, ref.Name), bots: table, log: log}, nil
+		return botGuard{in: trigger.NewIntake(intakeCfg), self: v1alpha1.NamespacedName(ref.Namespace, ref.Name), platform: conn.Platform, bots: table, log: log}, nil
 	}
 	chatDone := make(chan error, 1)
 	if own != nil {
-		ownSink, err := newIntake(own.Ref)
+		ownSink, err := newIntake(*own)
 		if err != nil {
 			return nil, err
 		}

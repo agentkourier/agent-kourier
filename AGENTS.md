@@ -28,6 +28,8 @@ internal/identity       Binding token source and credentials for the agent pool
 internal/secret         redacting Secret value type
 internal/chat           chat-neutral model and chat.Platform; imports no session, config or store (chattest: conformance suite, fake platform, the Alertmanager trigger the tests share)
 internal/chat/slack     Slack adapter (Block Kit, Socket Mode); the only code, with the broker, that may import Slack or slack-go
+internal/chat/teams     Microsoft Teams adapter (http mode): Bot Framework token verifier, activities to the neutral model, conversation store, Entra token, Bot Connector posts and edits
+internal/chat/lanes     the per-channel lanes in which the Slack and Teams adapters hold what they took on, and their bounds; it reports a shed, and what a shed means stays in each adapter (a leaf: imports nothing of the module)
 internal/trigger        message intake: chat.triggers matched (spec 8.2), trigger threads and limits, bot mentions, Submit to the session manager, the dry run's Replay
 internal/store          SQLite and Postgres persistence, leader fencing
 internal/outbox         durable outbound posting (the versioned neutral message)
@@ -53,6 +55,7 @@ test/crdcorpus          valid and invalid objects that the CRD schemas and the b
 hack/kind/              kind tier scripts (fast, full, ax, sandbox)
 hack/{docs,release,postgres,crdhashes}  doc generators, release scripts, Postgres test helpers, the CRD schema hashes
 hack/{ci,github,security,clip}  CI tool installer and testhooks package selection, PR label check, scan and workflow policy, the demo clip's recording
+hack/slack/             the live probe of a ChatConnection in Slack's HTTP mode, run against Slack itself before a release that touches the mode
 ```
 
 ## Make targets
@@ -60,7 +63,7 @@ hack/{ci,github,security,clip}  CI tool installer and testhooks package selectio
 Run `make` for help. Only Go and the tools pinned in `go.mod` (`tool` directive) are needed;
 golangci-lint runs as `go tool golangci-lint`, never a global install.
 
-- `make fmt lint test build tidy`: `test` runs `go test -race ./...`, then `go test -race -tags testhooks` over the `./internal/...` packages whose test build the tag changes (`hack/ci/testhooks-packages.sh`), then the scripts' own tests (`test-scripts`: kind, security policy, release gate, PR labels, CI tool installer, testhooks package selection, Actions cache upkeep); `build` writes `bin/agent-kourier`.
+- `make fmt lint test build tidy`: `test` runs `go test -race ./...`, then `go test -race -tags testhooks` over the `./internal/...` packages whose test build the tag changes (`hack/ci/testhooks-packages.sh`), then the scripts' own tests (`test-scripts`: kind, security policy, release gate, PR labels, the Slack HTTP-mode probe, CI tool installer, testhooks package selection, Actions cache upkeep); `build` writes `bin/agent-kourier`.
 - `make crds` regenerates the CustomResourceDefinitions in `charts/agent-kourier/files/crds/` from the markers in `api/v1alpha1` with
   `controller-gen` (pinned as a `tool` in `go.mod`, run as `go tool controller-gen`). Run it after changing an API type or marker and commit the
   result: `TestCommittedCRDsMatchGeneration` in `make test` fails when the committed files differ from what generation produces. The
@@ -73,14 +76,18 @@ golangci-lint runs as `go tool golangci-lint`, never a global install.
   as a server-side dry-run create. A new API field or validation rule gets a marker where the schema can copy it and an entry in
   `test/crdcorpus/testdata/invalid` with its `# schema: refuses` or `# schema: accepts` flag. The CI job `crd-corpus` runs it on the pinned node and on the chart's minimum Kubernetes (`CRD_CORPUS_NODE=min`, `NODE_IMAGE_MIN` in `hack/kind/lib.sh`). A bound in the
   schema is a cap in `Validate` too (`maxTriggers`, `maxExtract`, `maxHeaders`, `maxHeaderNameLen`), so lowering one can refuse a config that loads today.
+  On the same cluster it then runs `test/chart`'s `TestLeaderLabelPolicyOnAnAPIServer` with `CHART_ADMISSION_KUBECONFIG` set to it (it needs helm): the
+  chart's ValidatingAdmissionPolicy for the leader label, installed with its Role, must allow the broker's label on its own pod and deny the rest. Unset,
+  that test skips; set by hand, it must name a cluster on this machine, where it makes and deletes a namespace and a cluster-wide policy and binding.
 - `make e2e-fast-up` / `e2e-full-up` / `e2e-ax-up` bring up the kind tiers (`hack/kind/`); `e2e-fast-down`,
   `e2e-full-down`, `e2e-ax-down` and `e2e-down` (all) tear them down. `e2e-fast` / `e2e-full` / `e2e-ax` run the E2E tests in that tier
   as an in-cluster Job (`hack/kind/e2e-run.sh`).
 - `E2E_CONFIG_SOURCE=crds make e2e-fast-up` (or `e2e-full-up`) runs the tier on custom resources: the CRDs first, then the same config as CRs and the
   release upgraded with `hack/kind/crds-values.yaml`, as the chart README says to move. The default, `files`, is the ConfigMap route, which each tier's values name (`config.source: files`) because the chart's own default is `crds`. The bring-up moves a tier
-  between the two in place; `e2e-run.sh` reads the source from the Deployment, and the `CR_` tests skip on files. Run `make e2e-fast` on each source before
+  between the two in place; `e2e-run.sh` reads the source from the Deployment, and the `CR_` tests skip on files. On custom resources the fast tier also serves the four webhook recipes of `examples/recipes` in their namespace (`hack/kind/webhook-values.yaml`), which the `WH_` tests drive through the fake vendors (`test/fakevendors`); they skip on files and with `E2E_TWO_APPS=1` or `E2E_TEAMS=1`. Run `make e2e-fast` on each source before
   a change to `internal/config`, the chart or `hack/kind`.
 - `E2E_TWO_APPS=1` (with `E2E_CONFIG_SOURCE=crds`) adds a team's Slack app to the fast tier, which the `MC_` tests drive. `make e2e-fast` does not run them (their failover cases would take its Job near its time limit); `make e2e-two-apps` (`hack/kind/two-apps.sh`) runs them as a Job of their own (`E2E_RUN=^TestMC_`), then the steps that change the admission with Helm: the list, a namespace label selector (a label added and removed with no restart), every namespace, and `{}`.
+- `E2E_TEAMS=1` (with `E2E_CONFIG_SOURCE=crds`, not with `E2E_TWO_APPS=1`) adds Microsoft Teams to the fast tier: the fake Teams service (`test/faketeams`, `hack/kind/fast/teams/faketeams.yaml`) with a certificate made at bring-up, the broker on the test hooks `AGENTKOURIER_TEAMS_URL` and `AGENTKOURIER_TEAMS_CA` (`hack/kind/teams-values.yaml`, which also turns the chat listener on and admits `teams-e2e`), and a team's two Teams connections in http mode, one with Graph notifications and one that polls (`hack/kind/fast/teams/teams.yaml`). A Teams connection of the test image calls the fake's host alone; the production image has neither hook (`make image-check`). `make e2e-fast` does not run the `TEAMS_` tests; `make e2e-teams` runs them as a Job of their own (`E2E_RUN=^TestTEAMS_`), and their failover case runs on `E2E_STORE=postgres E2E_REPLICAS=2`. Socket mode is not on the tier.
 - `make e2e-crs-scenarios` runs what the Job cannot, because its image has no kubectl or Helm (`hack/kind/crs-scenarios.sh`; the fast tier up on
   `E2E_CONFIG_SOURCE=crds`): what each client does with an unknown field, what `kubectl get` shows, a
   Binding stored before a tightening of the schema, and `kubectl wait`. `make e2e-crs-migration` (`hack/kind/crs-migration.sh`) moves a release between the ConfigMap

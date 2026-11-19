@@ -3,6 +3,15 @@
 For a platform engineer setting up the chat side: at the end, a Slack app has the scopes and events Agent Kourier
 needs, its tokens are in a Kubernetes Secret, and a ChatConnection points at it.
 
+Slack can deliver the app's events and button presses in one of two ways, and the ChatConnection's `spec.slack.mode` says which:
+
+- **Socket Mode** (`socket`, the default when the field is unset): Agent Kourier opens a WebSocket to Slack, so nothing in your cluster
+  needs to be reachable from the internet.
+- **Events API over HTTP** (`http`): Slack sends each event and press as an HTTPS request, signed with the app's signing secret,
+  to a URL of Agent Kourier's chat listener, a port of its own. The cluster must expose that port to the internet.
+
+Either way Agent Kourier calls Slack's Web API with the bot token to post, so it needs to reach Slack on 443.
+
 ## Before you start
 
 - Permission to install an app in the Slack workspace. Workspace settings can require an admin to approve each app; a
@@ -11,11 +20,15 @@ needs, its tokens are in a Kubernetes Secret, and a ChatConnection points at it.
 - A Slack app that no other running Agent Kourier uses (see the warning at the end of the steps). A team that brings an app of its own to the platform's broker does the same steps, and then follows [Let a team bring its own Slack app](team-slack-app.md).
 - `kubectl` access to the namespace Agent Kourier runs in.
 - For the check in the last step: Go, at the version in `go.mod`, and a checkout of the repository.
+- For HTTP mode only: a host name that Slack can reach over HTTPS and that routes to your cluster, such as an Ingress controller's,
+  with a certificate for it; and, for the chart's leader label, the right to create a ValidatingAdmissionPolicy and its binding,
+  which are cluster-scoped ([Security model](../explanation/security.md#the-chat-port)), on Kubernetes 1.33 or later. The policy is
+  `admissionregistration.k8s.io/v1`; the chart checks no Kubernetes version for it, and its tests run it on 1.33 and 1.37 only.
 
 === "Socket Mode"
 
-    Socket Mode is how Agent Kourier connects to Slack today: it opens a WebSocket to Slack, so nothing in your cluster
-    needs to be reachable from the internet.
+    In Socket Mode Agent Kourier opens a WebSocket to Slack, so nothing in your cluster needs to be reachable from the internet.
+    It is the mode of a ChatConnection that does not set `spec.slack.mode`.
 
     **1. Create the app from the manifest.** Open <https://api.slack.com/apps>, choose **Create New App**, **From a
     manifest**, and paste
@@ -115,9 +128,173 @@ needs, its tokens are in a Kubernetes Secret, and a ChatConnection points at it.
 
 === "Events API (HTTP)"
 
-    !!! note "Not served yet"
+    !!! warning "Experimental"
 
-        The broker serves Slack over Socket Mode only, and a ChatConnection has no setting for another mode. Use Socket Mode.
+        HTTP mode is tested end to end against the end-to-end tests' fake Slack, and has been tried once against Slack itself,
+        on one installation reached through a tunnel: the URL check, a mention, a button press, a bot message that a trigger
+        matched, requests with a wrong, missing or old signature (answered 401), and a message sent while the only replica was being replaced.
+        What this tab says of Slack's settings pages comes from that test. Slack's retry schedule, and when Slack gives up on an
+        app, come from Slack's documentation. It needs 0.5.0 or later: the 0.4.0 chart's values schema refuses
+        `chatListener` and `networkPolicy.chatFrom`, and its broker does not know `spec.slack.mode`.
+
+    In HTTP mode Slack sends the app's events and button presses to Agent Kourier as HTTPS requests, and Agent Kourier
+    answers them on its chat listener. The app has no app-level token; its signing secret proves that a request is Slack's.
+    How Slack sends, retries and gives up is Slack's own behaviour: what the test above saw of it is in the note after step 8,
+    and the rest is from Slack's documentation.
+
+    **1. Choose the request URL.** Every request of a ChatConnection in HTTP mode goes to one path:
+
+    ```text
+    https://<host>/chat/slack/<namespace>/<name>
+    ```
+
+    `<namespace>` and `<name>` are the ChatConnection's. The connection `slack` in the namespace `agent-kourier`, behind the host
+    `chat.example.com`, is `https://chat.example.com/chat/slack/agent-kourier/slack`. Events and button presses share the URL:
+    Agent Kourier reads a form-encoded request as a press (its `payload` field), and any other as an Events API payload in JSON.
+
+    **2. Create the app from the manifest.** Open <https://api.slack.com/apps>, choose **Create New App**, **From a
+    manifest**, and paste
+    [`hack/kind/sandbox/slack-app-manifest.yaml`](https://github.com/agentkourier/agent-kourier/blob/main/hack/kind/sandbox/slack-app-manifest.yaml)
+    with its `settings` block replaced by this one, your URL in both places:
+
+    ```yaml
+    settings:
+      event_subscriptions:
+        request_url: https://chat.example.com/chat/slack/agent-kourier/slack
+        bot_events:
+          - app_mention
+          - message.channels
+          - message.groups
+      interactivity:
+        is_enabled: true
+        request_url: https://chat.example.com/chat/slack/agent-kourier/slack
+      org_deploy_enabled: false
+      socket_mode_enabled: false
+      token_rotation_enabled: false
+    ```
+
+    The scopes and the three bot events are the same as in Socket Mode; `socket_mode_enabled: false` and the two
+    `request_url` fields are what differ. Slack checks an Events request URL by sending it a `url_verification` request,
+    which Agent Kourier can answer only once it serves the connection (step 7). It serves it only once the Secret of step 5
+    holds the bot token and the signing secret, and the bot token exists only once the app is installed (step 3). So the
+    block above is the app's end state, and a new app gets its URLs in step 7. The manifest editor refuses
+    `event_subscriptions` and `interactivity` that have neither a `request_url` nor Socket Mode, so create a new app from
+    the block with two changes: `socket_mode_enabled: true`, and the two `request_url` lines left out. The app needs no
+    app-level token for that, and step 7 turns Socket Mode off. Whether Slack takes a manifest whose URL it cannot check yet
+    was not tried.
+
+    For an app you already have, the same settings are in its pages: **Socket Mode** off, **Event Subscriptions** on with the
+    request URL and the three bot events, and **Interactivity & Shortcuts** on with the same URL.
+
+    **3. Copy the bot token and the signing secret.**
+
+    | Credential | Why Agent Kourier needs it | Secret key |
+    |---|---|---|
+    | Bot User OAuth Token, `xoxb-` | Calls Slack's Web API as the bot, as in Socket Mode. | `botToken` |
+    | Signing Secret | Checks that each request on the chat listener was signed by this app. It is never sent to Slack. | `signingSecret` |
+
+    1. Under **Install App**, install the app to the workspace and copy the **Bot User OAuth Token** (`xoxb-`).
+    2. Open **Basic Information**, and under **App Credentials** reveal and copy the **Signing Secret**.
+
+    You do not need an app-level token, and Agent Kourier does not read one in HTTP mode.
+
+    **4. Invite the bot and copy the channel ID**, as in Socket Mode: `/invite @Agent Kourier` in each channel a Binding will
+    use, and copy the channel ID (`C…`) from the channel's details.
+
+    **5. Store the credentials.** In a file that only you can read, as in Socket Mode:
+
+    ```sh
+    mkdir -p ~/.config/agent-kourier
+    touch ~/.config/agent-kourier/slack-secret.env && chmod 600 ~/.config/agent-kourier/slack-secret.env
+    ```
+
+    Write the two values, one `key=value` per line, with no quotes:
+
+    ```dotenv
+    botToken=xoxb-REPLACE
+    signingSecret=REPLACE
+    ```
+
+    ```sh
+    kubectl -n agent-kourier create secret generic slack \
+      --from-env-file="$HOME/.config/agent-kourier/slack-secret.env"
+    ```
+
+    The key names are fixed by the mode: `botToken` and `signingSecret`. A Secret that lacks one, or holds it empty, stops
+    the broker's own connection from starting (exit code 2: [Troubleshoot](troubleshoot.md#the-pod-exits-with-code-2)), as a
+    missing `appToken` does in Socket Mode. Keep the file for the check in step 8, and delete it afterwards.
+
+    **6. Declare the connection and open the chat listener.** In the chart's values:
+
+    ```yaml
+    config:
+      source: files # the ConfigMap route; on custom resources the ChatConnection's spec is the same
+      chatConnections:
+        slack:
+          spec:
+            platform: slack
+            credentialsSecretRef: {name: slack}
+            slack: {mode: http}
+    chatListener:
+      enabled: true # (1)!
+      ingress:
+        enabled: true # (2)!
+        className: "" # (3)!
+        host: chat.example.com
+        tls: [{hosts: [chat.example.com], secretName: chat-example-com-tls}] # (4)!
+    networkPolicy:
+      chatFrom: # (5)!
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}
+    ```
+
+    1. Opens the chat listener (`AGENTKOURIER_CHAT_LISTEN`) on `chatListener.port`, 8081, and adds the Service
+       `<fullname>-chat`, which selects the leader's pod, and, with `rbac.create`, the Role and the ValidatingAdmissionPolicy
+       that let the leader label its pod ([Chat listener](https://github.com/agentkourier/agent-kourier/blob/main/charts/agent-kourier/README.md#chat-listener)).
+       Without the listener a connection in HTTP mode is not run: the broker's own connection fails the start (exit code 2),
+       and a team's connection is not started.
+    2. An Ingress, `<fullname>-chat`, that sends the path prefix `/chat/` to the chat Service and nothing else. Leave it off to
+       expose the Service another way (`chatListener.service.type: LoadBalancer`, or an Ingress or gateway of your own).
+    3. The IngressClass; empty leaves it to the cluster's default.
+    4. A TLS Secret for the host, which you make, or the annotations of a certificate controller in `chatListener.ingress.annotations`.
+       Slack sends its requests only to HTTPS URLs (Slack's documentation).
+    5. Who may reach the chat port when `networkPolicy.enabled` is true, which then requires it: here, the pods of an
+       ingress controller in the namespace `ingress-nginx`. The render refuses `chatFrom` without the chat listener.
+
+    Install or upgrade with these values. When the leader serves the connection its log has
+    `the chat listener serves the connection`, with the `path`, and `slack: http mode taking requests`.
+
+    **7. Let Slack check the URL.** If the app was created with Socket Mode on, turn it off on the **Socket Mode** page
+    first. Slack shows a notice that the features without a request URL need one; in the test, **Interactivity** was off
+    afterwards. In the app's **Event Subscriptions** page, enter the request URL (or, if the manifest had it, have Slack check it
+    again). Slack sends a `url_verification` request as soon as the URL is entered; Agent Kourier checks its signature and
+    answers it with its challenge, and Slack shows the URL as **Verified**. Save the page. Then, under **Interactivity &
+    Shortcuts**, turn Interactivity on if it is off, set the same URL, and save. The page shows no check of that URL; a
+    button press is the check. The **Event Subscriptions** page also has a **Delayed Events** setting, whose text on the
+    page says it retries missed deliveries slowly over 24 hours. Agent Kourier has not been tried with it on.
+
+    Only the leading replica answers, and only while it serves the connection: the broker must be running, leading, and its
+    pod must carry the leader label, which the chart's chat Service selects. If the check fails, see
+    [Troubleshoot](troubleshoot.md#slack-cannot-verify-the-request-url).
+
+    **8. Check the setup with a dry run**, as in Socket Mode's step 6, once a Binding names the channel. The dry run uses
+    the bot token alone. That the signing secret is right shows on the metric `agentkourier_slack_http_requests_total`: a
+    message in the channel counts as `acknowledged`, and a wrong secret as `bad_signature`
+    ([Metrics](../reference/metrics.md#operations-intake-delivery-and-triggers)).
+
+    !!! note "What Slack does when Agent Kourier does not answer"
+
+        Agent Kourier answers 200 once it has taken an event or press, or found nothing in it to take, and 503 when it has not
+        taken it within 2 seconds or cannot take it, so that Slack sends it again. A request that comes while no replica leads
+        gets no answer from Agent Kourier: the chat Service has no endpoint, so the Ingress or the load balancer answers it, or
+        the connection fails. Slack's documentation says
+        that it waits about 3 seconds for an answer, sends an unanswered event again a few times over several minutes with an
+        `X-Slack-Retry-Num` header, and can turn an app's event subscriptions off when most of its requests fail for a long
+        time. The schedule and the turning off are not checked here against Slack. In the one test against Slack, a message
+        was sent while the only replica was being replaced: its first deliveries were refused at the tunnel in front of the
+        chat Service, a retry with `X-Slack-Retry-Num` reached the new leader within a second of the post, and the thread
+        got one reply.
+        `agentkourier_slack_http_retries_total` counts the retries that reach Agent Kourier.
+        [High availability](../explanation/high-availability.md#slack-in-http-mode) says when no replica answers.
 
 ## What the app is allowed to do
 
@@ -138,14 +315,15 @@ Every Slack call Agent Kourier makes, and the scope in the manifest that allows 
 | `conversations.list`, made only by `agent-kourier init`, to find the ID of a channel given by name | `channels:read`, `groups:read` |
 | `usergroups.users.list`, made when someone presses a tool approval on a Binding that sets `interactions.approverGroups`, and by the leader to [verify each such Binding](troubleshoot.md#a-binding-is-not-ready) | `usergroups:read` when a Binding sets `interactions.approverGroups` |
 | Events `app_mention`, `message.channels`, `message.groups` | `app_mentions:read`, `channels:history`, `groups:history` |
-| Socket Mode | the app-level token, `connections:write` |
+| Socket Mode, in Socket Mode only | the app-level token, `connections:write` |
+| Events API and interactivity requests, in HTTP mode only | none: Slack signs them with the app's signing secret |
 
 The `message.channels` and `message.groups` events carry a person's replies in a thread Agent Kourier owns and, for a Binding with a
 [`personMessage` trigger](../reference/chat-triggers.md#a-persons-message), each message a person posts outside a thread; no other scope or event is needed for it.
 
 The leader calls `conversations.info` once for each Binding's channel on each pass of [Binding verification](../reference/metrics.md#binding-verification), and `usergroups.users.list` up to once for each approver group that the Bindings setting `interactions.approverGroups` name, a group that several Bindings name once unless a read is cut short at its Binding's 8 second bound, when the next Binding that needs the group reads it again (a Binding's read stops at the first group that fails, and none is made while the chat credentials Secret differs from the tokens in use or is unusable: gone, empty, missing a key, or of a type that is never read). An app without the scope reads `False/MissingScope` on `ChannelJoined`, or on `ApproversReadable` for the groups; the calls only report, and turns still run.
 
-Agent Kourier reads the `botToken` and `appToken` of the broker's own connection when it starts. A new token written to its Secret is not used until a restart, and until then `ChannelJoined` (and `ApproversReadable`, for a Binding with approver groups) reads `Unknown/ChatCredentialsChanged` and the probe does not call Slack. A team ChatConnection restarts by itself at the first look after Agent Kourier has the change to its Secret or its spec, which comes every 5 seconds, and until then its Bindings read the same reason when the tokens in its Secret differ from the ones it runs on.
+Agent Kourier reads the credentials of the broker's own connection, `botToken` and `appToken` in Socket Mode or `botToken` and `signingSecret` in HTTP mode, when it starts. A new value written to its Secret is not used until a restart, and until then `ChannelJoined` (and `ApproversReadable`, for a Binding with approver groups) reads `Unknown/ChatCredentialsChanged` and the probe does not call Slack. A team ChatConnection restarts by itself at the first look after Agent Kourier has the change to its Secret or its spec, which comes every 5 seconds, and until then its Bindings read the same reason when the tokens in its Secret differ from the ones it runs on.
 
 While an agent investigates an alert thread, Agent Kourier calls `assistant.threads.setStatus`, which shows Slack's assistant
 status (`is working…`) in the thread. It does this only when `chat.progress` is not `steps` and `output` is `live`, and

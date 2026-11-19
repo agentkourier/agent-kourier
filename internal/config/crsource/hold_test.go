@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	apiruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/config/crsource"
 	"github.com/agentkourier/agent-kourier/internal/testutil"
@@ -391,7 +393,7 @@ func TestABindingMadeAgainWhileItsDeletionIsDeferredIsTheNewOne(t *testing.T) {
 	_ = unstructured.SetNestedField(fresh.Object, "C0999999991", "spec", "chat", "channel")
 	bad := find(objs, "sre-alerts")
 	bad.SetUID("uid-bad")
-	_ = unstructured.SetNestedField(bad.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(bad.Object, "#general alerts", "spec", "chat", "channel")
 	until(t, func() { c.apply(fresh); c.apply(bad) }, func() bool {
 		return src.CachedGenerationForTest("Binding", "sre", "chat-only") >= 0 && src.CachedGenerationForTest("Binding", "sre", "sre-alerts") >= 0
 	})
@@ -432,7 +434,7 @@ func TestADeferredObjectThatComesBackRefusedIsDeferredAgainWhenItGoesAgain(t *te
 	clock.advance(20 * time.Second)
 	back := find(objs, "sre-alerts") // the same uid, as a list that missed it gives, and now refused
 	back.SetGeneration(2)
-	_ = unstructured.SetNestedField(back.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(back.Object, "#general alerts", "spec", "chat", "channel")
 	until(t, func() { c.apply(back) }, func() bool { return src.CachedGenerationForTest("Binding", "sre", "sre-alerts") == 2 })
 	if s, _ := read(t, src); len(s.Bindings) != 2 || len(s.Invalid) != 1 || s.Invalid[0].Served != 1 {
 		t.Fatalf("Bindings %v, Invalid %+v; want it served from its last good generation and refused", bindingNames(s), s.Invalid)
@@ -457,7 +459,7 @@ func TestADeferredGenerationOfAnotherObjectIsNotServedWhenTheNewOneGoes(t *testi
 	read(t, src)
 	bad := find(objs, "sre-alerts")
 	bad.SetUID("uid-bad")
-	_ = unstructured.SetNestedField(bad.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(bad.Object, "#general alerts", "spec", "chat", "channel")
 	until(t, func() { c.apply(bad) }, func() bool { return src.CachedGenerationForTest("Binding", "sre", "sre-alerts") >= 0 })
 	read(t, src)
 	c.seenGone(t, src, "Binding", []*unstructured.Unstructured{bad}, "sre-alerts")
@@ -581,6 +583,30 @@ func TestTheBackendOfALiveBindingOfAHeldConnectionIsHeld(t *testing.T) {
 	}
 }
 
+// While the own connection is deleted and held, a Binding of it that is still there is held to the platform of the held connection,
+// which is in no listing: the check that a read makes finds the held connection, and refuses a bot's name as the sender with
+// InvalidPlatformID, as on a live connection. Validate refuses that name first (Slack's shapes are the schema's), so the check is
+// given the Binding directly; while the connection is listed, Validate's refusal of the same edit keeps the last good generation
+// served (sourcetest's chat ID cases).
+func TestABindingOfTheHeldConnectionIsHeldToItsPlatform(t *testing.T) {
+	leakCheck(t)
+	objs := corpus(t)
+	c := newCluster(t, objs...)
+	src := c.start(t)
+	set(t, src)
+	var b v1alpha1.Binding
+	if err := apiruntime.DefaultUnstructuredConverter.FromUnstructured(find(objs, "sre-alerts").Object, &b); err != nil || len(b.Spec.Chat.Triggers) < 2 {
+		t.Fatalf("the corpus is stale: sre-alerts decodes to %+v (%v)", b.Spec.Chat.Triggers, err)
+	}
+	b.Spec.Chat.Triggers[1].From.ID = "alertmanager"
+	until(t, func() { c.remove(find(objs, "slack-main")) }, func() bool { s, _ := set(t, src); return len(held(s)) == 1 })
+
+	const problem = `spec.chat.triggers[1].from.id: "alertmanager" is not a bot ID on Slack, the platform of ChatConnection agent-kourier-system/slack-main`
+	if reason, message := src.PlatformCheckForTest(&b); reason != config.ReasonInvalidPlatformID || !strings.Contains(message, problem) {
+		t.Errorf("check = %q, %q; want %s and the problem %q", reason, message, config.ReasonInvalidPlatformID, problem)
+	}
+}
+
 // The references of the chart's own objects name no namespace, since they are all in the release's: a hold that read a
 // reference without the Binding's namespace would find neither the connection nor the backend.
 func TestAHoldReadsReferencesThatNameNoNamespace(t *testing.T) {
@@ -656,7 +682,7 @@ func TestABindingMadeAgainDuringTheHoldIsNotTheHeldOne(t *testing.T) {
 	_ = unstructured.SetNestedField(fresh.Object, "C0999999991", "spec", "chat", "channel")
 	bad := find(objs, "sre-alerts")
 	bad.SetUID("uid-bad")
-	_ = unstructured.SetNestedField(bad.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(bad.Object, "#general alerts", "spec", "chat", "channel")
 	until(t, func() { c.apply(fresh); c.apply(bad) }, func() bool {
 		return src.CachedGenerationForTest("Binding", "sre", "chat-only") == 1 && src.CachedGenerationForTest("Binding", "sre", "sre-alerts") == 1
 	})
@@ -775,7 +801,7 @@ func TestAMovedBindingMadeInvalidBackOnTheOwnConnectionHasNoLastGood(t *testing.
 	}
 	back := find(objs, "sre-alerts")
 	back.SetGeneration(3)
-	_ = unstructured.SetNestedField(back.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(back.Object, "#general alerts", "spec", "chat", "channel")
 	until(t, func() { c.apply(back) }, func() bool { return src.CachedGenerationForTest("Binding", "sre", "sre-alerts") == 3 })
 	s, _ := set(t, src)
 	if slices.Contains(bindingNames(s), "sre/sre-alerts") {

@@ -191,6 +191,28 @@ func TestReactionsAreIdempotentAndNeedAMessage(t *testing.T) {
 	}
 }
 
+// A fake whose caps name no reaction has none: React and Unreact say chat.ErrNoReactions, which Classify calls Permanent, and
+// the message shows nothing.
+func TestAFakeWithNoReactionsSaysSoAndShowsNone(t *testing.T) {
+	f := NewFake()
+	c := f.Capabilities()
+	c.AckReaction = ""
+	f.SetCaps(c)
+	ref, _ := f.Post(ctx, tgt, say("x"), "t")
+	for name, call := range map[string]func(context.Context, chat.Ref, string) error{"React": f.React, "Unreact": f.Unreact} {
+		err := call(ctx, ref, "eyes")
+		if !errors.Is(err, chat.ErrNoReactions) {
+			t.Errorf("%s = %v, want chat.ErrNoReactions", name, err)
+		}
+		if v := f.Classify(chat.OpReact, err); v.Class != chat.Permanent {
+			t.Errorf("Classify of %s's error = %+v, want Permanent: no retry makes a reaction a platform has none of", name, v)
+		}
+	}
+	if got := f.Messages()[0].Reactions; len(got) != 0 {
+		t.Errorf("reactions = %v, want none", got)
+	}
+}
+
 func TestUnreactTakesAReactionOffAndIsSuccessWhenItIsNotThere(t *testing.T) {
 	f := NewFake()
 	ref, _ := f.Post(ctx, tgt, say("x"), "t")
@@ -439,6 +461,24 @@ func TestEphemeralsAreKeptAndNeedAMessage(t *testing.T) {
 	}
 	if err := f.Ephemeral(ctx, tgt, "U1", chat.Message{}); !errors.Is(err, chat.ErrInvalid) {
 		t.Errorf("an empty ephemeral = %v, want ErrInvalid", err)
+	}
+}
+
+// A fake whose caps say it has no ephemeral messages says chat.ErrNoEphemeral, which it calls Permanent, and shows and keeps nothing.
+func TestAFakeWithNoEphemeralMessagesSaysSoAndShowsNothing(t *testing.T) {
+	f := NewFake()
+	c := f.Capabilities()
+	c.Ephemeral = false
+	f.SetCaps(c)
+	err := f.Ephemeral(ctx, tgt, "U1", chat.Message{Fallback: "only you"})
+	if !errors.Is(err, chat.ErrNoEphemeral) {
+		t.Fatalf("Ephemeral = %v, want chat.ErrNoEphemeral", err)
+	}
+	if v := f.Classify(chat.OpPost, err); v.Class != chat.Permanent {
+		t.Errorf("Classify = %+v, want Permanent", v)
+	}
+	if got, shown := f.Ephemerals(), f.Subject().Sent(); len(got) != 0 || len(shown) != 0 {
+		t.Errorf("kept %+v and showed %d texts, want nothing", got, len(shown))
 	}
 }
 

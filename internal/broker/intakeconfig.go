@@ -19,8 +19,10 @@ type intakeParts struct {
 	snapshot     func() *config.Snapshot
 	submitter    trigger.Submitter
 	interactions func(context.Context, chat.Interaction) error
-	notice       func(context.Context, session.Key, session.Notice) error
-	starter      *triggerStarter
+	// decidePress takes the press of a platform that waits for its decision in the press's request (chat.InlineDecider).
+	decidePress func(context.Context, chat.Interaction) (chat.PressOutcome, error)
+	notice      func(context.Context, session.Key, session.Notice) error
+	starter     *triggerStarter
 	// threads keeps the thread of each trigger key, runs counts the starts each trigger's limits hold to, and
 	// replies is the reply queue the Intake asks whether a reservation's turn was taken (store.ReplyQueue.HasReply):
 	// all three are the one store.
@@ -48,6 +50,8 @@ func newIntakeConfig(p intakeParts) (trigger.IntakeConfig, error) {
 		return trigger.IntakeConfig{}, errors.New("broker: submitter is required for the intake: it is how a message becomes a turn")
 	case p.interactions == nil:
 		return trigger.IntakeConfig{}, errors.New("broker: interactions is required for the intake: it takes the presses of buttons")
+	case p.decidePress == nil:
+		return trigger.IntakeConfig{}, errors.New("broker: decidePress is required for the intake: it takes the presses whose platform waits for their decision")
 	case p.notice == nil:
 		return trigger.IntakeConfig{}, errors.New("broker: notice is required for the intake: it tells a thread that Agent Kourier cannot continue it")
 	case p.starter == nil:
@@ -63,7 +67,7 @@ func newIntakeConfig(p intakeParts) (trigger.IntakeConfig, error) {
 	}
 	return trigger.IntakeConfig{
 		Connection: p.conn, Snapshot: p.snapshot, Submitter: p.submitter, Logger: p.log,
-		Interactions: p.interactions, Notice: p.notice,
-		TriggerThreads: p.threads, TriggerRuns: p.runs, OnStart: p.starter.OnStart, OnLimited: p.starter.Limited, TakesBotMention: p.starter.TakesBotMention, TurnQueued: p.replies.HasReply,
+		Interactions: p.interactions, DecidePress: p.decidePress, Notice: p.notice,
+		TriggerThreads: p.threads, TriggerRuns: p.runs, OnStart: p.starter.OnStart, OnLimited: p.starter.Limited, TakesBotMention: p.starter.TakesBotMention, TakesTurn: p.starter.TakesTurn, TurnQueued: p.replies.HasReply,
 	}, nil
 }

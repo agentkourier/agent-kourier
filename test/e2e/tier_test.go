@@ -14,3 +14,16 @@ func TestCheckTier(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckSlackMode(t *testing.T) {
+	for _, mode := range []string{SlackModeSocket, SlackModeHTTP} {
+		if err := CheckSlackMode(mode); err != nil {
+			t.Errorf("CheckSlackMode(%q) = %v; want nil", mode, err)
+		}
+	}
+	for _, mode := range []string{"", "HTTP", "http ", "events", "websocket"} {
+		if err := CheckSlackMode(mode); err == nil {
+			t.Errorf("CheckSlackMode(%q) succeeded; want an error: a mode is never guessed", mode)
+		}
+	}
+}

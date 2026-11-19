@@ -1,5 +1,6 @@
 {{- if .Values.service.enabled }}
-# Agent Kourier's health and metrics port, and nothing else: Agent Kourier receives no webhook.
+# Agent Kourier's health and metrics port, and nothing else, on every pod, a standby's included. The chat listener's requests go through
+# the chat Service (chat-service.yaml), which selects the leader alone.
 apiVersion: v1
 kind: Service
 metadata:

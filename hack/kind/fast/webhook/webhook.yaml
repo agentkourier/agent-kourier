@@ -1,0 +1,54 @@
+# The fast tier's webhook connections (custom resources only, E2E_CONFIG_SOURCE=crds; lib.sh's deploy_webhook): the four recipes of
+# examples/recipes/webhook-*, in their own namespace, acme-webhooks, which hack/kind/webhook-values.yaml puts on the platform's admission list, so
+# that the broker serves them beside its own connection, on the chat listener that the same file turns on. The ConfigMap route serves the one
+# ChatConnection of its directory, so they have no place there, and test/e2e's WH_ tests skip on it. deploy_webhook applies each recipe's
+# ChatConnection and Binding as they are, but for the agent token it gives the Binding (webhook_binding), and this file in place of the
+# recipes' AgentBackends, whose URL is a placeholder. The fake vendors (test/fakevendors, the Deployment fakevendors of fast/doubles.yaml) are
+# their far side, with the fake secrets that deploy_webhook puts in the Secrets the recipes name (never committed as Secrets); test/kindmanifests
+# pins that they agree, and that the names are the ones test/e2e's vendors.go uses.
+#
+# What the broker must be granted to read the Secrets, as a team grants it: a Role in the namespace that names them, bound to its ServiceAccount.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: agent-kourier-reads-acme-webhooks, namespace: acme-webhooks}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [github-webhook, bitbucket-webhook, jira-webhook, linear-webhook, webhook-agent-token]
+    verbs: [list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: agent-kourier-reads-acme-webhooks, namespace: acme-webhooks}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agent-kourier-reads-acme-webhooks}
+subjects: [{kind: ServiceAccount, name: agent-kourier, namespace: agent-kourier}]
+---
+# The recipes' AgentBackends, by the names their Bindings give them: the stub agent's webhook agents (-webhook-vendor-api), one for each vendor,
+# which read the recipe's prompt and post on the fake vendor's API as the agent's own account.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: github-agent, namespace: acme-webhooks}
+spec:
+  dialect: a2a
+  url: http://stubagent.e2e.svc.cluster.local:8080/agents/agents/github
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: bitbucket-agent, namespace: acme-webhooks}
+spec:
+  dialect: a2a
+  url: http://stubagent.e2e.svc.cluster.local:8080/agents/agents/bitbucket
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: jira-agent, namespace: acme-webhooks}
+spec:
+  dialect: a2a
+  url: http://stubagent.e2e.svc.cluster.local:8080/agents/agents/jira
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: linear-agent, namespace: acme-webhooks}
+spec:
+  dialect: a2a
+  url: http://stubagent.e2e.svc.cluster.local:8080/agents/agents/linear

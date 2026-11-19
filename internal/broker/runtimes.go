@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,7 +26,7 @@ type connRuntime struct {
 	// watched is the platform as every shared part gets it (runtimeTable.Platform): watched for a rejected credential (WatchAuth), so that a
 	// call of any of them that finds the tokens rejected ends the run.
 	watched chat.Platform
-	// report is WatchAuth's: a call that finds the tokens rejected ends ctx with an authRejected, which is ErrSlackAuth, as the cause.
+	// report is WatchAuth's: a call that finds the tokens rejected ends ctx with an authRejected, which is ErrChatAuth, as the cause.
 	report func(code string)
 	// gauge is what agentkourier_chat_connected of the connection is set through.
 	gauge *connGauge
@@ -44,12 +45,24 @@ type connRuntime struct {
 	// retired the platform of the runtime fails fast (stopped). A runtime that is replaced by a restart is in the same span: its turns go on with
 	// the platform they hold, which is the connection's still. Nil for the own connection, if the broker has one, which is always served.
 	life atomic.Pointer[connLife]
+	// route is the runtime's route on the chat listener while it runs (runtimeHost.route): set only when the broker has a chat listener and
+	// the platform takes requests over HTTP, and taken away when the run ends or the runtime is halted.
+	route atomic.Pointer[chatRoute]
 }
 
-// halt ends the run of the runtime on purpose and does not wait for it (wait does).
+// halt ends the run of the runtime on purpose and does not wait for it (wait does). Its route on the chat listener goes at once, so that a
+// request that comes while the run is stopping is answered 503 and sent again.
 func (rt *connRuntime) halt() {
 	rt.halted.Store(true)
+	rt.unroute()
 	rt.stop()
+}
+
+// unroute drops the runtime's route on the chat listener, if it has one.
+func (rt *connRuntime) unroute() {
+	if r := rt.route.Swap(nil); r != nil {
+		r.drop()
+	}
 }
 
 // rejection says whether the platform rejected the credentials of the runtime, and the code it did so with: a call or the run saw it, and ended ctx
@@ -135,13 +148,18 @@ type runtimeTable struct {
 	// know would be the loop it exists to stop. A refusal that lifts writes the bot back, since the lookup that learned it is not asked again;
 	// a restart that carries its id on writes nothing, because a connection that is held was never forgotten.
 	bots map[string]appIdentity
+	// ending is the runtimes that remove took out of rts, by connection, until their run has returned (running): a run that is stopping may
+	// still write to the store (a Microsoft Teams receiver drains what it answered), so the record of the served connections does not prune
+	// the connection before then.
+	ending map[string][]*connRuntime
 	// sealed is set by the shutdown when it halts the runtimes: a runtime added after it is halted as it is added, so that none runs on
 	// beyond the step that stops them.
 	sealed bool
 }
 
 func newRuntimeTable() *runtimeTable {
-	return &runtimeTable{rts: map[string]*connRuntime{}, down: map[string]*connectionStopped{}, bots: map[string]appIdentity{}}
+	return &runtimeTable{rts: map[string]*connRuntime{}, down: map[string]*connectionStopped{}, bots: map[string]appIdentity{},
+		ending: map[string][]*connRuntime{}}
 }
 
 var _ chat.Resolver[chat.Platform] = (*runtimeTable)(nil)
@@ -171,6 +189,28 @@ func (t *runtimeTable) Platform(conn string) (chat.Platform, error) {
 func (t *runtimeTable) runs(conn string) bool {
 	_, err := t.Platform(conn)
 	return err == nil
+}
+
+// running says whether a run of the connection conn may still be going: a runtime of it is in the table (rejected or not), or one that was
+// taken out (remove) while its run went and whose run has not told the table it ended (ended).
+func (t *runtimeTable) running(conn string) bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	_, ok := t.rts[conn]
+	return ok || len(t.ending[conn]) > 0
+}
+
+// ended forgets rt among the runtimes taken out whose run goes: its run's goroutine calls it once it has closed rt.done. remove reads done
+// under t.mu, so a runtime taken out after the close is never kept, and one taken out before it is dropped here.
+func (t *runtimeTable) ended(rt *connRuntime) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	going := slices.DeleteFunc(t.ending[rt.name], func(e *connRuntime) bool { return e == rt })
+	if len(going) == 0 {
+		delete(t.ending, rt.name)
+		return
+	}
+	t.ending[rt.name] = going
 }
 
 // downError is the error of a connection that nothing runs.
@@ -256,13 +296,17 @@ func (t *runtimeTable) seal() []*connRuntime {
 	return out
 }
 
-// remove takes rt out of the table, if it is the connection's runtime still: a runtime that was replaced is not in it to take.
+// remove takes rt out of the table, if it is the connection's runtime still: a runtime that was replaced is not in it to take. Either way rt,
+// if its run goes, is running until the run returns and says so (ended); one that never ran, or whose run has returned, is not kept.
 func (t *runtimeTable) remove(rt *connRuntime) {
 	t.mu.Lock()
+	defer t.mu.Unlock()
 	if t.rts[rt.name] == rt {
 		delete(t.rts, rt.name)
 	}
-	t.mu.Unlock()
+	if rt.ran.Load() && !isClosed(rt.done) {
+		t.ending[rt.name] = append(t.ending[rt.name], rt)
+	}
 }
 
 // identify records whose bot the connection conn has, in place of the one it had: a connection that is served keeps its bot until a new one is
@@ -280,30 +324,30 @@ func (t *runtimeTable) forgetBot(conn string) {
 	delete(t.bots, conn)
 }
 
-// botOwner implements botOwners over the connections that are served.
-func (t *runtimeTable) botOwner(botID string) (string, bool) {
+// botOwner implements botOwners over the connections that are served: the bot of a connection on another platform is none, whatever its ID.
+func (t *runtimeTable) botOwner(platform, botID string) (string, bool) {
 	if botID == "" {
 		return "", false
 	}
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	for name, id := range t.bots {
-		if id.Bot == botID {
+		if id.Platform == platform && id.Bot == botID {
 			return name, true
 		}
 	}
 	return "", false
 }
 
-// botUserOwner implements botOwners for the user a bot posts as.
-func (t *runtimeTable) botUserOwner(user string) (string, bool) {
+// botUserOwner implements botOwners for the user a bot posts as, on platform as botOwner is.
+func (t *runtimeTable) botUserOwner(platform, user string) (string, bool) {
 	if user == "" {
 		return "", false
 	}
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	for name, id := range t.bots {
-		if id.User == user {
+		if id.Platform == platform && id.User == user {
 			return name, true
 		}
 	}
@@ -327,10 +371,12 @@ type runtimeHost struct {
 	log     *slog.Logger
 	metrics *Metrics
 	table   *runtimeTable
-	// open builds the platform of a connection (leaderHalf.openPlatform).
-	open func(conn Connection, onConnection func(connected bool)) (builtPlatform, error)
+	// open builds the platform of a connection (leaderHalf.openPlatform), on parent, which holds the broker's instruments.
+	open func(ctx context.Context, conn Connection, onConnection func(connected bool)) (builtPlatform, error)
 	// parent is the context the runs hang from: the broker's own, which only the shutdown ends.
 	parent context.Context
+	// routes is the chat listener's route table, nil when the broker has no chat listener.
+	routes *chatRoutes
 }
 
 // build makes the runtime of conn and puts it in the table: from here the shared parts reach its platform. agentkourier_chat_connected says 0 for
@@ -339,11 +385,11 @@ func (h *runtimeHost) build(conn Connection) (*connRuntime, error) {
 	name := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
 	h.metrics.ChatConnected(name, false)
 	gauge := &connGauge{m: h.metrics, name: name}
-	p, err := h.open(conn, gauge.set)
+	p, err := h.open(h.parent, conn, gauge.set)
 	if err != nil {
 		return nil, err
 	}
-	ctx, report, stop := WithAuthFailure(h.parent)
+	ctx, report, stop := WithAuthFailure(h.parent, conn.Platform)
 	rt := &connRuntime{name: name, conn: conn, platform: p, report: report, gauge: gauge, ctx: ctx, stop: stop, done: make(chan struct{})}
 	rt.watched = watchRuntime(p.Platform, report, rt.stopped)
 	if !h.table.add(rt) {
@@ -357,19 +403,44 @@ func (h *runtimeHost) build(conn Connection) (*connRuntime, error) {
 // runtime was not halted the run ended by itself, which for RunPlatform is a rejected credential, whether the run or a call through the platform
 // found it out: the runtime leaves the table then, so the connection is down, with the rejection as the reason (runtimeTable.fail), and its
 // transport closes. A halted one stays until its owner takes it out, because the final drain of a shutdown still posts through it.
+//
+// While it runs, a runtime whose platform takes requests over HTTP has its route on the chat listener (route), which goes when the run ends.
 func (h *runtimeHost) run(rt *connRuntime, sink chat.Sink, onEnd func(rt *connRuntime, err error)) {
 	rt.ran.Store(true)
+	h.route(rt)
 	go func() {
-		err := RunPlatform(rt.ctx, rt.platform, sink, RunPolicy{Logger: h.log.With("connection", rt.name)})
+		err := RunPlatform(rt.ctx, rt.platform, sink, RunPolicy{Logger: h.log.With("connection", rt.name), Platform: rt.conn.Platform})
+		rt.unroute()
 		if !rt.halted.Load() {
 			h.table.fail(rt, err)
 			h.closeTransport(rt) // nothing posts through it from here: the connection is down
 		}
 		close(rt.done)
+		h.table.ended(rt)
 		if onEnd != nil {
 			onEnd(rt, err)
 		}
 	}()
+}
+
+// route puts rt's route on the chat listener, if the broker has one and rt's platform offers a handler (chat.HTTPReceiver). A runtime that
+// was halted while its route was being put is unrouted at once: halt may have looked for the route before it was there.
+func (h *runtimeHost) route(rt *connRuntime) {
+	if h.routes == nil {
+		return
+	}
+	handler, ok := receiverOf(rt.platform.Platform)
+	if !ok {
+		return
+	}
+	r := h.routes.register(rt.conn.Platform, rt.name, handler)
+	if r == nil {
+		return // the replica no longer leads
+	}
+	rt.route.Store(r)
+	if rt.halted.Load() {
+		rt.unroute()
+	}
 }
 
 // closeTransport closes the idle connections of rt's Slack transport, once, and tells the seam. It is for after the last call through the

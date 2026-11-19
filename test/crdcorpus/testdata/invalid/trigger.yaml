@@ -2150,8 +2150,8 @@ spec:
         limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
         promptTemplate: '{{ printf "%2000000000d" 1 }}'
 ---
-# rule: trigger/spec.chat.triggers[].from.id: over 32 characters
-# want: spec.chat.triggers[1].from.id: is 33 bytes, longer than the 32 byte limit
+# rule: trigger/spec.chat.triggers[].from.id: over 36 characters
+# want: spec.chat.triggers[1].from.id: is 37 bytes, longer than the 36 byte limit
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
@@ -2171,7 +2171,7 @@ spec:
     triggers:
       - {type: mention}
       - type: botMessage
-        from: {id: B00000000000000000000000000000000}
+        from: {id: B000000000000000000000000000000000000}
         match: {title: "^FIRING"}
         extract:
           state: {field: title, regex: "(?P<state>FIRING|RESOLVED)"}
@@ -2768,3 +2768,209 @@ spec:
         match: {text: "("}
         limits: {rateLimit: {maxRuns: 6, per: 30m, maxConcurrent: 2}, maxRunsPerDay: 50}
         promptTemplate: "A person reported something in {{ .Channel }}."
+---
+# rule: trigger/webhookEvent: from
+# want: spec.chat.triggers[0].from: not allowed with type: webhookEvent
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: pr-review, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: pr-reviewer, namespace: kagent}
+  identity: {userId: agent-kourier-pr-review}
+  chat:
+    connectionRef: {name: github}
+    channel: acme/widgets
+    output: none
+    triggers:
+      - type: webhookEvent
+        from: {id: B0123456789}
+        limits: {rateLimit: {maxRuns: 20, per: 1h, maxConcurrent: 2}, maxRunsPerDay: 100}
+        promptTemplate: "Review {{ .Channel }}."
+---
+# rule: trigger/webhookEvent: extract
+# want: spec.chat.triggers[0].extract: not allowed with type: webhookEvent
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: pr-review, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: pr-reviewer, namespace: kagent}
+  identity: {userId: agent-kourier-pr-review}
+  chat:
+    connectionRef: {name: github}
+    channel: acme/widgets
+    output: none
+    triggers:
+      - type: webhookEvent
+        extract: {key: {field: title, regex: "(?P<key>.+)"}}
+        limits: {rateLimit: {maxRuns: 20, per: 1h, maxConcurrent: 2}, maxRunsPerDay: 100}
+        promptTemplate: "Review {{ .Channel }}."
+---
+# rule: trigger/webhookEvent: thread
+# want: spec.chat.triggers[0].thread: not allowed with type: webhookEvent
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: pr-review, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: pr-reviewer, namespace: kagent}
+  identity: {userId: agent-kourier-pr-review}
+  chat:
+    connectionRef: {name: github}
+    channel: acme/widgets
+    output: none
+    triggers:
+      - type: webhookEvent
+        thread: {cooldown: 2h}
+        limits: {rateLimit: {maxRuns: 20, per: 1h, maxConcurrent: 2}, maxRunsPerDay: 100}
+        promptTemplate: "Review {{ .Channel }}."
+---
+# rule: trigger/webhookEvent: promptTemplate missing
+# want: spec.chat.triggers[0].promptTemplate: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: pr-review, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: pr-reviewer, namespace: kagent}
+  identity: {userId: agent-kourier-pr-review}
+  chat:
+    connectionRef: {name: github}
+    channel: acme/widgets
+    output: none
+    triggers:
+      - type: webhookEvent
+        limits: {rateLimit: {maxRuns: 20, per: 1h, maxConcurrent: 2}, maxRunsPerDay: 100}
+---
+# rule: trigger/webhookEvent: rateLimit missing
+# want: spec.chat.triggers[0].limits.rateLimit: required: set maxRuns, per and maxConcurrent; a webhookEvent trigger requires both rateLimit and maxRunsPerDay
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: pr-review, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: pr-reviewer, namespace: kagent}
+  identity: {userId: agent-kourier-pr-review}
+  chat:
+    connectionRef: {name: github}
+    channel: acme/widgets
+    output: none
+    triggers:
+      - type: webhookEvent
+        limits: {maxRunsPerDay: 100}
+        promptTemplate: "Review {{ .Channel }}."
+---
+# rule: trigger/webhookEvent: maxRunsPerDay missing
+# want: spec.chat.triggers[0].limits.maxRunsPerDay: required: set the cap for a day, or 0 for no cap; a webhookEvent trigger requires both rateLimit and maxRunsPerDay
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: pr-review, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: pr-reviewer, namespace: kagent}
+  identity: {userId: agent-kourier-pr-review}
+  chat:
+    connectionRef: {name: github}
+    channel: acme/widgets
+    output: none
+    triggers:
+      - type: webhookEvent
+        limits: {rateLimit: {maxRuns: 20, per: 1h, maxConcurrent: 2}}
+        promptTemplate: "Review {{ .Channel }}."
+---
+# rule: trigger/webhookEvent: match key not a field name
+# want: spec.chat.triggers[0].match.Event: invalid field name "Event"
+# field: spec.chat.triggers[0].match
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: pr-review, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: pr-reviewer, namespace: kagent}
+  identity: {userId: agent-kourier-pr-review}
+  chat:
+    connectionRef: {name: github}
+    channel: acme/widgets
+    output: none
+    triggers:
+      - type: webhookEvent
+        match: {Event: ^push$}
+        limits: {rateLimit: {maxRuns: 20, per: 1h, maxConcurrent: 2}, maxRunsPerDay: 100}
+        promptTemplate: "Review {{ .Channel }}."
+---
+# rule: trigger/webhookEvent: exclude key over 63 bytes
+# want: spec.chat.triggers[0].exclude: entry 0, in name order, is named with 64 bytes, longer than the 63 byte limit
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: pr-review, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: pr-reviewer, namespace: kagent}
+  identity: {userId: agent-kourier-pr-review}
+  chat:
+    connectionRef: {name: github}
+    channel: acme/widgets
+    output: none
+    triggers:
+      - type: webhookEvent
+        exclude: {eaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: x}
+        limits: {rateLimit: {maxRuns: 20, per: 1h, maxConcurrent: 2}, maxRunsPerDay: 100}
+        promptTemplate: "Review {{ .Channel }}."
+---
+# rule: trigger/webhookEvent: match over 6 entries
+# want: spec.chat.triggers[0].match: has 7 entries, maximum is 6
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: pr-review, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: pr-reviewer, namespace: kagent}
+  identity: {userId: agent-kourier-pr-review}
+  chat:
+    connectionRef: {name: github}
+    channel: acme/widgets
+    output: none
+    triggers:
+      - type: webhookEvent
+        match: {a: x, b: x, c: x, d: x, e: x, f: x, g: x}
+        limits: {rateLimit: {maxRuns: 20, per: 1h, maxConcurrent: 2}, maxRunsPerDay: 100}
+        promptTemplate: "Review {{ .Channel }}."
+---
+# rule: trigger/webhookEvent: promptTemplate that does not parse
+# want: spec.chat.triggers[0].promptTemplate: invalid template
+# schema: accepts
+# broker-only: the schema does not parse templates
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: pr-review, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: pr-reviewer, namespace: kagent}
+  identity: {userId: agent-kourier-pr-review}
+  chat:
+    connectionRef: {name: github}
+    channel: acme/widgets
+    output: none
+    triggers:
+      - type: webhookEvent
+        limits: {rateLimit: {maxRuns: 20, per: 1h, maxConcurrent: 2}, maxRunsPerDay: 100}
+        promptTemplate: "Review {{ .Channel"
+---
+# rule: trigger/webhookEvent: promptTemplate that reads .Key
+# want: spec.chat.triggers[0].promptTemplate: invalid template: reads .Key, which a webhookEvent trigger does not have
+# schema: accepts
+# broker-only: the schema does not parse templates, so it cannot see what one reads
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: pr-review, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: pr-reviewer, namespace: kagent}
+  identity: {userId: agent-kourier-pr-review}
+  chat:
+    connectionRef: {name: github}
+    channel: acme/widgets
+    output: none
+    triggers:
+      - type: webhookEvent
+        limits: {rateLimit: {maxRuns: 20, per: 1h, maxConcurrent: 2}, maxRunsPerDay: 100}
+        promptTemplate: "Review {{ .Channel }} for {{ .Key }}."

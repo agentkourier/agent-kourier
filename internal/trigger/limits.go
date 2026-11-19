@@ -1,7 +1,6 @@
 package trigger
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"strconv"
@@ -46,8 +45,8 @@ func (in *Intake) admit(ctx context.Context, m Match) (store.TriggerAdmission, e
 		Binding: m.Binding, Trigger: m.Index, At: m.Received,
 		Key: store.ConversationKey{Connection: in.conn, Channel: m.Message.At.Channel, Thread: m.Message.At.ID},
 	}
-	if m.Mention || m.Person { // each holds its place for its own turn alone, not for the later turns of its thread
-		run.SessionThread = cmp.Or(m.Message.At.Thread, m.Message.At.ID)
+	if m.Mention || m.Person || m.Webhook { // each holds its place for its own turn alone, not for the later turns of its thread
+		run.SessionThread = m.sessionThread()
 	}
 	adm, err := in.cfg.TriggerRuns.AdmitTriggerRun(ctx, run, limits)
 	if err != nil {
@@ -56,27 +55,39 @@ func (in *Intake) admit(ctx context.Context, m Match) (store.TriggerAdmission, e
 	return adm, nil
 }
 
-// stopThread is what a limit does to a fire that reserved a thread: it gives the reservation back and counts the
-// decision. The key is as if it had not fired, so the next fire of it may start when there is capacity; and nothing
-// is posted, since a note per alert is what a storm must not do (D26). If the release fails the decision is left
-// unset and the error returned: the redelivery finds its own reservation and is checked again. A message stopped before is
-// a redelivery, and was counted then.
+// stopThread is what a limit does to a fire that reserved a thread: it gives the reservation back, counts the stopped
+// start (agentkourier_trigger_limited_total) and makes the decision limited. The key is as if it had not fired, so the
+// next fire of it may start when there is capacity; and nothing is posted, since a note per alert is what a storm must
+// not do (D26). If the release fails the error is returned, and nothing is counted: the redelivery finds its own
+// reservation and is checked again. A message stopped before is a redelivery, and was counted then.
 func (in *Intake) stopThread(ctx context.Context, m Match, hash string, out decided, adm store.TriggerAdmission) (decided, error) {
+	out.decision = DecisionLimited // what the attempt carries out, which a failed release logs
 	if _, err := in.cfg.TriggerThreads.ReleaseTriggerThread(ctx, m.Binding, hash, m.Message.At.ID); err != nil {
-		out.decision = ""
 		return out, fmt.Errorf("release the thread of key %s: %w", out.keyHash, err)
 	}
 	if !adm.Again {
 		in.countLimited(ctx, m, adm.Limit)
 	}
-	out.decision = DecisionLimited
 	return out, nil
 }
 
-// countLimited counts and logs a start a limit stopped. The log names the Binding, the trigger and the limit and
-// where the alert was, and never what it said.
+// countLimited counts and logs a start a limit stopped (logLimited).
 func (in *Intake) countLimited(ctx context.Context, m Match, limit store.TriggerLimit) {
 	telemetry.Count(ctx, "agentkourier_trigger_limited_total", m.Binding, strconv.Itoa(m.Index), string(limit))
+	in.logLimited(ctx, m, limit)
+}
+
+// logLimited logs a start a limit stopped. The log names the Binding, the trigger and the limit and where the message was, and never
+// what it said. An alert's reached people through its own post, so it is logged at INFO; a webhook event's is lost unless its sender
+// delivers it again, so it is logged at WARN, with the thread and the sender's delivery ID, by which it is found in the sender's log
+// and sent again (spec D55).
+func (in *Intake) logLimited(ctx context.Context, m Match, limit store.TriggerLimit) {
+	if m.Webhook {
+		in.log.WarnContext(ctx, "chat: a webhook event was not investigated; a limit is reached, and the event is lost unless it is delivered again",
+			"binding", m.Binding, "trigger", m.Index, "limit", limit, "channel", m.Message.At.Channel, "thread", m.sessionThread(),
+			"message", m.Message.At.ID, "delivery", m.Message.Webhook.Delivery)
+		return
+	}
 	in.log.InfoContext(ctx, "chat: a trigger's start was not made; a limit is reached", "binding", m.Binding, "trigger", m.Index, "limit", limit, "channel", m.Message.At.Channel, "message", m.Message.At.ID)
 }
 

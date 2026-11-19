@@ -865,20 +865,20 @@ func twoConnectionsMoved(t *testing.T, moved map[string]string, without ...strin
 // ChatConnection, which Resolve allows to name the same channel, is left out: the bot would answer for a channel it was never asked about.
 func TestBindingTargetsAreTheServedConnectionsBindingsOnly(t *testing.T) {
 	snap := twoConnections(t)
-	got := bindingTargets(snap, []v1alpha1.ObjectRef{refA})
+	got := bindingTargets(snap, []v1alpha1.ObjectRef{refA}, nil)
 	want := []bindingcheck.Target{{Binding: "ops/oncall", Connection: connA, Channel: "C2"}, {Binding: "sre/oncall", Connection: connA, Channel: "C1"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("targets of slack-a = %v; want %v", got, want)
 	}
-	got = bindingTargets(snap, []v1alpha1.ObjectRef{refB})
+	got = bindingTargets(snap, []v1alpha1.ObjectRef{refB}, nil)
 	want = []bindingcheck.Target{{Binding: "ops/also-other", Connection: connB, Channel: "C3"}, {Binding: "sre/other-bot", Connection: connB, Channel: "C1"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("targets of slack-b = %v; want %v", got, want)
 	}
-	if got := bindingTargets(snap, []v1alpha1.ObjectRef{{Namespace: "platform", Name: "slack-c"}}); len(got) != 0 {
+	if got := bindingTargets(snap, []v1alpha1.ObjectRef{{Namespace: "platform", Name: "slack-c"}}, nil); len(got) != 0 {
 		t.Errorf("targets of a connection no Binding names = %v; want none", got)
 	}
-	if got := bindingTargets(nil, []v1alpha1.ObjectRef{refA}); got != nil {
+	if got := bindingTargets(nil, []v1alpha1.ObjectRef{refA}, nil); got != nil {
 		t.Errorf("targets before the first load = %v; want none", got)
 	}
 }

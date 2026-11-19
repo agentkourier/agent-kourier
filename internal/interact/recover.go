@@ -21,7 +21,7 @@ type Session interface {
 
 // resend sends the stored answer of an answered interaction whose pause has come again. The answer is
 // built from the stored request, the question the person saw, never from the pause just parsed. A task
-// that has moved on is not paused, and the answer is dropped. An answer that retention has cleared cannot be sent: the
+// that has moved on, to its end or to another question, is not paused on this one, and the answer is dropped. An answer that retention has cleared cannot be sent: the
 // task is cancelled (refuseCleared).
 func (i *Intake) resend(ctx context.Context, p Pause, b Binding, row store.Interaction) error {
 	if len(row.Request) == 0 || len(row.Answer) == 0 { // cleared by retention: there is no answer left to send
@@ -50,15 +50,16 @@ func (i *Intake) resend(ctx context.Context, p Pause, b Binding, row store.Inter
 }
 
 // AnswerMessage builds the message that sends an interaction's answer (the stored answer is the
-// dialect.Answer as JSON): the dialect's, with a message ID fixed by the interaction, so sending it
-// again is the same message, and the person who decided, on platform, as its attribution. What kagent does with a
+// dialect.Answer as JSON): the dialect's, with a message ID fixed by the interaction (dialect.AnswerID),
+// so sending it again is the same message and the session takes it only while the task is paused on
+// that interaction, and the person who decided, on platform, as its attribution. What kagent does with a
 // repeated message ID on an answer is UNCONFIRMED(WP-02).
 func AnswerMessage(d dialect.Dialect, id string, in dialect.Interaction, answer dialect.Answer, decider string, platform dialect.Platform) (a2a.Message, error) {
 	msg, err := d.BuildResponse(in, answer)
 	if err != nil {
 		return a2a.Message{}, err
 	}
-	msg.ID = id + answerSuffix
+	msg.ID = dialect.AnswerID(id)
 	d.Attribute(&msg, dialect.User{ID: decider, Platform: platform})
 	return msg, nil
 }

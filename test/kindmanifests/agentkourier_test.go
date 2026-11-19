@@ -77,7 +77,7 @@ func fastConfig(t *testing.T) string {
 }
 
 var upFastSecrets = secrets{
-	"agent-kourier/slack-fast": {"botToken", "appToken"}, "agent-kourier/agent-kourier-agent-token": {"token"},
+	"agent-kourier/slack-fast": {"botToken", "appToken", "signingSecret"}, "agent-kourier/agent-kourier-agent-token": {"token"},
 	"agent-kourier/prompt-agent-bearer": {"token"}, // lib.sh's deploy_prompt_agent
 }
 
@@ -340,6 +340,14 @@ func TestTheRunnerJobRunsEveryE2ETest(t *testing.T) {
 				}
 				continue
 			}
+			// The TEAMS_ tests (Microsoft Teams on the fake Teams service) are make e2e-teams's, on a tier brought up with E2E_TEAMS=1, in a Job of their own
+			// (TestTheTeamsTargetRunsEveryTEAMSTest).
+			if strings.HasPrefix(m[1], "TestTEAMS_") {
+				if re.MatchString(m[1]) {
+					t.Errorf("the Job's pattern %q selects %s (%s): the TEAMS_ tests are run by make e2e-teams, not by the main Job", pattern, m[1], filepath.Base(f))
+				}
+				continue
+			}
 			seen++
 			if !re.MatchString(m[1]) {
 				t.Errorf("the Job's pattern %q does not select %s (%s), so the Job would never run it", pattern, m[1], filepath.Base(f))
@@ -350,7 +358,7 @@ func TestTheRunnerJobRunsEveryE2ETest(t *testing.T) {
 		t.Errorf("found %d e2e tests; the scan is not looking at them", seen)
 	}
 	// Each family the files hold has a test the pattern selects, named here: a family that is dropped from the pattern fails even if the scan misses it.
-	for _, name := range []string{"TestSmoke", "TestFault_X", "TestS1_X", "TestAX_X", "TestA2A_APlainPodThatRestartedAnswersAThreadFromAFreshContext", "TestVerify_BindingsThatCannotBeServedAreNotReadyAndTheLeaderSaysWhy", "TestCR_X"} {
+	for _, name := range []string{"TestSmoke", "TestFault_X", "TestS1_X", "TestAX_X", "TestA2A_APlainPodThatRestartedAnswersAThreadFromAFreshContext", "TestVerify_BindingsThatCannotBeServedAreNotReadyAndTheLeaderSaysWhy", "TestCR_X", "TestWH_X"} {
 		if !re.MatchString(name) {
 			t.Errorf("the Job's pattern %q does not select %s, so it would never run", pattern, name)
 		}

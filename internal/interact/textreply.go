@@ -34,7 +34,7 @@ func NewTextReplies(pipeline *Pipeline, pauses PauseHandler, ready <-chan struct
 // recorded question and never takes up the current task. Preparation and classification share
 // the session facts read here; the press pipeline still performs its own authorization checks.
 // The task may predate Ready: Paused and the decider re-read durable question state, and
-// Manager.Answer verifies that the same task is still parked before accepting an answer.
+// Manager.Answer verifies that the same task is still parked on the same question before accepting an answer.
 func (r *TextReplies) Decide(ctx context.Context, key store.ConversationKey, reply store.Reply, task a2a.Task) (session.TextReplyOutcome, error) {
 	select {
 	case <-ctx.Done():
@@ -75,7 +75,7 @@ func (p *Pipeline) textReply(ctx context.Context, key store.ConversationKey, rep
 		if !session.IsTextQuestion(in) {
 			return session.TextReplyNotAnswer, nil
 		}
-		id = InteractionID(*in)
+		id = dialect.InteractionID(*in)
 	}
 	row, err := p.cfg.Store.GetInteraction(ctx, id)
 	if errors.Is(err, store.ErrNotFound) {

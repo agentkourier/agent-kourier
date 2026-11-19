@@ -4,6 +4,9 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/config"
 )
 
 // MaxServedConnections is the cap on the connections served, which a test fills.
@@ -116,3 +119,18 @@ func (s *Source) CachedNamespaceForTest(name string) *unstructured.Unstructured 
 	u, _ := item.(*unstructured.Unstructured)
 	return u
 }
+
+// PlatformCheckForTest runs the check that a read makes of a valid Binding against the platform of its connection
+// (platformCheck), with no connection in the Set: only the own connection held after its deletion is found. Validate holds every
+// chat ID to Slack's shape but the channel of a Binding of webhookEvent triggers alone, so a Slack Binding that a read checks does
+// not fail it on Slack; a test gives b without Validate.
+func (s *Source) PlatformCheckForTest(b *v1alpha1.Binding) (config.RejectionReason, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.platformCheck(nil)(b)
+}
+
+// SetPlatformsForTest replaces the rules that a read holds a valid Binding to on its connection's platform (platformCheck), before
+// Start. Slack serves every feature and Validate holds its shapes, so a test that needs the check to refuse a Slack Binding gives
+// rules of its own.
+func (s *Source) SetPlatformsForTest(platforms config.PlatformRules) { s.platforms = platforms }

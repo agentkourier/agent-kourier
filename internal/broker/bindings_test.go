@@ -26,6 +26,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
 	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/internal/session"
@@ -209,22 +210,25 @@ func TestNoSnapshotYetIsNotAnUnknownBinding(t *testing.T) {
 // platformAck stands for the platform's own acknowledgment reaction (chat.Caps.AckReaction).
 const platformAck = "platform-default"
 
-// The reaction is the Binding's, else the platform's; the API supplies neither.
+// The reaction is the Binding's, else the platform's; the API supplies neither. A platform known to have no reactions shows none,
+// whatever the Binding names; one that is not known (no platform runs the connection) is not taken to have none.
 func TestAcknowledgmentIsTheBindingsReactionElseThePlatforms(t *testing.T) {
 	on, off := true, false
 	for _, tc := range []struct {
 		name     string
 		ack      *v1alpha1.ChatAcknowledgment
-		platform string
+		platform platformReactions
 		enabled  bool
 		reaction string
 	}{
-		{"not written", nil, platformAck, true, platformAck},
-		{"written without an emoji", &v1alpha1.ChatAcknowledgment{Enabled: &on}, platformAck, true, platformAck},
-		{"the Binding's emoji wins", &v1alpha1.ChatAcknowledgment{Emoji: "eyes"}, platformAck, true, "eyes"},
-		{"disabled", &v1alpha1.ChatAcknowledgment{Enabled: &off}, platformAck, false, platformAck},
-		{"a platform with none shows nothing", nil, "", true, ""},
-		{"a platform with none, and the Binding names one", &v1alpha1.ChatAcknowledgment{Emoji: "eyes"}, "", true, "eyes"},
+		{"not written", nil, platformReactions{own: platformAck}, true, platformAck},
+		{"written without an emoji", &v1alpha1.ChatAcknowledgment{Enabled: &on}, platformReactions{own: platformAck}, true, platformAck},
+		{"the Binding's emoji wins", &v1alpha1.ChatAcknowledgment{Emoji: "eyes"}, platformReactions{own: platformAck}, true, "eyes"},
+		{"disabled", &v1alpha1.ChatAcknowledgment{Enabled: &off}, platformReactions{own: platformAck}, false, platformAck},
+		{"no platform known: no default", nil, platformReactions{}, true, ""},
+		{"no platform known, and the Binding names one", &v1alpha1.ChatAcknowledgment{Emoji: "eyes"}, platformReactions{}, true, "eyes"},
+		{"a platform with no reactions shows nothing", nil, platformReactions{none: true}, true, ""},
+		{"a platform with no reactions, and the Binding names one", &v1alpha1.ChatAcknowledgment{Emoji: "eyes"}, platformReactions{none: true}, true, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if enabled, reaction := acknowledgment(tc.ack, tc.platform); enabled != tc.enabled || reaction != tc.reaction {
@@ -259,6 +263,14 @@ func TestBackendCarriesWhatTheSessionNeeds(t *testing.T) {
 	be.Attribute(msg, dialect.User{ID: "U1", Name: "Ada"})
 	if _, ok := msg.Metadata["agentkourier.dev/actor"]; !ok {
 		t.Errorf("Attribute left no actor in %v: it is not the kagent-v1 dialect's", msg.Metadata)
+	}
+	if be.ParseInteraction == nil {
+		t.Fatal("ParseInteraction is nil: the session could not tell which question a task waits on, and would take no answer")
+	}
+	question := map[string]any{"type": "ask_user_request", "id": "req-1", "questions": []map[string]any{{"question": "Which?"}}}
+	paused := a2a.Task{ID: "task-1", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired, Message: &a2a.Message{Metadata: map[string]any{kagentv1.HITLExtension: question}}}}
+	if in, err := be.ParseInteraction(paused); err != nil || in == nil || in.Kind != dialect.AskUser || in.RequestID != "req-1" {
+		t.Errorf("ParseInteraction = %+v, %v; want the kagent-v1 dialect's reading of the question req-1", in, err)
 	}
 }
 

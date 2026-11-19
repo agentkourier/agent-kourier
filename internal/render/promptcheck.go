@@ -3,6 +3,9 @@ package render
 import (
 	"fmt"
 	"net/url"
+	"strings"
+
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 )
 
 // The rules a value of a PromptView must pass to reach a prompt's instruction part (spec R2).
@@ -11,7 +14,8 @@ import (
 // key, and never a sentence. Link is not from the message: Agent Kourier builds it (see checkLink).
 // A value that fails refuses the whole render.
 const (
-	// maxNameBytes bounds a Fields value, State, Channel and Source.
+	// maxNameBytes bounds a Fields value, State and Source, and a Channel of the name shape (a Microsoft Teams channel ID is bounded
+	// by its own shape, checkChannel).
 	maxNameBytes = 128
 	// maxKeyBytes bounds Key.
 	maxKeyBytes = 128
@@ -31,10 +35,13 @@ const (
 	ReasonTooLong Reason = "is too long"
 	// ReasonNotLink is a Link that is no http or https URL with a host and no credentials.
 	ReasonNotLink Reason = "is not an http or https URL"
+	// ReasonInvalid is an id field of a webhook event that is Invalid: the event has values for it, and none passed the id check, so
+	// it has no value that may be shown, and an empty one would read as its absence (spec D55).
+	ReasonInvalid Reason = "is an id field none of whose values passed its check"
 )
 
 // Code is the reason as a short word from a closed set, for a metric label and an audit entry: "characters",
-// "too_long" or "not_link"; "other" for any reason added without one.
+// "too_long", "not_link" or "invalid"; "other" for any reason added without one.
 func (r Reason) Code() string {
 	switch r {
 	case ReasonCharacters:
@@ -43,6 +50,8 @@ func (r Reason) Code() string {
 		return "too_long"
 	case ReasonNotLink:
 		return "not_link"
+	case ReasonInvalid:
+		return "invalid"
 	}
 	return "other"
 }
@@ -78,11 +87,42 @@ func check(ref, value string, rule func(string) Reason) error {
 // ASCII only, so a letter that only looks Latin is refused.
 func checkName(s string) Reason { return checkShape(s, maxNameBytes, "_.-:") }
 
+// checkChannel is the rule of Channel: the name shape, or the exact shape of a Microsoft Teams channel ID, 19:<id>@thread.tacv2 (or
+// @thread.skype) of at most 140 bytes, as the API holds a Binding's channel to it (v1alpha1.ChatPlatformOf). The "@" it holds is
+// not let into the name shape, which a Fields value shares: the channel is Agent Kourier's own, read from the platform and not from
+// the message, and the shape takes no "@" but the one before "thread.", and nothing a sentence needs.
+func checkChannel(s string) Reason {
+	r := checkName(s)
+	if r != "" && isTeamsChannel(s) {
+		return ""
+	}
+	return r
+}
+
+// isTeamsChannel says whether s has the shape of a Microsoft Teams channel ID.
+func isTeamsChannel(s string) bool {
+	p, ok := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformTeams, Teams: &v1alpha1.TeamsConnectionSpec{}})
+	return ok && p.Channel.Matches(s)
+}
+
 // checkKey is the rule of Key: the alert-name shape and "/", as in "alertname/namespace", at
 // most 128 bytes. It allows no space, so a key made of group label values ("KubePodCrashLooping
 // payments", as the Alertmanager example extracts) is refused if a template reads .Key: such a
 // template should read the entries it needs from .Fields.
 func checkKey(s string) Reason { return checkShape(s, maxKeyBytes, "_.-:/") }
+
+// checkWebhookChannel is the rule of a webhook event's Channel: the webhook channel shape (v1alpha1.ValidWebhookChannel), letters,
+// digits, ".", "_" and "-" in parts with "/" between them, at most v1alpha1.MaxWebhookChannelLen bytes, which a Binding of the
+// connection may name and the connection resolves from an event.
+func checkWebhookChannel(s string) Reason {
+	switch {
+	case len(s) > v1alpha1.MaxWebhookChannelLen:
+		return ReasonTooLong
+	case !v1alpha1.ValidWebhookChannel(s):
+		return ReasonCharacters
+	}
+	return ""
+}
 
 // checkShape returns ReasonTooLong if s is longer than limit bytes, and ReasonCharacters if
 // it holds a byte that is no ASCII letter or digit and not among extra.
@@ -101,27 +141,46 @@ func checkShape(s string, limit int, extra string) Reason {
 // linkExtra is what a permalink needs besides letters and digits: the characters of a path, a
 // query of name=value pairs and a fragment. It has no "+" or "%", which would let a link carry
 // encoded prose ("?Ignore+all+previous+instructions", or a percent-encoded tag), and no "@",
-// so a link holds no credentials.
+// so a link holds no credentials. The one "@" a link may hold is in a path segment that is a
+// Microsoft Teams channel ID, as Teams' permalink of a message has (checkLink).
 const linkExtra = "-._~:/?#=&"
 
 // checkLink is the rule of Link, which is Agent Kourier's own: the platform's permalink of the triggering
 // message, built from the channel and the message's ID. It is never a field of the message (not
 // link, which the sender wrote), so the rule is a second line of defence, narrow enough
 // for a permalink and for little else. The link is at most 256 bytes of letters, digits and the
-// characters of linkExtra, with a scheme of http or https (in any case) and a host. An empty
+// characters of linkExtra, with a scheme of http or https (in any case) and a host. An "@" is
+// allowed only as the one of a path segment that has the exact shape of a Microsoft Teams channel
+// ID (isTeamsChannel), so never in the host's credentials, the query or the fragment. An empty
 // link passes: the view may have none.
 func checkLink(s string) Reason {
 	if s == "" {
 		return ""
 	}
-	if r := checkShape(s, maxLinkBytes, linkExtra); r != "" {
+	if r := checkShape(s, maxLinkBytes, linkExtra+"@"); r != "" {
 		return r
 	}
 	u, err := url.Parse(s)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return ReasonNotLink
 	}
+	// Each Teams channel segment holds one "@", so a link whose "@"s are all theirs has none in its credentials, query or fragment.
+	if ats := strings.Count(s, "@"); ats != teamsChannelSegments(u.Path) {
+		return ReasonCharacters
+	}
 	return ""
+}
+
+// teamsChannelSegments is how many segments of path are Microsoft Teams channel IDs, each of which holds one "@". The link holds no
+// "%" (linkExtra), so its path is as it was written.
+func teamsChannelSegments(path string) int {
+	n := 0
+	for seg := range strings.SplitSeq(path, "/") {
+		if isTeamsChannel(seg) {
+			n++
+		}
+	}
+	return n
 }
 
 func asciiAlnum(b byte) bool {

@@ -25,6 +25,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
+	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
@@ -51,6 +52,9 @@ const (
 const (
 	textGone   = "This message can no longer be rated."
 	textGaveUp = "Couldn't record your vote. Please press the button again."
+	// textNotMember is never told alone, since Slack refuses a message to a person who is not in the channel: it is the word for a
+	// platform that answers the press itself (chat.InlineDecider).
+	textNotMember = "Only members of this channel can rate this message."
 )
 
 // The label values of an alert name that is none: a message that is no alert's, and an alert that has no name.
@@ -150,10 +154,13 @@ type Auditor interface {
 	FeedbackVote(ctx context.Context, a audit.Actor, v audit.FeedbackVote) error
 }
 
-// Config configures a Handler. Everything but Now, Logger, Limits and Notify is required.
+// Config configures a Handler. Everything but Now, Logger, Limits and Outcomes is required.
 type Config struct {
 	Store    Store
 	Sessions interact.SessionReader
+	// Bindings says whether a Binding's answers to people carry the buttons, so that a vote on an answer of a Binding whose
+	// feedback is off is refused.
+	Bindings Bindings
 	// Authorizers and Ephemerals give the platform of the connection a vote came in on, which says who may vote and tells the
 	// voter alone what became of their press.
 	Authorizers chat.Resolver[interact.Authorizer]
@@ -166,6 +173,16 @@ type Config struct {
 	// Notify is called with each press recorded, for the worker to pick it up. Required. It runs in Press, on the path that
 	// acknowledges the button to Slack, so it must never block (interact.Worker.Submit does not).
 	Notify func(store.Press)
+	// Outcomes, if set, takes what Process finds a press came to, for a platform that waits for it in the press's request
+	// (DecidePress). Nil: DecidePress waits for nothing.
+	Outcomes *interact.Outcomes
+}
+
+// Bindings gives a Binding's feedback.enabled; the broker implements it.
+type Bindings interface {
+	// FeedbackEnabled is the feedback.enabled of the Binding named "namespace/name": whether its answers to people carry the
+	// buttons. An error wrapping session.ErrUnknownBinding means the config has no such Binding.
+	FeedbackEnabled(name string) (bool, error)
 }
 
 // Handler takes the presses of feedback buttons. Press is the sink's side and Process the worker's. It is safe for
@@ -181,8 +198,8 @@ var _ interact.PressProcessor = (*Handler)(nil)
 
 // New returns a Handler over cfg.
 func New(cfg Config) (*Handler, error) {
-	if cfg.Store == nil || cfg.Sessions == nil || cfg.Authorizers == nil || cfg.Ephemerals == nil || cfg.Auditor == nil {
-		return nil, errors.New("feedback: Store, Sessions, Authorizers, Ephemerals and Auditor are required")
+	if cfg.Store == nil || cfg.Sessions == nil || cfg.Bindings == nil || cfg.Authorizers == nil || cfg.Ephemerals == nil || cfg.Auditor == nil {
+		return nil, errors.New("feedback: Store, Sessions, Bindings, Authorizers, Ephemerals and Auditor are required")
 	}
 	if cfg.Notify == nil {
 		return nil, errors.New("feedback: Notify is required")
@@ -212,26 +229,54 @@ func laneOf(turn string) string { return lanePrefix + turn }
 
 // Press records a press of a feedback button and returns, at Agent Kourier's own clock. It returns ErrNotFeedback for a button that
 // is not one, and store.ErrLimit when too many presses wait. A press that names no person or message is acknowledged and
-// dropped.
+// dropped, and so is a press that the platform delivers again (the same i.Delivery) after it was recorded: while that press
+// waits it is handed to Notify again, as it was recorded (store.RecordOnce).
 func (h *Handler) Press(ctx context.Context, i chat.Interaction) error {
+	recorded, ok, err := h.record(ctx, i)
+	if err != nil || !ok {
+		return err
+	}
+	h.cfg.Notify(recorded)
+	return nil
+}
+
+// DecidePress is Press for a platform that waits for the decision in the press's request (chat.InlineDecider): it records the press
+// as Press does, hands it to Notify, and waits until ctx ends for what Process finds it came to (interact.Outcomes.Wait). The worker
+// decides the press, once, as it decides every press, whether or not the wait is still there.
+func (h *Handler) DecidePress(ctx context.Context, i chat.Interaction) (chat.PressOutcome, error) {
+	recorded, ok, err := h.record(ctx, i)
+	if err != nil || !ok {
+		return chat.PressOutcome{}, err
+	}
+	return h.cfg.Outcomes.Wait(ctx, recorded, h.cfg.Notify), nil
+}
+
+// record records a press of a feedback button once, and says false, with no error, for a press that names no person or message
+// and for one delivered again after it was processed.
+func (h *Handler) record(ctx context.Context, i chat.Interaction) (store.Press, bool, error) {
 	v, ok := ParseValue(i.PromptID)
 	if !ok {
-		return ErrNotFeedback
+		return store.Press{}, false, ErrNotFeedback
 	}
 	if i.User == "" || i.At.Channel == "" || i.At.ID == "" {
 		h.cfg.Logger.WarnContext(ctx, "feedback: a press that names no person or message was dropped", "channel", i.At.Channel, "message", i.At.ID)
-		return nil
+		return store.Press{}, false, nil
 	}
 	inputs, err := json.Marshal(pressInputs{Conn: i.At.Conn, Value: i.PromptID})
 	if err != nil {
-		return fmt.Errorf("feedback: encode a press: %w", err)
+		return store.Press{}, false, fmt.Errorf("feedback: encode a press: %w", err)
 	}
-	press := store.Press{InteractionID: laneOf(v.Turn), User: i.User, Connection: i.At.Conn, Channel: i.At.Channel, MessageRef: i.At.ID, Inputs: inputs, PressedAt: h.cfg.Now()}
-	if press.Seq, err = h.cfg.Store.RecordPress(ctx, press, h.cfg.Limits); err != nil {
-		return fmt.Errorf("feedback: record a press on %s: %w", v.Turn, err)
+	press := store.Press{InteractionID: laneOf(v.Turn), User: i.User, Connection: i.At.Conn, Channel: i.At.Channel, MessageRef: i.At.ID, Inputs: inputs, PressedAt: h.cfg.Now(), Delivery: i.Delivery}
+	// A vote delivered again by the platform is not recorded again: the first delivery is the vote, and recording this one
+	// after a later vote would put back the verdict the person replaced.
+	recorded, ok, err := store.RecordOnce(ctx, h.cfg.Store, press, h.cfg.Limits)
+	switch {
+	case err != nil:
+		return store.Press{}, false, fmt.Errorf("feedback: record a press on %s: %w", v.Turn, err)
+	case !ok:
+		h.cfg.Logger.InfoContext(ctx, "feedback: a vote delivered again was processed before; it is acknowledged and not recorded again", "turn", v.Turn)
 	}
-	h.cfg.Notify(press)
-	return nil
+	return recorded, ok, nil
 }
 
 // Process works one recorded press through: find the session of its message and the Binding's agent, check who pressed (a
@@ -243,7 +288,18 @@ func (h *Handler) Press(ctx context.Context, i chat.Interaction) error {
 // for another try, and only the worker's cap ends it (GiveUp). The audit, the count and the word to the voter come after
 // the vote is stored and never undo it: a failure of the audit is logged and metered by its writer, and a person who is not
 // told can look at the buttons or press again.
+//
+// What the press came to is published to Outcomes, for a platform that waits for it (DecidePress): a press that is finished, with the
+// words for the voter (those they are told alone, and for a person outside the channel, who is told nothing alone, that only members
+// can rate the message), and one to be tried again as no decision yet.
 func (h *Handler) Process(ctx context.Context, press store.Press) (interact.Result, error) {
+	res, text, err := h.process(ctx, press)
+	h.cfg.Outcomes.Publish(press.Seq, res, text)
+	return res, err
+}
+
+// process is Process, which returns as well the words for the voter of what the press came to (chat.PressOutcome.Text).
+func (h *Handler) process(ctx context.Context, press store.Press) (interact.Result, string, error) {
 	var in pressInputs
 	v, ok := Value{}, false
 	if err := json.Unmarshal(press.Inputs, &in); err == nil {
@@ -260,19 +316,31 @@ func (h *Handler) Process(ctx context.Context, press store.Press) (interact.Resu
 	if errors.Is(err, store.ErrNotFound) {
 		return h.finish(ctx, press, to, textGone)
 	} else if err != nil {
-		return interact.Retry, fmt.Errorf("feedback: read the session of %s: %w", v.Turn, err)
+		return interact.Retry, "", fmt.Errorf("feedback: read the session of %s: %w", v.Turn, err)
+	}
+	// An answer to a person carries the buttons only when its Binding's feedback is on (an investigation's always does): a vote on
+	// one while it is off is refused. A Binding the config no longer has takes votes as it did.
+	if v.Kind == store.FeedbackAnswer {
+		switch on, err := h.cfg.Bindings.FeedbackEnabled(sess.Binding); {
+		case errors.Is(err, session.ErrUnknownBinding):
+		case err != nil:
+			return interact.Retry, "", fmt.Errorf("feedback: read whether %s takes votes: %w", sess.Binding, err)
+		case !on:
+			h.cfg.Logger.DebugContext(ctx, "feedback: a vote on an answer of a Binding whose feedback is off was refused", "binding", sess.Binding)
+			return h.finish(ctx, press, to, textGone)
+		}
 	}
 	// The message the buttons are on is the one the turn's outbox row says it is, in the channel of the press: the thread and
 	// the turn in the value are the button's own words, and a vote is recorded for them only if the platform agrees (as a
 	// prompt's press must name the message of its interaction).
 	switch found, err := h.onMessage(ctx, press, v); {
 	case err != nil:
-		return interact.Retry, fmt.Errorf("feedback: read the message of %s: %w", v.Turn, err)
+		return interact.Retry, "", fmt.Errorf("feedback: read the message of %s: %w", v.Turn, err)
 	case found == messageUnrecorded:
 		// The message is on the platform before its place is written to the row, and a press can come in between. It is tried
 		// again, as every press that cannot be processed yet is, until the worker's age bound ends it (and says so).
 		h.cfg.Logger.DebugContext(ctx, "feedback: the message of a press has no place recorded yet; it will be tried again", "channel", press.Channel)
-		return interact.Retry, nil
+		return interact.Retry, "", nil
 	case found == messageOther:
 		h.cfg.Logger.DebugContext(ctx, "feedback: a press names a message that is not the turn's; it was ignored", "channel", press.Channel)
 		return h.finish(ctx, press, to, "")
@@ -281,17 +349,18 @@ func (h *Handler) Process(ctx context.Context, press store.Press) (interact.Resu
 
 	authz, err := h.cfg.Authorizers.Platform(in.Conn)
 	if err != nil {
-		return interact.Retry, fmt.Errorf("feedback: check who pressed on %s: %w", v.Turn, err)
+		return interact.Retry, "", fmt.Errorf("feedback: check who pressed on %s: %w", v.Turn, err)
 	}
 	switch member, err := authz.IsMember(ctx, press.Channel, press.User); {
 	case err != nil:
-		return interact.Retry, fmt.Errorf("feedback: check who pressed on %s: %w", v.Turn, err)
-	case !member: // told of nothing: Slack refuses an ephemeral to a person who is not in the channel
+		return interact.Retry, "", fmt.Errorf("feedback: check who pressed on %s: %w", v.Turn, err)
+	case !member: // told of nothing alone: Slack refuses an ephemeral to a person who is not in the channel
 		h.cfg.Logger.DebugContext(ctx, "feedback: a press of a person outside the channel was ignored", "channel", press.Channel)
-		return h.finish(ctx, press, to, "")
+		res, _, err := h.finish(ctx, press, to, "")
+		return res, textNotMember, err
 	}
 	if bot, err := authz.IsBot(ctx, press.User); err != nil {
-		return interact.Retry, fmt.Errorf("feedback: check who pressed on %s: %w", v.Turn, err)
+		return interact.Retry, "", fmt.Errorf("feedback: check who pressed on %s: %w", v.Turn, err)
 	} else if bot {
 		return h.finish(ctx, press, to, "")
 	}
@@ -302,7 +371,7 @@ func (h *Handler) Process(ctx context.Context, press store.Press) (interact.Resu
 		Kind: v.Kind, Verdict: v.Verdict, At: press.PressedAt,
 	})
 	if err != nil {
-		return interact.Retry, fmt.Errorf("feedback: store the vote on %s: %w", v.Turn, err)
+		return interact.Retry, "", fmt.Errorf("feedback: store the vote on %s: %w", v.Turn, err)
 	}
 	if previous == v.Verdict {
 		return h.finish(ctx, press, to, "Your vote is already recorded as "+words(v.Verdict)+".")
@@ -408,24 +477,29 @@ func (h *Handler) GiveUp(ctx context.Context, press store.Press) error {
 	var in pressInputs
 	_ = json.Unmarshal(press.Inputs, &in)
 	v, _ := ParseValue(in.Value) // a press that cannot be read is told in the channel's own place: no thread
-	_, err := h.finish(ctx, press, chat.Target{Conn: cmp.Or(in.Conn, press.Connection), Channel: press.Channel, Thread: v.Thread}, textGaveUp)
+	_, _, err := h.finish(ctx, press, chat.Target{Conn: cmp.Or(in.Conn, press.Connection), Channel: press.Channel, Thread: v.Thread}, textGaveUp)
 	return err
 }
 
-// finish tells the person text, if there is any, in the thread of to, and deletes the press. Telling is best-effort: a
-// person who is not told can press again, and a failure is only logged.
-func (h *Handler) finish(ctx context.Context, press store.Press, to chat.Target, text string) (interact.Result, error) {
+// finish tells the person text, if there is any, in the thread of to, and deletes the press, and returns text as the words for the voter. Telling is best-effort: a
+// person who is not told can press again, and a failure is only logged. On a platform that has no ephemeral messages
+// (chat.ErrNoEphemeral) the person is not told by design, and that is logged at debug, not as a warning.
+func (h *Handler) finish(ctx context.Context, press store.Press, to chat.Target, text string) (interact.Result, string, error) {
 	if text != "" {
 		e, err := h.cfg.Ephemerals.Platform(to.Conn)
 		if err == nil {
 			err = e.Ephemeral(ctx, to, press.User, chat.Message{Fallback: text})
 		}
 		if err != nil {
-			h.cfg.Logger.WarnContext(ctx, "feedback: a person could not be told the outcome of their press", "channel", press.Channel, "err", err)
+			level := slog.LevelWarn
+			if errors.Is(err, chat.ErrNoEphemeral) {
+				level = slog.LevelDebug
+			}
+			h.cfg.Logger.Log(ctx, level, "feedback: a person could not be told the outcome of their press", "channel", press.Channel, "err", err)
 		}
 	}
 	if err := h.cfg.Store.DeletePress(ctx, press.Seq); err != nil {
-		return interact.Retry, fmt.Errorf("feedback: delete the press %d: %w", press.Seq, err)
+		return interact.Retry, "", fmt.Errorf("feedback: delete the press %d: %w", press.Seq, err)
 	}
-	return interact.Done, nil
+	return interact.Done, text, nil
 }

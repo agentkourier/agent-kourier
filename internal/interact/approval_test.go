@@ -3,6 +3,7 @@ package interact_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -308,7 +309,7 @@ func refusedBeforeRecording(t *testing.T, r *rig, task a2a.Task, reason string) 
 	if err != nil || in == nil {
 		t.Fatal(in, err)
 	}
-	if _, err := r.st.GetInteraction(t.Context(), interact.InteractionID(*in)); !errors.Is(err, store.ErrNotFound) {
+	if _, err := r.st.GetInteraction(t.Context(), dialect.InteractionID(*in)); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("GetInteraction = %v; want no interaction made for a pause that is refused", err)
 	}
 	if len(r.slack.posted) != 0 || len(r.asked) != 0 || len(r.sess.cancels) != 1 || len(r.sess.answers) != 0 || len(r.hook) != 0 || len(r.notices(t)) != 1 {
@@ -481,11 +482,34 @@ func TestAnApprovalOfTooManyToolsForThePlatformIsRefusedAsUnusable(t *testing.T)
 	}
 }
 
-// TestAPlatformThatCannotFitForAnotherReasonIsNotARefusal: only a prompt that is too large is refused as unusable. Any
-// other error is returned, for the pause to be tried again.
+// TestAnApprovalOnAPlatformThatShowsNoApprovalsIsRefusedAsUnusable: a platform that shows no tool approvals gives
+// chat.ErrInvalid for a prompt of tools (chat.Platform.Fits), which no retry mends. The approval is refused as unusable, as
+// one too large is: the thread is told, the task is cancelled, and both are audited, once. It is not tried again in silence
+// until its deadline.
+func TestAnApprovalOnAPlatformThatShowsNoApprovalsIsRefusedAsUnusable(t *testing.T) {
+	r := newRig(t, allowApprovals)
+	r.fits = func(p chat.Prompt) error {
+		if len(p.Tools) > 0 {
+			return fmt.Errorf("%w: this platform shows no tool approvals", chat.ErrInvalid)
+		}
+		return nil
+	}
+	if err := r.paused(t, approval()); err != nil {
+		t.Fatalf("Paused = %v; want the approval refused, which is no error to retry", err)
+	}
+	if row := r.row(t, approval()); row.State != store.InteractionCancelled || len(r.sess.cancels) != 1 || len(r.notices(t)) != 1 || len(r.slack.posted) != 0 {
+		t.Errorf("state %s, %d cancels, %d notices, %d posts; want it refused and closed, and the thread told", row.State, len(r.sess.cancels), len(r.notices(t)), len(r.slack.posted))
+	}
+	if rows := strings.Join(r.auditRows(t), "|"); strings.Count(rows, "unusable_pause: ") != 1 || strings.Count(rows, "unusable_pause_cancel: ok") != 1 {
+		t.Errorf("audit %q; want the unusable pause and its cancel audited once", rows)
+	}
+}
+
+// TestAPlatformThatCannotFitForAnotherReasonIsNotARefusal: only a prompt that no retry mends (too large, or invalid for
+// the platform) is refused as unusable. Any other error is returned, for the pause to be tried again.
 func TestAPlatformThatCannotFitForAnotherReasonIsNotARefusal(t *testing.T) {
 	r := newRig(t, allowApprovals)
-	r.promptErr = errors.New("the platform does not show tool approvals")
+	r.promptErr = errors.New("the platform is down")
 	if err := r.paused(t, approval()); err == nil || len(r.sess.cancels) != 0 {
 		t.Errorf("Paused = %v with %d cancels; want the error returned and nothing cancelled", err, len(r.sess.cancels))
 	}

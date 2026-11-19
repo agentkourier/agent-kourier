@@ -13,9 +13,10 @@ import (
 // Step returns the progress step of a tool call in the state given: the tool's name as its title and the redacted summary
 // of its arguments as its detail. They are the name and summary of the tool line (Tool), the same redacted summary that
 // the status line of the update path shows, put on one line and capped as it is: the raw arguments never reach a step. id is Agent Kourier's own name for the step in its stream, never the agent's call ID.
+// The step is a call (chat.Step.Call), which a platform may word as it words the status line.
 func Step(id string, call agent.ToolCallEvent, state chat.StepState) chat.Step {
 	line := Tool(call.Name, call.Args)
-	return chat.Step{ID: id, Title: line.Name, Detail: line.Summary, State: state}
+	return chat.Step{ID: id, Title: line.Name, Detail: line.Summary, State: state, Call: true}
 }
 
 // Failed says whether the response of a tool call reports that the call failed. A response is whatever the tool
@@ -70,10 +71,11 @@ const ApprovalTitle = "Approval requested: "
 // AwaitingApproval is the step of a tool call that the task paused to have approved, in the state it is left in when the
 // stream stops at the pause: retitled to say that the approval was asked for, and done, since the call has not failed
 // and a platform may show a step that is not done at the stop of its stream as failed (Slack does). Its detail is the
-// call's, as Step has it. The answer's own message shows the call again, with how it ended.
+// call's, as Step has it, and it is no call as made (chat.Step.Call): its title says what it waits for. The answer's own
+// message shows the call again, with how it ended.
 func AwaitingApproval(id string, call agent.ToolCallEvent) chat.Step {
 	st := Step(id, call, chat.StepDone)
-	st.Title = ApprovalTitle + st.Title
+	st.Title, st.Call = ApprovalTitle+st.Title, false
 	return st
 }
 

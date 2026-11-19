@@ -13,7 +13,7 @@ NODE_IMAGE=kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e
 NODE_IMAGE_MIN=kindest/node:v1.33.12@sha256:3f5c8443c620245e4d355cfe09e96a91ead32ceaa569d3f1ca9edf0cb2fe2ff4
 RUNTIME_IMAGE=gcr.io/distroless/static-debian12@sha256:d75cdd72874d4790092fcb1b058493ecf6bb5bf2b2b897045b00ff01d91843f2
 # The Go image Agent Kourier is built in (the Dockerfile's builder stage); go.mod's go version is 1.27.4.
-GO_IMAGE=golang:1.27.4@sha256:5e8afd493a7124a8586e134d9b532731161d4b9becf9dee5a5956b107426f93d
+GO_IMAGE=golang:1.27.4@sha256:205c7636d74e0ffbe3d007162df7d74f859f5a8c8322dfb9f907977686c126cf
 # One full tier per Docker host: the cluster name is fixed, so two checkouts share it. The fast
 # tier is a separate cluster; use_tier fast points CLUSTER and OWNER_LABEL at it.
 CLUSTER=agent-kourier-full
@@ -26,6 +26,11 @@ CHECKOUT_KEY=agentkourier.agent-kourier.dev/checkout
 # do: every release of the chart in the namespace carries it (the sandbox's and any other), since the front door's NetworkPolicy trusts it.
 # test/e2e's agentKourierPods is the same selector.
 TIER_AGENTKOURIER_PODS=app.kubernetes.io/name=agent-kourier,app.kubernetes.io/instance=agent-kourier
+# E2E_SLACK_MODE=http (the fast and full tiers): the fake Slack sends its default app's events and presses as signed requests to this URL, the
+# chat Service of the tier's release (hack/kind/http-values.yaml), which selects the leader, at the route of the tier's ChatConnection
+# agent-kourier/slack-fast; and signs them with this secret, which Agent Kourier reads from the Secret slack-fast. A fake constant.
+FAKE_SLACK_REQUEST_URL=http://agent-kourier-chat.agent-kourier.svc.cluster.local:8081/chat/slack/agent-kourier/slack-fast
+FAKE_SLACK_SIGNING_SECRET=fake-slack-signing-secret
 
 die() {
   echo "error: $*" >&2
@@ -142,21 +147,23 @@ build_doubles_image() {
     *) die "unsupported Docker architecture" ;;
   esac
   BUILD=$(mktemp -d)
-  for double in fakeslack stubagent sink signaler hitlagent; do
+  for double in fakeslack faketeams stubagent sink signaler hitlagent fakevendors; do
     GOOS=linux GOARCH=${goarch} CGO_ENABLED=0 go build -C "${ROOT}" -o "${BUILD}/${double}" "./test/${double}/cmd/${double}"
   done
   docker build -q -f "${HERE}/fast/Dockerfile" --build-arg "RUNTIME_IMAGE=${RUNTIME_IMAGE}" -t "${DOUBLES_IMAGE}" "${BUILD}" >/dev/null
   kind load docker-image "${DOUBLES_IMAGE}" --name "${CLUSTER}"
 }
 
-# apply_doubles: the fake Slack, stub agent and sink in namespace e2e, and Alertmanager (with its
+# apply_doubles: the fake Slack, stub agent, sink and fake vendors in namespace e2e, and Alertmanager (with its
 # route to the sink) in monitoring; needs install_operator first. None is published: the fake
-# Slack's /_control/ has no authentication.
+# Slack's /_control/ has no authentication, nor have the fake vendors'. E2E_SLACK_MODE says how the fake Slack sends its default app's events and presses (fake_slack_mode_patch).
 apply_doubles() {
+  require_slack_mode
   "${K[@]}" apply -f "${HERE}/fast/doubles.yaml" >/dev/null
+  "${K[@]}" -n e2e patch deploy/fakeslack --type=strategic -p "$(fake_slack_mode_patch)" >/dev/null
   # Restart so a rebuilt image (same tag) is picked up.
-  "${K[@]}" -n e2e rollout restart deploy/fakeslack deploy/stubagent deploy/hitlagent deploy/sink >/dev/null
-  "${K[@]}" -n e2e rollout status deploy/fakeslack deploy/stubagent deploy/hitlagent deploy/sink --timeout=180s
+  "${K[@]}" -n e2e rollout restart deploy/fakeslack deploy/stubagent deploy/hitlagent deploy/sink deploy/fakevendors >/dev/null
+  "${K[@]}" -n e2e rollout status deploy/fakeslack deploy/stubagent deploy/hitlagent deploy/sink deploy/fakevendors --timeout=180s
   "${K[@]}" apply -f "${HERE}/fast/alertmanager.yaml" >/dev/null
   "${K[@]}" -n monitoring wait --for=condition=Available alertmanager/agent-kourier --timeout=180s
 }
@@ -235,8 +242,8 @@ assert_app_unpublished() {
 
 assert_never_published() {
   local app ingresses ports hostports apiserver='^6443/tcp -> 127\.0\.0\.1:[0-9]+$'
-  echo "== never published: the fake Slack's /_control/ and the stub agent's /_control/release/ have no authentication, nor has hitlagent"
-  for app in fakeslack stubagent hitlagent; do
+  echo "== never published: the fake Slack's /_control/, the stub agent's /_control/release/ and the fake vendors' /_control/ have no authentication, nor has hitlagent"
+  for app in fakeslack stubagent hitlagent fakevendors; do
     assert_app_unpublished e2e "${app}"
   done
   ingresses=$("${K[@]}" -n e2e get ingress -o name)
@@ -360,6 +367,37 @@ require_config_source() {
   esac
 }
 
+# require_slack_mode: die unless E2E_SLACK_MODE is socket (the default: the fake Slack and the tier's ChatConnection over Socket Mode) or http (signed
+# requests to the broker's chat listener). Call it in a script's preflight, before anything is changed.
+require_slack_mode() {
+  case "${E2E_SLACK_MODE:-socket}" in
+    socket | http) ;;
+    *) die "E2E_SLACK_MODE must be socket or http" ;;
+  esac
+}
+
+# fake_slack_mode_patch: the strategic merge patch of the Deployment fakeslack for E2E_SLACK_MODE. In http mode the container's args (which follow
+# its command, in fast/doubles.yaml) give the default app FAKE_SLACK_REQUEST_URL and FAKE_SLACK_SIGNING_SECRET, and the fake retries on its default
+# schedule; in socket mode the patch takes the args away. doubles.yaml sets no args, so kubectl apply never touches them and the patch alone decides
+# them, in either direction. The team apps (-app) stay on Socket Mode: the MC_ tests, which use them, run in socket mode only.
+fake_slack_mode_patch() {
+  local args=null
+  if [ "${E2E_SLACK_MODE:-socket}" = http ]; then
+    args="[\"-request-url\",\"${FAKE_SLACK_REQUEST_URL}\",\"-signing-secret\",\"${FAKE_SLACK_SIGNING_SECRET}\"]"
+  fi
+  printf '{"spec":{"template":{"spec":{"containers":[{"name":"fakeslack","args":%s}]}}}}' "${args}"
+}
+
+# slack_mode_config DIR: in http mode, put the tier's ChatConnection (DIR/chatconnection.yaml, a copy of fast/agent-kourier/config's) in HTTP mode;
+# in socket mode leave it as it is, which is Socket Mode. The same file is the ConfigMap's and the custom resource's, so both routes read the mode.
+slack_mode_config() {
+  [ "${E2E_SLACK_MODE:-socket}" = http ] || return 0
+  # The line goes at the end of the file, so the last top-level key must be spec.
+  awk '/^[^ #]/ { last = $0 } END { exit last != "spec:" }' "$1/chatconnection.yaml" ||
+    die "the ChatConnection's last top-level key is not spec:, so slack.mode cannot be appended to it"
+  printf '  slack: {mode: http}\n' >>"$1/chatconnection.yaml"
+}
+
 # crds_held_by_release: succeed when the CRDs in the cluster were installed by the release agent-kourier (crds.install), so that a tier that goes back to
 # the ConfigMap route keeps crds.install on, as the chart README says to: a release without it no longer holds them. Needs K.
 crds_held_by_release() {
@@ -379,10 +417,16 @@ crds_held_by_release() {
 # to the ConfigMap route, and the custom resources stay in the cluster, unread, as the chart README says. Either way the config is the same files.
 # The array AGENTKOURIER_CRDS_ARGS, if the caller set it, holds more helm arguments for the route upgrade of crds only (the platform's admission list of
 # the tier with two Slack apps: a value the ConfigMap route refuses). The Secrets are fake constants made here and never committed, and the agent
-# token (Secret agent-kourier-agent-token) is the caller's to make: it differs by tier. Needs HERE, ROOT, K, H.
+# token (Secret agent-kourier-agent-token) is the caller's to make: it differs by tier.
+# E2E_SLACK_MODE=http puts the ChatConnection in HTTP mode (slack_mode_config, on either route) and adds hack/kind/http-values.yaml, the chat listener
+# and its Service, to every helm call; socket, the default, leaves both out, so that running this again in socket mode moves the tier back. The Secret
+# slack-fast holds the keys of both modes, and the broker reads those of its mode. Needs HERE, ROOT, K, H.
 deploy_agentkourier() {
   local config dir source=${E2E_CONFIG_SOURCE:-files} values=${AGENTKOURIER_VALUES:-${ROOT}/charts/agent-kourier/ci/fast-values.yaml}
+  local mode_args=()
   require_config_source
+  require_slack_mode
+  [ "${E2E_SLACK_MODE:-socket}" = socket ] || mode_args=(-f "${HERE}/http-values.yaml")
   refuse_while_sandbox_up
   config=$(mktemp -d)
   trap 'rm -rf "${config}"; trap - RETURN' RETURN # the scratch directory goes however this ends
@@ -392,17 +436,19 @@ deploy_agentkourier() {
   for dir in "$@"; do
     cp "${dir}"/*.yaml "${config}"
   done
+  slack_mode_config "${config}"
   "${K[@]}" create namespace agent-kourier --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
   "${K[@]}" -n agent-kourier create secret generic slack-fast --from-literal=botToken=xoxb-fake-test-token \
-    --from-literal=appToken=xapp-fake-test-token --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+    --from-literal=appToken=xapp-fake-test-token --from-literal=signingSecret="${FAKE_SLACK_SIGNING_SECRET}" \
+    --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
   "${K[@]}" -n agent-kourier create configmap agent-kourier-config --from-file="${config}" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
   case "${source}" in
     files)
       # A tier that was on crds holds the CRDs under the release: keep them there. (An empty array is unset to bash 3.2.)
       if crds_held_by_release; then
-        install_agentkourier "${values}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"} --set crds.install=true
+        install_agentkourier "${values}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"} ${mode_args[@]+"${mode_args[@]}"} --set crds.install=true
       else
-        install_agentkourier "${values}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"}
+        install_agentkourier "${values}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"} ${mode_args[@]+"${mode_args[@]}"}
       fi
       ;;
     crds)
@@ -411,14 +457,14 @@ deploy_agentkourier() {
       if ! crds_held_by_release; then
         replace_unowned_deployment agent-kourier
         adopt_into_release agent-kourier serviceaccount/agent-kourier role/agent-kourier-secrets rolebinding/agent-kourier-secrets service/agent-kourier pvc/agent-kourier-data
-        helm_install_agentkourier agent-kourier "${values}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"} --set crds.install=true
+        helm_install_agentkourier agent-kourier "${values}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"} ${mode_args[@]+"${mode_args[@]}"} --set crds.install=true
       fi
       "${K[@]}" wait --for=condition=Established --timeout=60s crd/bindings.agentkourier.dev crd/agentbackends.agentkourier.dev crd/chatconnections.agentkourier.dev >/dev/null
       # 2. The config as custom resources (the files are manifests of the three kinds already), then the route. A server-side dry run first, so that a
       # file the CRDs refuse stops here with the apiserver's words.
       "${K[@]}" apply --dry-run=server -f "${config}" >/dev/null
       "${K[@]}" apply -f "${config}" >/dev/null
-      install_agentkourier "${values}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"} -f "${HERE}/crds-values.yaml" ${AGENTKOURIER_CRDS_ARGS[@]+"${AGENTKOURIER_CRDS_ARGS[@]}"}
+      install_agentkourier "${values}" ${AGENTKOURIER_HELM_ARGS[@]+"${AGENTKOURIER_HELM_ARGS[@]}"} ${mode_args[@]+"${mode_args[@]}"} -f "${HERE}/crds-values.yaml" ${AGENTKOURIER_CRDS_ARGS[@]+"${AGENTKOURIER_CRDS_ARGS[@]}"}
       ;;
   esac
 }
@@ -485,6 +531,131 @@ deploy_two_apps() {
     die "the broker never connected team-a's Slack app to the fake Slack; is team-a in config.connectionNamespaces, and does team-a's Role name its Secret?"
   }
   echo "ok: team-a's Slack app is connected to the fake Slack"
+}
+
+# The fast tier's webhook connections (hack/kind/fast/webhook, custom resources only): FAKE_WEBHOOK_SECRETS is the fake webhook secret of each
+# recipe's connection, vendor=secret, which deploy_webhook puts in the Secret <vendor>-webhook that the recipe's ChatConnection names and the fake
+# vendors (fast/doubles.yaml, the Deployment fakevendors) sign with. WEBHOOK_AGENT_TOKEN is the Secret of the agent token each recipe's Binding is
+# given here, an unsigned JWT of WEBHOOK_AGENT_EMAIL: the tier's stub agent asks for a bearer, as kagent in OIDC mode does. Fake constants, made into
+# Secrets here and never committed; test/kindmanifests pins that they agree with the fake's command and the recipes.
+FAKE_WEBHOOK_SECRETS=(github=fake-webhook-github-secret bitbucket=fake-webhook-bitbucket-secret jira=fake-webhook-jira-secret linear=fake-webhook-linear-secret)
+WEBHOOK_NAMESPACE=acme-webhooks
+WEBHOOK_AGENT_TOKEN=webhook-agent-token
+WEBHOOK_AGENT_EMAIL=acme-webhooks@example.test
+
+# webhook_binding: a recipe's Binding, as JSON on stdin, on stdout with WEBHOOK_AGENT_TOKEN as its identity's tokenSecretRef, and nothing else
+# changed: the recipes are written for an agent that asks for no token, and the tier's stub agent asks for one. Needs jq.
+webhook_binding() {
+  jq -c --arg secret "${WEBHOOK_AGENT_TOKEN}" '.spec.identity.tokenSecretRef = {name: $secret}'
+}
+
+# deploy_webhook: the tier's webhook connections on custom resources: the namespace WEBHOOK_NAMESPACE, which hack/kind/webhook-values.yaml admits,
+# the Secret of each connection (FAKE_WEBHOOK_SECRETS) and of the agent token, hack/kind/fast/webhook/webhook.yaml (the Role that grants them to the
+# broker, and the AgentBackends of the stub agent's webhook agents), and each recipe of examples/recipes/webhook-<vendor>: its ChatConnection as it
+# is, and its Binding through webhook_binding. It returns once the broker says the four connections are up (agentkourier_chat_connected, read from
+# its metrics Service by a probe pod), and dies if they are not in three minutes. The Secrets are made with apply from a pipe, as
+# deploy_agentkourier makes the tier's. Needs HERE, ROOT, K, CURL_IMAGE, jq, and the CRDs served (deploy_agentkourier with crds).
+deploy_webhook() {
+  local pod=probe-webhook-${RANDOM} metrics=http://agent-kourier.agent-kourier.svc.cluster.local:8080/metrics pair vendor recipe conns=()
+  "${K[@]}" create namespace "${WEBHOOK_NAMESPACE}" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  for pair in "${FAKE_WEBHOOK_SECRETS[@]}"; do
+    vendor=${pair%%=*}
+    "${K[@]}" -n "${WEBHOOK_NAMESPACE}" create secret generic "${vendor}-webhook" --from-literal=webhookSecret="${pair#*=}" \
+      --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  done
+  "${K[@]}" -n "${WEBHOOK_NAMESPACE}" create secret generic "${WEBHOOK_AGENT_TOKEN}" --from-literal=token="$(unsigned_jwt "${WEBHOOK_AGENT_EMAIL}")" \
+    --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" apply --dry-run=server -f "${HERE}/fast/webhook/webhook.yaml" >/dev/null
+  "${K[@]}" apply -f "${HERE}/fast/webhook/webhook.yaml" >/dev/null
+  for pair in "${FAKE_WEBHOOK_SECRETS[@]}"; do
+    vendor=${pair%%=*}
+    recipe=${ROOT}/examples/recipes/webhook-${vendor}/kourier
+    "${K[@]}" apply -f "${recipe}/chatconnection.yaml" >/dev/null
+    "${K[@]}" create --dry-run=client -o json -f "${recipe}/binding.yaml" | webhook_binding | "${K[@]}" apply -f - >/dev/null
+    conns+=("${WEBHOOK_NAMESPACE}/${vendor}")
+  done
+  # shellcheck disable=SC2016 # the script runs in the pod
+  "${K[@]}" -n e2e run "${pod}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" --command -- sh -c '
+    metrics=$1
+    shift
+    end=$(( $(date +%s) + 180 ))
+    while [ "$(date +%s)" -lt "${end}" ]; do
+      m=$(curl -s -m 5 "${metrics}")
+      up=1
+      for c in "$@"; do
+        printf %s "$m" | grep -q "^agentkourier_chat_connected{connection=\"$c\"} 1$" || up=
+      done
+      [ -z "${up}" ] || exit 0
+      sleep 2
+    done
+    exit 1' sh "${metrics}" "${conns[@]}" >/dev/null || {
+    "${K[@]}" -n agent-kourier logs deploy/agent-kourier --tail=40 >&2 || true
+    die "the broker never said its webhook connections in ${WEBHOOK_NAMESPACE} are up; is ${WEBHOOK_NAMESPACE} in config.connectionNamespaces, with the chat listener on (hack/kind/webhook-values.yaml)?"
+  }
+  echo "ok: the webhook connections ${conns[*]} are up"
+}
+
+# deploy_fake_teams: the fake Microsoft Teams service (fast/teams/faketeams.yaml, in namespace e2e; E2E_TEAMS=1), before deploy_agentkourier, whose pod reads
+# the fake's certificate from the ConfigMap faketeams-ca in agent-kourier (hack/kind/teams-values.yaml, AGENTKOURIER_TEAMS_CA). The certificate and its key are
+# made here for the fake's Service name (faketeams cert), on each bring-up, in a scratch directory that goes with the function: the key goes to the cluster
+# as the Secret faketeams-tls in e2e and nowhere else, and only the certificate to agent-kourier. A test key, for a fake that is published nowhere.
+# Restarted, so that a rebuilt image (same tag) or a new certificate is picked up. Needs ROOT, HERE, K and the doubles image.
+deploy_fake_teams() {
+  local dir
+  dir=$(mktemp -d)
+  trap 'rm -rf "${dir}"; trap - RETURN' RETURN
+  go run -C "${ROOT}" ./test/faketeams/cmd/faketeams cert -host faketeams.e2e.svc.cluster.local -dir "${dir}"
+  "${K[@]}" -n e2e create secret tls faketeams-tls --cert="${dir}/tls.crt" --key="${dir}/tls.key" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" create namespace agent-kourier --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" -n agent-kourier create configmap faketeams-ca --from-file=ca.crt="${dir}/tls.crt" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" apply -f "${HERE}/fast/teams/faketeams.yaml" >/dev/null
+  "${K[@]}" -n e2e rollout restart deploy/faketeams >/dev/null
+  "${K[@]}" -n e2e rollout status deploy/faketeams --timeout=180s
+}
+
+# deploy_teams_connections: the tier's Microsoft Teams connections (E2E_TEAMS=1; custom resources only): the namespace teams-e2e, its Secrets (the client
+# secret that the fake Teams service takes, and an agent token), and fast/teams/teams.yaml: the Role that grants the broker those Secrets, the ChatConnections
+# teams-push and teams-poll, the AgentBackend and the Bindings. Then the setup a team makes with a real bot: the bot's app added to the team (the fake's
+# install, a conversationUpdate on the team's conversation) and a person's mention of the bot in each bound channel, which is what gives the broker the
+# record of that channel (its team, Microsoft Entra group and service URL) that a subscription and a poll need. The approval channel's mention starts a turn
+# that waits on its card. It returns once the broker answers each of those activities with 200, which is the broker serving both connections on its chat
+# listener, and dies if it does not in three minutes. The TEAMS_ tests make the setup again once a run, since the fake keeps nothing over a restart.
+# Needs HERE, K, jq, and the CRDs served (deploy_agentkourier with crds).
+deploy_teams_connections() {
+  local pod deadline ok="" fake=http://faketeams.e2e.svc.cluster.local:8080/_control
+  "${K[@]}" create namespace teams-e2e --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" -n teams-e2e create secret generic teams-bot --from-literal=clientSecret=fake-teams-client-secret \
+    --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" -n teams-e2e create secret generic teams-e2e-agent-token --from-literal=token="$(unsigned_jwt teams-e2e@example.test)" \
+    --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" apply --dry-run=server -f "${HERE}/fast/teams/teams.yaml" >/dev/null
+  "${K[@]}" apply -f "${HERE}/fast/teams/teams.yaml" >/dev/null
+  deadline=$((SECONDS + 180))
+  while [ "${SECONDS}" -lt "${deadline}" ]; do
+    pod=install-teams-${RANDOM}
+    # shellcheck disable=SC2016 # the script runs in the pod
+    if "${K[@]}" -n e2e run "${pod}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" --command -- sh -c '
+      set -e
+      fake=$1
+      ok() { grep -q "\"status\":200"; }
+      setup() {
+        curl -sf -m 40 -X POST -H "Content-Type: application/json" -d "{\"app\":\"$1\",\"channel\":\"$2\"}" "$fake/install" | ok
+        curl -sf -m 40 -X POST -H "Content-Type: application/json" \
+          -d "{\"app\":\"$1\",\"channel\":\"$2\",\"user\":\"7e2e7ea5-0000-4000-8000-0000000000d0\",\"name\":\"Setup\",\"text\":\"setup\"}" "$fake/mention" | ok
+      }
+      push=7e2e7ea5-0000-4000-8000-0000000000a1 poll=7e2e7ea5-0000-4000-8000-0000000000a2
+      for c in teams-mention teams-approval teams-alert-push teams-failover; do setup "$push" "19:$c@thread.tacv2"; done
+      setup "$poll" "19:teams-alert-poll@thread.tacv2"' sh "${fake}" >/dev/null 2>&1; then
+      ok=1
+      break
+    fi
+    sleep 5
+  done
+  [ -n "${ok}" ] || {
+    "${K[@]}" -n agent-kourier logs deploy/agent-kourier --tail=40 >&2 || true
+    die "the broker never answered the fake Teams service's install and setup mentions with 200; is teams-e2e in config.connectionNamespaces, does its Role name its Secrets, and is the chat listener on?"
+  }
+  echo "ok: the broker serves the Teams connections teams-e2e/teams-push and teams-e2e/teams-poll"
 }
 
 # runner_admission DIR: the broker's admission (spec D54) for the E2E runner, as the Deployment agent-kourier has it: its AGENTKOURIER_CHAT_CONNECTION,

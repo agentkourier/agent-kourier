@@ -25,7 +25,8 @@ and `ghcr.io/agentkourier/agent-kourier-echo-agent` (linux/amd64 and linux/arm64
    exact commit from a push to `main`. The release gate checks the same commit and the latest attempt again; a
    missing, pending, failed or pull-request-only run blocks the release.
 4. Run the kind tiers on that commit by hand, since no workflow does ([CI](#ci) says why). The custom resource
-   route has its own runs of the tiers, two scenarios that nothing else runs, and a run of the failover tests. Each tier needs Docker and
+   route has its own runs of the tiers, two scenarios that nothing else runs, and runs of the failover tests; the last
+   two runs send the fake Slack's requests through the chat listener (Slack's HTTP mode). Each tier needs Docker and
    about 8 GB free; take each down before the next comes up:
 
    ```sh
@@ -35,27 +36,65 @@ and `ghcr.io/agentkourier/agent-kourier-echo-agent` (linux/amd64 and linux/arm64
    E2E_CONFIG_SOURCE=crds make e2e-full-up e2e-full e2e-full-down                # custom resources
    E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up e2e-crs-migration e2e-fast-down
    E2E_CONFIG_SOURCE=crds E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up e2e-fast e2e-fast-down   # failover
+   E2E_SLACK_MODE=http E2E_CONFIG_SOURCE=crds make e2e-fast-up e2e-fast e2e-fast-down                 # Slack HTTP mode
+   E2E_SLACK_MODE=http E2E_CONFIG_SOURCE=crds E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up e2e-fast e2e-fast-down
    ```
 
    `make e2e-fast` and `make e2e-full` read which route the Deployment is on and run the tests of that route. What the
    runs cover, in the order above:
 
-   1. The fast tier on the ConfigMap route, with one SQLite replica: the suite, with every `CR_` test and S16 skipped.
-   2. The full tier on the ConfigMap route: its own suite, with the `CR_` tests and S16 skipped.
-   3. The fast tier on the custom resource route, with one replica: the suite and the `CR_` tests, except the failover test,
-      which needs two replicas, and the migration test, which runs only in its phases.
+   1. The fast tier on the ConfigMap route, with one SQLite replica: the suite, with every `CR_` and `WH_` test and S16 skipped.
+   2. The full tier on the ConfigMap route: its own suite, with the `CR_` and `WH_` tests and S16 skipped.
+   3. The fast tier on the custom resource route, with one replica: the suite, the `CR_` tests, except the failover test,
+      which needs two replicas, and the migration test, which runs only in its phases, and the `WH_` tests, which drive
+      the webhook recipes that the bring-up serves on this route only.
       `make e2e-crs-scenarios` adds the scenarios that need kubectl or Helm, and needs the tier up on this route.
    4. The full tier on the custom resource route: its own suite against an Agent Kourier that reads custom resources. It
-      runs none of the `CR_` tests, which skip off the fast tier (`test/e2e/cr_test.go`: they use the stub agent, which
-      the full tier lacks).
+      runs none of the `CR_` or `WH_` tests, which skip off the fast tier (`test/e2e/cr_test.go`, `test/e2e/wh_test.go`:
+      they use the stub agent, which the full tier lacks).
    5. `make e2e-crs-migration`, which needs the fast tier up on Postgres with two replicas on the ConfigMap route (the
       default), and runs `TestCR_MigrationKeepsASessionAlive` in its phases.
-   6. The fast tier on Postgres with two replicas on the custom resource route: the only run of the failover tests.
-      S16 (`TestS16_FailoverLosesNoEventAndDuplicatesNone`) needs the fast tier with two replicas and runs on either route;
-      `TestCR_FailoverDoesNotBlankStatus` needs the custom resource route as well. Both skip anywhere else, so no other run
-      executes them.
+   6. The fast tier on Postgres with two replicas on the custom resource route, over Socket Mode: the suite, the `WH_`
+      tests and the failover tests. S16 (`TestS16_FailoverLosesNoEventAndDuplicatesNone`) needs the fast tier with two replicas and
+      runs on either route; `TestCR_FailoverDoesNotBlankStatus` needs the custom resource route as well. Both skip
+      anywhere else, so only this run and run 8 execute them.
+   7. The fast tier on the custom resource route with one replica, with the fake Slack in HTTP mode
+      (`E2E_SLACK_MODE=http`): the same suite as run 3, with every event and press of the fake Slack's default app sent
+      as a signed request to the chat listener instead of over Socket Mode. The full tier stays on Socket Mode: its
+      suite tests the kagent behind Agent Kourier, and how Slack's requests reach Agent Kourier does not depend on it.
+   8. The fast tier on Postgres with two replicas on the custom resource route, in HTTP mode: the suite, with both
+      failover tests, and Slack's requests going to whichever replica carries the leader label. S16's press cases check
+      what differs by mode: in HTTP mode a press sent while the leader is dead or frozen is sent again by the fake Slack
+      and decided by the new leader, which must have answered at least one such retry, and the person whose press lost
+      is told so once.
 
    `make e2e-crs-scenarios` and `make e2e-crs-migration` say what they need and stop if the tier is not as they need it. A failure blocks the tag.
+
+   The kind tiers reach only the end-to-end tests' fake Slack. When the release changes Slack's HTTP mode (the Slack
+   adapter's HTTP handling, the chat listener, or the chart's chat Service and its values), also deploy that commit's image
+   to an install with a ChatConnection in HTTP mode that Slack itself reaches, and run `hack/slack/http-probe.sh` against
+   it. It sends requests that Slack did not sign (each must be answered 401) and one to an unknown connection (503), then
+   posts an alert and a bot's mention in the channel, and waits for the connection's bot to reply to each. It needs three
+   Slack apps: the connection's own, one whose bot the Binding's `botMessage` trigger names, and one that mentions the
+   connection's bot, which no `botMessage` trigger of the Binding may name. `--help` says what the Binding must have, and
+   names the two checks left to be done by hand: a button press, and a leader killed while a message is posted. With the
+   leader's metrics port forwarded, the probe also checks the increments of `agentkourier_slack_http_requests_total`:
+
+   ```sh
+   kubectl -n agent-kourier port-forward "$(kubectl -n agent-kourier get pod -l agentkourier.dev/role=leader -o name)" 8080 &
+   until curl -fsS -o /dev/null http://127.0.0.1:8080/metrics; do sleep 1; done
+   hack/slack/http-probe.sh \
+     --url https://chat.example.com/chat/slack/agent-kourier/slack \
+     --channel C0123456789 \
+     --probe-env ~/.config/agent-kourier/probe.env \
+     --poster-env ~/.config/agent-kourier/poster.env \
+     --mention-env ~/.config/agent-kourier/mention.env \
+     --metrics-url http://127.0.0.1:8080/metrics
+   kill %1
+   ```
+
+   The three files are mode 600: `probe.env` holds the connection's `botToken=`, and the two others each `SLACK_BOT_TOKEN=`
+   of their app. The probe exits non-zero if any check fails, and a failure blocks the tag.
 5. `git tag vX.Y.Z <the release pull request's commit on main>` and `git push origin vX.Y.Z`.
 6. Watch the `release` workflow. Its job summary and the GitHub Release body name the pushed image and chart
    digests. A GitHub Release is created only after both signatures verify.

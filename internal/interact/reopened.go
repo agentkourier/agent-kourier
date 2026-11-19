@@ -3,18 +3,14 @@ package interact
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
+	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 )
-
-// answerSuffix ends the ID of the message that sends an interaction's answer (AnswerMessage), so that the interaction is read
-// off the message.
-const answerSuffix = "/answer"
 
 // reopened is a pause that the session opened again because the denial sent to it was not delivered.
 type reopened struct {
@@ -52,8 +48,8 @@ func NewReopened(st store.Interactions) *Reopened {
 // session's notice stands. Any other answer is left alone. The stored interaction supplies the conversation key
 // when the sweeper cancels; the watcher retains only the reported task ID to check against that row.
 func (r *Reopened) AnswerReopened(ctx context.Context, _ session.Key, taskID a2a.TaskID, answerID string) bool {
-	id, ok := strings.CutSuffix(answerID, answerSuffix)
-	if !ok {
+	id := dialect.AnsweredInteraction(answerID)
+	if id == "" {
 		return false
 	}
 	row, err := r.st.GetInteraction(ctx, id)

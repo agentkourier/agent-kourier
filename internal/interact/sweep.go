@@ -641,10 +641,11 @@ func (s *Sweeper) endApproval(ctx context.Context, row store.Interaction, in dia
 // denial is tried again; the essential step is never given up on. No session the broker wires answers any other error today
 // (the sweeper has the manager itself, and the manager answers only the two above), so that branch is defensive.
 //
-// A denial the session took is remembered, and a later sweep of the same row (a later step failed) does not send it again:
-// sent again, it could meet a newer pause of the same task, which the session matches by task ID alone, and kagent answers
-// tool IDs it does not know by wedging the task. UNCONFIRMED: a restart between the denial and the record, a kagent that
-// pauses the same task twice, and what it does with a repeated message ID.
+// A denial the session took is remembered, and a later sweep of the same row (a later step failed) does not send it again.
+// Sent again, it would not reach a newer pause of the same task, whose tool IDs kagent does not know and would wedge the task
+// on: the session takes an answer only while the task waits on the interaction it answers (Manager.Answer). UNCONFIRMED: a
+// restart between the denial and the record, a kagent that pauses the same task twice, and what it does with a repeated
+// message ID.
 func (s *Sweeper) denyApproval(ctx context.Context, row store.Interaction, in dialect.Interaction, b Binding, binding string, now time.Time) (pauseEnd, error) {
 	denied := pauseEnd{notice: timedOutDeniedNotice, binding: binding, counted: true, audited: true}
 	cancelled := func() (pauseEnd, error) { // the fallback

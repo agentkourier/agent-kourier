@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -196,14 +197,58 @@ func bindingNames(s *config.Set) []string {
 
 // The custom resource source runs the same conformance suite as the files.
 func TestConformance(t *testing.T) {
+	start := func(t *testing.T, c *cluster, corpus sourcetest.Corpus) config.Source {
+		return c.startAs(t, corpus.Connection)
+	}
 	sourcetest.Run(t, func(t *testing.T, corpus sourcetest.Corpus) config.Source {
 		leakCheck(t)
-		var objs []*unstructured.Unstructured
-		for i, d := range corpus.Docs {
-			objs = append(objs, object(t, d, fmt.Sprintf("uid-%d", i), 1))
+		return start(t, newCluster(t, corpusObjects(t, corpus.Docs)...), corpus)
+	}, sourcetest.Options{PerObject: true, IgnoresUnknownFields: true, Edit: editor(start)})
+}
+
+// corpusObjects returns the documents of a sourcetest corpus as a cluster holds them, the ith with the uid uid-i, at generation 1.
+func corpusObjects(t *testing.T, docs []string) []*unstructured.Unstructured {
+	t.Helper()
+	var objs []*unstructured.Unstructured
+	for i, d := range docs {
+		objs = append(objs, object(t, d, fmt.Sprintf("uid-%d", i), 1))
+	}
+	return objs
+}
+
+// editor is the sourcetest.Editor of the source that start builds over a cluster of the corpus. A change applies each document
+// that differs from the one before it as the next generation of its object, and returns once the source's fingerprint moves.
+func editor(start func(t *testing.T, c *cluster, corpus sourcetest.Corpus) config.Source) sourcetest.Editor {
+	return func(t *testing.T, corpus sourcetest.Corpus) (config.Source, func([]string)) {
+		leakCheck(t)
+		c := newCluster(t, corpusObjects(t, corpus.Docs)...)
+		src := start(t, c, corpus)
+		current := slices.Clone(corpus.Docs)
+		generations := make([]int64, len(current))
+		for i := range generations {
+			generations[i] = 1
 		}
-		return newCluster(t, objs...).startAs(t, corpus.Connection)
-	}, sourcetest.Options{PerObject: true, IgnoresUnknownFields: true})
+		return src, func(docs []string) {
+			t.Helper()
+			before := src.Fingerprint(t.Context())
+			var changed []*unstructured.Unstructured
+			for i, d := range docs {
+				if d == current[i] {
+					continue
+				}
+				current[i] = d
+				generations[i]++
+				u := object(t, d, fmt.Sprintf("uid-%d", i), generations[i])
+				u.SetResourceVersion(strconv.FormatInt(generations[i], 10))
+				changed = append(changed, u)
+			}
+			until(t, func() {
+				for _, u := range changed {
+					c.apply(u)
+				}
+			}, func() bool { return src.Fingerprint(t.Context()) != before })
+		}
+	}
 }
 
 // The objects of a cluster carry what an API server adds: a uid, a generation, a creation time. The Set keeps them, since
@@ -272,6 +317,59 @@ func TestFingerprintFollowsGenerationAndUIDNotResourceVersion(t *testing.T) {
 	until(t, func() { c.remove(again); c.apply(again) }, func() bool { return src.Fingerprint(t.Context()) != afterSpec })
 }
 
+// An edit that passes Validate and that the platform of its live connection does not take is refused as an invalid edit is: the last
+// good generation stays served, and Invalid says why, with the reason of resolution. Slack serves every feature, so the platform here is
+// Slack's without questions to a person.
+func TestAnEditThePlatformDoesNotTakeKeepsTheLastGoodGeneration(t *testing.T) {
+	leakCheck(t)
+	objs := corpus(t)
+	c := newCluster(t, objs...)
+	src, err := crsource.New(crsource.Options{Client: c.client, Connection: own})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src.SetPlatformsForTest(func(spec v1alpha1.ChatConnectionSpec) (v1alpha1.ChatPlatform, bool) {
+		p, ok := v1alpha1.ChatPlatformOf(spec)
+		p.AskUser = false
+		return p, ok
+	})
+	t.Cleanup(src.Stop)
+	if err := src.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	s, fp := set(t, src)
+	if len(s.Invalid) != 1 || s.Invalid[0].Name != "sre-alerts" || s.Invalid[0].Reason != config.ReasonUnsupportedOnPlatform {
+		t.Fatalf("Invalid = %+v; want sre-alerts, which asks questions at generation 1, refused for its platform", s.Invalid)
+	}
+
+	edit := find(objs, "chat-only")
+	edit.SetGeneration(2)
+	_ = unstructured.SetNestedField(edit.Object, true, "spec", "interactions", "askUser")
+	until(t, func() { c.apply(edit) }, func() bool { return src.Fingerprint(t.Context()) != fp })
+	s, _ = set(t, src)
+	const msg = "spec.interactions.askUser: questions to a person are not supported on Slack, the platform of ChatConnection " +
+		"agent-kourier-system/slack-main: set it to false (see " + config.PlatformsPage + ")"
+	i := slices.IndexFunc(s.Invalid, func(inv config.Invalid) bool { return inv.Name == "chat-only" })
+	if i < 0 {
+		t.Fatalf("Invalid = %+v; want chat-only's edit refused", s.Invalid)
+	}
+	if inv := s.Invalid[i]; inv.Reason != config.ReasonUnsupportedOnPlatform || inv.Generation != 2 || inv.Served != 1 || inv.Message != msg {
+		t.Errorf("Invalid = %+v; want generation 2 refused with UnsupportedOnPlatform, 1 served, and the message %q", inv, msg)
+	}
+	j := slices.IndexFunc(s.Bindings, func(b v1alpha1.Binding) bool { return b.Name == "chat-only" })
+	if j < 0 || s.Bindings[j].Generation != 1 || s.Bindings[j].Spec.Interactions.AskUser {
+		t.Fatalf("Bindings = %v; want chat-only served at generation 1, which asks no questions", bindingNames(s))
+	}
+	rep := report(t, src)
+	k := slices.IndexFunc(rep.Rejections, func(r config.Rejection) bool { return r.Name == "chat-only" })
+	if k < 0 || rep.Rejections[k].Reason != config.ReasonUnsupportedOnPlatform || rep.Rejections[k].Served != 1 {
+		t.Errorf("rejections = %+v; want chat-only's edit rejected with UnsupportedOnPlatform, generation 1 served", rep.Rejections)
+	}
+	if _, ok := rep.Snapshot.Binding("sre", "chat-only"); !ok {
+		t.Error("chat-only is not served; want its generation 1")
+	}
+}
+
 // The Set read and the fingerprint it returns describe the same state, and a Fingerprint taken then agrees.
 func TestSetReturnsTheFingerprintOfWhatItRead(t *testing.T) {
 	leakCheck(t)
@@ -292,7 +390,7 @@ func TestAnInvalidUpdateKeepsTheLastGoodGeneration(t *testing.T) {
 
 	bad := find(objs, "sre-alerts")
 	bad.SetGeneration(2)
-	_ = unstructured.SetNestedField(bad.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(bad.Object, "#general alerts", "spec", "chat", "channel")
 	until(t, func() { c.apply(bad) }, func() bool { return src.Fingerprint(t.Context()) != fp })
 	s, _ := set(t, src)
 	if len(s.Invalid) != 1 {
@@ -363,7 +461,7 @@ func TestAnInvalidNewObjectIsNotServedAndARecreatedOneDoesNotBorrow(t *testing.T
 	fresh := find(objs, "chat-only")
 	fresh.SetName("brand-new")
 	fresh.SetUID("uid-new")
-	_ = unstructured.SetNestedField(fresh.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(fresh.Object, "#general alerts", "spec", "chat", "channel")
 	until(t, func() { c.apply(fresh) }, func() bool { return src.Fingerprint(t.Context()) != fp })
 	s, _ := set(t, src)
 	if len(s.Invalid) != 1 || s.Invalid[0].Served != 0 || s.Invalid[0].Name != "brand-new" {
@@ -378,7 +476,7 @@ func TestAnInvalidNewObjectIsNotServedAndARecreatedOneDoesNotBorrow(t *testing.T
 	reborn := find(objs, "sre-alerts")
 	reborn.SetUID("uid-reborn")
 	reborn.SetGeneration(1)
-	_ = unstructured.SetNestedField(reborn.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(reborn.Object, "#general alerts", "spec", "chat", "channel")
 	until(t, func() { c.remove(reborn); c.apply(reborn) }, func() bool { return src.Fingerprint(t.Context()) != fp })
 	s, _ = set(t, src)
 	if slices.Contains(bindingNames(s), "sre/sre-alerts") {
@@ -429,11 +527,11 @@ func TestOnlyTheBrokersOwnConnectionAndItsBindingsAreRead(t *testing.T) {
 	brokenForeign.SetName("broken-foreign")
 	brokenForeign.SetUID("uid-broken-foreign")
 	_ = unstructured.SetNestedField(brokenForeign.Object, "slack-other", "spec", "chat", "connectionRef", "name")
-	_ = unstructured.SetNestedField(brokenForeign.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(brokenForeign.Object, "#general alerts", "spec", "chat", "channel")
 	brokenOther := find(objs, "slack-main")
 	brokenOther.SetName("slack-broken")
 	brokenOther.SetUID("uid-slack-broken")
-	_ = unstructured.SetNestedField(brokenOther.Object, "teams", "spec", "platform")
+	_ = unstructured.SetNestedField(brokenOther.Object, "discord", "spec", "platform")
 
 	s, _ := set(t, newCluster(t, append(objs, other, foreign, dangling, brokenForeign, brokenOther)...).start(t))
 	if got := names(s.ChatConnections, func(c v1alpha1.ChatConnection) string { return c.Name }); !slices.Equal(got, []string{"slack-main"}) {
@@ -452,7 +550,7 @@ func TestTheOwnConnectionThatIsInvalidIsReported(t *testing.T) {
 	leakCheck(t)
 	objs := corpus(t)
 	bad := find(objs, "slack-main")
-	_ = unstructured.SetNestedField(bad.Object, "teams", "spec", "platform")
+	_ = unstructured.SetNestedField(bad.Object, "discord", "spec", "platform")
 	objs[slices.IndexFunc(objs, func(u *unstructured.Unstructured) bool { return u.GetName() == "slack-main" })] = bad
 	s, _ := set(t, newCluster(t, objs...).start(t))
 	if len(s.ChatConnections) != 0 || len(s.Invalid) != 1 || s.Invalid[0].Kind != config.KindChatConnection || s.Invalid[0].Served != 0 {

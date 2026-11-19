@@ -142,6 +142,17 @@ kubectl -n agent-kourier port-forward pod/<pod> 8080:8080 &
 curl -s localhost:8080/metrics | grep -E '^agentkourier_leader'
 ```
 
+With the chat listener (`chatListener.enabled`, for a ChatConnection in Slack HTTP mode), the leader's pod alone also carries the label
+`agentkourier.dev/role=leader`, which the chat Service selects, so Slack's requests reach the leader and never the standby:
+
+```sh
+kubectl -n agent-kourier get pods -l agentkourier.dev/role=leader
+```
+
+It lists the Lease's holder once it has started to lead, and a leader that is stopping until its shutdown takes the label off. During a takeover no Ready pod has the label for a while, and Slack's
+requests fail until the new leader puts it on ([High availability and failover](../explanation/high-availability.md#slack-in-http-mode)).
+HTTP mode is why a second replica matters most: with SQLite, each rollout leaves Slack with no one to answer it until the new pod leads.
+
 ## 5. Drill a failover
 
 Do this on a test install, with a bound channel you can use.
@@ -170,7 +181,9 @@ Do this on a test install, with a bound channel you can use.
     lost node's leader is replaced about a lease duration, 15 s, after its last renewal.
 
 4. Watch the thread. The new leader recovers the turn: the half-written message is replaced with the whole answer, and
-   the answer appears once. Reply in the thread: the same session continues.
+   the answer appears once. Reply in the thread: the same session continues. With the chat listener, the label
+   `agentkourier.dev/role=leader` is on the new leader's pod (`kubectl -n agent-kourier get pods -l agentkourier.dev/role=leader`), and the leader's
+   `agentkourier_slack_http_retries_total` counts the requests that Slack sent again and that reached it.
 
 5. Check the new leader counted its takeover. The earlier port-forward may point at the deleted pod, so
    port-forward to the new holder's pod, as in Check the leader, and read the counter:

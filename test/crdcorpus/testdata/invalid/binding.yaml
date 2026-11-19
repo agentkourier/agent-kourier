@@ -1248,8 +1248,8 @@ spec:
     connectionRef: {name: slack}
     channel: C0123456789
 ---
-# rule: binding/spec.chat.channel: over 32 characters
-# want: spec.chat.channel: is 33 bytes, longer than the 32 byte limit
+# rule: binding/spec.chat.channel: over 140 characters
+# want: spec.chat.channel: is 141 bytes, longer than the 140 byte limit
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
@@ -1265,7 +1265,7 @@ spec:
     userId: agent-kourier-sre
   chat:
     connectionRef: {name: slack}
-    channel: C00000000000000000000000000000000
+    channel: C00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
     triggers:
       - {type: mention}
       - type: botMessage
@@ -1373,8 +1373,8 @@ spec:
         limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
         promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
 ---
-# rule: binding/spec.chat.mentions[].user: over 21 characters
-# want: spec.chat.mentions[0].user: is 22 bytes, longer than the 21 byte limit
+# rule: binding/spec.chat.mentions[].user: over 36 characters
+# want: spec.chat.mentions[0].user: is 37 bytes, longer than the 36 byte limit
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
@@ -1391,7 +1391,7 @@ spec:
   chat:
     connectionRef: {name: slack}
     channel: C0123456789
-    mentions: [{name: sam, user: U000000000000000000000}]
+    mentions: [{name: sam, user: U000000000000000000000000000000000000}]
     triggers:
       - {type: mention}
       - type: botMessage
@@ -1467,3 +1467,200 @@ spec:
         limits: {rateLimit: {maxRuns: 5, per: "10m", maxConcurrent: 2}, maxRunsPerDay: 20}
         promptTemplate: "An alert is {{ .State }}: {{ .Key }}."
   session: {threadTTL: "0000000000000000000000000000000000000000000000000000000000002160h"}
+---
+# rule: binding/spec.chat.channel: a name without its #
+# want: spec.chat.channel: invalid channel "general"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: general
+---
+# rule: binding/spec.chat.channel: a colon
+# want: spec.chat.channel: invalid channel "ch:1"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: "ch:1"
+---
+# rule: binding/spec.chat.mentions[].user: a login, not an ID
+# want: spec.chat.mentions[0].user: invalid user ID ".octocat"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    mentions: [{name: oncall, user: .octocat}]
+---
+# rule: binding/spec.chat.channel: a Teams channel of a thread kind that is not a channel's
+# want: spec.chat.channel: invalid channel "19:a1b2c3d4@thread.v2"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: teams}
+    channel: "19:a1b2c3d4@thread.v2"
+---
+# rule: binding/spec.chat.channel: a Teams channel with no ID
+# want: spec.chat.channel: invalid channel "19:@thread.tacv2"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: teams}
+    channel: "19:@thread.tacv2"
+---
+# rule: binding/spec.chat.channel: a Teams thread, a channel with its root message
+# want: spec.chat.channel: invalid channel "19:a1b2c3d4@thread.tacv2;messageid=1700000000000"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: alerts
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: teams}
+    channel: "19:a1b2c3d4@thread.tacv2;messageid=1700000000000"
+---
+# rule: binding/spec.chat.channel: a webhook channel with an empty part
+# want: spec.chat.channel: invalid channel "acme//widgets"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: pr-review, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: pr-reviewer, namespace: kagent}
+  identity: {userId: agent-kourier-pr-review}
+  chat:
+    connectionRef: {name: github}
+    channel: acme//widgets
+    output: none
+    triggers:
+      - type: webhookEvent
+        match: {event: ^pull_request$}
+        limits: {rateLimit: {maxRuns: 20, per: 1h, maxConcurrent: 2}, maxRunsPerDay: 100}
+        promptTemplate: "Review {{ .Channel }}."
+---
+# rule: binding/spec.chat.channel: a webhook channel over 140 bytes
+# want: spec.chat.channel: is 141 bytes, longer than the 140 byte limit
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: pr-review, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: pr-reviewer, namespace: kagent}
+  identity: {userId: agent-kourier-pr-review}
+  chat:
+    connectionRef: {name: github}
+    channel: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    output: none
+    triggers:
+      - type: webhookEvent
+        limits: {rateLimit: {maxRuns: 20, per: 1h, maxConcurrent: 2}, maxRunsPerDay: 100}
+        promptTemplate: "Review {{ .Channel }}."
+---
+# rule: binding/spec.chat.channel: a webhook channel with a mention trigger
+# want: spec.chat.channel: invalid channel "acme/widgets"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: pr-review, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: pr-reviewer, namespace: kagent}
+  identity: {userId: agent-kourier-pr-review}
+  chat:
+    connectionRef: {name: github}
+    channel: acme/widgets
+    triggers:
+      - type: mention
+      - type: webhookEvent
+        limits: {rateLimit: {maxRuns: 20, per: 1h, maxConcurrent: 2}, maxRunsPerDay: 100}
+        promptTemplate: "Review {{ .Channel }}."
+---
+# rule: binding/spec.chat.channel: a webhook channel with no triggers
+# want: spec.chat.channel: invalid channel "acme/widgets"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: pr-review, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: pr-reviewer, namespace: kagent}
+  identity: {userId: agent-kourier-pr-review}
+  chat:
+    connectionRef: {name: github}
+    channel: acme/widgets
+---
+# rule: binding/spec.chat.output: none on a Binding of other triggers
+# want: spec.chat.output: unsupported value "none"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: alerts, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: k8s-agent, namespace: kagent}
+  identity: {userId: agent-kourier-sre}
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789
+    output: none

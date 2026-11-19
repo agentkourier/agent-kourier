@@ -5,7 +5,7 @@ site_url: https://agentkourier.dev/
 site_description: >-
   Write the agent, not the chat integration. Agent Kourier is a Kubernetes-native broker that carries chat messages
   and the alerts posted there to streaming A2A agents, including one that is suspended until it is called, and posts
-  the answers in the thread. Slack today; more platforms planned.
+  the answers in the thread, on Slack, and experimentally on Microsoft Teams.
 repo_url: https://github.com/agentkourier/agent-kourier
 repo_name: agentkourier/agent-kourier
 edit_uri: edit/main/docs/
@@ -136,6 +136,7 @@ nav:
       - how-to/index.md
       - Install with Helm: how-to/install-with-helm.md
       - Configure Slack: how-to/configure-slack.md
+      - Configure Microsoft Teams: how-to/configure-teams.md
       - Create the Binding identity: how-to/create-binding-identity.md
       - Write a Binding: how-to/write-a-binding.md
       - Let a team bring its own Slack app: how-to/team-slack-app.md
@@ -143,6 +144,12 @@ nav:
       - Investigate Alertmanager alerts: how-to/investigate-alertmanager-alerts.md
       - Start investigations from any bot's messages: how-to/any-bot-trigger.md
       - Tune triggers with a dry run: how-to/tune-triggers.md
+      - Webhooks:
+          - Start agents from webhooks: how-to/receive-webhooks.md
+          - GitHub: how-to/webhooks/github.md
+          - Jira Cloud: how-to/webhooks/jira.md
+          - Bitbucket Cloud: how-to/webhooks/bitbucket.md
+          - Linear: how-to/webhooks/linear.md
       - Start from a recipe: how-to/recipes.md
       - Connect a kagent agent: how-to/connect-kagent.md
       - Connect a generic A2A agent: how-to/connect-a2a-agent.md
@@ -164,6 +171,7 @@ nav:
       - Helm values: reference/helm-values.md
       - Command line and environment: reference/cli.md
       - Chat triggers: reference/chat-triggers.md
+      - What each platform supports: reference/platforms.md
       - Metrics: reference/metrics.md
       - Logs and traces: reference/logs-and-traces.md
       - Stored data: reference/stored-data.md

@@ -101,10 +101,10 @@ func (i *Intake) refuseCleared(ctx context.Context, p Pause, b Binding, row stor
 	return i.cfg.Audit.Decision(ctx, a, audit.Decision{InteractionID: row.ID, TaskID: a2a.TaskID(row.TaskID), Result: audit.DecisionAnswerCleared})
 }
 
-// refuseTooLarge turns away a pause whose prompt does not fit in one message, which no retry mends: it
-// is refused as unusable, and the interaction, which has no prompt and never will, is closed with the
-// task, so that the sweep has no prompt to replace. cause wraps chat.ErrTooLarge.
-func (i *Intake) refuseTooLarge(ctx context.Context, p Pause, b Binding, row store.Interaction, cause error) error {
+// refuseUnshowable turns away a pause whose prompt the platform cannot show, which no retry mends: one that does not fit
+// in one message, or a prompt of tools on a platform that shows no tool approvals. It is refused as unusable, and the
+// interaction, which has no prompt and never will, is closed with the task, so that the sweep has no prompt to replace. cause wraps chat.ErrTooLarge or chat.ErrInvalid.
+func (i *Intake) refuseUnshowable(ctx context.Context, p Pause, b Binding, row store.Interaction, cause error) error {
 	cause = fmt.Errorf("%w: %w", dialect.ErrUnusablePause, cause)
 	a := audit.Actor{Binding: p.Binding, Identity: b.Identity}
 	if err := i.ensureUnusablePause(ctx, a, p.Task.ID, p.Task.ContextID, row.CreatedAt, cause); err != nil {
@@ -198,7 +198,7 @@ func (i *Intake) closeUnusable(ctx context.Context, p Pause, row store.Interacti
 // refuseAskUser turns away a question on a Binding that does not allow them: the thread is told, the
 // task is cancelled, and the decision is audited and counted, once, by the same rule as refuseUnusable.
 func (i *Intake) refuseAskUser(ctx context.Context, p Pause, b Binding, in dialect.Interaction) error {
-	id := InteractionID(in)
+	id := dialect.InteractionID(in)
 	handled, err := i.cancel(ctx, p, "ask-user not allowed", noticeAskUser, id)
 	switch {
 	case handled:

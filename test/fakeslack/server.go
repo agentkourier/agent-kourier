@@ -3,7 +3,9 @@
 // through slack-go's slack.OptionAPIURL(fake.URL() + "/"), or, when the fake
 // runs behind another listener, by serving the Server as an http.Handler.
 // Socket Mode clients connect with an xapp- token; apps.connections.open
-// answers with a websocket URL on the same listener. The same handler serves a
+// answers with a websocket URL on the same listener. An app in HTTP mode
+// (App.RequestURL, WithRequestURL) is sent its events and presses as signed
+// requests to its URL instead (httpdelivery.go). The same handler serves a
 // JSON control surface under /_control/ (controlhttp.go), which needs no Slack
 // token and is only for tests inside a cluster.
 //
@@ -24,6 +26,15 @@
 //     ticket; the content of hello; envelopes going to an app's newest connection
 //     only, where Slack spreads them over up to 10; and unacked envelopes
 //     never being redelivered, where Slack retries.
+//   - HTTP mode (httpdelivery.go), tagged UNCONFIRMED(HTTP-8), all of it from
+//     Slack's docs and none of it seen from Slack: the signature headers and
+//     their base string; an event's JSON body and a press's form with the field
+//     payload; one URL for events and presses; the url_verification body; the
+//     retry headers and their reasons (http_error, http_timeout,
+//     connection_failed); and an ack being any 200, whose body the fake does
+//     not read (Ack's payload is nil).
+//     Deliberate departures: a short retry schedule (WithHTTPRetries), no retry
+//     of a 4xx, and the first attempts of one channel sent in order.
 //   - Several apps (apps.go, WithApp): a registered app's events being the channels whose members
 //     include its bot, and the default app's being every channel's; the app parameter that
 //     tells a websocket whose connection it is; another app's posts reaching an app as message
@@ -162,10 +173,12 @@ type Server struct {
 	strictTokens bool              // set by WithStrictTokens, read-only after construction
 	noOwnEvents  bool              // set by WithoutOwnPostEvents, read-only after construction
 	sock         sockets
-	control      http.Handler // the /_control/ routes
+	web          webDeliveries // the requests to the apps in HTTP mode (httpdelivery.go)
+	control      http.Handler  // the /_control/ routes
 
 	mu       sync.Mutex
 	last     int64                 // microseconds of the last ts issued, guarded by mu
+	lastAct  int64                 // microseconds of the last action_ts issued, guarded by mu
 	events   int                   // Events API events issued, guarded by mu
 	channels map[string][]*Message // messages per channel in ts order, guarded by mu
 	users    map[string]User       // guarded by mu
@@ -258,6 +271,10 @@ func NewHandler(opts ...Option) *Server {
 		o(s)
 	}
 	s.finishApps()
+	s.web.onAck = func(id string) { s.sock.settle(id, nil) }
+	s.web.onDone = s.sock.finish
+	s.web.revoked = s.isRevoked
+	s.web.start()
 	s.control = s.newControlRoutes()
 	return s
 }
@@ -279,11 +296,13 @@ func (s *Server) URL() string {
 	return s.srv.URL
 }
 
-// Close drops every Socket Mode client and waits for their goroutines, then
+// Close ends the requests to the apps in HTTP mode, those waiting to be retried
+// too, drops every Socket Mode client and waits for their goroutines, then
 // shuts down a Server started with New. Call it on a Server from NewHandler
 // too.
 func (s *Server) Close() {
 	s.releaseAllPosts()
+	s.web.stop()
 	s.sock.stop()
 	if s.srv != nil {
 		s.srv.Close()

@@ -37,6 +37,10 @@ type IntakeConfig struct {
 	Submitter Submitter
 	// Interactions takes the presses of buttons. Nil drops them, acknowledged.
 	Interactions func(ctx context.Context, i chat.Interaction) error
+	// DecidePress takes the press of a platform that waits for its decision in the press's request (chat.InlineDecider): it records
+	// the press as Interactions does and waits, until ctx ends, for what it came to. Nil gives such a press to Interactions, and
+	// the platform is told it was not decided in the wait.
+	DecidePress func(ctx context.Context, i chat.Interaction) (chat.PressOutcome, error)
 	// Notice, if set, tells a thread that Agent Kourier cannot continue it: session.NoticeExpired for a
 	// thread past its threadTTL, session.NoticeBindingGone for one whose Binding left the config. It also
 	// takes the notes of a trigger's thread: session.NoticeTriggerRepeat and session.NoticeTriggerClosed.
@@ -80,6 +84,13 @@ type IntakeConfig struct {
 	// posts nothing and queues nothing, so it is not_started, with no count against the limits and no report that they stopped
 	// it. Its error is the event's: the platform delivers it again.
 	TakesBotMention func(ctx context.Context, m Match) (bool, error)
+	// TakesTurn, if set, says whether the session that a webhook event's start would be a turn of takes it now, reading only, as
+	// TakesBotMention does for a bot's mention. It is asked before the event meets the limits: an event whose thread's session has
+	// ended (past its threadTTL, or its Binding gone) and whose replacement the session manager withholds (the old session may still
+	// be at work, or the body was queued before) is not_started. It is taken, logged, spends no place in the limits, and is not
+	// remembered, so that its redelivery is asked about again. Its error is the event's: the platform answers 503, and the sender
+	// delivers it again.
+	TakesTurn func(ctx context.Context, m Match) (bool, error)
 	// TurnQueued, if set, says whether the turn with this ID (the MessageID of the message that started it) was
 	// durably taken: queued or already sent. It closes the window between OnStart queueing a turn and the
 	// thread being marked started (a failed write, a crash, an event Slack never delivered again): a later fire
@@ -123,6 +134,8 @@ var (
 	_ chat.Sink             = (*Intake)(nil)
 	_ chat.BotFilter        = (*Intake)(nil)
 	_ chat.BotMentionFilter = (*Intake)(nil)
+	_ chat.InlineDecider    = (*Intake)(nil)
+	_ chat.ChannelLister    = (*Intake)(nil)
 )
 
 // NewIntake returns an Intake over cfg.
@@ -145,6 +158,8 @@ func NewIntake(cfg IntakeConfig) *Intake {
 //     channel's Binding, in order (botMessage). A match is decided (see Decision) and may be handed to
 //     IntakeConfig.OnStart; a message no trigger matches is ignored and counted.
 //   - A bot's mention (m.Bot set and m.Mentioned) goes to IntakeConfig.OnStart too, within fixed limits (botMention).
+//   - An event of a webhook connection (m.Webhook set) is tried against the webhookEvent triggers of its channel's Binding
+//     (webhookEvent), and is never submitted here either. One that a limit stopped, or whose session withheld it, is not remembered.
 //
 // It returns an error only when Submit failed in a way a retry may cure, so the platform leaves the
 // event unacknowledged. An invalid turn is logged and dropped; no retry could mend it.
@@ -172,6 +187,23 @@ func (in *Intake) Message(ctx context.Context, m chat.Inbound) (telemetryErr err
 		disposition = "duplicate"
 		if in.matched.has(seen) {
 			in.countDecision(ctx, m.At.Channel, DecisionDedup)
+		}
+		return nil
+	}
+	if m.Webhook != nil {
+		d, out, err := in.webhookEvent(ctx, snap, m)
+		if err != nil {
+			return err
+		}
+		// A start that a limit stopped, or that the session of its thread withheld, is not remembered (spec D55): the stop is
+		// transient, and the event's redelivery, by its sender or by hand, is decided again, and starts once there is room, or once the
+		// session has settled.
+		forget := out.decision == DecisionLimited || out.withheld
+		if disposition = d; d != "ignored" && !forget {
+			in.seen.add(seen)
+		}
+		if d == "trigger_matched" && !forget {
+			in.matched.add(seen)
 		}
 		return nil
 	}
@@ -266,16 +298,34 @@ func (in *Intake) Message(ctx context.Context, m chat.Inbound) (telemetryErr err
 
 // Interaction passes a press to IntakeConfig.Interactions, and returns its error.
 func (in *Intake) Interaction(ctx context.Context, i chat.Interaction) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "agentkourier.intake", attribute.String("agentkourier.source", "interaction"))
-	defer func() {
-		telemetry.Count(ctx, "agentkourier_intake_total", "interaction", telemetry.ErrorClass(telemetryErr), in.conn)
-		op.Finish(telemetryErr)
-	}()
+	ctx, finish := in.pressed(ctx)
+	defer func() { finish(telemetryErr) }()
 	if in.cfg.Interactions == nil {
 		in.log.WarnContext(ctx, "chat: press dropped; no handler", "channel", i.At.Channel, "message", i.At.ID)
 		return nil
 	}
 	return in.cfg.Interactions(ctx, i)
+}
+
+// DecidePress implements chat.InlineDecider: it passes a press to IntakeConfig.DecidePress, and returns what it says. With no
+// DecidePress it is Interaction, and the press is not decided in the wait.
+func (in *Intake) DecidePress(ctx context.Context, i chat.Interaction) (_ chat.PressOutcome, telemetryErr error) {
+	if in.cfg.DecidePress == nil {
+		return chat.PressOutcome{}, in.Interaction(ctx, i)
+	}
+	ctx, finish := in.pressed(ctx)
+	defer func() { finish(telemetryErr) }()
+	return in.cfg.DecidePress(ctx, i)
+}
+
+// pressed starts the span of a press and returns its context and the function that counts the press and ends the span, given the
+// press's error.
+func (in *Intake) pressed(ctx context.Context) (context.Context, func(error)) {
+	ctx, op := telemetry.Start(ctx, "agentkourier.intake", attribute.String("agentkourier.source", "interaction"))
+	return ctx, func(err error) {
+		telemetry.Count(ctx, "agentkourier_intake_total", "interaction", telemetry.ErrorClass(err), in.conn)
+		op.Finish(err)
+	}
 }
 
 // botMessage tries a bot's message against the botMessage triggers of the Binding that owns its channel, and
@@ -316,7 +366,40 @@ func (in *Intake) personMessage(ctx context.Context, snap *config.Snapshot, m ch
 		return "ignored", false, nil
 	}
 	disposition, decision, err := in.matchTriggers(ctx, snap, rb, m, "person message")
-	return disposition, decision == DecisionLimited && mentionTriggerIn(rb.Binding.Spec.Chat.Triggers), err
+	return disposition, decision.decision == DecisionLimited && mentionTriggerIn(rb.Binding.Spec.Chat.Triggers), err
+}
+
+// webhookEvent tries an event of a webhook connection against the webhookEvent triggers of the Binding that owns its channel, and
+// returns the disposition for the intake metric and the decision of a match. A channel with no Binding is ignored: the platform has
+// answered the event, and it starts nothing. A match is decided as an alert's with no thread rules (decide): the limits, then OnStart,
+// which starts the turn in the thread that the connection derived. The log lines name the sender's delivery and the thread, both
+// identifiers the platform checked, and never a field's value.
+func (in *Intake) webhookEvent(ctx context.Context, snap *config.Snapshot, m chat.Inbound) (string, decided, error) {
+	if snap == nil {
+		return "ignored", decided{}, nil
+	}
+	rb, ok := snap.BindingForChannel(in.cfg.Connection.Namespace, in.cfg.Connection.Name, m.At.Channel)
+	if !ok {
+		return "ignored", decided{}, nil
+	}
+	return in.matchTriggers(ctx, snap, rb, m, "webhook event", "thread", m.At.Thread, "delivery", m.Webhook.Delivery)
+}
+
+// decideWebhook decides a webhook event's match, once the session of its thread has said that it takes the start (TakesTurn), as
+// decideMention does a mention's: a thread whose ended session the session manager will not replace yet would take no turn, so the
+// event is not_started with no place taken in the limits, and dropped. Its log line names the thread and the sender's delivery.
+func (in *Intake) decideWebhook(ctx context.Context, m Match) (decided, error) {
+	if in.cfg.TakesTurn != nil {
+		switch takes, err := in.cfg.TakesTurn(ctx, m); {
+		case err != nil:
+			return decided{}, fmt.Errorf("ask whether the session takes the turn: %w", err)
+		case !takes:
+			in.log.InfoContext(ctx, "chat: a webhook event's thread cannot be continued yet, so the event was dropped", "binding", m.Binding, "trigger", m.Index,
+				"channel", m.Message.At.Channel, "thread", m.sessionThread(), "message", m.Message.At.ID, "delivery", m.Message.Webhook.Delivery)
+			return decided{decision: DecisionNotStarted, thread: m.sessionThread(), withheld: true}, nil
+		}
+	}
+	return in.decide(ctx, m)
 }
 
 // triedAsPerson says whether m is the input of the personMessage triggers among triggers: a person's message at the top level of
@@ -333,10 +416,12 @@ func triedAsPerson(triggers []v1alpha1.Trigger, m chat.Inbound) bool {
 // the match. what names the message in logs, and sender is the attributes that say who sent it (never what it said).
 //   - A message that no trigger matches is counted as agentkourier_trigger_unmatched_total of the Binding, so that a
 //     changed template shows up as a rising count, and logged at DEBUG with where it was, and never what it said.
-//   - A match is counted and logged, and decided: what it does to the thread of its key (decide). The decision is
-//     counted as agentkourier_trigger_decisions_total once it is made, whether or not what follows it succeeds; an
-//     error returns, and the redelivery is decided again (a dedup, for a start that was already recorded).
-func (in *Intake) matchTriggers(ctx context.Context, snap *config.Snapshot, rb config.ResolvedBinding, m chat.Inbound, what string, sender ...any) (disposition string, decision Decision, err error) {
+//   - A match is logged and decided: what it does to the thread of its key (decide). The decision is counted as
+//     agentkourier_trigger_decisions_total, and the match as agentkourier_trigger_matched_total, once it is taken, so a
+//     started decision is a turn that started. An attempt that fails counts neither: it is logged at WARN with the
+//     decision it was carrying out, and its error returns, for the platform to log and to deliver the event again
+//     (agentkourier_intake_total counts it as an error). The redelivery is decided again and counted then.
+func (in *Intake) matchTriggers(ctx context.Context, snap *config.Snapshot, rb config.ResolvedBinding, m chat.Inbound, what string, sender ...any) (disposition string, decision decided, err error) {
 	name := v1alpha1.NamespacedName(rb.Binding.Namespace, rb.Binding.Name)
 	trace.SpanFromContext(ctx).SetAttributes(attribute.String("agentkourier.binding", name))
 	where := append([]any{"binding", name, "channel", m.At.Channel, "message", m.At.ID}, sender...)
@@ -344,20 +429,24 @@ func (in *Intake) matchTriggers(ctx context.Context, snap *config.Snapshot, rb c
 	if !ok {
 		telemetry.Count(ctx, "agentkourier_trigger_unmatched_total", name)
 		in.log.DebugContext(ctx, "chat: "+what+" matched no trigger", where...)
-		return "trigger_unmatched", "", nil
+		return "trigger_unmatched", decided{}, nil
 	}
-	match := Match{Binding: name, Index: trigger.index, Fields: fields, Thread: trigger.thread, Limits: trigger.limits, PromptTemplate: trigger.prompt, MessageID: in.messageID(m), Received: in.now(), Message: m, Person: trigger.person}
+	match := Match{Binding: name, Index: trigger.index, Fields: fields, Thread: trigger.thread, Limits: trigger.limits, PromptTemplate: trigger.prompt, MessageID: in.messageID(m), Received: in.now(), Message: m, Person: trigger.person, Webhook: trigger.webhook}
 	in.log.InfoContext(ctx, "chat: "+what+" matched a trigger", append(where, "trigger", trigger.index)...)
-	out, err := in.decide(ctx, match)
-	if out.decision != "" {
-		telemetry.Count(ctx, "agentkourier_trigger_decisions_total", name, string(out.decision))
-		in.log.InfoContext(ctx, "chat: trigger decided", "binding", name, "trigger", trigger.index, "decision", out.decision, "keyHash", out.keyHash, "channel", m.At.Channel, "message", m.At.ID, "thread", out.thread)
+	decide := in.decide
+	if match.Webhook {
+		decide = in.decideWebhook
 	}
+	out, err := decide(ctx, match)
+	attrs := []any{"binding", name, "trigger", trigger.index, "decision", out.decision, "keyHash", out.keyHash, "channel", m.At.Channel, "message", m.At.ID, "thread", out.thread}
 	if err != nil {
-		return "", "", fmt.Errorf("trigger %d of %s for %s: %w", trigger.index, name, in.messageID(m), err)
+		in.log.WarnContext(ctx, "chat: trigger decision not taken; its redelivery decides again", attrs...)
+		return "", decided{}, fmt.Errorf("trigger %d of %s for %s: %w", trigger.index, name, in.messageID(m), err)
 	}
-	telemetry.Count(ctx, "agentkourier_trigger_matched_total", name) // only once the match was taken: a redelivery counts it then
-	return "trigger_matched", out.decision, nil
+	telemetry.Count(ctx, "agentkourier_trigger_decisions_total", name, string(out.decision))
+	in.log.InfoContext(ctx, "chat: trigger decided", attrs...)
+	telemetry.Count(ctx, "agentkourier_trigger_matched_total", name)
+	return "trigger_matched", out, nil
 }
 
 // topLevel says whether m opens a thread of its own rather than replying in one: it is in none, or it is the root of
@@ -404,6 +493,23 @@ func (in *Intake) AcceptsBot(channel, botID string) bool {
 		return false
 	}
 	return botMessageTriggerNames(rb.Binding.Spec.Chat.Triggers, botID)
+}
+
+// BoundChannels implements chat.ChannelLister: the channels that the Bindings of the current config place on this connection,
+// sorted, each once. None before the first config.
+func (in *Intake) BoundChannels() []string {
+	snap := in.cfg.Snapshot()
+	if snap == nil {
+		return nil
+	}
+	var out []string
+	for _, rb := range snap.Bindings() {
+		if rb.Connection != nil && rb.Connection.Namespace == in.cfg.Connection.Namespace && rb.Connection.Name == in.cfg.Connection.Name {
+			out = append(out, rb.Binding.Spec.Chat.Channel)
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // botMessageTriggerNames says whether a botMessage trigger of triggers names the bot botID.

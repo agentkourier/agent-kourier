@@ -9,7 +9,9 @@ import (
 )
 
 // Invalid says that one object of a source that fails one object at a time, the custom resources, did not pass Default
-// and Validate, or could not be decoded. File mode has none: a file that does not load fails the whole load.
+// and Validate, or could not be decoded, or is a Binding whose chat IDs or features the platform of its ChatConnection does
+// not take (Reason). File mode has none: a file that does not load fails the whole load, and a Binding that its platform
+// does not take fails the resolution of the whole config.
 //
 // A broker serves what it can instead: Served is the generation of the same object that the Set holds in its place, the
 // last good one, or zero when there is none and the object is left out. A deleted object that is held on purpose has Deleted
@@ -35,7 +37,14 @@ type Invalid struct {
 	// Message is the problems found, joined, each as "path: message". It is capped, and it names fields and the values
 	// that were set in them, which are never Secret values: a Secret is named, not read.
 	Message string
+	// Reason is set for a Binding that passed Default and Validate and that the source refused because the platform of its
+	// ChatConnection does not take a chat ID or a feature of it (RefusedOnPlatform): InvalidPlatformID or UnsupportedOnPlatform,
+	// which the Binding is told. It is empty for an object that failed Default or Validate, whose Binding is told InvalidSpec.
+	Reason RejectionReason
 }
+
+// bindingReason is the reason a Binding is told when this, its own generation, is refused.
+func (i Invalid) bindingReason() RejectionReason { return cmp.Or(i.Reason, ReasonInvalidSpec) }
 
 // ID returns "kind namespace/name".
 func (i Invalid) ID() string { return identity{i.Kind, i.Namespace, i.Name}.String() }
@@ -135,7 +144,7 @@ type Report struct {
 	// Rejections is what is wrong with each Binding that is not served as written, sorted by namespace and name. A
 	// Binding with Served zero is not in the Snapshot; one with a Served generation is, and runs the older object.
 	Rejections []Rejection
-	// Invalid lists every object, of any kind, that failed Default or Validate, sorted by kind, namespace and name.
+	// Invalid lists every object, of any kind, that the source refused (see Invalid), sorted by kind, namespace and name.
 	Invalid []Invalid
 	// UnservedConnections lists the ChatConnections that the source read and left out of the Snapshot for a reason that is not the
 	// object's own (UnservedConnection), sorted by namespace and name. The Bindings that name one are not in the Snapshot and are
@@ -177,10 +186,11 @@ func CapMessage(s string) string {
 // left out because an object they name has no good generation (ResolvePartial sees that as not found).
 //
 // A Binding that is served from the last good generation of a refused object has a Rejection with its Served generation,
-// naming the reason: its own spec (InvalidSpec), its backend (BackendRejected) or its connection (ConnectionRejected). A
+// naming the reason: its own spec (InvalidSpec, or the Invalid's Reason when its platform refused it), its backend
+// (BackendRejected) or its connection (ConnectionRejected). A
 // Binding that is left out for a reference that is not found, where the target exists but is refused, has the Rejection
 // with that reason instead of NotFound. A Binding that is refused and has no last good generation is left out, and is
-// rejected as InvalidSpec. A Binding left out by the agents limit of a backend whose newest generation is refused, or that was
+// rejected as InvalidSpec (or with the Invalid's Reason). A Binding left out by the agents limit of a backend whose newest generation is refused, or that was
 // deleted and is held, has the sentence "(the limit is that of the generation being served: <the object's description>)" added to
 // its message: the description says which generation is invalid and which is served, and holds the problems found only when the
 // Binding is in the backend's own namespace.
@@ -223,7 +233,7 @@ func resolvePerObject(set *Set) (*Snapshot, []Rejection) {
 			rej.Generation = inv.Generation
 			if !said[id] {
 				said[id] = true
-				out = append(out, Rejection{Namespace: id.namespace, Name: id.name, Reason: ReasonInvalidSpec, Message: "spec: " + inv.describe(true, false), Generation: inv.Generation})
+				out = append(out, Rejection{Namespace: id.namespace, Name: id.name, Reason: inv.bindingReason(), Message: "spec: " + inv.describe(true, false), Generation: inv.Generation})
 			}
 		}
 		switch rej.Reason {
@@ -258,7 +268,7 @@ func resolvePerObject(set *Set) (*Snapshot, []Rejection) {
 		}
 		refs := bindings[id]
 		if inv, ok := invalid[id]; ok {
-			out = append(out, Rejection{Namespace: id.namespace, Name: id.name, Reason: ReasonInvalidSpec, Message: "spec: " + inv.describe(true, true),
+			out = append(out, Rejection{Namespace: id.namespace, Name: id.name, Reason: inv.bindingReason(), Message: "spec: " + inv.describe(true, true),
 				Generation: inv.Generation, Served: inv.Served})
 		}
 		if inv, ok := invalid[refs.backend]; ok {
@@ -271,7 +281,7 @@ func resolvePerObject(set *Set) (*Snapshot, []Rejection) {
 	// A refused Binding that has no good generation is not in the Set at all, and so is nowhere above.
 	for _, inv := range set.Invalid {
 		if inv.Kind == KindBinding && inv.Served == 0 {
-			out = append(out, Rejection{Namespace: inv.Namespace, Name: inv.Name, Reason: ReasonInvalidSpec, Message: "spec: " + inv.describe(true, true), Generation: inv.Generation})
+			out = append(out, Rejection{Namespace: inv.Namespace, Name: inv.Name, Reason: inv.bindingReason(), Message: "spec: " + inv.describe(true, true), Generation: inv.Generation})
 		}
 	}
 	slices.SortStableFunc(out, func(a, b Rejection) int {

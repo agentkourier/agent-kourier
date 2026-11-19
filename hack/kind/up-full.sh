@@ -14,7 +14,7 @@ set -eEuo pipefail
 KAGENT_VERSION=1.0.0-alpha5
 MOCKLLM_REF=v0.1.0 # tag name, for humans; the commit below is what is built
 MOCKLLM_COMMIT=35792a004f9387562a8760b2a513be8edeea6cf7
-GO_IMAGE=golang:1.27.4@sha256:5e8afd493a7124a8586e134d9b532731161d4b9becf9dee5a5956b107426f93d
+GO_IMAGE=golang:1.27.4@sha256:205c7636d74e0ffbe3d007162df7d74f859f5a8c8322dfb9f907977686c126cf
 MOCKLLM_IMAGE=agent-kourier-e2e/mockllm:${MOCKLLM_REF}
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -24,6 +24,9 @@ ROOT=$(cd "${HERE}/../.." && pwd)
 # E2E_CONFIG_SOURCE=crds runs Agent Kourier on custom resources instead of the ConfigMap (the tier default, files, named in the tiers' values), as up-fast.sh does (lib.sh's deploy_agentkourier).
 E2E_CONFIG_SOURCE=${E2E_CONFIG_SOURCE:-files}
 require_config_source
+# E2E_SLACK_MODE=http runs the tier's ChatConnection in HTTP mode, through Agent Kourier's chat listener, as up-fast.sh does; socket is the default.
+E2E_SLACK_MODE=${E2E_SLACK_MODE:-socket}
+require_slack_mode
 FULL=${HERE}/full
 CTX=kind-${CLUSTER}
 K=(kubectl --context "${CTX}")
@@ -150,4 +153,4 @@ settle_full_tier
 step "verify"
 "${FULL}/verify.sh"
 docker stats --no-stream --format 'node cpu={{.CPUPerc}} mem={{.MemUsage}}' "$(kind get nodes --name "${CLUSTER}")"
-echo "full tier up in ${SECONDS}s (context ${CTX}, config source ${E2E_CONFIG_SOURCE})"
+echo "full tier up in ${SECONDS}s (context ${CTX}, config source ${E2E_CONFIG_SOURCE}, Slack mode ${E2E_SLACK_MODE})"

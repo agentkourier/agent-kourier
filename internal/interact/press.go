@@ -45,9 +45,10 @@ type Authorizer interface {
 	IsInAnyGroup(ctx context.Context, groups []string, user string) (bool, error)
 }
 
-// PressDecider takes the decision on a complete press: *Decider.
+// PressDecider takes the decision on a complete press: *Decider. It returns the words for the presser of what the decision came to
+// (Decider.Decide).
 type PressDecider interface {
-	Decide(ctx context.Context, pd PressDecision) error
+	Decide(ctx context.Context, pd PressDecision) (string, error)
 }
 
 // PressStore is what the pipeline keeps and reads: the presses waiting, the interactions they answer, and the claim
@@ -58,7 +59,7 @@ type PressStore interface {
 	GetInteraction(ctx context.Context, id string) (store.Interaction, error)
 }
 
-// PressConfig configures a Pipeline. Everything but Now, Logger, Limits, EarlyFor and Notify is required.
+// PressConfig configures a Pipeline. Everything but Now, Logger, Limits, EarlyFor and Outcomes is required.
 type PressConfig struct {
 	Store    PressStore
 	Sessions SessionReader
@@ -84,6 +85,9 @@ type PressConfig struct {
 	// in Press, on the path that acknowledges the button to Slack, so it must never block: a hand-off to a
 	// buffered or unbounded queue, as Worker.Submit is, and not to a channel a worker may not be reading.
 	Notify func(store.Press)
+	// Outcomes, if set, takes what Process finds a press came to, for a platform that waits for it in the press's request
+	// (DecidePress). Nil: DecidePress waits for nothing.
+	Outcomes *Outcomes
 }
 
 // Pipeline takes the presses of a prompt's Submit button (spec 8.4 step 3). Press is the sink's side:
@@ -123,22 +127,51 @@ func NewPipeline(cfg PressConfig) (*Pipeline, error) {
 // Press records a press of an interaction's button and returns. PressedAt is Agent Kourier's own clock now,
 // not Slack's, and is the time of the decision whenever it is made (WP-33e contract). It returns
 // ErrNotInteraction for a button that is not an interaction's, and store.ErrLimit when too many presses
-// wait.
+// wait. A press that the platform delivers again (the same i.Delivery) after it was recorded returns nil and
+// records nothing: the first delivery is decided, or its person told, once. While that press waits it is handed to
+// Notify again, as it was recorded, in case the first delivery's record committed and returned an error
+// (store.RecordOnce); the worker ignores a press it holds, and skips one it has finished since.
 func (p *Pipeline) Press(ctx context.Context, i chat.Interaction) error {
+	recorded, ok, err := p.record(ctx, i)
+	if err != nil || !ok {
+		return err
+	}
+	p.cfg.Notify(recorded)
+	return nil
+}
+
+// DecidePress is Press for a platform that waits for the decision in the press's request (chat.InlineDecider): it records the press
+// as Press does, hands it to Notify, and waits until ctx ends for what Process finds it came to (Outcomes.Wait). The worker that Notify
+// feeds decides the press, once, as it decides every press, so a press whose wait runs out, or whose processing must be tried again,
+// is still decided by it later. A press delivered again after it was processed is not decided again, and the outcome says nothing.
+func (p *Pipeline) DecidePress(ctx context.Context, i chat.Interaction) (chat.PressOutcome, error) {
+	recorded, ok, err := p.record(ctx, i)
+	if err != nil || !ok {
+		return chat.PressOutcome{}, err
+	}
+	return p.cfg.Outcomes.Wait(ctx, recorded, p.cfg.Notify), nil
+}
+
+// record records a press of an interaction's button once (store.RecordOnce), and says false, with no error, for one delivered again
+// after it was processed.
+func (p *Pipeline) record(ctx context.Context, i chat.Interaction) (store.Press, bool, error) {
 	if !strings.HasPrefix(i.PromptID, "ix-") {
-		return ErrNotInteraction
+		return store.Press{}, false, ErrNotInteraction
 	}
 	inputs, err := encodePress(i)
 	if err != nil {
-		return fmt.Errorf("interact: encode a press: %w", err)
+		return store.Press{}, false, fmt.Errorf("interact: encode a press: %w", err)
 	}
-	press := store.Press{InteractionID: i.PromptID, User: i.User, Connection: i.At.Conn, Channel: i.At.Channel, MessageRef: i.At.ID, Inputs: inputs, PressedAt: p.cfg.Now()}
+	press := store.Press{InteractionID: i.PromptID, User: i.User, Connection: i.At.Conn, Channel: i.At.Channel, MessageRef: i.At.ID, Inputs: inputs, PressedAt: p.cfg.Now(), Delivery: i.Delivery}
 	press.TraceParent, press.TraceState = telemetry.Capture(ctx)
-	if press.Seq, err = p.cfg.Store.RecordPress(ctx, press, p.cfg.Limits); err != nil {
-		return fmt.Errorf("interact: record a press of %s: %w", i.PromptID, err)
+	recorded, ok, err := store.RecordOnce(ctx, p.cfg.Store, press, p.cfg.Limits)
+	switch {
+	case err != nil:
+		return store.Press{}, false, fmt.Errorf("interact: record a press of %s: %w", i.PromptID, err)
+	case !ok:
+		p.cfg.Logger.InfoContext(ctx, "interact: a press delivered again was processed before; it is acknowledged and not recorded again", "interaction", i.PromptID)
 	}
-	p.cfg.Notify(press)
-	return nil
+	return recorded, ok, nil
 }
 
 // Result is what Process did with a press.
@@ -167,13 +200,24 @@ const (
 // and only the worker's cap ends such a press (GiveUp). The one exception is an approver-group check that the platform
 // says can never succeed until an operator fixes the groups (chat.ErrGroupsMisconfigured): that press is ended at once,
 // told and deleted, with nothing decided or audited, so that it does not hold the later presses of its interaction.
+//
+// What the press came to is published to Outcomes, for a platform that waits for it (DecidePress): a press that is finished, with the
+// words for its presser, and one to be tried again as no decision yet.
 func (p *Pipeline) Process(ctx context.Context, press store.Press) (Result, error) {
+	res, text, err := p.process(ctx, press)
+	p.cfg.Outcomes.Publish(press.Seq, res, text)
+	return res, err
+}
+
+// process is Process, which returns as well the words for the presser of what the press came to (chat.PressOutcome.Text): what
+// they are told alone, or, for a press that decided, what the decider says of it.
+func (p *Pipeline) process(ctx context.Context, press store.Press) (Result, string, error) {
 	row, err := p.cfg.Store.GetInteraction(ctx, press.InteractionID)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		return p.finish(ctx, press, nil, textGone)
 	case err != nil:
-		return Retry, fmt.Errorf("interact: read %s: %w", press.InteractionID, err)
+		return Retry, "", fmt.Errorf("interact: read %s: %w", press.InteractionID, err)
 	case row.Key.Connection != press.Connection:
 		// A button is pressed on the connection whose app posted it, and a Slack ID is unlikely to collide between two apps, but
 		// nothing else holds a press of one connection from deciding the interaction of another: it is dropped, and nobody is told.
@@ -181,7 +225,7 @@ func (p *Pipeline) Process(ctx context.Context, press store.Press) (Result, erro
 		return p.finish(ctx, press, nil, "")
 	case row.MessageRef == "":
 		if p.cfg.Now().Sub(press.PressedAt) < p.cfg.EarlyFor { // the prompt's post is not recorded yet
-			return Retry, nil
+			return Retry, "", nil
 		}
 		return p.finish(ctx, press, &row, wordsOf(requestKind(row)).notReady)
 	case row.MessageRef != press.MessageRef || row.Key.Channel != press.Channel:
@@ -208,19 +252,19 @@ func (p *Pipeline) open(row store.Interaction, user string) bool {
 // What the press means depends on the kind of the decoded request, never on the row's kind (a tool approval that a
 // sub-agent raised is stored as "nested"). A question reads the controls' answers (ExtractAnswer); an approval reads
 // the button and the per-tool choices (ExtractDecisions). Either goes on to the same decider.
-func (p *Pipeline) authorized(ctx context.Context, press store.Press, row store.Interaction) (Result, error) {
+func (p *Pipeline) authorized(ctx context.Context, press store.Press, row store.Interaction) (Result, string, error) {
 	name, b, err := p.binding(ctx, row)
 	if err != nil {
-		return Retry, err
+		return Retry, "", err
 	} else if b == nil {
 		return p.finish(ctx, press, &row, wordsOf(requestKind(row)).gone)
 	}
 	w := wordsOf(requestKind(row))
-	refuse := func(d audit.Decision, text string) (Result, error) {
+	refuse := func(d audit.Decision, text string) (Result, string, error) {
 		actor := audit.Actor{User: press.User, Binding: name, Identity: b.Identity}
 		d.InteractionID, d.TaskID, d.At = row.ID, a2a.TaskID(row.TaskID), press.PressedAt
 		if err := p.cfg.Auditor.Decision(ctx, actor, d); err != nil {
-			return Retry, fmt.Errorf("interact: audit the refusal of a press of %s: %w", row.ID, err)
+			return Retry, "", fmt.Errorf("interact: audit the refusal of a press of %s: %w", row.ID, err)
 		}
 		return p.finish(ctx, press, &row, text)
 	}
@@ -303,7 +347,7 @@ func (p *Pipeline) authorized(ctx context.Context, press store.Press, row store.
 				if ctx.Err() == nil {
 					p.cfg.Logger.ErrorContext(ctx, "interact: the approver-group check failed; the press is kept and tried again", "binding", name, "interaction", row.ID, "err", err)
 				}
-				return Retry, fmt.Errorf("interact: check the approver groups of %s for %s: %w", name, row.ID, err)
+				return Retry, "", fmt.Errorf("interact: check the approver groups of %s for %s: %w", name, row.ID, err)
 			case !approver:
 				return refuse(audit.Decision{Result: audit.DecisionNotApprover}, w.notApprover)
 			}
@@ -322,10 +366,12 @@ func (p *Pipeline) authorized(ctx context.Context, press store.Press, row store.
 		return refuse(shape, text(problems))
 	}
 	pd := PressDecision{Interaction: row, In: in, Answer: answer, User: press.User, PressedAt: press.PressedAt, BindingName: name, Binding: *b}
-	if err := p.cfg.Decider.Decide(ctx, pd); err != nil {
-		return Retry, err
+	told, err := p.cfg.Decider.Decide(ctx, pd)
+	if err != nil {
+		return Retry, "", err
 	}
-	return p.finish(ctx, press, nil, "")
+	res, _, err := p.finish(ctx, press, nil, "") // the decider has told the person what it tells them
+	return res, told, err
 }
 
 // askUserAnswer reads a press of a question. Submit is its one button: a press of any other is no honest press of the
@@ -345,8 +391,8 @@ func askUserAnswer(in dialect.Interaction, inputs pressInputs) (dialect.Answer, 
 // the worker to try again, at whatever age: a Slack error that outlasts a window, and straddles the deadline,
 // must not lose an answer that came in time. Only the worker's cap ends such a press, through GiveUp, which
 // tells the person to press again.
-func (p *Pipeline) unverified(row store.Interaction, err error) (Result, error) {
-	return Retry, fmt.Errorf("interact: check who pressed %s: %w", row.ID, err)
+func (p *Pipeline) unverified(row store.Interaction, err error) (Result, string, error) {
+	return Retry, "", fmt.Errorf("interact: check who pressed %s: %w", row.ID, err)
 }
 
 // textGaveUp is told to a person whose press the worker gave up on, about a question. Pressing again is the way on: an
@@ -362,7 +408,7 @@ func (p *Pipeline) GiveUp(ctx context.Context, press store.Press) error {
 	if row, err := p.cfg.Store.GetInteraction(ctx, press.InteractionID); err == nil {
 		in, text = &row, wordsOf(requestKind(row)).gaveUp
 	}
-	_, err := p.finish(ctx, press, in, text)
+	_, _, err := p.finish(ctx, press, in, text)
 	return err
 }
 
@@ -385,12 +431,22 @@ func (p *Pipeline) binding(ctx context.Context, row store.Interaction) (string, 
 // finish tells the person text, if there is any, in the thread of row (the interaction's: a prompt lives in a
 // thread; nil when it is not known), and deletes the press. Telling is best-effort: a person who is not told
 // can press again, and a failure is only logged.
-func (p *Pipeline) finish(ctx context.Context, press store.Press, row *store.Interaction, text string) (Result, error) {
+func (p *Pipeline) finish(ctx context.Context, press store.Press, row *store.Interaction, text string) (Result, string, error) {
 	return p.finishWith(ctx, press, row, chat.Message{Fallback: text})
 }
 
+// untoldLevel is the level at which a person not told the outcome of their press is logged: debug on a platform that has no
+// ephemeral messages (chat.ErrNoEphemeral), where the person is not told, by design: nothing is posted for all to see in its place.
+// A warning for any other error.
+func untoldLevel(err error) slog.Level {
+	if errors.Is(err, chat.ErrNoEphemeral) {
+		return slog.LevelDebug
+	}
+	return slog.LevelWarn
+}
+
 // finishWith is finish for a message that has parts, such as one that names a person.
-func (p *Pipeline) finishWith(ctx context.Context, press store.Press, row *store.Interaction, m chat.Message) (Result, error) {
+func (p *Pipeline) finishWith(ctx context.Context, press store.Press, row *store.Interaction, m chat.Message) (Result, string, error) {
 	if m.Fallback != "" || len(m.Parts) > 0 {
 		// The person is told on the connection the press came in on, which is the interaction's; a press whose interaction is
 		// not found, or is another connection's, is answered there too.
@@ -403,11 +459,11 @@ func (p *Pipeline) finishWith(ctx context.Context, press store.Press, row *store
 			err = e.Ephemeral(ctx, to, press.User, m)
 		}
 		if err != nil {
-			p.cfg.Logger.WarnContext(ctx, "interact: a person could not be told the outcome of their press", "interaction", press.InteractionID, "err", err)
+			p.cfg.Logger.Log(ctx, untoldLevel(err), "interact: a person could not be told the outcome of their press", "interaction", press.InteractionID, "err", err)
 		}
 	}
 	if err := p.cfg.Store.DeletePress(ctx, press.Seq); err != nil {
-		return Retry, fmt.Errorf("interact: delete the press %d: %w", press.Seq, err)
+		return Retry, "", fmt.Errorf("interact: delete the press %d: %w", press.Seq, err)
 	}
-	return Done, nil
+	return Done, m.Fallback, nil
 }

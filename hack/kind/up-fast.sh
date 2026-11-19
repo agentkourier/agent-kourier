@@ -26,7 +26,9 @@
 # E2E_REPLICAS=2 (with E2E_STORE=postgres) runs two Agent Kourier replicas, a leader and a standby (spec 11, D37), with the election timings of
 # charts/agent-kourier/ci/fast-postgres-ha-values.yaml, and brings up the container signaler (fast/signaler.yaml) that the failover scenario S16
 # uses to freeze or kill the leader's process. The rest of the suite runs on two replicas too. Without it, or with 1, there is one replica and
-# no signaler, and S16 skips. Re-running with another E2E_REPLICAS changes the replicas in place.
+# no signaler, and S16 skips. Re-running with another E2E_REPLICAS changes the replicas in place. S16 passes in either Slack mode (E2E_SLACK_MODE,
+# below), and is run in both: E2E_STORE=postgres E2E_REPLICAS=2 E2E_CONFIG_SOURCE=crds E2E_SLACK_MODE=http make e2e-fast-up, then
+# E2E_RUN='^TestS16_' make e2e-fast, and the same again with E2E_SLACK_MODE=socket.
 #
 # E2E_CONFIG_SOURCE=crds runs Agent Kourier on custom resources instead of the ConfigMap (the tier default, files, which the tiers' values name with config.source files: the chart's own default is crds): the CRDs are installed first, with
 # the release still on the ConfigMap route, then the same config is applied as Binding, AgentBackend and ChatConnection resources and the release is
@@ -34,12 +36,33 @@
 # either, and the scenarios that are about the custom resources (the CR_ tests) skip on the ConfigMap route. Re-running with the other value moves
 # the tier over in place, and back: the custom resources stay in the cluster, unread, when the tier goes back to files.
 #
-# E2E_TWO_APPS=1 (with E2E_CONFIG_SOURCE=crds) runs a broker that serves two Slack apps (spec D52; the MC_ tests of test/e2e, which make e2e-two-apps runs, and make e2e-fast does not): the platform's
+# E2E_SLACK_MODE=http runs the tier's ChatConnection in HTTP mode: the fake Slack sends the default app's events and presses as signed requests to
+# Agent Kourier's chat listener, through the chat Service that selects the leader (hack/kind/http-values.yaml; lib.sh's apply_doubles and
+# deploy_agentkourier). The default, socket, is Socket Mode. The E2E suite is the same in either, but for the MC_ tests, which run in socket mode only.
+# Re-running with the other value moves the tier over in place.
+#
+# E2E_TWO_APPS=1 (with E2E_CONFIG_SOURCE=crds and E2E_SLACK_MODE socket) runs a broker that serves two Slack apps (spec D52; the MC_ tests of test/e2e, which make e2e-two-apps runs, and make e2e-fast does not): the platform's
 # ChatConnection (slack-fast, the fake Slack's default app) and a team's, team-a, which brings its own Slack app and its own Secret, granted by a Role of
 # its own. The platform admits the namespaces team-a, team-b and team-c (hack/kind/two-apps-values.yaml), and each connection has a Binding
 # (hack/kind/fast/two-apps). The fake Slack hosts the second app and a third (team-b's) in every tier (fast/doubles.yaml). On E2E_STORE=postgres with
 # E2E_REPLICAS=2 the failover scenarios of that suite run too. Bringing the tier up again without it takes the admission list away, and the team's
 # objects stay in the cluster, not served. hack/kind/two-apps.sh (make e2e-two-apps) runs the scenarios that change the admission list with Helm.
+#
+# On custom resources the tier also serves four webhook connections, the recipes of examples/recipes/webhook-*, in their namespace acme-webhooks
+# (hack/kind/fast/webhook, lib.sh's deploy_webhook; the WH_ tests of test/e2e drive them through the fake vendors, test/fakevendors):
+# hack/kind/webhook-values.yaml admits the namespace and turns on the chat listener. The ConfigMap route serves one ChatConnection, so it has no
+# webhook connection, and the WH_ tests skip there. With E2E_TWO_APPS=1 or E2E_TEAMS=1 the admission list is their tests' own, so the webhook
+# connections stay in the cluster, not served, and the WH_ tests skip too. The recipes' trigger limits count starts in the tier's store, which
+# keeps them through restarts of Agent Kourier and bring-ups of the tier: a tier takes 5 runs of the WH_ tests an hour and 20 a day (each run
+# starts GitHub's review trigger twice, and the recipe allows it 10 starts an hour and 40 a day), and only a fresh tier (hack/kind/down.sh fast
+# first), or a bring-up on a store the tier has not used, starts them over.
+#
+# E2E_TEAMS=1 (with E2E_CONFIG_SOURCE=crds, and not with E2E_TWO_APPS=1, whose admission list is another) adds Microsoft Teams to the tier: the fake Teams
+# service (hack/kind/fast/teams/faketeams.yaml, test/faketeams), its certificate, and the broker on the test hooks that point a Teams connection at it and
+# nowhere else (hack/kind/teams-values.yaml: AGENTKOURIER_TEAMS_URL, AGENTKOURIER_TEAMS_CA, the chat listener, and the admission of namespace teams-e2e), then
+# a team's two Teams connections in http mode, one with Graph's notifications and one that polls, with their Bindings (hack/kind/fast/teams/teams.yaml). The
+# TEAMS_ tests of test/e2e drive it; make e2e-teams runs them, and make e2e-fast does not. On E2E_STORE=postgres with E2E_REPLICAS=2 their failover case runs
+# too. Bringing the tier up again without it takes the hooks and the admission away; the fake and the team's objects stay in the cluster, not served.
 set -eEuo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -61,11 +84,25 @@ case "${E2E_REPLICAS}" in
 esac
 E2E_CONFIG_SOURCE=${E2E_CONFIG_SOURCE:-files}
 require_config_source
+E2E_SLACK_MODE=${E2E_SLACK_MODE:-socket}
+require_slack_mode
 E2E_TWO_APPS=${E2E_TWO_APPS:-0}
 case "${E2E_TWO_APPS}" in
   0) ;;
-  1) [ "${E2E_CONFIG_SOURCE}" = crds ] || die "E2E_TWO_APPS=1 needs E2E_CONFIG_SOURCE=crds: a team's ChatConnection is a custom resource" ;;
+  1)
+    [ "${E2E_CONFIG_SOURCE}" = crds ] || die "E2E_TWO_APPS=1 needs E2E_CONFIG_SOURCE=crds: a team's ChatConnection is a custom resource"
+    [ "${E2E_SLACK_MODE}" = socket ] || die "E2E_TWO_APPS=1 needs E2E_SLACK_MODE=socket: the MC_ tests run in Socket Mode only"
+    ;;
   *) die "E2E_TWO_APPS must be 0 or 1" ;;
+esac
+E2E_TEAMS=${E2E_TEAMS:-0}
+case "${E2E_TEAMS}" in
+  0) ;;
+  1)
+    [ "${E2E_CONFIG_SOURCE}" = crds ] || die "E2E_TEAMS=1 needs E2E_CONFIG_SOURCE=crds: the Teams ChatConnections are a team's custom resources"
+    [ "${E2E_TWO_APPS}" = 0 ] || die "E2E_TEAMS=1 and E2E_TWO_APPS=1 each set the platform's admission list; bring the tier up with one of them"
+    ;;
+  *) die "E2E_TEAMS must be 0 or 1" ;;
 esac
 CTX=kind-${CLUSTER}
 K=(kubectl --context "${CTX}")
@@ -134,8 +171,17 @@ if [ "${E2E_REPLICAS}" = 2 ]; then
 fi
 
 AGENTKOURIER_CRDS_ARGS=()
+WEBHOOKS=0
 if [ "${E2E_TWO_APPS}" = 1 ]; then
   AGENTKOURIER_CRDS_ARGS=(-f "${HERE}/two-apps-values.yaml")
+elif [ "${E2E_CONFIG_SOURCE}" = crds ] && [ "${E2E_TEAMS}" = 0 ]; then
+  WEBHOOKS=1
+  AGENTKOURIER_CRDS_ARGS=(-f "${HERE}/webhook-values.yaml")
+fi
+if [ "${E2E_TEAMS}" = 1 ]; then
+  AGENTKOURIER_CRDS_ARGS=(-f "${HERE}/teams-values.yaml")
+  step "fake Microsoft Teams service, its certificate"
+  deploy_fake_teams
 fi
 
 step "agent-kourier: namespace, config, Secrets, chart"
@@ -155,6 +201,16 @@ if [ "${E2E_TWO_APPS}" = 1 ]; then
   deploy_two_apps
 fi
 
+if [ "${WEBHOOKS}" = 1 ]; then
+  step "acme-webhooks: the webhook recipes' ChatConnections and Bindings, their Secrets and AgentBackends"
+  deploy_webhook
+fi
+
+if [ "${E2E_TEAMS}" = 1 ]; then
+  step "teams-e2e: two Teams connections on the fake Teams service, their Secrets and Bindings"
+  deploy_teams_connections
+fi
+
 step "verify"
 "${FAST}/verify.sh"
-echo "fast tier up in ${SECONDS}s (context ${CTX}, store ${E2E_STORE}, ${E2E_REPLICAS} Agent Kourier replica(s), config source ${E2E_CONFIG_SOURCE}, two apps ${E2E_TWO_APPS})"
+echo "fast tier up in ${SECONDS}s (context ${CTX}, store ${E2E_STORE}, ${E2E_REPLICAS} Agent Kourier replica(s), config source ${E2E_CONFIG_SOURCE}, Slack mode ${E2E_SLACK_MODE}, two apps ${E2E_TWO_APPS}, Teams ${E2E_TEAMS}, webhook connections ${WEBHOOKS})"

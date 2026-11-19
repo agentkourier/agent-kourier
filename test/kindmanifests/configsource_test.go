@@ -18,9 +18,9 @@ case "$*" in
 esac
 `
 
-// deploy runs lib.sh's deploy_agentkourier against stubs with E2E_CONFIG_SOURCE source, as the fast tier calls it, and returns the calls one to a line
+// deploy runs lib.sh's deploy_agentkourier against stubs with E2E_CONFIG_SOURCE source and any more variables in env (NAME=VALUE), as the fast tier calls it, and returns the calls one to a line
 // and the error, if any, with the script's output.
-func deploy(t *testing.T, source, crdOwner string) (calls []string, out string, err error) {
+func deploy(t *testing.T, source, crdOwner string, env ...string) (calls []string, out string, err error) {
 	t.Helper()
 	bin, logs := t.TempDir(), t.TempDir()
 	for _, tool := range []string{"kubectl", "helm"} {
@@ -35,6 +35,7 @@ func deploy(t *testing.T, source, crdOwner string) (calls []string, out string, 
 	script := `set -eu; . "$1"; HERE="$2"; ROOT=/repo; K=(kubectl --context c); H=(helm --kube-context c); deploy_agentkourier "$2/fast/agent-kourier/config/agentbackend.yaml"`
 	cmd := exec.CommandContext(t.Context(), "bash", "-c", script, "bash", filepath.Join(hack, "lib.sh"), hack)
 	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "STUB_LOG="+logs, "STUB_OWNER="+crdOwner, "E2E_CONFIG_SOURCE="+source)
+	cmd.Env = append(cmd.Env, env...)
 	raw, err := cmd.CombinedOutput()
 	for _, l := range strings.Split(strings.TrimSpace(readLog(t, logs, "calls")), "\n") {
 		if l != "" {

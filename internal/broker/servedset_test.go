@@ -28,14 +28,57 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
-// recordedServed is a store.ConnectionServing in memory: the record of the connections a broker served, which outlives the writer
-// that wrote it, as the store's does.
+// recordedServed is a servedStore in memory: the record of the connections a broker served, which outlives the writer that wrote it,
+// as the store's does, and the connections whose Microsoft Teams conversations, and poll positions, were deleted.
 type recordedServed struct {
-	mu       sync.Mutex
-	set      []string
-	replaces int
-	failRead error
-	failPut  error
+	mu        sync.Mutex
+	set       []string
+	replaces  int
+	failRead  error
+	failPut   error
+	failPrune error
+	pruned    []string
+	prunes    int
+	// failPositions, positionsPruned and positionPrunes are failPrune, pruned and prunes for the poll positions.
+	failPositions   error
+	positionsPruned []string
+	positionPrunes  int
+}
+
+func (s *recordedServed) DeleteTeamsPollPositions(_ context.Context, connection string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.positionPrunes++
+	if s.failPositions != nil {
+		return s.failPositions
+	}
+	s.positionsPruned = append(s.positionsPruned, connection)
+	return nil
+}
+
+// positionsPrunedOf is prunedOf for the poll positions.
+func (s *recordedServed) positionsPrunedOf() ([]string, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.positionsPruned), s.positionPrunes
+}
+
+func (s *recordedServed) DeleteTeamsConversations(_ context.Context, connection string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.prunes++
+	if s.failPrune != nil {
+		return s.failPrune
+	}
+	s.pruned = append(s.pruned, connection)
+	return nil
+}
+
+// prunedOf is the connections whose conversations were deleted, in order, and how many deletes were asked for, the failed ones too.
+func (s *recordedServed) prunedOf() ([]string, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.pruned), s.prunes
 }
 
 func (s *recordedServed) ServedConnections(context.Context) ([]string, error) {
@@ -125,6 +168,9 @@ const (
 	teamBind = "team-a/on-a"
 )
 
+// noneRun is the running of a record whose broker runs no connection: a deleted one is pruned at once.
+func noneRun(string) bool { return false }
+
 func bothServed() map[string][]string {
 	return map[string][]string{ownConn: {sreAlerts}, teamConn: {teamBind}}
 }
@@ -147,7 +193,7 @@ type servedRig struct {
 func newServedRig(t *testing.T, c *statusCluster, served map[string][]string, record *recordedServed, named namedBindings) *servedRig {
 	t.Helper()
 	r := &servedRig{record: record, statusRig: newStatusRigWith(t, c, nil, func(cfg *statusConfig) {
-		cfg.Served = newServedRecord(record, named.of, cfg.Now)
+		cfg.Served = newServedRecord(record, named.of, noneRun, cfg.Now)
 	})}
 	r.serving(t, served)
 	return r
@@ -359,6 +405,128 @@ func TestADeletedConnectionIsNotToldNotServed(t *testing.T) {
 	if got, want := record.recorded(), []string{ownConn}; !slices.Equal(got, want) {
 		t.Errorf("the record = %v; want the deleted connection pruned", got)
 	}
+	if pruned, n := record.prunedOf(); !slices.Equal(pruned, []string{teamConn}) || n != 1 {
+		t.Errorf("the Teams conversations of %v were deleted, in %d calls; want those of the deleted connection alone, once", pruned, n)
+	}
+	if pruned, n := record.positionsPrunedOf(); !slices.Equal(pruned, []string{teamConn}) || n != 1 {
+		t.Errorf("the Teams poll positions of %v were deleted, in %d calls; want those of the deleted connection alone, once", pruned, n)
+	}
+}
+
+// The Microsoft Teams poll positions of a deleted connection that cannot be deleted keep the connection in the record, as its
+// conversations do, and the delete of both is tried again; once it is done, the connection leaves the record.
+func TestAFailedDeleteOfThePollPositionsKeepsTheDeletedConnectionRecorded(t *testing.T) {
+	c := newStatusCluster(t, storedBinding(sreAlerts, 1))
+	record := &recordedServed{set: []string{ownConn, teamConn}, failPositions: errors.New("store is read only")}
+	r := newServedRig(t, c, ownServed(), record, namedBindings{ownConn: {sreAlerts}})
+	r.reconcile()
+	if got, want := record.recorded(), []string{ownConn, teamConn}; !slices.Equal(got, want) {
+		t.Fatalf("the record = %v while the delete of the positions fails; want %v, the deleted connection kept", got, want)
+	}
+	record.mu.Lock()
+	record.failPositions = nil
+	record.mu.Unlock()
+	r.pass()
+	if got, want := record.recorded(), []string{ownConn}; !slices.Equal(got, want) {
+		t.Errorf("the record = %v once the delete works; want %v", got, want)
+	}
+	if pruned, n := record.positionsPrunedOf(); !slices.Equal(pruned, []string{teamConn}) || n != 2 {
+		t.Errorf("deleted the positions of %v in %d calls; want the deleted connection's, on the second try", pruned, n)
+	}
+}
+
+// The Microsoft Teams conversations of a deleted connection that cannot be deleted keep the connection in the record, so that the delete is
+// tried again at the next pass that reads the record, after a restart too; once it is done, the connection leaves the record.
+func TestAFailedPruneKeepsTheDeletedConnectionRecordedAndIsTriedAgain(t *testing.T) {
+	c := newStatusCluster(t, storedBinding(sreAlerts, 1))
+	record := &recordedServed{set: []string{ownConn, teamConn}, failPrune: errors.New("store is read only")}
+	r := newServedRig(t, c, ownServed(), record, namedBindings{ownConn: {sreAlerts}})
+	r.reconcile()
+	if got, want := record.recorded(), []string{ownConn, teamConn}; !slices.Equal(got, want) {
+		t.Fatalf("the record = %v while the delete fails; want %v, the deleted connection kept", got, want)
+	}
+	if !strings.Contains(r.logs.String(), "cannot be compared with the record") {
+		t.Errorf("the failed delete was not said:\n%s", r.logs)
+	}
+	record.mu.Lock()
+	record.failPrune = nil
+	record.mu.Unlock()
+	r.pass()
+	if got, want := record.recorded(), []string{ownConn}; !slices.Equal(got, want) {
+		t.Errorf("the record = %v once the delete works; want %v", got, want)
+	}
+	if pruned, n := record.prunedOf(); !slices.Equal(pruned, []string{teamConn}) || n != 2 {
+		t.Errorf("deleted %v in %d calls; want the deleted connection's, on the second try", pruned, n)
+	}
+}
+
+// A deleted connection whose run has not stopped yet (the supervisor has not seen the deletion, or its run is draining) may still write
+// what Microsoft Teams tells it of a channel: it stays in the record, and its conversations are not deleted, until its run has stopped.
+func TestADeletedConnectionIsPrunedOnlyOnceItsRunHasStopped(t *testing.T) {
+	c := newStatusCluster(t, storedBinding(sreAlerts, 1))
+	record := &recordedServed{set: []string{ownConn, teamConn}}
+	var running atomic.Bool
+	running.Store(true)
+	r := &servedRig{record: record, statusRig: newStatusRigWith(t, c, nil, func(cfg *statusConfig) {
+		cfg.Served = newServedRecord(record, namedBindings{ownConn: {sreAlerts}}.of, func(conn string) bool { return conn == teamConn && running.Load() }, cfg.Now)
+	})}
+	r.serving(t, ownServed())
+	r.reconcile()
+	if got, want := record.recorded(), []string{ownConn, teamConn}; !slices.Equal(got, want) {
+		t.Errorf("the record = %v while the deleted connection runs; want %v", got, want)
+	}
+	if pruned, n := record.prunedOf(); n != 0 {
+		t.Errorf("the conversations of %v were deleted while the connection runs; want none", pruned)
+	}
+	if got := c.stored(t, sreAlerts)["Accepted"]; got.Status != metav1.ConditionTrue {
+		t.Errorf("Accepted = %+v; want the served Binding written all the same", got)
+	}
+	running.Store(false)
+	r.pass()
+	if got, want := record.recorded(), []string{ownConn}; !slices.Equal(got, want) {
+		t.Errorf("the record = %v once the run has stopped; want %v", got, want)
+	}
+	if pruned, n := record.prunedOf(); !slices.Equal(pruned, []string{teamConn}) || n != 1 {
+		t.Errorf("deleted %v in %d calls; want the deleted connection's, once", pruned, n)
+	}
+}
+
+// Against the real store: the Microsoft Teams conversations and poll positions of a connection whose ChatConnection is deleted go, and those of the
+// connection served and of one stopped but still in the cluster stay.
+func TestTheTeamsConversationsOfADeletedConnectionAreDeleted(t *testing.T) {
+	const stoppedConn = "team-b/teams"
+	st := sqlitetest.Open(t)
+	if err := st.ReplaceServedConnections(t.Context(), []string{ownConn, teamConn, stoppedConn}, sweepNow.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	const channel = "19:KourierStandInChannelForTestsOnly0000000000a@thread.tacv2"
+	for _, conn := range []string{ownConn, teamConn, stoppedConn} {
+		if err := st.RememberTeamsConversation(t.Context(), store.TeamsConversation{Connection: conn, Channel: channel,
+			ServiceURL: "https://smba.example.test/amer/", UpdatedAt: sweepNow.Add(-time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.SaveTeamsPollPosition(t.Context(), store.TeamsPollPosition{Connection: conn, Channel: channel,
+			DeltaLink: "https://graph.example.test/delta?$deltatoken=1", PolledAt: sweepNow.Add(-time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record := newServedRecord(st, namedBindings{ownConn: {sreAlerts}, stoppedConn: nil}.of, noneRun, func() time.Time { return sweepNow })
+	if _, err := record.update(t.Context(), config.Report{Snapshot: servedSnapshot(t, ownServed())}); err != nil {
+		t.Fatal(err)
+	}
+	for conn, want := range map[string]bool{ownConn: true, teamConn: false, stoppedConn: true} {
+		_, err := st.GetTeamsConversation(t.Context(), conn, channel)
+		if kept := err == nil; kept != want {
+			t.Errorf("the conversation of %s kept = %v (%v); want %v", conn, kept, err, want)
+		}
+		_, err = st.GetTeamsPollPosition(t.Context(), conn, channel)
+		if kept := err == nil; kept != want {
+			t.Errorf("the poll position of %s kept = %v (%v); want %v", conn, kept, err, want)
+		}
+	}
+	if got, err := st.ServedConnections(t.Context()); err != nil || !slices.Equal(got, []string{ownConn, stoppedConn}) {
+		t.Errorf("the record = %v, %v; want the deleted connection gone and the stopped one kept", got, err)
+	}
 }
 
 // The status of a Binding says a ChatConnection exists and is not served only if the connection admits the Binding's namespace: a Binding
@@ -374,7 +542,7 @@ func TestABindingTheConnectionDoesNotAdmitIsToldNothing(t *testing.T) {
 		}
 		return crsource.ConnectionBindings{Exists: true}, nil
 	}
-	r := &servedRig{record: record, statusRig: newStatusRigWith(t, c, nil, func(cfg *statusConfig) { cfg.Served = newServedRecord(record, named, cfg.Now) })}
+	r := &servedRig{record: record, statusRig: newStatusRigWith(t, c, nil, func(cfg *statusConfig) { cfg.Served = newServedRecord(record, named, noneRun, cfg.Now) })}
 	r.serving(t, ownServed())
 	r.reconcile()
 	if c.stored(t, teamBind)["Accepted"].Reason != "ConnectionNotServed" || appliesTo(c, outsider) != 0 {
@@ -433,7 +601,7 @@ func TestRetentionKeepsTheSessionsOfAStoppedConnectionsBindingAfterARestart(t *t
 	}
 	snap := servedSnapshot(t, ownServed())
 	report := func() config.Report { return config.Report{Snapshot: snap} }
-	record := newServedRecord(st, bothExist().of, func() time.Time { return sweepNow })
+	record := newServedRecord(st, bothExist().of, noneRun, func() time.Time { return sweepNow })
 	known := record.retentionKnows(t.Context(), report, testutil.DiscardLogger(), func() (map[string]time.Duration, []string, bool) {
 		return map[string]time.Duration{sreAlerts: 24 * time.Hour}, nil, true
 	})
@@ -446,7 +614,7 @@ func TestRetentionKeepsTheSessionsOfAStoppedConnectionsBindingAfterARestart(t *t
 	}
 
 	// A record that cannot be read leaves the retention knowing nothing, so that it deletes nothing: the stopped connections are unknown.
-	broken := newServedRecord(&recordedServed{failRead: errors.New("store is down")}, bothExist().of, nil)
+	broken := newServedRecord(&recordedServed{failRead: errors.New("store is down")}, bothExist().of, noneRun, nil)
 	if _, _, ok := broken.retentionKnows(t.Context(), report, testutil.DiscardLogger(),
 		func() (map[string]time.Duration, []string, bool) { return nil, nil, true })(); ok {
 		t.Error("the retention is told it knows the Bindings while the record cannot be read")
@@ -620,7 +788,7 @@ func TestAConnectionWhoseBindingsCannotBeFoundYetIsKeptAndNothingIsDeleted(t *te
 	}
 	var rec *servedRecord
 	r := &servedRig{record: record, statusRig: newStatusRigWith(t, c, nil, func(cfg *statusConfig) {
-		rec = newServedRecord(record, naming, cfg.Now)
+		rec = newServedRecord(record, naming, noneRun, cfg.Now)
 		cfg.Served = rec
 	})}
 	// Another connection is served now, so the record is written while the lookup fails.
@@ -661,7 +829,7 @@ func TestAConnectionWhoseBindingsCannotBeFoundYetIsKeptAndNothingIsDeleted(t *te
 func TestRetentionKnowsReadsOneSnapshot(t *testing.T) {
 	stopped, serving := servedSnapshot(t, ownServed()), servedSnapshot(t, bothServed())
 	record := func() *servedRecord {
-		return newServedRecord(&recordedServed{set: []string{ownConn, teamConn}}, bothExist().of, nil)
+		return newServedRecord(&recordedServed{set: []string{ownConn, teamConn}}, bothExist().of, noneRun, nil)
 	}
 	known := func(calls *int) func() (map[string]time.Duration, []string, bool) {
 		return func() (map[string]time.Duration, []string, bool) {

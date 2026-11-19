@@ -37,7 +37,7 @@ func TestTheOwnConnectionIsHeldWhenDeletedAndMadeAgainInvalid(t *testing.T) {
 	bad := conn.DeepCopy()
 	bad.SetUID("uid-recreated")
 	bad.SetGeneration(1)
-	_ = unstructured.SetNestedField(bad.Object, "teams", "spec", "platform")
+	_ = unstructured.SetNestedField(bad.Object, "discord", "spec", "platform")
 	until(t, func() { c.apply(bad) }, func() bool { s, _ := set(t, src); return len(s.Invalid) == 1 && !s.Invalid[0].Deleted })
 	s, _ := set(t, src)
 	inv := s.Invalid[0]
@@ -70,7 +70,7 @@ func TestAnInvalidEditDoesNotMoveABindingBetweenBrokers(t *testing.T) {
 
 	away := find(objs, "sre-alerts") // served here, edited invalid and onto the other connection
 	away.SetGeneration(2)
-	_ = unstructured.SetNestedField(away.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(away.Object, "#general alerts", "spec", "chat", "channel")
 	_ = unstructured.SetNestedField(away.Object, "slack-other", "spec", "chat", "connectionRef", "name")
 	until(t, func() { c.apply(away) }, func() bool { return src.Fingerprint(t.Context()) != fp })
 	s, _ := set(t, src)
@@ -84,7 +84,7 @@ func TestAnInvalidEditDoesNotMoveABindingBetweenBrokers(t *testing.T) {
 	_, fp = set(t, src) // the other broker's Binding, edited invalid and onto this one: this broker has no good for it
 	onto := foreign.DeepCopy()
 	onto.SetGeneration(2)
-	_ = unstructured.SetNestedField(onto.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(onto.Object, "#general alerts", "spec", "chat", "channel")
 	_ = unstructured.SetNestedField(onto.Object, "slack-main", "spec", "chat", "connectionRef", "name")
 	_ = unstructured.SetNestedField(onto.Object, "agent-kourier-system", "spec", "chat", "connectionRef", "namespace")
 	until(t, func() { c.apply(onto) }, func() bool { return src.Fingerprint(t.Context()) != fp })
@@ -102,7 +102,7 @@ func TestAnInvalidEditDoesNotMoveABindingBetweenBrokers(t *testing.T) {
 	_, fp = set(t, src) // and one that stays on the other's connection while invalid is none of this broker's
 	stays := foreign.DeepCopy()
 	stays.SetGeneration(3)
-	_ = unstructured.SetNestedField(stays.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(stays.Object, "#general alerts", "spec", "chat", "channel")
 	until(t, func() { c.apply(stays) }, func() bool { return src.Fingerprint(t.Context()) != fp })
 	s, _ = set(t, src)
 	for _, inv := range s.Invalid {
@@ -484,7 +484,7 @@ func TestABindingWhoseConnectionBecomesAnotherBrokersAndIsEditedInvalidIsLeftOut
 	later.SetUID("uid-later")
 	bad := late.DeepCopy()
 	bad.SetGeneration(2)
-	_ = unstructured.SetNestedField(bad.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(bad.Object, "#general alerts", "spec", "chat", "channel")
 	// Both are in the informers' caches before the next read, which is what puts the last good generation and the new
 	// connection in one read: a read between them would let the Binding go on the connection alone.
 	until(t, func() { c.apply(later); c.apply(bad) }, func() bool {

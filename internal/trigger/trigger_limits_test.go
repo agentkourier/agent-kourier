@@ -359,8 +359,8 @@ func TestARetriedStartCountsOnce(t *testing.T) {
 		t.Fatal("a start that failed returned no error; want the event redelivered")
 	}
 	h.hookErr = nil
-	if got := h.send(t, "200.1", alertN(10, "FIRING")); got != "dedup" { // the redelivery of the start that failed
-		t.Fatalf("the redelivery: %q; want dedup", got)
+	if got := h.send(t, "200.1", alertN(10, "FIRING")); got != "started" { // the redelivery of the start that failed is the start
+		t.Fatalf("the redelivery: %q; want started", got)
 	}
 	var decisions []string
 	for n := 11; n < 16; n++ { // the first of the five places was the retried start

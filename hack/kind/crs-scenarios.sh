@@ -199,9 +199,15 @@ ${out}"
   out=$("${K[@]}" get agentkourier -A 2>&1) && contains "${out}" "chatconnection.agentkourier.dev/slack-fast" && pass "kubectl get agentkourier -A (the category) lists all three kinds" || fail "kubectl get agentkourier -A: ${out}"
   out=$("${K[@]}" -n agent-kourier get akbinding fast-chat 2>&1)
   echo "${out}"
-  for col in READY REASON CHANNEL AGE; do
+  for col in READY REASON CONNECTION CHANNEL AGE; do
     contains "${out%%$'\n'*}" "${col}" && pass "kubectl get akbinding has the column ${col}" || fail "kubectl get akbinding has no column ${col}"
   done
+  out=$("${K[@]}" -n agent-kourier get akconnection slack-fast 2>&1)
+  echo "${out}"
+  for col in PLATFORM AGE; do
+    contains "${out%%$'\n'*}" "${col}" && pass "kubectl get akconnection has the column ${col}" || fail "kubectl get akconnection has no column ${col}"
+  done
+  contains "${out}" "slack" && pass "kubectl get akconnection shows the platform slack" || fail "kubectl get akconnection does not show the platform: ${out}"
   if out=$("${K[@]}" get bindings -A 2>&1); then fail "kubectl get bindings -A answered: that is the core resource, which must not be what the docs say to type"; else pass "kubectl get bindings -A fails (the core resource of that name): ${out##*$'\n'}"; fi
   # The leader writes a status after a probe and at most every ten seconds: a tier that has just come up has none yet, so it is waited for.
   local ready='' _

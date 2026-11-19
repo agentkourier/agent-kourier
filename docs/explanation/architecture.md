@@ -120,7 +120,8 @@ manifests, operator, or deployment tooling handle that lifecycle.
 
 ## One conversation
 
-A turn crosses two protocols. Slack delivers events to Agent Kourier over a Socket Mode connection, and Agent Kourier
+A turn crosses two protocols. Slack delivers events to Agent Kourier over a Socket Mode connection, or, in HTTP mode, as signed
+requests to its chat listener, and Agent Kourier
 writes to Slack through its Web API. Agent Kourier calls the agent over A2A and reads the reply as a stream. The first
 diagram follows one message in a chat thread; the second shows what happens when the agent pauses for an answer.
 
@@ -137,14 +138,14 @@ sequenceDiagram
     box A2A backend
         participant G as Agent
     end
-    S->>A: Socket Mode event (message or app_mention)
+    S->>A: event (message or app_mention), over Socket Mode or HTTP
     A->>M: Submit the turn to the Binding's session
     M->>M: write the session and queue the turn, keyed by message ID
     M->>R: acknowledgment notice, unless the Binding turns it off
     M-->>A: queued, and the session's runner woken
     Note over S,M: Submit does not wait for the agent. If it returns an error, the event is left<br/>unacknowledged for Slack to send again. A message it rejects as invalid is dropped.
     par
-        A->>S: acknowledge the event
+        A->>S: acknowledge the event (a Socket Mode ack, or the HTTP answer 200)
     and
         R-)S: reactions.add (hourglass_flowing_sand by default), from the outbox, if on
     and
@@ -178,7 +179,7 @@ sequenceDiagram
     G-->>M: input-required (a question or a tool approval)
     M->>I: record the pause
     I->>S: post the question through the outbox
-    S->>A: Socket Mode interactive event (a button press)
+    S->>A: interactive event (a button press), over Socket Mode or HTTP
     A->>I: record the press
     A->>S: acknowledge the event
     I->>I: check that the question is still open, channel membership and that the presser<br/>is not a bot. For an approval, check that the Binding still allows approvals<br/>and, if it names approver groups, that the presser is in one
@@ -196,7 +197,7 @@ If the agent rejects the answer with a JSON-RPC internal error (`-32603`), Agent
 posts a notice in the thread.
 
 A question that takes a typed answer is answered by a reply in the thread instead of a button. The reply comes in as
-a Socket Mode message event and Submit queues it. A session waiting on the question reads the paused task and passes
+a message event and Submit queues it. A session waiting on the question reads the paused task and passes
 the reply to interactions, which check it as they check a press. A reply that is not taken as the answer stays queued
 as an ordinary turn, unless intake already tied it to the question.
 

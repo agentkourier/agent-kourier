@@ -21,7 +21,10 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/chat/teams"
+	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/retention"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -75,6 +78,15 @@ type RunConfig struct {
 	Election ElectionConfig
 	// Listener serves /healthz, /readyz and /metrics, from the start of Run to its end.
 	Listener net.Listener
+	// ChatListener, if set, is the chat listener: the port a chat platform sends its requests to (POST /chat/<platform>/<namespace>/<name>),
+	// apart from Listener so that /metrics is never on it. Every replica serves it, and only the leader's connections have routes on it.
+	// Nil serves none.
+	ChatListener net.Listener
+	// LeaderPod, if set, is the pod Run runs in, which the leader labels (LeaderLabel) so that a Service that selects the label sends the
+	// chat listener's requests to the leader alone: every replica takes the label off its pod as it starts, before it says it is ready,
+	// and the leader puts it on once its leader half has started and takes it off at shutdown. It needs ChatListener, and both of its
+	// fields. The zero value labels nothing.
+	LeaderPod PodRef
 	// Client is the Kubernetes client the Secret informers use. Nil means InClusterClient.
 	Client kubernetes.Interface
 	// SyncTimeout bounds the wait for the Secret caches; zero means Bootstrap's default.
@@ -100,6 +112,13 @@ type RunConfig struct {
 	// package's tests, which run Run offline with a client that does not call Slack. It is
 	// unexported, so no other package, and no config, can replace the client.
 	newSlack func(slack.Config) slackAPI
+	// teamsFakes edits the config of a Microsoft Teams client before it is built: a seam for this package's tests, which point its token,
+	// key and Bot Connector calls at fakes of their own. It is unexported, so no config can send the client secret or the bot's token
+	// anywhere else (the Bot Framework's metadata URL, above all, is set here and by nothing in a production build).
+	teamsFakes func(*teams.Config)
+	// wrapPlatform replaces a connection's chat platform, as newPlatform built it, with one that wraps it, before the lease fence does: a
+	// seam for this package's tests, which give a platform a way to take requests over HTTP (chat.HTTPReceiver) of their own.
+	wrapPlatform func(chat.Platform) chat.Platform
 	// slackHTTPTimeout is the bound of one Slack Web API call (slackAPITimeout if zero): a seam for this package's tests,
 	// which cannot wait for 30 seconds.
 	slackHTTPTimeout time.Duration
@@ -150,8 +169,9 @@ type RunConfig struct {
 	// startTrace is told as each step of the interactions' startup is done, so a test can see their order
 	// against the Slack intake opening.
 	startTrace func(step string)
-	// identify tells whose bot a connection's token is (appIdentity), in place of auth.test: a seam for this package's tests, which run
-	// connections on doubles. Nil asks Slack, except where newSlack replaces the client, and then asks nothing (identityOf).
+	// identify tells whose bot a connection's token is (appIdentity), in place of the platform's identity call (platformSpec.Identify): a seam
+	// for this package's tests, which run connections on doubles. Nil asks the connection's platform (identityOf); Slack's asks nothing where
+	// newSlack replaces the client (slackIdentityOf).
 	identify func(ctx context.Context, conn Connection) (appIdentity, error)
 	// superviseEvery is how often the supervisor looks at the team connections (5 seconds if zero): a seam for this package's tests,
 	// which cannot wait for it.
@@ -165,6 +185,8 @@ type RunConfig struct {
 	transportClosed func(conn string)
 	// outboxBuilt is given the outbox as the leader half builds it, so a test can post through it and look at its lanes.
 	outboxBuilt func(*outbox.Outbox)
+	// outcomesBuilt is given the press outcomes as the leader half builds them, so a test can wait on them and read their cap.
+	outcomesBuilt func(*interact.Outcomes)
 	// leaderLaunched is called once Run has launched the leader half (or its candidacy), before it waits for the
 	// signal, so a test can hold Run there and send the signal while the leader half is up.
 	leaderLaunched func()
@@ -276,6 +298,14 @@ func (c RunConfig) validate() error {
 	if c.Store.kind() == StorePostgres {
 		if err := c.Election.validate(); err != nil {
 			return err
+		}
+	}
+	if !c.LeaderPod.IsZero() {
+		switch {
+		case c.LeaderPod.Namespace == "" || c.LeaderPod.Name == "":
+			return fmt.Errorf("%w: LeaderPod must be set to a namespace and a name, or not at all", ErrWiring)
+		case c.ChatListener == nil:
+			return fmt.Errorf("%w: LeaderPod is set without a ChatListener: the pod is labeled only for the chat listener's Service", ErrWiring)
 		}
 	}
 	if !retention.ValidAuditRetention(c.AuditRetention) {

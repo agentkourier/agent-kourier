@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"maps"
+	"reflect"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -42,7 +43,7 @@ type supervisor struct {
 	own      *Connection
 	identify func(ctx context.Context, conn Connection) (appIdentity, error)
 	// intake builds the Sink of a connection's platform.
-	intake   func(ref v1alpha1.ObjectRef) (chat.Sink, error)
+	intake   func(conn Connection) (chat.Sink, error)
 	refusals *refusals
 	// conns is where the supervisor publishes the connections the verification probes the Bindings of (see publish).
 	conns *atomic.Pointer[[]Connection]
@@ -108,6 +109,19 @@ func (st *teamRuntime) held() bool {
 	return st.id.known() && !st.refused && (st.rt != nil || !st.failed)
 }
 
+// identityOf is s.identify, with the identity it gives set to conn's platform (appIdentity.Platform): every ID in it is that platform's, so the
+// apps claimed in a pass and the bots of the guard are told apart by platform whatever the call gave. The zero identity stays zero.
+func (s *supervisor) identityOf(ctx context.Context, conn Connection) (appIdentity, error) {
+	id, err := s.identify(ctx, conn)
+	if err != nil {
+		return appIdentity{}, err
+	}
+	if id.known() {
+		id.Platform = conn.Platform
+	}
+	return id, nil
+}
+
 // run supervises until ctx ends: it reconciles with initial, the team connections the takeover read, and then with what each tick finds. It
 // returns when ctx has ended; the runtimes are left running, for the shutdown's haltAll. Every call that can block in a pass is bounded by ctx or by a
 // timeout of its own, so once ctx has ended it returns within the longest of those.
@@ -136,12 +150,12 @@ func (s *supervisor) ownRef() v1alpha1.ObjectRef {
 	return s.own.Ref
 }
 
-// reconcile is one pass. It stops what is no longer served or has changed or is a second connection of an app, decides who holds each Slack app (the own
+// reconcile is one pass. It stops what is no longer served or has changed or is a second connection of an app, decides who holds each app (an app is its platform's: appKey; the own
 // connection first, if there is one, then the team connections oldest first, since the order of desired is the age), and then starts what is to run, so that a younger
 // connection of an app is stopped before the older one starts.
 func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 	s.refusedNow = nil
-	defer func() { s.publish(desired) }()
+	defer func() { s.nameRoutes(desired); s.publish(desired) }()
 	present := map[string]bool{}
 	for _, t := range desired {
 		present[t.Name()] = true
@@ -171,7 +185,7 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 		return
 	}
 	if s.own != nil && !s.ownKnown {
-		id, err := s.identify(ctx, *s.own)
+		id, err := s.identityOf(ctx, *s.own)
 		if err != nil {
 			s.say(ctx, "", "the identity of the own connection is not known yet, so no team connection starts", err)
 			return
@@ -180,9 +194,9 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 		s.host.table.identify(s.own.Ref.Namespace+"/"+s.own.Ref.Name, id) // the bot guard of the team connections tells the own bot from a person
 		delete(s.said, "")
 	}
-	claimed := map[string]string{} // Slack app -> the connection that holds it
+	claimed := map[appKey]string{} // app, of a platform -> the connection that holds it
 	if s.own != nil && s.ownID.known() {
-		claimed[s.ownID.App] = s.own.Ref.Namespace + "/" + s.own.Ref.Name
+		claimed[s.ownID.key()] = s.own.Ref.Namespace + "/" + s.own.Ref.Name
 	}
 	refused := map[string]string{}
 	var toStart []string
@@ -190,22 +204,37 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 		name := t.Name()
 		st := s.teams[name]
 		if t.Err != nil {
-			// Its Secret is not readable now, or its platform has no adapter. What runs keeps running on the tokens it was started with:
-			// a cache that is relisting is no reason to drop a connection. Otherwise it starts once it can.
+			// Its Secret is not readable now, or its platform has no adapter. What runs
+			// keeps running on the tokens it was started with when its Secret is at fault: a cache that is relisting is no reason to drop a
+			// connection. A ChatConnection that now asks for what this broker cannot run (one edited to such a platform) is stopped instead, as
+			// one that changed is, and not left running on the spec it no longer has; its entry goes, and its bot with it, so that it starts
+			// afresh once it can. Otherwise it starts once it can.
+			if st != nil && unrunnable(t.Err) {
+				s.host.table.forgetBot(name) // it posts nothing from here, and its identity is asked again when it can start
+				s.retire(name)
+				s.stop(ctx, name, st, "its ChatConnection changed to what this broker cannot run")
+				delete(s.teams, name)
+				delete(s.said, name)
+				st = nil
+			}
 			if st != nil && st.held() {
 				// It holds its app unless an older connection claimed it in this pass (desired is oldest first): then it is the second
 				// connection of the app and is refused, as it would be if its Secret could be read, and not left running beside the older.
-				if holder, taken := claimed[st.id.App]; taken {
+				if holder, taken := claimed[st.id.key()]; taken {
 					s.refuse(ctx, name, st, holder, refused)
 				} else {
-					claimed[st.id.App] = name
+					claimed[st.id.key()] = name
 				}
 			}
 			if st != nil && st.refused {
-				refused[name] = refusedMessage
+				refused[name] = refusedMessage(t.Platform)
 			}
 			if st == nil || st.rt == nil {
-				s.say(ctx, name, "the ChatConnection is not started yet: its credentials cannot be used", t.Err)
+				msg := "the ChatConnection is not started yet: its credentials cannot be used"
+				if errors.Is(t.Err, errNoAdapter) { // no Secret is at fault, and none that is mended starts it
+					msg = "the ChatConnection is not started: this broker has no adapter for its platform"
+				}
+				s.say(ctx, name, msg, t.Err)
 				if st == nil || !st.refused { // a refused connection is not served, and its series is not for this branch to bring back
 					s.host.metrics.ChatConnected(name, false) // served and not connected: the series says so from the first look
 				}
@@ -243,7 +272,7 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 			continue
 		}
 		if !st.asked {
-			id, err := s.identify(ctx, t.Connection)
+			id, err := s.identityOf(ctx, t.Connection)
 			if err != nil && ctx.Err() != nil {
 				return // cancelled during the lookup: the failure says nothing of the tokens, so no claim and no refusal is cleared or set
 			}
@@ -269,16 +298,16 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 				// refusal it was under, and it holds the app of its previous tokens unless an older connection holds it now (it is then not
 				// refused on that, since its new tokens may be another app's). A connection that was never asked holds nothing.
 				if st.refused {
-					refused[name] = refusedMessage
-				} else if _, taken := claimed[st.id.App]; st.id.known() && !taken {
-					claimed[st.id.App] = name
+					refused[name] = refusedMessage(t.Platform)
+				} else if _, taken := claimed[st.id.key()]; st.id.known() && !taken {
+					claimed[st.id.key()] = name
 				}
 				s.say(ctx, name, "the identity of the ChatConnection's bot is not known yet, so it is not started", err)
 				continue
 			}
 		}
 		if st.id.known() {
-			if holder, taken := claimed[st.id.App]; taken {
+			if holder, taken := claimed[st.id.key()]; taken {
 				s.refuse(ctx, name, st, holder, refused)
 				continue
 			}
@@ -286,7 +315,7 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 			// identity is learned, because a refusal that lifts finds the identity asked already and the bot forgotten (see runtimeTable.bots).
 			s.host.table.identify(name, st.id)
 			if st.rt != nil || !st.failed { // a connection whose start failed holds no app: a younger one of it may be served
-				claimed[st.id.App] = name
+				claimed[st.id.key()] = name
 			}
 		}
 		st.refused = false
@@ -310,21 +339,23 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 	}
 }
 
-// refuse refuses the connection name as a second connection of the Slack app that holder, an older connection, uses: it is not served from here, so
-// its bot is no longer one of the broker's, its runtime (if any) is stopped, and it is recorded in refused.
+// refuse refuses the connection name as a second connection of the app (of its platform: a Slack app, a Microsoft Teams app) that holder, an older
+// connection, uses: it is not served from here, so its bot is no longer one of the broker's, its runtime (if any) is stopped, and it is recorded in
+// refused.
 func (s *supervisor) refuse(ctx context.Context, name string, st *teamRuntime, holder string, refused map[string]string) {
 	newly := !st.refused
 	st.refused = true
-	refused[name] = refusedMessage
+	app := appOf(st.id.Platform)
+	refused[name] = refusedMessage(st.id.Platform)
 	s.host.table.forgetBot(name) // not served, so it posts nothing and its bot is no longer one of the broker's
 	s.retire(name)
-	s.stop(ctx, name, st, "it is a second connection of the Slack app that "+holder+" uses")
+	s.stop(ctx, name, st, "it is a second connection of the "+app+" that "+holder+" uses")
 	// Not served from here, so the series of its earlier run would only go stale. Not only when this entry ran: a restart that
 	// ends in a refusal (its Secret now holds another app's tokens) made this entry fresh, and the run it replaced left series.
 	if newly && s.removed != nil {
 		s.removed(ctx, name)
 	}
-	s.say(ctx, name, "the ChatConnection is not served: it uses the same Slack app as the older ChatConnection "+holder+", and an app is served once", nil)
+	s.say(ctx, name, "the ChatConnection is not served: it uses the same "+app+" as the older ChatConnection "+holder+", and an app is served once", nil)
 }
 
 // recoverTurns asks for the turns that were left while the connection did not run to be taken up, now that it runs, and asks again at the next
@@ -360,7 +391,7 @@ func (s *supervisor) start(ctx context.Context, t TeamConnection, st *teamRuntim
 		s.say(ctx, name, "the ChatConnection cannot be started", err)
 		return
 	}
-	sink, err := s.intake(t.Ref)
+	sink, err := s.intake(t.Connection)
 	if err != nil {
 		s.host.stopRuntime(ctx, rt)
 		st.failed = true
@@ -407,6 +438,12 @@ func (s *supervisor) retire(name string) {
 	}
 }
 
+// unrunnable says whether err is a ChatConnection's own, and not its Secret's: a platform with no adapter. No Secret that is mended
+// starts it, and what ran on its earlier spec is not what it asks for now.
+func unrunnable(err error) bool {
+	return errors.Is(err, errNoAdapter)
+}
+
 // stop stops the runtime of st, if it has one, and says why. The connection is down from here.
 func (s *supervisor) stop(ctx context.Context, name string, st *teamRuntime, why string) {
 	if st.rt == nil {
@@ -437,6 +474,23 @@ func (s *supervisor) say(ctx context.Context, name, msg string, err error) {
 		return
 	}
 	s.log.WarnContext(ctx, msg, "connection", name)
+}
+
+// nameRoutes tells the chat listener's counter (Metrics.ChatListenerServes) every connection the broker is configured to serve: the own connection,
+// if there is one, and each connection of desired that is not refused, whether it runs or not, so that a request to the route of one that never
+// started (its Secret cannot be used, its credentials were rejected, its platform has no adapter) is counted under its name. It runs at the end of
+// the pass, on its goroutine, after the removals: a connection that was removed is not in desired, and a refused one, which was removed when it
+// was refused, is left out, so nothing gives back a name that Metrics.ConnectionRemoved took away.
+func (s *supervisor) nameRoutes(desired []TeamConnection) {
+	if s.own != nil {
+		s.host.metrics.ChatListenerServes(s.own.Platform, v1alpha1.NamespacedName(s.own.Ref.Namespace, s.own.Ref.Name))
+	}
+	for _, t := range desired {
+		if st := s.teams[t.Name()]; st != nil && st.refused {
+			continue
+		}
+		s.host.metrics.ChatListenerServes(t.Platform, t.Name())
+	}
 }
 
 // publish makes the list of connections the verification of the Bindings goes by: the own connection, if there is one, with its credentials, and every team
@@ -478,9 +532,12 @@ func (s *supervisor) publish(desired []TeamConnection) {
 	}
 }
 
-// sameConnections says whether a and b list the same connections with the same credentials, in the same order.
+// sameConnections says whether a and b list the same connections with the same credentials, the same spec.teams for a Microsoft Teams
+// connection and the same spec.webhook for a webhook connection, in the same order: a team connection restarted on an edit of its
+// spec.teams or its spec.webhook alone is a change of the list too.
 func sameConnections(a, b []Connection) bool {
 	return slices.EqualFunc(a, b, func(x, y Connection) bool {
-		return x.Ref == y.Ref && x.Platform == y.Platform && maps.EqualFunc(x.Credentials, y.Credentials, func(p, q secret.Value) bool { return p.Reveal() == q.Reveal() })
+		return x.Ref == y.Ref && x.Platform == y.Platform && x.Secret == y.Secret && x.Teams == y.Teams && reflect.DeepEqual(x.Webhook, y.Webhook) &&
+			maps.EqualFunc(x.Credentials, y.Credentials, func(p, q secret.Value) bool { return p.Reveal() == q.Reveal() })
 	})
 }

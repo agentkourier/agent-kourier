@@ -11,10 +11,12 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
 
 // Decision is what a matched bot message does to the thread of its key (spec 8.2). It is the decision
-// label of agentkourier_trigger_decisions_total.
+// label of agentkourier_trigger_decisions_total, which counts a decision once it is taken: an attempt that fails
+// counts nothing, and its redelivery is decided again.
 type Decision string
 
 // The decisions. A fire is a message whose extracted fields do not satisfy the trigger's closeWhen; a close is
@@ -24,7 +26,10 @@ const (
 	// its turn never started and the reservation is stale, or it is open but has been idle past the trigger's
 	// maxIdle, which is a resolve that never came. The message starts a new investigation, anchored to
 	// itself: the Intake reserves the thread, asks for the turn (OnStart), and, once that is taken, marks the
-	// thread started, which is when its cooldown begins.
+	// thread started, which is when its cooldown begins. A redelivery that finds the thread its own message
+	// reserved, and not started because an earlier attempt failed, asks for the turn again, and is this too: it
+	// is the start, and the failed attempt counted nothing. So is a turn that was queued and whose mark was lost,
+	// counted when a later fire adopts it (adoptQueuedTurn). So it is counted once for each turn that started.
 	DecisionStarted Decision = "started"
 	// DecisionRepeat: a fire, and the key has a thread that is open or inside its cooldown. A note in that
 	// thread says it fired again, a closed thread is open again, and no turn starts.
@@ -36,10 +41,10 @@ const (
 	// already, or its turn never started so there is no investigation to note. It is ignored. A redelivery of
 	// a close whose first delivery was taken, after a restart made the Intake forget it, is this too.
 	DecisionCloseUnknown Decision = "close_unknown"
-	// DecisionDedup: Slack delivered a message again that was taken already. An Intake that remembers it does
-	// nothing. One that does not, after a restart, finds in the store that the message reserved the thread:
-	// if its turn started that is all, and if not the start is asked for again (OnStart), since the first ask
-	// failed.
+	// DecisionDedup: Slack delivered a message again that was taken already, and nothing is done. An Intake
+	// that remembers it says so at once. One that does not, after a restart, finds in the store that the message
+	// reserved the thread and that its turn started. A redelivery whose reservation never started is not this:
+	// it asks for the start again (started, or limited or not_started as that ask goes).
 	DecisionDedup Decision = "dedup"
 	// DecisionEmptyKey: a fire of a trigger that threads by key whose key came out empty, which names no
 	// thread. It is an investigation of its own each time, with no cooldown and no note, as a trigger with no
@@ -64,6 +69,12 @@ const (
 // logs its own reason. Any other error of OnStart is transient: it is returned, and the redelivery asks again.
 var ErrNotStarted = errors.New("chat: the trigger's turn was not started")
 
+// ErrWithheld is ErrNotStarted for a webhook event's start that the session of its thread cannot take yet: its ended session's
+// replacement is withheld while the old session may still be at work. OnStart returns it, itself or wrapped. It is decided
+// not_started as ErrNotStarted is, but the event is not remembered, as a limited one is not: the session settles, and the sender's
+// redelivery of it is decided again.
+var ErrWithheld = fmt.Errorf("chat: the session cannot take the turn yet: %w", ErrNotStarted)
+
 // reservationGrace is how long a thread that reserved its key, and whose turn has not started, is left to start
 // before a later message of the key may take the key over. A turn that is starting takes milliseconds, and a
 // failed one is asked for again by its redelivery within seconds, so a minute tells the two apart.
@@ -82,6 +93,7 @@ type decided struct {
 	decision Decision
 	keyHash  string // the first eight characters of the hash of the key; empty if the match has none
 	thread   string // the thread the decision is about, if known
+	withheld bool   // not_started because the session cannot take the turn yet (ErrWithheld, or IntakeConfig.TakesTurn)
 }
 
 // decide applies the thread rules of a match to the store, and carries out what they say:
@@ -90,7 +102,8 @@ type decided struct {
 //	  or a reservation that never started and is stale,
 //	  or an open thread idle past thread.maxIdle                     started: reserve, check the limits, OnStart, mark started
 //	  ... and a limit of the trigger is reached                      limited: give the reservation back
-//	fire, the message is the thread's own (a redelivery)             dedup: OnStart again if it never started
+//	fire, the message is the thread's own (a redelivery), started    dedup: nothing
+//	fire, the message is the thread's own, never started             started: OnStart again, mark started
 //	fire, any other thread of the key                                repeat: note, then reopen it
 //	close, the key has an open thread whose turn started             closed: note, then close it
 //	close, otherwise                                                 close_unknown: nothing
@@ -104,8 +117,9 @@ type decided struct {
 //
 // Each step is idempotent, and the note comes before the change it goes with, so an error at any point is
 // mended by the redelivery: a note is one row of the outbox whatever its asks, and a redelivered start finds its
-// own reservation. The decision is returned with the error when it was made already (the thread was reserved,
-// the OnStart failed). Everything here is a local write, since it runs on the platform's acknowledgement path.
+// own reservation. The decision may be returned with the error (the thread was reserved, the OnStart failed); it is
+// not counted then, since it was not carried out, and the redelivery decides again. Everything here is a local
+// write, since it runs on the platform's acknowledgement path.
 func (in *Intake) decide(ctx context.Context, m Match) (decided, error) {
 	key := m.Fields[threadKeyField]
 	closing := closes(m.Thread.CloseWhen, m.Fields)
@@ -140,11 +154,11 @@ func (in *Intake) fireThread(ctx context.Context, m Match, hash string, out deci
 	case opened:
 		out.decision = DecisionStarted
 		return in.startThread(ctx, m, hash, out)
-	case th.Thread == at:
+	case th.Thread == at && th.Started():
 		out.decision = DecisionDedup
-		if th.Started() {
-			return out, nil
-		}
+		return out, nil
+	case th.Thread == at: // an earlier attempt reserved the thread and its start failed: this is the start
+		out.decision = DecisionStarted
 		return in.startThread(ctx, m, hash, out)
 	}
 	if err := in.note(ctx, m, th.Thread, session.NoticeTriggerRepeat); err != nil {
@@ -163,9 +177,11 @@ func (in *Intake) fireThread(ctx context.Context, m Match, hash string, out deci
 // beside the first. So, before a fire may take over a reservation of another message that is stale and not started,
 // it asks (IntakeConfig.TurnQueued) whether that reservation's turn was taken, and if so marks that thread started,
 // as the lost write would have, with the cooldown running from its own message. OpenTriggerThread then finds a
-// started open thread, and the fire is a repeat in it. A reservation whose turn was not taken (the start failed or
-// was refused) is left for the takeover. Marking is idempotent, and a thread that someone else marked or took
-// over in the meantime is not this fire's to mend.
+// started open thread, and the fire is a repeat in it. The adopted turn is counted as a started decision here: the
+// attempt that queued it failed on the mark and counted nothing, and any later delivery of its message finds the
+// thread started (dedup), so this is the one count of that start. A reservation whose turn was not taken (the start
+// failed or was refused) is left for the takeover. Marking is idempotent, and a thread that someone else marked or
+// took over in the meantime is not this fire's to mend, nor to count.
 func (in *Intake) adoptQueuedTurn(ctx context.Context, m Match, hash string) error {
 	if in.cfg.TurnQueued == nil {
 		return nil
@@ -191,6 +207,7 @@ func (in *Intake) adoptQueuedTurn(ctx context.Context, m Match, hash string) err
 	}
 	switch err := in.cfg.TriggerThreads.MarkTriggerStarted(ctx, m.Binding, hash, th.Thread, th.Opened.Add(m.Thread.Cooldown.Duration)); {
 	case err == nil:
+		telemetry.Count(ctx, "agentkourier_trigger_decisions_total", m.Binding, string(DecisionStarted))
 		in.log.WarnContext(ctx, "chat: a thread's turn was queued but its mark was lost; marked it started instead of taking the key over",
 			"binding", m.Binding, "keyHash", hash[:8], "thread", th.Thread, "channel", m.Message.At.Channel)
 	case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrConflict):
@@ -226,9 +243,13 @@ func (in *Intake) closeThread(ctx context.Context, m Match, hash string, out dec
 }
 
 // unthreaded is decide for a match that has no thread to apply the rules to: its trigger threads by nothing, or
-// by a key that came out empty. A close is unknown, and a fire starts a turn of its own, with no cooldown.
+// by a key that came out empty. A close is unknown, and a fire starts a turn of its own, with no cooldown. The thread the decision
+// is about is the session's: for a webhook event the thread the connection derived, not the event's ID.
+//
+// A webhook event that a limit stopped is logged at WARN each time it is stopped, a redelivery too, with the sender's delivery ID:
+// it is lost unless it is delivered again, and the operator finds it in the sender's log by that ID (spec D55). It is counted once.
 func (in *Intake) unthreaded(ctx context.Context, m Match, closing bool) (decided, error) {
-	out := decided{decision: DecisionStarted, thread: m.Message.At.ID}
+	out := decided{decision: DecisionStarted, thread: m.sessionThread()}
 	switch {
 	case closing:
 		return decided{decision: DecisionCloseUnknown}, nil
@@ -246,13 +267,15 @@ func (in *Intake) unthreaded(ctx context.Context, m Match, closing bool) (decide
 		if !adm.Again { // a redelivery that lost what remembers it was counted and told then
 			in.countLimited(ctx, m, adm.Limit)
 			in.tellLimited(ctx, m, adm.Limit)
+		} else if m.Webhook {
+			in.logLimited(ctx, m, adm.Limit)
 		}
 		out.decision = DecisionLimited
 		return out, nil
 	}
 	err := in.start(ctx, m)
 	if errors.Is(err, ErrNotStarted) {
-		out.decision, err = DecisionNotStarted, nil
+		out.decision, out.withheld, err = DecisionNotStarted, errors.Is(err, ErrWithheld), nil
 	}
 	return out, err
 }

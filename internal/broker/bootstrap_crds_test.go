@@ -155,7 +155,7 @@ func TestBootstrapCRDsFailuresAtStart(t *testing.T) {
 		},
 		"the own connection is invalid": {
 			edit: func(objs []*unstructured.Unstructured) {
-				_ = unstructured.SetNestedField(objs[1].Object, "teams", "spec", "platform")
+				_ = unstructured.SetNestedField(objs[1].Object, "discord", "spec", "platform")
 			},
 			wiring: true, says: "ChatConnection agent-kourier-system/slack-main is invalid",
 		},
@@ -271,7 +271,7 @@ func TestBootstrapCRDsFollowsTheClusterWhileRunning(t *testing.T) {
 	// registered: repeat the update until the Reloader has seen it.
 	bad := crObject(t, "binding.yaml")
 	bad.SetGeneration(2)
-	_ = unstructured.SetNestedField(bad.Object, "#general", "spec", "chat", "channel")
+	_ = unstructured.SetNestedField(bad.Object, "#general alerts", "spec", "chat", "channel")
 	waitFor("the invalid update to be reported", func() bool {
 		update(crBindings, bad)
 		return len(c.Reloader.Report().Invalid) == 1

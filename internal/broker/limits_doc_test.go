@@ -2,11 +2,14 @@ package broker
 
 import (
 	"fmt"
+	"net/http"
 	"testing"
 
+	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/tools/leaderelection"
 
 	"github.com/agentkourier/agent-kourier/internal/limitsdoc"
+	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
 // TestLimitsPage holds the page docs/reference/limits.md to the limits of the broker's wiring. Each value is the one the
@@ -46,4 +49,27 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Duration(t, "reconnectReset", defaultRunResetAfter)
 	limitsdoc.Duration(t, "retryAfterMax", retryAfterMax)
 	limitsdoc.Duration(t, "slackAPITimeout", slackAPITimeout)
+	limitsdoc.Duration(t, "teamsAPITimeout", teamsAPITimeout)
+
+	// The chat listener's: the server's bounds as the server Run serves is built with them, and those the route table holds itself.
+	chat := newChatServer(http.NotFoundHandler())
+	limitsdoc.Bytes(t, "chatHeaders", chat.MaxHeaderBytes)
+	limitsdoc.Duration(t, "chatReadHeader", chat.ReadHeaderTimeout)
+	limitsdoc.Duration(t, "chatRead", chat.ReadTimeout)
+	limitsdoc.Duration(t, "chatWrite", chat.WriteTimeout)
+	limitsdoc.Duration(t, "chatIdle", chat.IdleTimeout)
+	limitsdoc.Bytes(t, "chatBody", chatMaxBody)
+	limitsdoc.Duration(t, "chatHandler", chatHandlerTimeout)
+	limitsdoc.Duration(t, "chatAnswer", chatAnswerTimeout)
+	routes := newChatRoutes(nil, nil)
+	limitsdoc.Count(t, "chatInFlight", cap(routes.slots))
+	limitsdoc.Bytes(t, "chatBodyBudget", routes.budget.left)
+	limitsdoc.Bytes(t, "chatBodyChunk", chatBodyChunk)
+	limitsdoc.Duration(t, "chatDrain", chatDrainTimeout)
+
+	// The leader label on the pod: the bound of one write and the wait after a failed one, as the labeler Run builds is given them.
+	labeler := newPodLabeler(fake.NewClientset(), PodRef{Namespace: "ns", Name: "pod"}, testutil.DiscardLogger(), func(string) {})
+	limitsdoc.Duration(t, "podLabelTimeout", labeler.timeout)
+	limitsdoc.Duration(t, "podLabelBackoffBase", labeler.base)
+	limitsdoc.Duration(t, "podLabelBackoffCap", labeler.ceiling)
 }

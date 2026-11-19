@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -23,6 +24,10 @@ import (
 
 // otherLabel is the value of a label whose input is outside the fixed set it takes.
 const otherLabel = "other"
+
+// unknownLabel is the connection label of a request to the chat listener whose path names no connection that the listener serves. A
+// ChatConnection's name has a slash in it, so no connection is called this.
+const unknownLabel = "unknown"
 
 // Metrics is the broker's Prometheus registry and the hooks that feed it. It is not the global
 // registry: each broker has its own, so tests and a second broker in one process do not collide.
@@ -49,21 +54,32 @@ type Metrics struct {
 	bindingRej    *prometheus.GaugeVec
 	heldObjects   *prometheus.GaugeVec
 	statusWrites  *prometheus.CounterVec
-	crdSchema     *prometheus.GaugeVec // series only once set, which only a broker on the custom resources does (crdschema.go)
+	crdSchema     *prometheus.GaugeVec   // series only once set, which only a broker on the custom resources does (crdschema.go)
+	chatRequests  *prometheus.CounterVec // series only once a request comes, which only a broker with a chat listener takes
+	labelWrites   *prometheus.CounterVec // series only once a write is tried, which only a broker told its pod makes (podlabel.go)
+
+	// listenerMu guards listenerConns, and is held by ChatListenerRequest while it counts and by ConnectionRemoved while it deletes, so that
+	// a request to a connection that is being removed is counted either before its series are deleted, and goes with them, or after, as unknown.
+	listenerMu sync.RWMutex
+	// listenerConns is the platform of each connection ("namespace/name") that ChatListenerServes was told since the connection was last
+	// removed: the connections that agentkourier_chat_listener_requests_total names.
+	listenerConns map[string]string
 }
 
 // The kinds and reasons that the config gauges carry, a closed set each.
 var (
 	configKinds      = []string{config.KindAgentBackend, config.KindChatConnection, config.KindBinding}
 	rejectionReasons = []config.RejectionReason{config.ReasonInvalidSpec, config.ReasonBackendNotFound, config.ReasonBackendRejected,
-		config.ReasonConnectionNotFound, config.ReasonConnectionRejected, config.ReasonNamespaceNotAllowed, config.ReasonAgentNamespaceNotAllowed, config.ReasonChannelConflict}
+		config.ReasonConnectionNotFound, config.ReasonConnectionRejected, config.ReasonNamespaceNotAllowed, config.ReasonAgentNamespaceNotAllowed,
+		config.ReasonInvalidPlatformID, config.ReasonUnsupportedOnPlatform, config.ReasonChannelConflict}
 )
 
 // NewMetrics returns the metrics. stale is read at each scrape for agentkourier_config_stale, and
 // may be nil (never stale): it is Config.Stale.
 func NewMetrics(stale func() bool) (*Metrics, error) {
 	m := &Metrics{
-		reg: prometheus.NewRegistry(),
+		reg:           prometheus.NewRegistry(),
+		listenerConns: map[string]string{},
 		auditFailures: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_audit_write_failures_total",
 			Help: "Audit entries that could not be written, by kind."}, []string{"kind"}),
 		rejections: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_credential_rejections_total",
@@ -81,7 +97,7 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		decisions: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_interaction_decisions_total",
 			Help: "Presses decided on an interaction, by result."}, []string{"result"}),
 		chatUp: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_chat_connected",
-			Help: "1 while the chat connection (Slack Socket Mode) is up, else 0, by ChatConnection."}, []string{"connection"}),
+			Help: "1 while the connection to the chat platform (for Slack, Socket Mode) is up, else 0, by ChatConnection."}, []string{"connection"}),
 		turns: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_turn_outcomes_total",
 			Help: "Turns that ended, by Binding and how: the terminal state of the task, or the class of what stopped it."}, []string{"binding", "outcome"}),
 		leader: prometheus.NewGauge(prometheus.GaugeOpts{Name: "agentkourier_leader",
@@ -95,15 +111,19 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		probeDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "agentkourier_binding_probe_duration_seconds",
 			Help: "How long a probe of a Binding took, by condition: the time the checker took, whatever it found.", Buckets: prometheus.DefBuckets}, []string{"condition"}),
 		invalid: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_config_invalid_objects",
-			Help: "Objects of the custom resource config source that the broker refuses or holds past their deletion, by kind: a Binding of this broker (it names this broker's connection, or none that exists) that fails Default or Validate; any AgentBackend in the cluster that does, whoever uses it; this broker's own ChatConnection when it fails them or was deleted and is held; and, while that connection is held, each Binding of it and each AgentBackend they use that was deleted and is held with it. Each is served from its last good generation, or left out if it has none; a held Binding that resolution leaves out, for any reason (it lost its channel, its backend is gone, or its backend no longer allows it), is counted and not served. 0 while the config is read from files, where one bad object fails the whole reload."}, []string{"kind"}),
+			Help: "Objects of the custom resource config source that the broker refuses or holds past their deletion, by kind: a Binding of this broker (it names this broker's connection, or none that exists) that fails Default or Validate, or whose chat IDs or features the platform of its ChatConnection does not take; any AgentBackend in the cluster that fails them, whoever uses it; this broker's own ChatConnection when it fails them or was deleted and is held; and, while that connection is held, each Binding of it and each AgentBackend they use that was deleted and is held with it. Each is served from its last good generation, or left out if it has none; a held Binding that resolution leaves out, for any reason (it lost its channel, its backend is gone, or its backend no longer allows it), is counted and not served. 0 while the config is read from files, where one bad object fails the whole reload."}, []string{"kind"}),
 		heldObjects: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_config_held_objects",
 			Help: "Objects of the custom resource config source that were deleted and that the broker holds at their last good generation, by kind, while its own ChatConnection is deleted and held: the connection, the Bindings of it that are gone, and the AgentBackends that they and the Bindings of it that are still there use and that are gone. A held Binding that resolution leaves out, for any reason (it lost its channel, its backend is gone, or its backend no longer allows it), is held and not served. 0 when nothing is held, and always while the config is read from files."}, []string{"kind"}),
 		bindingRej: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_config_binding_rejections",
-			Help: "Bindings of the custom resource config source that are not accepted as written, by reason: InvalidSpec, BackendNotFound, BackendRejected, ConnectionNotFound, ConnectionRejected, ConnectionNotServed, NamespaceNotAllowed, AgentNamespaceNotAllowed or ChannelConflict. A Binding that is served from an older generation counts too. The series can overlap: a Binding with more than one rejection is counted under each of its reasons, so their sum can exceed the number of Bindings that are not accepted. ConnectionNotServed is the leader's alone (a standby says 0): it counts the Bindings whose status the leader writes that reason to. 0 while the config is read from files."}, []string{"reason"}),
+			Help: "Bindings of the custom resource config source that are not accepted as written, by reason: InvalidSpec, BackendNotFound, BackendRejected, ConnectionNotFound, ConnectionRejected, ConnectionNotServed, NamespaceNotAllowed, AgentNamespaceNotAllowed, InvalidPlatformID, UnsupportedOnPlatform or ChannelConflict. A Binding that is served from an older generation counts too. The series can overlap: a Binding with more than one rejection is counted under each of its reasons, so their sum can exceed the number of Bindings that are not accepted. ConnectionNotServed is the leader's alone (a standby says 0): it counts the Bindings whose status the leader writes that reason to. 0 while the config is read from files."}, []string{"reason"}),
 		statusWrites: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_binding_status_writes_total",
 			Help: "Writes of a Binding's status by the leader, by result: written, put_back (written again to the words it already had, because the status had been changed: a person's edit, or another writer), or failed (the API server refused or could not be reached; it is tried again). The series exist only once the leader of a broker that reads the custom resources has tried a write."}, []string{"result"}),
 		crdSchema: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_crd_schema_state",
 			Help: "1 for what the broker found when it compared each CRD's schema hash with the one it was built with, at start and every minute, and 0 for the other states, by CRD and state (match, mismatch, unannotated or unknown). Only a broker that reads custom resources has these series; with files there are none."}, []string{"crd", "state"}),
+		chatRequests: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_chat_listener_requests_total",
+			Help: "Requests to the chat listener, by outcome, platform and connection. Outcome: served (a connection's handler was called), not_found (the path is no route), method (not POST), no_route (the connection does not run on this replica: answered 503), too_large (the body is past the cap), unreadable (the body could not be read whole) or busy (the listener already held as many requests as it may: answered 503). Platform: the one the path names (slack, teams or webhook), or other. Connection: the ChatConnection the path names while this replica, as the leader, serves it (whether it runs or not), until it is no longer served, else unknown; not_found and method are always unknown. Only a broker with a chat listener has these series."}, []string{"outcome", "platform", "connection"}),
+		labelWrites: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_leader_pod_label_writes_total",
+			Help: "Writes of the leader label (agentkourier.dev/role=leader) on this replica's own pod, by result: labeled (put on, as the replica began to lead), unlabeled (taken off, as the replica started or stopped) or failed (the API server refused or could not be reached; it is tried again). Only a broker with a chat listener that is told its pod has these series."}, []string{"result"}),
 	}
 	m.ConfigReport(config.Report{})
 	m.UnservedBindings(0)
@@ -115,7 +135,7 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		return 0
 	})
 	var err error
-	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, m.approvals, m.timeouts, m.removed, m.decisions, m.chatUp, m.turns, m.leader, m.takeovers, m.bindingCond, m.bindingReady, m.probeDuration, m.invalid, m.bindingRej, m.heldObjects, m.crdSchema, m.statusWrites, staleGauge} {
+	for _, c := range []prometheus.Collector{m.auditFailures, m.rejections, m.abandons, m.reloadErrors, m.approvals, m.timeouts, m.removed, m.decisions, m.chatUp, m.turns, m.leader, m.takeovers, m.bindingCond, m.bindingReady, m.probeDuration, m.invalid, m.bindingRej, m.heldObjects, m.crdSchema, m.statusWrites, m.chatRequests, m.labelWrites, staleGauge} {
 		err = errors.Join(err, m.reg.Register(c))
 	}
 	if err != nil {
@@ -261,12 +281,19 @@ func (m *Metrics) ChatConnected(connection string, up bool) {
 
 // ConnectionRemoved is told that the ChatConnection named connection ("namespace/name") is not served by this broker: it was taken out of
 // the config or out of the set the broker serves, or it was stopped as a second connection of a Slack app another connection uses. It deletes the
-// series the connection has: agentkourier_chat_connected, which would otherwise say 0 for a connection that is not served, and the ones that
-// carry its name in the telemetry (telemetry.ForgetConnection). It is the one place that lists them, so a series that gains a connection label is
-// deleted here. A connection that restarts, or is stopped for its credentials, is still served and keeps its series. A connection with no series
-// is no error.
+// series the connection has: agentkourier_chat_connected, which would otherwise say 0 for a connection that is not served, its series of
+// agentkourier_chat_listener_requests_total, and the ones that carry its name in the telemetry (telemetry.ForgetConnection). It is the one place
+// that lists them, so a series that gains a connection label is deleted here. A connection that restarts, or is stopped for its credentials, is
+// still served and keeps its series. A connection with no series is no error.
+//
+// The chat listener counts a later request to the connection's route as unknown, until the connection is served again
+// (ChatListenerServes): the path is the sender's, so a request can come at any time, and it must not bring the series back.
 func (m *Metrics) ConnectionRemoved(ctx context.Context, connection string) {
 	m.chatUp.DeleteLabelValues(connection)
+	m.listenerMu.Lock()
+	delete(m.listenerConns, connection)
+	m.chatRequests.DeletePartialMatch(prometheus.Labels{"connection": connection})
+	m.listenerMu.Unlock()
 	telemetry.ForgetConnection(ctx, connection)
 }
 
@@ -281,6 +308,39 @@ func (m *Metrics) Leader(leading bool) {
 
 // Takeover counts a leadership taken: the lease won and the epoch bumped.
 func (m *Metrics) Takeover() { m.takeovers.Inc() }
+
+// ChatListenerServes records that the connection ("namespace/name") of platform is served. The leader's supervisor tells it every connection
+// the broker is configured to serve at each pass, whether it runs or not (supervisor.nameRoutes), and chatRoutes.register tells it before a
+// route takes a request. From then until ConnectionRemoved, ChatListenerRequest counts the requests to that connection's route under its name,
+// including those answered no_route while it has not started, restarts or is down. It must not be told a connection after ConnectionRemoved
+// unless the connection is served again.
+func (m *Metrics) ChatListenerServes(platform, connection string) {
+	m.listenerMu.Lock()
+	defer m.listenerMu.Unlock()
+	m.listenerConns[connection] = platform
+}
+
+// ChatListenerRequest counts a request to the chat listener by its outcome (chatOutcomes), and one outside them as "other", and by the
+// platform and the connection that its path names. The path is the sender's to choose, so neither is taken as it is: the platform is
+// counted as itself only when it is one of chatPlatforms, and as "other" otherwise; the connection only when ChatListenerServes was told it
+// for that platform since it was last removed, and as "unknown" otherwise. No value the sender chooses can grow the series.
+func (m *Metrics) ChatListenerRequest(outcome, platform, connection string) {
+	if !slices.Contains(chatOutcomes, outcome) {
+		outcome = otherLabel
+	}
+	m.listenerMu.RLock()
+	defer m.listenerMu.RUnlock()
+	if served, ok := m.listenerConns[connection]; !ok || served != platform {
+		connection = unknownLabel
+	}
+	if !slices.Contains(chatPlatforms, platform) {
+		platform = otherLabel
+	}
+	m.chatRequests.WithLabelValues(outcome, platform, connection).Inc()
+}
+
+// PodLabelWrite counts a write of the leader label on the replica's own pod by its result: labeled, unlabeled or failed (podlabel.go).
+func (m *Metrics) PodLabelWrite(result string) { m.labelWrites.WithLabelValues(result).Inc() }
 
 // BindingCondition records a condition of a Binding that changed: bindingcheck.Options.OnTransition. The condition's series
 // say its new status (1 for it, 0 for the other two), and a change of Ready also sets agentkourier_binding_ready, which is 1

@@ -27,6 +27,47 @@ type Inbound struct {
 	// Bot is set when a bot posted the message, and only then. A platform forwards a bot's message only
 	// if the Sink takes it (BotFilter), and never Agent Kourier's own.
 	Bot *BotMessage
+	// Webhook is set when the message is an event of a webhook connection, and only then: the delivery that carried it and its
+	// named fields, which a webhookEvent trigger's regexes read and the untrusted block shows. Such a message has no Text, is not
+	// Mentioned, and its thread is the one the connection derives.
+	Webhook *WebhookEvent
+}
+
+// WebhookEvent is what an event of a webhook connection carries beyond a message: the sender's ID of its delivery, who caused it,
+// and its named fields, in the connection's order. Every value is the sender's, and untrusted.
+type WebhookEvent struct {
+	// Delivery is the sender's ID of the delivery that carried the event, read from the connection's delivery header, for the log
+	// lines that name the event; it is not the event's ID (At.ID), and a redelivery may carry another. It is empty when the
+	// connection names no delivery header, or the request's value is missing or fails the id check that an id field's value passes.
+	Delivery string
+	// Actor is the first actor value that resolved, for the untrusted block; empty when none did.
+	Actor string
+	// Fields are the event's named values, one for each field of the connection.
+	Fields []WebhookField
+}
+
+// WebhookField is one named field of a webhook event. A field is in one of three states, and Present and Invalid are never both
+// set:
+//
+//   - Present: a value resolved and, for an id field, passed the id check. Value is it: an id field's an identifier, a text field's
+//     the raw, untrusted text. An empty value resolves and passes the id check, so a field can be Present with an empty Value; it
+//     ends the first-of list as any other value does.
+//   - Invalid: an id field one of whose sources resolved, but only to values that fail the id check. Value is empty. It is not
+//     absent: a reader that would act on the field's absence fails closed instead.
+//   - absent (neither): nothing resolved. Value is empty.
+type WebhookField struct {
+	Name, Value          string
+	ID, Present, Invalid bool
+}
+
+// Value returns the value of the field name: empty for a field that is absent or Invalid, or that the event does not have.
+func (e *WebhookEvent) Value(name string) string {
+	for _, f := range e.Fields {
+		if f.Name == name {
+			return f.Value
+		}
+	}
+	return ""
 }
 
 // BotMessage is what a bot's message carries beyond a person's: the sender, by its ID and kind and never its display name
@@ -107,6 +148,17 @@ type ThreadReader interface {
 	ThreadFromStart(ctx context.Context, t Target, before string, limit int) (msgs []HistoryMessage, dropped int, err error)
 }
 
+// RootReader is an optional interface of a ThreadReader that reads the message that opened a thread alone, in fewer calls than
+// ThreadFromStart, which reads the replies with it: what the first turn of a session that a person's mention opened inside a thread
+// carries (Caps.RootContext, spec 8.2, D56). A caller that finds a platform without it reads ThreadFromStart and keeps its first
+// message.
+type RootReader interface {
+	// ThreadRoot returns the message that opened the thread t.Thread, decoded as ThreadFromStart decodes it, and false, with no
+	// error, if the platform no longer has it. Its errors are a ThreadReader's: ErrNoThreadReads for a platform that cannot read a
+	// thread, ErrInvalid for a target that names no thread, and the platform's own, which Classify reads (OpOther).
+	ThreadRoot(ctx context.Context, t Target) (msg HistoryMessage, found bool, err error)
+}
+
 // Sink receives what Platform.Run decodes. A platform may call it from several goroutines at once, so a Sink is safe for
 // concurrent use; a platform keeps the events of one channel in order and calls for one channel one at a time.
 type Sink interface {
@@ -134,6 +186,39 @@ type BotFilter interface {
 type BotMentionFilter interface {
 	// AcceptsBotMention says whether a mention by the bot botID in channel is to be taken.
 	AcceptsBotMention(channel, botID string) bool
+}
+
+// ChannelLister is an optional interface of a Sink that names the channels bound to its connection now: the channels of the
+// Bindings that name the connection. A platform that must ask its service for each bound channel's messages (Microsoft Teams'
+// Graph subscriptions) asks it again and again, since Bindings come and go; a Sink that does not implement it binds no channel, and
+// the platform asks for none. The answer is a routing question, so the adapter holds no copy of the config.
+type ChannelLister interface {
+	// BoundChannels returns the channels of the connection that a Binding names, sorted, each once. The slice is the caller's.
+	BoundChannels() []string
+}
+
+// InlineDecider is an optional interface of a Sink, for a platform that answers a press in the press's own request and can show the
+// presser alone what that answer says (Microsoft Teams shows the answer to an Adaptive Card's press as a banner under the card). Such
+// a platform asks it in place of Interaction, and tells the presser what it returns; a Sink that does not implement it is given the
+// press by Interaction. A platform that answers a press before it hands it on (Slack) never asks it, so its presses take
+// Interaction's path as they always have.
+type InlineDecider interface {
+	// DecidePress takes i as Interaction does, an error meaning it was not taken, and then waits, until ctx ends, for i to be
+	// decided where Interaction's presses are decided (the press worker), which decides it once whether or not anyone waits. It
+	// returns what it knows when the decision is made, or when ctx ends: an outcome that is not Decided if the decision was not
+	// made in time, or is not final (the press is tried again later). The wait never decides a press itself.
+	DecidePress(ctx context.Context, i Interaction) (PressOutcome, error)
+}
+
+// PressOutcome is what became of a press, as InlineDecider.DecidePress knows it when it returns.
+type PressOutcome struct {
+	// Decided says the press was decided for good: Text then says what it came to. False says the press was taken and is still to
+	// be decided, later and once, so the presser cannot be told the outcome yet.
+	Decided bool
+	// Text is what the presser is to be told of a press that was Decided, in fixed words that hold nothing an agent or a person
+	// wrote: refused (and why), taken, or already recorded. Empty when the decision has nothing to tell them (a press that names
+	// another message than its prompt's is dropped without a word), and always empty when the press is not Decided.
+	Text string
 }
 
 // Stream is a message that grows while an agent writes it. The markdown that Append and Stop take is
@@ -167,6 +252,13 @@ type Stream interface {
 var (
 	// ErrNoStreams is returned by Stream on a platform without streams (Caps.Streams false).
 	ErrNoStreams = errors.New("chat: the platform has no streaming messages")
+	// ErrNoReactions is returned by React and Unreact on a platform without reactions (an empty Caps.AckReaction). No retry
+	// mends it, so Classify(OpReact) of it is Permanent.
+	ErrNoReactions = errors.New("chat: the platform has no reactions")
+	// ErrNoEphemeral is wrapped by the error of Ephemeral on a platform without ephemeral messages (Caps.Ephemeral false),
+	// which shows nothing. No retry mends it, so Classify(OpPost) of it is Permanent. A caller that tells a person something
+	// alone checks it with errors.Is: the person was not told, by design, and that is no fault.
+	ErrNoEphemeral = errors.New("chat: the platform has no ephemeral messages")
 	// ErrNotStreaming is wrapped by the error of an Append or a Stop of a message that is not streaming: it ended,
 	// or it never was a stream. The caller that is finishing a stream it did not start tolerates it.
 	ErrNotStreaming = errors.New("chat: the message is not streaming")
@@ -233,7 +325,8 @@ type Access struct {
 	Archived bool
 }
 
-// Platform is a chat platform: Slack today. An adapter implements it, and nothing else in Agent Kourier names
+// Platform is a chat platform: Slack, Microsoft Teams, or a webhook connection's sender (whose adapter the broker does not run
+// yet). An adapter implements it, and nothing else in Agent Kourier names
 // the platform it adapts. Every method is safe for concurrent use.
 //
 // Every method that sends text keeps the contract of the package comment, and the adapter passes
@@ -265,12 +358,14 @@ type Platform interface {
 	// StreamAt is the stream that is the message at r, which another run started and a recovery has the Ref of: it
 	// makes no call, and its Append and Stop say ErrNotStreaming if the message is not streaming.
 	StreamAt(r Ref) Stream
-	// Ephemeral shows m to user alone, in t. Nothing keeps it.
+	// Ephemeral shows m to user alone, in t. Nothing keeps it. A platform without ephemeral messages (Caps.Ephemeral false)
+	// says ErrNoEphemeral and shows nothing.
 	Ephemeral(ctx context.Context, t Target, user string, m Message) error
-	// React puts the reaction name on the message at r. A reaction that is there already is success.
+	// React puts the reaction name on the message at r. A reaction that is there already is success. A platform with no
+	// reactions (an empty Caps.AckReaction) says ErrNoReactions and shows nothing.
 	React(ctx context.Context, r Ref, name string) error
 	// Unreact takes the reaction name that React put on the message at r off it. A reaction that is not there is
-	// success.
+	// success. A platform with no reactions says ErrNoReactions.
 	Unreact(ctx context.Context, r Ref, name string) error
 
 	// IsMember says whether user is in the conversation channel. It fails closed: an error is never
@@ -323,7 +418,7 @@ type Platform interface {
 	// is asked before a prompt is stored, so that a pause that cannot be shown is refused at once. A prompt
 	// of tools is ErrTooLarge too when the text of one tool, cleaned, is longer than its place's limit
 	// (Caps.Limit): the text of a tool awaiting approval is never shown cut. A platform that shows no tool
-	// approvals gives ErrInvalid for a prompt of tools.
+	// approvals gives ErrInvalid for a prompt of tools. The caller refuses a pause on either error as unusable.
 	Fits(p Prompt) error
 	// Classify says what an error returned by one of the methods means for a retry.
 	Classify(op Op, err error) Verdict

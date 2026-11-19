@@ -232,7 +232,8 @@ func runInit(ctx context.Context, o initOptions, ver string, stdin io.Reader, ge
 		client = slack.New(slack.Config{BotToken: token, APIURL: o.apiURL, HTTPClient: &http.Client{Timeout: 30 * time.Second}})
 	}
 	channel := o.channel
-	if !v1alpha1.IsChannelID(channel) {
+	slackRules, _ := v1alpha1.ChatPlatformOf(v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformSlack})
+	if !slackRules.Channel.Matches(channel) {
 		if client == nil {
 			return usagef("--channel %q is a name: set %s (or name a file with --token-file) so that Slack can look it up, or give the channel's ID, which starts with C (G for an older private channel)", channel, botTokenKey)
 		}

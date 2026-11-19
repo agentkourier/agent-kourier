@@ -4,6 +4,7 @@ package broker
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -98,4 +99,37 @@ func TestATeamConnectionWhoseTokenSlackRefusesIsNotStartedOrAskedAgain(t *testin
 func (w *connWorld) waitForLog(text string) {
 	w.t.Helper()
 	w.eventually("the log to say "+text, func() bool { return strings.Contains(w.logs.String(), text) })
+}
+
+// The identity of a connection is its platform's to give: a Slack connection is asked of Slack (auth.test, then bots.info), and a connection of a
+// platform with no identity call gets the zero identity, with no error and no call to Slack, even with a Slack bot token in its credentials.
+func TestTheIdentityOfAConnectionIsAskedOfItsOwnPlatform(t *testing.T) {
+	t.Parallel()
+	f := newFakeSlackWeb(t)
+	f.bots["xoxb-w1"] = struct{ team, user, bot, app string }{"T1", "U1", "B1", "AAPP"}
+	c := RunConfig{}
+	c.hooks.SlackAPIURL = f.url()
+
+	other := connWithBotToken("xoxb-w1")
+	other.Platform = "other"
+	if id, err := c.identityOf(t.Context(), other); err != nil || id != (appIdentity{}) {
+		t.Errorf("identityOf(a connection of another platform) = %+v, %v; want the zero identity and no error", id, err)
+	}
+	f.mu.Lock()
+	calls := slices.Clone(f.calls)
+	f.mu.Unlock()
+	if len(calls) != 0 {
+		t.Fatalf("Slack was called %v for a connection of another platform; want no call", calls)
+	}
+
+	id, err := c.identityOf(t.Context(), connWithBotToken("xoxb-w1"))
+	if err != nil || id != (appIdentity{App: "AAPP", Team: "T1", User: "U1", Bot: "B1"}) {
+		t.Errorf("identityOf(a Slack connection) = %+v, %v; want the app Slack gives", id, err)
+	}
+	f.mu.Lock()
+	calls = slices.Clone(f.calls)
+	f.mu.Unlock()
+	if !slices.Equal(calls, []string{"auth.test", "bots.info"}) {
+		t.Errorf("Slack was called %v for a Slack connection; want auth.test and then bots.info", calls)
+	}
 }

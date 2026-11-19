@@ -1376,7 +1376,7 @@ func TestEveryReasonACheckerMayReportIsReportable(t *testing.T) {
 		switch r {
 		case ReasonOK:
 			want = []Status{True}
-		case ReasonPending, ReasonProbeFailed, ReasonProbeTimeout:
+		case ReasonPending, ReasonProbeFailed, ReasonProbeTimeout, ReasonNoReactions:
 		case ReasonChatCredentialsRejected:
 			want = []Status{False}
 		case ReasonChatUnavailable, ReasonChatCredentialsChanged, ReasonChatCredentialsUnusable:

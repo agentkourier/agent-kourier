@@ -27,7 +27,7 @@ import (
 // maps them to exit codes.
 //
 // The order is klog (before anything uses client-go, so even its first line is capped and routed),
-// the Kubernetes client, the health server (so that /healthz answers from here on), Bootstrap (the
+// the Kubernetes client, the health server (so that /healthz answers from here on), the chat listener if there is one, Bootstrap (the
 // config, from files or, with cfg.ConfigSource crds, from the custom resources of the cluster, and the Secret caches), the broker's own ChatConnection if it has one (spec D53), the store (SQLite, or Postgres with its DSN read from
 // a Secret: cfg.Store), and then readiness: /readyz says 503 "starting" until the last of those is done. The
 // own connection comes before the store, so a config that v1 cannot serve leaves no database behind. That is what every
@@ -91,7 +91,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	}
 	defer func() { // a signal during startup makes some step fail with the context's error: a clean stop
 		// A rejected token that was reported first stays a failure whatever signal follows it.
-		if err != nil && ctx.Err() != nil && !errors.Is(err, ErrSlackAuth) {
+		if err != nil && ctx.Err() != nil && !errors.Is(err, ErrChatAuth) {
 			err = nil
 		}
 	}()
@@ -167,6 +167,16 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	}
 	runCtx = telemetry.WithObserver(runCtx, obs)
 	ready := &Readiness{}
+	// The leader label on this replica's pod, if Run was told its pod: off from the start (the pod may have kept it from a container that
+	// exited as the leader), on once the leader half has started. It comes off in the health step, the last, just before the lease is handed
+	// over: no other replica leads before then, so there is no other pod for the chat Service to select, and the chat listener, closed in
+	// the intake step, already refuses the connections that reach this one. Its stop is added before the health server's, so it runs first.
+	var labeler *podLabeler
+	if !cfg.LeaderPod.IsZero() {
+		labeler = newPodLabeler(client, cfg.LeaderPod, log, metrics.PodLabelWrite)
+		labeler.start(runCtx)
+		sd.add(stepHealth, labeler.stop)
+	}
 	auditEndpoint := testhooks.NewAuditEndpoint()
 	served, servedDone := make(chan error, 1), make(chan struct{})
 	serveCtx, stopServing := context.WithCancel(context.WithoutCancel(ctx))
@@ -175,6 +185,24 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		close(servedDone)
 	}()
 	sd.add(stepHealth, func(c context.Context) { stopServing(); waitFor(c, servedDone) })
+	// The chat listener, if there is one: every replica serves it from here, and only the leader half's runtimes put routes on it, so a
+	// standby answers 503 to every route. It stops taking requests first of all, before the intakes that its requests feed stop: its
+	// stop is the intake step's, added here before the leader half can add its own.
+	var routes *chatRoutes
+	var chatServed chan error // nil, and never ready, without a chat listener
+	if cfg.ChatListener != nil {
+		routes = newChatRoutes(metrics, log)
+		chatServed = make(chan error, 1)
+		chatDone := make(chan struct{})
+		chatCtx, stopChat := context.WithCancel(context.WithoutCancel(ctx))
+		go func() {
+			chatServed <- serveServer(chatCtx, cfg.ChatListener, newChatServer(routes), chatDrainTimeout)
+			close(chatDone)
+		}()
+		// What holds a request waiting lets it go first (chatRoutes.onDrain), so that the drain answers it.
+		sd.add(stepIntake, func(c context.Context) { routes.draining(); stopChat(); waitFor(c, chatDone) })
+		log.InfoContext(ctx, "chat listener", "address", cfg.ChatListener.Addr().String())
+	}
 
 	var extraSecrets []config.SecretName // the Postgres DSN's Secret is Agent Kourier's own, so no resource of the config names it
 	if cfg.Store.kind() == StorePostgres {
@@ -203,6 +231,10 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		if err != nil {
 			return err
 		}
+		// Here, and not only when the leader builds the platform: a standby that could not serve the connection must not start and say Ready.
+		if err := cfg.checkOwnConnection(conn); err != nil {
+			return err
+		}
 		log.InfoContext(ctx, "serving a ChatConnection", "connection", v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name))
 		connsServed.Store(&[]Connection{conn})
 	}
@@ -210,6 +242,9 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	// A write that finds another replica has led since ends the process (spec D37): the error alone would be handled
 	// by whichever part made the write, and the part could carry on. SQLite never calls it.
 	fail := &failStop{log: log, exit: cfg.exitFunc()}
+	if routes != nil {
+		fail.before = routes.close // a replica that no longer leads takes no request, from the moment it knows
+	}
 	st, err := openStore(runCtx, cfg.Store, cfg.DBPath, boot.Secrets, log,
 		postgres.WithOnDeposed(func() { fail.now("a write found its epoch stale: another replica has led since") }))
 	if err != nil {
@@ -239,8 +274,22 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	}
 
 	// Everything that every replica runs is up. A standby is as ready as a leader: readiness never depends on the
-	// lease, since nothing routes traffic to Agent Kourier in Socket Mode, and a standby is healthy (spec 11).
-	ready.Set(append(boot.Checks(), StoreOpen(st))...)
+	// lease, since a standby is healthy (spec 11) and no Service that sends traffic needs it to lead. In Socket Mode nothing routes
+	// traffic to Agent Kourier; a chat listener's requests reach the leader through a Service that selects the leader label, not
+	// readiness alone, and a standby's chat listener, if one is sent a request, answers 503 to every route, which a platform sends again.
+	// With a pod to label, readiness waits for the label too: a pod that kept it from an earlier process is not ready, so in no Service, the
+	// chat Service included, until its removal has succeeded (podLabeler.check). The start waits for the first write to be tried (it is
+	// bounded by podLabelTimeout) and fails if the API server says it can never succeed: no Role to patch the pod, or no such pod.
+	checks := boot.Checks()
+	checks = append(checks, StoreOpen(st))
+	if labeler != nil {
+		waitFor(runCtx, labeler.settled())
+		if err := labeler.startError(); err != nil {
+			return err
+		}
+		checks = append(checks, labeler.check())
+	}
+	ready.Set(checks...)
 	log.InfoContext(ctx, "ready")
 
 	// The leader half starts here with SQLite, and with a fencing store when the lease is won and the store has its
@@ -253,7 +302,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		lease = newLeaseClock(cfg.leaseNow)
 		guard = newLeaseFence(cfg.Election, lease, fail.now)
 	}
-	leader := &leaderHalf{cfg: cfg, log: log, sd: sd, metrics: metrics, boot: boot, st: st, leaseFence: guard, status: status, connsServed: &connsServed}
+	leader := &leaderHalf{cfg: cfg, log: log, sd: sd, metrics: metrics, boot: boot, st: st, leaseFence: guard, status: status, connsServed: &connsServed, routes: routes}
 	leaderDone := make(chan error, 1)
 	runLeader := func() {
 		leave, ok := gate.enter()
@@ -280,6 +329,9 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 		}
 		metrics.Leader(true)
 		chatDone, err := leader.start(ctx, runCtx, current)
+		if err == nil && labeler != nil {
+			labeler.lead() // inside the gate, so lead happens before stop or never
+		}
 		leave()
 		if err != nil {
 			leaderDone <- err
@@ -313,13 +365,15 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	case <-ctx.Done():
 		return nil
 	case err := <-leaderDone:
-		if ctx.Err() != nil && !errors.Is(err, ErrSlackAuth) { // stopped by the signal, not by Slack
+		if ctx.Err() != nil && !errors.Is(err, ErrChatAuth) { // stopped by the signal, not by the platform
 			return nil
 		}
 		return err
 	case err := <-served:
 		served <- err // for the cleanup, which waits for it too
 		return fmt.Errorf("the health server stopped before the broker did: %w", err)
+	case err := <-chatServed:
+		return fmt.Errorf("the chat listener stopped before the broker did: %w", err)
 	}
 }
 

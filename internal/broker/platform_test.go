@@ -12,7 +12,8 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/secret"
 )
 
-// The adapter is chosen by ChatConnection.platform: slack builds the Slack adapter over a client of its own, and any
+// The adapter is chosen by ChatConnection.platform: slack builds the Slack adapter over a client of its own, teams the Microsoft
+// Teams adapter (the Teams tests), webhook the webhook platform (TestNewPlatformBuildsAWebhookConnectionOnTheChatListener), and any
 // other value is a wiring error, which no retry mends.
 func TestNewPlatformIsChosenByThePlatformOfTheConnection(t *testing.T) {
 	slackConn := Connection{
@@ -20,19 +21,19 @@ func TestNewPlatformIsChosenByThePlatformOfTheConnection(t *testing.T) {
 		Credentials: map[string]secret.Value{"botToken": secret.New("xoxb-fake"), "appToken": secret.New("xapp-fake")},
 	}
 	var cfg RunConfig
-	built, err := cfg.newPlatform(slackConn, nil, nil)
+	built, err := cfg.newPlatform(t.Context(), slackConn, nil, nil, nil, nil)
 	if err != nil || built.Platform == nil || built.closeIdle == nil {
-		t.Fatalf("newPlatform(slack) = %+v, %v; want the Slack adapter, and a way to close its connections", built, err)
+		t.Fatalf("newPlatform(slack, nil) = %+v, %v; want the Slack adapter, and a way to close its connections", built, err)
 	}
-	if got := built.Capabilities(); !got.Streams || !got.Edits {
+	if got := built.Capabilities(); !got.Streams || got.AckReaction == "" {
 		t.Errorf("the adapter's capabilities are %+v; want Slack's", got)
 	}
-	for _, name := range []string{"teams", "", "Slack"} {
+	for _, name := range []string{"discord", "", "Slack", "Teams", "Webhook"} {
 		bad := slackConn
 		bad.Platform = name
-		built, err := cfg.newPlatform(bad, nil, nil)
+		built, err := cfg.newPlatform(t.Context(), bad, nil, nil, nil, nil)
 		if !errors.Is(err, ErrWiring) || built.Platform != nil {
-			t.Errorf("newPlatform(%q) = %+v, %v; want a wiring error and no platform", name, built, err)
+			t.Errorf("newPlatform(%q, nil) = %+v, %v; want a wiring error and no platform", name, built, err)
 		}
 	}
 }
@@ -45,7 +46,7 @@ func TestTheSlackSeamBuildsTheClientTheAdapterRunsOn(t *testing.T) {
 		Ref: v1alpha1.ObjectRef{Namespace: "platform", Name: "slack"}, Platform: v1alpha1.PlatformSlack,
 		Credentials: map[string]secret.Value{"botToken": secret.New("xoxb-fake"), "appToken": secret.New("xapp-fake")},
 	}
-	built, err := cfg.newPlatform(conn, nil, nil)
+	built, err := cfg.newPlatform(t.Context(), conn, nil, nil, nil, nil)
 	if err != nil || saw.BotToken.Reveal() != "xoxb-fake" || saw.AppToken.Reveal() != "xapp-fake" || saw.HTTPClient == nil {
 		t.Fatalf("newPlatform = %+v, %v; client config %+v; want the client built from the credentials, on a transport of its own", built, err, saw)
 	}
@@ -64,14 +65,14 @@ func TestNewPlatformPassesTheConnectionHookToTheClient(t *testing.T) {
 		Credentials: map[string]secret.Value{"botToken": secret.New("xoxb-fake"), "appToken": secret.New("xapp-fake")},
 	}
 	var told []bool
-	if _, err := cfg.newPlatform(conn, nil, func(up bool) { told = append(told, up) }); err != nil || saw.OnConnection == nil {
+	if _, err := cfg.newPlatform(t.Context(), conn, nil, func(up bool) { told = append(told, up) }, nil, nil); err != nil || saw.OnConnection == nil {
 		t.Fatalf("newPlatform = %v; client config %+v; want OnConnection set", err, saw)
 	}
 	saw.OnConnection(true)
 	if len(told) != 1 || !told[0] {
 		t.Errorf("the hook was told %v; want the call of OnConnection", told)
 	}
-	if _, err := cfg.newPlatform(conn, nil, nil); err != nil || saw.OnConnection != nil {
+	if _, err := cfg.newPlatform(t.Context(), conn, nil, nil, nil, nil); err != nil || saw.OnConnection != nil {
 		t.Errorf("newPlatform with no hook = %v; OnConnection set = %v; want none", err, saw.OnConnection != nil)
 	}
 }
@@ -84,7 +85,7 @@ func TestNewPlatformTellsTheClientItsConnection(t *testing.T) {
 	for _, ref := range []v1alpha1.ObjectRef{{Namespace: "platform", Name: "slack"}, {Namespace: "team-a", Name: "slack"}} {
 		conn := Connection{Ref: ref, Platform: v1alpha1.PlatformSlack,
 			Credentials: map[string]secret.Value{"botToken": secret.New("xoxb-fake"), "appToken": secret.New("xapp-fake")}}
-		if _, err := cfg.newPlatform(conn, nil, nil); err != nil {
+		if _, err := cfg.newPlatform(t.Context(), conn, nil, nil, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -105,15 +106,18 @@ func canceled(t *testing.T) context.Context {
 }
 
 // A turn is attributed to a person on a platform: the ID is the ChatConnection's spec.platform and the name is the one the
-// broker holds for it. A platform the broker does not know keeps its ID, with no name, so that a prefix still reads true.
+// API holds for it (ActorName). A platform the API does not know keeps its ID, with no name, so that a prefix still reads true.
 func TestActorPlatformNamesThePlatformOfTheConnection(t *testing.T) {
-	for id, want := range map[string]dialect.Platform{
-		v1alpha1.PlatformSlack: {ID: "slack", Name: "Slack"},
-		"teams":                {ID: "teams"},
-		"":                     {},
+	for _, tc := range []struct {
+		spec v1alpha1.ChatConnectionSpec
+		want dialect.Platform
+	}{
+		{v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformSlack}, dialect.Platform{ID: "slack", Name: "Slack"}},
+		{v1alpha1.ChatConnectionSpec{Platform: "teams"}, dialect.Platform{ID: "teams"}},
+		{v1alpha1.ChatConnectionSpec{}, dialect.Platform{}},
 	} {
-		if got := actorPlatform(id); got != want {
-			t.Errorf("actorPlatform(%q) = %+v, want %+v", id, got, want)
+		if got := actorPlatform(tc.spec); got != tc.want {
+			t.Errorf("actorPlatform(%+v) = %+v, want %+v", tc.spec, got, tc.want)
 		}
 	}
 }

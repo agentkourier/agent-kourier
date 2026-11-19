@@ -92,7 +92,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.4.0
+    helm.sh/chart: agent-kourier-0.5.0
   name: agent-kourier-config
   namespace: agent-kourier-system
 ---
@@ -104,7 +104,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.4.0
+    helm.sh/chart: agent-kourier-0.5.0
   name: agent-kourier-token-refresh
   namespace: agent-kourier-system
 spec:
@@ -202,7 +202,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.4.0
+    helm.sh/chart: agent-kourier-0.5.0
   name: agent-kourier
   namespace: agent-kourier-system
 spec:
@@ -216,7 +216,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: e851f5b5c8e7d7a0ade9ab7326c48b7bb748b1a2bc517e94d7aec54cea6c93d8
+        checksum/config: f6ccb03699e7dbcea5b96c9d03653c7fa5f8c6fc6f1ac3c379241ce8458799b5
         example.test/scrape: "false"
       labels:
         app.kubernetes.io/instance: agent-kourier
@@ -233,6 +233,16 @@ spec:
           value: /data/agent-kourier.db
         - name: AGENTKOURIER_LISTEN
           value: :8080
+        - name: AGENTKOURIER_CHAT_LISTEN
+          value: :8081
+        - name: AGENTKOURIER_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: AGENTKOURIER_POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
         - name: AGENTKOURIER_LOG_LEVEL
           value: debug
         - name: AGENTKOURIER_KLOG_V
@@ -264,6 +274,8 @@ spec:
         ports:
         - containerPort: 8080
           name: http
+        - containerPort: 8081
+          name: chat
         readinessProbe:
           httpGet:
             path: /readyz
@@ -325,6 +337,35 @@ spec:
         name: tmp
 ---
 apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  labels:
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.5.0
+  name: agent-kourier-chat
+  namespace: agent-kourier-system
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: agent-kourier.example.test
+    http:
+      paths:
+      - backend:
+          service:
+            name: agent-kourier-chat
+            port:
+              name: chat
+        path: /chat/
+        pathType: Prefix
+  tls:
+  - hosts:
+    - agent-kourier.example.test
+    secretName: agent-kourier-chat-tls
+---
+apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   labels:
@@ -332,7 +373,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.4.0
+    helm.sh/chart: agent-kourier-0.5.0
   name: agent-kourier
   namespace: agent-kourier-system
 spec:
@@ -392,6 +433,16 @@ spec:
     ports:
     - port: 8080
       protocol: TCP
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: ingress-nginx
+    ports:
+    - port: 8081
+      protocol: TCP
   podSelector:
     matchLabels:
       app.kubernetes.io/instance: agent-kourier
@@ -410,7 +461,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.4.0
+    helm.sh/chart: agent-kourier-0.5.0
   name: agent-kourier-data
   namespace: agent-kourier-system
 spec:
@@ -429,7 +480,26 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.4.0
+    helm.sh/chart: agent-kourier-0.5.0
+  name: agent-kourier-leader-label
+  namespace: agent-kourier-system
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.5.0
   name: agent-kourier-secrets
   namespace: agent-kourier-system
 rules:
@@ -449,7 +519,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.4.0
+    helm.sh/chart: agent-kourier-0.5.0
   name: agent-kourier-secrets
   namespace: sre
 rules:
@@ -469,7 +539,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.4.0
+    helm.sh/chart: agent-kourier-0.5.0
   name: agent-kourier-token-refresh
   namespace: sre
 rules:
@@ -490,7 +560,27 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.4.0
+    helm.sh/chart: agent-kourier-0.5.0
+  name: agent-kourier-leader-label
+  namespace: agent-kourier-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: agent-kourier-leader-label
+subjects:
+- kind: ServiceAccount
+  name: agent-kourier
+  namespace: agent-kourier-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.5.0
   name: agent-kourier-secrets
   namespace: agent-kourier-system
 roleRef:
@@ -510,7 +600,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.4.0
+    helm.sh/chart: agent-kourier-0.5.0
   name: agent-kourier-secrets
   namespace: sre
 roleRef:
@@ -530,7 +620,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.4.0
+    helm.sh/chart: agent-kourier-0.5.0
   name: agent-kourier-token-refresh
   namespace: sre
 roleRef:
@@ -550,7 +640,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.4.0
+    helm.sh/chart: agent-kourier-0.5.0
   name: agent-kourier
   namespace: agent-kourier-system
 spec:
@@ -559,6 +649,28 @@ spec:
     port: 8080
     targetPort: http
   selector:
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/name: agent-kourier
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.5.0
+  name: agent-kourier-chat
+  namespace: agent-kourier-system
+spec:
+  ports:
+  - name: chat
+    port: 8081
+    targetPort: chat
+  selector:
+    agentkourier.dev/role: leader
     app.kubernetes.io/instance: agent-kourier
     app.kubernetes.io/name: agent-kourier
   type: ClusterIP
@@ -574,7 +686,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.4.0
+    helm.sh/chart: agent-kourier-0.5.0
   name: agent-kourier
   namespace: agent-kourier-system
 ---
@@ -587,7 +699,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.4.0
+    helm.sh/chart: agent-kourier-0.5.0
   name: agent-kourier-token-refresh
   namespace: agent-kourier-system
 ---
@@ -599,7 +711,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.4.0
+    helm.sh/chart: agent-kourier-0.5.0
     release: kube-prometheus-stack
   name: agent-kourier
   namespace: monitoring
@@ -616,3 +728,79 @@ spec:
     matchLabels:
       app.kubernetes.io/instance: agent-kourier
       app.kubernetes.io/name: agent-kourier
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  labels:
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.5.0
+  name: agent-kourier-agent-kourier-system-leader-label
+spec:
+  failurePolicy: Fail
+  matchConditions:
+  - expression: request.userInfo.username == 'system:serviceaccount:agent-kourier-system:agent-kourier'
+    name: the-brokers-service-account
+  matchConstraints:
+    resourceRules:
+    - apiGroups:
+      - ""
+      apiVersions:
+      - v1
+      operations:
+      - UPDATE
+      resources:
+      - pods
+  validations:
+  - expression: '''authentication.kubernetes.io/pod-name'' in request.userInfo.extra
+      && request.userInfo.extra[''authentication.kubernetes.io/pod-name''] == [object.metadata.name]'
+    message: the broker may change only its own pod, the one its token is bound to
+    reason: Forbidden
+  - expression: variables.newLabels.all(k, k == variables.role || (k in variables.oldLabels
+      && variables.oldLabels[k] == variables.newLabels[k])) && variables.oldLabels.all(k,
+      k == variables.role || k in variables.newLabels)
+    message: the broker may change only the label agentkourier.dev/role of its pod
+    reason: Forbidden
+  - expression: '!(variables.role in variables.newLabels) || variables.newLabels[variables.role]
+      == ''leader'''
+    message: the label agentkourier.dev/role may only be leader
+    reason: Forbidden
+  - expression: 'object.spec == oldObject.spec && (has(object.metadata.annotations)
+      ? object.metadata.annotations : {}) == (has(oldObject.metadata.annotations)
+      ? oldObject.metadata.annotations : {}) && (has(object.metadata.finalizers) ?
+      object.metadata.finalizers : []) == (has(oldObject.metadata.finalizers) ? oldObject.metadata.finalizers
+      : []) && (has(object.metadata.ownerReferences) ? object.metadata.ownerReferences
+      : []) == (has(oldObject.metadata.ownerReferences) ? oldObject.metadata.ownerReferences
+      : [])'
+    message: the broker may change only the labels of its pod, not its spec, annotations,
+      finalizers or owners
+    reason: Forbidden
+  variables:
+  - expression: '''agentkourier.dev/role'''
+    name: role
+  - expression: 'has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}'
+    name: oldLabels
+  - expression: 'has(object.metadata.labels) ? object.metadata.labels : {}'
+    name: newLabels
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  labels:
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.5.0
+  name: agent-kourier-agent-kourier-system-leader-label
+spec:
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: agent-kourier-system
+  policyName: agent-kourier-agent-kourier-system-leader-label
+  validationActions:
+  - Deny

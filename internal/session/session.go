@@ -61,6 +61,10 @@ type Backend struct {
 	// ThreadReplies is the Binding's chat.threadReplies. Anything but mention, the empty value too,
 	// means every person's reply in a thread Agent Kourier owns is a turn (spec 8.2, D38).
 	ThreadReplies v1alpha1.ThreadReplies
+	// RootContext says that the platform of the Binding's connection carries a thread's root (chat.Caps.RootContext): the first
+	// turn of a session that a person's mention opened inside a thread asks Config.ThreadContext for it, whatever ThreadReplies
+	// says (D56). Without it such a turn asks nothing, and a turn of a Binding that is not mention-only reads nothing from the store.
+	RootContext bool
 	// ThreadTTL is how long after its last activity a thread keeps its session (D28).
 	ThreadTTL time.Duration
 	// Agent runs the Binding's turns. Its credentials resolve on every call.
@@ -68,6 +72,10 @@ type Backend struct {
 	// Attribute records the acting user on a turn: the dialect's Attribute. Nil means a turn
 	// carries no attribution.
 	Attribute func(msg *a2a.Message, actor dialect.User)
+	// ParseInteraction is the dialect's: it reads which interaction (dialect.InteractionID) a paused task waits on, so that the
+	// manager takes only an answer to that interaction (Manager.Answer). Nil reads every pause as one with no interaction,
+	// which takes no answer that names one.
+	ParseInteraction func(task a2a.Task) (*dialect.Interaction, error)
 	// Platform is the chat platform of the Binding's ChatConnection, which the manager puts on the actor it
 	// attributes a turn to. The zero value attributes a turn with no platform.
 	Platform dialect.Platform
@@ -98,6 +106,20 @@ type Backend struct {
 	// AcknowledgmentConfigured distinguishes a Binding that explicitly selected the new lifecycle (including disabled)
 	// from older direct session configurations that still use the queued marker.
 	AcknowledgmentConfigured bool
+}
+
+// questionOf is the interaction the paused task waits on (dialect.InteractionID), as the interaction module names the one it
+// records for the pause, or "" when the dialect reads none: a pause with nothing structured to answer, or one it cannot read,
+// which the interaction module does not answer.
+func (b *Backend) questionOf(task a2a.Task) string {
+	if b.ParseInteraction == nil {
+		return ""
+	}
+	in, err := b.ParseInteraction(task)
+	if err != nil || in == nil {
+		return ""
+	}
+	return dialect.InteractionID(*in)
 }
 
 // Auditor records agent calls: *audit.Writer. A failed write is logged, never fatal (spec 8.6).
@@ -321,7 +343,9 @@ type Config struct {
 	// is called off every lock. The
 	// runner calls it once for each turn it sends, in the send of a turn only: never for a task that is followed
 	// again, found again or recovered. NoThreadContext adds nothing. whole says the turn is one that carries what the thread
-	// holds, every author's (store.Reply.WholeThread), and after is empty on the thread's first turn: from its root.
+	// holds, every author's (store.Reply.WholeThread), and after is empty on the thread's first turn: from its root. after is
+	// empty and whole false for the first turn of a session that a person's mention opened inside a thread, whatever
+	// chat.threadReplies says: the hook may return the thread's root, which a platform that carries roots shows (D56).
 	ThreadContext func(ctx context.Context, key Key, binding, after, before string, whole bool) string
 	// After waits for a duration, and defaults to time.After. A test injects a clock.
 	After func(time.Duration) <-chan time.Time

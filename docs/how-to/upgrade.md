@@ -4,7 +4,7 @@ For an operator running the Helm chart: at the end, Agent Kourier runs a newer r
 audit log intact, and you know how to roll back.
 
 Each release publishes a signed multi-arch image and a chart whose default image is that image by digest, as
-[Install with Helm](install-with-helm.md#the-release) describes. The current release is `0.4.0`. To run a build that is not
+[Install with Helm](install-with-helm.md#the-release) describes. The current release is `0.5.0`. To run a build that is not
 released, see [Build from source](install-with-helm.md#build-from-source).
 
 The [release notes](../release-notes.md) say what each release changed and what is breaking. 0.2.0 makes custom resources the chart's default, so a
@@ -934,3 +934,167 @@ config:
   now in `config.connectionNamespaces`, or set `config.chatConnection`.
 - **A broker with a selector beside an own connection or a list rolls back to those alone.** The connections it admitted by label are no longer
   served after the rollback, and their Bindings say `ConnectionNotServed` (read in the source of 0.3.2, not run). Put their namespaces on the list in the same change to keep serving them.
+
+## Upgrade to the release that serves Slack over HTTP
+
+A Slack ChatConnection can now take its events and button presses over HTTP, as Events API and interactivity requests that Slack signs with
+the app's signing secret, instead of over Socket Mode: `spec.slack.mode: http`, with the chat listener that the chart's `chatListener` values
+open ([Configure Slack](configure-slack.md)).
+
+### What changes for every install
+
+These apply whether or not any connection moves to HTTP mode.
+
+- **A database migration, 0030, runs at the first start.** On SQLite and on Postgres it adds the table `press_deliveries`, which keeps
+  a key of each button press for at least an hour, so that a press Slack sends again is recorded once, in Socket Mode as in HTTP mode
+  ([Stored data](../reference/stored-data.md)). It only adds a table.
+- **The chart refuses `podLabels` that set `agentkourier.dev/role`**, with the chat listener on or off
+  (`podLabels must not set agentkourier.dev/role: ...`): the leader writes that label on its own pod, and the chat Service selects it. Take
+  the key out of `podLabels` in the values you upgrade with.
+- **`AGENTKOURIER_POD_NAMESPACE` needs `AGENTKOURIER_CHAT_LISTEN`.** A Deployment of your own that sets the new variable without the chat
+  listener exits with [code 2](troubleshoot.md#the-pod-exits-with-code-2). The chart sets it only with `chatListener.enabled`.
+- **Socket Mode is unchanged.** A ChatConnection that does not set `spec.slack.mode` is in Socket Mode, as before, and its Secret keeps
+  `botToken` and `appToken`. `chatListener.enabled` is false by default, so the upgrade adds no port, Service, Role or admission policy.
+
+### Move a connection to HTTP mode
+
+- **The chat listener needs cluster-scoped objects.** With `chatListener.enabled` and `rbac.create` the chart installs a
+  ValidatingAdmissionPolicy (`admissionregistration.k8s.io/v1`) and its binding, `<fullname>-<namespace>-leader-label`, beside a Role that
+  may patch the release namespace's pods ([Security model](../explanation/security.md#the-chat-port)). Whoever runs `helm upgrade` needs the
+  right to create both kinds.
+- **Run the chat listener on Kubernetes 1.33 or later.** The chart checks no Kubernetes version for the admission policy, on either route,
+  and its tests run the policy on 1.33 and 1.37 only. The custom resource route requires 1.33 already; on the ConfigMap route, check the
+  cluster's version yourself.
+- **Upgrade first, then set the mode.** Upgrade the chart, with the broker and the CRDs, before any ChatConnection sets `spec.slack.mode`.
+  A broker of an earlier release does not know the field: on the ConfigMap route it refuses it (`spec.slack: unknown field`, exit code 2),
+  and on custom resources, once the later release's CRDs are installed, it ignores it and runs the connection in Socket Mode, which needs `appToken`
+  ([Troubleshoot](troubleshoot.md#the-pod-exits-with-code-2)). CRDs of an earlier release do not have the field either, so the API server refuses it there (or drops it, for a client that does not ask for strict field validation).
+
+To move a connection that runs in Socket Mode to HTTP mode, after the upgrade:
+
+1. Add `signingSecret` to its Secret, and keep `appToken` there until the move is done, so that you can go back by removing the mode.
+2. In one `helm upgrade`, set `chatListener` (and its Ingress, and `networkPolicy.chatFrom` if the policy is on) and the connection's
+   `spec.slack.mode: http`. A team's ChatConnection is the team's to change, on a broker whose chart has the chat listener on.
+3. In the app's settings, turn Socket Mode off, and set the Events and Interactivity request URLs, which Slack checks against the broker
+   that now serves them ([Configure Slack](configure-slack.md), steps 2 and 7).
+
+Between steps 2 and 3 the broker takes nothing over Socket Mode, and Slack does not yet send over HTTP; what Slack does with the events of
+that time is Slack's, and not checked here. Make the two changes close together, at a quiet time. Run HTTP mode on Postgres with two
+replicas: with SQLite every rollout leaves Slack nothing to answer it until the new pod leads
+([High availability](../explanation/high-availability.md#slack-in-http-mode)).
+
+### Roll back from the release that serves Slack over HTTP
+
+- **Put every connection back in Socket Mode first**: remove `spec.slack` from its ChatConnection, with `appToken` in its Secret, and turn
+  Socket Mode back on in the app. A broker of an earlier release cannot run a connection in HTTP mode, and on the ConfigMap route refuses
+  `spec.slack` whatever it holds (above).
+- **Take `chatListener` and `networkPolicy.chatFrom` off the values in the same change.** The chart of an earlier release refuses keys it does
+  not have (its values schema, read in the chart of 0.4.0, not run).
+- **The table `press_deliveries` stays, unread.** 0.4.0 does not read it and records each delivery of a press, as it did. At start it logs
+  at WARN `the database schema is newer than this build of Agent Kourier`, with `newest_known_migration` 29 and `newest_in_database` 30, and
+  starts (read in the source of 0.4.0, not run).
+
+## Upgrade to the release that shows each Binding's connection
+
+The chat IDs of a Binding are checked as in 0.4.0: the schema and the broker's load hold `chat.channel`, a `botMessage` trigger's `from.id`,
+a mention's `user` and `interactions.approverGroups` to Slack's shapes and to the same length caps, with the same messages, so every
+Binding that 0.4.0 took loads as it did. What changes:
+
+- **New columns in `kubectl get`.** `kubectl get akbinding` shows `CONNECTION`, the name of the Binding's ChatConnection, before `CHANNEL`.
+  `kubectl get akconnection` shows `PLATFORM` between `NAME` and `AGE`; it showed `NAME` and `AGE` alone before. A script that reads the
+  columns by position needs the new order. The Binding and ChatConnection CRDs change, and their schema hashes with them: the chart applies
+  them with the release when `crds.install` is true, or unset on `config.source: crds`; if you apply the CRDs yourself, apply
+  `charts/agent-kourier/files/crds` again.
+- **Two more reasons a Binding can be refused for.** The broker checks a Binding once more against the platform of its ChatConnection when
+  it reads the two together, and refuses one that names an ID of another shape with `InvalidPlatformID` or asks for a feature the platform
+  does not serve with `UnsupportedOnPlatform` ([What each platform supports](../reference/platforms.md)). The schema holds Slack's shapes
+  already and Slack serves every feature the broker checks, so no Binding on Slack gets either. `agentkourier_config_binding_rejections`
+  has a series for each, at 0.
+
+**Roll back.** No stored object depends on this release: the chat ID rules are 0.4.0's. The CRDs of 0.4.0 have neither column.
+
+## Upgrade to the release that takes webhooks
+
+A ChatConnection can take signed webhooks from another service: `spec.platform: webhook`, on the chat listener
+([Start agents from webhooks](receive-webhooks.md)). The platform is experimental. A config of Slack connections loads as it did in 0.5.0.
+What changes for every install:
+
+- **Apply the CRDs again.** The ChatConnection CRD changes for the platform `webhook` and `spec.webhook`, and the Binding CRD for the
+  trigger type `webhookEvent`, the output `none` and a webhook Binding's channel; their schema hashes change with them. The chart applies
+  them with the release when `crds.install` is true, or unset on `config.source: crds`. If you apply the CRDs yourself, apply
+  `charts/agent-kourier/files/crds` again. Until then the API server refuses a webhook ChatConnection, and a broker on custom resources
+  logs at WARN `the schema hash of a CRD is not the one this broker was built with` and sets `agentkourier_crd_schema_state{state="mismatch"}`
+  to 1 for the two CRDs.
+- **`agentkourier_chat_listener_requests_total` has two new labels**, `platform` and `connection` ([Metrics](../reference/metrics.md)). A
+  rule that sums the counter, or selects by `outcome` alone, reads as before. A rule or a recording rule that keeps every label gets more
+  series: one for each platform and connection the leader serves, and `unknown`.
+- **Webhooks add no database migration** and no chart value; the migrations of this release are Microsoft Teams' ([below](#upgrade-to-the-release-that-takes-microsoft-teams-chatconnections)).
+
+### Roll back from the release that takes webhooks
+
+- **Delete the webhook ChatConnections and their Bindings first**, and turn the webhooks off at each service, which otherwise send to a URL
+  that no longer runs. On the ConfigMap route, take them out of the config in the same change. A broker of 0.5.0 takes `spec.platform`
+  `slack` alone, and neither the trigger type `webhookEvent` nor the output `none`: on the ConfigMap route it does not load a config that
+  holds them and exits with [code 2](troubleshoot.md#the-pod-exits-with-code-2); on custom resources it refuses the connection and the
+  Bindings that name it, and the refused connection still takes one of the 16 places (read in the source of 0.5.0, not run).
+- **Then roll back the broker and the CRDs.** The CRDs of 0.5.0 do not have the platform `webhook`, so the API server refuses a webhook
+  ChatConnection written after they are applied. What it does with one that is still stored is Kubernetes's own behaviour, not checked here.
+- **Rules that select the listener counter by `platform` or `connection`** match nothing on 0.5.0, which has neither label.
+- **The sessions that webhook events started stay in the store**, as the sessions of any deleted Binding do; 0.5.0 has no table to undo.
+
+## Upgrade to the release that takes Microsoft Teams ChatConnections
+
+A ChatConnection may now say `spec.platform: teams`, with a `spec.teams` block ([ChatConnection](../reference/chatconnection.md)), and
+the schema and the broker's load take Microsoft Teams' chat IDs beside Slack's. The broker runs a teams connection in `http` mode, on
+its chat listener, or in `socket` mode, with what [What each platform supports](../reference/platforms.md) says it does not do yet. What changes:
+
+- **A teams ChatConnection runs in `http` or `socket` mode.** `spec.teams.tenantID` and `spec.teams.appID` are required, each a GUID in
+  lowercase hex; `spec.teams.mode` is `http` or `socket`, and `http` when left out; `spec.teams.notificationURL` is optional, an `https`
+  URL whose path is the connection's own route, `/chat/teams/<namespace>/<name>`. Its Secret needs the key `clientSecret`, in either mode.
+  `spec.teams` on a Slack connection, and `spec.slack` on a teams one, are refused. A teams ChatConnection in `http` mode needs the chat listener
+  (`AGENTKOURIER_CHAT_LISTEN`); with none it is not run: as the broker's own connection it stops the broker's start with a wiring error
+  that says why, and as a team's connection it is not started, and the broker logs why. In `socket` mode it needs no chat listener: the
+  leader opens a WebSocket to Microsoft Teams, which Microsoft calls a public preview.
+  Nothing changes for a Slack connection.
+- **Other apps' posts come through Microsoft Graph.** Microsoft Teams sends a bot no post of another app, so a teams connection reads
+  the bound channels' posts from Microsoft Graph, in either mode: by Graph's notifications at `spec.teams.notificationURL` when it is
+  set, which needs the chat listener and a public HTTPS route to it, and by polling the channels when it is not
+  ([Alerts on Microsoft Teams](../reference/platforms.md#alerts-on-microsoft-teams)). That is how an alert that Alertmanager posts
+  through a Workflows webhook reaches a `botMessage` trigger. Graph reads under the resource-specific permission
+  `ChannelMessage.Read.Group`, which the Teams app's manifest asks for and its install in the team grants.
+  [Configure Microsoft Teams](configure-teams.md) sets up the bot, the app, the connection and the alert route.
+- **Wider chat IDs at apply and load.** `chat.channel` takes a Microsoft Teams channel ID, `19:…@thread.tacv2` or `@thread.skype`, and
+  its cap goes from 32 bytes to 140. A `botMessage` trigger's `from.id` and a mention's `user` take a Microsoft Entra ID, a GUID in
+  lowercase hex, and their caps go to 36 bytes (a Slack user ID is still bounded at 21 by its pattern). `interactions.approverGroups`
+  keeps Slack's shape and its 32 bytes. The messages of an ID with neither platform's shape now name both shapes, for example
+  `spec.chat.channel: invalid channel "general": must be a channel ID such as C0123456789 (Slack) or 19:…@thread.tacv2 (Microsoft Teams), not a name`.
+  A script that matches the earlier message needs the new one.
+- **The broker holds each Binding to its own platform.** A Microsoft Teams ID on a Slack connection, a Slack ID on a teams connection,
+  and a Slack channel or sender ID of 33 to 140 bytes (36 for a sender), which the schema now takes, are refused when the broker reads the
+  Binding with its ChatConnection, with `InvalidPlatformID`; `approverGroups` on a teams connection is refused with
+  `UnsupportedOnPlatform` ([What each platform supports](../reference/platforms.md)). A Binding that 0.5.0 took has Slack's shapes within
+  Slack's caps, and loads as it did. `agent-kourier dry-run` holds a Binding to Slack's shapes and caps, as before.
+- **The Binding and ChatConnection CRDs change**, and their schema hashes with them: the chart applies them with the release when
+  `crds.install` is true, or unset on `config.source: crds`; if you apply the CRDs yourself, apply `charts/agent-kourier/files/crds` again.
+  [Limits](../reference/limits.md#write-a-binding-an-agentbackend-or-a-chatconnection) has the new caps.
+- **A database migration, 0031, runs at the first start.** On SQLite and on Postgres it adds the table `teams_conversations`, which
+  keeps, for each channel of a teams connection, where to post to it and which team it is in, so that a restart or a change of leader
+  posts where the channel's last activity said ([Stored data](../reference/stored-data.md)). The leader writes it from the activities of a
+  teams connection, and on custom resources deletes a connection's rows when its ChatConnection is deleted. It only adds a table. A broker of
+  an earlier release, after a rollback, does not read the table or delete from it, and logs at start that the database schema is newer than
+  its build.
+- **A database migration, 0032, runs at the first start.** On SQLite and on Postgres it adds the table `teams_poll_positions`, which keeps
+  where the polls of each channel of a teams connection with no `notificationURL` stand, so that a restart or a change of leader resumes
+  them ([Stored data](../reference/stored-data.md)). It only adds a table. A broker of an earlier release, after a rollback, does not read
+  it or delete from it, and logs at start that the database schema is newer than its build.
+
+### Roll back from the release that takes Microsoft Teams ChatConnections
+
+**Delete every teams ChatConnection, and every Binding that names a Microsoft Teams ID, before you roll back.** A broker of an earlier
+release refuses `spec.platform: teams` and a Microsoft Teams ID as invalid, and on the ConfigMap route `spec.teams` as an unknown field:
+there the config does not load (exit code 2). On custom resources a Binding with a Microsoft Teams ID is refused with `InvalidSpec` and
+not served; a teams ChatConnection, which has no status, is refused when the broker reads it: as the broker's own connection it stops the
+start (exit code 2), and as a team's it is not served and each of its Bindings says `ConnectionRejected`. The CRDs of an earlier release do not
+have `spec.teams` and hold each chat ID to Slack's shape and caps, so the API server refuses a new write of such an object. No other stored
+object depends on this release. On custom resources, a teams ChatConnection deleted while this release still runs also takes its rows of
+`teams_conversations` and `teams_poll_positions` with it; on the ConfigMap route, and for one deleted after the rollback, the rows stay, and an earlier release does not read them.

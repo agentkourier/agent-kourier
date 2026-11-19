@@ -5,8 +5,6 @@ package interact
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -117,22 +115,6 @@ type Pause struct {
 	Recovered bool
 }
 
-// InteractionID is the ID a pause becomes: a hash of its kind, task, request ID and tool IDs, so the
-// same pause always has the same ID and agent text never reaches one.
-func InteractionID(in dialect.Interaction) string {
-	tools := make([]string, len(in.Tools))
-	for i, t := range in.Tools {
-		tools[i] = t.ID
-	}
-	slices.Sort(tools)
-	var b strings.Builder
-	for _, f := range append([]string{string(in.Kind), string(in.TaskID), in.RequestID}, tools...) {
-		fmt.Fprintf(&b, "%d:%s;", len(f), f) // length-prefixed, so no two field lists hash alike
-	}
-	sum := sha256.Sum256([]byte(b.String()))
-	return "ix-" + hex.EncodeToString(sum[:])[:32]
-}
-
 // errAuthRequired is the cause of refusing a task that asks for authentication: no dialect can answer it from the thread,
 // and with no interaction it would have no prompt and no timeout, so the runner parked on it would never be released.
 var errAuthRequired = fmt.Errorf("%w: the agent asked for authentication (auth-required), which Agent Kourier does not support", dialect.ErrUnusablePause)
@@ -183,8 +165,8 @@ func (i *Intake) Paused(ctx context.Context, p Pause) error {
 	case store.InteractionPending:
 		if row.MessageRef == "" {
 			err := i.post(ctx, p, row, *in)
-			if errors.Is(err, chat.ErrTooLarge) {
-				return i.refuseTooLarge(ctx, p, b, row, err)
+			if errors.Is(err, chat.ErrTooLarge) || errors.Is(err, chat.ErrInvalid) {
+				return i.refuseUnshowable(ctx, p, b, row, err)
 			}
 			if errors.Is(err, outbox.ErrAbandoned) && in.Kind == dialect.ToolApproval {
 				return i.refuseAbandoned(ctx, p, b, row, err)
@@ -426,7 +408,7 @@ func (i *Intake) record(ctx context.Context, p Pause, b Binding, in dialect.Inte
 	case in.Kind == dialect.ToolApproval:
 		kind = store.InteractionToolApproval
 	}
-	id := InteractionID(in)
+	id := dialect.InteractionID(in)
 	row := store.Interaction{TextReplies: in.TextReplies, ID: id, Key: p.Key, TaskID: string(in.TaskID), Kind: kind, Request: request, CreatedAt: at, Deadline: at.Add(b.Timeout)}
 	if _, err := i.cfg.Store.CreateInteraction(ctx, row); err != nil {
 		return store.Interaction{}, fmt.Errorf("interact: record %s: %w", id, err)
@@ -493,7 +475,8 @@ func keyOf(in dialect.Interaction) pauseKey {
 }
 
 // post sends the prompt through the outbox, role reply, source the interaction ID (spec 8.6 step 5). A prompt
-// the platform cannot show in one message is an error wrapping chat.ErrTooLarge, before anything is sent.
+// the platform cannot show in one message is an error wrapping chat.ErrTooLarge, and one it cannot show at all (a prompt
+// of tools on a platform that shows no tool approvals) an error wrapping chat.ErrInvalid, before anything is sent.
 //
 // A question's prompt is made from the pause as parsed (promptOf). An approval's is made from the stored request
 // (row.Request) and not from the pause just parsed, with toolsOf and nothing else: the same tools in another order are the
@@ -503,7 +486,7 @@ func keyOf(in dialect.Interaction) pauseKey {
 // exactTools holds a raw one to, and checking it again would refuse a pause that was accepted. The exactness of what is
 // shown is checked where the raw pause is: Paused calls exactTools on it before it records anything, and post is called
 // from nowhere else; promptOf, which checks and redacts, is the way to the prompt of a raw approval. Whether the stored
-// prompt fits the platform is Fits's to say, below, and a prompt that does not is refused as too large by the caller.
+// prompt fits the platform is Fits's to say, below, and a prompt that does not is refused as unusable by the caller.
 func (i *Intake) post(ctx context.Context, p Pause, row store.Interaction, in dialect.Interaction) error {
 	var prompt chat.Prompt
 	var err error

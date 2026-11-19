@@ -134,7 +134,7 @@ func TestAQuestionStoredBeforeRedactionIsStillThePauseWhenItComesAgain(t *testin
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(in)
-	legacy := store.Interaction{ID: interact.InteractionID(*in), Key: key, TaskID: "task-1", Kind: store.InteractionAskUser, Request: raw, CreatedAt: t0, Deadline: t0.Add(timeout)}
+	legacy := store.Interaction{ID: dialect.InteractionID(*in), Key: key, TaskID: "task-1", Kind: store.InteractionAskUser, Request: raw, CreatedAt: t0, Deadline: t0.Add(timeout)}
 	if _, err := r.st.CreateInteraction(t.Context(), legacy); err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestAnApprovalStoredBeforeRedactionIsRefusedAsUnusable(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(in)
-	legacy := store.Interaction{ID: interact.InteractionID(*in), Key: key, TaskID: "task-1", Kind: store.InteractionToolApproval, Request: raw, CreatedAt: t0, Deadline: t0.Add(timeout)}
+	legacy := store.Interaction{ID: dialect.InteractionID(*in), Key: key, TaskID: "task-1", Kind: store.InteractionToolApproval, Request: raw, CreatedAt: t0, Deadline: t0.Add(timeout)}
 	if _, err := r.st.CreateInteraction(t.Context(), legacy); err != nil {
 		t.Fatal(err)
 	}

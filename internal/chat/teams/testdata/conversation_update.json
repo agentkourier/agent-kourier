@@ -1,0 +1,40 @@
+{
+  "type": "conversationUpdate",
+  "id": "f:00000000-0000-4000-8000-0000000000c1",
+  "membersAdded": [
+    {
+      "id": "28:22222222-3333-4444-8555-666666666666"
+    }
+  ],
+  "channelData": {
+    "team": {
+      "id": "19:KourierStandInChannelForTestsOnly0000000000a@thread.tacv2",
+      "name": "Example Team",
+      "aadGroupId": "33333333-4444-4555-8666-777777777777"
+    },
+    "eventType": "teamMemberAdded",
+    "tenant": {
+      "id": "11111111-2222-4333-8444-555555555555"
+    }
+  },
+  "channelId": "msteams",
+  "serviceUrl": "https://smba.trafficmanager.net/amer/11111111-2222-4333-8444-555555555555/",
+  "from": {
+    "id": "29:1test-user-not-a-real-id",
+    "name": "Test User",
+    "aadObjectId": "00000000-0000-4000-8000-000000000001"
+  },
+  "conversation": {
+    "isGroup": true,
+    "conversationType": "channel",
+    "tenantId": "11111111-2222-4333-8444-555555555555",
+    "id": "19:KourierStandInChannelForTestsOnly0000000000a@thread.tacv2"
+  },
+  "recipient": {
+    "id": "28:22222222-3333-4444-8555-666666666666",
+    "name": "Agent Kourier"
+  },
+  "timestamp": "2026-11-18T01:10:00.000Z",
+  "localTimestamp": "2026-11-18T01:10:00.000Z",
+  "localTimezone": "UTC"
+}

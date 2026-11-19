@@ -8,6 +8,8 @@ ROOT=$(cd "${HERE}/../.." && pwd)
 # shellcheck source-path=SCRIPTDIR source=substrate.sh
 . "${HERE}/substrate.sh"
 use_tier ax
+# apply_doubles reads E2E_SLACK_MODE, and this tier's Agent Kourier (ci/ax-values.yaml) has no chat listener.
+[ "${E2E_SLACK_MODE:-socket}" = socket ] || die "E2E_SLACK_MODE=http is for the fast and full tiers: the AX tier runs Socket Mode"
 CTX=kind-${CLUSTER}
 K=(kubectl --context "${CTX}")
 H=(helm --kube-context "${CTX}")

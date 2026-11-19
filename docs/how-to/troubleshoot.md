@@ -113,12 +113,17 @@ The five minutes and the 200 pages are constants of the binary (`agent.DefaultLo
 agent-kourier: slack rejected the tokens: invalid_auth
 ```
 
-Slack refused a token of the broker's own connection for good, so Agent Kourier stops rather than retry. A broker with no own connection
-never ends this way: every connection it serves is a team connection. (A team ChatConnection whose
-token Slack refuses does not end the process: that connection stops, its `agentkourier_chat_connected` says 0, the log has a WARN that
-names it and Slack's code, and its Bindings show `ChatCredentialsRejected` on `ChannelJoined`. It starts again by itself when its Secret
-or ChatConnection changes.) The word at the end is Slack's own code: `invalid_auth`, `not_authed`, `token_revoked`, `token_expired` or `account_inactive`. The usual cause is a token copied incompletely or
-from another Slack app, or one that has been revoked since.
+The chat platform (Slack; for a Teams connection, Microsoft Entra or the Bot Connector) refused the credentials of the broker's own
+connection for good, so Agent Kourier stops rather than retry. A broker with no own connection never ends this way: every connection
+it serves is a team connection. (A team ChatConnection whose credentials the platform refuses does not end the process: that
+connection stops, its `agentkourier_chat_connected` says 0, the log has a WARN that names it and the platform's code, and its Bindings
+show `ChatCredentialsRejected` on `ChannelJoined`. It starts again by itself when its Secret or ChatConnection changes.)
+
+**Slack.** The word at the end is Slack's own code: `invalid_auth`, `not_authed`, `token_revoked`, `token_expired` or
+`account_inactive`. The usual cause is a token copied incompletely or from another Slack app, or one that has been revoked since.
+
+In HTTP mode only the bot token is sent to Slack: the signing secret is never checked by Slack, and a wrong one shows as Slack's
+requests answered 401 ([below](#slacks-requests-are-answered-401)), not as this exit.
 
 Agent Kourier checks the bot token before it opens the Socket Mode connection with the app token. At the default `info`
 log level, if the last `slack:` line before the error is not `slack: socket mode connecting` (or `slack: socket mode reconnecting`),
@@ -130,6 +135,23 @@ Replace the Secret with the right tokens, then restart rather than wait out the 
 ```sh
 kubectl -n agent-kourier create secret generic slack \
   --from-literal=botToken="$SLACK_BOT_TOKEN" --from-literal=appToken="$SLACK_APP_TOKEN" \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n agent-kourier rollout restart deploy/agent-kourier
+```
+
+**Microsoft Teams.** The line reads `agent-kourier: teams rejected the tokens: <code>`, with `(reported by a call)` after it when a
+post or another call found the refusal rather than the connection's start. The broker asks Microsoft Entra for the bot's token as the
+connection starts, so a client secret, `spec.teams.appID` or `spec.teams.tenantID` that Entra refuses (a 400 or a 401) ends the start;
+the code is Entra's OAuth error code. The same exit follows when the Bot Connector refuses the bot's token (401) or answers that an
+admin disabled the app (403 `BotDisabledByAdmin`), with the Bot Connector's code, and in socket mode when the socket's connect call is
+answered 401, with no code. Entra's refusal of the token for Microsoft Graph does not end the process. A client secret stored with a
+newline at its end is sent with it ([Store the client secret](configure-teams.md#2-store-the-client-secret)). The dry run reads only
+Slack, so it does not test these credentials. Write the right value in the file as that step says, replace the Secret `teams` from it, then
+restart, and delete the file:
+
+```sh
+kubectl -n agent-kourier create secret generic teams \
+  --from-env-file="$HOME/.config/agent-kourier/teams-secret.env" \
   --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n agent-kourier rollout restart deploy/agent-kourier
 ```
@@ -184,7 +206,22 @@ it cannot use. A restart fails the same way. The text after `the broker cannot b
   `config.chatConnection`; check `extraEnv` for one of your own.
 - `AGENTKOURIER_CONNECTION_NAMESPACES item 2 is not a namespace name` (the position among the comma-separated items, never the value), and `AGENTKOURIER_CONNECTION_NAMESPACES is set with AGENTKOURIER_CONFIG_SOURCE=files`
   or `AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR is set with AGENTKOURIER_CONFIG_SOURCE=files`: the admission list has an item that is not a DNS-1123 label (no wildcard), or the list or the selector is set on the files route, which serves the one ChatConnection of its directory. The chart sets them from `config.connectionNamespaces` and `config.connectionNamespaceSelector`, and refuses a non-empty list, or any selector, `{}` included, with `files` while it renders.
-- `ChatConnection agent-kourier/slack: read botToken of Secret agent-kourier/slack:` (or `appToken`): the
+- `ChatConnection agent-kourier/slack is in Slack HTTP mode, and the broker has no chat listener for Slack to send to: set AGENTKOURIER_CHAT_LISTEN`:
+  the broker's own connection sets `spec.slack.mode: http`, and the broker opens no chat listener, so Slack would have nowhere to send.
+  Every replica refuses it, a standby too. Set `chatListener.enabled: true` in the chart's values (it sets the variable), or put the connection
+  back in Socket Mode. A team connection in HTTP mode on such a broker does not stop it: that connection is not started, and the log has a
+  WARN, `the ChatConnection cannot be started`, that names it and gives the same reason.
+- `the leader label cannot be written on the pod agent-kourier/agent-kourier-6d9f-x2k4p: the broker needs patch on pods in its namespace, and
+  AGENTKOURIER_POD_NAMESPACE and AGENTKOURIER_POD_NAME must name its own pod`: with the chat listener, the first write of the leader label
+  (its removal, as the replica starts) was refused as forbidden, or for a pod the API server does not have, which no retry mends. The ERROR line
+  `writing the leader label of the pod failed; trying again` just before has the API server's answer in full. Forbidden is the Role
+  `<fullname>-leader-label` missing (`rbac.create: false`, or a Role of your own without `patch` on `pods`), or the chart's admission policy
+  refusing the write: its message says which rule, such as the pod not being the one the broker's token is bound to, which is what
+  `AGENTKOURIER_POD_NAME` or `AGENTKOURIER_POD_NAMESPACE` set by hand to another existing pod meets. A pod not found is a name or
+  namespace of a pod that does not exist. The chart sets both from the downward API. Without the chart's policy (`rbac.create: false`,
+  with a Role of your own), a name set to another existing pod is not refused: that pod is labeled, and the chat Service sends it Slack's
+  requests.
+- `ChatConnection agent-kourier/slack: read botToken of Secret agent-kourier/slack:` (or `appToken`, or `signingSecret` in HTTP mode): the
   key is in the Secret but its value is empty. `kubectl create secret --from-literal=botToken="$SLACK_BOT_TOKEN"` stores an
   empty value when the variable is not set in that shell. Check that both variables are set, and replace the Secret as
   for [code 1](#the-pod-exits-with-code-1).
@@ -252,8 +289,13 @@ resource's kind and name. The usual problems:
 - `required`, or a value that does not match its pattern, such as a channel name where the channel ID belongs.
 - `not found` on a reference: a Binding's `connectionRef` or `backendRef` that names no resource, or a Secret that
   does not exist in that namespace.
-- `has no key "botToken"` (or `appToken`): the Slack Secret exists, but not with these key names. They are case
-  sensitive.
+- `has no key "botToken"` (or `appToken`, or `signingSecret` in HTTP mode): the Slack Secret exists, but not with the key names of the
+  connection's mode. They are case sensitive.
+- `spec.slack: unknown field` on a ChatConnection: the broker is from a release before Slack HTTP mode, and the values are of a later one.
+  Upgrade the chart, and the broker with it, before a ChatConnection sets `spec.slack.mode`
+  ([Upgrade](upgrade.md#upgrade-to-the-release-that-serves-slack-over-http)). On custom resources, once the later release's CRDs are
+  installed, such a broker ignores the field instead, runs the connection in Socket Mode, and for its own connection exits with
+  ``read appToken of Secret ...`` (code 2, above) when the Secret holds the keys of HTTP mode. The CRDs of the earlier release do not have the field either, so the API server refuses it there (or drops it, for a client that does not ask for strict field validation).
 
 The line is cut after 300 bytes, so with several problems you may see only the first. For the problems in the files
 themselves, run `agent-kourier dry-run` against the rendered values, as in
@@ -382,12 +424,95 @@ Agent Kourier never saw the message. Check, in this order:
 1. The bot is a member of the channel. An invite is separate from the app being installed.
 2. The Binding's `chat.channel` is the channel ID (`C…`; `G…` for an older private channel), not the name.
 3. The app subscribes to `app_mention`, `message.channels` and `message.groups`, and Socket
-   Mode is on.
-4. Only one process uses the app token. A second consumer receives a share of the events. That includes a second ChatConnection of the same Slack app: one broker serves the older and
+   Mode is on; or, for a connection with `spec.slack.mode: http`, Socket Mode is off and the Events request URL is the
+   connection's, verified by Slack ([below](#slack-cannot-verify-the-request-url)).
+4. In Socket Mode, only one process uses the app token. A second consumer receives a share of the events. That includes a second ChatConnection of the same Slack app: one broker serves the older and
    not the younger, whose Bindings say `ConnectionNotServed` ([Two connections of one Slack app](team-slack-app.md#two-connections-of-one-slack-app)).
    The `slack: socket mode connected` line has a `num_connections` field. A fresh start
    can read 8 with no other consumer and replies still arriving, so treat a
    number above 1 as a reason to look and not as proof.
+
+## Slack cannot verify the request URL
+
+Slack checks an Events request URL by sending a `url_verification` request to it. Agent Kourier answers it with its challenge once the
+signature holds, but only on the replica that leads, while it runs the connection. Go along the path from Slack to the broker:
+
+1. **The broker serves the connection.** The leader's log has `the chat listener serves the connection` with the `path`, such as
+   `/chat/slack/agent-kourier/slack`. The URL in Slack must end in that path exactly: the namespace and name are the ChatConnection's.
+   No such line means the leader does not run the connection: it is not in HTTP mode, it is not served (its Bindings say why), or the
+   broker has no chat listener (exit code 2, [above](#the-pod-exits-with-code-2)).
+2. **A pod carries the leader label and is Ready.** The chat Service selects the pod labeled `agentkourier.dev/role=leader`:
+
+    ```sh
+    kubectl -n agent-kourier get pods -l agentkourier.dev/role=leader
+    kubectl -n agent-kourier get endpointslices -l kubernetes.io/service-name=agent-kourier-chat
+    ```
+
+    No such pod, or no ready endpoint, means no replica leads yet, or the leader's label write keeps failing
+    (`agentkourier_leader_pod_label_writes_total{result="failed"}`, and an ERROR `writing the leader label of the pod failed; trying again`),
+    or the pod is not Ready ([below](#readyz-fails-on-leader-label)). `agent-kourier-chat` is `<fullname>-chat`.
+3. **The request reaches the chat listener.** On the leader, `agentkourier_chat_listener_requests_total` grows with each attempt. If it does
+   not, the request stops before the pod: the host's DNS, the certificate, the Ingress (it sends only the prefix `/chat/`), or the
+   NetworkPolicy, which admits only `networkPolicy.chatFrom` to the chat port. `not_found` is a path that is not
+   `/chat/<platform>/<namespace>/<name>`; `no_route` (503) is a connection that does not run on that replica. On the leader, the requests to
+   a connection it serves carry `connection="<namespace>/<name>"`, whether the connection runs or not. A request URL that names a connection
+   the leader does not serve, such as one with a misspelt namespace, is counted under `connection="unknown"` with `platform="slack"`:
+
+    ```promql
+    sum by (outcome, connection) (increase(agentkourier_chat_listener_requests_total{platform="slack"}[15m]))
+    ```
+4. **The signature holds.** `agentkourier_slack_http_requests_total{outcome="challenge"}` counts a check answered (once the connection's
+   first run has started; one before is answered and not counted). `bad_signature` or `stale` (401) is the next section.
+
+## Slack's requests are answered 401
+
+`agentkourier_slack_http_requests_total` says which:
+
+- `bad_signature`: the signature is not the one the connection's `signingSecret` makes, or the signature or timestamp header is missing.
+  The usual cause is the signing secret of another app, or a value copied incompletely; the Secret must hold the **Signing Secret** of
+  the app whose request URL this is, not its client secret or a token. Something between Slack and the broker that changes the body
+  (a proxy that re-encodes it) or drops the `X-Slack-*` headers fails it too, since the signature covers the exact bytes.
+- `stale`: `X-Slack-Request-Timestamp` is more than 5 minutes from the broker's clock, either way. Check the clock of the node the leader
+  runs on. A request replayed later than that is refused the same way.
+
+The broker's own connection reads its Secret when it starts: after you fix the Secret, restart the Deployment. A team connection restarts
+by itself when its Secret changes.
+
+## Slack's requests are answered 503
+
+A 503 tells Slack to send the request again. Which part answered it says why:
+
+- **Nothing in Agent Kourier counted it.** The chat Service had no endpoint: no replica leads, during a takeover or a SQLite rollout, or
+  the leader's pod lacks the label or is not Ready. Whatever is in front of the Service, your Ingress controller or load balancer,
+  answered it. See
+  [High availability](../explanation/high-availability.md#slack-in-http-mode) for how long a takeover takes.
+- **`agentkourier_chat_listener_requests_total`**, with `Retry-After`. The leader counts a request under the connection's name in
+  `connection` while it serves the connection, running or not; a standby, and the leader for a connection it does not serve, count it under
+  `unknown`:
+    - `no_route`: the connection does not run on that replica. A standby answers so, and so does a leader whose connection is not
+      started, has stopped (its credentials rejected, say) or is not served. A standby should get none: if it does, something other than
+      the chart's chat Service sends requests to every pod.
+    - `busy`: 32 requests were already being handled, or the bodies being read filled the listener's 32 MiB. A steady count means the
+      handlers are slow to answer, or many clients send at once ([Limits](../reference/limits.md#run-the-broker)).
+- **`agentkourier_slack_http_requests_total`**, from the Slack adapter of the connection:
+    - `not_running`: the connection's run is not taking requests, as between two attempts to start it (its `auth.test` failed: the log
+      has `slack connection ended; connecting again`).
+    - `shed`: the adapter's lanes were full (`agentkourier_slack_events_shed_total` says which bound).
+    - `withheld`: the broker did not take the event or the press (a WARN `slack: message not taken; left unacknowledged for Slack to send again`,
+      or `slack: interaction not taken; left unacknowledged`, says why), or `timeout`: it had not taken it within 2 seconds.
+
+## `/readyz` fails on `leader-label`
+
+```text
+not ready: leader-label: the leader label of the pod has not been written yet; it may still be on from an earlier process
+```
+
+With the chat listener, every replica takes the leader label off its own pod as it starts, and is not ready until a write of the label
+has succeeded. Until then it is in no Service, the health and metrics Service included, and a rolling update on Postgres waits for it.
+The log has an ERROR for each failed write, `writing the leader label of the pod failed; trying again`, with the API server's answer, and
+`agentkourier_leader_pod_label_writes_total{result="failed"}` grows. The writes are tried again, up to every 30 seconds, for as long as
+the broker runs. A patch that times out or gets a server error is the API server, or something in front of it, that answers reads and
+not this write. A write refused as forbidden, or for a pod that does not exist, fails the start instead ([exit code 2](#the-pod-exits-with-code-2)).
 
 ## A Binding is not accepted
 
@@ -413,7 +538,8 @@ namespace ([Let a team bring its own Slack app](team-slack-app.md#3-the-platform
 [A team's connection is not served on a label selector](#a-teams-connection-is-not-served-on-a-label-selector). No metric counts such a Binding: this broker leaves it to the broker that serves its connection, and cannot tell whether one does.
 
 A Binding that is refused after an edit keeps running as it was: `message` says `serving generation 1`, and the other conditions describe that
-generation, while `Ready` is `False` with `Accepted:InvalidSpec`. A Binding with no earlier generation to serve is not served at all.
+generation, while `Ready` is `False` with `Accepted:InvalidSpec` (or `Accepted:InvalidPlatformID` or `Accepted:UnsupportedOnPlatform`, for a
+generation that its ChatConnection's platform does not take). A Binding with no earlier generation to serve is not served at all.
 
 | `reason` | What happened | What to do |
 |---|---|---|
@@ -422,9 +548,11 @@ generation, while `Ready` is `False` with `Accepted:InvalidSpec`. A Binding with
 | `BackendRejected` | The AgentBackend it names is invalid. If it had a good generation, that one is what runs, and `message` says which. | Fix the AgentBackend. In your own namespace `message` carries its problems. For one of another namespace it does not, so ask its owner. |
 | `ConnectionNotFound` | `spec.chat.connectionRef` names a ChatConnection that does not exist. No broker owns the Binding, so the leader of any broker that sees it writes this. | Check the name and the namespace. |
 | `ConnectionRejected` | The ChatConnection it names is invalid, as for `BackendRejected`. | Ask the owner of the ChatConnection. |
-| `ConnectionNotServed` | `spec.chat.connectionRef` names a ChatConnection that exists, and this broker does not serve it: it stopped serving it, it serves at most 16 chat connections and left this one out, or the connection is a second connection of a Slack app that an older one uses. `message` says which. | Ask the platform team whether another broker serves the ChatConnection, or whether its namespace is meant to be served here. For a second connection of an app, see [Two connections of one Slack app](team-slack-app.md#two-connections-of-one-slack-app). A broker that does serve it writes its own status over this one. After a restart or a change of leader, this status can appear for up to about 10 seconds over a Binding that another broker serves, until that broker writes its own words again. |
+| `ConnectionNotServed` | `spec.chat.connectionRef` names a ChatConnection that exists, and this broker does not serve it: it stopped serving it, it serves at most 16 chat connections and left this one out, or the connection is a second connection of a Slack or Microsoft Teams app that an older one uses. `message` says which. | Ask the platform team whether another broker serves the ChatConnection, or whether its namespace is meant to be served here. For a second connection of an app, see [Two connections of one Slack app](team-slack-app.md#two-connections-of-one-slack-app). A broker that does serve it writes its own status over this one. After a restart or a change of leader, this status can appear for up to about 10 seconds over a Binding that another broker serves, until that broker writes its own words again. |
 | `NamespaceNotAllowed` | The AgentBackend or ChatConnection is in another namespace and its `allowedNamespaces` does not list the Binding's. The answer is the same whether the object is valid or not. | Ask the owner to list your namespace, or use an object of your own. |
 | `AgentNamespaceNotAllowed` | The AgentBackend it names sets `agents`, and `spec.agent.namespace` is not a namespace it allows: `spec.agent.namespace: AgentBackend team-a/kagent does not allow agents in namespace kagent`. The Binding is not served. The limit applied is that of the AgentBackend generation being served, which is an older one if the latest is invalid, and `message` then says so. | Name an agent in a namespace the AgentBackend allows. If the agent is in the Binding's own namespace, ask the owner to set `agents.sameNamespace: true`; otherwise ask the owner to list the agent's namespace in `agents.namespaces`. |
+| `InvalidPlatformID` | A chat ID that the schema takes does not fit its ChatConnection's platform: it has the shape of another platform's ID and not this one's, or it has this platform's shape and is longer than this platform's cap (on Slack, a channel or a bot ID over 32 bytes: `spec.chat.channel: is 33 bytes, longer than the 32 byte limit of a channel ID on Slack, …`). For example, `spec.chat.channel: "19:a1b2c3d4e5f6@thread.tacv2" is not a channel ID on Slack, the platform of ChatConnection team-a/slack: use the channel's ID, such as C0123456789 (G… for an older private channel), not its name (see https://agentkourier.dev/reference/platforms/)`. The API server and the broker's load hold each chat ID to Slack's or Microsoft Teams' shape, but the channel of a Binding whose triggers are all `webhookEvent`, which they hold to a webhook channel's: a value with none of those shapes, such as a channel's name `general`, or one past the field's cap, is refused by the API server when it is applied, and by the load on the files route. A `webhookEvent` Binding with the channel `acme/widgets` on a Slack connection has this reason too. The last good generation, if there is one, stays served. | Write the ID that `message` asks for. [What each platform supports](../reference/platforms.md#chat-ids) has each platform's shapes. |
+| `UnsupportedOnPlatform` | The Binding asks for a feature, a trigger type or an output that the platform of its ChatConnection does not serve, and `message` names the field and what to change. Slack serves every feature that the broker checks, so a Binding of Slack's triggers on Slack never has it; on a teams connection `interactions.approverGroups` has it. The last good generation, if there is one, stays served. | Change the field as `message` says, or use a ChatConnection of a platform that serves the feature ([What each platform supports](../reference/platforms.md#features)). |
 | `ChannelConflict` | Another Binding on the same ChatConnection holds the channel. The older one holds it, by `creationTimestamp`. If that Binding is in another namespace, `message` says only `a Binding in another namespace`. | Choose another channel. To find the holder, the operator reads the log line: it names it. [Who holds a channel](../explanation/config-routes.md#who-holds-a-channel) says how it is decided. |
 
 ## A team's connection is not served on a label selector
@@ -460,7 +588,7 @@ kubectl get namespaces -l 'agentkourier.dev/serve=true'
   right is taken away while the broker runs, it keeps the labels it last read, so a namespace labelled since is not admitted and one whose label was
   removed since stays admitted, and `agentkourier_config_stale` is 1. Check the right as the pod's ServiceAccount:
   `kubectl auth can-i watch namespaces --as system:serviceaccount:agent-kourier:<serviceaccount>`.
-- **The namespace is admitted, and the connection is still not served.** It is past the 16 the broker serves, or a second connection of a Slack app
+- **The namespace is admitted, and the connection is still not served.** It is past the 16 the broker serves, or a second connection of a Slack or Microsoft Teams app
   that an older connection uses: its Bindings say `ConnectionNotServed`, and `message` says which. Or it is served and has not started, because its
   Secret cannot be read: its Bindings say `ChatUnavailable`. [What the team sees in its Binding's status](team-slack-app.md#what-the-team-sees-in-its-bindings-status) has each.
 
@@ -530,6 +658,15 @@ ends with a fixed message and decides nothing, unless they are in a group earlie
 | `ChatCredentialsUnusable` | unknown | The Secret, or a key of it, is gone or empty, or the Secret is of a type that is never read, so the read was not made. A running connection keeps the tokens it read. A team ChatConnection that has not started because of this is left out until the Secret can be used. | Mend the Secret. A restart of the broker's own connection fails until you do; a team connection starts, or restarts on other tokens, by itself. |
 | `ChatUnavailable` | unknown | Slack rate-limited the read, did not answer within the 8 seconds the read of all the groups is given, or the read failed (`cause` has why). Or the Binding's chat connection is not running, as for `ChannelJoined` above, and no call was made. | Wait for the next pass. If it stays, read the cause. |
 
+### `AcknowledgmentShown`
+
+Only a Binding whose `chat.acknowledgment` is enabled and names an `emoji`, on a ChatConnection whose platform has no reactions, has this
+condition. It is never `True`: it is `False`, or `Unknown` with `Pending` after an edit until the next pass. A Binding on Slack never has it.
+
+| `reason` | Status | What happened | What to do |
+|---|---|---|---|
+| `NoReactions` | false | The platform of the Binding's ChatConnection has no reactions, so the reaction that `chat.acknowledgment.emoji` names is never put on a message. Turns run as before. | Leave `emoji` empty, or set `enabled: false`. |
+
 ### Any condition
 
 | `reason` | Status | What happened | What to do |
@@ -541,7 +678,7 @@ ends with a fixed message and decides nothing, unless they are in a group earlie
 
 With the config read from custom resources, the leader writes the status of each Binding it serves, and writes it back if it differs. If something else keeps changing it, the two go on at each other once each gap, and `agentkourier_binding_status_writes_total{result="put_back"}` climbs steadily. After three put-backs in a row, each within five gaps of the one before, the leader's log says, once for the Binding, `something else keeps changing the status of a Binding, and this broker keeps putting it back`, and names it.
 
-What else writes a Binding's status is either another Agent Kourier that serves the same Binding, or a controller of your own. The first happens when two installs name the same ChatConnection (`AGENTKOURIER_CHAT_CONNECTION`), or admit the same namespace (on both lists, or matched by both selectors, or one of each): each then serves that namespace's ChatConnections and writes the status of their Bindings, and each opens Socket Mode on the app of every one of them, so Slack gives each event of the app to one of the two brokers and the other misses it, as in the warning in [Configure Slack](configure-slack.md). A broker that serves every namespace (its `config route` line says `connection_admission` `all`) does this beside any other broker in the cluster, even one that serves its own connection alone, since it serves that connection too. Give each install its own connections and namespaces that no other install admits, and keep every namespace for a cluster with one broker, so that each serves its own Bindings. For the second, look at the `managedFields` of the Binding (`kubectl get akbinding <name> -n <namespace> -o yaml --show-managed-fields`): the manager `agent-kourier` owns the conditions of the types `Accepted`, `BackendReachable`, `ChannelJoined`, `ApproversReadable` and `Ready`, and any other manager that writes them is the one to stop. A person's edit is put back once and is no fight. A controller that writes the status less often than once in five gaps stays below the three, and shows only in the metric. The numbers are on [Limits](../reference/limits.md#run-the-broker).
+What else writes a Binding's status is either another Agent Kourier that serves the same Binding, or a controller of your own. The first happens when two installs name the same ChatConnection (`AGENTKOURIER_CHAT_CONNECTION`), or admit the same namespace (on both lists, or matched by both selectors, or one of each): each then serves that namespace's ChatConnections and writes the status of their Bindings, and each opens Socket Mode on the app of every one of them, so Slack gives each event of the app to one of the two brokers and the other misses it, as in the warning in [Configure Slack](configure-slack.md). A broker that serves every namespace (its `config route` line says `connection_admission` `all`) does this beside any other broker in the cluster, even one that serves its own connection alone, since it serves that connection too. Give each install its own connections and namespaces that no other install admits, and keep every namespace for a cluster with one broker, so that each serves its own Bindings. For the second, look at the `managedFields` of the Binding (`kubectl get akbinding <name> -n <namespace> -o yaml --show-managed-fields`): the manager `agent-kourier` owns the conditions of the types `Accepted`, `BackendReachable`, `ChannelJoined`, `ApproversReadable`, `AcknowledgmentShown` and `Ready`, and any other manager that writes them is the one to stop. A person's edit is put back once and is no fight. A controller that writes the status less often than once in five gaps stays below the three, and shows only in the metric. The numbers are on [Limits](../reference/limits.md#run-the-broker).
 
 ## An agent on kagent 0.9.x answers, but the answer can appear twice
 

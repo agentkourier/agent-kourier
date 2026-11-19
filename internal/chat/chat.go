@@ -1,7 +1,7 @@
 // Package chat is Agent Kourier's chat-neutral model: what a conversation platform has to be for Agent Kourier to
-// run on it. A platform (Slack today) is one implementation of Platform, in its own package, and no
-// session, interact, render, outbox or store code names it (spec 13: adding a platform requires
-// implementing one interface).
+// run on it. A platform is one implementation of Platform, in its own package: Slack, Microsoft Teams and the webhook
+// platform, all of which the broker runs. No session, interact, render, outbox or store code names
+// one (spec 13: adding a platform requires implementing one interface).
 //
 // # The security contract (spec 8.4, R2)
 //
@@ -113,16 +113,22 @@ func (w Where) String() string {
 // Caps is what a platform can do and how much it can show. A feature a platform lacks is false, and the
 // caller degrades (no Streams: a turn is posted once when it ends).
 type Caps struct {
-	Streams   bool // Stream works
-	Steps     bool // Stream.Step shows progress steps in a stream, and a message shows its Steps part; needs Streams
-	Ephemeral bool // Ephemeral shows a message to one person alone
-	Edits     bool // Update works
-	Inputs    bool // a Prompt's questions are answered inline; otherwise by a reply
+	Streams bool // Stream works
+	// Steps says a message shows its Steps part and, on a platform with Streams, Stream.Step shows progress steps in a
+	// stream. A platform without streams may have it: its replies are updated, and each update shows the steps.
+	Steps     bool
+	Ephemeral bool // Ephemeral shows a message to one person alone; otherwise it says ErrNoEphemeral and shows nothing
 	Busy      bool // MarkBusy shows a thread as busy; otherwise it says ErrNoBusy, as a platform may later even when this is set
 	// AckReaction is the reaction name, without colons, that Agent Kourier puts on an accepted message while it works, when a
-	// Binding's acknowledgment names none. The API names no reaction, so each platform says which one is its own (Slack:
-	// hourglass_flowing_sand). Empty means the platform has none, and an acknowledgment that names none shows nothing.
+	// Binding's acknowledgment names none, and on a reply that waits behind a task. The API names no reaction, so each platform
+	// says which one is its own (Slack: hourglass_flowing_sand). Empty means the platform has no reactions at all: React and
+	// Unreact say ErrNoReactions, a message shows no acknowledgment, and a Binding that names a reaction is told it is not shown.
 	AckReaction string
+	// RootContext says that the first turn of a session that a person's mention opened inside a thread carries the message that
+	// opened the thread, whoever wrote it, read through the platform's ThreadReader (spec 8.2, D56). It is for a platform where an
+	// alert's post reaches no trigger (Microsoft Teams sends a bot no other app's posts), so a person asks about an alert that no turn
+	// has carried. Without it such a turn carries the person's message alone.
+	RootContext bool
 	// MaxText is the most text, in UTF-16 units, that one place shows, and Limits is the same for the
 	// places that differ. A place cut to its limit ends in Truncated, which counts.
 	MaxText int

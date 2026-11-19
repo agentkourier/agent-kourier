@@ -1,0 +1,26 @@
+# The overlay of a tier with the Microsoft Teams connections (E2E_TEAMS=1 in up-fast.sh, with E2E_CONFIG_SOURCE=crds): layered over crds-values.yaml in the
+# route upgrade of lib.sh's deploy_agentkourier (AGENTKOURIER_CRDS_ARGS). The broker serves the ChatConnections of teams-e2e beside its own (slack-fast):
+# teams-push and teams-poll (hack/kind/fast/teams/teams.yaml).
+config:
+  connectionNamespaces: [teams-e2e]
+# Teams in http mode sends its activities, and Graph its notifications, to the chat listener: the listener on 8081 and its Service agent-kourier-chat,
+# which selects the leader, as hack/kind/http-values.yaml has them (the Slack connection stays in its own mode). chatFrom admits the fake Teams service's
+# pods too, when the chart's NetworkPolicy is on; the tiers' values leave it off.
+chatListener:
+  enabled: true
+  port: 8081
+  service: {port: 8081}
+networkPolicy:
+  chatFrom:
+    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: e2e}}
+      podSelector: {matchLabels: {app: fakeslack}}
+    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: e2e}}
+      podSelector: {matchLabels: {app: faketeams}}
+# The test image's hooks (internal/testhooks): the fake Slack, as the tier's values have it (a list is replaced, not merged), and the fake Teams service,
+# with the certificate its TLS is checked against, which lib.sh's deploy_fake_teams puts in the ConfigMap faketeams-ca. A Teams connection of the test image
+# then calls that host alone. The production image has neither hook (make image-check).
+extraEnv:
+  - {name: AGENTKOURIER_SLACK_API_URL, value: "http://fakeslack.e2e.svc.cluster.local:8080/"}
+  - {name: AGENTKOURIER_TEAMS_URL, value: "https://faketeams.e2e.svc.cluster.local:8443"}
+  - name: AGENTKOURIER_TEAMS_CA
+    valueFrom: {configMapKeyRef: {name: faketeams-ca, key: ca.crt}}

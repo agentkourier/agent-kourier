@@ -2,6 +2,7 @@ package feedback_test
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/feedback"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
+	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
@@ -37,6 +39,36 @@ const (
 	bindingID = "agent-kourier/sre"
 	agentID   = "kagent/sre"
 )
+
+// rating is the feedback.enabled of each Binding; a Binding it does not hold is one the config has not got, and err, if set, is
+// every answer.
+type rating struct {
+	mu      sync.Mutex
+	enabled map[string]bool
+	err     error
+}
+
+func (r *rating) FeedbackEnabled(name string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.err != nil {
+		return false, r.err
+	}
+	on, ok := r.enabled[name]
+	if !ok {
+		return false, fmt.Errorf("%w: %s", session.ErrUnknownBinding, name)
+	}
+	return on, nil
+}
+
+func (r *rating) set(name string, on bool, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if name != "" {
+		r.enabled[name] = on
+	}
+	r.err = err
+}
 
 // authz says who is a member and who is a bot; a user in neither is a person outside the channel.
 type authz struct {
@@ -107,21 +139,23 @@ func (a *audits) FeedbackVote(_ context.Context, actor audit.Actor, v audit.Feed
 }
 
 type rig struct {
-	st   *sqlite.Store
-	az   *authz
-	eph  *ephemerals
-	aud  *audits
-	tel  *telemetrytest.Harness
-	h    *feedback.Handler
-	now  time.Time
-	seen []store.Press // what Notify was told
-	logs bytes.Buffer
+	st    *sqlite.Store
+	az    *authz
+	eph   *ephemerals
+	aud   *audits
+	tel   *telemetrytest.Harness
+	h     *feedback.Handler
+	now   time.Time
+	seen  []store.Press // what Notify was told
+	logs  bytes.Buffer
+	rates *rating // the Bindings' feedback.enabled: on for bindingID
 }
 
 func newRig(t *testing.T) *rig {
 	t.Helper()
 	st := sqlitetest.Open(t)
-	r := &rig{st: st, az: &authz{members: map[string]bool{"UALICE1": true, "UBOB22": true}, bots: map[string]bool{"UBOT111": true}}, eph: &ephemerals{}, aud: &audits{}, tel: telemetrytest.New(t), now: t0}
+	r := &rig{st: st, az: &authz{members: map[string]bool{"UALICE1": true, "UBOB22": true}, bots: map[string]bool{"UBOT111": true}}, eph: &ephemerals{}, aud: &audits{}, tel: telemetrytest.New(t), now: t0,
+		rates: &rating{enabled: map[string]bool{bindingID: true}}}
 	r.members("UBOT111") // a bot is in the channel: membership does not keep it out
 	if err := st.UpsertSession(t.Context(), store.Session{Key: key, Binding: bindingID, Origin: store.Origin{Source: "alertmanager", Subject: "KubePodCrashLooping"}, Agent: agentID, LastActivity: t0}); err != nil {
 		t.Fatal(err)
@@ -129,8 +163,8 @@ func newRig(t *testing.T) *rig {
 	r.message(t, key, turn, "100.9")
 	var err error
 	r.h, err = feedback.New(feedback.Config{
-		Store: st, Sessions: st, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Auditor: r.aud,
-		Limits: store.PressLimits{Total: 10, PerUser: 3}, Logger: slog.New(slog.NewTextHandler(&r.logs, nil)),
+		Store: st, Sessions: st, Bindings: r.rates, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Auditor: r.aud,
+		Limits: store.PressLimits{Total: 10, PerUser: 3}, Logger: slog.New(slog.NewTextHandler(&r.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		Now: func() time.Time { return r.now }, Notify: func(p store.Press) { r.seen = append(r.seen, p) },
 	})
 	if err != nil {
@@ -552,6 +586,59 @@ func TestAPressOnAThreadThatIsGoneIsToldSoAndRecordsNothing(t *testing.T) {
 	}
 }
 
+// A vote on an answer to a person is taken only while the session's Binding has feedback.enabled: its answers carry no buttons
+// otherwise, so a press of one is refused and the person told the message can no longer be rated. An investigation's buttons do not
+// depend on the setting, nor does a Binding the config no longer has; a failed read of the setting is tried again.
+func TestAVoteOnAnAnswerIsRefusedWhenItsBindingsFeedbackIsOff(t *testing.T) {
+	for name, tc := range map[string]struct {
+		kind    store.FeedbackKind
+		on      bool
+		binding string // the Binding the setting is given for, bindingID unless set
+		err     error
+		res     interact.Result
+		voted   bool
+	}{
+		"an answer, feedback on":                {kind: store.FeedbackAnswer, on: true, res: interact.Done, voted: true},
+		"an answer, feedback off":               {kind: store.FeedbackAnswer, res: interact.Done},
+		"an investigation, feedback off":        {kind: store.FeedbackInvestigation, res: interact.Done, voted: true},
+		"an answer of a Binding that is gone":   {kind: store.FeedbackAnswer, binding: "agent-kourier/other", res: interact.Done, voted: true},
+		"an answer, the setting cannot be read": {kind: store.FeedbackAnswer, on: true, err: errors.New("the config has not loaded yet"), res: interact.Retry},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t)
+			r.rates.enabled = map[string]bool{}
+			r.rates.set(cmp.Or(tc.binding, bindingID), tc.on, tc.err)
+			res, err := r.vote(t, press("UALICE1", tc.kind, store.VerdictUseful))
+			if res != tc.res || (err != nil) != (tc.err != nil) {
+				t.Fatalf("Process = %v, %v; want %v", res, err, tc.res)
+			}
+			if voted := len(r.votes(t)) == 1; voted != tc.voted {
+				t.Errorf("voted %v, want %v", voted, tc.voted)
+			}
+			eph := r.eph.list()
+			switch {
+			case tc.err != nil:
+				if len(eph) != 0 || r.waiting(t) != 1 {
+					t.Errorf("told %+v with %d presses waiting; want the press kept for another try", eph, r.waiting(t))
+				}
+			case !tc.voted:
+				if len(eph) != 1 || eph[0].text != "This message can no longer be rated." || r.waiting(t) != 0 {
+					t.Errorf("told %+v with %d presses waiting; want the person told it can no longer be rated", eph, r.waiting(t))
+				}
+			}
+		})
+	}
+}
+
+// New refuses a Config without Bindings, and the error names it: a vote on an answer could not be checked against the setting.
+func TestNewRefusesAConfigWithoutBindings(t *testing.T) {
+	r := newRig(t)
+	_, err := feedback.New(notifying(feedback.Config{Store: r.st, Sessions: r.st, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Auditor: r.aud}))
+	if err == nil || !strings.Contains(err.Error(), "Bindings") {
+		t.Fatalf("New = %v; want an error that names Bindings", err)
+	}
+}
+
 // The Binding and the agent of a vote are the session's, as they were when the thread was made: a Binding that has left the
 // config, or has another agent now, neither blocks nor relabels a vote on an earlier investigation.
 func TestAVoteOnAThreadWhoseBindingIsGoneIsRecordedUnderWhatTheSessionHolds(t *testing.T) {
@@ -745,13 +832,48 @@ func TestAFailedAuditOrTellingDoesNotCostTheVote(t *testing.T) {
 	}
 }
 
+// A platform that shows no message to one person alone says chat.ErrNoEphemeral: the vote counts, and the person not being told
+// is logged at debug and not as a warning. Any other failure to tell them still warns.
+func TestAVoteOnAPlatformWithNoEphemeralMessagesIsNotAFault(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err       error
+		wantLevel string
+	}{
+		"no ephemeral messages": {fmt.Errorf("other: %w", chat.ErrNoEphemeral), "level=DEBUG"},
+		"another failure":       {errors.New("slack down"), "level=WARN"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t)
+			r.eph.err = tc.err
+			res, err := r.vote(t, press("UALICE1", store.FeedbackInvestigation, store.VerdictUseful))
+			if err != nil || res != interact.Done || len(r.votes(t)) != 1 || r.waiting(t) != 0 || len(r.eph.list()) != 1 {
+				t.Fatalf("Process = %v, %v, %d votes, %d waiting, %d told; want Done, the vote and the one ephemeral tried", res, err, len(r.votes(t)), r.waiting(t), len(r.eph.list()))
+			}
+			out := r.logs.String()
+			var line string
+			for l := range strings.Lines(out) {
+				if strings.Contains(l, "could not be told") {
+					line = l
+					break
+				}
+			}
+			if !strings.Contains(line, tc.wantLevel) || !strings.Contains(line, "C1") {
+				t.Errorf("logged %q; want %s that the person was not told, naming the channel", out, tc.wantLevel)
+			}
+			if tc.wantLevel == "level=DEBUG" && strings.Contains(out, "level=WARN") {
+				t.Errorf("logged %q; want no warning for a platform that has no ephemeral messages", out)
+			}
+		})
+	}
+}
+
 func TestAPressRecordedBeforeARestartIsProcessedAfterIt(t *testing.T) {
 	r := newRig(t)
 	if err := r.h.Press(t.Context(), press("UALICE1", store.FeedbackInvestigation, store.VerdictUseful)); err != nil {
 		t.Fatal(err)
 	}
 	// A new Handler over the same store, as a restart makes, finds the press in the store and processes it.
-	h, err := feedback.New(notifying(feedback.Config{Store: r.st, Sessions: r.st, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Auditor: r.aud, Now: func() time.Time { return t0.Add(time.Hour) }}))
+	h, err := feedback.New(notifying(feedback.Config{Store: r.st, Sessions: r.st, Bindings: r.rates, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Auditor: r.aud, Now: func() time.Time { return t0.Add(time.Hour) }}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -871,7 +993,7 @@ func notifying(cfg feedback.Config) feedback.Config {
 // New refuses a Config without Notify, and the error names it: the worker would never hear of a press.
 func TestNewRefusesAnUnwiredNotify(t *testing.T) {
 	r := newRig(t)
-	_, err := feedback.New(feedback.Config{Store: r.st, Sessions: r.st, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Auditor: r.aud})
+	_, err := feedback.New(feedback.Config{Store: r.st, Sessions: r.st, Bindings: r.rates, Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph), Auditor: r.aud})
 	if err == nil || !strings.Contains(err.Error(), "Notify") {
 		t.Fatalf("New = %v; want an error that names Notify", err)
 	}

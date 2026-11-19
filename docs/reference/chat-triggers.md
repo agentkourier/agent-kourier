@@ -151,7 +151,7 @@ match is a *fire*.
 
 | Message | The key has | Decision | What happens |
 |---|---|---|---|
-| fire | no thread, a closed one past its cooldown, one whose turn never started and is over a minute old, or an open one idle past `maxIdle` | `started` | A new investigation in a thread anchored to this message. The cooldown begins once its turn is taken. |
+| fire | no thread, a closed one past its cooldown, one whose turn never started and is over a minute old, an open one idle past `maxIdle`, or this very message's own reservation whose turn never started (a redelivery after a failed start) | `started` | A new investigation in a thread anchored to this message. The cooldown begins once its turn is taken. |
 | fire | an open thread that is not idle past `maxIdle`, or a closed one inside its cooldown | `repeat` | "Fired again at `<time>`." in that thread, which reopens. No turn. |
 | fire | this very message as its thread (a redelivery) | `dedup` | Nothing, if its turn started. |
 | fire, key empty | | `empty_key` | An investigation of its own, with no cooldown and no note. |
@@ -190,8 +190,10 @@ The template sees:
 
 `.Fields`, `.State` and `.Key` come out of the sender's message, so each value the template reads is checked before it
 reaches the instruction part: the alert-name shape (ASCII letters, digits and `_.-:`, at most 128 bytes) for fields,
-state, channel and source; the same plus `/` for the key; and a plain `http` or `https` URL of at most 256 bytes for
-the link. A value that fails refuses the turn (`not_started`). A key that holds spaces, such as the
+state, channel and source, or for the channel the shape of a Microsoft Teams channel ID (`19:…@thread.tacv2` or
+`@thread.skype`, at most 140 bytes); the same plus `/` for the key; and a plain `http` or `https` URL of at most 256
+bytes for the link, each of whose `@` must be the one of a path segment that is a whole Teams channel ID, as Teams'
+permalink has: an `@` anywhere else (the credentials, the query, the fragment) fails. A value that fails refuses the turn (`not_started`). A key that holds spaces, such as the
 Alertmanager example's, fails this check, so a template should read `.Fields` entries, not `.Key`.
 
 After the rendered template, the whole message follows, normalized and with its secrets redacted, inside a block

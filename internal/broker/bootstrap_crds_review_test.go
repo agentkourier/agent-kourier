@@ -33,7 +33,7 @@ func TestBootstrapCRDsKeepsTheOwnConnectionWhenItIsMadeAgainInvalid(t *testing.T
 	// The informers' watches may not be open yet, and the fake delivers only to an open one: repeat until it is seen.
 	bad := crObject(t, "chatconnection.yaml")
 	bad.SetUID("uid-recreated")
-	_ = unstructured.SetNestedField(bad.Object, "teams", "spec", "platform")
+	_ = unstructured.SetNestedField(bad.Object, "discord", "spec", "platform")
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		if err := res.Delete(t.Context(), testConnection.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {

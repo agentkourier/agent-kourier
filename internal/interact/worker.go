@@ -23,9 +23,18 @@ type PressProcessor interface {
 
 const defaultGiveUpAfter = time.Hour
 
-// WorkerConfig configures a Worker. Everything but Processor is optional.
+// PressLookup reads a recorded press by its Seq, and returns store.ErrNotFound once it is finished: store.Presses.
+type PressLookup interface {
+	GetPress(ctx context.Context, seq int64) (store.Press, error)
+}
+
+// WorkerConfig configures a Worker. Everything but Processor and Presses is optional.
 type WorkerConfig struct {
 	Processor PressProcessor
+	// Presses is where the Worker sees, before each try, that a press is still recorded: a press handed over again
+	// after it was finished (a delivery of it again that read it just before, or Recover) is skipped, not processed
+	// again.
+	Presses PressLookup
 	// Workers is how many interactions are worked on at once (default 4).
 	Workers int
 	// Backoff is the wait before a press that could not be processed is tried again (default 5 seconds), and
@@ -85,6 +94,9 @@ func NewWorker(cfg WorkerConfig) (*Worker, error) {
 	if cfg.Processor == nil {
 		return nil, errors.New("interact: a Processor is required")
 	}
+	if cfg.Presses == nil {
+		return nil, errors.New("interact: a press lookup is required")
+	}
 	if cfg.Workers <= 0 {
 		cfg.Workers = 4
 	}
@@ -103,7 +115,7 @@ func NewWorker(cfg WorkerConfig) (*Worker, error) {
 
 // Submit hands the Worker a press that is recorded, and returns at once: it is Pipeline's Notify. A press
 // that is already held is ignored, and so is any after Run has ended: it is recorded, and the next start
-// finds it.
+// finds it. A press that is finished by the time its turn comes is skipped.
 func (w *Worker) Submit(p store.Press) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -128,8 +140,8 @@ type PressSource interface {
 
 // Recover hands the Worker every press the store still holds, oldest first, which is how a press recorded
 // before a crash, or one the Worker did not finish, is found again (spec 8.4 step 3). A press the Worker
-// already holds is ignored, so Recover may run before or after Run starts. It should run before the
-// intake is open: a press listed just before it is finished, and announced after, would be processed again.
+// already holds is ignored, so Recover may run before or after Run starts, and before or after the intake
+// is open: a press listed just before it is finished, and handed over after, is skipped as finished.
 func (w *Worker) Recover(ctx context.Context, src PressSource) error {
 	presses, err := src.ListPresses(ctx)
 	if err != nil {
@@ -204,10 +216,7 @@ func (w *Worker) work(ctx context.Context, l *lane) {
 	j := l.jobs[0]
 	w.mu.Unlock()
 	ctx = telemetry.Restore(ctx, j.press.TraceParent, j.press.TraceState)
-	ctx, op := telemetry.Start(ctx, "agentkourier.interaction.process")
-	defer func() { op.Finish(nil) }()
-	res, err := w.cfg.Processor.Process(ctx, j.press)
-	op.Finish(err)
+	res, err := w.try(ctx, l, j)
 	if ctx.Err() != nil { // cut off by shutdown: the press is not at fault, and is still recorded
 		return
 	}
@@ -232,6 +241,25 @@ func (w *Worker) work(ctx context.Context, l *lane) {
 	if !w.closed {
 		l.timer = time.AfterFunc(backoff.Doubling(w.cfg.Backoff, w.cfg.MaxBackoff, j.tries), func() { w.requeue(l) })
 	}
+}
+
+// try processes the press j of l once, if it is still recorded. A press no longer recorded (finished, or purged by
+// retention) is Done with no try: Submit forgets a press once it is finished, so one handed over again after that (by a
+// delivery of it again that read it before, or by Recover) would otherwise be processed twice. A failure to look the
+// press up fails the try.
+func (w *Worker) try(ctx context.Context, l *lane, j *job) (Result, error) {
+	switch _, err := w.cfg.Presses.GetPress(ctx, j.press.Seq); {
+	case errors.Is(err, store.ErrNotFound):
+		w.cfg.Logger.InfoContext(ctx, "interact: a press is no longer recorded (finished or purged); it is skipped", "interaction", l.id, "seq", j.press.Seq)
+		return Done, nil
+	case err != nil:
+		return Retry, fmt.Errorf("interact: see that press %d is still recorded: %w", j.press.Seq, err)
+	}
+	ctx, op := telemetry.Start(ctx, "agentkourier.interaction.process")
+	defer func() { op.Finish(nil) }()
+	res, err := w.cfg.Processor.Process(ctx, j.press)
+	op.Finish(err)
+	return res, err
 }
 
 // next drops the finished first press of l, and goes on to the next one, if there is one.

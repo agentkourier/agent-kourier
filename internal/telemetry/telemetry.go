@@ -77,6 +77,20 @@ func New(reg prometheus.Registerer, provider trace.TracerProvider) (*Observer, e
 		{"agentkourier_render_final_total", "Final output delivery outcomes.", []string{"outcome"}},
 		{"agentkourier_chat_api_calls_total", "Chat API operations, including logical errors over HTTP 200.", []string{"operation", "outcome", ConnectionLabel}},
 		{"agentkourier_slack_events_shed_total", "Slack events left unacknowledged, so that Slack sends them again, because the adapter already held as many as it may: channel_backlog (one channel's lane was full) or adapter_backlog (all lanes were).", []string{"reason", ConnectionLabel}},
+		{"agentkourier_slack_http_requests_total", "Requests Slack sent to a connection in HTTP mode, by what they were answered: acknowledged, challenge, bad_signature, stale, malformed, not_running, shed, withheld or timeout.", []string{"outcome", ConnectionLabel}},
+		{"agentkourier_teams_requests_total", "Requests Microsoft Teams sent to a teams connection, by what they were answered: accepted, duplicate, invoke, bad_token, keys_unavailable, malformed, wrong_tenant, not_running or shed.", []string{"outcome", ConnectionLabel}},
+		{"agentkourier_teams_tokens_refused_total", "Requests to a teams connection whose Bot Framework token was refused (answered 401), by the check it failed.", []string{"reason", ConnectionLabel}},
+		{"agentkourier_teams_activities_shed_total", "Activities Microsoft Teams sent to a teams connection that were answered 503, which Teams sends again once over https: channel_backlog or adapter_backlog (the lanes were full), not_running (the connection was not taking them) or socket_busy (in socket mode, its sockets were handling as many as they may).", []string{"reason", ConnectionLabel}},
+		{"agentkourier_teams_activities_lost_total", "Messages of a teams connection that were never handed on after Microsoft Teams was answered 200 for their activity or Microsoft Graph 202 for their notification, which neither sends again: stopped (dropped when the drain at the stop ran out), not_taken (the broker did not take an activity's message in its tries) or graph_not_taken (the broker did not take a message read through Microsoft Graph in its tries).", []string{"reason", ConnectionLabel}},
+		{"agentkourier_teams_socket_envelopes_total", "Envelopes Microsoft Teams sent over a teams connection's sockets in socket mode, by type (activity, invoke, other) and outcome: what the activity was answered with (accepted, duplicate, invoke, malformed, wrong_tenant, not_running, shed), busy (answered 503: the connection's sockets were handling as many envelopes as they may) or unanswered (the reply frame could not be sent).", []string{"type", "outcome", ConnectionLabel}},
+		{"agentkourier_teams_socket_reconnects_total", "Connects of a teams connection's socket in socket mode that follow another, by region and the reason for it: expiry (a replacement before the socket's token expired), a SocketClosing code (socket_mode_disabled, replaced, token_reused, no_identity, closing_other), closed, server_timeout, ready_timeout, rate_limited, refused, unavailable or failed.", []string{"region", "reason", ConnectionLabel}},
+		{"agentkourier_teams_graph_notifications_total", "What Microsoft Graph sent to the notificationURL of a teams connection, by kind (validation, change, lifecycle) and outcome: answered (a validation handshake), taken, not_taken, duplicate, own, ignored, edit, not_named, gone, fetch_failed or malformed (a change), reauthorization_required, subscription_removed, missed or other (a lifecycle event), and, of either, client_state (its clientState was not the connection's), wrong_tenant, unknown_subscription, shed or not_running.", []string{"kind", "outcome", ConnectionLabel}},
+		{"agentkourier_teams_graph_polls_total", "Polls of a bound channel's messages through Microsoft Graph by a teams connection with no notificationURL, by outcome: started (the run's first read of the channel, which hands on nothing), polled, reset (Graph refused the delta link: read anew from now), throttled (429), failed (may pass) or refused (401, 403, 404 or 400: the channel is failing).", []string{"outcome", ConnectionLabel}},
+		{"agentkourier_teams_graph_read_messages_total", "Messages that a poll or a catch-up read of Microsoft Graph found in a bound channel of a teams connection, by outcome: taken, not_taken, duplicate, own, ignored, not_named, old (made before the read's bound) or shed (its channel's lane had no room).", []string{"outcome", ConnectionLabel}},
+		{"agentkourier_teams_graph_catchups_total", "Catch-up reads of a bound channel's recent messages through Microsoft Graph by a teams connection, by trigger (start, socket_gap, missed) and outcome (read, failed, not_running).", []string{"trigger", "outcome", ConnectionLabel}},
+		{"agentkourier_teams_graph_throttled_total", "Reads of Microsoft Graph by the polls of a teams connection that Graph answered 429, each of which paused every read of the connection for its Retry-After.", []string{ConnectionLabel}},
+		{"agentkourier_slack_http_retries_total", "Signed requests to a connection in HTTP mode that Slack marked as a retry (X-Slack-Retry-Num): a request it sent again because an earlier one was not answered 200 in time.", []string{ConnectionLabel}},
+		{webhookRequests, "Requests sent to a webhook connection, by what they were answered (outcome) and why (reason): accepted, ignored, self and unmapped (200), unverified (401), malformed (400), not_running, withheld, timeout and cancelled (503).", []string{"outcome", "reason", ConnectionLabel}},
 	} {
 		c := prometheus.NewCounterVec(prometheus.CounterOpts{Name: d.name, Help: d.help}, d.labels)
 		if err := reg.Register(c); err != nil {
@@ -97,6 +111,7 @@ func New(reg prometheus.Registerer, provider trace.TracerProvider) (*Observer, e
 		{"agentkourier_agent_first_text_duration_seconds", "Execution attempt to its first nonempty text event; recovered snapshots excluded.", []string{"operation"}},
 		{"agentkourier_outbox_delivery_duration_seconds", "Durable row creation to successful delivery or adoption.", []string{"role", "mode"}},
 		{"agentkourier_interaction_wait_seconds", "Interaction creation to its first durable resolution.", []string{"kind", "outcome"}},
+		{"agentkourier_teams_socket_gap_seconds", "Intervals in which no socket of a teams connection in socket mode was ready, from the start of its run or the end of its last ready socket to the next ready one, or to the end of the run. Teams delivers nothing in them, and does not send it later.", []string{ConnectionLabel}},
 	} {
 		h := prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: d.name, Help: d.help, Buckets: durationBuckets()}, d.labels)
 		if err := reg.Register(h); err != nil {
@@ -113,12 +128,17 @@ func New(reg prometheus.Registerer, provider trace.TracerProvider) (*Observer, e
 	}{
 		{"agentkourier_sessions_active", "Conversation runners currently active in this process.", nil},
 		{"agentkourier_sessions_paused", "Conversation runners currently awaiting input in this process.", nil},
+		{"agentkourier_teams_socket_ready", "Whether a teams connection in socket mode has a ready socket in the region (1) or not (0).", []string{"region", ConnectionLabel}},
+		{"agentkourier_teams_graph_channels", "Bound channels of a teams connection, by the state of their Microsoft Graph intake: subscribed (a notificationURL) or polling (none), waiting_group (the Microsoft Entra group of the channel's team is not known yet) or failing (the last call to make or renew its subscription failed, or the app's subscription to the channel for another URL holds it; or Graph refused its poll for good).", []string{"state", ConnectionLabel}},
 	} {
 		g := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: d.name, Help: d.help}, d.labels)
 		if err := reg.Register(g); err != nil {
 			return nil, err
 		}
 		o.gauges[d.name] = g
+		if slices.Contains(d.labels, ConnectionLabel) {
+			o.perConnection = append(o.perConnection, g)
+		}
 	}
 	for _, c := range []prometheus.Collector{collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{})} {
 		if err := reg.Register(c); err != nil {
@@ -235,6 +255,41 @@ func Count(ctx context.Context, name string, labels ...string) {
 	}
 }
 
+// webhookRequests is the counter of the requests to a webhook connection, which WebhookRequests records.
+const webhookRequests = "agentkourier_webhook_requests_total"
+
+// WebhookRequests records agentkourier_webhook_requests_total for one webhook connection: the platform is given it when it is built,
+// and counts each answer it gives through it, with no context of the request's or of a Run's. The zero value records nothing.
+type WebhookRequests struct {
+	vec        *prometheus.CounterVec
+	connection string
+}
+
+// WebhookRecorder returns the recorder of agentkourier_webhook_requests_total for connection ("namespace/name"), on the broker's
+// instruments in ctx; with none there, it records nothing. Its series are the connection's, which ForgetConnection deletes.
+func WebhookRecorder(ctx context.Context, connection string) WebhookRequests {
+	o := observer(ctx)
+	if o == nil {
+		return WebhookRequests{}
+	}
+	return WebhookRequests{vec: o.counts[webhookRequests], connection: connection}
+}
+
+// Init makes the series of outcome and reason exist, at zero if it did not, so that a rule over it has a value before the first
+// such request. outcome and reason come from the platform's closed sets.
+func (w WebhookRequests) Init(outcome, reason string) {
+	if w.vec != nil {
+		w.vec.WithLabelValues(outcome, reason, w.connection)
+	}
+}
+
+// Count adds one to the series of outcome and reason.
+func (w WebhookRequests) Count(outcome, reason string) {
+	if w.vec != nil {
+		w.vec.WithLabelValues(outcome, reason, w.connection).Inc()
+	}
+}
+
 // ForgetConnection deletes every series that carries the connection label with the value connection ("namespace/name"), so that a
 // connection that is no longer served leaves none behind. It is for the connection's removal: its counters start again from zero if it
 // is served again. A call that records for the connection afterwards makes a series again, so call it once nothing of the connection
@@ -252,6 +307,15 @@ func Observe(ctx context.Context, name string, d time.Duration, labels ...string
 	if o := observer(ctx); o != nil {
 		if h := o.histograms[name]; h != nil {
 			h.WithLabelValues(labels...).Observe(max(d.Seconds(), 0))
+		}
+	}
+}
+
+// SetGauge sets the series of the gauge name under labels to v.
+func SetGauge(ctx context.Context, name string, v float64, labels ...string) {
+	if o := observer(ctx); o != nil {
+		if g := o.gauges[name]; g != nil {
+			g.WithLabelValues(labels...).Set(v)
 		}
 	}
 }

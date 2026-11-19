@@ -99,7 +99,12 @@ func (s *Server) blockActions(user, channel string, m Message, btn element, bloc
 	}
 	m.Metadata = nil
 	s.mu.Lock()
-	name, now := s.users[user].Name, s.now()
+	name := s.users[user].Name
+	// Each press has an action_ts of its own, a microsecond past the last if the clock has not moved on, so that two presses of
+	// one button by one person are never one press to the broker, which keys a press by it. A delivery sent again is the same
+	// payload, with the same action_ts.
+	s.lastAct = max(s.now().UnixMicro(), s.lastAct+1)
+	actionTS := fmt.Sprintf("%d.%06d", s.lastAct/1_000_000, s.lastAct%1_000_000)
 	s.mu.Unlock()
 	if name == "" {
 		name = user
@@ -112,9 +117,9 @@ func (s *Server) blockActions(user, channel string, m Message, btn element, bloc
 	action := map[string]any{
 		"type": "button", "action_id": btn.element["action_id"], "block_id": btn.blockID,
 		"text": btn.element["text"], "value": btn.element["value"],
-		"action_ts": fmt.Sprintf("%d.%06d", now.Unix(), now.Nanosecond()/1000),
+		"action_ts": actionTS,
 	}
-	return s.sendEnvelope(app.AppID, "interactive", map[string]any{
+	return s.sendEnvelope(app.AppID, channel, "interactive", map[string]any{
 		"type": "block_actions", "api_app_id": app.AppID, "team": map[string]any{"id": app.TeamID},
 		"user":    map[string]any{"id": user, "name": name, "team_id": app.TeamID},
 		"channel": map[string]any{"id": channel}, "container": container, "message": m,

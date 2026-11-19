@@ -10,14 +10,14 @@ import (
 type stepName int
 
 const (
-	stepIntake       stepName = iota // the Slack run and its intake stop, so nothing new reaches the interactions
+	stepIntake       stepName = iota // the chat listener stops taking requests, then the Slack run and its intake stop, so nothing new reaches the interactions
 	stepInteractions                 // what the interactions started stops: the press worker, the sweeper, the replacer, retention and the pause tap, the trigger-thread sweep, and the verification of the Bindings
 	stepManager                      // the session manager stops its runners
 	stepDrain                        // the outbox stops, then posts what is pending one last time, and Slack's idle connections close
 	stepPool                         // the agent clients close
 	stepResolver                     // the Reloader stops, then the Secret informers
 	stepStore                        // the store closes, after everything that writes to it
-	stepHealth                       // the health server goes last, so /healthz answers to the end
+	stepHealth                       // the leader label comes off the pod, just before the lease is handed over, then the health server goes last, so /healthz answers to the end
 )
 
 func (n stepName) String() string {
@@ -94,8 +94,17 @@ func waitFor(ctx context.Context, done <-chan struct{}) {
 	}
 }
 
-// add registers what to do at the step n. fn must return when its context ends.
-func (s *shutdown) add(n stepName, fn func(context.Context)) { s.steps[n] = fn }
+// add registers what to do at the step n. fn must return when its context ends. A step that two parts add to runs both, one after the
+// other in the order they were added, within the step's one bound: a second add never drops the first. The chat listener's stop and the
+// intakes' are both the intake step's, and the listener's is added first, by Run, before the leader half can start.
+func (s *shutdown) add(n stepName, fn func(context.Context)) {
+	prev := s.steps[n]
+	if prev == nil {
+		s.steps[n] = fn
+		return
+	}
+	s.steps[n] = func(ctx context.Context) { prev(ctx); fn(ctx) }
+}
 
 // run performs the registered steps once, and forgets them. The steps' contexts do not inherit ctx's
 // end, which is what started the shutdown.

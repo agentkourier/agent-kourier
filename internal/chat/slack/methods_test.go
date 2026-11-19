@@ -178,8 +178,8 @@ func TestReactAndTheChecksOfWhoIsInTheChannel(t *testing.T) {
 
 func TestACapabilityIsWhatSlackCanDo(t *testing.T) {
 	c := newWorld(t).p.Capabilities()
-	if !c.Streams || !c.Ephemeral || !c.Edits || !c.Inputs {
-		t.Errorf("Capabilities = %+v, want streams, ephemerals, edits and inline inputs", c)
+	if !c.Streams || !c.Ephemeral || c.AckReaction == "" {
+		t.Errorf("Capabilities = %+v, want streams, ephemerals and reactions", c)
 	}
 	for _, w := range chat.AllWheres() {
 		if w == chat.WhereUser {

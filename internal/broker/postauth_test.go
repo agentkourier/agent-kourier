@@ -10,7 +10,9 @@ import (
 
 	slackgo "github.com/slack-go/slack"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
 )
 
@@ -190,6 +192,24 @@ func TestWatchAuthReportsOnlyFatalAuthAndPassesEverythingThrough(t *testing.T) {
 	}
 }
 
+// A platform with no ephemeral messages says chat.ErrNoEphemeral, which is what it is and not a rejected credential: WatchAuth passes it
+// through untouched and reports nothing.
+func TestWatchAuthPassesNoEphemeralThroughAndReportsNothing(t *testing.T) {
+	f := chattest.NewFake()
+	caps := f.Capabilities()
+	caps.Ephemeral = false
+	f.SetCaps(caps)
+	var reported []string
+	w := WatchAuth(f, func(code string) { reported = append(reported, code) })
+	err := w.Ephemeral(t.Context(), chat.Target{Conn: "ns/conn", Channel: "C1"}, "U1", chat.Message{Fallback: "only you"})
+	if !errors.Is(err, chat.ErrNoEphemeral) {
+		t.Errorf("Ephemeral = %v, want chat.ErrNoEphemeral untouched", err)
+	}
+	if len(reported) != 0 {
+		t.Errorf("reported %v, want nothing: a platform without ephemeral messages has not rejected its credentials", reported)
+	}
+}
+
 // blocking is a SlackRunner that holds the connection until its context ends, as a healthy one does.
 type blocking struct{}
 
@@ -200,12 +220,12 @@ func (blocking) Classify(op chat.Op, err error) chat.Verdict {
 }
 
 // A bot token revoked while the connection is up fails posts with invalid_auth, which the outbox
-// treats as transient. The report ends the run with ErrSlackAuth, so the process exits and says so.
+// treats as transient. The report ends the run with ErrChatAuth, so the process exits and says so.
 func TestAPostThatFindsTheTokenRevokedEndsTheSlackRun(t *testing.T) {
-	ctx, report, stop := WithAuthFailure(t.Context())
+	ctx, report, stop := WithAuthFailure(t.Context(), v1alpha1.PlatformSlack)
 	defer stop()
 	got := make(chan error, 1)
-	go func() { got <- RunPlatform(ctx, blocking{}, nil, RunPolicy{}) }()
+	go func() { got <- RunPlatform(ctx, blocking{}, nil, RunPolicy{Platform: v1alpha1.PlatformSlack}) }()
 
 	w := WatchAuth(platform{postErr: slackErr("token_revoked")}, report)
 	if _, err := w.Post(t.Context(), chat.Target{Channel: "C1"}, chat.Outgoing{}, "id"); err == nil {
@@ -214,11 +234,11 @@ func TestAPostThatFindsTheTokenRevokedEndsTheSlackRun(t *testing.T) {
 
 	select {
 	case err := <-got:
-		if !errors.Is(err, ErrSlackAuth) || errors.Is(err, context.Canceled) {
-			t.Errorf("RunPlatform = %v, want ErrSlackAuth and not a clean stop", err)
+		if !errors.Is(err, ErrChatAuth) || errors.Is(err, context.Canceled) {
+			t.Errorf("RunPlatform = %v, want ErrChatAuth and not a clean stop", err)
 		}
-		if !strings.Contains(err.Error(), "token_revoked") {
-			t.Errorf("RunPlatform = %v, want the code token_revoked named", err)
+		if want := "slack rejected the tokens: token_revoked (reported by a call)"; err.Error() != want {
+			t.Errorf("RunPlatform = %v, want %q: the platform and the code named", err, want)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the run was not ended")
@@ -228,10 +248,10 @@ func TestAPostThatFindsTheTokenRevokedEndsTheSlackRun(t *testing.T) {
 // The same wiring with an error that is not fatal leaves the run up, and a shutdown stays a shutdown.
 func TestOtherPostErrorsLeaveTheRunAloneAndAShutdownStaysClean(t *testing.T) {
 	parent, cancel := context.WithCancel(t.Context())
-	ctx, report, stop := WithAuthFailure(parent)
+	ctx, report, stop := WithAuthFailure(parent, v1alpha1.PlatformSlack)
 	defer stop()
 	got := make(chan error, 1)
-	go func() { got <- RunPlatform(ctx, blocking{}, nil, RunPolicy{}) }()
+	go func() { got <- RunPlatform(ctx, blocking{}, nil, RunPolicy{Platform: v1alpha1.PlatformSlack}) }()
 
 	w := WatchAuth(platform{postErr: slackErr("channel_not_found")}, report)
 	_, _ = w.Post(t.Context(), chat.Target{Channel: "C1"}, chat.Outgoing{}, "id")
@@ -242,7 +262,7 @@ func TestOtherPostErrorsLeaveTheRunAloneAndAShutdownStaysClean(t *testing.T) {
 	}
 
 	cancel()
-	if err := <-got; !errors.Is(err, context.Canceled) || errors.Is(err, ErrSlackAuth) {
-		t.Errorf("RunPlatform after a signal = %v, want a clean stop", err)
+	if err := <-got; !errors.Is(err, context.Canceled) || errors.Is(err, ErrChatAuth) || !strings.HasPrefix(err.Error(), "slack run stopped: ") {
+		t.Errorf("RunPlatform after a signal = %v, want a clean stop of the slack run", err)
 	}
 }

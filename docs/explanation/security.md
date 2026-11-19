@@ -1,6 +1,6 @@
 # Security model
 
-This page explains who Agent Kourier acts as, where the access boundary is, why kagent needs a verifying front door,
+This page explains who Agent Kourier acts as, where the access boundary is, what guards the chat port of Slack HTTP mode, why kagent needs a verifying front door,
 and how text from people, alerts and agents is kept inert.
 
 ## One identity per Binding
@@ -82,7 +82,7 @@ audited and counted; nothing falls back.
 ## A team brings its own chat app
 
 On custom resources one broker can hold the chat credentials of more than one app: its own connection's, if it has one, and
-the bot token and app-level token of every ChatConnection it admits, read from the Secret each names in its own
+the bot token and the app-level token or signing secret of every ChatConnection it admits, read from the Secret each names in its own
 namespace. They sit in the memory of one pod, in the redacting type of the section above, beside the Binding tokens the broker
 already holds for every team. A reader of that pod's memory has them all, and a platform that admits a team's namespace takes on
 the tokens of the team's app: see [Let a team bring its own Slack app](../how-to/team-slack-app.md).
@@ -118,7 +118,8 @@ broker serves its own connection alone.
 A second key stands beside admission. The Secret of a team connection is in the team's namespace, and the broker's ServiceAccount can
 read it only if someone grants that: the team, with a Role that names the Secret, or the platform, with `rbac.secretNames` or
 `rbac.secretNamespaces`. `credentialsSecretRef` takes a name and never a namespace, so a team cannot point its connection at a
-Secret of another namespace. The broker reads the two keys `botToken` and `appToken` of the Secret, and uses them to call Slack. A connection
+Secret of another namespace. The broker reads the two keys of the connection's mode, `botToken` and `appToken` in Socket Mode or `botToken` and
+`signingSecret` in HTTP mode, and uses them to call Slack and, in HTTP mode, to check Slack's requests. A connection
 whose Secret the broker cannot read is not started: the broker logs a WARN, `the ChatConnection is not started yet: its credentials cannot be used`,
 `agentkourier_chat_connected` is 0 for it, and it starts once the Secret can be read. In a namespace of `rbac.secretNamespaces` the broker
 may read every Secret, so there a ChatConnection that is admitted needs no grant from the team: with every namespace admitted, that is each
@@ -126,13 +127,14 @@ namespace of `rbac.secretNamespaces`.
 
 What a team that may write a ChatConnection in an admitted namespace can do, and what it cannot:
 
-- It can have the broker open Socket Mode on its app, and post as its app in the channels that app is in. A Binding posts only to the
+- It can have the broker open Socket Mode on its app, or, in HTTP mode, serve a route of its own on the broker's public chat port
+  (`/chat/slack/<namespace>/<name>`, checked with the team's signing secret: [The chat port](#the-chat-port)), and post as its app in the channels that app is in. A Binding posts only to the
   channel it names, as before, and a Binding uses a connection only from the connection's namespace or a namespace in its
   `allowedNamespaces`.
 - It can have the broker send its app's tokens to an agent, if the Secret is granted. The grant to the ServiceAccount is for the
   Secret and not for the ChatConnection, so any Binding's `tokenSecretRef` or AgentBackend's `valueSecretRef` in that namespace can name it,
   and the broker sends the value to that AgentBackend's `url`, as described below. Anyone who may write Bindings or AgentBackends in an admitted
-  namespace can then do this with the team's `botToken` and `appToken`. Grant the Secret only if they may hold the tokens.
+  namespace can then do this with the team's `botToken` and its `appToken` or `signingSecret`. Grant the Secret only if they may hold them.
 - It can fill the places. The broker serves at most 16 connections, its own first, if it has one, and the others oldest first, and no setting changes that.
   With every namespace admitted the 16 are shared by the whole cluster. A connection takes its place whether or not its Secret can be read, since
   the broker counts the objects and not their Secrets, so a team needs no grant to fill places. A team that creates many leaves a later team's connection out, and that connection's Bindings say `ConnectionNotServed`. Bound
@@ -144,6 +146,58 @@ What a team that may write a ChatConnection in an admitted namespace can do, and
 - It stops the broker's use of its app by deleting its ChatConnection, which takes effect without a hold. The platform stops it by taking
   the namespace off the list, with the restart that applies the change, or by removing the label the selector matches, which applies at the next read.
   With every namespace admitted the platform has no per-namespace switch: it narrows the admission to a list or a selector, which is an upgrade.
+
+## The chat port
+
+A ChatConnection in Slack HTTP mode, and a Microsoft Teams one, takes its platform's requests on the chat listener, a port that the internet reaches by design, through the
+chart's Ingress or a load balancer of your own. It is a port of its own (`chatListener.port`), apart from the health and metrics port, so
+`/metrics` is never on it, and it is closed unless `chatListener.enabled` is set. Every request is bounded, and checked, before any work is
+done for it ([Limits](../reference/limits.md#run-the-broker) has each value and what happens past it):
+
+- **Cheap refusals first.** A path that is not `/chat/<platform>/<namespace>/<name>` is answered 404, a method other than POST 405, and a
+  connection that does not run on this replica (a standby, or a connection that is down) 503, all without reading the body. A body
+  declared past `1 MiB` is answered 413 unread.
+- **The body is capped, and so is the memory of all bodies.** A body is read whole, to at most 1 MiB, within the 2 s bound on reading the
+  request, into 4 KiB buffers that are each counted against 32 MiB for all the requests being read or handled. A body that does not fit
+  is answered 503 with `Retry-After`, and the rest of it is not read.
+- **The requests in flight are capped.** At most 32 requests have their connection's handler running at once, across every connection;
+  the next is answered 503 with `Retry-After`. A request takes a place only once its body has been read, so a client that sends slowly
+  holds no place, only a buffer. The listener does not count connections, which Go's HTTP server holds for each client; a rate limit
+  belongs in front of it, in your ingress.
+- **The signature before any decoding.** Each connection's route checks the request with that connection's signing secret: first that
+  `X-Slack-Request-Timestamp` is within 5 minutes of the broker's clock, either way, then that `X-Slack-Signature` is the HMAC-SHA256 of
+  the timestamp and the body under the secret, compared in constant time. Only then is the body decoded. A request that fails is
+  answered 401 and counted as `bad_signature` or `stale` on `agentkourier_slack_http_requests_total`; nothing of it is logged but the
+  outcome, at debug level. A request signed by one app does not pass on the route of another app's connection. A signed request
+  replayed within the 5 minutes is taken as Slack's own retry would be: a message that has already made a turn makes no other, since
+  turns are queued by message ID, and a press is checked against its question as any press is.
+- **Microsoft Teams' token before the body.** A Microsoft Teams connection's route first checks the request's bearer token: signed
+  RS256 by a key that the Bot Framework publishes and endorses for Microsoft Teams, for the connection's `spec.teams.appID`, with an
+  expiry and a not-before time within 5 minutes of the broker's clock. Only then is the body read and decoded; its service URL must be the token's, and its
+  tenant the connection's. A request that fails is answered 401, or 403 for another tenant, and counted on
+  `agentkourier_teams_requests_total` and `agentkourier_teams_tokens_refused_total`. The bot's own token, from Microsoft Entra, goes
+  only to the service URL that the channel's activities named (or Microsoft's global route for Teams), over HTTPS, with no redirect
+  followed.
+- **Who may reach the port.** With `networkPolicy.enabled`, ingress to the chat port is only from `networkPolicy.chatFrom` (the chart
+  refuses the policy and the listener without it), and to the metrics port only from `metricsFrom`. The chart's Ingress sends only the
+  path prefix `/chat/`.
+
+**The leader label and its admission policy.** Slack's requests reach the leader because the leader labels its own pod
+`agentkourier.dev/role=leader`, which the chat Service selects ([High availability](high-availability.md#slack-in-http-mode)). That
+takes `patch` on pods, and a Deployment's pods are named by its ReplicaSet, so the chart's Role, `<fullname>-leader-label`, cannot name
+the pod and grants `patch` on every pod of the release namespace. A pod patch reaches more than labels: a container's image, for one,
+or the token-refresh CronJob's pod, whose ServiceAccount may patch a Binding's token Secret. So with the Role the chart installs a
+ValidatingAdmissionPolicy and its binding, `<fullname>-<namespace>-leader-label`, which hold the broker's ServiceAccount to the label
+`agentkourier.dev/role`, to the value `leader` or its removal, and to the pod its token is bound to (the pod name the API server reads from
+the token), and refuse any change to the pod's spec, annotations, finalizers or owners. Both are cluster-scoped, so installing the chart
+with `chatListener.enabled` and `rbac.create` needs the right to create ValidatingAdmissionPolicies and their bindings. With
+`rbac.create: false` the chart makes neither; a Role you grant yourself without such a policy lets the broker change any pod of its
+namespace.
+
+What the policy still allows: whoever holds a token of the broker's pod, or can run a pod as its ServiceAccount, can put the label on that
+pod and so draw the chat Service's requests, which carry the messages of the app's channels, to it. Keep Agent Kourier in a namespace of
+its own, where no one else can create pods. The chart refuses `podLabels` that set `agentkourier.dev/role`, which would put every
+replica behind the chat Service. The policy is run by the chart's tests on Kubernetes 1.33 and later; the chart checks no version for it.
 
 ## What the people who write these objects can do
 

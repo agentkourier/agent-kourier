@@ -86,7 +86,14 @@ approval that a sub-agent raised are not retitled. The reply after the decision 
 an error when it was denied.
 
 The first complete, authorized decision wins. An incomplete press is rejected with an ephemeral message and does not reach
-the agent. Agent Kourier audits the decision before sending it under the Binding's service identity, then replaces the
+the agent. A press that Slack sends again, because the answer to its first delivery was lost, is recorded once, by the
+`action_ts` that Slack gives the press and repeats when it sends it again (Slack's behaviour, not checked here): its
+person is told the outcome once, and a winning press is decided and sent to the agent once. The broker knows the press
+for at least an hour after it was recorded ([Limits](../reference/limits.md#what-the-broker-keeps-and-logs)). Pressing
+the button again is a new press. A new press by the person who already decided decides nothing: the decision that was
+recorded, while the broker keeps it, is sent again, and the task takes it only while it is still paused on that same
+approval. A task that has gone on, to its end or to a later question or approval, gets nothing, and nobody is told.
+Agent Kourier audits the decision before sending it under the Binding's service identity, then replaces the
 prompt with an ending that shows each tool's Approved or Denied verdict and removes the controls. The audit records the
 Binding, Slack user, time, counts and cleaned tool names; it never records arguments or rejection text. A denial uses the
 dialect's fixed reason.
@@ -97,7 +104,8 @@ before retrying the denial. A denial that the agent does not take causes the tas
 If a person's recorded decision wins a race with the sweep after its timeout audit, the sweep appends a `superseded`
 audit for that timeout. A failure to write the compensation is logged.
 
-A permanently abandoned or oversized approval prompt is refused as unusable. Agent Kourier queues the fixed refusal
+A permanently abandoned approval prompt is refused as unusable, and so is any prompt the chat platform cannot show: one
+too large for one message, or one the platform cannot display at all. Agent Kourier queues the fixed refusal
 notice and closes the interaction before cancelling the task, so a restart can retry the cancellation without reporting
 another timeout. A transient posting failure remains retryable.
 

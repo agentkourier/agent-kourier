@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -50,7 +51,7 @@ func TestExitCodes(t *testing.T) {
 		want int
 	}{
 		{"a clean stop", nil, exitOK},
-		{"Slack rejected the tokens", fmt.Errorf("run: %w", broker.ErrSlackAuth), exitSlackAuth},
+		{"the chat platform rejected the tokens", fmt.Errorf("run: %w", broker.ErrChatAuth), exitChatAuth},
 		{"the config or the wiring is wrong", fmt.Errorf("run: %w", broker.ErrWiring), exitUsage},
 		{"RBAC denied access to Secrets", fmt.Errorf("bootstrap: %w", k8ssecrets.ErrAccessDenied), exitRBAC},
 		{"any other failure", errors.New("store: disk full"), exitFailure},
@@ -59,8 +60,8 @@ func TestExitCodes(t *testing.T) {
 			t.Errorf("%s: exitCode = %d, want %d", tc.name, got, tc.want)
 		}
 	}
-	codes := map[int]bool{exitOK: true, exitSlackAuth: true, exitUsage: true, exitRBAC: true, exitFailure: true}
-	if len(codes) != 5 || exitOK != 0 || exitSlackAuth != 1 || exitUsage != 2 || exitRBAC != 3 {
+	codes := map[int]bool{exitOK: true, exitChatAuth: true, exitUsage: true, exitRBAC: true, exitFailure: true}
+	if len(codes) != 5 || exitOK != 0 || exitChatAuth != 1 || exitUsage != 2 || exitRBAC != 3 {
 		t.Errorf("the exit codes are %v, want 0 clean, 1 Slack auth, 2 wiring or usage, 3 RBAC, and one more for the rest", codes)
 	}
 }
@@ -81,6 +82,78 @@ func TestEnvConfigDefaultsAndOverrides(t *testing.T) {
 	}
 	if o.configDir != "/c" || o.dbPath != "/d/x.db" || o.listen != "127.0.0.1:9" || o.syncTimeout != 5*time.Second || o.klogV != 3 || o.logLevel != slog.LevelDebug {
 		t.Errorf("overrides = %+v", o)
+	}
+}
+
+// AGENTKOURIER_CHAT_LISTEN is the chat listener's address, and unset is no chat listener: it has no default, so a broker that is not
+// given one opens no second port.
+func TestEnvConfigChatListen(t *testing.T) {
+	if c, err := loadEnv(env{}.get); err != nil || c.chatListen != "" {
+		t.Errorf("unset: chat listener %q, %v; want none", c.chatListen, err)
+	}
+	if c, err := loadEnv(env{"AGENTKOURIER_CHAT_LISTEN": ":8081"}.get); err != nil || c.chatListen != ":8081" {
+		t.Errorf("set to :8081: chat listener %q, %v; want :8081", c.chatListen, err)
+	}
+}
+
+// AGENTKOURIER_POD_NAMESPACE, with AGENTKOURIER_POD_NAME, names the pod the leader labels for the chat Service. It is refused without a
+// chat listener (the label is for the listener's Service alone) and without the pod's name. The name is the pod's own, not the election's
+// identity, which run makes unique to the process.
+func TestEnvConfigLeaderPod(t *testing.T) {
+	const listen, ns, pod = ":8081", "agent-kourier", "agent-kourier-7d9f8-abcde"
+	for name, tc := range map[string]struct {
+		env  env
+		want broker.PodRef
+		err  string // "" is accepted
+	}{
+		"unset":                         {env{}, broker.PodRef{}, ""},
+		"a listener alone":              {env{"AGENTKOURIER_CHAT_LISTEN": listen}, broker.PodRef{}, ""},
+		"a pod's name alone (postgres)": {env{"AGENTKOURIER_CHAT_LISTEN": listen, "AGENTKOURIER_POD_NAME": pod}, broker.PodRef{}, ""},
+		"the pod and a listener":        {env{"AGENTKOURIER_CHAT_LISTEN": listen, "AGENTKOURIER_POD_NAMESPACE": ns, "AGENTKOURIER_POD_NAME": pod}, broker.PodRef{Namespace: ns, Name: pod}, ""},
+		"the pod without a listener":    {env{"AGENTKOURIER_POD_NAMESPACE": ns, "AGENTKOURIER_POD_NAME": pod}, broker.PodRef{}, "AGENTKOURIER_POD_NAMESPACE is set without AGENTKOURIER_CHAT_LISTEN"},
+		"a namespace without a name":    {env{"AGENTKOURIER_CHAT_LISTEN": listen, "AGENTKOURIER_POD_NAMESPACE": ns}, broker.PodRef{}, "AGENTKOURIER_POD_NAME is required with AGENTKOURIER_POD_NAMESPACE"},
+		"postgres keeps the pod's name": {env{"AGENTKOURIER_CHAT_LISTEN": listen, "AGENTKOURIER_POD_NAMESPACE": ns, "AGENTKOURIER_POD_NAME": pod, "AGENTKOURIER_STORE": "postgres", "AGENTKOURIER_POSTGRES_DSN_SECRET": "agent-kourier/pg/dsn", "AGENTKOURIER_LEASE_NAMESPACE": ns, "AGENTKOURIER_LEASE_NAME": "agent-kourier-leader"}, broker.PodRef{Namespace: ns, Name: pod}, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, err := loadEnv(tc.env.get)
+			switch {
+			case tc.err == "" && err != nil:
+				t.Fatalf("loadEnv = %v; want nil", err)
+			case tc.err != "" && (!errors.Is(err, broker.ErrWiring) || !strings.Contains(err.Error(), tc.err)):
+				t.Fatalf("loadEnv = %v; want an ErrWiring saying %q", err, tc.err)
+			case tc.err != "":
+				return
+			}
+			if got := c.runConfig().LeaderPod; got != tc.want {
+				t.Errorf("LeaderPod = %+v; want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// With AGENTKOURIER_CHAT_LISTEN set, run listens on it before the broker starts, and an address it cannot listen on fails the start and
+// is named. An address it can listen on lets the start go on, to where it stops here: the cluster, which a test has none of. (That
+// unset reads as no chat listener is TestEnvConfigChatListen's.)
+func TestRunListensOnTheChatAddressOnlyWhenSet(t *testing.T) {
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+	t.Setenv("KUBERNETES_SERVICE_PORT", "")
+	t.Cleanup(restoreDefaultLogger())
+	taken, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = taken.Close() }()
+
+	var stdout, stderr bytes.Buffer
+	code := run(nil, "dev", &stdout, &stderr, env{"AGENTKOURIER_LISTEN": "127.0.0.1:0", "AGENTKOURIER_CHAT_LISTEN": taken.Addr().String()}.get)
+	if code != exitFailure || !strings.Contains(stderr.String(), "listen on "+taken.Addr().String()) {
+		t.Errorf("a chat address in use: exit %d, stderr %q; want %d naming the address", code, stderr.String(), exitFailure)
+	}
+
+	stderr.Reset()
+	code = run(nil, "dev", &stdout, &stderr, env{"AGENTKOURIER_LISTEN": "127.0.0.1:0", "AGENTKOURIER_CHAT_LISTEN": "127.0.0.1:0"}.get)
+	if code != exitUsage || !strings.Contains(stderr.String(), "only in a cluster") {
+		t.Errorf("a free chat address: exit %d, stderr %q; want the start to go on to the cluster", code, stderr.String())
 	}
 }
 

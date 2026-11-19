@@ -1,0 +1,26 @@
+# Bitbucket Cloud: a repository webhook with a secret, for pull requests created and updated and their comments created.
+# Its URL is https://<host>/chat/webhook/acme-webhooks/bitbucket. The Secret bitbucket-webhook, in namespace
+# acme-webhooks, holds the key webhookSecret, the webhook's secret; you make it, and no secret belongs in this file.
+# Replace the identity with the account ID of the bot user of the access token the agent posts with, so its own
+# comments are dropped.
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: bitbucket, namespace: acme-webhooks}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: bitbucket-webhook}
+  webhook:
+    identity: "712020:00000000-0000-0000-0000-000000000001"   # the access token's bot user's account_id
+    verify: {scheme: hmac-sha256, header: X-Hub-Signature, prefix: "sha256="}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/actor/account_id, /comment/user/account_id]}
+    thread: {field: pr, prefix: pr-}                           # one session for each pull request: pr-7
+    delivery: {header: X-Request-UUID}
+    fields:
+      - {name: event, header: X-Event-Key, kind: id}
+      - {name: pr, from: [/pullrequest/id], kind: id}
+      - {name: draft, from: [/pullrequest/draft], kind: id}
+      - {name: commit, from: [/pullrequest/source/commit/hash], kind: id}   # 12 characters, not 40
+      - {name: title, from: [/pullrequest/title]}
+      - {name: description, from: [/pullrequest/description]}
+      - {name: comment, from: [/comment/content/raw]}

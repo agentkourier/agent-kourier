@@ -53,6 +53,51 @@ func (f *fakeAdapter) ReplaceServedConnections(_ context.Context, a1 []string, _
 	return f.err
 }
 
+func (f *fakeAdapter) RememberTeamsConversation(_ context.Context, a1 store.TeamsConversation) error {
+	f.record("RememberTeamsConversation")
+	f.row = a1
+	return f.err
+}
+
+func (f *fakeAdapter) GetTeamsConversation(_ context.Context, _, _ string) (store.TeamsConversation, error) {
+	f.record("GetTeamsConversation")
+	return zero[store.TeamsConversation](), f.err
+}
+
+func (f *fakeAdapter) DeleteTeamsConversations(_ context.Context, a1 string) error {
+	f.record("DeleteTeamsConversations")
+	f.row = a1
+	return f.err
+}
+
+func (f *fakeAdapter) SaveTeamsPollPosition(_ context.Context, a1 store.TeamsPollPosition) error {
+	f.record("SaveTeamsPollPosition")
+	f.row = a1
+	return f.err
+}
+
+func (f *fakeAdapter) GetTeamsPollPosition(_ context.Context, _, _ string) (store.TeamsPollPosition, error) {
+	f.record("GetTeamsPollPosition")
+	return zero[store.TeamsPollPosition](), f.err
+}
+
+func (f *fakeAdapter) DeleteTeamsPollPosition(_ context.Context, _, _ string) error {
+	f.record("DeleteTeamsPollPosition")
+	return f.err
+}
+
+func (f *fakeAdapter) DeleteTeamsPollPositions(_ context.Context, a1 string) error {
+	f.record("DeleteTeamsPollPositions")
+	f.row = a1
+	return f.err
+}
+
+func (f *fakeAdapter) DeleteTeamsPollPositionsExcept(_ context.Context, a1 string, _ []string) error {
+	f.record("DeleteTeamsPollPositionsExcept")
+	f.row = a1
+	return f.err
+}
+
 func (f *fakeAdapter) AttributeConnection(_ context.Context, _ string) (store.AttributedRows, error) {
 	f.record("AttributeConnection")
 	return zero[store.AttributedRows](), f.err
@@ -201,6 +246,11 @@ func (f *fakeAdapter) ListDueInteractions(_ context.Context, _ time.Time) ([]sto
 func (f *fakeAdapter) ListPendingAcknowledgmentReplies(_ context.Context) ([]store.Reply, error) {
 	f.record("ListPendingAcknowledgmentReplies")
 	return zero[[]store.Reply](), f.err
+}
+
+func (f *fakeAdapter) GetPress(_ context.Context, _ int64) (store.Press, error) {
+	f.record("GetPress")
+	return zero[store.Press](), f.err
 }
 
 func (f *fakeAdapter) ListPresses(_ context.Context) ([]store.Press, error) {

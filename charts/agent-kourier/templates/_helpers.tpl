@@ -115,6 +115,12 @@ with two or more entries there is no guess to make, and the render fails. Empty 
 {{- printf "%s-%s-crs" (include "agentkourier.fullname" .) .Release.Namespace | trunc 253 | trimSuffix "-" -}}
 {{- end -}}
 
+{{/* The ValidatingAdmissionPolicy that holds the leader label's patch to the broker's own pod, and its binding: cluster-scoped, so the
+     release namespace is in the name. */}}
+{{- define "agentkourier.leaderLabelPolicyName" -}}
+{{- printf "%s-%s-leader-label" (include "agentkourier.fullname" .) .Release.Namespace | trunc 253 | trimSuffix "-" -}}
+{{- end -}}
+
 {{/* True (non-empty) when Agent Kourier keeps its state in SQLite on a volume. */}}
 {{- define "agentkourier.sqlite" -}}
 {{- if ne .Values.store.type "postgres" -}}true{{- end -}}
@@ -290,6 +296,25 @@ Checks that no values file can get past. Included by the Deployment, which every
 {{- end -}}
 {{- if and .Values.networkPolicy.enabled (not .Values.networkPolicy.kubeApiServer.cidrs) -}}
 {{- fail "networkPolicy.enabled needs networkPolicy.kubeApiServer.cidrs: Agent Kourier reads Secrets through the API server, and a NetworkPolicy cannot select it by pod. On EKS use the control-plane subnet CIDRs (aws eks describe-cluster, then the subnets' CIDRs), not the endpoint IPs, which change on upgrades; elsewhere: kubectl get endpoints kubernetes" -}}
+{{- end -}}
+{{- /* The chat listener: a port of its own, a Service that selects the leader by a label only the leader writes, and nothing it would ignore. */ -}}
+{{- if hasKey .Values.podLabels "agentkourier.dev/role" -}}
+{{- fail "podLabels must not set agentkourier.dev/role: the leader puts that label on its own pod, and the chat Service selects the leader by it, so a pod template that carried it would put every replica, the standby included, behind the chat Service" -}}
+{{- end -}}
+{{- if .Values.chatListener.enabled -}}
+{{- if eq (int .Values.chatListener.port) (int .Values.listen.port) -}}
+{{- fail "chatListener.port must differ from listen.port: the chat listener is a port of its own, so that /metrics is never on the port a chat platform reaches" -}}
+{{- end -}}
+{{- if and .Values.networkPolicy.enabled (not .Values.networkPolicy.chatFrom) -}}
+{{- fail "networkPolicy.enabled with chatListener.enabled needs networkPolicy.chatFrom: the NetworkPolicyPeers that may reach the chat port (the ingress controller's pods, or an ipBlock). Without it nothing can reach the chat listener" -}}
+{{- end -}}
+{{- else -}}
+{{- if .Values.chatListener.ingress.enabled -}}
+{{- fail "chatListener.ingress.enabled needs chatListener.enabled: the Ingress sends to the chat Service, which the chat listener renders" -}}
+{{- end -}}
+{{- if .Values.networkPolicy.chatFrom -}}
+{{- fail "networkPolicy.chatFrom is for chatListener.enabled: without the chat listener there is no chat port to admit it to, and it would be ignored" -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 

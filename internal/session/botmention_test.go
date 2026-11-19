@@ -123,6 +123,7 @@ func TestTakesSaysWhatSubmitWouldDoAndWritesNothing(t *testing.T) {
 // reaction: the limit on running mentions reads it, and it decides which buttons the final message carries.
 func TestAMentionsTaskStaysTheMentionsThroughAnAnswer(t *testing.T) {
 	f := newFixture(t)
+	f.parse = askedBy
 	f.ackConfigured, f.ackEnabled, f.ackEmoji = true, true, "eyes"
 	f.textReplies = true
 	answerStarted, releaseAnswer := make(chan struct{}), make(chan struct{})
@@ -147,7 +148,7 @@ func TestAMentionsTaskStaysTheMentionsThroughAnAnswer(t *testing.T) {
 	}
 	f.setTextReply(func(ctx context.Context, k Key, r store.Reply, task a2a.Task) (TextReplyOutcome, error) {
 		msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(r.Text))
-		msg.ID, msg.TaskID, msg.ContextID = r.ID+"/answer", task.ID, task.ContextID
+		msg.ID, msg.TaskID, msg.ContextID = answerIDFor(task), task.ID, task.ContextID
 		return TextReplyConsumed, f.m.Answer(ctx, k, msg)
 	})
 	answer := inbound("2")
@@ -179,6 +180,9 @@ func TestTheTurnOfATaskSaysWhetherItIsAMentions(t *testing.T) {
 		{"a person's turn", tstate{r: store.Reply{ID: "p", MessageRef: "1.9"}}, ""},
 		{"a task found again as a mention's", tstate{began: store.TaskTurn{ID: "m", MessageRef: "1.9", Mention: "1.5"}}, "1.5"},
 		{"a task found again as a person's", tstate{began: store.TaskTurn{ID: "p", MessageRef: "1.9"}}, ""},
+		// Every turn of a webhook event's session is an event's start, the first and the later ones of its thread alike.
+		{"a webhook event's turn", tstate{key: Key{Thread: "pr-42"}, sess: store.Session{Origin: store.Origin{Source: store.OriginWebhookEvent}},
+			r: store.Reply{ID: "w", MessageRef: "e2"}}, "e2"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.t.outputTurn().Mention; got != tc.want {

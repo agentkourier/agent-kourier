@@ -218,7 +218,7 @@ func TestLoadRejectsBadTriggers(t *testing.T) {
 		{
 			name:     "bare on, which YAML reads as true",
 			triggers: "      - on: mention\n",
-			want:     who + "spec.chat.triggers[0].true: unknown field\n" + who + "spec.chat.triggers[0].type: unsupported value \"\", must be one of mention, botMessage, personMessage",
+			want:     who + "spec.chat.triggers[0].true: unknown field\n" + who + "spec.chat.triggers[0].type: unsupported value \"\", must be one of mention, botMessage, personMessage, webhookEvent",
 		},
 		{
 			name:     "regex that does not compile",
@@ -404,9 +404,20 @@ func TestLoadRejects(t *testing.T) {
 			want: []string{`c.yaml#1 ChatConnection agent-kourier-system/slack-main: spec.directMessages: unknown field`},
 		},
 		{
-			name:  "removed mode field",
+			// The mode is in the platform's block, spec.slack.mode (spec D42), and not at spec.mode, where it was once planned.
+			name:  "mode outside the slack block",
 			files: map[string]string{"c.yaml": strings.Replace(connectionDoc, "platform: slack,", "platform: slack, mode: socket,", 1)},
 			want:  []string{`c.yaml#1 ChatConnection agent-kourier-system/slack-main: spec.mode: unknown field`},
+		},
+		{
+			name:  "unknown field in the slack block",
+			files: map[string]string{"c.yaml": strings.Replace(connectionDoc, "platform: slack,", "platform: slack, slack: { mode: socket, signingSecret: x },", 1)},
+			want:  []string{`c.yaml#1 ChatConnection agent-kourier-system/slack-main: spec.slack.signingSecret: unknown field`},
+		},
+		{
+			name:  "unknown Slack mode",
+			files: map[string]string{"c.yaml": strings.Replace(connectionDoc, "platform: slack,", "platform: slack, slack: { mode: events },", 1)},
+			want:  []string{`c.yaml#1 ChatConnection agent-kourier-system/slack-main: spec.slack.mode: unsupported value "events", must be one of socket, http`},
 		},
 		{
 			name:  "malformed YAML",
@@ -446,11 +457,11 @@ func TestLoadRejects(t *testing.T) {
 		{
 			name: "problems from several files are all reported",
 			files: map[string]string{
-				"a.yaml": strings.Replace(bindingDoc, "C0123456789", "general", 1),
+				"a.yaml": strings.Replace(bindingDoc, "C0123456789", "sre alerts", 1),
 				"b.yaml": strings.Replace(backendDoc, "kagent-v1", "grpc", 1),
 			},
 			want: []string{
-				`a.yaml#1 Binding sre/sre-alerts: spec.chat.channel: invalid channel "general": must be a channel ID such as C0123456789, not a name`,
+				`a.yaml#1 Binding sre/sre-alerts: spec.chat.channel: invalid channel "sre alerts": must be a channel ID such as C0123456789 (Slack) or 19:…@thread.tacv2 (Microsoft Teams), not a name`,
 				`b.yaml#1 AgentBackend agent-kourier-system/kagent-pilot: spec.dialect: unsupported value "grpc", must be one of a2a, kagent-v1`,
 			},
 		},
