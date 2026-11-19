@@ -1,0 +1,19 @@
+# The fast tier's webhook connections (hack/kind/fast/webhook, on custom resources): an overlay on crds-values.yaml that up-fast.sh gives lib.sh's
+# deploy_agentkourier for the route upgrade of crds (AGENTKOURIER_CRDS_ARGS), unless the tier serves two Slack apps, whose admission list
+# (two-apps-values.yaml) the MC_ tests hold to their three namespaces. It admits the namespace acme-webhooks, which holds the four webhook recipes'
+# connections, beside the broker's own, and turns on the chat listener, which every webhook connection needs: its Service agent-kourier-chat (port
+# 8081) selects the pod that carries the leader label, and the fake vendors (test/fakevendors) post to it. In HTTP mode http-values.yaml turns the
+# listener on too, with the same values. chatFrom admits the fake vendors' pods to the chat port, and the fake Slack's, since this list takes the
+# place of http-values.yaml's, when the chart's NetworkPolicy is on; the tiers' values leave it off.
+config:
+  connectionNamespaces: [acme-webhooks]
+chatListener:
+  enabled: true
+  port: 8081
+  service: {port: 8081}
+networkPolicy:
+  chatFrom:
+    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: e2e}}
+      podSelector: {matchLabels: {app: fakeslack}}
+    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: e2e}}
+      podSelector: {matchLabels: {app: fakevendors}}

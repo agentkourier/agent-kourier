@@ -87,7 +87,7 @@ for ns in team-a team-b team-c; do
   "${K[@]}" get namespace "${ns}" >/dev/null 2>&1 || "${K[@]}" create namespace "${ns}" >/dev/null
 done
 # Where Agent Kourier reads its config from now: the Deployment says (the chart sets AGENTKOURIER_CONFIG_SOURCE only for crds), not the tier's bring-up,
-# so a tier moved between the two in place is run as it is. The CR_ tests skip unless it is crds.
+# so a tier moved between the two in place is run as it is. The CR_ and WH_ tests skip unless it is crds.
 config_source=$("${K[@]}" -n agent-kourier get deploy/agent-kourier -o 'jsonpath={.spec.template.spec.containers[0].env[?(@.name=="AGENTKOURIER_CONFIG_SOURCE")].value}' --ignore-not-found) || die "could not read the Deployment agent-kourier to see where it reads its config from; a run that guessed files would skip every CR_ test and pass"
 config_source=${config_source:-files}
 case "${config_source}" in

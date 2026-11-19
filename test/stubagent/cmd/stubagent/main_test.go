@@ -29,7 +29,7 @@ var scenarioAgents = map[string]string{
 // turns, so the server is not left waiting on their streams.
 func serve(t *testing.T, tick time.Duration, requireAuth bool) *httptest.Server {
 	t.Helper()
-	stub := newStub(tick, requireAuth, "")
+	stub := newStub(tick, requireAuth, "", "")
 	srv := httptest.NewServer(withControl(stub))
 	t.Cleanup(srv.Close)
 	t.Cleanup(stub.Close)
@@ -169,7 +169,7 @@ func TestEachStartMakesItsOwnIDs(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		stub := newStub(0, false, tag)
+		stub := newStub(0, false, tag, "") //nolint:contextcheck // the stub's agents run their turns on contexts of their own, not on this request's
 		srv := httptest.NewServer(withControl(stub))
 		t.Cleanup(srv.Close)
 		t.Cleanup(stub.Close)

@@ -48,6 +48,15 @@
 # E2E_REPLICAS=2 the failover scenarios of that suite run too. Bringing the tier up again without it takes the admission list away, and the team's
 # objects stay in the cluster, not served. hack/kind/two-apps.sh (make e2e-two-apps) runs the scenarios that change the admission list with Helm.
 #
+# On custom resources the tier also serves four webhook connections, the recipes of examples/recipes/webhook-*, in their namespace acme-webhooks
+# (hack/kind/fast/webhook, lib.sh's deploy_webhook; the WH_ tests of test/e2e drive them through the fake vendors, test/fakevendors):
+# hack/kind/webhook-values.yaml admits the namespace and turns on the chat listener. The ConfigMap route serves one ChatConnection, so it has no
+# webhook connection, and the WH_ tests skip there. With E2E_TWO_APPS=1 or E2E_TEAMS=1 the admission list is their tests' own, so the webhook
+# connections stay in the cluster, not served, and the WH_ tests skip too. The recipes' trigger limits count starts in the tier's store, which
+# keeps them through restarts of Agent Kourier and bring-ups of the tier: a tier takes 5 runs of the WH_ tests an hour and 20 a day (each run
+# starts GitHub's review trigger twice, and the recipe allows it 10 starts an hour and 40 a day), and only a fresh tier (hack/kind/down.sh fast
+# first), or a bring-up on a store the tier has not used, starts them over.
+#
 # E2E_TEAMS=1 (with E2E_CONFIG_SOURCE=crds, and not with E2E_TWO_APPS=1, whose admission list is another) adds Microsoft Teams to the tier: the fake Teams
 # service (hack/kind/fast/teams/faketeams.yaml, test/faketeams), its certificate, and the broker on the test hooks that point a Teams connection at it and
 # nowhere else (hack/kind/teams-values.yaml: AGENTKOURIER_TEAMS_URL, AGENTKOURIER_TEAMS_CA, the chat listener, and the admission of namespace teams-e2e), then
@@ -162,8 +171,12 @@ if [ "${E2E_REPLICAS}" = 2 ]; then
 fi
 
 AGENTKOURIER_CRDS_ARGS=()
+WEBHOOKS=0
 if [ "${E2E_TWO_APPS}" = 1 ]; then
   AGENTKOURIER_CRDS_ARGS=(-f "${HERE}/two-apps-values.yaml")
+elif [ "${E2E_CONFIG_SOURCE}" = crds ] && [ "${E2E_TEAMS}" = 0 ]; then
+  WEBHOOKS=1
+  AGENTKOURIER_CRDS_ARGS=(-f "${HERE}/webhook-values.yaml")
 fi
 if [ "${E2E_TEAMS}" = 1 ]; then
   AGENTKOURIER_CRDS_ARGS=(-f "${HERE}/teams-values.yaml")
@@ -188,6 +201,11 @@ if [ "${E2E_TWO_APPS}" = 1 ]; then
   deploy_two_apps
 fi
 
+if [ "${WEBHOOKS}" = 1 ]; then
+  step "acme-webhooks: the webhook recipes' ChatConnections and Bindings, their Secrets and AgentBackends"
+  deploy_webhook
+fi
+
 if [ "${E2E_TEAMS}" = 1 ]; then
   step "teams-e2e: two Teams connections on the fake Teams service, their Secrets and Bindings"
   deploy_teams_connections
@@ -195,4 +213,4 @@ fi
 
 step "verify"
 "${FAST}/verify.sh"
-echo "fast tier up in ${SECONDS}s (context ${CTX}, store ${E2E_STORE}, ${E2E_REPLICAS} Agent Kourier replica(s), config source ${E2E_CONFIG_SOURCE}, Slack mode ${E2E_SLACK_MODE}, two apps ${E2E_TWO_APPS}, Teams ${E2E_TEAMS})"
+echo "fast tier up in ${SECONDS}s (context ${CTX}, store ${E2E_STORE}, ${E2E_REPLICAS} Agent Kourier replica(s), config source ${E2E_CONFIG_SOURCE}, Slack mode ${E2E_SLACK_MODE}, two apps ${E2E_TWO_APPS}, Teams ${E2E_TEAMS}, webhook connections ${WEBHOOKS})"
