@@ -20,7 +20,8 @@ const cardContentTypeIn = "application/vnd.microsoft.card.adaptive"
 // deeper. Text deeper than this is not read.
 const cardMaxDepth = 32
 
-// graphTextMax is the most of a message's body that is read as text, in bytes: what is past it is not read. A person's message in Teams
+// graphTextMax is the most of a message's body that is read as text, in bytes, and the most of its cards' text that is kept: what is past
+// it is not read, or dropped. A person's message in Teams
 // is at most about 28 KB (Microsoft's documentation, not measured), and htmlText is linear, so the cap bounds the work on a body that
 // Graph serves of any size.
 const graphTextMax = 128 << 10
@@ -64,14 +65,7 @@ type graphAttached struct {
 // text is what the body says, of its first graphTextMax bytes: a text body as written, an html one as htmlText reads it (Graph's
 // default), and nothing for another type.
 func (b graphBody) text() string {
-	content := b.Content
-	if len(content) > graphTextMax {
-		cut := graphTextMax
-		for cut > 0 && !utf8.RuneStart(content[cut]) {
-			cut--
-		}
-		content = content[:cut]
-	}
+	content := cutText(b.Content)
 	switch strings.ToLower(cmp.Or(b.ContentType, "html")) {
 	case "text":
 		return content
@@ -81,7 +75,20 @@ func (b graphBody) text() string {
 	return ""
 }
 
-// cardsText is the text of the message's Adaptive Cards, one after another.
+// cutText is s cut to its first graphTextMax bytes, at the start of a rune.
+func cutText(s string) string {
+	if len(s) <= graphTextMax {
+		return s
+	}
+	cut := graphTextMax
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
+}
+
+// cardsText is the text of the message's Adaptive Cards, one after another, of at most graphTextMax bytes: what is past it is dropped,
+// as a body's text past it is not read.
 func (m graphMessage) cardsText() string {
 	var parts []string
 	for _, a := range m.Attachments {
@@ -93,7 +100,7 @@ func (m graphMessage) cardsText() string {
 			parts = append(parts, t)
 		}
 	}
-	return strings.Join(parts, "\n")
+	return cutText(strings.Join(parts, "\n"))
 }
 
 // mentions says whether the message mentions the application appID, by the mentions Graph lists (not by its text, which a person can

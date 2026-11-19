@@ -358,7 +358,11 @@ type TeamsConnectionSpec struct {
 	// notifications of the bound channels' messages. Its path is /chat/teams/<namespace>/<name>, the ChatConnection's own namespace
 	// and name. It is optional, in either mode. At most 2048 bytes, https only (Microsoft Graph's documentation of a subscription's
 	// notificationUrl requires HTTPS), with no credentials, query or fragment. The API server checks the form of the path, and the
-	// broker that it is the connection's own. The broker does not subscribe to notifications yet: the URL is checked, and not used.
+	// broker that it is the connection's own. When it is set, the leader keeps a Microsoft Graph subscription to the messages of each
+	// channel that a Binding of the connection names, with this URL for its notifications, and reads each new message that Graph
+	// notifies: that is how a post of another app, such as an alert's card that Workflows posts, reaches the connection, since Teams
+	// sends a bot no other bot's post. It needs the chat listener in either mode, and Graph must reach the leader at this URL. Unset,
+	// no other app's post reaches the connection.
 	// +kubebuilder:validation:MaxLength=2048
 	// +kubebuilder:validation:XValidation:rule=`self == '' || self.matches('(?i)^https://[^/?#]')`,message="must be an https URL with a host"
 	// +kubebuilder:validation:XValidation:rule=`!self.matches('(?i)^https?://[^/?#]*@')`,message="must not contain credentials"

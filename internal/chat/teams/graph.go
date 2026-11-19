@@ -1,6 +1,7 @@
 package teams
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -116,6 +117,12 @@ func (g *graphClient) ours(link string) bool {
 
 // get reads the Graph URL link into out. An answer other than 2xx is a *GraphError.
 func (g *graphClient) get(ctx context.Context, link string, out any) error {
+	return g.call(ctx, http.MethodGet, link, nil, out)
+}
+
+// call sends method to the Graph URL link, with body as JSON when it is not nil, and reads a 2xx answer into out when out is not nil
+// (an answer with no body, as Graph gives a delete, is read into no out). An answer other than 2xx is a *GraphError.
+func (g *graphClient) call(ctx context.Context, method, link string, body, out any) error {
 	if !g.ours(link) {
 		return errNotGraph
 	}
@@ -123,12 +130,23 @@ func (g *graphClient) get(ctx context.Context, link string, out any) error {
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, link, nil)
+	var payload io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("teams: encoding a request to Microsoft Graph: %w", err)
+		}
+		payload = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, link, payload)
 	if err != nil {
 		return fmt.Errorf("teams: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+tok.Reveal())
 	req.Header.Set("Accept", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	resp, err := g.client.Do(req)
 	if err != nil {
 		// The *url.Error repeats the URL, whose path names the team, the channel and the thread: only what it wraps is kept.
@@ -136,7 +154,7 @@ func (g *graphClient) get(ctx context.Context, link string, out any) error {
 		if errors.As(err, &ue) {
 			err = ue.Err
 		}
-		return fmt.Errorf("teams: Microsoft Graph read: %w", err)
+		return fmt.Errorf("teams: Microsoft Graph call: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, graphMaxBody+1))
@@ -157,6 +175,9 @@ func (g *graphClient) get(ctx context.Context, link string, out any) error {
 	}
 	if len(data) > graphMaxBody {
 		return errAnswerTooLong
+	}
+	if out == nil {
+		return nil
 	}
 	if err := json.Unmarshal(data, out); err != nil {
 		return fmt.Errorf("teams: Microsoft Graph's answer is not JSON: %w", err)

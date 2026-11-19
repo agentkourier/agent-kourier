@@ -80,6 +80,24 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Count(t, "teamsCardDepth", cardMaxDepth)
 	limitsdoc.Bytes(t, "teamsGraphText", graphTextMax)
 
+	// The Graph intake of a connection with a notificationURL: the bounds a Client is built with, read from one New built, and the
+	// constants it reads.
+	nc, err := New(Config{Connection: testConn, TenantID: testTenant, AppID: testAppID, ClientSecret: secret.New(testClientSecret),
+		NotificationURL: "https://kourier.example.test/chat/teams/" + testConn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	limitsdoc.Duration(t, "teamsSubscriptionLifetime", nc.push.subs.lifetime)
+	limitsdoc.Duration(t, "teamsSubscriptionRenewLead", nc.push.subs.renewLead)
+	limitsdoc.Duration(t, "teamsSubscriptionCall", nc.push.subs.callTimeout)
+	limitsdoc.Duration(t, "teamsSubscriptionReconcile", nc.push.subs.every)
+	limitsdoc.Count(t, "teamsSubscriptionListPages", subscriptionListPages)
+	limitsdoc.Bytes(t, "teamsNotificationBody", notificationMaxBody)
+	limitsdoc.Duration(t, "teamsFetchTimeout", nc.push.fetchTimeout)
+	limitsdoc.Count(t, "teamsFetchAttempts", fetchAttempts)
+	limitsdoc.Duration(t, "teamsFetchRetry", nc.push.fetchRetry)
+	limitsdoc.Duration(t, "teamsFetchRetryMax", nc.push.fetchRetryMax)
+
 	// Socket mode: the waits that a socket-mode Client keeps in fields, which a test may shorten, are read from one New built, and the
 	// rest from the constants it reads.
 	sc, err := New(Config{Connection: testConn, TenantID: testTenant, AppID: testAppID, ClientSecret: secret.New(testClientSecret), Socket: true})

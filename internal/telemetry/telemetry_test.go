@@ -230,6 +230,8 @@ var connectionSeries = []struct {
 	{"agentkourier_teams_socket_reconnects_total", []string{"amer", "expiry"}},
 	{"agentkourier_teams_socket_gap_seconds", []string{}},
 	{"agentkourier_teams_socket_ready", []string{"amer"}},
+	{"agentkourier_teams_graph_notifications_total", []string{"change", "taken"}},
+	{"agentkourier_teams_graph_channels", []string{"subscribed"}},
 }
 
 // seriesOf returns the values of the connection label of every series of the named family.
@@ -266,7 +268,7 @@ func TestForgetConnectionDeletesOnlyThatConnectionsSeries(t *testing.T) {
 			switch {
 			case strings.HasSuffix(s.name, "_seconds"):
 				Observe(ctx, s.name, time.Second, labels...)
-			case strings.HasSuffix(s.name, "_ready"):
+			case strings.HasSuffix(s.name, "_ready"), s.name == "agentkourier_teams_graph_channels": // the gauges
 				SetGauge(ctx, s.name, 1, labels...)
 			default:
 				Count(ctx, s.name, labels...)

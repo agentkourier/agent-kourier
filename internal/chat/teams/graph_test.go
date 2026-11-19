@@ -41,9 +41,12 @@ type fakeGraph struct {
 	redirect string
 	reqs     []graphReq
 	scopes   []string // the scope of each token grant that the fake's Entra took
+	subs     fakeSubs // the app's subscriptions (push_test.go)
 }
 
-func newFakeGraph() fakeGraph { return fakeGraph{msgs: map[string]map[string]any{}} }
+func newFakeGraph() fakeGraph {
+	return fakeGraph{msgs: map[string]map[string]any{}, subs: fakeSubs{byID: map[string]map[string]any{}}}
+}
 
 // graphURL is the fake's Microsoft Graph, as Config.GraphURL takes it.
 func (f *fakeConnector) graphURL() string { return f.srv.URL + strings.TrimSuffix(graphPrefix, "/") }
@@ -103,6 +106,23 @@ func (f *fakeConnector) serveGraph(w http.ResponseWriter, r *http.Request) {
 	notFound := func() {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = io.WriteString(w, `{"error":{"code":"NotFound","message":"`+path+`"}}`)
+	}
+	if path == "/subscriptions" || strings.HasPrefix(path, "/subscriptions/") {
+		f.serveSubscriptions(w, r, path)
+		return
+	}
+	// A reply, GET …/messages/{root}/replies/{id}: the message id, if it is a reply to root.
+	if thread, id, ok := strings.Cut(path, "/replies/"); ok {
+		root := thread[strings.LastIndex(thread, "/")+1:]
+		f.mu.Lock()
+		m, ok := g.msgs[thread[:strings.LastIndex(thread, "/")+1]+id]
+		f.mu.Unlock()
+		if !ok || m["replyToId"] != root {
+			notFound()
+			return
+		}
+		_ = json.NewEncoder(w).Encode(m)
+		return
 	}
 	root, isReplies := strings.CutSuffix(path, "/replies")
 	isRoots := strings.HasSuffix(path, "/messages")

@@ -128,6 +128,7 @@ var (
 	_ chat.BotFilter        = (*Intake)(nil)
 	_ chat.BotMentionFilter = (*Intake)(nil)
 	_ chat.InlineDecider    = (*Intake)(nil)
+	_ chat.ChannelLister    = (*Intake)(nil)
 )
 
 // NewIntake returns an Intake over cfg.
@@ -429,6 +430,23 @@ func (in *Intake) AcceptsBot(channel, botID string) bool {
 		return false
 	}
 	return botMessageTriggerNames(rb.Binding.Spec.Chat.Triggers, botID)
+}
+
+// BoundChannels implements chat.ChannelLister: the channels that the Bindings of the current config place on this connection,
+// sorted, each once. None before the first config.
+func (in *Intake) BoundChannels() []string {
+	snap := in.cfg.Snapshot()
+	if snap == nil {
+		return nil
+	}
+	var out []string
+	for _, rb := range snap.Bindings() {
+		if rb.Connection != nil && rb.Connection.Namespace == in.cfg.Connection.Namespace && rb.Connection.Name == in.cfg.Connection.Name {
+			out = append(out, rb.Binding.Spec.Chat.Channel)
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // botMessageTriggerNames says whether a botMessage trigger of triggers names the bot botID.

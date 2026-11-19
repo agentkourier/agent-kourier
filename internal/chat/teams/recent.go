@@ -8,7 +8,8 @@ import (
 // The bounds of the dedup by activity ID. Teams sends a message again only after a fast error answer, once (measured on a test tenant
 // on 2026-11-18, for a message only), and the receiver releases the key of an activity it does not take, so that delivery is taken. The dedup guards
 // against a request that comes twice all the same (a replay of a captured request while its token is valid, or a proxy that retries),
-// and is the place where the Graph intake will meet the activities.
+// and is where the Graph intake (push.go) meets the activities: a person's post that comes both as an activity and as a Graph
+// notification has one key (messageKey), and is handed on once, whichever comes first.
 //
 // It is the second set of keys in two generations, after the chat intake's (internal/trigger/intake.go); a shared package replaces
 // both, as internal/chat/lanes did the lanes.
@@ -53,6 +54,15 @@ func (r *recent) claim(k string) bool {
 	}
 	r.cur[k] = struct{}{}
 	return true
+}
+
+// has says whether k is held, without claiming it.
+func (r *recent) has(k string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, inCur := r.cur[k]
+	_, inOld := r.old[k]
+	return inCur || inOld
 }
 
 // forget removes k, so that it is new again: for an activity that was claimed and then not taken.

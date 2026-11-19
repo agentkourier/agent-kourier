@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    agentkourier.dev/schema-sha256: bbe6841164047f3d5953500d29498b71e357f40a1da2d0018f2adbdd9d38f0b5
+    agentkourier.dev/schema-sha256: 906e59e6bd9fcdf256135b2307abfa04b9dd3537b65cdd65da5976b73584521b
     controller-gen.kubebuilder.io/version: v0.23.0
   name: chatconnections.agentkourier.dev
 spec:
@@ -134,7 +134,11 @@ spec:
                       notifications of the bound channels' messages. Its path is /chat/teams/<namespace>/<name>, the ChatConnection's own namespace
                       and name. It is optional, in either mode. At most 2048 bytes, https only (Microsoft Graph's documentation of a subscription's
                       notificationUrl requires HTTPS), with no credentials, query or fragment. The API server checks the form of the path, and the
-                      broker that it is the connection's own. The broker does not subscribe to notifications yet: the URL is checked, and not used.
+                      broker that it is the connection's own. When it is set, the leader keeps a Microsoft Graph subscription to the messages of each
+                      channel that a Binding of the connection names, with this URL for its notifications, and reads each new message that Graph
+                      notifies: that is how a post of another app, such as an alert's card that Workflows posts, reaches the connection, since Teams
+                      sends a bot no other bot's post. It needs the chat listener in either mode, and Graph must reach the leader at this URL. Unset,
+                      no other app's post reaches the connection.
                     maxLength: 2048
                     type: string
                     x-kubernetes-validations:

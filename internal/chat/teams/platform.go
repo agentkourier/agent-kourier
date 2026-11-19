@@ -59,6 +59,15 @@ type Config struct {
 	// OnSocketGap, if set, is told of each interval in socket mode in which no socket was ready, when a socket is ready again (Gap): what
 	// Teams sent in it was not delivered. It is called from the goroutine of Run, in order; it must not block.
 	OnSocketGap func(Gap)
+	// NotificationURL is the connection's spec.teams.notificationURL: when set, Run keeps a Microsoft Graph subscription to the messages
+	// of each channel that a Binding of the connection names (subscriptions.go), with this as its notification and lifecycle URL, and
+	// the connection's route on the chat listener takes what Graph sends there, in either mode (push.go). It is how another app's post,
+	// an alert's that Workflows posted, reaches the connection, since Teams sends a bot none. Unset, the connection subscribes to nothing.
+	NotificationURL string
+	// OnNotificationsMissed, if set, is told the channel of each lifecycle notification missed: Graph did not deliver some notifications
+	// of the channel's messages, which are not read. It is the seam of a backfill, which is not built. It is called from a request's
+	// goroutine; it must not block.
+	OnNotificationsMissed func(channel string)
 }
 
 // Client is a Microsoft Teams connection as a chat.Platform. In http mode Teams sends the bot's activities to the connection's route
@@ -90,6 +99,7 @@ type Client struct {
 	log           *slog.Logger
 	onConnection  func(bool)
 	sockets       *sockets // the connection's sockets in socket mode, nil in http mode
+	push          *push    // the Graph intake of a connection with a notificationURL, nil without one
 }
 
 // New returns the Client of cfg. It refuses a config with no connection, tenant, app or secret.
@@ -137,6 +147,15 @@ func New(cfg Config) (*Client, error) {
 	if cfg.Socket {
 		c.sockets = newSockets(cfg.Connection, recv, tokens, direct, cfg, log)
 	}
+	if cfg.NotificationURL != "" {
+		state, err := clientStateOf(cfg.ClientSecret.Reveal(), cfg.Connection)
+		if err != nil {
+			return nil, err
+		}
+		c.push = &push{c: c, url: cfg.NotificationURL, state: state, onMissed: cfg.OnNotificationsMissed, fetchTimeout: fetchTimeout,
+			fetchRetry: fetchRetry, fetchRetryMax: fetchRetryMax}
+		c.push.subs = newSubscriber(c, cfg.NotificationURL, state)
+	}
 	return c, nil
 }
 
@@ -149,9 +168,24 @@ func New(cfg Config) (*Client, error) {
 // In socket mode Run then runs the connection's sockets until ctx ends (sockets.run), and returns sooner with the error that ends them:
 // the bot's credentials rejected (FatalAuth), or every region refusing the socket (an error Classify says may pass). It closes the
 // sockets before it returns, so a run that ends, as the leader's does when it stops leading, leaves none open.
+//
+// With a NotificationURL, Run keeps the subscriptions of the channels that sink names (chat.ChannelLister; a sink that names none has
+// none made) while it runs, and stops keeping them before it returns. It leaves them in Graph, for the next leader to adopt.
 func (c *Client) Run(ctx context.Context, sink chat.Sink) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	if c.push != nil {
+		lister, _ := sink.(chat.ChannelLister)
+		kept := make(chan struct{})
+		go func() {
+			defer close(kept)
+			c.push.subs.run(ctx, lister)
+		}()
+		defer func() {
+			cancel()
+			<-kept
+		}()
+	}
 	served := make(chan error, 1)
 	go func() { served <- c.recv.serve(ctx, sink, c.sockets == nil) }()
 	if _, err := c.api.tokens.token(ctx); err != nil {
@@ -178,10 +212,16 @@ func (c *Client) Run(ctx context.Context, sink chat.Sink) error {
 	return <-served
 }
 
-// HTTPHandler implements chat.HTTPReceiver: the Receiver, the handler of the connection's route, in http mode. In socket mode there is
-// none: the activities come on the sockets.
+// HTTPHandler implements chat.HTTPReceiver: the handler of the connection's route. In http mode it is the Receiver, which takes the
+// activities, and with a NotificationURL Graph's requests too (httpsRoute). In socket mode the activities come on the sockets, so there
+// is a handler only with a NotificationURL, which takes Graph's requests alone (graphRoute).
 func (c *Client) HTTPHandler() (http.Handler, bool) {
-	if c.sockets != nil {
+	switch {
+	case c.push != nil && c.sockets != nil:
+		return graphRoute{c.push}, true
+	case c.push != nil:
+		return httpsRoute{p: c.push, recv: c.recv}, true
+	case c.sockets != nil:
 		return nil, false
 	}
 	return c.recv, true

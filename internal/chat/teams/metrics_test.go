@@ -217,3 +217,44 @@ func TestReceiverSeriesAreForgottenWithTheConnection(t *testing.T) {
 		t.Fatalf("%d series after the connection was forgotten, want 0", n)
 	}
 }
+
+// series is the value of the series of name under the test connection and the other labels given, of a counter, a gauge or the
+// count of a histogram; 0 when it has none.
+func (o observed) series(t *testing.T, name string, labels ...string) float64 {
+	t.Helper()
+	mfs, err := o.reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() != name {
+			continue
+		}
+	metrics:
+		for _, m := range mf.GetMetric() {
+			have := map[string]bool{}
+			conn := false
+			for _, l := range m.GetLabel() {
+				have[l.GetValue()] = true
+				conn = conn || l.GetName() == telemetry.ConnectionLabel && l.GetValue() == testConn
+			}
+			if !conn {
+				continue
+			}
+			for _, l := range labels {
+				if !have[l] {
+					continue metrics
+				}
+			}
+			switch {
+			case m.GetCounter() != nil:
+				return m.GetCounter().GetValue()
+			case m.GetGauge() != nil:
+				return m.GetGauge().GetValue()
+			case m.GetHistogram() != nil:
+				return float64(m.GetHistogram().GetSampleCount())
+			}
+		}
+	}
+	return 0
+}

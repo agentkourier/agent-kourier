@@ -133,7 +133,7 @@ func (c RunConfig) newPlatform(conn Connection, log *slog.Logger, onConnection f
 		tc := teams.Config{Connection: name, TenantID: conn.Teams.TenantID, AppID: conn.Teams.AppID,
 			ClientSecret: conn.Credentials[v1alpha1.TeamsClientSecretKey], Logger: log, OnConnection: onConnection,
 			HTTPClient: &http.Client{Transport: telemetry.Transport(transport, false), Timeout: teamsAPITimeout}, Conversations: convs,
-			Socket: conn.Teams.Mode == v1alpha1.TeamsModeSocket}
+			Socket: conn.Teams.Mode == v1alpha1.TeamsModeSocket, NotificationURL: conn.Teams.NotificationURL}
 		if c.teamsFakes != nil {
 			c.teamsFakes(&tc)
 		}
@@ -148,7 +148,8 @@ func (c RunConfig) newPlatform(conn Connection, log *slog.Logger, onConnection f
 
 // needsChatListener refuses, with a wiring error, a connection that takes its platform's requests on the chat listener when the broker has
 // none (AGENTKOURIER_CHAT_LISTEN unset): a Slack connection in HTTP mode, whose credentials are read with the signing secret
-// (v1alpha1.CredentialKeys), and a Microsoft Teams connection in http mode (spec.teams.mode unset or http). The platform could not reach
+// (v1alpha1.CredentialKeys), a Microsoft Teams connection in http mode (spec.teams.mode unset or http), and one in socket mode with a
+// spec.teams.notificationURL, to which Microsoft Graph sends the notifications of its channels' messages. The platform could not reach
 // it, and it would show as connected while nothing came in. Run checks its own connection with it at start, on every replica, so that a
 // standby refuses the config as the leader does; newPlatform checks each connection it builds.
 func (c RunConfig) needsChatListener(conn Connection) error {
@@ -162,6 +163,9 @@ func (c RunConfig) needsChatListener(conn Connection) error {
 			ErrWiring, name)
 	case conn.Platform == v1alpha1.PlatformTeams && conn.Teams.Mode != v1alpha1.TeamsModeSocket:
 		return fmt.Errorf("%w: ChatConnection %s is a Microsoft Teams connection in http mode, and the broker has no chat listener for Teams to send to: set AGENTKOURIER_CHAT_LISTEN",
+			ErrWiring, name)
+	case conn.Platform == v1alpha1.PlatformTeams && conn.Teams.NotificationURL != "":
+		return fmt.Errorf("%w: ChatConnection %s is a Microsoft Teams connection with a notificationURL, and the broker has no chat listener for Microsoft Graph to send to: set AGENTKOURIER_CHAT_LISTEN",
 			ErrWiring, name)
 	}
 	return nil

@@ -16,7 +16,6 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/secret"
-	"github.com/agentkourier/agent-kourier/internal/telemetry"
 	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/faketeams"
 )
@@ -162,45 +161,10 @@ func (st *socketTest) up(t *testing.T, want bool) {
 	})
 }
 
-// series is the value of the series of name under the test connection and the other labels given, of a counter, a gauge or the
-// count of a histogram; 0 when it has none.
+// series is st's observed series (observed.series).
 func (st *socketTest) series(t *testing.T, name string, labels ...string) float64 {
 	t.Helper()
-	mfs, err := st.obs.reg.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, mf := range mfs {
-		if mf.GetName() != name {
-			continue
-		}
-	metrics:
-		for _, m := range mf.GetMetric() {
-			have := map[string]bool{}
-			conn := false
-			for _, l := range m.GetLabel() {
-				have[l.GetValue()] = true
-				conn = conn || l.GetName() == telemetry.ConnectionLabel && l.GetValue() == testConn
-			}
-			if !conn {
-				continue
-			}
-			for _, l := range labels {
-				if !have[l] {
-					continue metrics
-				}
-			}
-			switch {
-			case m.GetCounter() != nil:
-				return m.GetCounter().GetValue()
-			case m.GetGauge() != nil:
-				return m.GetGauge().GetValue()
-			case m.GetHistogram() != nil:
-				return float64(m.GetHistogram().GetSampleCount())
-			}
-		}
-	}
-	return 0
+	return st.obs.series(t, name, labels...)
 }
 
 // envelope is the fixture name as an envelope of typ, with the deadline given (25 s if 0).

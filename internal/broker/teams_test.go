@@ -136,6 +136,20 @@ func TestNewPlatformBuildsTheTeamsAdapter(t *testing.T) {
 	if _, ok := receiverOf(built.Platform); ok {
 		t.Error("the Teams adapter in socket mode offers a handler for the chat listener; want none")
 	}
+	// With a notificationURL, Microsoft Graph sends to the connection's route on the chat listener in either mode: a broker with none
+	// refuses it, and one with a chat listener gets a handler for it in socket mode too.
+	notified := socket
+	notified.Teams.NotificationURL = "https://kourier.example.test/chat/teams/team-a/teams"
+	if err := none.needsChatListener(notified); !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), "notificationURL") {
+		t.Errorf("needsChatListener(teams in socket mode with a notificationURL) with no chat listener = %v; want a wiring error that names the notificationURL", err)
+	}
+	built, err = cfg.newPlatform(notified, nil, nil, teams.NewMemoryConversations())
+	if err != nil {
+		t.Fatalf("newPlatform(teams in socket mode with a notificationURL) = %v; want the adapter", err)
+	}
+	if h, ok := receiverOf(built.Platform); !ok || h == nil {
+		t.Error("the Teams adapter in socket mode with a notificationURL offers no handler for the chat listener; want Graph's")
+	}
 	for name, edit := range map[string]func(*Connection){
 		"no client secret": func(c *Connection) { c.Credentials = nil },
 		"no tenant":        func(c *Connection) { c.Teams.TenantID = "" },

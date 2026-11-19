@@ -147,6 +147,15 @@ type BotMentionFilter interface {
 	AcceptsBotMention(channel, botID string) bool
 }
 
+// ChannelLister is an optional interface of a Sink that names the channels bound to its connection now: the channels of the
+// Bindings that name the connection. A platform that must ask its service for each bound channel's messages (Microsoft Teams'
+// Graph subscriptions) asks it again and again, since Bindings come and go; a Sink that does not implement it binds no channel, and
+// the platform asks for none. The answer is a routing question, so the adapter holds no copy of the config.
+type ChannelLister interface {
+	// BoundChannels returns the channels of the connection that a Binding names, sorted, each once. The slice is the caller's.
+	BoundChannels() []string
+}
+
 // InlineDecider is an optional interface of a Sink, for a platform that answers a press in the press's own request and can show the
 // presser alone what that answer says (Microsoft Teams shows the answer to an Adaptive Card's press as a banner under the card). Such
 // a platform asks it in place of Interaction, and tells the presser what it returns; a Sink that does not implement it is given the

@@ -297,14 +297,14 @@ func (r *Receiver) handle(s *serving, w work) {
 	}
 }
 
-// deliver gives w's post to s's sink, again after a failure, up to sinkAttempts times in all or until the work's context ends. A post
-// the sink never takes is dropped: its dedup key is released, so that the same activity is taken if it comes again, and the drop is
-// logged at WARN. It is counted as not taken unless the stop cut it, which Serve counts as stopped.
-func (r *Receiver) deliver(s *serving, w work) {
+// deliver gives w's post to s's sink, again after a failure, up to sinkAttempts times in all or until the work's context ends, and says
+// whether the sink took it. A post the sink never takes is dropped: its dedup key is released, so that the same activity is taken if it
+// comes again, and the drop is logged at WARN. It is counted as not taken unless the stop cut it, which Serve counts as stopped.
+func (r *Receiver) deliver(s *serving, w work) bool {
 	for attempt := 1; ; attempt++ {
 		err := s.sink.Message(s.ctx, *w.msg)
 		if err == nil {
-			return
+			return true
 		}
 		if attempt == sinkAttempts || s.ctx.Err() != nil || !waitFor(s.ctx, backoff.Doubling(r.sinkRetryBase, sinkRetryMax, attempt)) {
 			r.release(w)
@@ -313,7 +313,7 @@ func (r *Receiver) deliver(s *serving, w work) {
 			}
 			r.log.WarnContext(s.ctx, "teams: the sink did not take a message, which is dropped",
 				"channel", quote(w.msg.At.Channel), "message", w.msg.At.ID, "attempts", attempt, "error", err.Error())
-			return
+			return false
 		}
 	}
 }
@@ -483,8 +483,14 @@ func (r *Receiver) take(ctx, tctx context.Context, a activity) answer {
 	channel, _ := splitConversation(a.Conversation.ID)
 	key := ""
 	if a.ID != "" {
-		key = a.Type + "\x00" + channel + "\x00" + a.ID
+		key = dedupKey(a.Type, channel, a.ID)
 		if !r.seen.claim(key) {
+			// What it says of its channel is still recorded: the post may have been taken from a Graph notification (push.go), which
+			// records nothing, and the record is what posts and reads of the channel need.
+			if conv != nil {
+				c := *conv
+				s.submit(channel, func() { r.handle(s, work{conv: &c}) })
+			}
 			r.log.DebugContext(ctx, "teams: an activity came again; acknowledged", "type", quote(a.Type), "id", a.ID)
 			return answer{status: http.StatusOK, outcome: requestDuplicate}
 		}
@@ -513,6 +519,13 @@ func (r *Receiver) take(ctx, tctx context.Context, a activity) answer {
 	}
 	return answer{status: http.StatusOK, outcome: requestAccepted}
 }
+
+// dedupKey is the key of the dedup (recent) of an activity of the type typ, of channel, with the ID id.
+func dedupKey(typ, channel, id string) string { return typ + "\x00" + channel + "\x00" + id }
+
+// messageKey is the key of the dedup of the message id of channel: an activity's of the type message, which a Graph notification of
+// the same post claims too (push.go), so that the post is handed on once.
+func messageKey(channel, id string) string { return dedupKey("message", channel, id) }
 
 // telemetryContext is the context the series of a request are counted on: the last Serve's, which carries the broker's instruments,
 // or ctx before the first Serve.
