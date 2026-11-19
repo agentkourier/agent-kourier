@@ -116,7 +116,7 @@ Bedrock and the MCP client, on CPython 3.14, and runs as the non-root user 65532
 ### 1. Choose the image
 
 `agent/manifests/deployment.yaml` names the image that this release publishes,
-`ghcr.io/agentkourier/agent-kourier-prompt-agent:v0.4.0`, for `linux/amd64` and `linux/arm64`, signed as Agent Kourier's
+`ghcr.io/agentkourier/agent-kourier-prompt-agent:v0.5.0`, for `linux/amd64` and `linux/arm64`, signed as Agent Kourier's
 image is ([Verify the release](../../../docs/how-to/install-with-helm.md#verify-the-release)). It holds `agent.py`, the
 example `agent.yaml` and the pinned packages. The pod reads your `agent.yaml` from the ConfigMap (step 2), so writing
 your agent needs no build. A tag can be moved, so to pin what every node runs, set `image:` to the digest that the
