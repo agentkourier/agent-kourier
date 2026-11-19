@@ -9,15 +9,15 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 )
 
-// intakeErrors reads agentkourier_intake_total{source="message",disposition="error"} of the test's connection: the count of
-// the events whose handling failed, which the platform delivers again.
+// intakeErrors reads agentkourier_intake_total{source="message",disposition="error"} of the connection of the test's Intake: the
+// count of the events whose handling failed, which the platform delivers again.
 func (h *triggered) intakeErrors(t *testing.T) float64 {
 	t.Helper()
 	families, err := h.reg.Gather()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{"source": "message", "disposition": "error", "connection": conn}
+	want := map[string]string{"source": "message", "disposition": "error", "connection": v1alpha1.NamespacedName(h.cfg.Connection.Namespace, h.cfg.Connection.Name)}
 	for _, f := range families {
 		if f.GetName() != "agentkourier_intake_total" {
 			continue
@@ -37,21 +37,27 @@ func (h *triggered) intakeErrors(t *testing.T) float64 {
 
 // A decision is counted once it is taken. An attempt whose start failed counts no decision, only the intake's error; its
 // redelivery decides again and is the start, counted once, whichever kind of trigger it is and whether or not it threads by
-// key. A delivery after that start is a dedup.
+// key, and a webhook event's too. A delivery after that start is a dedup.
 func TestAFailedStartIsCountedOnceItsRedeliveryStarts(t *testing.T) {
 	tests := []struct {
 		name    string
 		trigger []v1alpha1.Trigger
 		msg     chat.Inbound
+		intake  func(*testing.T, ...v1alpha1.Trigger) *triggered // newLimited if nil
 	}{
-		{"a bot message whose trigger threads by key", []v1alpha1.Trigger{trialTrigger()}, botInbound("C1", "100.1", kindFiring)},
-		{"a bot message whose trigger threads by nothing", []v1alpha1.Trigger{kindOnly()}, botInbound("C1", "100.1", kindFiring)},
-		{"a person's message", []v1alpha1.Trigger{personTrigger(nil)}, personPost("C1", "9.9", "", "checkout is down")},
-		{"a bot's mention", nil, botMentionOf("5.5", "4.4")},
+		{"a bot message whose trigger threads by key", []v1alpha1.Trigger{trialTrigger()}, botInbound("C1", "100.1", kindFiring), nil},
+		{"a bot message whose trigger threads by nothing", []v1alpha1.Trigger{kindOnly()}, botInbound("C1", "100.1", kindFiring), nil},
+		{"a person's message", []v1alpha1.Trigger{personTrigger(nil)}, personPost("C1", "9.9", "", "checkout is down"), nil},
+		{"a bot's mention", nil, botMentionOf("5.5", "4.4"), nil},
+		{"a webhook event", []v1alpha1.Trigger{webhookTrigger(nil)}, prEvent("e1", "d1"), newWebhook},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := newLimited(t, tt.trigger...)
+			intake := tt.intake
+			if intake == nil {
+				intake = newLimited
+			}
+			h := intake(t, tt.trigger...)
 			h.hookErr = errors.New("the queue is down")
 			if err := h.in.Message(h.ctx, tt.msg); !errors.Is(err, h.hookErr) {
 				t.Fatalf("Message = %v; want the hook's error, so that the platform sends it again", err)

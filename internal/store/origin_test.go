@@ -11,6 +11,7 @@ func TestOriginValid(t *testing.T) {
 		"source without subject":     {Source: "ci"},
 		"generic source and subject": {Source: "ci", Subject: "build"},
 		"identifier punctuation":     {Source: "alertmanager", Subject: "KubePodCrashLooping:v2"},
+		"a webhook event's":          {Source: OriginWebhookEvent},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if !origin.Valid() {

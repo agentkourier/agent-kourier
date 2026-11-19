@@ -145,6 +145,8 @@ func NewIntake(cfg IntakeConfig) *Intake {
 //     channel's Binding, in order (botMessage). A match is decided (see Decision) and may be handed to
 //     IntakeConfig.OnStart; a message no trigger matches is ignored and counted.
 //   - A bot's mention (m.Bot set and m.Mentioned) goes to IntakeConfig.OnStart too, within fixed limits (botMention).
+//   - An event of a webhook connection (m.Webhook set) is tried against the webhookEvent triggers of its channel's Binding
+//     (webhookEvent), and is never submitted here either. One that a limit stopped is not remembered.
 //
 // It returns an error only when Submit failed in a way a retry may cure, so the platform leaves the
 // event unacknowledged. An invalid turn is logged and dropped; no retry could mend it.
@@ -172,6 +174,21 @@ func (in *Intake) Message(ctx context.Context, m chat.Inbound) (telemetryErr err
 		disposition = "duplicate"
 		if in.matched.has(seen) {
 			in.countDecision(ctx, m.At.Channel, DecisionDedup)
+		}
+		return nil
+	}
+	if m.Webhook != nil {
+		d, decision, err := in.webhookEvent(ctx, snap, m)
+		if err != nil {
+			return err
+		}
+		// A start that a limit stopped is not remembered (spec D55): its sender does not send it again on its own, and its redelivery,
+		// by hand, is decided again, and starts if there is room by then.
+		if disposition = d; d != "ignored" && decision != DecisionLimited {
+			in.seen.add(seen)
+		}
+		if d == "trigger_matched" && decision != DecisionLimited {
+			in.matched.add(seen)
 		}
 		return nil
 	}
@@ -319,6 +336,22 @@ func (in *Intake) personMessage(ctx context.Context, snap *config.Snapshot, m ch
 	return disposition, decision == DecisionLimited && mentionTriggerIn(rb.Binding.Spec.Chat.Triggers), err
 }
 
+// webhookEvent tries an event of a webhook connection against the webhookEvent triggers of the Binding that owns its channel, and
+// returns the disposition for the intake metric and the decision of a match. A channel with no Binding is ignored: the platform has
+// answered the event, and it starts nothing. A match is decided as an alert's with no thread rules (decide): the limits, then OnStart,
+// which starts the turn in the thread that the connection derived. The log lines name the sender's delivery and the thread, both
+// identifiers the platform checked, and never a field's value.
+func (in *Intake) webhookEvent(ctx context.Context, snap *config.Snapshot, m chat.Inbound) (string, Decision, error) {
+	if snap == nil {
+		return "ignored", "", nil
+	}
+	rb, ok := snap.BindingForChannel(in.cfg.Connection.Namespace, in.cfg.Connection.Name, m.At.Channel)
+	if !ok {
+		return "ignored", "", nil
+	}
+	return in.matchTriggers(ctx, snap, rb, m, "webhook event", "thread", m.At.Thread, "delivery", m.Webhook.Delivery)
+}
+
 // triedAsPerson says whether m is the input of the personMessage triggers among triggers: a person's message at the top level of
 // the channel, not a direct message, in a Binding that has such a trigger. A message that mentions Agent Kourier, where the
 // Binding has a mention trigger, is that trigger's, so that a person who asks for the agent is not also a report that uses a
@@ -348,7 +381,7 @@ func (in *Intake) matchTriggers(ctx context.Context, snap *config.Snapshot, rb c
 		in.log.DebugContext(ctx, "chat: "+what+" matched no trigger", where...)
 		return "trigger_unmatched", "", nil
 	}
-	match := Match{Binding: name, Index: trigger.index, Fields: fields, Thread: trigger.thread, Limits: trigger.limits, PromptTemplate: trigger.prompt, MessageID: in.messageID(m), Received: in.now(), Message: m, Person: trigger.person}
+	match := Match{Binding: name, Index: trigger.index, Fields: fields, Thread: trigger.thread, Limits: trigger.limits, PromptTemplate: trigger.prompt, MessageID: in.messageID(m), Received: in.now(), Message: m, Person: trigger.person, Webhook: trigger.webhook}
 	in.log.InfoContext(ctx, "chat: "+what+" matched a trigger", append(where, "trigger", trigger.index)...)
 	out, err := in.decide(ctx, match)
 	attrs := []any{"binding", name, "trigger", trigger.index, "decision", out.decision, "keyHash", out.keyHash, "channel", m.At.Channel, "message", m.At.ID, "thread", out.thread}

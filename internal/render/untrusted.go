@@ -16,8 +16,8 @@ import (
 // The untrusted block module (spec R2). Text from people or other bots that
 // reaches an agent goes through one module, so the sanitising, the escaping, the cut, the tag, the safety sentence
 // and the budget are written, and tested, once. A caller describes a block and says what its content is; the module
-// writes the rules. The two blocks today are the alert fields of a chat trigger (prompt.go) and the replies of a thread
-// (threadreplies.go).
+// writes the rules. The blocks today are the alert fields of a chat trigger and the event of a webhook connection (prompt.go), and
+// the replies of a thread (threadreplies.go).
 //
 // A block is written as
 //
@@ -49,7 +49,7 @@ import (
 // for any block as for any other, so the budget is settled before the tag is known.
 //
 // The block is cut to a whole-block cap, in UTF-16 units as chat.Truncate counts them, by a drop policy (see
-// oldestPolicy). The close tag is always written, and so is the line that says items were left out: their room is
+// oldestPolicy and wholePolicy). The close tag is always written, and so is the line that says items were left out: their room is
 // taken first, at its widest.
 
 // fieldKind says how a field's value is cleaned before it is escaped. Every kind takes secrets out; there is none that
@@ -128,6 +128,52 @@ type oldestPolicy struct {
 	Dropped int
 }
 
+// wholePolicy is how a block that cuts no item leaves items out: it shows, in their order, each item whose fields fit their caps
+// whole and that fits whole in the room that is left, and leaves out each other whole, while an item after it that fits is still
+// shown. A last line names the items it left out, in their order, by their names (an item's wrapper, or its first field's name),
+// which are constants of the caller's as every name is: "Left out, too long to show here: comment, body.". So the agent is never
+// shown part of a text whose rest could change what it says, and it knows what it was not shown.
+type wholePolicy struct {
+	// Lead starts the last line, before the names. A constant, escaped as text is.
+	Lead string
+}
+
+// line is the last line of a block that left out the items named, without its newline.
+func (w wholePolicy) line(names []string) string {
+	return prose(w.Lead) + " " + strings.Join(names, ", ") + "."
+}
+
+// layout returns the items to show of items, in room units, how many it left out, and the last line that names them, with its
+// newline. Its room is taken first, at its widest (every item named), unless every item fits whole without it.
+func (w wholePolicy) layout(items []cleanedItem, room int) (shown []renderedItem, leftOut int, last string) {
+	all := make([]renderedItem, len(items))
+	names := make([]string, len(items))
+	fits := make([]bool, len(items))
+	need := 0
+	for i, it := range items {
+		all[i], _ = it.render(math.MaxInt / 4) // an item that fits its caps is not cut, and one that does not is left out
+		names[i], fits[i] = it.name(), it.fitsCaps()
+		need += chat.Units(all[i].text)
+	}
+	if need <= room && !slices.Contains(fits, false) {
+		return all, 0, ""
+	}
+	room -= chat.Units(w.line(names) + "\n")
+	var left []string
+	for i, r := range all {
+		if !fits[i] || chat.Units(r.text) > room {
+			left = append(left, names[i])
+			continue
+		}
+		room -= chat.Units(r.text)
+		shown = append(shown, r)
+	}
+	if len(left) > 0 {
+		last = w.line(left) + "\n"
+	}
+	return shown, len(left), last
+}
+
 // untrustedBlock is what a caller says of a block: what it holds, and how much of it to show.
 type untrustedBlock struct {
 	// Opening is the caller's clause that says what the content is, the subject of the sentence that names the tag:
@@ -145,6 +191,9 @@ type untrustedBlock struct {
 	// its trailing items: it keeps the leading items, cuts the field that runs over the room to what is left and marks it
 	// (chat.Truncated), and the items after it are left out, and a last line that is the mark says so.
 	Oldest *oldestPolicy
+	// Whole, if it is set and Oldest is not, is the policy of a block that cuts no item: one that does not fit is left out whole,
+	// and named (wholePolicy).
+	Whole *wholePolicy
 	// MaxUnits caps the whole section: the lead, the tags, the items and the last line. It must hold the lead, the tags
 	// and the last line at its widest; a block whose cap is below them is written, with no item, and exceeds it.
 	MaxUnits int
@@ -293,6 +342,24 @@ type renderedItem struct {
 	fields []escapedField
 }
 
+// name is what a block that leaves the item out calls it: its wrapper, or its first field's name.
+func (it cleanedItem) name() string {
+	if it.wrapper != "" || len(it.fields) == 0 {
+		return it.wrapper
+	}
+	return it.fields[0].name
+}
+
+// fitsCaps says whether every field of the item shows whole within its cap, as escaped.
+func (it cleanedItem) fitsCaps() bool {
+	for _, f := range it.fields {
+		if !blank(f.value) && chat.Units(escapeCut(f.value, math.MaxInt/4)) > f.cap {
+			return false
+		}
+	}
+	return true
+}
+
 // text returns the field's value written escaped and cut, at most room units; ok is false if that is only the mark
 // of a cut (nothing of it is shown).
 func (f cleanedField) text(room int) (string, bool) {
@@ -376,8 +443,10 @@ func (b untrustedBlock) layout(items []cleanedItem) (section string, leftOut int
 	frame := chat.Units(b.lead(placeholder)+"\n") + chat.Units("<"+placeholder+">\n") + chat.Units("</"+placeholder+">\n")
 
 	var shown []renderedItem
-	var last string              // the line before the close tag that says items were left out
-	if o := b.Oldest; o == nil { // leave out the trailing items
+	var last string // the line before the close tag that says items were left out
+	if w := b.Whole; w != nil && b.Oldest == nil {
+		shown, leftOut, last = w.layout(items, b.MaxUnits-frame)
+	} else if o := b.Oldest; o == nil { // leave out the trailing items
 		// The mark's line is reserved whether it is needed or not.
 		room := b.MaxUnits - frame - chat.Units(chat.Truncated) - 1
 		for i, it := range items {

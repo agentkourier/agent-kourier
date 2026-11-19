@@ -117,7 +117,7 @@ what is refused at load before you apply a config.
 
 ## Write a prompt template
 
-A `botMessage` or `personMessage` trigger's `promptTemplate` is text that runs over values taken out of a message. These limits keep what it can do small.
+A `botMessage`, `personMessage` or `webhookEvent` trigger's `promptTemplate` is text that runs over values taken out of a message or a webhook event. These limits keep what it can do small.
 [The release that limits prompt templates](../how-to/upgrade.md#upgrade-to-the-release-that-limits-prompt-templates) has the errors.
 
 | Limit | Value | Past it | Setting |
@@ -127,10 +127,12 @@ A `botMessage` or `personMessage` trigger's `promptTemplate` is text that runs o
 | The values a load check runs the template over | `64`<!--limit:placeholder--> bytes each | A template that slices a value past that length fails the load. One that slices past the length of a real value, but within that length, passes the load and fails when the first message renders: a render error, so no turn starts. | None |
 | A value the template reads: `.Fields` entries, `.State`, `.Channel` and `.Source` | `128`<!--limit:valueBytes--> bytes, of ASCII letters, digits and `_ . - :` | The render is refused: no turn, a note in the alert's thread, an audit entry, and `agentkourier_trigger_refused_total` with the reason `too_long` or `characters`. | None |
 | `.Key` | `128`<!--limit:keyBytes--> bytes, with `/` also allowed | The same. | None |
+| A value a `webhookEvent` trigger's template reads: `.Channel` and `.Fields` entries, which are id fields of the ChatConnection | `128`<!--limit:keyBytes--> bytes, with `/` also allowed | The same, with no note, since a webhook connection posts nothing. An id field the template reads that is marked invalid, because none of its values was an identifier, is refused with the reason `invalid`. | None |
 | `.Link` | `256`<!--limit:linkBytes--> bytes of an `http` or `https` URL | The same, with the reason `too_long`, `characters` or `not_link`. | None |
 | The instruction part of the first prompt (the template's output) | `4000`<!--limit:instructionUnits--> UTF-16 units | Cut. | None |
 | One field of the message in the untrusted block | `3000`<!--limit:fieldUnits--> UTF-16 units | Cut. | None |
 | The untrusted block as a whole | `8000`<!--limit:untrustedUnits--> UTF-16 units | Fields that do not fit are left out, and a last line says so. The whole prompt is at most `12002`<!--limit:promptUnits--> units. | None |
+| One field of a webhook event in the untrusted block, and the block as a whole | `3000`<!--limit:fieldUnits--> UTF-16 units a field, and `8000`<!--limit:untrustedUnits--> the block | A field past its bound, or one that does not fit in what the fields before it leave, is left out whole, never cut, and a last line names each field left out. | None |
 
 ## Build or connect an agent backend
 

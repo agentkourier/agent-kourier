@@ -236,9 +236,13 @@ func (in *Intake) closeThread(ctx context.Context, m Match, hash string, out dec
 }
 
 // unthreaded is decide for a match that has no thread to apply the rules to: its trigger threads by nothing, or
-// by a key that came out empty. A close is unknown, and a fire starts a turn of its own, with no cooldown.
+// by a key that came out empty. A close is unknown, and a fire starts a turn of its own, with no cooldown. The thread the decision
+// is about is the session's: for a webhook event the thread the connection derived, not the event's ID.
+//
+// A webhook event that a limit stopped is logged at WARN each time it is stopped, a redelivery too, with the sender's delivery ID:
+// it is lost unless it is delivered again, and the operator finds it in the sender's log by that ID (spec D55). It is counted once.
 func (in *Intake) unthreaded(ctx context.Context, m Match, closing bool) (decided, error) {
-	out := decided{decision: DecisionStarted, thread: m.Message.At.ID}
+	out := decided{decision: DecisionStarted, thread: m.sessionThread()}
 	switch {
 	case closing:
 		return decided{decision: DecisionCloseUnknown}, nil
@@ -256,6 +260,8 @@ func (in *Intake) unthreaded(ctx context.Context, m Match, closing bool) (decide
 		if !adm.Again { // a redelivery that lost what remembers it was counted and told then
 			in.countLimited(ctx, m, adm.Limit)
 			in.tellLimited(ctx, m, adm.Limit)
+		} else if m.Webhook {
+			in.logLimited(ctx, m, adm.Limit)
 		}
 		out.decision = DecisionLimited
 		return out, nil

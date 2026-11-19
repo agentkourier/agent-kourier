@@ -30,6 +30,9 @@ const (
 // botMentionSource is the source a bot's mention reports. It is no alert, so feedback attributes no alert to it.
 const botMentionSource = store.OriginBotMention
 
+// webhookEventSource is the source a webhookEvent trigger's start reports. It is no alert, so feedback attributes no alert to it.
+const webhookEventSource = store.OriginWebhookEvent
+
 // triggerAuditor is what the starter needs of the audit log: *audit.Writer.
 type triggerAuditor interface {
 	TriggerRefused(ctx context.Context, a audit.Actor, r audit.TriggerRefusal) error
@@ -50,7 +53,7 @@ type triggerStarterConfig struct {
 	Log   *slog.Logger
 }
 
-// triggerStarter turns a botMessage or personMessage trigger's decision to start into an investigation (spec 8.2): it
+// triggerStarter turns a botMessage, personMessage or webhookEvent trigger's decision to start into an investigation (spec 8.2): it
 // renders the first prompt from the trigger's template and the matched message, and gives it to the session manager's own
 // intake, the durable path a mention takes, anchored to the matched message's thread. It is the Intake's IntakeConfig.OnStart.
 //
@@ -109,11 +112,60 @@ func newTriggerStarter(cfg triggerStarterConfig) (*triggerStarter, error) {
 // A bot's mention (m.Mention) is a turn of the thread the mention is in, whose session may exist already, and it carries that
 // thread. The Intake asked already whether its session takes a turn (trigger.IntakeConfig.TakesBotMention); one that stopped since
 // is ErrNotStarted with no note: the bot asked, and a note answers no one.
+//
+// A webhook event (m.Webhook) is a turn of the thread its connection derived from the event (the thread field's value), whose
+// session may exist already: one session takes every event of a pull request. It is nobody's turn, on a platform with no replies
+// (session.Inbound.NoReplies), with no subject and no link, and its text is RenderWebhook's, over the event itself. Its message ID
+// is the connection's, from the hash of the body, so a redelivery of the same body is the same turn. In a thread whose session has
+// expired or whose Binding is gone the session manager replaces the session, which is logged. When it withholds the replacement
+// (Expired or BindingGone: the old session may still be at work, or the body was queued before), asking again would change
+// nothing, so the start is ErrNotStarted: the event is taken and dropped, rather than refused and sent again for ever.
 func (s *triggerStarter) OnStart(ctx context.Context, m trigger.Match) error {
 	at := m.Message.At
 	if at.Conn == "" { // an adapter names the connection of every message it forwards; one that does not could file the session under none
 		s.log.ErrorContext(ctx, "chat: a trigger's message names no connection, so it started nothing", "binding", m.Binding, "channel", at.Channel, "message", at.ID)
 		return fmt.Errorf("message %s names no connection: %w", m.MessageID, trigger.ErrNotStarted)
+	}
+	text, origin, err := s.firstTurn(ctx, m)
+	if err != nil {
+		return s.refuse(ctx, m, err)
+	}
+	id := m.MessageID
+	res, err := s.submit.Submit(ctx, session.Inbound{
+		Key:       s.keyOf(m),
+		Binding:   m.Binding,
+		MessageID: id, MessageRef: at.ID, UserID: authorOf(m), Text: text, Create: true, WholeThread: m.Mention, NoReplies: m.Webhook,
+		Origin: origin,
+	})
+	switch {
+	case err != nil:
+		return fmt.Errorf("start the investigation of %s: %w", id, err)
+	case m.Mention && !res.Admission.Queues():
+		s.log.InfoContext(ctx, "chat: a bot's mention took no turn; the thread cannot be continued", "binding", m.Binding, "channel", at.Channel, "message", at.ID, "disposition", res.Disposition)
+		return fmt.Errorf("bot mention of %s: %w", id, trigger.ErrNotStarted)
+	case m.Webhook && (res.Disposition == session.Expired || res.Disposition == session.BindingGone):
+		s.log.InfoContext(ctx, "chat: a webhook event's thread cannot be continued yet, so the event was dropped", webhookAttrs(m, res)...)
+		return fmt.Errorf("webhook event %s: %w", id, trigger.ErrNotStarted)
+	case res.Disposition != session.Created && res.Disposition != session.Accepted:
+		return fmt.Errorf("start the investigation of %s: the session manager did not take it (%s)", id, res.Disposition)
+	}
+	if res.Admission.Replaces {
+		s.log.InfoContext(ctx, "chat: a webhook event replaced the ended session of its thread", webhookAttrs(m, res)...)
+	}
+	return nil
+}
+
+// firstTurn is the text of the turn a match starts and the origin of the session it may make: for a webhook event RenderWebhook's,
+// over the event, with no subject; for a message Render's, over the message and its link, with the alert's name as the subject.
+func (s *triggerStarter) firstTurn(ctx context.Context, m trigger.Match) (string, store.Origin, error) {
+	prompt, err := render.NewPrompt("promptTemplate", m.PromptTemplate) // parsed at load too; this is the same parse
+	if err != nil {
+		return "", store.Origin{}, err
+	}
+	at := m.Message.At
+	if m.Webhook {
+		text, err := prompt.RenderWebhook(v1alpha1.PromptView{Channel: at.Channel, Source: webhookEventSource}, m.Message.Webhook)
+		return text, store.Origin{Source: webhookEventSource}, err
 	}
 	source := botMessageSource
 	switch {
@@ -130,31 +182,19 @@ func (s *triggerStarter) OnStart(ctx context.Context, m trigger.Match) error {
 	} else {
 		s.log.DebugContext(ctx, "chat: the platform made no permalink for an alert; the prompt's link is empty", "channel", at.Channel, "message", at.ID)
 	}
-	prompt, err := render.NewPrompt("promptTemplate", m.PromptTemplate) // parsed at load too; this is the same parse
-	var text string
-	if err == nil {
-		text, err = prompt.Render(view, render.MessageOf(m.Message))
+	text, err := prompt.Render(view, render.MessageOf(m.Message))
+	return text, store.Origin{Source: source, Subject: feedback.AlertName(m.Fields["alertname"])}, err
+}
+
+// webhookAttrs are the log attributes of a webhook event's start: identifiers only, the thread the connection derived and the
+// sender's delivery ID among them, and never a value of the event's text fields.
+func webhookAttrs(m trigger.Match, res session.Result) []any {
+	at := m.Message.At
+	var delivery string
+	if ev := m.Message.Webhook; ev != nil {
+		delivery = ev.Delivery
 	}
-	if err != nil {
-		return s.refuse(ctx, m, err)
-	}
-	id := m.MessageID
-	res, err := s.submit.Submit(ctx, session.Inbound{
-		Key:       s.keyOf(m),
-		Binding:   m.Binding,
-		MessageID: id, MessageRef: at.ID, UserID: authorOf(m), Text: text, Create: true, WholeThread: m.Mention,
-		Origin: store.Origin{Source: source, Subject: feedback.AlertName(m.Fields["alertname"])},
-	})
-	switch {
-	case err != nil:
-		return fmt.Errorf("start the investigation of %s: %w", id, err)
-	case m.Mention && !res.Admission.Queues():
-		s.log.InfoContext(ctx, "chat: a bot's mention took no turn; the thread cannot be continued", "binding", m.Binding, "channel", at.Channel, "message", at.ID, "disposition", res.Disposition)
-		return fmt.Errorf("bot mention of %s: %w", id, trigger.ErrNotStarted)
-	case res.Disposition != session.Created && res.Disposition != session.Accepted:
-		return fmt.Errorf("start the investigation of %s: the session manager did not take it (%s)", id, res.Disposition)
-	}
-	return nil
+	return []any{"binding", m.Binding, "trigger", m.Index, "channel", at.Channel, "thread", at.Thread, "message", at.ID, "delivery", delivery, "disposition", res.Disposition}
 }
 
 // authorOf is who wrote the turn a match starts: the person of a person's message, and nobody for a bot's message or mention,
@@ -177,13 +217,13 @@ func (s *triggerStarter) permalink(at chat.Ref) (string, bool) {
 
 // TakesBotMention says whether the session of a bot's mention would take it as a turn (trigger.IntakeConfig.TakesBotMention).
 func (s *triggerStarter) TakesBotMention(ctx context.Context, m trigger.Match) (bool, error) {
-	return s.takes(ctx, session.Inbound{Key: s.keyOf(m), Binding: m.Binding, Create: true, WholeThread: true})
+	return s.takes(ctx, session.Inbound{Key: s.keyOf(m), Binding: m.Binding, Create: true, WholeThread: m.Mention, NoReplies: m.Webhook})
 }
 
-// keyOf is the session a match is a turn of: an alert's own thread, or the thread a bot's mention is in.
+// keyOf is the session a match is a turn of: an alert's own thread, or the thread a bot's mention or a webhook event is in.
 func (s *triggerStarter) keyOf(m trigger.Match) session.Key {
 	thread := m.Message.At.ID
-	if m.Mention {
+	if m.Mention || m.Webhook {
 		thread = cmp.Or(m.Message.At.Thread, thread)
 	}
 	return session.Key{Connection: m.Message.At.Conn, Channel: m.Message.At.Channel, Thread: thread}
