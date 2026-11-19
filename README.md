@@ -18,9 +18,9 @@ breaking a Slack `Binding`. Agents speak only A2A, so a new platform needs no ch
 [Install with Helm](docs/how-to/install-with-helm.md) · [Architecture](docs/explanation/architecture.md) ·
 [Release notes](docs/release-notes.md)
 
-> **Status: v0.4.0.** Install the published chart and image with
+> **Status: v0.5.0.** Install the published chart and image with
 > [Install with Helm](docs/how-to/install-with-helm.md). The `v1alpha1` resource format can change before 1.0. See
-> [Status](#status). Slack HTTP mode needs a release later than 0.4.0, whose chart refuses its values.
+> [Status](#status). Slack HTTP mode, new in 0.5.0, is experimental.
 
 <p align="center">
   <img src="docs/assets/clip/team-app.gif" width="100%" alt="A terminal. The platform team creates the namespace agent-kourier and installs the agent-kourier chart with a values file of comments only, so the broker serves the ChatConnections of every namespace and starts with no Slack app of its own. The team then creates its Slack Secret in team-a from a file, a Role and RoleBinding that let the broker's ServiceAccount list and watch it, fills in the four lines marked yours in team-a.yaml (a ChatConnection, an AgentBackend and a Binding), applies it, and kubectl get akbinding shows the Binding become True OK. Then Slack: a mention of the team's bot, and the agent's answer in its thread.">
@@ -220,7 +220,7 @@ other bots, and the [trigger reference](docs/reference/chat-triggers.md) has the
 | Kind | Integration | Status |
 |---|---|---|
 | Chat platform | Slack over Socket Mode: mentions, thread replies, streamed output, questions | Implemented |
-| Chat platform | Slack over the Events API (HTTP mode): the same, with Slack's signed requests taken on the chat listener, behind a Service that selects the leader. Tested against the end-to-end tests' fake Slack, and tried once against Slack itself. Needs a release later than 0.4.0, whose chart refuses `chatListener` and `networkPolicy.chatFrom`. See [Configure Slack](docs/how-to/configure-slack.md) | Experimental |
+| Chat platform | Slack over the Events API (HTTP mode): the same, with Slack's signed requests taken on the chat listener, behind a Service that selects the leader. Tested against the end-to-end tests' fake Slack, and tried once against Slack itself. Needs 0.5.0 or later: the 0.4.0 chart refuses `chatListener` and `networkPolicy.chatFrom`. See [Configure Slack](docs/how-to/configure-slack.md) | Experimental |
 | Chat platform | Slack direct messages | Planned |
 | Chat platform | Microsoft Teams | Planned |
 | Chat platform | Other platforms, through the `chat.Platform` interface and its conformance suite | Planned |
@@ -241,9 +241,9 @@ the contract.
 
 ## Status
 
-The current release is v0.4.0: a signed image for `linux/amd64` and `linux/arm64`,
-`ghcr.io/agentkourier/agent-kourier:v0.4.0`, and the Helm chart `oci://ghcr.io/agentkourier/charts/agent-kourier`
-version `0.4.0`, which pins that image by digest. It runs as one
+The current release is v0.5.0: a signed image for `linux/amd64` and `linux/arm64`,
+`ghcr.io/agentkourier/agent-kourier:v0.5.0`, and the Helm chart `oci://ghcr.io/agentkourier/charts/agent-kourier`
+version `0.5.0`, which pins that image by digest. It runs as one
 replica with a SQLite store, or as two replicas on Postgres with a leader election
 and fencing, installed with the [Helm chart](charts/agent-kourier/README.md). Agent Kourier writes
 an audit log, exports Prometheus metrics and can export OpenTelemetry traces. See
