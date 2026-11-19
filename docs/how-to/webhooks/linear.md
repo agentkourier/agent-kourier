@@ -156,7 +156,7 @@ Edit the OAuth application, and turn its webhook on:
 | Field | Value |
 |---|---|
 | Webhooks | On. |
-| URL | `https://<host>/chat/webhook/acme-webhooks/linear`: the namespace and the name of the ChatConnection. Linear takes HTTPS only. |
+| URL | `https://<host>/chat/webhook/acme-webhooks/linear`: the namespace and the name of the ChatConnection, on HTTPS. Whether Linear takes any other scheme is not verified. |
 | Resource types | Issues and Comments. |
 
 Save. The webhook's detail page shows its signing secret: copy it, paste it into a file, and make the Secret from it, with the key
@@ -250,7 +250,7 @@ starts nothing.
 | `unverified`, `stale` | The delivery's `webhookTimestamp` is more than a minute from the broker's clock, either way. Fix the node's time sync, or widen `verify.timestamp.window` (at most `10m`). |
 | `unverified`, `bad_signature`, on every delivery | The Secret's `webhookSecret` is not the webhook's signing secret: copy it again from the webhook's detail page, and make the Secret again. |
 | A description edit starts nothing | `/updatedFrom` holds the earlier values of what changed. An issue whose description was empty before may carry no earlier text there (not seen in the run); the field reads as empty, and the trigger does not match. |
-| A comment that names the application starts nothing | The regex wants the application's name as a word, with or without the `@`. The application cannot be picked from Linear's mention list, so type its name. |
+| A comment that names the application starts nothing | The regex wants the application's name as a word, with or without the `@`. The application may not be offered in Linear's mention list (not verified), so type its name. |
 | `accepted`, and no plan | `agentkourier_trigger_limited_total{binding="acme-webhooks/linear-plans"}` rose: with `maxConcurrent: 1`, an issue created while another plan runs is stopped. The answer was `200`, so Linear does not send it again, and the event is lost; the WARN line names its delivery. Raise `maxConcurrent`. |
 | A delivery failed | Linear's documentation says it waits 5 seconds for a `200`, counts any other answer as a failure, such as the broker's `503`, tries again after 1 minute, 1 hour and 6 hours, and may turn off a webhook that keeps failing. Whether a try carries a new `webhookTimestamp` is not verified: one that carries the first attempt's time is answered `401`, `stale`, once that time is more than a minute old, and never reaches a trigger. |
 | A turn, and nothing on Linear | The agent's tools: a token older than 30 days, or one without a scope to comment. |

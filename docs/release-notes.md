@@ -8,7 +8,8 @@ What changed in each release, newest first, and what you must do about it. The s
 A ChatConnection can take signed JSON webhooks from another service, such as GitHub, Jira Cloud, Bitbucket Cloud or Linear, and start
 sessions of an agent from them: `spec.platform: webhook`, on the chat listener. The webhook platform is experimental. Agent Kourier posts
 nothing on such a connection; the agent answers on the service with its own tools. [Start agents from webhooks](how-to/receive-webhooks.md)
-has the setup, and a page for each of the four services.
+has the setup, and a page for each of the four services. [Upgrade to the release that takes webhooks](how-to/upgrade.md#upgrade-to-the-release-that-takes-webhooks)
+has the upgrade, and how to roll it back.
 
 ### Breaking changes
 

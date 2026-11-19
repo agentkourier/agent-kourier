@@ -1,9 +1,9 @@
 # webhook-linear
 
-A Linear workspace webhook sends issue and comment events to Agent Kourier. An issue created in a team starts a plan by
-your agent; an edit of its description, or a comment that mentions the agent, starts more in the same session. Agent
-Kourier posts nothing on Linear: the agent reads the issue and comments on it with its own Linear tools, through an API
-key.
+A Linear webhook, of an OAuth application or of the workspace, sends issue and comment events to Agent Kourier. An issue
+created in a team starts a plan by your agent; an edit of its description, or a comment that mentions the agent, starts
+more in the same session. Agent Kourier posts nothing on Linear: the agent reads the issue and comments on it with its own
+Linear tools, as an OAuth application's user or through an API key.
 
 It holds the Agent Kourier side only: a ChatConnection of the `webhook` platform, a Binding and the AgentBackend it refers
 to. It ships no agent. Point the Binding at any A2A agent (A2A is the Agent2Agent protocol) that has Linear tools
@@ -20,7 +20,7 @@ replayed later is refused. It then maps the JSON body onto an event:
 | Of the event | From | Read as |
 |---|---|---|
 | The channel | `/data/team/key` (an issue's team), `/data/issue/team/key` (a comment's issue's team), such as `ENG` | The Binding whose `chat.channel` is that team key takes the event. |
-| The actor | `/actor/id`, `/data/userId`, `/data/user/id` | An event whose actor is the connection's `identity`, the user ID of the agent's API key (compared ignoring ASCII case), is the agent's own and is dropped. |
+| The actor | `/actor/id`, `/data/userId`, `/data/user/id` | An event whose actor is the connection's `identity`, the user ID the agent acts as (compared ignoring ASCII case), is the agent's own and is dropped. |
 | The thread | the `issue` field: `ENG-7` | One session for each issue. A comment on it continues that session. |
 | The delivery's ID | the `Linear-Delivery` header | Named in the log line of each delivery, and in the warning of one a limit stopped. |
 | The fields | `type`, `action`, `issue` (the issue's identifier, or a comment's issue's) (id fields), and `title`, `prevDescription` (`/updatedFrom/description`), `comment` (text) | The triggers' `match` and `exclude` keys. The prompt template reads id fields alone; the text fields reach the agent only in the untrusted block. |
@@ -54,7 +54,8 @@ by whoever filed, edited or commented on it.
 - **A Linear webhook** with a signing secret, for the resource types **Issues** and **Comments**. The header names, the
   signature's form, the timestamp and the body's paths this recipe reads follow Linear's webhook documentation, and this
   repository has not checked them against a live delivery.
-- **An API key for the agent**, whose user's ID is the `identity`.
+- **A Linear account for the agent**: an OAuth application whose client-credentials token acts as the application's own
+  user, or a personal API key, which acts as its user. That user's ID is the `identity`.
 - **An A2A agent that has Linear tools** using that key, and its URL. The AgentBackend's `url` is a placeholder
   (`REPLACE-ME`).
 - **The broker's clock within a minute of Linear's.** A delivery whose timestamp is further off either way is answered
@@ -77,7 +78,7 @@ kourier/
 
 ## Apply it
 
-1. Replace the placeholders: the `identity` with the user ID of the agent's API key, `ENG` with your team's key in the
+1. Replace the placeholders: the `identity` with the user ID the agent acts as (the OAuth application's user, or an API key's), `ENG` with your team's key in the
    Binding's `channel`, `acme-agent` in the comment trigger's regex with the name people mention the agent by, and the
    AgentBackend's `url` with your agent's. On the `a2a` dialect the URL alone selects the agent, and the Binding's
    `agent.name` and `agent.namespace` are labels.

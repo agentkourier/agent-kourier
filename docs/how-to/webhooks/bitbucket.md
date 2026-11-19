@@ -155,7 +155,7 @@ On the repository, open **…**, **Settings**, then, under **Workflow**, **Webho
 | **Triggers** | **Choose from a full list of triggers**: under Pull Request, **Created**, **Updated** and **Comment created**. Uncheck **Repository push**. |
 
 Save, then look at the webhook in the list and check that it is active. In the run one was saved inactive, and sent nothing.
-Bitbucket sends no test delivery: its first real event is the test.
+No test delivery from Bitbucket is known to this page (not verified): make its first real event the test.
 
 ## 7. Test it
 
@@ -250,7 +250,7 @@ webhooks only on a repository. One connection for a whole workspace was not trie
 | Nothing at all | The webhook is inactive: open it, check **Active**, save. To see what Bitbucket sent, open **View requests** on the webhook and choose **Enable history**; Atlassian's documentation says only the deliveries after that are recorded. |
 | `unverified`, `bad_signature`, on every delivery | The webhook's secret is not the Secret's `webhookSecret`. Set it on the webhook again from the file of step 3. |
 | A review on every edit of the description | `pullrequest:updated` ([above](#change-what-starts-a-turn)). |
-| A comment that mentions the agent starts nothing | The regex wants `@` and the token's name. The bot user cannot be picked from Bitbucket's mention list, so type the name: the comment's raw text then holds it as written. |
+| A comment that mentions the agent starts nothing | The regex wants `@` and the token's name. The bot user may not be offered in Bitbucket's mention list (not verified), so type the name: the comment's raw text then holds it as written. |
 | `accepted`, and no review | The pull request is a draft, or `agentkourier_trigger_limited_total{binding="acme-webhooks/bitbucket-reviews"}` rose: with `maxConcurrent: 1`, a second pull request while a review runs is stopped, and the answer was `200`, so Bitbucket does not send it again, and the event is lost; the WARN line names its delivery. Raise `maxConcurrent`. |
 | A delivery failed | Atlassian's documentation says Bitbucket waits 10 seconds for an answer, and tries a delivery that got a `5xx`, such as the broker's `503`, up to two more times. |
 | A turn, and nothing on Bitbucket | The agent's tools: an expired token, or one without **Pull requests: Write**. |

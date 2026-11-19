@@ -173,7 +173,7 @@ not name every field of the form, so the fields below other than **Exclude body*
 | Comment | **created**, so that the agent's own comments arrive and count as `self`, and for a trigger on comments ([below](#change-what-starts-a-turn)). The recipe has no trigger on comments, so a person's comment is `accepted` and starts nothing. |
 | **Exclude body** | Unchecked. Checked, Jira leaves the body out (Atlassian's documentation), and the connection has nothing to read. Whether Jira then signs the empty body is not known (not tried): if it does, every delivery is answered `400`, `malformed`, `schema`; if it does not, `401`, `unverified`, `unsigned`. |
 
-Create it. Jira sends no test delivery: its first real event is the test.
+Create it. No test delivery from Jira is known to this page (not verified): make its first real event the test.
 
 ## 7. Test it
 
@@ -253,7 +253,7 @@ the first changed field is read: see [Troubleshooting](#troubleshooting).
 
 | What you see | Why, and what to do |
 |---|---|
-| Nothing at all after creating the webhook | Jira sends no test delivery. Create or edit an issue that the JQL matches. |
+| Nothing at all after creating the webhook | No test delivery from Jira is known to this page (not verified). Create or edit an issue that the JQL matches. |
 | `unverified`, `bad_signature`, on every delivery | The webhook's secret is not the Secret's `webhookSecret`. Atlassian's documentation says Jira does not show a saved secret: set the one from the file of step 3 on the webhook again. |
 | `malformed`, `schema`, or `unverified`, `unsigned`, with the right secret | **Exclude body** may be checked. |
 | An edit starts nothing, and the field's name holds a space | `changed` is an `id` field, and a field name such as `Fix Version` is not an identifier, so the field is marked invalid and the second trigger, which matches it, misses. The event is still taken: a trigger that does not name `changed` can take it. A new issue carries a changelog too, which the first trigger does not read. |

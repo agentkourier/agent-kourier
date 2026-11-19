@@ -102,11 +102,13 @@ sum by (connection, reason) (increase(agentkourier_webhook_requests_total{outcom
 # The sender's payload no longer fits the mapping: a thread that is not an identifier, or not there at all
 sum by (connection, reason) (increase(agentkourier_webhook_requests_total{outcome="unmapped",reason=~"bad_id|no_thread"}[1h])) > 0
 
-# Events a limit stopped. On a webhook connection they were answered 200 and are lost unless delivered again; the WARN line names each delivery
-sum by (binding, limit) (increase(agentkourier_trigger_limited_total[30m])) > 0
+# Events a limit stopped. On a webhook connection they were answered 200 and are lost unless delivered again; the WARN line names each delivery.
+# The counter has no connection label: name the webhook Bindings, here the recipes'
+sum by (binding, limit) (increase(agentkourier_trigger_limited_total{binding=~"acme-webhooks/.*"}[30m])) > 0
 
-# A first prompt that failed its check, such as an id field with no valid value: no turn, and on a webhook connection no note either
-sum by (binding, reason) (increase(agentkourier_trigger_refused_total[30m])) > 0
+# A first prompt that failed its check, such as an id field with no valid value: no turn, and on a webhook connection no note either.
+# No connection label here either: filter by binding
+sum by (binding, reason) (increase(agentkourier_trigger_refused_total{binding=~"acme-webhooks/.*"}[30m])) > 0
 
 # No event taken for a day: the webhook may be off at the sender, or point elsewhere
 sum by (connection) (increase(agentkourier_webhook_requests_total{outcome="accepted"}[24h])) == 0

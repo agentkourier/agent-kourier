@@ -37,9 +37,11 @@ The guides assume you know Kubernetes and Helm, and link to [explanation](../exp
 
 ## Recipes
 
-- [Start from a recipe](recipes.md): a worked example with its Agent Kourier resources, its checks and, for one of
-  them, its agent. Two recipes: `sre-triage`, Alertmanager alerts to a read-only kagent agent, and
-  `custom-bot-trigger`, a CI bot's failure posts to an agent of your own, with a hand-written trigger.
+- [Start from a recipe](recipes.md): a worked example with its Agent Kourier resources, its checks and, for some of
+  them, its agent. Four recipes for Slack: `sre-triage`, Alertmanager alerts to a read-only kagent agent,
+  `custom-bot-trigger`, a CI bot's failure posts to an agent of your own, `docs-agent`, answers from documentation, and
+  `prompt-agent`, an agent defined by a prompt. Four for webhooks, from GitHub, Jira Cloud, Bitbucket Cloud and Linear,
+  each walked through from [Start agents from webhooks](receive-webhooks.md).
 
 ## Security
 
