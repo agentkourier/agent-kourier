@@ -122,9 +122,10 @@ Secret without the key, or with it empty, stops the broker's own connection from
 
 Agent Kourier sends the value to Microsoft Entra as the Secret holds it, and trims nothing: a value written with
 `echo "$S" > file` and stored with `--from-file=clientSecret=file` ends in a newline, which is sent as part of the secret.
-Entra then refuses the token (not checked here), and a broker whose own connection this is exits with code 1 and
-`agent-kourier: teams rejected the tokens: <code>`, where `<code>` is Entra's OAuth error code. If you make the Secret
-with `--from-file`, write the file with `printf '%s'`, which adds no newline.
+Entra then refuses the token request (not checked here), and a broker whose own connection this is exits with code 1
+and `agent-kourier: teams rejected the tokens: <code>`, where `<code>` is Entra's OAuth error code
+([Troubleshoot](troubleshoot.md#the-pod-exits-with-code-1)). If you make the Secret with `--from-file`, write the file
+with `printf '%s'`, which adds no newline.
 
 ## 3. Write the app package
 

@@ -113,12 +113,14 @@ The five minutes and the 200 pages are constants of the binary (`agent.DefaultLo
 agent-kourier: slack rejected the tokens: invalid_auth
 ```
 
-Slack refused a token of the broker's own connection for good, so Agent Kourier stops rather than retry. A broker with no own connection
-never ends this way: every connection it serves is a team connection. (A team ChatConnection whose
-token Slack refuses does not end the process: that connection stops, its `agentkourier_chat_connected` says 0, the log has a WARN that
-names it and Slack's code, and its Bindings show `ChatCredentialsRejected` on `ChannelJoined`. It starts again by itself when its Secret
-or ChatConnection changes.) The word at the end is Slack's own code: `invalid_auth`, `not_authed`, `token_revoked`, `token_expired` or `account_inactive`. The usual cause is a token copied incompletely or
-from another Slack app, or one that has been revoked since.
+The chat platform (Slack; for a Teams connection, Microsoft Entra or the Bot Connector) refused the credentials of the broker's own
+connection for good, so Agent Kourier stops rather than retry. A broker with no own connection never ends this way: every connection
+it serves is a team connection. (A team ChatConnection whose credentials the platform refuses does not end the process: that
+connection stops, its `agentkourier_chat_connected` says 0, the log has a WARN that names it and the platform's code, and its Bindings
+show `ChatCredentialsRejected` on `ChannelJoined`. It starts again by itself when its Secret or ChatConnection changes.)
+
+**Slack.** The word at the end is Slack's own code: `invalid_auth`, `not_authed`, `token_revoked`, `token_expired` or
+`account_inactive`. The usual cause is a token copied incompletely or from another Slack app, or one that has been revoked since.
 
 In HTTP mode only the bot token is sent to Slack: the signing secret is never checked by Slack, and a wrong one shows as Slack's
 requests answered 401 ([below](#slacks-requests-are-answered-401)), not as this exit.
@@ -134,6 +136,19 @@ Replace the Secret with the right tokens, then restart rather than wait out the 
 kubectl -n agent-kourier create secret generic slack \
   --from-literal=botToken="$SLACK_BOT_TOKEN" --from-literal=appToken="$SLACK_APP_TOKEN" \
   --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n agent-kourier rollout restart deploy/agent-kourier
+```
+
+**Microsoft Teams.** The line reads `agent-kourier: teams rejected the tokens: <code>`, with `(reported by a call)` after it when a
+post or another call found the refusal rather than the connection's start. The broker asks Microsoft Entra for the bot's token as the
+connection starts, so a client secret, `spec.teams.appID` or `spec.teams.tenantID` that Entra refuses (a 400 or a 401) ends the start;
+the code is Entra's OAuth error code. The same exit follows when the Bot Connector refuses the bot's token (401) or answers that an
+admin disabled the app (403 `BotDisabledByAdmin`), with the Bot Connector's code, and in socket mode when the socket's connect call is
+answered 401, with no code. Entra's refusal of the token for Microsoft Graph does not end the process. A client secret stored with a
+newline at its end is sent with it ([Store the client secret](configure-teams.md#2-store-the-client-secret)). The dry run reads only
+Slack, so it does not test these credentials. Make the Secret `teams` again as that step says, then restart:
+
+```sh
 kubectl -n agent-kourier rollout restart deploy/agent-kourier
 ```
 
