@@ -2,7 +2,7 @@
   <img src="docs/brand/assets/github/readme-banner-2560x640.png" alt="Agent Kourier: write the agent, not the chat integration." width="100%">
 </h1>
 
-<p align="center">A Kubernetes-native broker between team chat and streaming A2A agents. Slack and Microsoft Teams today; more platforms planned.</p>
+<p align="center">A Kubernetes-native broker between team chat and streaming A2A agents. Slack today, and Microsoft Teams in the release after 0.5.0; more platforms planned.</p>
 
 Agent Kourier runs in your cluster between your team's chat and your agents. A `Binding`
 connects a channel to an agent that serves streaming A2A, and Agent Kourier handles the
@@ -10,9 +10,11 @@ chat side: a session per thread, streamed replies, questions to people, investig
 started by alerts, and recovery after a restart or failover. The agent needs no chat code.
 It keeps its tools and task logic.
 
-Slack and Microsoft Teams (experimental) are the supported platforms today. Each platform is
-an adapter behind one chat interface and its conformance suite, and the resource API takes
-another platform without breaking a Slack `Binding`. Agents speak only A2A, so a new
+Slack is the supported platform in 0.5.0. Microsoft Teams (experimental) is merged and not in
+0.5.0, whose broker refuses `platform: teams`
+([Configure Microsoft Teams](docs/how-to/configure-teams.md)). Each platform is an adapter
+behind one chat interface and its conformance suite, and the resource API takes another
+platform without breaking a Slack `Binding`. Agents speak only A2A, so a new
 platform needs no change to them.
 
 [Documentation](https://agentkourier.dev) · [Try it in a kind sandbox](docs/tutorials/first-agent-in-slack.md) ·
