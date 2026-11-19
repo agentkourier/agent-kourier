@@ -46,7 +46,8 @@ The connection's `spec.webhook` says how to read a delivery:
 Each value is read with a [JSON Pointer](https://www.rfc-editor.org/rfc/rfc6901) into the body, such as `/pull_request/number`, or
 a list of them, where the first that resolves wins. A string resolves to its text, a number to the number as written, and `true` and
 `false` to those words; `null`, an object or an array does not resolve. A field can also be read from a request header, which the
-signature does not cover.
+signature does not cover. So a trigger that matches a header field must also match or exclude a body field that tells its events
+apart: a signed body can be sent again under any header, and the broker remembers only a body whose start was made or refused.
 
 Agent Kourier posts nothing on the service. The Binding's `chat.output` must be `none`: the CRD's default is `live`, and the broker
 refuses `live` and `final` on a webhook connection (`UnsupportedOnPlatform`). Its triggers are all `type: webhookEvent`. The agent
@@ -106,8 +107,8 @@ body, so the same body delivered again is the same event:
 - **A body that matched no trigger** starts nothing and is not remembered. The broker counts it on `agentkourier_intake_total` with
   `disposition="trigger_unmatched"` and on `agentkourier_trigger_unmatched_total` of the Binding, and logs it at DEBUG,
   `chat: webhook event matched no trigger`. When it comes again it is tried against the triggers again, and counted again if it still
-  matches none. So after you fix a trigger, the same delivery sent again from the service's log starts the turn, if the trigger's
-  limits allow it.
+  matches none. So after you fix a trigger, the same delivery sent again from the service's log is decided again, and starts the
+  turn unless the trigger's limits, the session of its thread or a refused prompt stop it, as below.
 - **An event of a channel that no Binding names** starts nothing and is not remembered: once a Binding names the channel, the same
   body delivered again is tried against its triggers.
 - **A start that a trigger's limits stopped** gets a `200` response all the same. No turn starts, no digest line is posted (the platform
