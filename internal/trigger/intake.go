@@ -159,7 +159,8 @@ func NewIntake(cfg IntakeConfig) *Intake {
 //     IntakeConfig.OnStart; a message no trigger matches is ignored and counted.
 //   - A bot's mention (m.Bot set and m.Mentioned) goes to IntakeConfig.OnStart too, within fixed limits (botMention).
 //   - An event of a webhook connection (m.Webhook set) is tried against the webhookEvent triggers of its channel's Binding
-//     (webhookEvent), and is never submitted here either. One that a limit stopped, or whose session withheld it, is not remembered.
+//     (webhookEvent), and is never submitted here either. One that no trigger matched, that a limit stopped, or whose session withheld
+//     it, is not remembered.
 //
 // It returns an error only when Submit failed in a way a retry may cure, so the platform leaves the
 // event unacknowledged. An invalid turn is logged and dropped; no retry could mend it.
@@ -195,14 +196,12 @@ func (in *Intake) Message(ctx context.Context, m chat.Inbound) (telemetryErr err
 		if err != nil {
 			return err
 		}
-		// A start that a limit stopped, or that the session of its thread withheld, is not remembered (spec D55): the stop is
-		// transient, and the event's redelivery, by its sender or by hand, is decided again, and starts once there is room, or once the
-		// session has settled.
-		forget := out.decision == DecisionLimited || out.withheld
-		if disposition = d; d != "ignored" && !forget {
+		// Only a decision that stands is remembered (spec D55). An event that no trigger matched, a start that a limit stopped, and one
+		// that the session of its thread withheld are not: a trigger fixed by a reload, room in the limits and a settled session each
+		// change the decision, and the event's redelivery, by its sender or by hand, is decided again and starts then. A channel of
+		// the connection belongs to one Binding at most (config.Resolve), so an event its triggers did not match was taken by no Binding.
+		if disposition = d; d == "trigger_matched" && out.decision != DecisionLimited && !out.withheld {
 			in.seen.add(seen)
-		}
-		if d == "trigger_matched" && !forget {
 			in.matched.add(seen)
 		}
 		return nil
