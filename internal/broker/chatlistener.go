@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 )
 
@@ -94,6 +95,21 @@ const (
 // chatOutcomes are the outcomes, in the order docs/reference/metrics.md lists them.
 var chatOutcomes = []string{chatServed, chatNotFound, chatMethod, chatNoRoute, chatTooLarge, chatUnreadable, chatBusy}
 
+// chatPlatforms are the platforms whose connections take requests on the chat listener, the values of the platform label of
+// agentkourier_chat_listener_requests_total besides "other": a closed set, in the order docs/reference/metrics.md lists them. A platform
+// whose adapter offers a handler (chat.HTTPReceiver) is one more entry here.
+var chatPlatforms = []string{v1alpha1.PlatformSlack, v1alpha1.PlatformTeams}
+
+// chatCounter is what the chat listener reports to: Metrics.
+type chatCounter interface {
+	// ChatListenerServes says that the connection conn ("namespace/name") of platform is served, here because its route is put on the
+	// listener: from then until the connection is removed, the requests to its route are counted under its name.
+	ChatListenerServes(platform, conn string)
+	// ChatListenerRequest counts a request by its outcome and by the platform and the connection that its path names, which are the
+	// sender's to choose: empty when the path names none.
+	ChatListenerRequest(outcome, platform, conn string)
+}
+
 // chatRoutes is the chat listener's route table: the handler of each connection that runs on this replica and takes requests over HTTP
 // (chat.HTTPReceiver), by "<platform>/<namespace>/<name>". It belongs to the broker and not to an adapter, so that the routes of every
 // platform share one port, and so that a replica with no route for a connection (a standby, or a leader whose connection is starting,
@@ -107,9 +123,9 @@ type chatRoutes struct {
 	// drains is what runs as the listener begins its drain at shutdown (draining): what holds a request waiting lets it go, so that
 	// the request is answered inside the drain. Guarded by mu.
 	drains []func()
-	// count is told the outcome of each request (Metrics.ChatListenerRequest).
-	count func(outcome string)
-	log   *slog.Logger
+	// counter is told each connection whose route is registered, and the outcome of each request.
+	counter chatCounter
+	log     *slog.Logger
 	// slots holds one token for each request whose handler runs, chatMaxInFlight at most.
 	slots chan struct{}
 	// budget is what is left of chatBodyBudget.
@@ -159,8 +175,8 @@ func handlerTimeout(h http.Handler) time.Duration {
 	return chatHandlerTimeout
 }
 
-func newChatRoutes(count func(outcome string), log *slog.Logger) *chatRoutes {
-	return &chatRoutes{routes: map[string]*chatRoute{}, count: count, log: log, slots: make(chan struct{}, chatMaxInFlight),
+func newChatRoutes(counter chatCounter, log *slog.Logger) *chatRoutes {
+	return &chatRoutes{routes: map[string]*chatRoute{}, counter: counter, log: log, slots: make(chan struct{}, chatMaxInFlight),
 		budget: chatBudget{left: chatBodyBudget}}
 }
 
@@ -168,7 +184,7 @@ func newChatRoutes(count func(outcome string), log *slog.Logger) *chatRoutes {
 func chatRouteKey(platform, conn string) string { return platform + "/" + conn }
 
 // register makes h the route of the connection conn of platform, in place of any, and returns the registration, or nil once the table
-// is closed.
+// is closed. The counter is told before the route takes a request, so that every request the route takes is counted under conn.
 func (t *chatRoutes) register(platform, conn string, h http.Handler) *chatRoute {
 	key := chatRouteKey(platform, conn)
 	t.mu.Lock()
@@ -176,6 +192,7 @@ func (t *chatRoutes) register(platform, conn string, h http.Handler) *chatRoute 
 	if t.closed {
 		return nil
 	}
+	t.counter.ChatListenerServes(platform, conn)
 	r := &chatRoute{table: t, key: key, h: h, timeout: handlerTimeout(h)}
 	t.routes[key] = r
 	t.log.Info("the chat listener serves the connection", "connection", conn, "path", chatPathPrefix+key)
@@ -236,48 +253,53 @@ func (t *chatRoutes) lookup(key string) *chatRoute {
 // request take a place among the handlers, and it is 503 with Retry-After when the last were taken while it was read: a client slow to
 // send its body holds no place. The route's handler is called with the body in memory and a context that ends chatHandlerTimeout later
 // (or the route's longer deadline: chat.HTTPDeadline), and the body's chunks are given back to the budget when it returns.
+//
+// Each request is counted once, by its outcome and by the platform and connection that its path names: none for a path that is no route's
+// shape, and the platform alone for a method other than POST, which is answered before the route is looked up.
 func (t *chatRoutes) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	key, ok := chatKeyOf(req.URL.Path)
 	if !ok {
-		t.count(chatNotFound)
+		t.counter.ChatListenerRequest(chatNotFound, "", "")
 		refuse(w, http.StatusNotFound, "404 page not found")
 		return
 	}
+	platform, conn, _ := strings.Cut(key, "/")
 	if req.Method != http.MethodPost {
-		t.count(chatMethod)
+		t.counter.ChatListenerRequest(chatMethod, platform, "")
 		w.Header().Set("Allow", http.MethodPost)
 		refuse(w, http.StatusMethodNotAllowed, "only POST is served here")
 		return
 	}
+	count := func(outcome string) { t.counter.ChatListenerRequest(outcome, platform, conn) }
 	route := t.lookup(key)
 	if route == nil {
-		t.count(chatNoRoute)
+		count(chatNoRoute)
 		w.Header().Set("Retry-After", strconv.Itoa(int(chatRetryAfter/time.Second)))
 		refuse(w, http.StatusServiceUnavailable, "the connection does not run on this replica")
 		return
 	}
 	if req.ContentLength > chatMaxBody {
-		t.count(chatTooLarge)
+		count(chatTooLarge)
 		refuse(w, http.StatusRequestEntityTooLarge, "the body is too large")
 		return
 	}
 	if len(t.slots) == cap(t.slots) { // spares the read of a body that would be refused; the place itself is taken after the read
-		t.busy(w, false)
+		busy(w, count, false)
 		return
 	}
 	chunks, size, charged, err := t.readBody(http.MaxBytesReader(w, req.Body, chatMaxBody))
 	defer t.budget.give(charged)
 	if err != nil {
 		if tooLarge := (*http.MaxBytesError)(nil); errors.As(err, &tooLarge) {
-			t.count(chatTooLarge)
+			count(chatTooLarge)
 			http.Error(w, "the body is too large", http.StatusRequestEntityTooLarge)
 			return
 		}
 		if errors.Is(err, errChatBudget) {
-			t.busy(w, false)
+			busy(w, count, false)
 			return
 		}
-		t.count(chatUnreadable)
+		count(chatUnreadable)
 		http.Error(w, "the body could not be read", http.StatusBadRequest)
 		return
 	}
@@ -285,7 +307,7 @@ func (t *chatRoutes) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	case t.slots <- struct{}{}:
 		defer func() { <-t.slots }()
 	default:
-		t.busy(w, true)
+		busy(w, count, true)
 		return
 	}
 	ctx, cancel := context.WithTimeout(req.Context(), route.timeout)
@@ -298,14 +320,14 @@ func (t *chatRoutes) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	in := req.WithContext(ctx)
 	in.Body, in.ContentLength = chunkBody(chunks), size
 	in.GetBody = func() (io.ReadCloser, error) { return chunkBody(chunks), nil }
-	t.count(chatServed)
+	count(chatServed)
 	route.h.ServeHTTP(w, in)
 }
 
 // busy answers 503 with Retry-After, counted as busy. A request whose body was not read whole (bodyRead false) is refused, so that its
 // connection is closed rather than read to its end.
-func (t *chatRoutes) busy(w http.ResponseWriter, bodyRead bool) {
-	t.count(chatBusy)
+func busy(w http.ResponseWriter, count func(outcome string), bodyRead bool) {
+	count(chatBusy)
 	w.Header().Set("Retry-After", strconv.Itoa(int(chatRetryAfter/time.Second)))
 	if bodyRead {
 		http.Error(w, "the chat listener is busy", http.StatusServiceUnavailable)

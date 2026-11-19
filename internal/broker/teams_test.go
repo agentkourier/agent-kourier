@@ -383,7 +383,7 @@ func TestTheTeamsRouteIsAnsweredBeforeTeamsGivesUpOnAnInvoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	routes := newChatRoutes(func(string) {}, testutil.DiscardLogger())
+	routes := newChatRoutes(mustMetrics(t, nil), testutil.DiscardLogger())
 	route := routes.register(v1alpha1.PlatformTeams, "ns/teams", recv)
 	defer route.drop()
 	if route.timeout <= chatHandlerTimeout {

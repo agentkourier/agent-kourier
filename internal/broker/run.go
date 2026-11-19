@@ -191,7 +191,7 @@ func Run(ctx context.Context, cfg RunConfig) (err error) {
 	var routes *chatRoutes
 	var chatServed chan error // nil, and never ready, without a chat listener
 	if cfg.ChatListener != nil {
-		routes = newChatRoutes(metrics.ChatListenerRequest, log)
+		routes = newChatRoutes(metrics, log)
 		chatServed = make(chan error, 1)
 		chatDone := make(chan struct{})
 		chatCtx, stopChat := context.WithCancel(context.WithoutCancel(ctx))
