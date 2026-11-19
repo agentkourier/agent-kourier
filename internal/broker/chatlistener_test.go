@@ -5,17 +5,17 @@ import (
 	"context"
 	"errors"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
@@ -67,7 +67,7 @@ type chatRig struct {
 func newChatRig(t *testing.T) *chatRig {
 	t.Helper()
 	m := mustMetrics(t, nil)
-	routes := newChatRoutes(m.ChatListenerRequest, testutil.DiscardLogger())
+	routes := newChatRoutes(m, testutil.DiscardLogger())
 	srv := httptest.NewUnstartedServer(routes)
 	srv.Config = newChatServer(routes)
 	srv.Start()
@@ -91,10 +91,51 @@ func (r *chatRig) do(method, path string, body io.Reader) (code int, retryAfter,
 	return resp.StatusCode, resp.Header.Get("Retry-After"), resp.Header.Get("Allow"), string(b)
 }
 
-// counted is the value of agentkourier_chat_listener_requests_total for outcome.
+// counted is the value of agentkourier_chat_listener_requests_total for outcome, summed over its platforms and connections.
 func (r *chatRig) counted(outcome string) int {
 	r.t.Helper()
-	return int(promtestutil.ToFloat64(r.m.chatRequests.WithLabelValues(outcome)))
+	n := 0
+	for k, v := range listenerSeries(r.t, r.m) {
+		if k.outcome == outcome {
+			n += v
+		}
+	}
+	return n
+}
+
+// listenerKey is the labels of a series of agentkourier_chat_listener_requests_total.
+type listenerKey struct{ outcome, platform, connection string }
+
+// listenerSeries is every series of agentkourier_chat_listener_requests_total, its value by its labels.
+func listenerSeries(t *testing.T, m *Metrics) map[listenerKey]int {
+	t.Helper()
+	fams, err := m.reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[listenerKey]int{}
+	for _, f := range fams {
+		if f.GetName() != "agentkourier_chat_listener_requests_total" {
+			continue
+		}
+		for _, s := range f.GetMetric() {
+			var k listenerKey
+			for _, l := range s.GetLabel() {
+				switch l.GetName() {
+				case "outcome":
+					k.outcome = l.GetValue()
+				case "platform":
+					k.platform = l.GetValue()
+				case "connection":
+					k.connection = l.GetValue()
+				default:
+					t.Fatalf("agentkourier_chat_listener_requests_total has the label %s", l.GetName())
+				}
+			}
+			out[k] = int(s.GetCounter().GetValue())
+		}
+	}
+	return out
 }
 
 // A connection's route is served at /chat/<platform>/<namespace>/<name>, POST only; a connection with no route here is 503 with a
@@ -422,22 +463,223 @@ func TestFailStopDropsTheRoutesBeforeItExits(t *testing.T) {
 	}
 }
 
-// Every outcome the listener counts is its own label, and anything else is "other".
+// Every outcome the listener counts is its own label, and anything else is "other"; a platform outside the listener's set is "other", and
+// a connection whose route was never on the listener is "unknown".
 func TestChatListenerOutcomesAreBounded(t *testing.T) {
 	m := mustMetrics(t, nil)
 	if got := samples(t, m); slices.ContainsFunc(got, func(s string) bool { return strings.HasPrefix(s, "agentkourier_chat_listener_") }) {
 		t.Errorf("a broker that took no request has chat listener series: %v", got)
 	}
 	for _, o := range append(slices.Clone(chatOutcomes), "made_up") {
-		m.ChatListenerRequest(o)
+		m.ChatListenerRequest(o, "made_up", "made/up")
 	}
-	got := samples(t, m)
+	got := listenerSeries(t, m)
 	for _, o := range append(slices.Clone(chatOutcomes), otherLabel) {
-		if !slices.Contains(got, "agentkourier_chat_listener_requests_total{outcome="+o+"} 1") {
-			t.Errorf("outcome %s has no series of its own: %v", o, got)
+		if got[listenerKey{o, otherLabel, unknownLabel}] != 1 {
+			t.Errorf("outcome %s has no series of its own, under platform other and connection unknown: %v", o, got)
 		}
+	}
+	if len(got) != len(chatOutcomes)+1 {
+		t.Errorf("series = %v, want one for each outcome and one for other", got)
 	}
 	if want := []string{"served", "not_found", "method", "no_route", "too_large", "unreadable", "busy"}; !slices.Equal(chatOutcomes, want) {
 		t.Errorf("the outcomes are %q, want %q as docs/reference/metrics.md lists them", chatOutcomes, want)
+	}
+	if want := []string{"slack"}; !slices.Equal(chatPlatforms, want) {
+		t.Errorf("the platforms are %q, want %q as docs/reference/metrics.md lists them", chatPlatforms, want)
+	}
+}
+
+// errBody is a request body that fails when it is read, as one whose client went away.
+type errBody struct{}
+
+func (errBody) Read([]byte) (int, error) { return 0, errors.New("the client went away") }
+
+// fillingBody is a request body that takes every place among the handlers of routes when it is first read, as requests that arrive
+// while it is being read do.
+type fillingBody struct {
+	routes *chatRoutes
+	once   sync.Once
+	r      io.Reader
+}
+
+func (b *fillingBody) Read(p []byte) (int, error) {
+	b.once.Do(func() { fillPlaces(b.routes) })
+	return b.r.Read(p)
+}
+
+// fillPlaces takes every place among the handlers, as chatMaxInFlight requests being handled do.
+func fillPlaces(t *chatRoutes) {
+	for range cap(t.slots) {
+		t.slots <- struct{}{}
+	}
+}
+
+// Each outcome is counted once, under the platform and the connection of the route its path names. The connection is named once its route
+// has been on the listener, so one that is down or restarting is still named; it is "unknown" for one whose route never was, and for a path
+// with no route's shape or a method other than POST, which are answered before the route is looked up. The platform is the path's when it
+// is one of the listener's, and "other" for any other and for a path that names none.
+func TestChatListenerCountsEachOutcomeUnderItsRoute(t *testing.T) {
+	post := func(path string) func(*chatRoutes) *http.Request {
+		return func(*chatRoutes) *http.Request {
+			return httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, strings.NewReader("x"))
+		}
+	}
+	unsized := func(body func(*chatRoutes) io.Reader) func(*chatRoutes) *http.Request {
+		return func(rt *chatRoutes) *http.Request {
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat/slack/ns/a", body(rt))
+			req.ContentLength = -1
+			return req
+		}
+	}
+	cases := map[string]struct {
+		req  func(*chatRoutes) *http.Request
+		want listenerKey
+	}{
+		"served":    {req: post("/chat/slack/ns/a"), want: listenerKey{chatServed, "slack", "ns/a"}},
+		"not found": {req: post("/chat/slack/ns"), want: listenerKey{chatNotFound, otherLabel, unknownLabel}},
+		"method on a served route": {
+			req: func(*chatRoutes) *http.Request {
+				return httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/chat/slack/ns/a", nil)
+			},
+			want: listenerKey{chatMethod, "slack", unknownLabel},
+		},
+		"no route, its route went":   {req: post("/chat/slack/ns/gone"), want: listenerKey{chatNoRoute, "slack", "ns/gone"}},
+		"no route, never a route":    {req: post("/chat/slack/ns/never"), want: listenerKey{chatNoRoute, "slack", unknownLabel}},
+		"no route, another platform": {req: post("/chat/github/ns/a"), want: listenerKey{chatNoRoute, otherLabel, unknownLabel}},
+		"too large, declared": {
+			req: func(*chatRoutes) *http.Request {
+				req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat/slack/ns/a", strings.NewReader("x"))
+				req.ContentLength = chatMaxBody + 1
+				return req
+			},
+			want: listenerKey{chatTooLarge, "slack", "ns/a"},
+		},
+		"too large, read": {
+			req:  unsized(func(*chatRoutes) io.Reader { return strings.NewReader(strings.Repeat("a", chatMaxBody+1)) }),
+			want: listenerKey{chatTooLarge, "slack", "ns/a"},
+		},
+		"unreadable": {req: unsized(func(*chatRoutes) io.Reader { return errBody{} }), want: listenerKey{chatUnreadable, "slack", "ns/a"}},
+		"busy, every place taken": {
+			req:  func(rt *chatRoutes) *http.Request { fillPlaces(rt); return post("/chat/slack/ns/a")(rt) },
+			want: listenerKey{chatBusy, "slack", "ns/a"},
+		},
+		"busy, the body does not fit": {
+			req:  func(rt *chatRoutes) *http.Request { rt.budget.left = 0; return post("/chat/slack/ns/a")(rt) },
+			want: listenerKey{chatBusy, "slack", "ns/a"},
+		},
+		"busy, the places filled during the read": {
+			req:  unsized(func(rt *chatRoutes) io.Reader { return &fillingBody{routes: rt, r: strings.NewReader("x")} }),
+			want: listenerKey{chatBusy, "slack", "ns/a"},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			m := mustMetrics(t, nil)
+			routes := newChatRoutes(m, testutil.DiscardLogger())
+			routes.register(v1alpha1.PlatformSlack, "ns/a", &heard{})
+			routes.register(v1alpha1.PlatformSlack, "ns/gone", &heard{}).drop()
+			routes.ServeHTTP(httptest.NewRecorder(), tc.req(routes))
+			if got, want := listenerSeries(t, m), map[listenerKey]int{tc.want: 1}; !maps.Equal(got, want) {
+				t.Errorf("series = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+// The path is the sender's to choose: no part of it becomes a label value unless it names, under its platform, a connection whose route
+// was on the listener, so the series cannot grow past the outcomes times the platforms times the connections served, and "unknown".
+func TestChatListenerNeverLabelsASenderChosenPath(t *testing.T) {
+	m := mustMetrics(t, nil)
+	routes := newChatRoutes(m, testutil.DiscardLogger())
+	routes.register(v1alpha1.PlatformSlack, "ns/a", &heard{})
+	paths := []string{"/chat/slack/ns/b", "/chat/slack/evil/a", "/chat/SLACK/ns/a", "/chat/github/ns/a", "/chat/other/ns/a", "/chat/slack/ns/a/x",
+		"/chat/slack/ns/a%2Fx", "/chat/slack/unknown/x", "/chat/" + strings.Repeat("p", 300) + "/ns/a", "/chat/slack/" + strings.Repeat("n", 300) + "/a",
+		"/chat//ns/a", "/x/slack/ns/a"}
+	for i := range 100 {
+		paths = append(paths, "/chat/slack/ns-"+strconv.Itoa(i)+"/name-"+strconv.Itoa(i))
+	}
+	for _, path := range paths {
+		for _, method := range []string{http.MethodPost, http.MethodGet} {
+			routes.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader("x")))
+		}
+	}
+	got := listenerSeries(t, m)
+	for k := range got {
+		if !slices.Contains([]string{"ns/a", unknownLabel}, k.connection) || !slices.Contains([]string{"slack", otherLabel}, k.platform) {
+			t.Errorf("a series is labelled %+v: a value the sender chose", k)
+		}
+		if k.connection == "ns/a" && k.platform != "slack" {
+			t.Errorf("a series names the served connection under the platform %q, which is not its route's", k.platform)
+		}
+	}
+	if len(got) > len(chatOutcomes)*(len(chatPlatforms)+1)*2 {
+		t.Errorf("%d series after %d paths, want them bounded by the outcomes, the platforms and the connections: %v", len(got), len(paths), got)
+	}
+}
+
+// A connection that is no longer served loses its series of the listener, and a request to its route after that is counted under
+// "unknown", not under its name: nothing brings its series back until its route is on the listener again. The other connections keep theirs.
+func TestConnectionRemovedDeletesItsListenerSeries(t *testing.T) {
+	m := mustMetrics(t, nil)
+	routes := newChatRoutes(m, testutil.DiscardLogger())
+	regA := routes.register(v1alpha1.PlatformSlack, "ns/a", &heard{})
+	routes.register(v1alpha1.PlatformSlack, "ns/b", &heard{})
+	serve := func(path string) {
+		routes.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, strings.NewReader("x")))
+	}
+	serve("/chat/slack/ns/a")
+	serve("/chat/slack/ns/b")
+	regA.drop()
+	serve("/chat/slack/ns/a")
+	serve("/chat/slack/ns/none")
+
+	m.ConnectionRemoved(t.Context(), "ns/a")
+
+	want := map[listenerKey]int{{chatServed, "slack", "ns/b"}: 1, {chatNoRoute, "slack", unknownLabel}: 1}
+	if got := listenerSeries(t, m); !maps.Equal(got, want) {
+		t.Errorf("after the removal the series are %v, want %v: ns/a's gone and the rest kept", got, want)
+	}
+	serve("/chat/slack/ns/a")
+	want[listenerKey{chatNoRoute, "slack", unknownLabel}] = 2
+	if got := listenerSeries(t, m); !maps.Equal(got, want) {
+		t.Errorf("after a request to the removed connection's route the series are %v, want %v: counted as unknown", got, want)
+	}
+	routes.register(v1alpha1.PlatformSlack, "ns/a", &heard{})
+	serve("/chat/slack/ns/a")
+	want[listenerKey{chatServed, "slack", "ns/a"}] = 1
+	if got := listenerSeries(t, m); !maps.Equal(got, want) {
+		t.Errorf("once the connection is served again the series are %v, want %v: named again, from zero", got, want)
+	}
+}
+
+// A request counted while its connection is being removed does not bring the connection's series back: it is counted before the series are
+// deleted, and goes with them, or after, as unknown. Each round races requests against the removal.
+func TestConnectionRemovedRacingRequestsLeavesNoSeries(t *testing.T) {
+	m := mustMetrics(t, nil)
+	for round := range 200 {
+		m.ChatListenerServes(v1alpha1.PlatformSlack, "ns/a")
+		var stop atomic.Bool
+		var counting sync.WaitGroup // each request goroutine has counted once, so the removal comes while they count
+		var wg sync.WaitGroup
+		counting.Add(4)
+		for range 4 {
+			wg.Go(func() {
+				m.ChatListenerRequest(chatNoRoute, v1alpha1.PlatformSlack, "ns/a")
+				counting.Done()
+				for !stop.Load() {
+					m.ChatListenerRequest(chatNoRoute, v1alpha1.PlatformSlack, "ns/a")
+				}
+			})
+		}
+		counting.Wait()
+		m.ConnectionRemoved(t.Context(), "ns/a")
+		stop.Store(true)
+		wg.Wait()
+		for k := range listenerSeries(t, m) {
+			if k.connection == "ns/a" {
+				t.Fatalf("round %d: a request counted during the removal brought back the series %+v", round, k)
+			}
+		}
 	}
 }

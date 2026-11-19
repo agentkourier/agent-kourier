@@ -109,10 +109,11 @@ func TestRunServesTheChatListenerForTheConnectionsThatRun(t *testing.T) {
 	if n := asked.Load(); n != 1 {
 		t.Errorf("the platform was asked for its handler %d times, want once as its run began", n)
 	}
-	r.waitMetric(`agentkourier_chat_listener_requests_total{outcome="served"} 1`)
-	r.waitMetric(`agentkourier_chat_listener_requests_total{outcome="no_route"} 1`)
-	r.waitMetric(`agentkourier_chat_listener_requests_total{outcome="method"} 1`)
-	r.waitMetric(`agentkourier_chat_listener_requests_total{outcome="not_found"} 3`)
+	// The own connection's requests are counted under its name; the rest name no connection that is served, or come before one is looked up.
+	r.waitMetric(`agentkourier_chat_listener_requests_total{connection="agent-kourier-system/slack-main",outcome="served",platform="slack"} 1`)
+	r.waitMetric(`agentkourier_chat_listener_requests_total{connection="unknown",outcome="no_route",platform="slack"} 1`)
+	r.waitMetric(`agentkourier_chat_listener_requests_total{connection="unknown",outcome="method",platform="slack"} 1`)
+	r.waitMetric(`agentkourier_chat_listener_requests_total{connection="unknown",outcome="not_found",platform="other"} 3`)
 }
 
 // At a shutdown the chat listener stops taking requests before the intakes stop, inside the intake step, and the steps are the ones they
