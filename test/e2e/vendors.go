@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/agentkourier/agent-kourier/test/fakevendors"
 )
@@ -36,6 +37,33 @@ func WebhookBinding(vendor string) string {
 		return WebhookNamespace + "/" + b
 	}
 	return ""
+}
+
+// WebhookLimits are the limits of one trigger of a recipe's Binding (limits.rateLimit and limits.maxRunsPerDay), as its binding.yaml sets
+// them: the WH_ tests name them when a limit stops a start, and test/kindmanifests holds them to the recipes.
+type WebhookLimits struct {
+	MaxRuns       int
+	Per           time.Duration
+	MaxConcurrent int
+	MaxRunsPerDay int
+}
+
+// webhookLimits are the limits of each recipe's triggers, in the order of its Binding's triggers.
+var webhookLimits = map[string][]WebhookLimits{
+	fakevendors.GitHub:    {{10, time.Hour, 1, 40}, {20, time.Hour, 1, 60}},
+	fakevendors.Bitbucket: {{10, time.Hour, 1, 40}, {20, time.Hour, 1, 60}},
+	fakevendors.Jira:      {{10, time.Hour, 1, 30}, {10, time.Hour, 1, 30}},
+	fakevendors.Linear:    {{10, time.Hour, 1, 30}, {10, time.Hour, 1, 30}, {20, time.Hour, 1, 60}},
+}
+
+// WebhookTriggerLimits returns the limits of the trigger of index trigger of vendor's recipe, and false for a trigger the recipe does not
+// have.
+func WebhookTriggerLimits(vendor string, trigger int) (WebhookLimits, bool) {
+	all := webhookLimits[vendor]
+	if trigger < 0 || trigger >= len(all) {
+		return WebhookLimits{}, false
+	}
+	return all[trigger], true
 }
 
 // Vendors drives the fake vendors (test/fakevendors). Its control surface has no authentication, so this client is only for tests inside

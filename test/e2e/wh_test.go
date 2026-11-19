@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -74,7 +76,7 @@ func requireWebhooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Fatalf("on custom resources the fast tier admits %s (hack/kind/webhook-values.yaml, which up-fast.sh gives the route upgrade), and this broker does not (%s): the bring-up lost the overlay", WebhookNamespace, env.Admission())
+	t.Fatalf("on custom resources the fast tier admits %s (hack/kind/webhook-values.yaml, which up-fast.sh gives the route upgrade), and this broker does not (%s): the bring-up lost the overlay; bring the tier up again with E2E_CONFIG_SOURCE=crds make e2e-fast-up", WebhookNamespace, env.Admission())
 }
 
 // newWebhookScenario returns a whScenario once the broker is ready and the four webhook connections run, or skips (requireWebhooks).
@@ -99,30 +101,6 @@ func newWebhookScenario(t *testing.T) *whScenario {
 	return w
 }
 
-// sum is the sum of the leader's samples of name that have labels, 0 when it has none.
-func (w *whScenario) sum(name string, labels map[string]string) float64 {
-	w.t.Helper()
-	var v float64
-	many, err := w.replicated(w.ctx)
-	switch {
-	case err != nil:
-	case many:
-		var leader kube.Replica
-		if leader, err = w.reps.WaitLeader(w.ctx, 2*time.Minute); err == nil {
-			v, err = w.reps.Sum(w.ctx, leader, name, labels)
-		}
-	default:
-		v, err = w.agentKourier.Sum(w.ctx, name, labels)
-	}
-	if errors.Is(err, ErrNoSample) {
-		return 0
-	}
-	if err != nil {
-		w.t.Fatal(err)
-	}
-	return v
-}
-
 // requests is the leader's agentkourier_webhook_requests_total of vendor's connection with outcome and reason.
 func (w *whScenario) requests(vendor, outcome, reason string) float64 {
 	w.t.Helper()
@@ -135,13 +113,55 @@ func (w *whScenario) served(vendor string) float64 {
 	return w.counter("agentkourier_chat_listener_requests_total", map[string]string{"outcome": "served", "platform": "webhook", "connection": WebhookConnection(vendor)})
 }
 
-// limited is the leader's count of the starts of vendor's Binding that a limit stopped, by every limit and trigger.
-func (w *whScenario) limited(vendor string) float64 {
+// decisions is the leader's agentkourier_trigger_decisions_total of vendor's Binding with decision.
+func (w *whScenario) decisions(vendor, decision string) float64 {
 	w.t.Helper()
-	return w.sum("agentkourier_trigger_limited_total", map[string]string{"binding": WebhookBinding(vendor)})
+	return w.counter("agentkourier_trigger_decisions_total", map[string]string{"binding": WebhookBinding(vendor), "decision": decision})
 }
 
-// whSent is how the broker answered the sends of one delivery: the last answer, and every one before it.
+// whLimits are the limits of a trigger, the label limit of agentkourier_trigger_limited_total.
+var whLimits = []string{"daily", "rate", "concurrent"}
+
+// limitedBy is the leader's agentkourier_trigger_limited_total of the trigger of vendor's Binding, by limit.
+func (w *whScenario) limitedBy(vendor string, trigger int) map[string]float64 {
+	w.t.Helper()
+	out := map[string]float64{}
+	for _, limit := range whLimits {
+		out[limit] = w.counter("agentkourier_trigger_limited_total", map[string]string{"binding": WebhookBinding(vendor), "trigger": strconv.Itoa(trigger), "limit": limit})
+	}
+	return out
+}
+
+// whStartsARun are the starts that one run of the WH_ tests makes of each recipe's trigger: TestWH_EachRecipe one of each recipe's first
+// trigger, and TestWH_ARedelivery one more of GitHub's, and one of its mention trigger.
+var whStartsARun = map[string][]int{fakevendors.GitHub: {2, 1}, fakevendors.Bitbucket: {1}, fakevendors.Jira: {1}, fakevendors.Linear: {1}}
+
+// whBudget is how many runs of the WH_ tests a tier takes in an hour and in a day before a recipe's limits stop a start: the tier's store
+// keeps the starts the limits count, through restarts of the broker and bring-ups of the tier, and only a fresh tier starts them over.
+func whBudget() (hour, day int) {
+	hour, day = math.MaxInt, math.MaxInt
+	for vendor, starts := range whStartsARun {
+		for trigger, n := range starts {
+			l, _ := WebhookTriggerLimits(vendor, trigger)
+			hour, day = min(hour, l.MaxRuns/n), min(day, l.MaxRunsPerDay/n)
+		}
+	}
+	return hour, day
+}
+
+// describeLimit says what limit of l is, as the recipe sets it.
+func describeLimit(limit string, l WebhookLimits) string {
+	switch limit {
+	case "daily":
+		return fmt.Sprintf("daily (maxRunsPerDay %d)", l.MaxRunsPerDay)
+	case "rate":
+		return fmt.Sprintf("rate (rateLimit.maxRuns %d per %s)", l.MaxRuns, l.Per)
+	default:
+		return fmt.Sprintf("concurrent (rateLimit.maxConcurrent %d)", l.MaxConcurrent)
+	}
+}
+
+// whSent is how the broker answered a run of sends: the last answer, and every one before it.
 type whSent struct {
 	last   fakevendors.Sent
 	before []fakevendors.Sent
@@ -205,28 +225,68 @@ func (w *whScenario) sendStatus(d fakevendors.Delivery, want int, desc string) w
 	return s
 }
 
-// start sends d, a delivery that starts a turn of vendor's Binding, until the broker takes it (200) and no limit stops it: a turn of an earlier
-// scenario may still be ending, and the recipes' triggers run one turn at a time (maxConcurrent 1). A limited event is answered 200 and not
-// remembered, so a vendor that sends it again has it decided again. It fails the test after a minute of limits, which is the recipe's rate limit
-// (maxRuns an hour) spent by earlier runs on a tier that outlives them.
-func (w *whScenario) start(vendor string, d fakevendors.Delivery, desc string) whSent {
+// whStarted is what start sent: the delivery of the turn that started, and the broker's answers to every send of every attempt.
+type whStarted struct {
+	d    fakevendors.Delivery
+	sent whSent
+}
+
+// start sends the delivery that build makes, which starts a turn of the trigger of index trigger of vendor's Binding, until the trigger
+// decides that it started. Each attempt is built afresh, so that a time the recipe checks (Linear's webhookTimestamp) is in its window. The
+// platform's Sink decides before the platform answers 200, so the decision is on agentkourier_trigger_decisions_total once the answer is in:
+// started returns; limited tries again a second later, since a turn of an earlier scenario may still hold the trigger's one place
+// (maxConcurrent 1); and any other decision fails the test. After a minute of limits it fails the test, naming the limits that stopped the
+// starts (agentkourier_trigger_limited_total counts a message's first stop only, so it names those that stopped any).
+func (w *whScenario) start(vendor string, trigger int, build func() fakevendors.Delivery, desc string) whStarted {
 	w.t.Helper()
 	var answers []fakevendors.Sent
+	limitedBefore := w.limitedBy(vendor, trigger)
 	deadline := time.Now().Add(time.Minute)
 	for {
-		limited := w.limited(vendor)
+		d := build()
+		started, limited := w.decisions(vendor, "started"), w.decisions(vendor, "limited")
 		s := w.sendStatus(d, http.StatusOK, desc)
 		answers = append(append(answers, s.before...), s.last)
-		// The trigger decides after the answer: a start a limit stops shows on the counter at once after it, or not at all.
-		if err := Consistently(w.ctx, time.Second, "no limit stops "+desc, func(context.Context) (bool, error) {
-			return w.limited(vendor) == limited, nil
-		}); err == nil {
-			return whSent{last: answers[len(answers)-1], before: answers[:len(answers)-1]}
+		switch {
+		case w.decisions(vendor, "started") > started:
+			return whStarted{d: d, sent: whSent{last: answers[len(answers)-1], before: answers[:len(answers)-1]}}
+		case w.decisions(vendor, "limited") == limited:
+			w.t.Fatalf("%s: answered 200, and the trigger decided neither started nor limited (dedup %v, not_started %v): a delivery of an earlier run?",
+				desc, w.decisions(vendor, "dedup"), w.decisions(vendor, "not_started"))
+		case time.Now().After(deadline):
+			w.t.Fatal(w.limitedFor(vendor, trigger, limitedBefore, desc))
 		}
-		if time.Now().After(deadline) {
-			w.t.Fatalf("%s: a limit of %s stopped it for a minute (agentkourier_trigger_limited_total %v); the recipe allows 10 starts an hour: the tier's runs may have spent them", desc, WebhookBinding(vendor), w.limited(vendor))
+		select {
+		case <-w.ctx.Done():
+			w.t.Fatal(w.ctx.Err())
+		case <-time.After(time.Second):
 		}
 	}
+}
+
+// limitedFor says which limits of the trigger of vendor's Binding stopped its starts for a minute: those whose count rose since before, or,
+// when none did (a message stopped again is not counted again), every one that has stopped a start.
+func (w *whScenario) limitedFor(vendor string, trigger int, before map[string]float64, desc string) string {
+	w.t.Helper()
+	l, _ := WebhookTriggerLimits(vendor, trigger)
+	now := w.limitedBy(vendor, trigger)
+	var rose, ever []string
+	for _, limit := range whLimits {
+		if now[limit] > before[limit] {
+			rose = append(rose, describeLimit(limit, l))
+		}
+		if now[limit] > 0 {
+			ever = append(ever, describeLimit(limit, l))
+		}
+	}
+	if len(rose) == 0 {
+		rose = ever
+	}
+	hour, day := whBudget()
+	return fmt.Sprintf("%s: trigger %d of %s was limited for a minute, by %s (agentkourier_trigger_limited_total %v). The tier's store keeps the starts "+
+		"that the limits count, through restarts and bring-ups: a tier takes %d runs of the WH_ tests an hour and %d a day, and only a fresh tier "+
+		"(make e2e-fast-down, then E2E_CONFIG_SOURCE=crds make e2e-fast-up) starts them over",
+		desc, trigger, WebhookBinding(vendor), strings.Join(rose, ", "), now, hour, day)
 }
 
 // postsOn are the posts on vendor's API on target, oldest first.
@@ -251,7 +311,7 @@ func (w *whScenario) waitPosts(vendor, target string, n int, desc string) []fake
 		return len(got) >= n, err
 	})
 	if err != nil {
-		w.t.Fatalf("%s: %v\nthe posts on %s: %+v; starts a limit stopped: %v", desc, err, target, got, w.limited(vendor))
+		w.t.Fatalf("%s: %v\nthe posts on %s: %+v", desc, err, target, got)
 	}
 	if len(got) != n {
 		w.t.Fatalf("%s: %d posts on %s; want %d: %+v", desc, len(got), target, n, got)
@@ -290,20 +350,36 @@ func (w *whScenario) answered(id string) []map[string]any {
 	return out
 }
 
-// waitAnswered waits for n INFO lines of the delivery id (answered) and checks that each is of vendor's connection with outcome.
+// whRetried are the outcomes of the platform's 503s, which a vendor sends again: the INFO lines of a delivery may hold them beside its 200s.
+var whRetried = []string{"not_running", "withheld", "timeout", "cancelled"}
+
+// waitAnswered waits for n INFO lines of the delivery id (answered) of vendor's connection with outcome and reason none, and checks that
+// every other line of it is of a 503 (whRetried).
 func (w *whScenario) waitAnswered(vendor, id, outcome string, n int) {
 	w.t.Helper()
-	var got []map[string]any
-	err := Wait(w.ctx, 30*time.Second, "the INFO line of the delivery "+id, func(context.Context) (bool, error) {
-		got = w.answered(id)
+	var got, other []map[string]any
+	err := Wait(w.ctx, 30*time.Second, "the INFO lines of the delivery "+id, func(context.Context) (bool, error) {
+		got, other = nil, nil
+		for _, rec := range w.answered(id) {
+			if rec["outcome"] == outcome {
+				got = append(got, rec)
+			} else {
+				other = append(other, rec)
+			}
+		}
 		return len(got) >= n, nil
 	})
 	if err != nil || len(got) != n {
-		w.t.Fatalf("%d %q lines name the delivery %s (%v); want %d", len(got), whAnswered, id, err, n)
+		w.t.Fatalf("%d %q lines of outcome %s name the delivery %s (%v); want %d", len(got), whAnswered, outcome, id, err, n)
 	}
 	for _, rec := range got {
-		if rec["level"] != "INFO" || rec["connection"] != WebhookConnection(vendor) || rec["outcome"] != outcome || rec["reason"] != "none" {
-			w.t.Errorf("the line of the delivery %s is %v; want INFO, of %s, outcome %s, reason none", id, rec, WebhookConnection(vendor), outcome)
+		if rec["level"] != "INFO" || rec["connection"] != WebhookConnection(vendor) || rec["reason"] != "none" {
+			w.t.Errorf("the line of the delivery %s is %v; want INFO, of %s, reason none", id, rec, WebhookConnection(vendor))
+		}
+	}
+	for _, rec := range other {
+		if o, _ := rec["outcome"].(string); !slices.Contains(whRetried, o) {
+			w.t.Errorf("the delivery %s has a line of outcome %s: %v; want %s, or a 503's (%v)", id, o, rec, outcome, whRetried)
 		}
 	}
 }
@@ -360,10 +436,12 @@ func TestWH_EachRecipeTakesASignedDeliveryAndDropsTheAgentsOwnPost(t *testing.T)
 			sc := *w.scenario
 			sc.t, sc.ctx = t, t.Context()
 			w := &whScenario{scenario: &sc, vendors: w.vendors}
-			st := startOf(t, vendor, whNumber())
+			n := whNumber()
+			st := startOf(t, vendor, n)
 			accepted, self, served := w.requests(vendor, "accepted", "none"), w.requests(vendor, "self", "none"), w.served(vendor)
 
-			sent := w.start(vendor, st.d, "the "+vendor+" delivery")
+			started := w.start(vendor, 0, func() fakevendors.Delivery { return startOf(t, vendor, n).d }, "the "+vendor+" delivery")
+			sent := started.sent
 			p := w.waitPosts(vendor, st.target, 1, "the agent's post on "+st.target)[0]
 			if p.Kind != st.kind || !strings.Contains(p.Body, st.text) {
 				t.Errorf("the post is %+v; want a %s on %s that holds %q", p, st.kind, st.target, st.text)
@@ -384,7 +462,7 @@ func TestWH_EachRecipeTakesASignedDeliveryAndDropsTheAgentsOwnPost(t *testing.T)
 			case got < float64(taken+1):
 				t.Errorf("agentkourier_chat_listener_requests_total{outcome=served,platform=webhook} of %s rose by %v; want at least %d", WebhookConnection(vendor), got, taken+1)
 			}
-			w.waitAnswered(vendor, st.d.ID(), "accepted", taken)
+			w.waitAnswered(vendor, started.d.ID(), "accepted", 1)
 			w.stillPosts(vendor, st.target, 1, "the agent's own post starts no turn")
 		})
 	}
@@ -437,26 +515,28 @@ func TestWH_ARedeliveryIsTakenOnceAndStartsNoSecondTurn(t *testing.T) {
 	const vendor = fakevendors.GitHub
 	n := whNumber()
 	st := startOf(t, vendor, n)
-	sent := w.start(vendor, st.d, "the pull request")
+	pr := w.start(vendor, 0, func() fakevendors.Delivery { return startOf(t, vendor, n).d }, "the pull request").d
 	w.waitPosts(vendor, st.target, 1, "the review")
-	taken, _ := sent.handled()
 
-	dedup := map[string]string{"binding": WebhookBinding(vendor), "decision": "dedup"}
-	before, accepted := w.counter("agentkourier_trigger_decisions_total", dedup), w.requests(vendor, "accepted", "none")
-	w.sendStatus(st.d, http.StatusOK, "the same delivery again")
-	if err := Wait(w.ctx, 30*time.Second, "the trigger to decide the redelivery a duplicate", func(context.Context) (bool, error) {
-		return w.counter("agentkourier_trigger_decisions_total", dedup) == before+1, nil
-	}); err != nil {
-		t.Fatal(err)
+	// The platform's Sink decides before the platform answers, so the decision is counted once the answer is in.
+	dedup, started, accepted := w.decisions(vendor, "dedup"), w.decisions(vendor, "started"), w.requests(vendor, "accepted", "none")
+	w.sendStatus(pr, http.StatusOK, "the same delivery again")
+	if got := w.decisions(vendor, "dedup") - dedup; got != 1 {
+		t.Errorf("agentkourier_trigger_decisions_total{decision=dedup} of %s rose by %v after the redelivery; want 1", WebhookBinding(vendor), got)
+	}
+	if got := w.decisions(vendor, "started") - started; got != 0 {
+		t.Errorf("agentkourier_trigger_decisions_total{decision=started} of %s rose by %v after the redelivery; want 0", WebhookBinding(vendor), got)
 	}
 	if got := w.requests(vendor, "accepted", "none") - accepted; got != 1 {
 		t.Errorf("agentkourier_webhook_requests_total{outcome=accepted} rose by %v after the redelivery; want 1: the platform takes it, and the trigger drops it", got)
 	}
-	w.waitAnswered(vendor, st.d.ID(), "accepted", taken+1)
+	w.waitAnswered(vendor, pr.ID(), "accepted", 2)
 	w.stillPosts(vendor, st.target, 1, "the redelivery starts no turn")
 
-	mention := fakevendors.GitHubComment{Repo: whRepo, Number: n, CommentID: n, Text: "@acme-review-agent is the retry bounded now?", Author: "octocat"}.Delivery()
-	w.start(vendor, mention, "the comment that mentions the agent")
+	mention := func() fakevendors.Delivery {
+		return fakevendors.GitHubComment{Repo: whRepo, Number: n, CommentID: n, Text: "@acme-review-agent is the retry bounded now?", Author: "octocat"}.Delivery()
+	}
+	w.start(vendor, 1, mention, "the comment that mentions the agent")
 	reply := w.waitPosts(vendor, st.target, 2, "the reply to the mention")[1]
 	if want := fmt.Sprintf("Reply on %s (turn 2)", st.target); reply.Kind != "comment" || !strings.Contains(reply.Body, want) {
 		t.Errorf("the reply is %+v; want a comment that holds %q: the redelivery ran no turn of the session", reply, want)

@@ -5,13 +5,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/agentkourier/agent-kourier/test/fakevendors"
 )
 
 // TestWebhookVendorAPIServesTheRecipesAgents: with -webhook-vendor-api the stub serves the webhook recipes' agent as agents/<vendor> for each of
@@ -29,9 +26,6 @@ func TestWebhookVendorAPIServesTheRecipesAgents(t *testing.T) {
 	}))
 	t.Cleanup(api.Close)
 
-	if want := []string{fakevendors.GitHub, fakevendors.Bitbucket, fakevendors.Jira, fakevendors.Linear}; !slices.Equal(webhookVendors, want) {
-		t.Errorf("the webhook agents are %v; want one for each vendor of test/fakevendors, %v", webhookVendors, want)
-	}
 	plain := serve(t, 0, false)
 	stub := newStub(0, false, "", api.URL)
 	srv := httptest.NewServer(withControl(stub))

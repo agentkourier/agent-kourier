@@ -52,7 +52,10 @@
 # (hack/kind/fast/webhook, lib.sh's deploy_webhook; the WH_ tests of test/e2e drive them through the fake vendors, test/fakevendors):
 # hack/kind/webhook-values.yaml admits the namespace and turns on the chat listener. The ConfigMap route serves one ChatConnection, so it has no
 # webhook connection, and the WH_ tests skip there. With E2E_TWO_APPS=1 the admission list is the MC_ tests' own, so the webhook connections stay
-# in the cluster, not served, and the WH_ tests skip too.
+# in the cluster, not served, and the WH_ tests skip too. The recipes' trigger limits count starts in the tier's store, which keeps them through
+# restarts of Agent Kourier and bring-ups of the tier: a tier takes 5 runs of the WH_ tests an hour and 20 a day (each run starts GitHub's review
+# trigger twice, and the recipe allows it 10 starts an hour and 40 a day), and only a fresh tier (hack/kind/down.sh fast first), or a bring-up on
+# the other store, starts them over.
 set -eEuo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

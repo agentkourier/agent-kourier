@@ -28,6 +28,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/test/fakevendors"
 	"github.com/agentkourier/agent-kourier/test/stubagent"
 )
 
@@ -68,7 +69,7 @@ func idTag(unique bool) (string, error) {
 // /agents/agents/<vendor>; webhookVendors are their names, the vendors of test/fakevendors.
 const webhookAgentNamespace = "agents"
 
-var webhookVendors = []string{"github", "bitbucket", "jira", "linear"}
+var webhookVendors = []string{fakevendors.GitHub, fakevendors.Bitbucket, fakevendors.Jira, fakevendors.Linear}
 
 // checkVendorAPI says whether api is a value -webhook-vendor-api takes: empty (no webhook agents), or an absolute http or https URL of a
 // host with no path, which stubagent.WebhookAgent puts the vendor's API paths after.

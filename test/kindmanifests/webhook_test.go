@@ -170,6 +170,44 @@ func TestTheWebhookTierServesTheRecipesOnTheStubAgent(t *testing.T) {
 		if !reflect.DeepEqual(got, original) {
 			t.Errorf("webhook_binding changed more of the %s recipe's Binding than its token:\n%v\nwant\n%v", vendor, got, original)
 		}
+
+		// test/e2e names the limits of each of the recipe's triggers when one stops a start.
+		triggers := rb.Binding.Spec.Chat.Triggers
+		for i, tr := range triggers {
+			var got e2e.WebhookLimits
+			if r := tr.Limits.RateLimit; r != nil {
+				got.MaxRuns, got.Per, got.MaxConcurrent = int(r.MaxRuns), r.Per.Duration, int(r.MaxConcurrent)
+			}
+			if d := tr.Limits.MaxRunsPerDay; d != nil {
+				got.MaxRunsPerDay = int(*d)
+			}
+			if want, ok := e2e.WebhookTriggerLimits(vendor, i); !ok || got != want {
+				t.Errorf("trigger %d of the %s recipe has the limits %+v; test/e2e says %+v (known %v)", i, vendor, got, want, ok)
+			}
+		}
+		if _, ok := e2e.WebhookTriggerLimits(vendor, len(triggers)); ok {
+			t.Errorf("test/e2e names the limits of a trigger %d of the %s recipe, which has %d triggers", len(triggers), vendor, len(triggers))
+		}
+
+		// The tier's AgentBackend is the recipe's but for its url, the recipe's placeholder.
+		recipe := recipeDoc(t, vendor, "agentbackend.yaml")
+		name := recipe["metadata"].(map[string]any)["name"]
+		var tier map[string]any
+		for _, doc := range objects(t, webhookManifest) {
+			if doc["kind"] == "AgentBackend" && doc["metadata"].(map[string]any)["name"] == name {
+				tier = doc
+			}
+		}
+		if tier == nil {
+			t.Errorf("%s has no AgentBackend %v in place of the %s recipe's", webhookManifest, name, vendor)
+			continue
+		}
+		for _, doc := range []map[string]any{recipe, tier} {
+			delete(doc["spec"].(map[string]any), "url")
+		}
+		if !reflect.DeepEqual(tier, recipe) {
+			t.Errorf("the tier's AgentBackend %v differs from the %s recipe's in more than its url:\n%v\nwant\n%v", name, vendor, tier, recipe)
+		}
 	}
 	var kinds []string
 	for _, doc := range objects(t, webhookManifest) {
