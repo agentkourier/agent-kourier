@@ -79,38 +79,40 @@ func checkAll(ctx context.Context, dirs []string) (map[string]error, error) {
 	return results, nil
 }
 
-// TestCheckAll runs the checks of TestRecipesApplyTogether on a Slack recipe and a Teams recipe built here that ship
-// one AgentBackend: each platform's recipes apply together, so only the pass over every platform refuses them.
+// TestCheckAll runs the checks of TestRecipesApplyTogether on recipes built here, so that each check must run for the test
+// to pass: a Slack recipe and a Teams recipe that ship one AgentBackend, which each platform's check passes and only the
+// pass over every platform refuses; and a second Slack recipe whose ChatConnection is of another name, which only the
+// check of the Slack recipes refuses.
 func TestCheckAll(t *testing.T) {
-	const backend = `apiVersion: agentkourier.dev/v1alpha1
-kind: AgentBackend
-metadata: { name: agents, namespace: recipe }
-spec: { dialect: a2a, url: "http://agent.recipe:8080" }
-`
-	recipe := func(name, spec, channel string) map[string]string {
+	const teamsSpec = "platform: teams, teams: { tenantID: 11111111-1111-4111-8111-111111111111, appID: 22222222-2222-4222-8222-222222222222 }"
+	recipe := func(name, backend, connection, spec, channel string) map[string]string {
 		return map[string]string{
-			"b.yaml": backend,
+			"b.yaml": fmt.Sprintf(`apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: { name: %s, namespace: recipe }
+spec: { dialect: a2a, url: "http://agent.recipe:8080" }
+`, backend),
 			"c.yaml": fmt.Sprintf(`apiVersion: agentkourier.dev/v1alpha1
 kind: ChatConnection
-metadata: { name: chat, namespace: recipe }
-spec: { %s, credentialsSecretRef: { name: chat } }
-`, spec),
+metadata: { name: %[1]s, namespace: recipe }
+spec: { %[2]s, credentialsSecretRef: { name: %[1]s } }
+`, connection, spec),
 			"x.yaml": fmt.Sprintf(`apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata: { name: %[1]s, namespace: recipe }
 spec:
-  agent: { backendRef: { name: agents }, name: helper, namespace: recipe }
+  agent: { backendRef: { name: %[2]s }, name: helper, namespace: recipe }
   identity: { userId: agent-kourier-%[1]s }
-  chat: { connectionRef: { name: chat }, channel: "%[2]s" }
-`, name, channel),
+  chat: { connectionRef: { name: %[3]s }, channel: "%[4]s" }
+`, name, backend, connection, channel),
 		}
 	}
 	root := t.TempDir()
 	var dirs []string
 	for name, files := range map[string]map[string]string{
-		"a": recipe("a", "platform: slack", "CAAAAAAAA"),
-		"b": recipe("b", "platform: teams, teams: { tenantID: 11111111-1111-4111-8111-111111111111, appID: 22222222-2222-4222-8222-222222222222 }",
-			"19:recipe-channel@thread.tacv2"),
+		"a": recipe("a", "agents", "chat", "platform: slack", "CAAAAAAAA"),
+		"b": recipe("b", "agents", "chat", teamsSpec, "19:recipe-channel@thread.tacv2"),
+		"c": recipe("c", "c-agents", "chat2", "platform: slack", "CCCCCCCCC"),
 	} {
 		dir := filepath.Join(root, name)
 		dirs = append(dirs, dir)
@@ -130,13 +132,15 @@ spec:
 	if got, want := slices.Sorted(maps.Keys(results)), []string{everyPlatform, "slack", "teams"}; !slices.Equal(got, want) {
 		t.Fatalf("checkAll ran %q, want %q", got, want)
 	}
-	if err := results[everyPlatform]; err == nil || !strings.Contains(err.Error(), "recipe b: AgentBackend recipe/agents is in recipe a too") {
-		t.Errorf("check %q = %v, want the AgentBackend that both recipes ship refused", everyPlatform, err)
+	if err := results[everyPlatform]; err == nil || !strings.Contains(err.Error(), "recipe b: AgentBackend recipe/agents is in recipe a too") ||
+		strings.Contains(err.Error(), "recipe c") {
+		t.Errorf("check %q = %v, want the AgentBackend that recipes a and b ship refused, and nothing of recipe c", everyPlatform, err)
 	}
-	for _, platform := range []string{"slack", "teams"} {
-		if err := results[platform]; err != nil {
-			t.Errorf("check %q = %v, want the recipe of the platform to apply", platform, err)
-		}
+	if err := results["slack"]; err == nil || !strings.Contains(err.Error(), "exactly one ChatConnection") {
+		t.Errorf("check %q = %v, want the two ChatConnections of the Slack recipes refused", "slack", err)
+	}
+	if err := results["teams"]; err != nil {
+		t.Errorf("check %q = %v, want the Teams recipe to apply", "teams", err)
 	}
 }
 
