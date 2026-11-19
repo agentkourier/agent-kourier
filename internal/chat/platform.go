@@ -284,7 +284,7 @@ type Access struct {
 	Archived bool
 }
 
-// Platform is a chat platform: Slack today. An adapter implements it, and nothing else in Agent Kourier names
+// Platform is a chat platform: Slack or Microsoft Teams today. An adapter implements it, and nothing else in Agent Kourier names
 // the platform it adapts. Every method is safe for concurrent use.
 //
 // Every method that sends text keeps the contract of the package comment, and the adapter passes

@@ -1,5 +1,5 @@
 // Package chat is Agent Kourier's chat-neutral model: what a conversation platform has to be for Agent Kourier to
-// run on it. A platform (Slack today) is one implementation of Platform, in its own package, and no
+// run on it. A platform (Slack and Microsoft Teams today) is one implementation of Platform, in its own package, and no
 // session, interact, render, outbox or store code names it (spec 13: adding a platform requires
 // implementing one interface).
 //

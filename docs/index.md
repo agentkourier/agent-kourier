@@ -1,8 +1,8 @@
 ---
 description: >-
   Write the agent, not the chat integration. Agent Kourier connects streaming A2A agents to team chat and handles
-  threads, streamed replies, questions, alert investigations, restarts and failover. Slack today; more platforms
-  planned.
+  threads, streamed replies, questions, alert investigations, restarts and failover. Slack and Microsoft Teams
+  today; more platforms planned.
 hide:
   - navigation
   - toc
@@ -20,7 +20,7 @@ hide:
 
 <p class="ak-hero__pitch">A Binding connects a chat channel to an agent that serves streaming A2A. Agent Kourier
 handles the chat side: a session per thread, streamed replies, questions to people, investigations started by alerts,
-and recovery after a restart or failover. Slack is supported today, and other chat platforms are planned.</p>
+and recovery after a restart or failover. Slack and Microsoft Teams (experimental) are supported today, and other chat platforms are planned.</p>
 
 <div class="ak-hero__actions">
 <a class="md-button md-button--primary" href="tutorials/first-agent-in-slack/">Try it in a kind sandbox</a>
