@@ -1006,3 +1006,22 @@ func TestReceiverHandsOnAPostWhoseRecordTheStoreRefuses(t *testing.T) {
 		t.Errorf("the store was asked for the record %d times, want twice: once for each activity, since the first was refused", got)
 	}
 }
+
+// TestReceiverDropsABotsInvoke: an invoke whose sender is a bot (28:…), another app's or the connection's own, reaches no
+// InvokeHandler, as a bot's message reaches no sink: it is answered 200 with no body.
+func TestReceiverDropsABotsInvoke(t *testing.T) {
+	for name, from := range map[string]string{"another bot": "28:99999999-8888-4777-8666-555555555555", "the bot itself": "28:" + testAppID} {
+		t.Run(name, func(t *testing.T) {
+			h := &invokeRecorder{answer: InvokeAnswer{Status: http.StatusOK, Body: []byte(`{"statusCode":200}`)}}
+			rt := newReceiverTest(t, true, h)
+			body := bytes.Replace(fixture(t, "invoke_action"), []byte(`"29:1test-user-not-a-real-id"`), []byte(`"`+from+`"`), 1)
+			rec := rt.post(t, body, "")
+			if rec.Code != http.StatusOK || rec.Body.Len() != 0 {
+				t.Errorf("answer %d %q, want 200 and no body", rec.Code, rec.Body.String())
+			}
+			if h.count() != 0 {
+				t.Errorf("the handler got a bot's invoke: %+v", h.invokes)
+			}
+		})
+	}
+}

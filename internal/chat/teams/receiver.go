@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -441,7 +442,7 @@ func (r *Receiver) takePayload(ctx context.Context, payload []byte) answer {
 //   - A message puts its post, if it is a person's, and its conversation on its channel's lane, and is answered 200 at once; an ID
 //     with ':' is 400, and lanes that shed it 503.
 //   - An invoke is answered by the InvokeHandler, in ctx, whatever the lanes do with its conversation; one whose replyToId holds ':'
-//     is 400.
+//     is 400, and one whose sender is a bot (28:…) is answered 200 with no body and handed to no handler, as a bot's message is dropped.
 //   - Anything else (an edit, a deletion, an install event) puts its conversation on the lane, and is answered 200, or 503 if shed.
 //
 // An activity that came before, by its type, channel and ID, within the dedup window, is answered 200 and handed on to nothing.
@@ -478,11 +479,15 @@ func (r *Receiver) take(ctx, tctx context.Context, a activity) answer {
 		}
 	case kindInvoke:
 		i, ok := a.invoke(r.conn)
-		if !ok {
+		switch {
+		case !ok:
 			r.log.DebugContext(ctx, "teams: an invoke was refused, since its replyToId holds ':'; answered 400")
 			return answer{status: http.StatusBadRequest, text: "the invoke names no message that an ID can name", outcome: requestMalformed}
+		case strings.HasPrefix(a.From.ID, botPrefix): // as a bot's message is dropped (message): a press is a person's
+			r.log.DebugContext(ctx, "teams: an invoke of a bot was dropped; acknowledged", "name", quote(a.Name))
+		default:
+			inv = &i
 		}
-		inv = &i
 	}
 	channel, _ := splitConversation(a.Conversation.ID)
 	key := ""
