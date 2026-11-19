@@ -101,6 +101,7 @@ type Client struct {
 	threadTimeout time.Duration                             // threadTimeout; a test shortens it
 	log           *slog.Logger
 	onConnection  func(bool)
+	posted        *recent  // the posts this Client made, by messageKey, within the dedup's window: Graph's notification of one is not read
 	sockets       *sockets // the connection's sockets in socket mode, nil in http mode
 	push          *push    // the Graph intake of a connection with a notificationURL, nil without one
 	poll          *poller  // the Graph intake of a connection with no notificationURL, nil with one
@@ -141,7 +142,7 @@ func New(cfg Config) (*Client, error) {
 	}
 	c := &Client{conn: cfg.Connection, tenant: cfg.TenantID, app: cfg.AppID, convs: convs, log: log, onConnection: cfg.OnConnection,
 		api: &connector{client: direct, tokens: tokens, now: now}, graph: graph, names: newNameCache(now), cards: newButtonCards(), rosterTimeout: rosterTimeout,
-		pressWait: pressWait, threadTimeout: threadTimeout, buttonKey: key, buttonsWait: waitFor}
+		pressWait: pressWait, threadTimeout: threadTimeout, buttonKey: key, buttonsWait: waitFor, posted: newRecent(now)}
 	recv, err := NewReceiver(ReceiverConfig{Connection: cfg.Connection, TenantID: cfg.TenantID, AppID: cfg.AppID,
 		MetadataURL: cfg.MetadataURL, HTTPClient: client, Conversations: convs, Logger: log, Now: now, Invokes: c})
 	if err != nil {
@@ -297,6 +298,7 @@ func (c *Client) Post(ctx context.Context, t chat.Target, o chat.Outgoing, tag s
 	if err != nil {
 		return chat.Ref{}, err
 	}
+	c.sent(t.Channel, id)
 	ref = c.ref(t.Channel, t.Thread, id)
 	if len(m.buttons) > 0 {
 		c.buttonsAfterPost(ctx, serviceURL, ref, m.buttons)
@@ -352,6 +354,14 @@ func (c *Client) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) (err e
 		return nil
 	}
 	return err
+}
+
+// sent remembers that this Client posted the message id in channel, so that Graph's notification of it is counted own and not read
+// (push.intake). The window is the dedup's: a notification comes seconds after the post.
+func (c *Client) sent(channel, id string) {
+	if id != "" {
+		c.posted.claim(messageKey(channel, id))
+	}
 }
 
 // RefAt implements chat.Platform.

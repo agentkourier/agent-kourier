@@ -244,7 +244,9 @@ channel's activities:
 - a person's post is the person's, as if Teams had sent it. A post that comes both as an activity and through Graph, such as a mention of
   the bot, is handed on once, whichever comes first;
 - Agent Kourier's own posts, edits and deletions, system events and deleted messages are dropped: an edit of an alert's card does not
-  start a turn again.
+  start a turn again. An edit or a deletion is dropped without a read, and so is a post that the replica that leads made in the last 10
+  minutes (a reply, or the card of its buttons), which the broker remembers in memory; an older one, or another replica's, is read and
+  then dropped.
 
 Microsoft Graph's lifecycle notifications come to the same URL: `reauthorizationRequired` renews the subscription at once,
 `subscriptionRemoved` makes it anew, and `missed`, which says that Graph did not deliver some notifications of the channel, is logged at

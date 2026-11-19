@@ -395,6 +395,7 @@ func resourceSegments(res string) ([]resourceSegment, bool) {
 
 // intake reads the message ref of sub's channel from Graph, on the channel's lane of s, and hands it to the sink as Run hands a person's
 // post, unless it is no post for the sink:
+//   - one that this Client posted (Client.sent: a post, or the card of a post's buttons) is the bot's own, and is not read;
 //   - one that an activity, or an earlier notification, already handed on is a duplicate. The dedup is the receiver's, by channel and
 //     message ID, so a person's post that Teams sends as an activity too (a mention of the bot, or any post under the resource-specific
 //     permission) goes to the sink once, whichever comes first. The key is claimed after the read, so a read that fails takes nothing
@@ -415,7 +416,11 @@ func (p *push) intake(s *serving, sub subscription, ref messageRef) {
 	r := p.c.recv
 	tctx := r.telemetryContext(ctx)
 	key := messageKey(sub.channel, ref.id)
-	if r.seen.has(key) {
+	switch {
+	case p.c.posted.has(key): // the Client posted it: no read, as the read would find it the bot's own
+		p.count(tctx, notifyChange, notifiedOwn)
+		return
+	case r.seen.has(key):
 		p.count(tctx, notifyChange, notifiedDuplicate)
 		return
 	}

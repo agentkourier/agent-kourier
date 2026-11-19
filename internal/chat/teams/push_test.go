@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1450,5 +1451,32 @@ func TestGraphPostNotTakenIsCountedApartFromActivities(t *testing.T) {
 	}
 	if got := pt.obs.series(t, "agentkourier_teams_activities_lost_total", lostNotTaken); got != 0 {
 		t.Errorf("lost{%s} = %v; want 0: a Graph message is no activity", lostNotTaken, got)
+	}
+}
+
+// The connection's own posts, a text and the card of its buttons, are known to be its own when Graph notifies them: each is counted
+// own, and none is read from Graph.
+func TestGraphDoesNotReadTheConnectionsOwnPosts(t *testing.T) {
+	pt := newPushTest(t, false)
+	pt.subscribed(t, testChannel)
+	ref, err := pt.c.Post(t.Context(), chat.Target{Conn: testConn, Channel: testChannel}, rated("It is the disk."), findTag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := strconv.Atoi(ref.ID)
+	if err != nil {
+		t.Fatalf("the text's ID %q: %v", ref.ID, err)
+	}
+	card := strconv.Itoa(n + 1) // the fake names each post the next ID: the buttons' card follows the text
+	pt.graphTaken()
+	sub := pt.subOf(testChannel)
+	if status, body := pt.notify(t, pt.change(sub, testChannel, "created", "", ref.ID), pt.change(sub, testChannel, "created", ref.ID, card)); status != http.StatusAccepted {
+		t.Fatalf("status = %d %s; want 202", status, body)
+	}
+	testutil.Eventually(t, "both counted own", func() bool { return pt.counted(t, notifyChange, notifiedOwn) == 2 })
+	for _, r := range pt.f.graphTaken() {
+		if strings.HasSuffix(r.path, "/"+ref.ID) || strings.HasSuffix(r.path, "/"+card) {
+			t.Errorf("the connection's own post was read from Graph: %s", r.path)
+		}
 	}
 }

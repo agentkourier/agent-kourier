@@ -200,6 +200,10 @@ func (c *Client) buttonsAfterPost(ctx context.Context, serviceURL string, text c
 // postButtons posts the card a of buttons to conv and remembers it as key's, with its ID, or with none when Teams named none.
 func (c *Client) postButtons(ctx context.Context, serviceURL, conv, key, sum string, a outActivity) error {
 	id, err := c.buttonsCall(ctx, func(ctx context.Context) (string, error) { return c.api.send(ctx, serviceURL, conv, a) })
+	if err == nil {
+		channel, _ := splitConversation(conv)
+		c.sent(channel, id)
+	}
 	if err == nil || errors.Is(err, errNoID) {
 		c.cards.put(key, buttonCard{id: id, sum: sum})
 	}
