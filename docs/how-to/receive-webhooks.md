@@ -160,10 +160,11 @@ What a service does with a `503` is its own. Their documentation, read on 2026-1
     ([step 2](team-slack-app.md#2-the-team-makes-the-secret-the-grant-and-the-connection)). A webhook connection can be the broker's
     own instead (`config.chatConnection` and `config.chatConnectionSecret`), which is the only way on the ConfigMap route: there the
     broker runs exactly one ChatConnection. The broker builds the platform of its own connection when it starts and when a replica
-    takes the lead, so an edit to its `spec.webhook` applies when Agent Kourier restarts, and until then the leader logs, once for each
-    edit of `spec.webhook` it reads that leaves the spec other than the one the connection runs on, a WARN with the connection in its `connection` attribute:
-    `chat connection: its spec.webhook was edited, and the running connection still uses the spec.webhook it started with; a restart of the broker applies the edit`; a team connection restarts by itself when
-    its ChatConnection changes.
+    takes the lead, so an edit to its `spec.webhook` applies when Agent Kourier restarts, and until then the leader logs, once for
+    each edit of `spec.webhook` it reads that leaves the spec other than the one the connection runs on, a WARN with the
+    connection in its `connection` attribute:
+    `chat connection: its spec.webhook was edited, and the running connection still uses the spec.webhook it started with; a restart of the broker applies the edit`;
+    a team connection restarts by itself when its ChatConnection changes.
 - **An agent with tools for the service**, and an account there for it to work as, with a credential that only the agent's tools
   hold. Agent Kourier never sees or passes that credential ([Tools for the agent](#tools-for-the-agent)). Any A2A agent works: each
   recipe has an AgentBackend of the `a2a` dialect whose `url` is a placeholder, `REPLACE-ME`, for your agent's

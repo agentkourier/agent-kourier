@@ -100,9 +100,10 @@ kourier/
     make it the broker's own connection instead, set `config.chatConnection: acme-webhooks/bitbucket` and
     `config.chatConnectionSecret: bitbucket-webhook`. The broker builds the platform of its own connection when it starts
     and when a replica takes the lead, so an edit to that connection's `spec.webhook` applies when Agent Kourier restarts. Until
-    then the leader logs, once for each edit of `spec.webhook` it reads that leaves the spec other than the one the connection runs on, a WARN with the connection in its `connection`
-    attribute: `chat connection: its spec.webhook was edited, and the running connection still uses the spec.webhook it started with; a restart of the broker applies the edit`. A team connection restarts
-    by itself when its ChatConnection changes.
+    then the leader logs, once for each edit of `spec.webhook` it reads that leaves the spec other than the one the connection
+    runs on, a WARN with the connection in its `connection` attribute:
+    `chat connection: its spec.webhook was edited, and the running connection still uses the spec.webhook it started with; a restart of the broker applies the edit`.
+    A team connection restarts by itself when its ChatConnection changes.
 4. Apply the resources:
 
     ```sh
