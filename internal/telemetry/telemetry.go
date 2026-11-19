@@ -79,6 +79,7 @@ func New(reg prometheus.Registerer, provider trace.TracerProvider) (*Observer, e
 		{"agentkourier_slack_events_shed_total", "Slack events left unacknowledged, so that Slack sends them again, because the adapter already held as many as it may: channel_backlog (one channel's lane was full) or adapter_backlog (all lanes were).", []string{"reason", ConnectionLabel}},
 		{"agentkourier_slack_http_requests_total", "Requests Slack sent to a connection in HTTP mode, by what they were answered: acknowledged, challenge, bad_signature, stale, malformed, not_running, shed, withheld or timeout.", []string{"outcome", ConnectionLabel}},
 		{"agentkourier_slack_http_retries_total", "Signed requests to a connection in HTTP mode that Slack marked as a retry (X-Slack-Retry-Num): a request it sent again because an earlier one was not answered 200 in time.", []string{ConnectionLabel}},
+		{webhookRequests, "Requests sent to a webhook connection, by what they were answered (outcome) and why (reason): accepted, ignored, self and unmapped (200), unverified (401), malformed (400), not_running, withheld, timeout and cancelled (503).", []string{"outcome", "reason", ConnectionLabel}},
 	} {
 		c := prometheus.NewCounterVec(prometheus.CounterOpts{Name: d.name, Help: d.help}, d.labels)
 		if err := reg.Register(c); err != nil {
@@ -234,6 +235,41 @@ func Count(ctx context.Context, name string, labels ...string) {
 		if c := o.counts[name]; c != nil {
 			c.WithLabelValues(labels...).Inc()
 		}
+	}
+}
+
+// webhookRequests is the counter of the requests to a webhook connection, which WebhookRequests records.
+const webhookRequests = "agentkourier_webhook_requests_total"
+
+// WebhookRequests records agentkourier_webhook_requests_total for one webhook connection: the platform is given it when it is built,
+// and counts each answer it gives through it, with no context of the request's or of a Run's. The zero value records nothing.
+type WebhookRequests struct {
+	vec        *prometheus.CounterVec
+	connection string
+}
+
+// WebhookRecorder returns the recorder of agentkourier_webhook_requests_total for connection ("namespace/name"), on the broker's
+// instruments in ctx; with none there, it records nothing. Its series are the connection's, which ForgetConnection deletes.
+func WebhookRecorder(ctx context.Context, connection string) WebhookRequests {
+	o := observer(ctx)
+	if o == nil {
+		return WebhookRequests{}
+	}
+	return WebhookRequests{vec: o.counts[webhookRequests], connection: connection}
+}
+
+// Init makes the series of outcome and reason exist, at zero if it did not, so that a rule over it has a value before the first
+// such request. outcome and reason come from the platform's closed sets.
+func (w WebhookRequests) Init(outcome, reason string) {
+	if w.vec != nil {
+		w.vec.WithLabelValues(outcome, reason, w.connection)
+	}
+}
+
+// Count adds one to the series of outcome and reason.
+func (w WebhookRequests) Count(outcome, reason string) {
+	if w.vec != nil {
+		w.vec.WithLabelValues(outcome, reason, w.connection).Inc()
 	}
 }
 
