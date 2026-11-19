@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -298,9 +299,9 @@ func TestTwoEventsOfOneThreadAreTwoStartsInIt(t *testing.T) {
 }
 
 // The session of a webhook event's thread is asked whether it takes the start before the limits (TakesTurn): one that will not (its
-// ended session's replacement withheld) is not_started, started nothing and spent no place, so that with one run an hour and one a
-// day the next event starts. An error of the ask is the event's, for the platform to answer 503, and decides nothing. A Slack
-// trigger's message is not asked about.
+// ended session's replacement withheld) is not_started, started nothing, spent no place, and is not remembered: its redelivery, once
+// the session has settled, is asked about again and starts, in the one run an hour and one a day it did not take. An error of the ask
+// is the event's, for the platform to answer 503, and decides nothing.
 func TestAWebhookEventIsAskedAboutBeforeTheLimits(t *testing.T) {
 	h := newWebhook(t, webhookTrigger(func(tr *v1alpha1.Trigger) {
 		tr.Limits = v1alpha1.TriggerLimits{RateLimit: &v1alpha1.RateLimit{MaxRuns: 1, Per: metav1.Duration{Duration: time.Hour}, MaxConcurrent: 1}, MaxRunsPerDay: new(int32(1))}
@@ -320,14 +321,15 @@ func TestAWebhookEventIsAskedAboutBeforeTheLimits(t *testing.T) {
 	if err := h.in.Message(h.ctx, prEvent("e2", "d2")); !errors.Is(err, errAsk) {
 		t.Fatalf("Message e2 = %v; want the ask's error", err)
 	}
-	if err := h.in.Message(h.ctx, prEvent("e3", "d3")); err != nil {
+	delete(answer, "e1") // the session settles
+	if err := h.in.Message(h.ctx, prEvent("e1", "d1")); err != nil {
 		t.Fatal(err)
 	}
-	if got := h.started(); !slices.Equal(got, []string{"e3"}) || !slices.Equal(asked, []string{"e1", "e2", "e3"}) {
-		t.Errorf("started %v after asking about %v; want e3 alone, each event asked about", got, asked)
+	if got := h.started(); !slices.Equal(got, []string{"e1"}) || !slices.Equal(asked, []string{"e1", "e2", "e1"}) {
+		t.Errorf("started %v after asking about %v; want e1's redelivery alone, each delivery asked about", got, asked)
 	}
 	if d := h.decisions(t); !maps.Equal(d, map[string]float64{"not_started": 1, "started": 1}) {
-		t.Errorf("decisions = %v; want e1 not_started and e3 started, and nothing for e2", d)
+		t.Errorf("decisions = %v; want e1 not_started, then started, and nothing for e2", d)
 	}
 	if got := h.limitedCount(t, "0"); len(got) != 0 {
 		t.Errorf("agentkourier_trigger_limited_total = %v; want none", got)
@@ -428,18 +430,34 @@ func TestALimitedWebhookEventIsWarnedOfAndDecidedAgainWhenRedelivered(t *testing
 	h.beQuiet(t)
 }
 
-// An event whose start the hook will not make (a refused prompt, or a thread whose ended session cannot be replaced yet) is taken
-// and remembered, so that its redelivery is a duplicate, as an alert's is.
+// An event whose start the hook will not make is taken. One it refused (a prompt that failed its check) is remembered, so that its
+// redelivery is a duplicate, as an alert's is: asking again would refuse it again. One whose thread's session withheld it
+// (ErrWithheld: its ended session cannot be replaced yet) is not, as a limited one is not, so that its redelivery is decided again and
+// starts once the session has settled.
 func TestAWebhookEventThatWasNotStartedIsTaken(t *testing.T) {
-	h := newWebhook(t, webhookTrigger(nil))
-	h.hookErr = errors.Join(errors.New("withheld"), trigger.ErrNotStarted)
-	for range 2 {
-		if err := h.in.Message(h.ctx, prEvent("e1", "d1")); err != nil {
-			t.Fatalf("Message = %v; want the event taken", err)
-		}
-	}
-	if d := h.decisions(t); !maps.Equal(d, map[string]float64{"not_started": 1, "dedup": 1}) {
-		t.Errorf("decisions = %v; want not_started, then the redelivery's dedup", d)
+	for _, tc := range []struct {
+		name  string
+		first error
+		want  map[string]float64
+		start int
+	}{
+		{"refused", errors.Join(errors.New("refused"), trigger.ErrNotStarted), map[string]float64{"not_started": 1, "dedup": 1}, 1},
+		{"withheld", fmt.Errorf("webhook event e1: %w", trigger.ErrWithheld), map[string]float64{"not_started": 1, "started": 1}, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newWebhook(t, webhookTrigger(nil))
+			h.hookErr = tc.first
+			if err := h.in.Message(h.ctx, prEvent("e1", "d1")); err != nil {
+				t.Fatalf("Message = %v; want the event taken", err)
+			}
+			h.hookErr = nil // the session settles
+			if err := h.in.Message(h.ctx, prEvent("e1", "d1")); err != nil {
+				t.Fatalf("Message of the redelivery = %v", err)
+			}
+			if d := h.decisions(t); !maps.Equal(d, tc.want) || len(h.got()) != tc.start {
+				t.Errorf("decisions = %v after %d starts asked; want %v and %d", d, len(h.got()), tc.want, tc.start)
+			}
+		})
 	}
 }
 

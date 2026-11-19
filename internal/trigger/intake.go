@@ -83,8 +83,9 @@ type IntakeConfig struct {
 	// TakesTurn, if set, says whether the session that a webhook event's start would be a turn of takes it now, reading only, as
 	// TakesBotMention does for a bot's mention. It is asked before the event meets the limits: an event whose thread's session has
 	// ended (past its threadTTL, or its Binding gone) and whose replacement the session manager withholds (the old session may still
-	// be at work, or the body was queued before) is not_started. It is taken, logged, and spends no place in the limits. Its
-	// error is the event's: the platform answers 503, and the sender delivers it again.
+	// be at work, or the body was queued before) is not_started. It is taken, logged, spends no place in the limits, and is not
+	// remembered, so that its redelivery is asked about again. Its error is the event's: the platform answers 503, and the sender
+	// delivers it again.
 	TakesTurn func(ctx context.Context, m Match) (bool, error)
 	// TurnQueued, if set, says whether the turn with this ID (the MessageID of the message that started it) was
 	// durably taken: queued or already sent. It closes the window between OnStart queueing a turn and the
@@ -152,7 +153,7 @@ func NewIntake(cfg IntakeConfig) *Intake {
 //     IntakeConfig.OnStart; a message no trigger matches is ignored and counted.
 //   - A bot's mention (m.Bot set and m.Mentioned) goes to IntakeConfig.OnStart too, within fixed limits (botMention).
 //   - An event of a webhook connection (m.Webhook set) is tried against the webhookEvent triggers of its channel's Binding
-//     (webhookEvent), and is never submitted here either. One that a limit stopped is not remembered.
+//     (webhookEvent), and is never submitted here either. One that a limit stopped, or whose session withheld it, is not remembered.
 //
 // It returns an error only when Submit failed in a way a retry may cure, so the platform leaves the
 // event unacknowledged. An invalid turn is logged and dropped; no retry could mend it.
@@ -184,16 +185,18 @@ func (in *Intake) Message(ctx context.Context, m chat.Inbound) (telemetryErr err
 		return nil
 	}
 	if m.Webhook != nil {
-		d, decision, err := in.webhookEvent(ctx, snap, m)
+		d, out, err := in.webhookEvent(ctx, snap, m)
 		if err != nil {
 			return err
 		}
-		// A start that a limit stopped is not remembered (spec D55): its sender does not send it again on its own, and its redelivery,
-		// by hand, is decided again, and starts if there is room by then.
-		if disposition = d; d != "ignored" && decision != DecisionLimited {
+		// A start that a limit stopped, or that the session of its thread withheld, is not remembered (spec D55): the stop is
+		// transient, and the event's redelivery, by its sender or by hand, is decided again, and starts once there is room, or once the
+		// session has settled.
+		forget := out.decision == DecisionLimited || out.withheld
+		if disposition = d; d != "ignored" && !forget {
 			in.seen.add(seen)
 		}
-		if d == "trigger_matched" && decision != DecisionLimited {
+		if d == "trigger_matched" && !forget {
 			in.matched.add(seen)
 		}
 		return nil
@@ -339,7 +342,7 @@ func (in *Intake) personMessage(ctx context.Context, snap *config.Snapshot, m ch
 		return "ignored", false, nil
 	}
 	disposition, decision, err := in.matchTriggers(ctx, snap, rb, m, "person message")
-	return disposition, decision == DecisionLimited && mentionTriggerIn(rb.Binding.Spec.Chat.Triggers), err
+	return disposition, decision.decision == DecisionLimited && mentionTriggerIn(rb.Binding.Spec.Chat.Triggers), err
 }
 
 // webhookEvent tries an event of a webhook connection against the webhookEvent triggers of the Binding that owns its channel, and
@@ -347,13 +350,13 @@ func (in *Intake) personMessage(ctx context.Context, snap *config.Snapshot, m ch
 // answered the event, and it starts nothing. A match is decided as an alert's with no thread rules (decide): the limits, then OnStart,
 // which starts the turn in the thread that the connection derived. The log lines name the sender's delivery and the thread, both
 // identifiers the platform checked, and never a field's value.
-func (in *Intake) webhookEvent(ctx context.Context, snap *config.Snapshot, m chat.Inbound) (string, Decision, error) {
+func (in *Intake) webhookEvent(ctx context.Context, snap *config.Snapshot, m chat.Inbound) (string, decided, error) {
 	if snap == nil {
-		return "ignored", "", nil
+		return "ignored", decided{}, nil
 	}
 	rb, ok := snap.BindingForChannel(in.cfg.Connection.Namespace, in.cfg.Connection.Name, m.At.Channel)
 	if !ok {
-		return "ignored", "", nil
+		return "ignored", decided{}, nil
 	}
 	return in.matchTriggers(ctx, snap, rb, m, "webhook event", "thread", m.At.Thread, "delivery", m.Webhook.Delivery)
 }
@@ -369,7 +372,7 @@ func (in *Intake) decideWebhook(ctx context.Context, m Match) (decided, error) {
 		case !takes:
 			in.log.InfoContext(ctx, "chat: a webhook event's thread cannot be continued yet, so the event was dropped", "binding", m.Binding, "trigger", m.Index,
 				"channel", m.Message.At.Channel, "thread", m.sessionThread(), "message", m.Message.At.ID, "delivery", m.Message.Webhook.Delivery)
-			return decided{decision: DecisionNotStarted, thread: m.sessionThread()}, nil
+			return decided{decision: DecisionNotStarted, thread: m.sessionThread(), withheld: true}, nil
 		}
 	}
 	return in.decide(ctx, m)
@@ -394,7 +397,7 @@ func triedAsPerson(triggers []v1alpha1.Trigger, m chat.Inbound) bool {
 //     started decision is a turn that started. An attempt that fails counts neither: it is logged at WARN with the
 //     decision it was carrying out, and its error returns, for the platform to log and to deliver the event again
 //     (agentkourier_intake_total counts it as an error). The redelivery is decided again and counted then.
-func (in *Intake) matchTriggers(ctx context.Context, snap *config.Snapshot, rb config.ResolvedBinding, m chat.Inbound, what string, sender ...any) (disposition string, decision Decision, err error) {
+func (in *Intake) matchTriggers(ctx context.Context, snap *config.Snapshot, rb config.ResolvedBinding, m chat.Inbound, what string, sender ...any) (disposition string, decision decided, err error) {
 	name := v1alpha1.NamespacedName(rb.Binding.Namespace, rb.Binding.Name)
 	trace.SpanFromContext(ctx).SetAttributes(attribute.String("agentkourier.binding", name))
 	where := append([]any{"binding", name, "channel", m.At.Channel, "message", m.At.ID}, sender...)
@@ -402,7 +405,7 @@ func (in *Intake) matchTriggers(ctx context.Context, snap *config.Snapshot, rb c
 	if !ok {
 		telemetry.Count(ctx, "agentkourier_trigger_unmatched_total", name)
 		in.log.DebugContext(ctx, "chat: "+what+" matched no trigger", where...)
-		return "trigger_unmatched", "", nil
+		return "trigger_unmatched", decided{}, nil
 	}
 	match := Match{Binding: name, Index: trigger.index, Fields: fields, Thread: trigger.thread, Limits: trigger.limits, PromptTemplate: trigger.prompt, MessageID: in.messageID(m), Received: in.now(), Message: m, Person: trigger.person, Webhook: trigger.webhook}
 	in.log.InfoContext(ctx, "chat: "+what+" matched a trigger", append(where, "trigger", trigger.index)...)
@@ -414,12 +417,12 @@ func (in *Intake) matchTriggers(ctx context.Context, snap *config.Snapshot, rb c
 	attrs := []any{"binding", name, "trigger", trigger.index, "decision", out.decision, "keyHash", out.keyHash, "channel", m.At.Channel, "message", m.At.ID, "thread", out.thread}
 	if err != nil {
 		in.log.WarnContext(ctx, "chat: trigger decision not taken; its redelivery decides again", attrs...)
-		return "", "", fmt.Errorf("trigger %d of %s for %s: %w", trigger.index, name, in.messageID(m), err)
+		return "", decided{}, fmt.Errorf("trigger %d of %s for %s: %w", trigger.index, name, in.messageID(m), err)
 	}
 	telemetry.Count(ctx, "agentkourier_trigger_decisions_total", name, string(out.decision))
 	in.log.InfoContext(ctx, "chat: trigger decided", attrs...)
 	telemetry.Count(ctx, "agentkourier_trigger_matched_total", name)
-	return "trigger_matched", out.decision, nil
+	return "trigger_matched", out, nil
 }
 
 // topLevel says whether m opens a thread of its own rather than replying in one: it is in none, or it is the root of

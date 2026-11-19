@@ -69,6 +69,12 @@ const (
 // logs its own reason. Any other error of OnStart is transient: it is returned, and the redelivery asks again.
 var ErrNotStarted = errors.New("chat: the trigger's turn was not started")
 
+// ErrWithheld is ErrNotStarted for a webhook event's start that the session of its thread cannot take yet: its ended session's
+// replacement is withheld while the old session may still be at work. OnStart returns it, itself or wrapped. It is decided
+// not_started as ErrNotStarted is, but the event is not remembered, as a limited one is not: the session settles, and the sender's
+// redelivery of it is decided again.
+var ErrWithheld = fmt.Errorf("chat: the session cannot take the turn yet: %w", ErrNotStarted)
+
 // reservationGrace is how long a thread that reserved its key, and whose turn has not started, is left to start
 // before a later message of the key may take the key over. A turn that is starting takes milliseconds, and a
 // failed one is asked for again by its redelivery within seconds, so a minute tells the two apart.
@@ -87,6 +93,7 @@ type decided struct {
 	decision Decision
 	keyHash  string // the first eight characters of the hash of the key; empty if the match has none
 	thread   string // the thread the decision is about, if known
+	withheld bool   // not_started because the session cannot take the turn yet (ErrWithheld, or IntakeConfig.TakesTurn)
 }
 
 // decide applies the thread rules of a match to the store, and carries out what they say:
@@ -268,7 +275,7 @@ func (in *Intake) unthreaded(ctx context.Context, m Match, closing bool) (decide
 	}
 	err := in.start(ctx, m)
 	if errors.Is(err, ErrNotStarted) {
-		out.decision, err = DecisionNotStarted, nil
+		out.decision, out.withheld, err = DecisionNotStarted, errors.Is(err, ErrWithheld), nil
 	}
 	return out, err
 }

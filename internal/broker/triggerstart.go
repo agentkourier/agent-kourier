@@ -118,8 +118,9 @@ func newTriggerStarter(cfg triggerStarterConfig) (*triggerStarter, error) {
 // (session.Inbound.NoReplies), with no subject and no link, and its text is RenderWebhook's, over the event itself. Its message ID
 // is the connection's, from the hash of the body, so a redelivery of the same body is the same turn. In a thread whose session has
 // expired or whose Binding is gone the session manager replaces the session, which is logged. When it withholds the replacement
-// (Expired or BindingGone: the old session may still be at work, or the body was queued before), asking again would change
-// nothing, so the start is ErrNotStarted: the event is taken and dropped, rather than refused and sent again for ever.
+// (Expired or BindingGone: the old session may still be at work, or the body was queued before), the start is trigger.ErrWithheld:
+// the event is taken, so that the platform answers 200 and it is not sent again at once for ever, and it is not remembered, so that
+// a redelivery once the session has settled is decided again.
 func (s *triggerStarter) OnStart(ctx context.Context, m trigger.Match) error {
 	at := m.Message.At
 	if at.Conn == "" { // an adapter names the connection of every message it forwards; one that does not could file the session under none
@@ -145,7 +146,7 @@ func (s *triggerStarter) OnStart(ctx context.Context, m trigger.Match) error {
 		return fmt.Errorf("bot mention of %s: %w", id, trigger.ErrNotStarted)
 	case m.Webhook && (res.Disposition == session.Expired || res.Disposition == session.BindingGone):
 		s.log.InfoContext(ctx, "chat: a webhook event's thread cannot be continued yet, so the event was dropped", webhookAttrs(m, res)...)
-		return fmt.Errorf("webhook event %s: %w", id, trigger.ErrNotStarted)
+		return fmt.Errorf("webhook event %s: %w", id, trigger.ErrWithheld)
 	case res.Disposition != session.Created && res.Disposition != session.Accepted:
 		return fmt.Errorf("start the investigation of %s: the session manager did not take it (%s)", id, res.Disposition)
 	}

@@ -124,7 +124,7 @@ func TestOnStartOfAWebhookEventInAnEndedThread(t *testing.T) {
 			s := newWebhookStarter(t)
 			s.sub.res = tc.res
 			err := s.OnStart(s.tel.Ctx, webhookMatch("e1"))
-			if tc.started && err != nil || !tc.started && !errors.Is(err, trigger.ErrNotStarted) {
+			if tc.started && err != nil || !tc.started && !errors.Is(err, trigger.ErrWithheld) {
 				t.Fatalf("OnStart = %v; want started %v, or ErrNotStarted", err, tc.started)
 			}
 			if len(s.notes.got) != 0 {
@@ -147,7 +147,7 @@ func TestOnStartRefusesAWebhookTemplateThatReadsAnInvalidField(t *testing.T) {
 	m := webhookMatch("e1")
 	m.PromptTemplate = "Review {{ .Fields.sha }} of {{ .Channel }}."
 	err := s.OnStart(s.tel.Ctx, m)
-	if !errors.Is(err, trigger.ErrNotStarted) || len(s.sub.got) != 0 {
+	if !errors.Is(err, trigger.ErrNotStarted) || errors.Is(err, trigger.ErrWithheld) || len(s.sub.got) != 0 {
 		t.Fatalf("OnStart = %v after %d turns; want ErrNotStarted and none", err, len(s.sub.got))
 	}
 	want := audit.TriggerRefusal{MessageID: m.MessageID, Trigger: 0, Ref: "Fields.sha", Reason: "invalid"}
@@ -207,11 +207,6 @@ func webhookWorld(t *testing.T, s *starter, limits v1alpha1.TriggerLimits) *trig
 	return trigger.NewIntake(cfg)
 }
 
-// wideLimits are a webhookEvent trigger's limits that no test here reaches.
-func wideLimits() v1alpha1.TriggerLimits {
-	return v1alpha1.TriggerLimits{RateLimit: &v1alpha1.RateLimit{MaxRuns: 10, Per: metav1.Duration{Duration: time.Hour}, MaxConcurrent: 10}, MaxRunsPerDay: new(int32(0))}
-}
-
 // A webhook event whose thread's ended session the session manager will not replace yet (past its threadTTL, or its Binding gone,
 // with the old session still at work or the body queued before) is asked about before the limits, as the start would be made: on a
 // platform with no replies, by the event's message ID. It is taken, so that the platform answers 200, decided not_started and logged
@@ -255,25 +250,47 @@ func TestAWithheldWebhookReplacementSpendsNoPlaceInTheLimits(t *testing.T) {
 	}
 }
 
-// From the Intake through the starter: a webhook event that the session said it would take, and that the session manager then did
-// not (the old session took a turn meanwhile), is taken, so that the platform answers 200 and the sender does not send it again for
-// ever, and decided not_started.
-func TestAWithheldWebhookReplacementIsTakenAndDropped(t *testing.T) {
-	s := newWebhookStarter(t)
-	s.sub.res = session.Result{Disposition: session.Expired, Admission: session.Admission{Kind: session.AdmitNotice, Notice: session.NoticeExpired}}
-	in := webhookWorld(t, s, wideLimits())
-	m := webhookMatch("e1").Message
-	for range 2 {
-		if err := in.Message(s.tel.Ctx, m); err != nil {
-			t.Fatalf("Message = %v; want the event taken", err)
-		}
-	}
-	if len(s.sub.got) != 1 || len(s.notes.got) != 0 {
-		t.Errorf("submitted %d, noted %+v; want the one ask, the redelivery a duplicate, and no note", len(s.sub.got), s.notes.got)
-	}
-	for decision, want := range map[string]float64{"not_started": 1, "dedup": 1} {
-		if got := s.tel.Counter(t, "agentkourier_trigger_decisions_total", map[string]string{"binding": startBinding, "decision": decision}); got != want {
-			t.Errorf("decisions %s = %v; want %v", decision, got, want)
-		}
+// From the Intake through the starter: a webhook event whose ended session's replacement is withheld is taken, so that the platform
+// answers 200, decided not_started, and not remembered: the withholding is transient (the old session has a task, or a reply not yet
+// delivered), so the sender's redelivery of the same body, once the session has settled, is decided again and starts. That holds
+// whether the session said so before the limits (Takes) or only as the start was submitted (the old session took a turn meanwhile);
+// in the second the first delivery's place is its redelivery's, so one run an hour does not stop it. Nothing is noted in the thread.
+func TestAWithheldWebhookEventStartsWhenItIsDeliveredAgainOnceTheSessionSettles(t *testing.T) {
+	withheld := session.Result{Disposition: session.Expired, Admission: session.Admission{Kind: session.AdmitNotice, Notice: session.NoticeExpired}}
+	for _, tc := range []struct {
+		name     string
+		withhold func(s *starter, on bool)
+	}{
+		{"before the limits", func(s *starter, on bool) {
+			s.takes = func(context.Context, session.Inbound) (bool, error) { return !on, nil }
+		}},
+		{"as the start is submitted", func(s *starter, on bool) {
+			s.sub.res = session.Result{}
+			if on {
+				s.sub.res = withheld
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newWebhookStarter(t)
+			in := webhookWorld(t, s, v1alpha1.TriggerLimits{RateLimit: &v1alpha1.RateLimit{MaxRuns: 1, Per: metav1.Duration{Duration: time.Hour}, MaxConcurrent: 1}, MaxRunsPerDay: new(int32(1))})
+			m := webhookMatch("e1").Message
+			tc.withhold(s, true)
+			if err := in.Message(s.tel.Ctx, m); err != nil {
+				t.Fatalf("Message = %v; want the withheld event taken", err)
+			}
+			tc.withhold(s, false) // the session settles
+			if err := in.Message(s.tel.Ctx, m); err != nil {
+				t.Fatalf("Message of the redelivery = %v", err)
+			}
+			if got := s.sub.got; len(got) == 0 || got[len(got)-1].MessageID == "" || len(s.notes.got) != 0 {
+				t.Fatalf("submitted %+v, noted %+v; want the redelivery's turn, and no note", got, s.notes.got)
+			}
+			for decision, want := range map[string]float64{"not_started": 1, "started": 1, "dedup": 0, "limited": 0} {
+				if got := s.tel.Counter(t, "agentkourier_trigger_decisions_total", map[string]string{"binding": startBinding, "decision": decision}); got != want {
+					t.Errorf("decisions %s = %v; want %v", decision, got, want)
+				}
+			}
+		})
 	}
 }
