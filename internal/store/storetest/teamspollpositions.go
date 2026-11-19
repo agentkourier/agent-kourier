@@ -94,6 +94,10 @@ func (su suite) teamsPollPositions(t *testing.T) {
 		isErr(t, s.DeleteTeamsPollPosition(t.Context(), "", channel), store.ErrInvalid, "DeleteTeamsPollPosition with no connection")
 		isErr(t, s.DeleteTeamsPollPosition(t.Context(), conn, ""), store.ErrInvalid, "DeleteTeamsPollPosition with no channel")
 		isErr(t, s.DeleteTeamsPollPositions(t.Context(), ""), store.ErrInvalid, "DeleteTeamsPollPositions with no connection")
+		isErr(t, s.DeleteTeamsPollPositionsExcept(t.Context(), "", []string{channel}), store.ErrInvalid,
+			"DeleteTeamsPollPositionsExcept with no connection")
+		isErr(t, s.DeleteTeamsPollPositionsExcept(t.Context(), conn, []string{"19:other@thread.tacv2", ""}), store.ErrInvalid,
+			"DeleteTeamsPollPositionsExcept with an empty channel to keep")
 		expect(t, s, pos)
 	})
 
@@ -135,5 +139,42 @@ func (su suite) teamsPollPositions(t *testing.T) {
 		gone(t, s, conn, second.Channel, "after the delete")
 		expect(t, s, other)
 		expect(t, s, lookalike)
+	})
+
+	su.runReopen(t, "DeleteTeamsPollPositionsExcept deletes the connection's positions of the channels not kept, and no other, for good", func(t *testing.T, s store.Store, reopen func() store.Store) {
+		kept := pos
+		kept.Channel = "19:kept@thread.tacv2"
+		lookalike := pos
+		lookalike.Channel = "19:KEPT@thread.tacv2"
+		other := pos
+		other.Connection = "ns/other"
+		for _, p := range []store.TeamsPollPosition{pos, kept, lookalike, other} {
+			save(t, s, p)
+		}
+		noErr(t, s.DeleteTeamsPollPositionsExcept(t.Context(), conn, []string{kept.Channel, "19:unstored@thread.tacv2"}),
+			"DeleteTeamsPollPositionsExcept")
+		s = reopen()
+		gone(t, s, conn, pos.Channel, "of a channel not kept")
+		gone(t, s, conn, lookalike.Channel, "of a channel kept only in another case")
+		expect(t, s, kept)
+		expect(t, s, other)
+	})
+
+	su.run(t, "DeleteTeamsPollPositionsExcept with nothing to keep deletes every position of the connection, and no other", func(t *testing.T, s store.Store) {
+		second := pos
+		second.Channel = "19:second@thread.tacv2"
+		other := pos
+		other.Connection = "ns/other"
+		for _, p := range []store.TeamsPollPosition{pos, second, other} {
+			save(t, s, p)
+		}
+		noErr(t, s.DeleteTeamsPollPositionsExcept(t.Context(), conn, []string{}), "DeleteTeamsPollPositionsExcept of an empty list")
+		gone(t, s, conn, pos.Channel, "after the delete")
+		gone(t, s, conn, second.Channel, "after the delete")
+		expect(t, s, other)
+		save(t, s, pos)
+		noErr(t, s.DeleteTeamsPollPositionsExcept(t.Context(), conn, nil), "DeleteTeamsPollPositionsExcept of nil")
+		gone(t, s, conn, pos.Channel, "after the delete of nil")
+		expect(t, s, other)
 	})
 }

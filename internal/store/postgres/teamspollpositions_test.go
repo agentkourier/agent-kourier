@@ -66,6 +66,9 @@ func TestTeamsPollPositionWritesAreFenced(t *testing.T) {
 	for what, write := range map[string]func() error{
 		"DeleteTeamsPollPosition of a standby":  func() error { return b.DeleteTeamsPollPosition(ctx, first.Connection, first.Channel) },
 		"DeleteTeamsPollPositions of a standby": func() error { return b.DeleteTeamsPollPositions(ctx, first.Connection) },
+		"DeleteTeamsPollPositionsExcept of a standby": func() error {
+			return b.DeleteTeamsPollPositionsExcept(ctx, first.Connection, nil)
+		},
 	} {
 		if err := write(); !errors.Is(err, store.ErrDeposed) {
 			t.Fatalf("%s = %v; want store.ErrDeposed", what, err)
@@ -80,6 +83,9 @@ func TestTeamsPollPositionWritesAreFenced(t *testing.T) {
 		"SaveTeamsPollPosition of a deposed leader":    func() error { return a.SaveTeamsPollPosition(ctx, moved) },
 		"DeleteTeamsPollPosition of a deposed leader":  func() error { return a.DeleteTeamsPollPosition(ctx, first.Connection, first.Channel) },
 		"DeleteTeamsPollPositions of a deposed leader": func() error { return a.DeleteTeamsPollPositions(ctx, first.Connection) },
+		"DeleteTeamsPollPositionsExcept of a deposed leader": func() error {
+			return a.DeleteTeamsPollPositionsExcept(ctx, first.Connection, nil)
+		},
 	} {
 		if err := write(); !errors.Is(err, store.ErrDeposed) {
 			t.Fatalf("%s = %v; want store.ErrDeposed", what, err)

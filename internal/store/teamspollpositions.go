@@ -19,7 +19,8 @@ type TeamsPollPosition struct {
 
 // TeamsPollPositions keeps one TeamsPollPosition for each polled channel of each Microsoft Teams connection. Only the leader polls, and a
 // write of a fenced store that is not the leader is ErrDeposed, as every write is. No retention loop deletes a position: the poller
-// deletes a channel's when no Binding names the channel any longer, the broker deletes a connection's when it finds the connection's
+// deletes a channel's when no Binding names the channel any longer, and at a run's start those of the channels that no Binding names
+// (DeleteTeamsPollPositionsExcept), the broker deletes a connection's when it finds the connection's
 // ChatConnection deleted (DeleteTeamsPollPositions), and a position left over is one small row that a later poll of its channel replaces.
 // A position holds IDs, a URL and a time, no message content.
 type TeamsPollPositions interface {
@@ -34,4 +35,8 @@ type TeamsPollPositions interface {
 	// DeleteTeamsPollPositions deletes every position of connection, compared byte for byte, and none of another; a connection with
 	// none is not an error. ErrInvalid if connection is empty.
 	DeleteTeamsPollPositions(ctx context.Context, connection string) error
+	// DeleteTeamsPollPositionsExcept deletes every position of connection whose channel is not in keep, compared byte for byte, in one
+	// statement, and none of another connection; an empty keep deletes them all. ErrInvalid if connection, or a channel of keep, is
+	// empty.
+	DeleteTeamsPollPositionsExcept(ctx context.Context, connection string, keep []string) error
 }

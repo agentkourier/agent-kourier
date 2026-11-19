@@ -55,3 +55,15 @@ func (s *adapter) DeleteTeamsPollPositions(ctx context.Context, connection strin
 	}
 	return nil
 }
+
+// DeleteTeamsPollPositionsExcept implements store.TeamsPollPositions. It is a write transaction, so it carries the epoch check of every
+// write. keep goes as one array; an empty one is sent as '{}', not NULL, against which no channel would compare.
+func (s *adapter) DeleteTeamsPollPositionsExcept(ctx context.Context, connection string, keep []string) error {
+	if keep == nil {
+		keep = []string{}
+	}
+	if _, err := s.exec(ctx, `DELETE FROM teams_poll_positions WHERE connection = $1 AND channel <> ALL($2::text[])`, connection, keep); err != nil {
+		return fmt.Errorf("delete the teams poll positions of %s but %d channels: %w", connection, len(keep), err)
+	}
+	return nil
+}

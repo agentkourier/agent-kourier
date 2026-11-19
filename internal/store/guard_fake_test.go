@@ -92,6 +92,12 @@ func (f *fakeAdapter) DeleteTeamsPollPositions(_ context.Context, a1 string) err
 	return f.err
 }
 
+func (f *fakeAdapter) DeleteTeamsPollPositionsExcept(_ context.Context, a1 string, _ []string) error {
+	f.record("DeleteTeamsPollPositionsExcept")
+	f.row = a1
+	return f.err
+}
+
 func (f *fakeAdapter) AttributeConnection(_ context.Context, _ string) (store.AttributedRows, error) {
 	f.record("AttributeConnection")
 	return zero[store.AttributedRows](), f.err

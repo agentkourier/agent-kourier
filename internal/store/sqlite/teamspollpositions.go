@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -49,6 +50,23 @@ func (s *adapter) DeleteTeamsPollPosition(ctx context.Context, connection, chann
 func (s *adapter) DeleteTeamsPollPositions(ctx context.Context, connection string) error {
 	if _, err := s.exec(ctx, `DELETE FROM teams_poll_positions WHERE connection = ?`, connection); err != nil {
 		return fmt.Errorf("delete the teams poll positions of %s: %w", connection, err)
+	}
+	return nil
+}
+
+// DeleteTeamsPollPositionsExcept implements store.TeamsPollPositions. keep goes as one JSON array, read by json_each, so that a list of
+// any length is one statement of two variables.
+func (s *adapter) DeleteTeamsPollPositionsExcept(ctx context.Context, connection string, keep []string) error {
+	if keep == nil {
+		keep = []string{}
+	}
+	list, err := json.Marshal(keep)
+	if err != nil {
+		return fmt.Errorf("delete the teams poll positions of %s but %d channels: %w", connection, len(keep), err)
+	}
+	if _, err := s.exec(ctx, `DELETE FROM teams_poll_positions WHERE connection = ? AND channel NOT IN (SELECT value FROM json_each(?))`,
+		connection, string(list)); err != nil {
+		return fmt.Errorf("delete the teams poll positions of %s but %d channels: %w", connection, len(keep), err)
 	}
 	return nil
 }

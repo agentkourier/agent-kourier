@@ -269,6 +269,12 @@ func deleteTeamsPollPosition(connection, channel string) call {
 	}
 }
 
+func deleteTeamsPollPositionsExcept(connection string, keep ...string) call {
+	return func(ctx context.Context, s store.Store) error {
+		return s.DeleteTeamsPollPositionsExcept(ctx, connection, keep)
+	}
+}
+
 func attributeConnection(connection string) call {
 	return func(ctx context.Context, s store.Store) error {
 		_, err := s.AttributeConnection(ctx, connection)
@@ -631,6 +637,10 @@ func specs() []spec {
 		}},
 		{"DeleteTeamsPollPositions", func(ctx context.Context, s store.Store) error { return s.DeleteTeamsPollPositions(ctx, "ns/teams") }, map[string]call{
 			"no connection": func(ctx context.Context, s store.Store) error { return s.DeleteTeamsPollPositions(ctx, "") },
+		}},
+		{"DeleteTeamsPollPositionsExcept", deleteTeamsPollPositionsExcept("ns/teams", "19:c@thread.tacv2"), map[string]call{
+			"no connection":         deleteTeamsPollPositionsExcept("", "19:c@thread.tacv2"),
+			"an empty kept channel": deleteTeamsPollPositionsExcept("ns/teams", "19:c@thread.tacv2", ""),
 		}},
 		{"AttributeConnection", attributeConnection("slack"), map[string]call{"no connection": attributeConnection("")}},
 		{"UnattributedRows", func(ctx context.Context, s store.Store) error { _, err := s.UnattributedRows(ctx); return err }, nil},

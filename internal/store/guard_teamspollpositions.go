@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"slices"
 )
 
 // SaveTeamsPollPosition implements TeamsPollPositions. No error names the deltaLink, which carries Graph's state token.
@@ -48,5 +49,15 @@ func (g *Guarded) DeleteTeamsPollPositions(ctx context.Context, connection strin
 			return fmt.Errorf("delete teams poll positions: a connection is required: %w", ErrInvalid)
 		}
 		return g.a.DeleteTeamsPollPositions(ctx, connection)
+	})
+}
+
+// DeleteTeamsPollPositionsExcept implements TeamsPollPositions.
+func (g *Guarded) DeleteTeamsPollPositionsExcept(ctx context.Context, connection string, keep []string) error {
+	return g.run(ctx, "agentkourier.store.DeleteTeamsPollPositionsExcept", func(ctx context.Context) error {
+		if connection == "" || slices.Contains(keep, "") {
+			return fmt.Errorf("delete teams poll positions except: a connection, and no empty channel to keep, are required: %w", ErrInvalid)
+		}
+		return g.a.DeleteTeamsPollPositionsExcept(ctx, connection, keep)
 	})
 }
