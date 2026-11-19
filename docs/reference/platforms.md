@@ -319,9 +319,11 @@ at the next poll round once an activity has told the group: at once, or as soon 
   names it again, when it is read to its `deltaLink` anew. A channel that no Binding names any longer is forgotten, and its stored
   position deleted. The first round of each run deletes too the stored positions of the connection's channels that no Binding names
   then, so a Binding removed while no broker polled, or one whose delete failed, leaves none. A Binding that names the channel again
-  reads it anew, and what was posted meanwhile is not handed on. A delete that fails is logged once at WARN and made again a minute
-  later, and each minute while it fails, and the polls go on. A channel that no Binding named at the run's first round, or whose delete
-  failed, is read anew when a Binding names it in the run. A Binding removed and added back while no broker ran is not seen: the
+  reads it anew, and what was posted meanwhile is not handed on. A failed delete of one channel's position, when no Binding names
+  it any longer, is logged at WARN with the channel, each time. It is made again a minute later by a delete of the positions of every
+  channel that no Binding names, as is a failed delete at the run's first round: that delete is made each minute while it fails, is
+  logged at WARN at its first failure, at DEBUG after, and at INFO when one succeeds after it, and the polls go on. A channel that no
+  Binding named at the run's first round, or whose delete failed, is read anew when a Binding names it in the run. A Binding removed and added back while no broker ran is not seen: the
   channel resumes from its stored position, as one that stayed bound does.
 - **Errors.** Graph's 429 pauses every read of the connection for its `Retry-After`, since Graph throttles an app in a tenant, and ends the
   channel's poll. A 403 (the app may not read the channel's messages: install or update the app in the team), a 401, a 404 or a 400 of
