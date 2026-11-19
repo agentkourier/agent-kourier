@@ -148,8 +148,8 @@ have the upgrade, and how to roll it back.
     - Configure Slack has a tab for HTTP mode, with what the one run against Slack itself showed; High availability, the Security model's
       chat port, Troubleshoot and Upgrade cover the mode too.
     - The recipes' README says how to run any recipe over HTTP mode.
-    - The README, the landing page and the glossary say Slack is the only platform today, and the README lists Microsoft Teams as
-      planned.
+    - The README, the landing page and the glossary say Slack is the only platform today, and the README's integrations table lists
+      a second chat platform as planned.
 
 - **Before a tag, the release checklist** runs the fast kind tier in HTTP mode on the custom resource route twice: on one replica, and on Postgres with two
   replicas, where the failover tests check that a press sent while the leader is dead or frozen is sent again and decided by the new
