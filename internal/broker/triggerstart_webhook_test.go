@@ -125,7 +125,7 @@ func TestOnStartOfAWebhookEventInAnEndedThread(t *testing.T) {
 			s.sub.res = tc.res
 			err := s.OnStart(s.tel.Ctx, webhookMatch("e1"))
 			if tc.started && err != nil || !tc.started && !errors.Is(err, trigger.ErrWithheld) {
-				t.Fatalf("OnStart = %v; want started %v, or ErrNotStarted", err, tc.started)
+				t.Fatalf("OnStart = %v; want started %v, or ErrWithheld", err, tc.started)
 			}
 			if len(s.notes.got) != 0 {
 				t.Errorf("notes %+v; want none", s.notes.got)
