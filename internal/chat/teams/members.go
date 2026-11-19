@@ -19,7 +19,7 @@ import (
 )
 
 // This file reads people on Microsoft Teams: who is in a channel's team (IsMember), whether a user is a bot (IsBot), and a person's
-// name (ResolveUser, and the decider an ending names). Every read is of the Bot Connector's roster of a conversation,
+// name (ResolveUser, and the people a post or an edit mentions: the decider an ending names, and each chat.Mention of a message). Every read is of the Bot Connector's roster of a conversation,
 // GET /v3/conversations/{id}/pagedmembers, page by page: its query (pageSize, continuationToken), its answer (members, each with id,
 // name and aadObjectId, and the continuationToken of the next page), that the roster of a team's standard channel is the team's
 // members, and its errors and throttling are Microsoft's documentation ("Get Teams specific context for your bot", read 2026-11-18),
@@ -27,7 +27,9 @@ import (
 
 const (
 	// rosterTimeout bounds each read of people as a whole, every page and every team of it: the press worker waits on it, off the
-	// invoke's path (Teams has been answered by then), as the Slack client's checks get interact.PressAuthzTimeout.
+	// invoke's path (Teams has been answered by then), as the Slack client's checks get interact.PressAuthzTimeout; and a Post or an
+	// Update that mentions a person whom no kept account or miss names waits on it before it sends (mentionNames), then names whom the
+	// read did not find as someone.
 	rosterTimeout = 10 * time.Second
 	// rosterPage is the members a roster read asks for in one page, the most that Microsoft documents.
 	rosterPage = 500
@@ -41,6 +43,12 @@ const (
 	namesTTL = time.Hour
 	// nameUnits is the most UTF-16 units of a name that a mention shows (mentionName).
 	nameUnits = 64
+	// namesMissTTL is how long the Client keeps that a mention could not be named: a person the channel's roster did not list (by
+	// channel and person), and a channel whose roster could not be read (by channel). Within it, a post or an edit in the channel names
+	// that person, or anyone the channel's misses cover, as someone with no read, so that a repeated mention does not wait on the roster
+	// each time. namesMissMax is the most misses it keeps.
+	namesMissTTL = time.Minute
+	namesMissMax = 1000
 )
 
 // errUnknownPerson is the error of a read that found no account for the ID in the rosters it read.
@@ -64,31 +72,35 @@ type rosterPageOf struct {
 	ContinuationToken string    `json:"continuationToken"`
 }
 
-// findIn reads the roster of the conversation conv at serviceURL, page by page, until an account whose aadObjectId is aad, which it
-// keeps (names) and returns; false when the last page has none. Each page takes one of *pages, which the caller shares across the
-// rosters of one read: a page past them is errRosterTooLong, and no call. A page whose next names a page this roster already gave
-// (a cycle) is an error, as is any failure of a page: the read fails closed, whatever a later page would have held. ctx bounds it.
-func (c *Client) findIn(ctx context.Context, pages *int, serviceURL, conv, aad string) (account, bool, error) {
+// findIn reads the roster of the conversation conv at serviceURL, page by page, until it has the account of every Microsoft Entra
+// object ID of want (its aadObjectId), which it keeps (names) and returns by ID; an ID the last page leaves unfound is not in the map.
+// Each page takes one of *pages, which the caller shares across the rosters of one read: a page past them is errRosterTooLong, and no
+// call. A page whose next names a page this roster already gave (a cycle) is an error, as is any failure of a page: the read fails
+// closed, with the accounts found before it, whatever a later page would have held. ctx bounds it.
+func (c *Client) findIn(ctx context.Context, pages *int, serviceURL, conv string, want ...string) (map[string]account, error) {
+	found := make(map[string]account, len(want))
 	token := ""
 	seen := map[string]bool{"": true}
 	for {
 		if *pages <= 0 {
-			return account{}, false, errRosterTooLong
+			return found, errRosterTooLong
 		}
 		*pages--
 		var page rosterPageOf
 		if err := c.api.call(ctx, http.MethodGet, serviceURL, rosterPath(conv, token), nil, &page); err != nil {
-			return account{}, false, err
+			return found, err
 		}
-		if i := slices.IndexFunc(page.Members, func(a account) bool { return a.AADObjectID == aad }); i >= 0 {
-			c.names.put(page.Members[i])
-			return page.Members[i], true, nil
+		for _, a := range page.Members {
+			if _, done := found[a.AADObjectID]; !done && slices.Contains(want, a.AADObjectID) {
+				c.names.put(a.AADObjectID, a)
+				found[a.AADObjectID] = a
+			}
 		}
 		switch {
-		case page.ContinuationToken == "":
-			return account{}, false, nil
+		case len(found) == len(want) || page.ContinuationToken == "":
+			return found, nil
 		case seen[page.ContinuationToken]:
-			return account{}, false, errors.New("teams: a page of the roster names as its next a page that the roster already gave")
+			return found, errors.New("teams: a page of the roster names as its next a page that the roster already gave")
 		}
 		token = page.ContinuationToken
 		seen[token] = true
@@ -116,11 +128,12 @@ func (c *Client) IsMember(ctx context.Context, channel, user string) (member boo
 	ctx, cancel := context.WithTimeout(ctx, c.rosterTimeout)
 	defer cancel()
 	pages := rosterMaxPages
-	_, found, err := c.findIn(ctx, &pages, c.serviceURL(ctx, channel), channel, user)
+	found, err := c.findIn(ctx, &pages, c.serviceURL(ctx, channel), channel, user)
 	if err != nil {
 		return false, fmt.Errorf("teams: reading the channel's roster: %w", err)
 	}
-	return found, nil
+	_, member = found[user]
+	return member, nil
 }
 
 // IsBot implements chat.Platform. A Teams ID that begins 28: is a bot's, with no call. A Microsoft Entra object ID is the account that
@@ -177,9 +190,10 @@ func (c *Client) account(ctx context.Context, aad string) (account, error) {
 	var first error
 	pages := rosterMaxPages
 	for _, t := range teams {
-		a, found, err := c.findIn(ctx, &pages, t.ServiceURL, t.TeamID, aad)
+		found, err := c.findIn(ctx, &pages, t.ServiceURL, t.TeamID, aad)
+		a, ok := found[aad]
 		switch {
-		case found:
+		case ok:
 			return a, nil
 		case err != nil && first == nil:
 			first = fmt.Errorf("teams: reading a team's roster: %w", err)
@@ -212,9 +226,10 @@ func (c *Client) knownTeams() []Conversation {
 	return out
 }
 
-// mentionNames are the names of the people that o mentions, by Microsoft Entra object ID (personName): the decider of an ending, and the
-// person of each mention of a message (chat.Mention), each looked up once. A person whose name cannot be had is left out, which the
-// mention shows as someone. A user of another shape is no mention, and is not looked up.
+// mentionNames are the names of the people that o mentions, by Microsoft Entra object ID: the decider of an ending, and the person of
+// each mention of a message (chat.Mention). A kept account gives a name with no call; the rest are read in one read of the channel's
+// roster (readNames), unless a miss of namesMissTTL covers them. A person whose name cannot be had is left out, which the mention shows
+// as someone. A user of another shape is no mention, and is not looked up.
 func (c *Client) mentionNames(ctx context.Context, channel string, o chat.Outgoing) map[string]string {
 	var people []string
 	switch {
@@ -227,43 +242,64 @@ func (c *Client) mentionNames(ctx context.Context, channel string, o chat.Outgoi
 			}
 		}
 	}
-	var names map[string]string
+	names := map[string]string{}
+	var want []string
 	for _, aad := range people {
-		if _, done := names[aad]; done || !entraID.MatchString(aad) {
+		if _, done := names[aad]; done || slices.Contains(want, aad) || !entraID.MatchString(aad) {
 			continue
 		}
-		if names == nil {
-			names = map[string]string{}
+		if a, ok := c.names.get(aad); ok {
+			names[aad] = a.Name
+			continue
 		}
-		names[aad] = c.personName(ctx, channel, aad)
+		if _, missed := c.misses.get(missKey{channel: channel}); missed {
+			continue
+		}
+		if _, missed := c.misses.get(missKey{channel, aad}); missed {
+			continue
+		}
+		want = append(want, aad)
+	}
+	if len(want) > 0 {
+		for aad, a := range c.readNames(ctx, channel, want) {
+			names[aad] = a.Name
+		}
 	}
 	return names
 }
 
-// personName is the name of the person aad, whom a message in channel mentions (the decider of a prompt's ending, or a chat.Mention): the
-// kept account's, or the one in the channel's roster, read within rosterTimeout and rosterMaxPages; "" when it cannot be had, which the
-// mention shows as someone, keeping it. A failed read is logged, and does not fail the post or the edit.
-func (c *Client) personName(ctx context.Context, channel, aad string) string {
-	if a, ok := c.names.get(aad); ok {
-		return a.Name
-	}
+// missKey is a miss of mentionNames: a person (aad) the roster of channel did not list, or, with no aad, a channel whose roster could
+// not be read.
+type missKey struct{ channel, aad string }
+
+// readNames reads the accounts of want, people a post or an edit in channel mentions, in one read of the channel's roster within
+// rosterTimeout and rosterMaxPages for all of them. A person the roster does not list is kept as a miss of theirs in the channel, and a
+// read that fails as a miss of the channel, for namesMissTTL; a read that ctx ended (the caller gave up) is not. A failed read is
+// logged, and fails neither the post nor the edit: the accounts it found before it failed are given.
+func (c *Client) readNames(ctx context.Context, channel string, want []string) map[string]account {
 	var err error
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat.ResolveUser")
 	defer func() { c.finish(ctx, op, "ResolveUser", err) }()
 	rctx, cancel := context.WithTimeout(ctx, c.rosterTimeout)
 	defer cancel()
 	pages := rosterMaxPages
-	a, found, err := c.findIn(rctx, &pages, c.serviceURL(ctx, channel), channel, aad)
+	found, err := c.findIn(rctx, &pages, c.serviceURL(ctx, channel), channel, want...)
 	switch {
 	case err != nil:
-		c.log.WarnContext(ctx, "teams: the name of a person a message mentions could not be read; the mention names them as someone",
+		if ctx.Err() == nil {
+			c.misses.put(missKey{channel: channel}, struct{}{})
+		}
+		c.log.WarnContext(ctx, "teams: the names of people a message mentions could not be read; the mentions name them as someone",
 			"error", err.Error())
-		return ""
-	case !found:
+	case len(found) < len(want):
+		for _, aad := range want {
+			if _, ok := found[aad]; !ok {
+				c.misses.put(missKey{channel, aad}, struct{}{})
+			}
+		}
 		c.log.DebugContext(ctx, "teams: the channel's roster does not list a person a message mentions; the mention names them as someone")
-		return ""
 	}
-	return a.Name
+	return found
 }
 
 // mentionName is name as a mention shows it in a card's TextBlock, which takes markdown: its letters, marks, digits and the
@@ -287,60 +323,60 @@ func mentionName(name string) string {
 	return chat.Truncate(b.String(), nameUnits)
 }
 
-// nameCache keeps the accounts that roster reads found, by Microsoft Entra object ID, for namesTTL, at most namesMax of them. It is
-// safe for concurrent use.
-type nameCache struct {
-	now func() time.Time
-	mu  sync.Mutex
-	m   map[string]cachedAccount // guarded by mu
+// ttlCache keeps values by key for ttl, at most most of them: the accounts that roster reads found, by Microsoft Entra object ID
+// (namesTTL, namesMax), and the misses of mentionNames (namesMissTTL, namesMissMax). It is safe for concurrent use.
+type ttlCache[K comparable, V any] struct {
+	now  func() time.Time
+	ttl  time.Duration
+	most int
+	mu   sync.Mutex
+	m    map[K]ttlEntry[V] // guarded by mu
 }
 
-type cachedAccount struct {
-	account
-	fetched time.Time
+type ttlEntry[V any] struct {
+	v    V
+	kept time.Time
 }
 
-func newNameCache(now func() time.Time) *nameCache {
-	return &nameCache{now: now, m: map[string]cachedAccount{}}
+func newTTLCache[K comparable, V any](now func() time.Time, ttl time.Duration, most int) *ttlCache[K, V] {
+	return &ttlCache[K, V]{now: now, ttl: ttl, most: most, m: map[K]ttlEntry[V]{}}
 }
 
-// get is the account kept for aad, if it is younger than namesTTL.
-func (n *nameCache) get(aad string) (account, bool) {
+// get is the value kept for k, if it is younger than the TTL.
+func (n *ttlCache[K, V]) get(k K) (V, bool) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	e, ok := n.m[aad]
-	if !ok || n.now().Sub(e.fetched) >= namesTTL {
-		return account{}, false
+	e, ok := n.m[k]
+	if !ok || n.now().Sub(e.kept) >= n.ttl {
+		var zero V
+		return zero, false
 	}
-	return e.account, true
+	return e.v, true
 }
 
-// put keeps a, making room first when namesMax are kept: the expired go, then any.
-func (n *nameCache) put(a account) {
-	if a.AADObjectID == "" {
-		return
-	}
+// put keeps v for k, making room first when most are kept: the expired go, then any.
+func (n *ttlCache[K, V]) put(k K, v V) {
 	now := n.now()
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if _, ok := n.m[a.AADObjectID]; !ok && len(n.m) >= namesMax {
+	if _, ok := n.m[k]; !ok && len(n.m) >= n.most {
 		for k, e := range n.m {
-			if now.Sub(e.fetched) >= namesTTL {
+			if now.Sub(e.kept) >= n.ttl {
 				delete(n.m, k)
 			}
 		}
 		for k := range n.m {
-			if len(n.m) < namesMax {
+			if len(n.m) < n.most {
 				break
 			}
 			delete(n.m, k)
 		}
 	}
-	n.m[a.AADObjectID] = cachedAccount{a, now}
+	n.m[k] = ttlEntry[V]{v, now}
 }
 
-// len is how many accounts are kept, the expired among them.
-func (n *nameCache) len() int {
+// len is how many values are kept, the expired among them.
+func (n *ttlCache[K, V]) len() int {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return len(n.m)

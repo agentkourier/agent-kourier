@@ -69,6 +69,8 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Count(t, "teamsNamesMax", namesMax)
 	limitsdoc.Duration(t, "teamsNamesTTL", namesTTL)
 	limitsdoc.Count(t, "teamsNameUnits", nameUnits)
+	limitsdoc.Duration(t, "teamsNamesMissTTL", c.misses.ttl)
+	limitsdoc.Count(t, "teamsNamesMissMax", c.misses.most)
 
 	// The polls of a connection with no notificationURL, read from the poller that New built.
 	limitsdoc.Duration(t, "teamsPollInterval", c.poll.interval)

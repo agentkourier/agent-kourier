@@ -430,12 +430,12 @@ func TestAKnownTeamHasOneServiceURL(t *testing.T) {
 func TestTheNamesAreBounded(t *testing.T) {
 	t.Parallel()
 	clock := newFakeClock()
-	n := newNameCache(clock.now)
+	n := newTTLCache[string, account](clock.now, namesTTL, namesMax)
 	for i := range namesMax {
-		n.put(account{ID: fmt.Sprintf("29:%d", i), Name: "x", AADObjectID: fmt.Sprintf("id-%d", i)})
+		n.put(fmt.Sprintf("id-%d", i), account{ID: fmt.Sprintf("29:%d", i), Name: "x", AADObjectID: fmt.Sprintf("id-%d", i)})
 	}
 	clock.advance(namesTTL / 2)
-	n.put(account{ID: "29:new", Name: "y", AADObjectID: "id-new"})
+	n.put("id-new", account{ID: "29:new", Name: "y", AADObjectID: "id-new"})
 	if got := n.len(); got != namesMax {
 		t.Errorf("%d names held, want %d", got, namesMax)
 	}
@@ -455,7 +455,7 @@ func TestTheNamesAreBounded(t *testing.T) {
 	if held != 0 {
 		t.Errorf("%d names as old as the TTL are given", held)
 	}
-	n.put(account{ID: "29:newer", Name: "z", AADObjectID: "id-newer"})
+	n.put("id-newer", account{ID: "29:newer", Name: "z", AADObjectID: "id-newer"})
 	if got := n.len(); got != 2 {
 		t.Errorf("%d names held once the expired went, want 2", got)
 	}
@@ -695,5 +695,127 @@ func TestAMessagesMentionNamesItsPerson(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// The people of one message are read in one read of the channel's roster, with one budget of pages: the read stops at the page that
+// lists the last of them, and a person mentioned twice is looked up once.
+func TestAMessagesMentionsAreReadInOneRosterRead(t *testing.T) {
+	t.Parallel()
+	ct := newClientTest(t)
+	ct.record(t, testChannel, testChannel)
+	ct.f.setRoster(testChannel, sam, alex, testUserA, botMember)
+	ct.f.setPageMax(1)
+	msg := chat.Say(chat.Message{Fallback: "Alex and the test user were named.", Parts: []chat.Part{
+		chat.Mention{User: alexID, Text: "first."}, chat.Mention{User: testUser, Text: "second."}, chat.Mention{User: alexID, Text: "again."},
+	}})
+	if _, err := ct.c.Post(t.Context(), chat.Target{Conn: testConn, Channel: testChannel}, msg, findTag); err != nil {
+		t.Fatal(err)
+	}
+	reqs := ct.f.take()
+	if got := rosterReads(t, reqs, testChannel); strings.Join(got, ",") != ",1,2" {
+		t.Errorf("roster pages read %q, want the first three once each", got)
+	}
+	calls := activityCalls(reqs)
+	if len(calls) != 1 {
+		t.Fatalf("%d posts, want 1", len(calls))
+	}
+	text := calls[0].activity.Text
+	for _, want := range []string{"<at>Alex Example</at> first.", "<at>Test User</at> second.", "<at>Alex Example</at> again."} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the text %q lacks %q", text, want)
+		}
+	}
+}
+
+// A mention that could not be named is not read again for namesMissTTL: a person the channel's roster does not list is named as
+// someone with no read in that channel, and a roster that could not be read names anyone mentioned in its channel so. A person of the
+// channel whom no miss covers is read; past the TTL, the missed are read again. A read that the caller ended keeps no miss.
+func TestAMentionThatCannotBeNamedIsNotReadAgainForAWhile(t *testing.T) {
+	t.Parallel()
+	mention := func(user string) chat.Outgoing {
+		return chat.Say(chat.Message{Fallback: "named.", Parts: []chat.Part{chat.Mention{User: user, Text: "named."}}})
+	}
+	for _, tc := range []struct {
+		name string
+		fail bool
+		// otherRead says whether a mention of another person of the channel, sam, reads the roster while the miss is kept.
+		otherRead bool
+	}{
+		{"a person the roster does not list", false, true},
+		{"a roster that cannot be read", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			clock := newFakeClock()
+			ct := newClientTest(t)
+			ct.c.misses = newTTLCache[missKey, struct{}](clock.now, namesMissTTL, namesMissMax)
+			ct.record(t, testChannel, testChannel)
+			ct.f.setRoster(testChannel, sam)
+			if tc.fail {
+				failRoster(ct.f, http.StatusServiceUnavailable)
+			}
+			post := func(user string) (reads int, text string) {
+				t.Helper()
+				if _, err := ct.c.Post(t.Context(), chat.Target{Conn: testConn, Channel: testChannel}, mention(user), findTag); err != nil {
+					t.Fatal(err)
+				}
+				reqs := ct.f.take()
+				calls := activityCalls(reqs)
+				if len(calls) != 1 {
+					t.Fatalf("%d posts, want 1", len(calls))
+				}
+				return len(rosterReads(t, reqs, testChannel)), calls[0].activity.Text
+			}
+			if reads, _ := post(alexID); reads == 0 {
+				t.Fatal("the first mention read no roster")
+			}
+			reads, text := post(alexID)
+			if reads != 0 {
+				t.Errorf("a missed mention read the roster %d times again within the TTL", reads)
+			}
+			if !strings.HasPrefix(text, "<at>"+mentionLabel+"</at>") {
+				t.Errorf("a missed mention shows %q, want it named as %s", text, mentionLabel)
+			}
+			if reads, _ := post(samID); (reads > 0) != tc.otherRead {
+				t.Errorf("another person's mention read the roster %d times, want a read: %t", reads, tc.otherRead)
+			}
+			clock.advance(namesMissTTL)
+			if reads, _ := post(alexID); reads == 0 {
+				t.Error("a mention past the miss's TTL read no roster")
+			}
+		})
+	}
+	t.Run("a read the caller ended", func(t *testing.T) {
+		t.Parallel()
+		ct := newClientTest(t)
+		ct.record(t, testChannel, testChannel)
+		ct.f.setRoster(testChannel, sam)
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		if names := ct.c.mentionNames(ctx, testChannel, mention(alexID)); len(names) != 0 {
+			t.Errorf("names %v from an ended read", names)
+		}
+		if n := ct.c.misses.len(); n != 0 {
+			t.Errorf("%d misses kept from a read the caller ended, want 0", n)
+		}
+	})
+}
+
+// A post or an edit that is not valid is refused before the names of its mentions are read: it reads no roster.
+func TestAnInvalidMessageReadsNoRoster(t *testing.T) {
+	t.Parallel()
+	ct := newClientTest(t)
+	ct.record(t, testChannel, testChannel)
+	ct.f.setRoster(testChannel, alex)
+	bad := chat.Outgoing{Message: &chat.Message{Fallback: "no version.", Parts: []chat.Part{chat.Mention{User: alexID, Text: "named."}}}}
+	if _, err := ct.c.Post(t.Context(), chat.Target{Conn: testConn, Channel: testChannel}, bad, findTag); !errors.Is(err, chat.ErrInvalid) {
+		t.Errorf("post: %v, want chat.ErrInvalid", err)
+	}
+	if err := ct.c.Update(t.Context(), chat.Ref{Platform: PlatformName, Conn: testConn, Channel: testChannel, ID: "1790000000200"}, bad); !errors.Is(err, chat.ErrInvalid) {
+		t.Errorf("update: %v, want chat.ErrInvalid", err)
+	}
+	if reqs := ct.f.take(); len(reqs) != 0 {
+		t.Errorf("%d calls for a message that is not valid, want none: %+v", len(reqs), reqs)
 	}
 }

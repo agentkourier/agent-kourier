@@ -93,7 +93,8 @@ type Client struct {
 	api           *connector
 	graph         *graphClient
 	convs         ConversationStore
-	names         *nameCache
+	names         *ttlCache[string, account]                // the accounts that roster reads found (namesTTL, namesMax)
+	misses        *ttlCache[missKey, struct{}]              // the mentions that could not be named (namesMissTTL, namesMissMax)
 	cards         *buttonCards                              // the cards of buttons posted under a text (buttons.go)
 	buttonKey     []byte                                    // the key of the buttons' MACs (buttonKey); never logged
 	buttonsWait   func(context.Context, time.Duration) bool // the wait before a post of buttons is tried again (waitFor); a test shortens it
@@ -144,7 +145,8 @@ func New(cfg Config) (*Client, error) {
 		return nil, err
 	}
 	c := &Client{conn: cfg.Connection, tenant: cfg.TenantID, app: cfg.AppID, convs: convs, log: log, onConnection: cfg.OnConnection,
-		api: &connector{client: direct, tokens: tokens, now: now}, graph: graph, names: newNameCache(now), cards: newButtonCards(), rosterTimeout: rosterTimeout,
+		api: &connector{client: direct, tokens: tokens, now: now}, graph: graph, names: newTTLCache[string, account](now, namesTTL, namesMax),
+		misses: newTTLCache[missKey, struct{}](now, namesMissTTL, namesMissMax), cards: newButtonCards(), rosterTimeout: rosterTimeout,
 		pressWait: pressWait, threadTimeout: threadTimeout, buttonKey: key, buttonsWait: waitFor, posted: newRecent(now),
 		groups: map[string]string{}}
 	recv, err := NewReceiver(ReceiverConfig{Connection: cfg.Connection, TenantID: cfg.TenantID, AppID: cfg.AppID,
@@ -306,6 +308,9 @@ func (c *Client) Post(ctx context.Context, t chat.Target, o chat.Outgoing, tag s
 	if t.Channel == "" {
 		return chat.Ref{}, fmt.Errorf("%w: a post with no channel", chat.ErrInvalid)
 	}
+	if err := o.Validate(); err != nil { // before mentionNames, so that what cannot be posted reads no roster
+		return chat.Ref{}, err
+	}
 	m, err := renderWith(o, c.mentionNames(ctx, t.Channel, o))
 	if err != nil {
 		return chat.Ref{}, err
@@ -336,6 +341,9 @@ func (c *Client) Update(ctx context.Context, r chat.Ref, o chat.Outgoing) (err e
 	defer func() { c.finish(ctx, op, "Update", err) }()
 	if r.Channel == "" || r.ID == "" {
 		return fmt.Errorf("%w: an update with no channel or message", chat.ErrInvalid)
+	}
+	if err := o.Validate(); err != nil { // before mentionNames, so that what cannot be shown reads no roster
+		return err
 	}
 	m, err := renderWith(o, c.mentionNames(ctx, r.Channel, o))
 	if errors.Is(err, errEmpty) {
