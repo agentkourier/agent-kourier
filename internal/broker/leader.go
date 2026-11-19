@@ -53,15 +53,16 @@ type leaderHalf struct {
 // makes (the outbox's posts and reactions, the renderer's streams and edits, the interactions' prompts, edits and ephemerals)
 // goes through the platform that this returns, and nothing else builds one. The platform's logger names the connection, as the broker's other
 // lines of a connection do ("connection", "namespace/name"), so that the lines of the Socket Mode connection of two connections can be told apart.
-// A Microsoft Teams platform keeps what it learns of its channels in the broker's store, whose writes are the leader's alone (on Postgres a
-// write of a replica that no longer leads is store.ErrDeposed, and ends the process, spec D37).
+// A Microsoft Teams platform keeps what it learns of its channels, and where its poll of each stands, in the broker's store, whose writes
+// are the leader's alone (on Postgres a write of a replica that no longer leads is store.ErrDeposed, and ends the process, spec D37).
 func (h *leaderHalf) openPlatform(conn Connection, onConnection func(connected bool)) (builtPlatform, error) {
 	log := h.log.With("connection", v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name))
 	var convs teams.ConversationStore
+	var positions teams.PollPositions
 	if h.st != nil {
-		convs = newTeamsConversations(h.st)
+		convs, positions = newTeamsConversations(h.st), newTeamsPollPositions(h.st)
 	}
-	p, err := h.cfg.newPlatform(conn, log, onConnection, convs)
+	p, err := h.cfg.newPlatform(conn, log, onConnection, convs, positions)
 	if err != nil {
 		return builtPlatform{}, err
 	}

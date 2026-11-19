@@ -29,7 +29,7 @@ import (
 )
 
 // recordedServed is a servedStore in memory: the record of the connections a broker served, which outlives the writer that wrote it,
-// as the store's does, and the connections whose Microsoft Teams conversations were deleted.
+// as the store's does, and the connections whose Microsoft Teams conversations, and poll positions, were deleted.
 type recordedServed struct {
 	mu        sync.Mutex
 	set       []string
@@ -39,6 +39,28 @@ type recordedServed struct {
 	failPrune error
 	pruned    []string
 	prunes    int
+	// failPositions, positionsPruned and positionPrunes are failPrune, pruned and prunes for the poll positions.
+	failPositions   error
+	positionsPruned []string
+	positionPrunes  int
+}
+
+func (s *recordedServed) DeleteTeamsPollPositions(_ context.Context, connection string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.positionPrunes++
+	if s.failPositions != nil {
+		return s.failPositions
+	}
+	s.positionsPruned = append(s.positionsPruned, connection)
+	return nil
+}
+
+// positionsPrunedOf is prunedOf for the poll positions.
+func (s *recordedServed) positionsPrunedOf() ([]string, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.positionsPruned), s.positionPrunes
 }
 
 func (s *recordedServed) DeleteTeamsConversations(_ context.Context, connection string) error {
@@ -386,6 +408,31 @@ func TestADeletedConnectionIsNotToldNotServed(t *testing.T) {
 	if pruned, n := record.prunedOf(); !slices.Equal(pruned, []string{teamConn}) || n != 1 {
 		t.Errorf("the Teams conversations of %v were deleted, in %d calls; want those of the deleted connection alone, once", pruned, n)
 	}
+	if pruned, n := record.positionsPrunedOf(); !slices.Equal(pruned, []string{teamConn}) || n != 1 {
+		t.Errorf("the Teams poll positions of %v were deleted, in %d calls; want those of the deleted connection alone, once", pruned, n)
+	}
+}
+
+// The Microsoft Teams poll positions of a deleted connection that cannot be deleted keep the connection in the record, as its
+// conversations do, and the delete of both is tried again; once it is done, the connection leaves the record.
+func TestAFailedDeleteOfThePollPositionsKeepsTheDeletedConnectionRecorded(t *testing.T) {
+	c := newStatusCluster(t, storedBinding(sreAlerts, 1))
+	record := &recordedServed{set: []string{ownConn, teamConn}, failPositions: errors.New("store is read only")}
+	r := newServedRig(t, c, ownServed(), record, namedBindings{ownConn: {sreAlerts}})
+	r.reconcile()
+	if got, want := record.recorded(), []string{ownConn, teamConn}; !slices.Equal(got, want) {
+		t.Fatalf("the record = %v while the delete of the positions fails; want %v, the deleted connection kept", got, want)
+	}
+	record.mu.Lock()
+	record.failPositions = nil
+	record.mu.Unlock()
+	r.pass()
+	if got, want := record.recorded(), []string{ownConn}; !slices.Equal(got, want) {
+		t.Errorf("the record = %v once the delete works; want %v", got, want)
+	}
+	if pruned, n := record.positionsPrunedOf(); !slices.Equal(pruned, []string{teamConn}) || n != 2 {
+		t.Errorf("deleted the positions of %v in %d calls; want the deleted connection's, on the second try", pruned, n)
+	}
 }
 
 // The Microsoft Teams conversations of a deleted connection that cannot be deleted keep the connection in the record, so that the delete is
@@ -444,7 +491,7 @@ func TestADeletedConnectionIsPrunedOnlyOnceItsRunHasStopped(t *testing.T) {
 	}
 }
 
-// Against the real store: the Microsoft Teams conversations of a connection whose ChatConnection is deleted go, and those of the
+// Against the real store: the Microsoft Teams conversations and poll positions of a connection whose ChatConnection is deleted go, and those of the
 // connection served and of one stopped but still in the cluster stay.
 func TestTheTeamsConversationsOfADeletedConnectionAreDeleted(t *testing.T) {
 	const stoppedConn = "team-b/teams"
@@ -458,6 +505,10 @@ func TestTheTeamsConversationsOfADeletedConnectionAreDeleted(t *testing.T) {
 			ServiceURL: "https://smba.example.test/amer/", UpdatedAt: sweepNow.Add(-time.Hour)}); err != nil {
 			t.Fatal(err)
 		}
+		if err := st.SaveTeamsPollPosition(t.Context(), store.TeamsPollPosition{Connection: conn, Channel: channel,
+			DeltaLink: "https://graph.example.test/delta?$deltatoken=1", PolledAt: sweepNow.Add(-time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	record := newServedRecord(st, namedBindings{ownConn: {sreAlerts}, stoppedConn: nil}.of, noneRun, func() time.Time { return sweepNow })
 	if _, err := record.update(t.Context(), config.Report{Snapshot: servedSnapshot(t, ownServed())}); err != nil {
@@ -467,6 +518,10 @@ func TestTheTeamsConversationsOfADeletedConnectionAreDeleted(t *testing.T) {
 		_, err := st.GetTeamsConversation(t.Context(), conn, channel)
 		if kept := err == nil; kept != want {
 			t.Errorf("the conversation of %s kept = %v (%v); want %v", conn, kept, err, want)
+		}
+		_, err = st.GetTeamsPollPosition(t.Context(), conn, channel)
+		if kept := err == nil; kept != want {
+			t.Errorf("the poll position of %s kept = %v (%v); want %v", conn, kept, err, want)
 		}
 	}
 	if got, err := st.ServedConnections(t.Context()); err != nil || !slices.Equal(got, []string{ownConn, stoppedConn}) {

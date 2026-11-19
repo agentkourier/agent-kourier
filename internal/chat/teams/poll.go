@@ -22,7 +22,9 @@ import (
 // notificationURL (in either mode): Teams sends a bot no other bot's post, an alert's card that Workflows posted among them, while Graph
 // gives every post. The leader alone polls, while the connection runs. It also holds the catch-up read that both routes share: at the
 // start of a run, while a channel has no deltaLink yet, after a gap of the sockets (socket mode), and after Graph's lifecycle
-// notification missed (push.go). What it has read is held in memory only: a run begins anew, with a catch-up read of the look-back.
+// notification missed (push.go). Where each channel's delta stands is kept in the store (PollPositions), so that a run resumes the delta
+// where the last left it; what else it read (the replies of each thread) is held in memory only, and a run's catch-up read of the
+// look-back reads it back.
 //
 // Measured on a test tenant in November 2026: GET /teams/{group}/channels/{channel}/messages/delta under the resource-specific permission
 // alone, its first read slow (1.3 s) and paged by @odata.nextLink to an @odata.deltaLink, and each read of the deltaLink after about 110
@@ -62,6 +64,17 @@ const (
 
 // pollTick is how often the poller looks for a channel that is due.
 const pollTick = time.Second
+
+// The bounds of the read position kept in the store (Config.Positions). A channel's position is the deltaLink of its last delta read whose
+// messages were all handed on, with when that poll began; it is written at most once each pollSaveEvery, when its deltaLink changed, and,
+// while the deltaLink stays the same, once its stored time is pollSaveIdle old, so that a quiet channel's position does not look older than
+// it is. A run resumes a channel's delta from its stored position unless the position is more than pollResumeMax old: a broker that was
+// away longer reads the channel anew, as at a first start, and hands on no older post as new.
+const (
+	pollSaveEvery = time.Minute
+	pollSaveIdle  = 10 * time.Minute
+	pollResumeMax = time.Hour
+)
 
 // The bounds of a catch-up read: one read of the channel's catchUpTop newest roots with their replies, of which the messages made since
 // the catch-up's start, at most pollLookback ago, are handed on. pollLookback is the dedup's window (dedupWindow): a message that the run
@@ -108,6 +121,15 @@ const (
 // channelPolling is the state of a bound channel that is polled, a label of agentkourier_teams_graph_channels besides the subscriber's.
 const channelPolling = "polling"
 
+// position is where a channel's delta stands: the deltaLink of a read, never logged, and when the poll that made it began.
+type position struct {
+	link   string
+	polled time.Time
+}
+
+// same says whether a and b are one position.
+func (a position) same(b position) bool { return a.link == b.link && a.polled.Equal(b.polled) }
+
 // polled is what the poller holds of one bound channel, in memory.
 type polled struct {
 	link    string    // the deltaLink of the last read, "" while the channel syncs; never logged, since it carries Graph's state token
@@ -125,6 +147,17 @@ type polled struct {
 	// catchUp, if not zero, is the start of a catch-up read that the channel's next poll makes, for the trigger catchUpWhy.
 	catchUp    time.Time
 	catchUpWhy string
+	// What the store keeps of the channel (Config.Positions): loaded says its position was read, resumed that link is the stored one
+	// and no read of it has succeeded yet, saved is the position the store holds as far as the run knows (read or written), savedAt
+	// when the run last tried to write it, and saveWarned that a write that failed was told at WARN.
+	loaded, resumed bool
+	saved           position
+	savedAt         time.Time
+	saveWarned      bool
+	// Guarded by the poller's mu, since the channel's lane writes them: pending counts the delta reads whose messages are on the lane
+	// and not yet handed on, and handed is the newest position whose read's messages, and every earlier read's, have been.
+	pending int
+	handed  position
 }
 
 // root is a thread whose replies a poll reads: when its root was made, when the newest reply that a read gave was made (zero before
@@ -159,6 +192,8 @@ type poller struct {
 	interval, callGap, rootWindow, skew, failMax, lookback time.Duration
 	tick                                                   time.Duration
 	rootCap, syncPages, maxPages                           int
+	positions                                              PollPositions // nil holds each channel's position in memory alone
+	saveEvery, saveIdle, resumeMax                         time.Duration
 	now                                                    func() time.Time
 	sleep                                                  func(context.Context, time.Duration) bool // waitFor; a test's moves its clock
 	log                                                    *slog.Logger
@@ -173,12 +208,15 @@ type poller struct {
 	chans    map[string]*polled
 	lastCall time.Time // when the last read began
 	paused   time.Time // no read before this: a 429's Retry-After, for the whole connection
+	stopped  bool      // the store refused a write because this broker no longer leads: the run reads nothing more
 }
 
-func newPoller(c *Client) *poller {
+// newPoller returns the poller of c, which keeps each channel's read position in positions (nil: in memory alone).
+func newPoller(c *Client, positions PollPositions) *poller {
 	return &poller{c: c, interval: pollInterval, callGap: pollCallGap, rootWindow: pollRootWindow, skew: pollSkew, failMax: pollFailMax,
 		lookback: pollLookback, tick: pollTick, rootCap: pollRootCap, syncPages: pollSyncPages, maxPages: pollMaxPages, now: c.graph.now,
-		sleep: waitFor, log: c.log, wake: make(chan struct{}, 1), chans: map[string]*polled{}}
+		sleep: waitFor, log: c.log, wake: make(chan struct{}, 1), chans: map[string]*polled{}, positions: positions,
+		saveEvery: pollSaveEvery, saveIdle: pollSaveIdle, resumeMax: pollResumeMax}
 }
 
 // gap is told of a gap of the sockets that ended (Config.OnSocketGap): every channel is read at once, with a catch-up read of what was
@@ -214,11 +252,13 @@ func (p *poller) groupKnown(channel string) {
 	}
 }
 
-// run polls the channels that lister names until ctx ends: a round every tick, and at once when a gap asks. It starts from nothing
-// held, a gap told after the last run ended included. With no lister nothing is bound, and nothing is read.
+// run polls the channels that lister names until ctx ends, or until the store refuses a write of a channel's position because this
+// broker no longer leads: a round every tick, and at once when a gap asks. It starts from nothing held in memory, a gap told after the
+// last run ended included; each channel's position is read from the store at its first poll. With no lister nothing is bound, and nothing
+// is read.
 func (p *poller) run(ctx context.Context, lister chat.ChannelLister) {
 	clear(p.chans)
-	p.lastCall, p.paused = time.Time{}, time.Time{}
+	p.lastCall, p.paused, p.stopped = time.Time{}, time.Time{}, false
 	p.mu.Lock()
 	p.gapFrom, p.grouped = time.Time{}, nil
 	p.mu.Unlock()
@@ -232,6 +272,9 @@ func (p *poller) run(ctx context.Context, lister chat.ChannelLister) {
 	for {
 		p.round(ctx, lister)
 		p.rounds.Add(1)
+		if p.stopped {
+			return
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -243,10 +286,10 @@ func (p *poller) run(ctx context.Context, lister chat.ChannelLister) {
 
 // round reads each bound channel that is due, in the order of their IDs, while the connection takes messages. A channel new to the run
 // is due within one interval of now, the new ones spread over it, and its first poll makes a catch-up read of the look-back; one that no
-// Binding names any longer is forgotten, with what was read of it. A channel that waits for its team's group is due at once when the
-// receiver has recorded the group since the last round (groupKnown).
+// Binding names any longer is forgotten, with what was read of it and its stored position (forget). A channel that waits for its team's
+// group is due at once when the receiver has recorded the group since the last round (groupKnown).
 func (p *poller) round(ctx context.Context, lister chat.ChannelLister) {
-	if ctx.Err() != nil {
+	if ctx.Err() != nil || p.stopped {
 		return
 	}
 	var bound []string
@@ -262,9 +305,12 @@ func (p *poller) round(ctx context.Context, lister chat.ChannelLister) {
 			added = append(added, ch)
 		}
 	}
-	for ch := range p.chans {
+	for _, ch := range slices.Sorted(maps.Keys(p.chans)) {
 		if !want[ch] {
 			delete(p.chans, ch)
+			if !p.forget(ctx, ch) {
+				return
+			}
 		}
 	}
 	for i, ch := range added {
@@ -291,7 +337,7 @@ func (p *poller) round(ctx context.Context, lister chat.ChannelLister) {
 	}
 	if s := p.c.recv.live.Load(); s != nil {
 		for _, ch := range slices.Sorted(maps.Keys(p.chans)) {
-			if ctx.Err() != nil {
+			if ctx.Err() != nil || p.stopped {
 				break
 			}
 			if st := p.chans[ch]; !p.now().Before(st.next) {
@@ -324,7 +370,9 @@ func (p *poller) setGauges(ctx context.Context, polling, waiting, failing int) {
 // due, each handed on on its lane. A channel with no deltaLink makes a catch-up read at each poll, so that a channel that syncs still, or
 // whose sync passed its pages, hands on its new posts. A read that fails stops the poll only when Graph throttled it or refused it for
 // good; another failure leaves the rest of the poll to be made, and the poll is counted failed. A channel whose team's Microsoft Entra
-// group is not known waits, told once at WARN with the fix.
+// group is not known waits, told once at WARN with the fix. The run's first poll of the channel reads its stored position first (load),
+// and a read of it that fails fails the poll, which is made again after the backoff; each poll then writes the position that the lane has
+// handed on since, when it is due (save).
 func (p *poller) poll(ctx context.Context, s *serving, ch string, st *polled) {
 	start := p.now()
 	group, err := p.c.teamGroup(ctx, ch)
@@ -340,6 +388,15 @@ func (p *poller) poll(ctx context.Context, s *serving, ch string, st *polled) {
 		return
 	case err != nil:
 		p.failed(ctx, ch, st, err)
+		return
+	}
+	if !st.loaded {
+		if err := p.load(ctx, ch, st, start); err != nil {
+			p.failed(ctx, ch, st, err)
+			return
+		}
+	}
+	if !p.save(ctx, ch, st, start) {
 		return
 	}
 	before := slices.Collect(maps.Keys(st.roots))
@@ -497,6 +554,7 @@ func (p *poller) syncDelta(ctx context.Context, group, ch string, st *polled, st
 		switch {
 		case page.DeltaLink != "":
 			st.link, st.prev, st.sync, st.pages = page.DeltaLink, start, "", 0
+			p.handedOn(st, position{link: page.DeltaLink, polled: start})
 			return or(polledStarted), nil
 		case page.NextLink == "":
 			st.sync = "" // made again from its first page; the pages read count still
@@ -512,19 +570,27 @@ func (p *poller) syncDelta(ctx context.Context, group, ch string, st *polled, st
 }
 
 // readDelta reads the delta of ch from its deltaLink, hands on, on the channel's lane, each message made at most skew before the last
-// read began, and then keeps the new deltaLink, so that a read whose messages could not be put on the lane is made again. A new root is
-// kept for its replies. A deltaLink that Graph no longer takes (logged at WARN) leaves the channel to sync anew, from this poll, with a
+// read began, and then keeps the new deltaLink, so that a read whose messages could not be put on the lane is made again; the read's
+// position is recorded for the store once the lane has handed them on (handOnDelta). A new root is kept for its replies. A deltaLink that
+// Graph no longer takes, the one the store kept included (logged at WARN), leaves the channel to sync anew, from this poll, with a
 // catch-up read of what was posted since the last read, within the look-back.
 func (p *poller) readDelta(ctx context.Context, s *serving, ch string, st *polled, start time.Time) (string, error) {
 	link, msgs, err := p.delta(ctx, st.link)
 	if isResync(err) {
-		p.log.WarnContext(ctx, "teams: Microsoft Graph no longer takes the channel's delta link; it is read anew from now, and a catch-up "+
-			"read hands on what was posted since the last poll, within the look-back", "channel", ch, "lookback", p.lookback.String())
+		which := "the channel's delta link"
+		if st.resumed {
+			which = "the channel's delta link that the store kept"
+		}
+		p.log.WarnContext(ctx, "teams: Microsoft Graph no longer takes "+which+"; it is read anew from now, and a catch-up read hands on "+
+			"what was posted since the last poll, within the look-back", "channel", ch, "lookback", p.lookback.String())
 		from := st.prev.Add(-p.skew) // catchUpDue bounds the read by the look-back
 		if st.catchUp.IsZero() || from.Before(st.catchUp) {
 			st.catchUp, st.catchUpWhy = from, catchUpStart
 		}
-		st.link, st.sync, st.pages = "", "", 0
+		st.link, st.sync, st.pages, st.resumed = "", "", 0, false
+		p.mu.Lock()
+		st.handed = position{} // a link Graph refuses is not written to the store
+		p.mu.Unlock()
 		return polledReset, nil
 	}
 	if err != nil {
@@ -546,11 +612,152 @@ func (p *poller) readDelta(ctx context.Context, s *serving, ch string, st *polle
 		}
 		fresh = append(fresh, found{root: root, m: m, old: old})
 	}
-	if err := p.c.handOnAll(ctx, s, ch, fresh); err != nil {
+	if err := p.handOnDelta(ctx, s, ch, st, fresh, position{link: link, polled: start}); err != nil {
 		return "", err
 	}
-	st.link, st.prev = link, start
+	st.link, st.prev, st.resumed = link, start, false
 	return polledRead, nil
+}
+
+// handOnDelta puts what a delta read of ch gave on the channel's lane (handOnAll), and records the read's position pos as handed on once
+// the lane has handed on all of it: an item cut by the stop of Serve leaves the position where it was for the rest of the run. A read
+// that gave nothing to hand on is recorded at once (handedOn).
+func (p *poller) handOnDelta(ctx context.Context, s *serving, ch string, st *polled, fresh []found, pos position) error {
+	if len(fresh) == 0 {
+		p.handedOn(st, pos)
+		return nil
+	}
+	p.mu.Lock()
+	st.pending++
+	p.mu.Unlock()
+	err := p.c.handOnAll(ctx, s, ch, fresh, func(done bool) {
+		if !done {
+			return // pending stays: no later read of the run is recorded past these messages
+		}
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		st.pending--
+		st.handed = pos
+	})
+	if err != nil {
+		p.mu.Lock()
+		st.pending--
+		p.mu.Unlock()
+	}
+	return err
+}
+
+// handedOn records pos, a read that gave nothing to hand on, as the channel's handed-on position, unless the messages of an earlier read
+// are on the lane still: the lane runs a channel's items in order, and records the position of that read once it has handed them on.
+func (p *poller) handedOn(st *polled, pos position) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if st.pending == 0 {
+		st.handed = pos
+	}
+}
+
+// load reads the stored position of ch, at the run's first poll of the channel, and resumes the channel's delta from it: the poll reads
+// its deltaLink, and hands on what was posted since the stored poll began, less the skew, as a later poll of the run would. A position
+// more than resumeMax old is not resumed, nor one whose time is more than the skew ahead of the poller's clock (another replica's clock ran
+// ahead, and the posts made since that replica's last poll would be taken as old): told at WARN, the channel is read anew, as at a first
+// start, with a catch-up read of the look-back. With no store, there is nothing to read.
+func (p *poller) load(ctx context.Context, ch string, st *polled, start time.Time) error {
+	if p.positions == nil {
+		st.loaded = true
+		return nil
+	}
+	got, ok, err := p.positions.Load(ctx, p.c.conn, ch)
+	if err != nil {
+		return fmt.Errorf("teams: read the channel's stored read position: %w", err)
+	}
+	st.loaded = true
+	if !ok || got.DeltaLink == "" {
+		return nil
+	}
+	stored := position{link: got.DeltaLink, polled: got.PolledAt}
+	st.saved = stored
+	if age := start.Sub(stored.polled); age > p.resumeMax || age < -p.skew {
+		p.log.WarnContext(ctx, "teams: a bound channel's stored read position is not resumed: it is older than the broker resumes from, or "+
+			"ahead of the broker's clock; the channel is read anew from now, and a catch-up read hands on what was posted within the look-back",
+			"channel", ch, "age", age.Round(time.Second).String(), "resumeMax", p.resumeMax.String(), "skew", p.skew.String(),
+			"lookback", p.lookback.String())
+		return nil
+	}
+	st.link, st.prev, st.resumed = stored.link, stored.polled, true
+	p.log.DebugContext(ctx, "teams: a bound channel's delta resumes from its stored read position", "channel", ch,
+		"polledAt", stored.polled.UTC().Format(time.RFC3339))
+	return nil
+}
+
+// save writes the channel's handed-on position to the store when it is due, and says false when the store refused the write because
+// this broker no longer leads, which stops the poller (stop). A position is due when it is not the stored one and saveEvery has passed
+// since the run last tried to write the channel's: one whose deltaLink changed, or, with the same deltaLink, once the stored time is
+// saveIdle old. A write that fails otherwise is told once at WARN until one succeeds (told at INFO), and is tried again saveEvery later.
+func (p *poller) save(ctx context.Context, ch string, st *polled, now time.Time) bool {
+	if p.positions == nil {
+		return true
+	}
+	p.mu.Lock()
+	pos := st.handed
+	p.mu.Unlock()
+	switch {
+	case pos.link == "" || pos.same(st.saved) || now.Before(st.savedAt.Add(p.saveEvery)):
+		return true
+	case pos.link == st.saved.link && now.Before(st.saved.polled.Add(p.saveIdle)):
+		return true
+	}
+	st.savedAt = now
+	err := p.positions.Save(ctx, p.c.conn, PollPosition{Channel: ch, DeltaLink: pos.link, PolledAt: pos.polled})
+	switch {
+	case errors.Is(err, ErrNotLeader):
+		p.stop(ctx, err)
+		return false
+	case err != nil && ctx.Err() != nil:
+		return true
+	case err != nil && !st.saveWarned:
+		st.saveWarned = true
+		p.log.WarnContext(ctx, "teams: a bound channel's read position could not be stored; the channel is polled on, and the write is "+
+			"tried again", "channel", ch, "retry", p.saveEvery.String(), "error", err.Error())
+		return true
+	case err != nil:
+		p.log.DebugContext(ctx, "teams: a bound channel's read position could not be stored again", "channel", ch, "error", err.Error())
+		return true
+	}
+	if st.saveWarned {
+		p.log.InfoContext(ctx, "teams: a bound channel's read position is stored again", "channel", ch)
+	}
+	st.saved, st.saveWarned = pos, false
+	return true
+}
+
+// forget deletes the stored position of ch, a channel that no Binding names any longer, so that a Binding that names it later does not
+// resume from where it stood: what was posted while it was not bound is not handed on. It says false when the store refused the delete
+// because this broker no longer leads, which stops the poller (stop); a delete that fails otherwise is logged at WARN.
+func (p *poller) forget(ctx context.Context, ch string) bool {
+	if p.positions == nil {
+		return true
+	}
+	err := p.positions.Forget(ctx, p.c.conn, ch)
+	switch {
+	case errors.Is(err, ErrNotLeader):
+		p.stop(ctx, err)
+		return false
+	case err != nil && ctx.Err() == nil:
+		p.log.WarnContext(ctx, "teams: the stored read position of a channel that no Binding names any longer could not be deleted; a "+
+			"Binding that names the channel again within the resume bound resumes from it", "channel", ch, "resumeMax", p.resumeMax.String(),
+			"error", err.Error())
+	}
+	return true
+}
+
+// stop stops the poller: the store refused a write of a channel's position because this broker no longer leads (ErrNotLeader). The
+// process of a deposed leader ends (spec D37); until then the poller reads nothing more, so that it neither hands on nor writes as a
+// leader that another replica has replaced.
+func (p *poller) stop(ctx context.Context, err error) {
+	p.stopped = true
+	p.log.WarnContext(ctx, "teams: the polls of the connection's channels stop: the store refused to keep a channel's read position, "+
+		"because this broker no longer leads", "error", err.Error())
 }
 
 // delta reads link and each page it names to the deltaLink, at most maxPages, and returns the deltaLink and the messages read.
@@ -685,7 +892,7 @@ func (p *poller) readReplies(ctx context.Context, s *serving, group, ch string, 
 			}
 			fresh = append(fresh, found{root: id, m: m})
 		}
-		if err := p.c.handOnAll(ctx, s, ch, fresh); err != nil {
+		if err := p.c.handOnAll(ctx, s, ch, fresh, nil); err != nil {
 			return err
 		}
 		for _, f := range fresh {
@@ -723,7 +930,7 @@ func (p *poller) catchUp(ctx context.Context, s *serving, group, ch string, st *
 	if err != nil {
 		return err
 	}
-	if err := p.c.handOnAll(ctx, s, ch, p.c.recentSince(ctx, ch, roots, since)); err != nil {
+	if err := p.c.handOnAll(ctx, s, ch, p.c.recentSince(ctx, ch, roots, since), nil); err != nil {
 		return err
 	}
 	now := p.now()
@@ -818,15 +1025,21 @@ type found struct {
 }
 
 // handOnAll puts what a read gave on ch's lane as one item, in the order of the messages' IDs, and returns once it is on the lane, which
-// hands each on after (handOnFound). It is an error when the lane has no room or the connection takes nothing now, and the read is then
-// made again.
-func (c *Client) handOnAll(ctx context.Context, s *serving, ch string, items []found) error {
+// hands each on after (handOnFound) and then tells after, if set, whether it handed on all of them (false: the stop of Serve cut it). It is
+// an error when the lane has no room or the connection takes nothing now, and the read is then made again; after is not called then. With
+// no items it puts nothing on the lane, and calls nothing.
+func (c *Client) handOnAll(ctx context.Context, s *serving, ch string, items []found, after func(done bool)) error {
 	if len(items) == 0 {
 		return nil
 	}
 	items = slices.Clone(items)
 	slices.SortStableFunc(items, func(a, b found) int { return compareIDs(a.m.ID, b.m.ID) })
-	shed, open := s.submit(ch, func() { c.handOnFound(s, ch, items) }) //nolint:contextcheck // the lane runs on Serve's context
+	shed, open := s.submit(ch, func() { //nolint:contextcheck // the lane runs on Serve's context
+		done := c.handOnFound(s, ch, items)
+		if after != nil {
+			after(done)
+		}
+	})
 	switch {
 	case !open:
 		return errors.New("teams: the connection takes nothing now")
@@ -840,12 +1053,12 @@ func (c *Client) handOnAll(ctx context.Context, s *serving, ch string, items []f
 }
 
 // handOnFound hands on, on ch's lane, each of items that is new and not a duplicate (handOn), and counts each in
-// agentkourier_teams_graph_read_messages_total.
-func (c *Client) handOnFound(s *serving, ch string, items []found) {
+// agentkourier_teams_graph_read_messages_total. It says whether it went through all of them: false when the stop of Serve cut it.
+func (c *Client) handOnFound(s *serving, ch string, items []found) bool {
 	tctx := c.recv.telemetryContext(s.ctx)
 	for _, it := range items {
 		if s.ctx.Err() != nil {
-			return
+			return false
 		}
 		switch {
 		case it.old:
@@ -856,6 +1069,7 @@ func (c *Client) handOnFound(s *serving, ch string, items []found) {
 			c.countRead(tctx, c.handOn(s, ch, it.root, it.m))
 		}
 	}
+	return s.ctx.Err() == nil
 }
 
 // countRead counts one in agentkourier_teams_graph_read_messages_total.

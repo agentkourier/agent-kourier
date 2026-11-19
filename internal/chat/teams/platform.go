@@ -40,6 +40,10 @@ type Config struct {
 	// Conversations keeps each channel's service URL and team, which the receiver records and the posts read; a
 	// MemoryConversations if nil. It is the seam of the persistent store.
 	Conversations ConversationStore
+	// Positions keeps where the poll of each channel's messages stands, so that a run resumes each channel's delta where the last left
+	// it (poll.go). With nil the position is held in memory alone, and each run reads every channel anew. A connection with a
+	// NotificationURL does not poll, and does not use it.
+	Positions PollPositions
 	// Logger is slog.Default() if nil. The caller names the connection on it.
 	Logger *slog.Logger
 	// Now is the clock of the tokens, the keys and the dedup; time.Now if nil.
@@ -157,7 +161,7 @@ func New(cfg Config) (*Client, error) {
 	c.recv = recv
 	recv.onGroup = c.groupKnown
 	if cfg.NotificationURL == "" {
-		c.poll = newPoller(c)
+		c.poll = newPoller(c, cfg.Positions)
 		onGap := cfg.OnSocketGap
 		cfg.OnSocketGap = func(g Gap) {
 			if onGap != nil {
@@ -204,7 +208,9 @@ func (c *Client) groupKnown(channel string) {
 //
 // With a NotificationURL, Run keeps the subscriptions of the channels that sink names (chat.ChannelLister; a sink that names none has
 // none made) while it runs, and stops keeping them before it returns. It leaves them in Graph, for the next leader to adopt. With none,
-// Run polls the messages of those channels from Graph while it runs (poller.run), and what it read is lost when it returns.
+// Run polls the messages of those channels from Graph while it runs (poller.run): where each channel's delta stands is kept in
+// Positions for the next run, and what else it read is lost when it returns. A write of Positions that the store refuses because this
+// broker no longer leads stops the polls, and Run goes on until ctx ends.
 func (c *Client) Run(ctx context.Context, sink chat.Sink) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

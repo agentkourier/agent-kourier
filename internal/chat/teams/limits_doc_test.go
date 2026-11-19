@@ -84,6 +84,9 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Duration(t, "teamsPollFailMax", c.poll.failMax)
 	limitsdoc.Count(t, "teamsCatchUpTop", catchUpTop)
 	limitsdoc.Duration(t, "teamsPollLookback", c.poll.lookback)
+	limitsdoc.Duration(t, "teamsPollSaveEvery", c.poll.saveEvery)
+	limitsdoc.Duration(t, "teamsPollSaveIdle", c.poll.saveIdle)
+	limitsdoc.Duration(t, "teamsPollResumeMax", c.poll.resumeMax)
 
 	// The reads of a thread through Microsoft Graph, and Find's of a channel: the bound a Client is built with, and the pages, answers and
 	// cards it reads.

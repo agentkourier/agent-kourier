@@ -29,7 +29,8 @@ import (
 // record has and the Snapshot has not, and that still exists, is stopped: it stays in the record, so that every later start finds it
 // stopped too and a Binding made on it afterwards is told, until it is served again (it is then served and stays in the record) or its
 // ChatConnection is deleted (it is then pruned; its Bindings are everyone's to report as ConnectionNotFound). The prune deletes what the
-// store keeps of the connection's Microsoft Teams channels first (store.TeamsConversations), whatever its platform was; while that fails,
+// store keeps of the connection's Microsoft Teams channels first (store.TeamsConversations, store.TeamsPollPositions), whatever its
+// platform was; while that fails,
 // the connection stays in the record, so that the next write, after a restart too, tries again. A deleted connection whose run has not
 // stopped yet (the supervisor sees a deletion at its next look, and a run that stops hands on, for at most a second, what it took) may still write them, so it
 // stays in the record, unpruned, until running says its run has stopped. One window is left, and accepted as unlikely: a connection that the
@@ -53,11 +54,12 @@ type servedRecord struct {
 	gone  map[string]bool // the connections recorded as served that the Snapshot does not have and that exist, "namespace/name"
 }
 
-// servedStore is the store as the record of the served connections uses it: the record, and the delete of what the store keeps of the
+// servedStore is the store as the record of the served connections uses it: the record, and the deletes of what the store keeps of the
 // Microsoft Teams channels of a connection whose ChatConnection is deleted.
 type servedStore interface {
 	store.ConnectionServing
 	DeleteTeamsConversations(ctx context.Context, connection string) error
+	DeleteTeamsPollPositions(ctx context.Context, connection string) error
 }
 
 // stoppedMessage is the Message of the UnservedConnection of a connection that the broker served and does not now.
@@ -133,7 +135,8 @@ func (r *servedRecord) compare(ctx context.Context, rep config.Report) (stopped 
 }
 
 // update compares the connections the Snapshot of rep serves with the record, and returns the stopped ones with their Bindings. It then
-// deletes the Microsoft Teams conversations of each recorded connection whose ChatConnection is deleted, and records the connections served
+// deletes what the store keeps of the Microsoft Teams channels of each recorded connection whose ChatConnection is deleted (prune), and
+// records the connections served
 // now, those stopped that still exist, and the deleted ones whose delete failed, if that differs from the record. Each step is tried at every
 // call: an error from one is returned with what the others found, and the call after it tries again.
 func (r *servedRecord) update(ctx context.Context, rep config.Report) ([]config.UnservedConnection, error) {
@@ -148,8 +151,8 @@ func (r *servedRecord) update(ctx context.Context, rep config.Report) ([]config.
 		want = append(want, k)
 	}
 	for _, k := range deleted {
-		if perr := r.store.DeleteTeamsConversations(ctx, k); perr != nil {
-			err = errors.Join(err, fmt.Errorf("delete the Microsoft Teams conversations of the deleted ChatConnection %s: %w", k, perr))
+		if perr := r.prune(ctx, k); perr != nil {
+			err = errors.Join(err, perr)
 			want = append(want, k) // kept, so that the delete is tried again
 		}
 	}
@@ -162,6 +165,19 @@ func (r *servedRecord) update(ctx context.Context, rep config.Report) ([]config.
 		}
 	}
 	return stopped, err
+}
+
+// prune deletes what the store keeps of the Microsoft Teams channels of conn, a connection whose ChatConnection is deleted: their
+// conversations and their poll positions. It tries both, and returns what failed.
+func (r *servedRecord) prune(ctx context.Context, conn string) error {
+	var errs []error
+	if err := r.store.DeleteTeamsConversations(ctx, conn); err != nil {
+		errs = append(errs, fmt.Errorf("delete the Microsoft Teams conversations of the deleted ChatConnection %s: %w", conn, err))
+	}
+	if err := r.store.DeleteTeamsPollPositions(ctx, conn); err != nil {
+		errs = append(errs, fmt.Errorf("delete the Microsoft Teams poll positions of the deleted ChatConnection %s: %w", conn, err))
+	}
+	return errors.Join(errs...)
 }
 
 // stopped is update without the write: the connections the broker served and does not now, for the retention of sessions, which must

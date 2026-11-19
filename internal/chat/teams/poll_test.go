@@ -34,14 +34,24 @@ type pollTest struct {
 
 func newPollTest(t *testing.T) *pollTest {
 	t.Helper()
+	return newPollTestWith(t, nil)
+}
+
+// newPollTestWith is newPollTest with the Client built from a config that edit, if set, changes.
+func newPollTestWith(t *testing.T, edit func(*Config)) *pollTest {
+	t.Helper()
 	f := newFakeConnector(t)
 	key := newSigningKey(t, "k", "msteams")
 	bf := newFakeBotFramework(t, key)
 	convs := NewMemoryConversations()
 	pt := &pollTest{sink: &bindingSink{}, obs: newObserved(t), logs: &syncBuffer{}, clk: &fakeClock{t: time.Now().UTC().Truncate(time.Second)}}
-	c, err := New(Config{Connection: testConn, TenantID: testTenant, AppID: testAppID, ClientSecret: secret.New(testClientSecret),
+	cfg := Config{Connection: testConn, TenantID: testTenant, AppID: testAppID, ClientSecret: secret.New(testClientSecret),
 		TokenURL: f.srv.URL + "/token", MetadataURL: bf.metadataURL(), GraphURL: f.graphURL(), HTTPClient: f.srv.Client(),
-		Conversations: convs, Logger: slog.New(slog.NewTextHandler(pt.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))})
+		Conversations: convs, Logger: slog.New(slog.NewTextHandler(pt.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))}
+	if edit != nil {
+		edit(&cfg)
+	}
+	c, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -22,7 +22,7 @@ func TestATeamsConnectionTakesNoFakeFromTheEnvironment(t *testing.T) {
 	t.Cleanup(func() { _ = ln.Close() })
 	var got teams.Config
 	cfg := RunConfig{ChatListener: ln, teamsFakes: func(tc *teams.Config) { got = *tc }}
-	built, err := cfg.newPlatform(teamsConn("team-a", "teams"), nil, nil, teams.NewMemoryConversations())
+	built, err := cfg.newPlatform(teamsConn("team-a", "teams"), nil, nil, teams.NewMemoryConversations(), nil)
 	if err != nil {
 		t.Fatalf("newPlatform(teams) = %v", err)
 	}

@@ -102,12 +102,12 @@ func TestNewPlatformBuildsTheTeamsAdapter(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = ln.Close() })
 	cfg := RunConfig{ChatListener: ln}
-	built, err := cfg.newPlatform(teamsConn("team-a", "teams"), nil, nil, teams.NewMemoryConversations())
+	built, err := cfg.newPlatform(teamsConn("team-a", "teams"), nil, nil, teams.NewMemoryConversations(), nil)
 	if err != nil || built.Platform == nil || built.closeIdle == nil {
-		t.Fatalf("newPlatform(teams) = %+v, %v; want the Teams adapter, and a way to close its connections", built, err)
+		t.Fatalf("newPlatform(teams, nil) = %+v, %v; want the Teams adapter, and a way to close its connections", built, err)
 	}
 	if _, ok := built.Platform.(*teams.Client); !ok {
-		t.Errorf("newPlatform(teams) built a %T", built.Platform)
+		t.Errorf("newPlatform(teams, nil) built a %T", built.Platform)
 	}
 	if h, ok := receiverOf(built.Platform); !ok || h == nil {
 		t.Error("the Teams adapter offers no handler for the chat listener")
@@ -117,7 +117,7 @@ func TestNewPlatformBuildsTheTeamsAdapter(t *testing.T) {
 	}
 
 	var none RunConfig
-	if _, err := none.newPlatform(teamsConn("team-a", "teams"), nil, nil, teams.NewMemoryConversations()); !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), "AGENTKOURIER_CHAT_LISTEN") {
+	if _, err := none.newPlatform(teamsConn("team-a", "teams"), nil, nil, teams.NewMemoryConversations(), nil); !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), "AGENTKOURIER_CHAT_LISTEN") {
 		t.Errorf("a teams connection on a broker with no chat listener: %v; want a wiring error that names AGENTKOURIER_CHAT_LISTEN", err)
 	}
 	if err := none.needsChatListener(teamsConn("team-a", "teams")); !errors.Is(err, ErrWiring) {
@@ -129,9 +129,9 @@ func TestNewPlatformBuildsTheTeamsAdapter(t *testing.T) {
 	if err := none.needsChatListener(socket); err != nil {
 		t.Errorf("needsChatListener(teams in socket mode) with no chat listener = %v; want none", err)
 	}
-	built, err = none.newPlatform(socket, nil, nil, teams.NewMemoryConversations())
+	built, err = none.newPlatform(socket, nil, nil, teams.NewMemoryConversations(), nil)
 	if err != nil {
-		t.Fatalf("newPlatform(teams in socket mode) with no chat listener = %v; want the adapter", err)
+		t.Fatalf("newPlatform(teams in socket mode, nil) with no chat listener = %v; want the adapter", err)
 	}
 	if _, ok := receiverOf(built.Platform); ok {
 		t.Error("the Teams adapter in socket mode offers a handler for the chat listener; want none")
@@ -143,9 +143,9 @@ func TestNewPlatformBuildsTheTeamsAdapter(t *testing.T) {
 	if err := none.needsChatListener(notified); !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), "notificationURL") {
 		t.Errorf("needsChatListener(teams in socket mode with a notificationURL) with no chat listener = %v; want a wiring error that names the notificationURL", err)
 	}
-	built, err = cfg.newPlatform(notified, nil, nil, teams.NewMemoryConversations())
+	built, err = cfg.newPlatform(notified, nil, nil, teams.NewMemoryConversations(), nil)
 	if err != nil {
-		t.Fatalf("newPlatform(teams in socket mode with a notificationURL) = %v; want the adapter", err)
+		t.Fatalf("newPlatform(teams in socket mode with a notificationURL, nil) = %v; want the adapter", err)
 	}
 	if h, ok := receiverOf(built.Platform); !ok || h == nil {
 		t.Error("the Teams adapter in socket mode with a notificationURL offers no handler for the chat listener; want Graph's")
@@ -157,11 +157,11 @@ func TestNewPlatformBuildsTheTeamsAdapter(t *testing.T) {
 	} {
 		c := teamsConn("team-a", "teams")
 		edit(&c)
-		if built, err := cfg.newPlatform(c, nil, nil, teams.NewMemoryConversations()); !errors.Is(err, ErrWiring) || built.Platform != nil {
+		if built, err := cfg.newPlatform(c, nil, nil, teams.NewMemoryConversations(), nil); !errors.Is(err, ErrWiring) || built.Platform != nil {
 			t.Errorf("%s: newPlatform = %+v, %v; want a wiring error and no platform", name, built, err)
 		}
 	}
-	if built, err := cfg.newPlatform(teamsConn("team-a", "teams"), nil, nil, nil); !errors.Is(err, ErrWiring) || built.Platform != nil {
+	if built, err := cfg.newPlatform(teamsConn("team-a", "teams"), nil, nil, nil, nil); !errors.Is(err, ErrWiring) || built.Platform != nil {
 		t.Errorf("no conversation store: newPlatform = %+v, %v; want a wiring error and no platform, not one that forgets its channels at a restart", built, err)
 	}
 }
@@ -304,6 +304,35 @@ func TestOpenPlatformKeepsTheTeamsConversationsInTheStore(t *testing.T) {
 	if len(got) != 2 || !strings.HasPrefix(got[0], "https://smba.example.test/amer/"+teamsTestTenant+"/v3/conversations/") ||
 		!strings.HasPrefix(got[1], teams.DefaultServiceURL+"v3/conversations/") {
 		t.Errorf("the posts went to %v; want the recorded channel's service URL, then the global route", got)
+	}
+}
+
+// The leader builds a Microsoft Teams platform that keeps where its polls stand in the broker's store: a position the platform saves is the
+// store's, under the connection's name, for the next leader to resume from.
+func TestOpenPlatformKeepsTheTeamsPollPositionsInTheStore(t *testing.T) {
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	st := sqlitetest.Open(t)
+	var positions teams.PollPositions
+	h := &leaderHalf{log: testutil.DiscardLogger(), st: st, cfg: RunConfig{ChatListener: ln, teamsFakes: func(tc *teams.Config) {
+		positions = tc.Positions
+	}}}
+	if _, err := h.openPlatform(teamsConn("team-a", "teams"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if positions == nil {
+		t.Fatal("the leader's Teams platform keeps no poll positions")
+	}
+	p := teams.PollPosition{Channel: "19:KourierStandInChannelForTestsOnly0000000000a@thread.tacv2",
+		DeltaLink: "https://graph.example.test/delta?$deltatoken=1", PolledAt: time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)}
+	if err := positions.Save(t.Context(), "team-a/teams", p); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := st.GetTeamsPollPosition(t.Context(), "team-a/teams", p.Channel); err != nil || got.DeltaLink != p.DeltaLink || !got.PolledAt.Equal(p.PolledAt) {
+		t.Errorf("the store holds %+v, %v; want the position the platform saved", got, err)
 	}
 }
 

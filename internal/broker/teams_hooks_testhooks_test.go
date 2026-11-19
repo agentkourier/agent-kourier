@@ -29,7 +29,7 @@ func TestATestImagesTeamsConnectionCallsTheFakeAlone(t *testing.T) {
 	var got teams.Config
 	cfg := RunConfig{ChatListener: ln, hooks: testhooks.Overrides{TeamsURL: ms.srv.URL, TeamsCA: ca},
 		teamsFakes: func(tc *teams.Config) { got = *tc }}
-	built, err := cfg.newPlatform(teamsConn("team-a", "teams"), nil, nil, teams.NewMemoryConversations())
+	built, err := cfg.newPlatform(teamsConn("team-a", "teams"), nil, nil, teams.NewMemoryConversations(), nil)
 	if err != nil {
 		t.Fatalf("newPlatform(teams) = %v; want the adapter, on the fake", err)
 	}
@@ -49,7 +49,7 @@ func TestATestImagesTeamsConnectionCallsTheFakeAlone(t *testing.T) {
 	}
 
 	cfg.hooks.TeamsCA = "not a certificate"
-	if built, err := cfg.newPlatform(teamsConn("team-a", "teams"), nil, nil, teams.NewMemoryConversations()); !errors.Is(err, ErrWiring) || built.Platform != nil {
+	if built, err := cfg.newPlatform(teamsConn("team-a", "teams"), nil, nil, teams.NewMemoryConversations(), nil); !errors.Is(err, ErrWiring) || built.Platform != nil {
 		t.Errorf("a fake whose CA is no certificate: newPlatform = %+v, %v; want a wiring error", built, err)
 	}
 }
