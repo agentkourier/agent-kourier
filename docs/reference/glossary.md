@@ -106,7 +106,8 @@ Outbox
     sending and recording is found and not posted twice.
 
 Platform
-:   A chat platform behind the `chat.Platform` interface. Slack is the only platform today.
+:   A chat platform behind the `chat.Platform` interface, which a ChatConnection's `spec.platform` names. The API takes `slack` and
+    `webhook`; this release's broker runs Slack alone ([What each platform supports](platforms.md)).
 
 Post
 :   A message Agent Kourier writes into a channel or thread.

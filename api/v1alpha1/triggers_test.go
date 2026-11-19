@@ -346,7 +346,7 @@ func TestTriggersValidate(t *testing.T) {
 		{"the fixture is valid", func(*Binding) {}, ""},
 		{"no triggers at all", func(o *Binding) { o.Spec.Chat.Triggers = nil }, ""},
 		{"unknown kind", func(o *Binding) { bot(o).Type = "message" },
-			at + `.type: unsupported value "message", must be one of mention, botMessage, personMessage`},
+			at + `.type: unsupported value "message", must be one of mention, botMessage, personMessage, webhookEvent`},
 		{"mention with a source", func(o *Binding) { o.Spec.Chat.Triggers[0].From = &BotSource{ID: "B0123456789"} },
 			"spec.chat.triggers[0].from: not allowed with type: mention"},
 		{"mention with a prompt", func(o *Binding) { o.Spec.Chat.Triggers[0].PromptTemplate = "x" },

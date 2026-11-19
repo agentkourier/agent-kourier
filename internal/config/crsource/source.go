@@ -11,7 +11,8 @@
 // kept in memory and put in the Set in its place, so that a typo in an update does not take a Binding out of routing. A
 // Binding that validates and names a chat ID or a feature that the platform of its connection does not take
 // (config.RefusedOnPlatform) is refused the same way, with that reason in its Invalid: only the connection says which platform's
-// IDs the Binding needs (with Slack the only platform, Validate has held them to Slack's shapes already). A Reloader that is PerObject turns the two into what is served
+// IDs the Binding needs (Validate has held them to Slack's shapes already, and the channel of a Binding of webhookEvent triggers alone
+// to a webhook channel's, which a Slack connection refuses here). A Reloader that is PerObject turns the two into what is served
 // and what is reported.
 //
 // # What it reads
