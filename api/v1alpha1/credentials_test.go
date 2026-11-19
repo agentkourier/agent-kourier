@@ -46,7 +46,14 @@ func TestCredentialKeysReturnsACopy(t *testing.T) {
 // Every platform and mode that a ChatConnection may name has keys, and one it may not name has none: a platform or mode added to
 // Validate without keys would start with no credentials read.
 func TestEveryPlatformAndModeValidateAcceptsHasCredentialKeys(t *testing.T) {
-	for _, p := range []string{PlatformSlack, "", "teams", "github", "Slack"} {
+	for _, scheme := range []WebhookScheme{WebhookHMACSHA256, WebhookToken, "", "hmac-sha1", "Token"} {
+		c := load[ChatConnection](t, "webhook/connection.yaml")
+		c.Spec.Webhook.Verify.Scheme = scheme
+		if valid, keyed := c.Validate() == nil, CredentialKeys(c.Spec) != nil; valid != keyed {
+			t.Errorf("webhook scheme %q: Validate accepts it %v, CredentialKeys has keys %v: the two must agree", scheme, valid, keyed)
+		}
+	}
+	for _, p := range []string{PlatformSlack, PlatformWebhook, "", "teams", "github", "Slack"} {
 		for _, slack := range []*SlackConnectionSpec{nil, {}, {Mode: SlackModeSocket}, {Mode: SlackModeHTTP}, {Mode: "websocket"}, {Mode: "HTTP"}} {
 			c := load[ChatConnection](t, "chatconnection.yaml")
 			c.Spec.Platform, c.Spec.Slack = p, slack

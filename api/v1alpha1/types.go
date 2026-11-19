@@ -37,6 +37,8 @@ const (
 
 	OutputLive  OutputMode = "live"
 	OutputFinal OutputMode = "final"
+	// OutputNone posts nothing of the agent's work, on a platform where the agent posts with its own tools (a webhook connection).
+	OutputNone OutputMode = "none"
 
 	ProgressSteps            ProgressMode = "steps"
 	ProgressStepsAndActivity ProgressMode = "steps-and-activity"
@@ -51,8 +53,13 @@ const (
 	SlackModeSocket SlackMode = "socket"
 	SlackModeHTTP   SlackMode = "http"
 
-	PlatformSlack = "slack"
+	PlatformSlack   = "slack"
+	PlatformWebhook = "webhook"
 )
+
+// platforms returns the platforms a ChatConnection may name, in the order of the Enum marker of spec.platform: another platform is
+// one more name here and in the marker.
+func platforms() []string { return []string{PlatformSlack, PlatformWebhook} }
 
 // ObjectRef names a resource in a namespace. An empty namespace means the namespace of the
 // referring object. A Binding's agent.backendRef and chat.connectionRef may name an AgentBackend or a
@@ -263,12 +270,18 @@ type ChatConnectionList struct {
 // ChatConnectionSpec is the desired state of a ChatConnection.
 //
 // +kubebuilder:validation:XValidation:rule="!has(self.slack) || self.platform == 'slack'",message="is set, but only a slack connection has one",fieldPath=".slack"
+// +kubebuilder:validation:XValidation:rule="!has(self.webhook) || self.platform == 'webhook'",message="is set, but only a webhook connection has one",fieldPath=".webhook"
+// +kubebuilder:validation:XValidation:rule="self.platform != 'webhook' || has(self.webhook)",message="is required on a webhook connection",fieldPath=".webhook"
 type ChatConnectionSpec struct {
-	// Platform is the chat platform: slack.
-	// +kubebuilder:validation:Enum=slack
+	// Platform is the chat platform: slack, or webhook, which takes signed JSON webhooks from a service such as a code host or an
+	// issue tracker (spec.webhook) and posts nothing there: the agent posts on the service with its own tools. The broker does not
+	// run a webhook connection yet: it refuses one as a wiring error, so that one as the broker's own stops its start, and a team's
+	// is not started.
+	// +kubebuilder:validation:Enum=slack;webhook
 	Platform string `json:"platform"`
 	// CredentialsSecretRef names one Secret whose keys are fixed by the platform and its mode. A Slack connection in Socket Mode needs
-	// botToken and appToken; one in HTTP mode needs botToken and signingSecret.
+	// botToken and appToken; one in HTTP mode needs botToken and signingSecret. A webhook connection needs webhookSecret with the
+	// hmac-sha256 scheme, and token with the token scheme.
 	CredentialsSecretRef SecretRef `json:"credentialsSecretRef"`
 	// AllowedNamespaces lists the other namespaces whose Bindings may reference this connection. Each is a DNS-1123 label.
 	// An empty list permits references only from the connection's own namespace. At most 256.
@@ -281,6 +294,10 @@ type ChatConnectionSpec struct {
 	// uses Socket Mode.
 	// +optional
 	Slack *SlackConnectionSpec `json:"slack,omitempty"`
+	// Webhook is how a webhook connection reads a delivery. A connection whose platform is webhook requires it, and every other
+	// refuses it.
+	// +optional
+	Webhook *WebhookSpec `json:"webhook,omitempty"`
 }
 
 // SlackMode returns the mode of a Slack connection: spec.slack.mode, or socket when it is unset. The API fills in no default (spec
@@ -387,16 +404,27 @@ type Identity struct {
 	TokenSecretRef *SecretKeyRef `json:"tokenSecretRef,omitempty"`
 }
 
+// The rules below copy Validate: a Binding whose triggers are all webhookEvent takes a webhook channel and output none, and any other
+// Binding takes Slack's channel and outputs, as before the webhook platform. The two literals are slackChannelID and webhookChannel,
+// and 32 is maxChatIDLen (TestCELLiteralsEqualTheBrokersConstants). (Not in the doc comment below, which the reference pages print.)
+
 // ChatBinding places the Binding in a channel.
+//
+// +kubebuilder:validation:XValidation:rule="(size(self.channel) <= 32 && self.channel.matches('^[CG][A-Z0-9]+$')) || (has(self.triggers) && size(self.triggers) > 0 && self.triggers.all(t, t.type == 'webhookEvent') && self.channel.matches('^[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9._-]+)*$'))",message="must be a channel ID such as C0123456789, not a name, of at most 32 bytes; a Binding whose triggers are all webhookEvent takes a webhook channel: letters, digits, '.', '_' and '-', with '/' between parts",fieldPath=".channel"
+// +kubebuilder:validation:XValidation:rule="!has(self.output) || self.output != 'none' || (has(self.triggers) && size(self.triggers) > 0 && self.triggers.all(t, t.type == 'webhookEvent'))",message="none is taken only by a Binding whose triggers are all webhookEvent",fieldPath=".output"
 type ChatBinding struct {
 	ConnectionRef ObjectRef `json:"connectionRef"`
-	// Channel is the platform's channel ID, not its name (Slack: `C…` or `G…`). At most 32 bytes.
-	// +kubebuilder:validation:MaxLength=32
-	// +kubebuilder:validation:Pattern=`^[CG][A-Z0-9]+$`
+	// Channel is the platform's channel ID, not its name (Slack: `C…` or `G…`, at most 32 bytes). A Binding whose triggers are all
+	// webhookEvent takes a webhook channel instead, as its connection reads it from an event: letters, digits, '.', '_' and '-',
+	// starting with a letter or a digit, with '/' between parts, such as acme/widgets or OPS, at most 140 bytes.
+	// +kubebuilder:validation:MaxLength=140
 	Channel string `json:"channel"`
-	// Output says what Agent Kourier posts of the agent's work: live, the reply as it is written, or final, the finished reply
-	// alone. Defaults to live.
-	// +kubebuilder:validation:Enum=live;final;""
+	// Output says what Agent Kourier posts of the agent's work: live, the reply as it is written; final, the finished reply
+	// alone; or none, nothing, which only a Binding whose triggers are all webhookEvent takes. Defaults to live. Slack serves live
+	// and final. A webhook connection serves none alone, since the agent posts on the service with its own tools: its Bindings
+	// write output: none, and one with live or final, the default included, is refused when the broker reads it with its
+	// connection, with the reason UnsupportedOnPlatform.
+	// +kubebuilder:validation:Enum=live;final;none;""
 	// +kubebuilder:default=live
 	// +optional
 	Output OutputMode `json:"output"`

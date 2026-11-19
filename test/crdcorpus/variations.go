@@ -242,7 +242,7 @@ func variationTemplates() []template {
 	dur := durations()
 	messageFields := of("text", "title", "link", "fallback", "footer", "body", "subject", "Text", "")
 	extractNames := of("key", "state", "a", "aB_9", "State", "1a", "a-b", "a b", "_a", "kéy", strings.Repeat("e", 63), strings.Repeat("e", 64), "k"+strings.Repeat("é", 31))
-	return []template{
+	return append([]template{
 		{kind: "AgentBackend", doc: backendDoc, mutations: []mutation{
 			{"spec.url", urls()},
 			{"spec.url", urls()},
@@ -281,7 +281,7 @@ func variationTemplates() []template {
 			{"spec.chat.mentions", of(absent{}, []any{map[string]any{"name": "here", "user": "U0123456789"}}, []any{map[string]any{"name": "channel", "user": "U0123456789"}},
 				[]any{map[string]any{"name": "everyone", "user": "U0123456789"}}, []any{map[string]any{"name": "everyone1", "user": "U0123456789"}}, []any{map[string]any{"name": "ok", "user": "U0123456789"}})},
 		}},
-	}
+	}, webhookTemplates()...)
 }
 
 func bindingMutations(dur, messageFields, extractNames func(*rand.Rand) any) []mutation {
@@ -430,6 +430,120 @@ spec:
   interactions: {toolApprovals: true, approverGroups: [S0123456789], timeout: 30m}
   session: {threadTTL: 90h}
 `
+
+const webhookConnectionDoc = `
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: variation, namespace: sre}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: s}
+  webhook:
+    identity: pr-reviewer[bot]
+    verify: {scheme: hmac-sha256, header: X-Hub-Signature-256, prefix: "sha256="}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login]}
+    thread: {field: number, prefix: pr-}
+    fields:
+      - {name: event, header: X-GitHub-Event, kind: id}
+      - {name: number, from: [/pull_request/number, /issue/number], kind: id}
+      - {name: title, from: [/pull_request/title]}
+    delivery: {header: X-GitHub-Delivery}
+`
+
+const webhookBindingDoc = `
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: variation, namespace: sre}
+spec:
+  agent: {backendRef: {name: kagent}, name: pr-reviewer, namespace: kagent}
+  identity: {userId: u}
+  chat:
+    connectionRef: {name: github}
+    channel: acme/widgets
+    output: none
+    triggers:
+      - type: webhookEvent
+        match: {event: "^pull_request$"}
+        exclude: {action: "^closed$"}
+        limits: {rateLimit: {maxRuns: 20, per: 1h, maxConcurrent: 2}, maxRunsPerDay: 100}
+        promptTemplate: "Review pull request #{{ .Fields.number }} of {{ .Channel }}."
+`
+
+// webhookTemplates are the variations of a webhook ChatConnection and a Binding of webhookEvent triggers: the rules that
+// tie one field of spec.webhook to another, and the channel and output of a Binding to the types of its triggers.
+func webhookTemplates() []template {
+	pointers := func(n int) []any {
+		out := make([]any, n)
+		for i := range out {
+			out[i] = "/p" + strconv.Itoa(i)
+		}
+		return out
+	}
+	headers := or(headerNames(), 1, 3, of("X-GitHub-Event", "x-hub-signature-256", "X-HUB-SIGNATURE-256", "X-Event", "X Event", strings.Repeat("X", 64), strings.Repeat("X", 65)))
+	fieldNames := of("event", "number", "key", "state", "Event", "e1", "a_b", "1a", strings.Repeat("e", 63), strings.Repeat("e", 64), "é", "")
+	keys := or(fieldNames, 2, 3, of(map[string]any{"a": "x", "b": "x", "c": "x", "d": "x", "e": "x", "f": "x", "g": "x"}))
+	keyed := func(k any) any {
+		if m, ok := k.(map[string]any); ok {
+			return m
+		}
+		return map[string]any{k.(string): "x"}
+	}
+	return []template{
+		{kind: "ChatConnection", doc: webhookConnectionDoc, mutations: []mutation{
+			{"spec.platform", of("webhook", "webhook", "slack", "")},
+			{"spec.webhook.identity", of("pr-reviewer[bot]", "", absent{}, nil, "a b", "x:y@z/{}", strings.Repeat("a", 128), strings.Repeat("a", 129), "é")},
+			{"spec.webhook.verify.scheme", of("hmac-sha256", "token", "token", "", "Token")},
+			{"spec.webhook.verify.header", headers},
+			{"spec.webhook.verify.prefix", of(absent{}, "", "sha256=", "Bearer ", "\t", "é", strings.Repeat("p", 32), strings.Repeat("p", 33))},
+			{"spec.webhook.verify.timestamp", of(absent{}, nil, map[string]any{}, map[string]any{"from": "/ts", "unit": "s", "window": "5m"},
+				map[string]any{"from": "ts", "unit": "s", "window": "5m"}, map[string]any{"from": "/ts", "unit": "ms", "window": "10m"},
+				map[string]any{"from": "/ts", "unit": "s", "window": "10m1s"}, map[string]any{"from": "/ts", "unit": "s", "window": "0s"},
+				map[string]any{"from": "/ts", "unit": "ns", "window": "1m"}, map[string]any{"from": "/ts", "window": "1m"})},
+			{"spec.webhook.channel", of(map[string]any{"from": []any{"/a"}}, map[string]any{"value": "acme/widgets"}, map[string]any{"value": "OPS"},
+				map[string]any{"value": "acme//w"}, map[string]any{}, map[string]any{"from": []any{"/a"}, "value": "x"}, map[string]any{"from": []any{}},
+				map[string]any{"value": ""}, map[string]any{"from": []any{""}}, map[string]any{"from": []any{"/"}}, map[string]any{"from": []any{"/a~2"}},
+				map[string]any{"from": pointers(8)}, map[string]any{"from": pointers(9)}, map[string]any{"from": []any{"/" + strings.Repeat("a", 255)}},
+				map[string]any{"from": []any{"/" + strings.Repeat("a", 256)}}, map[string]any{"value": strings.Repeat("a", 140)}, map[string]any{"value": strings.Repeat("a", 141)})},
+			{"spec.webhook.actor", of(map[string]any{"from": []any{"/sender/login"}}, map[string]any{"none": true}, map[string]any{"none": false, "from": []any{"/a"}},
+				map[string]any{"none": true, "from": []any{"/a"}}, map[string]any{"from": []any{"/a"}, "whenMissing": "keep"}, map[string]any{"whenMissing": "keep"},
+				map[string]any{"none": true, "whenMissing": ""}, map[string]any{"from": []any{"/a"}, "whenMissing": "Drop"}, map[string]any{}, map[string]any{"from": []any{}})},
+			{"spec.webhook.thread", of(absent{}, nil, map[string]any{}, map[string]any{"field": "number"}, map[string]any{"field": "title"}, map[string]any{"field": "nope"},
+				map[string]any{"field": "number", "prefix": "pr:"}, map[string]any{"field": "number", "prefix": strings.Repeat("p", 32)},
+				map[string]any{"field": "number", "prefix": strings.Repeat("p", 33)}, map[string]any{"field": "event", "prefix": ""})},
+			{"spec.webhook.fields.0.name", fieldNames},
+			{"spec.webhook.fields.0.header", headers},
+			{"spec.webhook.fields.1.from", of([]any{"/a"}, []any{}, []any{"a"}, nil, absent{}, pointers(8), pointers(9))},
+			{"spec.webhook.fields.1.header", of(absent{}, "", "X-Number")},
+			{"spec.webhook.fields.1.kind", of("id", "text", "", absent{}, "number")},
+			{"spec.webhook.fields.2.name", fieldNames},
+			{"spec.webhook.fields", of(absent{}, []any{}, nil)},
+			{"spec.webhook.delivery", of(absent{}, nil, map[string]any{}, map[string]any{"header": "X-Request-Id"}, map[string]any{"header": "Cookie"},
+				map[string]any{"header": "x-hub-signature-256"}, map[string]any{"header": ""})},
+			{"spec.webhook.delivery.header", headers},
+		}},
+		{kind: "Binding", doc: webhookBindingDoc, mutations: []mutation{
+			{"spec.chat.channel", of("acme/widgets", "OPS", "a.b_c-d/e", "C0123456789", "acme//w", "/acme", "acme/", "-a", "a b", "a:b", "é",
+				strings.Repeat("a", 140), strings.Repeat("a", 141), strings.Repeat("C", 32), "C"+strings.Repeat("0", 32))},
+			{"spec.chat.output", of("none", "none", "live", "final", "", absent{}, "None")},
+			{"spec.chat.triggers.0.type", of("webhookEvent", "webhookEvent", "mention", "botMessage", "personMessage", "")},
+			{"spec.chat.triggers", of(absent{}, []any{}, []any{map[string]any{"type": "mention"}},
+				[]any{map[string]any{"type": "webhookEvent", "promptTemplate": "x", "limits": map[string]any{"rateLimit": map[string]any{"maxRuns": int64(1), "per": "10s", "maxConcurrent": int64(1)}, "maxRunsPerDay": int64(0)}},
+					map[string]any{"type": "mention"}})},
+			{"spec.chat.triggers.0.match", of(absent{}, nil, map[string]any{})},
+			{"spec.chat.triggers.0.match", func(r *rand.Rand) any { return keyed(keys(r)) }},
+			{"spec.chat.triggers.0.exclude", func(r *rand.Rand) any { return keyed(keys(r)) }},
+			{"spec.chat.triggers.0.match.event", regexes()},
+			{"spec.chat.triggers.0.from", of(absent{}, nil, map[string]any{}, map[string]any{"id": "B0123456789"})},
+			{"spec.chat.triggers.0.extract", of(absent{}, nil, map[string]any{}, map[string]any{"key": map[string]any{"field": "title", "regex": "(?P<key>x)"}})},
+			{"spec.chat.triggers.0.thread", of(absent{}, nil, map[string]any{}, map[string]any{"by": ""}, map[string]any{"cooldown": "0s"},
+				map[string]any{"cooldown": "2h"}, map[string]any{"maxIdle": "0"}, map[string]any{"closeWhen": map[string]any{}}, map[string]any{"by": "key"})},
+			{"spec.chat.triggers.0.limits", of(absent{}, nil, map[string]any{}, map[string]any{"maxRunsPerDay": int64(0)},
+				map[string]any{"rateLimit": map[string]any{"maxRuns": int64(1), "per": "10s", "maxConcurrent": int64(1)}})},
+			{"spec.chat.triggers.0.promptTemplate", of("x", "", absent{}, "{{ .Fields.number }}", "{{ .Fields.title }}", "{{ .Channel", "{{ .Key }}")},
+		}},
+	}
+}
 
 const mentionBindingDoc = `
 apiVersion: agentkourier.dev/v1alpha1

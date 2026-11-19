@@ -1,0 +1,21 @@
+# A webhook fixture, in a directory of its own: tests copy testdata/ as one Slack config, which a webhook connection would
+# change (its Secret is not there). The CRD corpus walks into this directory, so the schema is held to it too.
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: { name: github, namespace: agent-kourier-system }
+spec:
+  platform: webhook
+  credentialsSecretRef: { name: github-webhook }   # key webhookSecret (scheme hmac-sha256)
+  allowedNamespaces: ["sre"]
+  webhook:
+    identity: pr-reviewer[bot]       # the account the agent posts as: its own events are dropped
+    verify: { scheme: hmac-sha256, header: X-Hub-Signature-256, prefix: "sha256=" }
+    channel: { from: [/repository/full_name] }
+    actor: { from: [/sender/login, /comment/user/login] }
+    thread: { field: number, prefix: pr- }
+    delivery: { header: X-GitHub-Delivery }
+    fields:
+      - { name: event, header: X-GitHub-Event, kind: id }
+      - { name: action, from: [/action], kind: id }
+      - { name: number, from: [/pull_request/number, /issue/number], kind: id }
+      - { name: title, from: [/pull_request/title, /issue/title] }

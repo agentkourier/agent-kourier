@@ -238,7 +238,7 @@ func TestAgentBackendValidate(t *testing.T) {
 
 func TestChatConnectionValidate(t *testing.T) {
 	runMutations[ChatConnection](t, "chatconnection.yaml", []mutation[ChatConnection]{
-		{"bad platform", func(o *ChatConnection) { o.Spec.Platform = "teams" }, `spec.platform: unsupported value "teams", must be one of slack`},
+		{"bad platform", func(o *ChatConnection) { o.Spec.Platform = "teams" }, `spec.platform: unsupported value "teams", must be one of slack, webhook`},
 		{"credentials without name", func(o *ChatConnection) { o.Spec.CredentialsSecretRef = SecretRef{} }, "spec.credentialsSecretRef.name: required"},
 		{"credentials with bad name", func(o *ChatConnection) { o.Spec.CredentialsSecretRef.Name = "Slack_Main" },
 			badName("spec.credentialsSecretRef.name", "Slack_Main")},
@@ -262,7 +262,7 @@ func TestChatConnectionRefusesASlackBlockOnAnotherPlatform(t *testing.T) {
 	c := load[ChatConnection](t, "chatconnection.yaml")
 	c.Spec.Platform = "teams"
 	c.Spec.Slack = &SlackConnectionSpec{Mode: SlackModeSocket}
-	want := []string{`spec.platform: unsupported value "teams", must be one of slack`, "spec.slack: is set, but only a slack connection has one"}
+	want := []string{`spec.platform: unsupported value "teams", must be one of slack, webhook`, "spec.slack: is set, but only a slack connection has one"}
 	if got := problemsOf(c.Validate()); !slices.Equal(got, want) {
 		t.Errorf("Validate() problems = %q, want %q", got, want)
 	}
