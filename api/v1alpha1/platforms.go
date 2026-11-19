@@ -72,7 +72,7 @@ type ChatPlatform struct {
 	ToolApprovals bool
 	// Feedback says whether the platform can show the useful and not-useful buttons and take a press (spec.feedback.enabled).
 	Feedback bool
-	// Triggers are the trigger types that the platform's Bindings take (spec.chat.triggers[].type), in the order a message names
+	// Triggers are the trigger types that the platform's Bindings take (spec.chat.triggers[].type), in the order a refusal lists
 	// them: Slack takes mention, botMessage and personMessage, and a webhook connection webhookEvent alone. A trigger of any other type
 	// is refused with UnsupportedOnPlatform, so a platform added without them takes none.
 	Triggers []TriggerType
