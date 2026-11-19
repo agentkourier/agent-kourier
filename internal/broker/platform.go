@@ -74,10 +74,12 @@ func platformFor(name string) (platformSpec, bool) {
 }
 
 // teamsIdentityOf is Microsoft Teams' identity call (platformSpec.Identify), which asks Teams nothing: a Teams bot is its Entra app, which
-// spec.teams.appID names, and its Teams ID is 28:<app ID>. Two connections of one app are then one app to the supervisor, and the older
-// serves it, as two of one Slack app do. Whether the client secret is the app's is for the connection's run to find (a FatalAuth).
+// spec.teams.appID names. Two connections of one app are then one app to the supervisor, and the older serves it, as two of one Slack app
+// do. Its bot is the bare app ID, not its Teams ID (28:<app ID>): a bot's post reaches the broker only through Microsoft Graph, which names
+// the app by that ID (chat.BotMessage.ID), as a botMessage trigger does, so the bot guard (botGuard) knows another connection's bot by it.
+// Whether the client secret is the app's is for the connection's run to find (a FatalAuth).
 func teamsIdentityOf(_ context.Context, _ RunConfig, conn Connection) (appIdentity, error) {
-	return appIdentity{App: conn.Teams.AppID, Bot: "28:" + conn.Teams.AppID}, nil
+	return appIdentity{App: conn.Teams.AppID, Bot: conn.Teams.AppID}, nil
 }
 
 // actorPlatform is the platform a ChatConnection's users are on, as the dialects attribute a turn to them: the ID is

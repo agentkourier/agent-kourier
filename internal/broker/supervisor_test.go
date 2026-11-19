@@ -478,7 +478,7 @@ func TestSupervisorRestartsATeamConnectionSwitchedToAnotherMode(t *testing.T) {
 // spec.
 func TestSupervisorRestartsATeamsConnectionSwitchedToAnotherMode(t *testing.T) {
 	w := newSupWorld(t)
-	w.ids["tok-teams"] = appIdentity{App: "22222222-3333-4444-8555-666666666666", Bot: "28:22222222-3333-4444-8555-666666666666"}
+	w.ids["tok-teams"] = appIdentity{App: "22222222-3333-4444-8555-666666666666", Bot: "22222222-3333-4444-8555-666666666666"}
 	inMode := func(gen int64, mode v1alpha1.TeamsMode) TeamConnection {
 		c := teamOn(v1alpha1.PlatformTeams, "team-c/teams", gen, "tok-teams", 3)
 		c.Teams = v1alpha1.TeamsConnectionSpec{TenantID: "11111111-2222-4333-8444-555555555555", AppID: w.ids["tok-teams"].App, Mode: mode}
@@ -1577,7 +1577,7 @@ func TestSupervisorStopsARunningConnectionEditedToWhatItCannotRun(t *testing.T) 
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newSupWorld(t)
-			w.ids["tok-teams"] = appIdentity{App: "22222222-3333-4444-8555-666666666666", Bot: "28:22222222-3333-4444-8555-666666666666"}
+			w.ids["tok-teams"] = appIdentity{App: "22222222-3333-4444-8555-666666666666", Bot: "22222222-3333-4444-8555-666666666666"}
 			running := teamOn(v1alpha1.PlatformTeams, "team-c/teams", 1, "tok-teams", 3)
 			w.reconcile(running)
 			if got := w.running(); !slices.Equal(got, []string{ownName, "team-c/teams"}) {
@@ -1629,7 +1629,7 @@ func TestSupervisorStopsARunningConnectionEditedToWhatItCannotRun(t *testing.T) 
 func TestSupervisorServesTheOlderConnectionOfATeamsApp(t *testing.T) {
 	const app, other = "22222222-3333-4444-8555-666666666666", "22222222-3333-4444-8555-777777777777"
 	id, err := RunConfig{}.identityOf(t.Context(), Connection{Platform: v1alpha1.PlatformTeams, Teams: v1alpha1.TeamsConnectionSpec{AppID: app}})
-	if want := (appIdentity{App: app, Bot: "28:" + app}); err != nil || id != want {
+	if want := (appIdentity{App: app, Bot: app}); err != nil || id != want {
 		t.Fatalf("identityOf a teams connection = %+v, %v; want %+v", id, err, want)
 	}
 
