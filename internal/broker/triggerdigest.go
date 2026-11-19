@@ -35,8 +35,12 @@ type triggerDigestConfig struct {
 	// Interval is how often windows are looked at (default 15 seconds). A line is posted within one Interval of
 	// its window ending.
 	Interval time.Duration
-	Now      func() time.Time // time.Now if nil
-	Logger   *slog.Logger     // slog.Default() if nil
+	// NoReplies says the connection ("namespace/name") is on a platform with no replies of Agent Kourier's (noRepliesIn): its
+	// windows are marked digested and no line is queued, since its platform posts nothing and the outbox would abandon the row.
+	// Nil queues the line of every connection.
+	NoReplies func(conn string) bool
+	Now       func() time.Time // time.Now if nil
+	Logger    *slog.Logger     // slog.Default() if nil
 }
 
 // purgeEvery is how often the loop deletes the runs that are older than any limit's window.
@@ -117,8 +121,18 @@ func (d *triggerDigest) pass(ctx context.Context) {
 }
 
 // post queues the line of one window and marks the window digested. The source of the row names the connection,
-// Binding, trigger and the start of the window, and nothing of any alert.
+// Binding, trigger and the start of the window, and nothing of any alert. The window of a connection with no replies
+// (triggerDigestConfig.NoReplies) is marked digested with no line: its platform posts nothing, and its stopped starts
+// are counted by agentkourier_trigger_limited_total all the same.
 func (d *triggerDigest) post(ctx context.Context, dg store.TriggerDigest) {
+	if d.cfg.NoReplies != nil && d.cfg.NoReplies(dg.Connection) {
+		if err := d.cfg.Store.MarkTriggerDigested(ctx, dg.Binding, dg.Trigger, dg.Start); err != nil {
+			d.cfg.Logger.WarnContext(ctx, "triggers: the window of a connection with no replies could not be recorded as digested; it will be tried again", "binding", dg.Binding, "trigger", dg.Trigger, "err", err)
+			return
+		}
+		d.cfg.Logger.DebugContext(ctx, "triggers: no digest line for a window of a connection with no replies", "binding", dg.Binding, "trigger", dg.Trigger, "connection", dg.Connection, "window", dg.End.Sub(dg.Start))
+		return
+	}
 	source := strings.Join([]string{"trigger-digest", dg.Connection, dg.Binding, strconv.Itoa(dg.Trigger), strconv.FormatInt(dg.Start.UnixNano(), 10)}, "/")
 	_, err := d.cfg.Queue.Enqueue(ctx, outbox.Post{
 		Source: source, Role: store.OutboxDigest, Connection: dg.Connection, Channel: dg.Channel,

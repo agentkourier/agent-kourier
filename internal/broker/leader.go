@@ -164,6 +164,9 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	if cfg.sink != nil {
 		sink = cfg.sink
 	}
+	// Nothing is rendered or queued for a connection whose platform has no replies (the webhook platform): it posts nothing.
+	noReplies := noRepliesIn(boot.Reloader.Current)
+	sink = quietSink{renderSink: sink, quiet: noReplies}
 	// The manager's sink is the tap, which hands the pauses of its turns to the interactions' intake; the
 	// intake answers through the manager, so its session is bound once the manager is built (D2).
 	// Whatever the interactions start adds its stop to stops, which runs between the intake, which feeds
@@ -209,8 +212,9 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	}
 	stops.add("trigger-threads", startLoop(runCtx, sweep.Run))
 	// The digest line of the alerts that a trigger's limits stopped is queued on the outbox, one for each window: the
-	// outbox posts it. The loop stops with the interactions' loops, before the outbox drain and the store.
-	digest, err := newTriggerDigest(triggerDigestConfig{Store: st, Queue: ob, Interval: cfg.digestEvery, Logger: log})
+	// outbox posts it, except for a connection with no replies. The loop stops with the interactions' loops, before the outbox
+	// drain and the store.
+	digest, err := newTriggerDigest(triggerDigestConfig{Store: st, Queue: ob, Interval: cfg.digestEvery, NoReplies: noReplies, Logger: log})
 	if err != nil {
 		return nil, fmt.Errorf("trigger digest: %w", err)
 	}
