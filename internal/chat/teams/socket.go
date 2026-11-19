@@ -76,7 +76,9 @@ const socketStopWait = time.Second
 // fifth or lengthened by as much. A socket that was ready for at least socketReconnectNow and then ended is followed by a connect at
 // once; one that ended sooner is a failure too, so that a socket the service closes as it opens does not make a busy loop. A 429 waits
 // its Retry-After, if it is longer, up to socketRetryAfterMax. A region that answers 403 (Socket mode not enabled for the bot in it), or
-// whose socket was closed by a SocketClosing that says not to reconnect, waits socketRefusedRetry.
+// whose socket was closed by a SocketClosing that says not to reconnect, waits socketRefusedRetry. A region's 403 is logged at WARN the
+// first time, and at DEBUG while each next one says the same, until the region has a socket ready again: a region that the bot is not
+// enabled in (apac, measured) refuses every socketRefusedRetry for as long as the connection runs.
 const (
 	socketRetryBase     = time.Second
 	socketRetryMax      = 15 * time.Second
@@ -337,6 +339,7 @@ func (s *sockets) region(ctx context.Context, region string, report func(regionE
 	var retiring sync.WaitGroup
 	defer retiring.Wait()
 	failures, reason := 0, ""
+	refusal := "" // the refusal last logged at WARN, until a socket of the region is ready
 	var wait time.Duration
 	for {
 		if wait > 0 && !waitFor(ctx, wait) {
@@ -354,12 +357,13 @@ func (s *sockets) region(ctx context.Context, region string, report func(regionE
 				return
 			}
 			var ok bool
-			if wait, reason, ok = s.failed(ctx, region, err, &failures, report); !ok {
+			if wait, reason, ok = s.failed(ctx, region, err, &failures, &refusal, report); !ok {
 				return
 			}
 			continue
 		}
 		readyAt := time.Now()
+		refusal = ""
 		s.log.InfoContext(ctx, "teams: socket ready", "region", region)
 		if !report(regionEvent{region: region, kind: regionUp}) {
 			s.retire(ctx, sk, 0)
@@ -384,8 +388,9 @@ func (s *sockets) region(ctx context.Context, region string, report func(regionE
 }
 
 // failed takes the failure err of a connect of region and says how long to wait before the next and why it is made; ok false means
-// the region stops (the credentials were rejected, or the run takes no more).
-func (s *sockets) failed(ctx context.Context, region string, err error, failures *int, report func(regionEvent) bool) (wait time.Duration, reason string, ok bool) {
+// the region stops (the credentials were rejected, or the run takes no more). A refusal (403) is logged at WARN unless it says what
+// *refusal, the one last logged at WARN, said: then at DEBUG.
+func (s *sockets) failed(ctx context.Context, region string, err error, failures *int, refusal *string, report func(regionEvent) bool) (wait time.Duration, reason string, ok bool) {
 	*failures++
 	if credentialsRejected(err) {
 		s.log.ErrorContext(ctx, "teams: the bot's credentials were rejected for Socket mode", "region", region, "error", err.Error())
@@ -394,8 +399,13 @@ func (s *sockets) failed(ctx context.Context, region string, err error, failures
 	}
 	wait, reason = s.retryWait(err, *failures)
 	if reason == reasonRefused {
-		s.log.WarnContext(ctx, "teams: a region refused the bot's socket; the other regions take its activities if they are ready",
-			"region", region, "error", err.Error(), "after", wait)
+		if said := err.Error(); said != *refusal {
+			*refusal = said
+			s.log.WarnContext(ctx, "teams: a region refused the bot's socket; the other regions take its activities if they are ready, and "+
+				"the same refusal again is logged at DEBUG", "region", region, "error", said, "after", wait)
+		} else {
+			s.log.DebugContext(ctx, "teams: a region refused the bot's socket again", "region", region, "error", said, "after", wait)
+		}
 		return wait, reason, report(regionEvent{region: region, kind: regionRefused, err: err})
 	}
 	s.log.WarnContext(ctx, "teams: a socket could not be opened; connecting again", "region", region, "error", err.Error(), "after", wait)

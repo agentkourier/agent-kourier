@@ -862,3 +862,42 @@ func TestSocketModeCountsEachEnvelopeBeforeRunReturns(t *testing.T) {
 		t.Errorf("envelopes{invoke} = %v when Run returned; want 1: the handler's count came after Run", got)
 	}
 }
+
+// A region that keeps answering the same 403 is logged at WARN once, and its later refusals at DEBUG, each still counted; a refusal that
+// says something else is logged at WARN again, and so is the first refusal after the region was ready.
+func TestSocketModeLogsARepeatedRefusalQuietly(t *testing.T) {
+	const refusedLine = "teams: a region refused the bot's socket;"
+	warns := func(st *socketTest) int {
+		n := 0
+		for line := range strings.SplitSeq(st.logs.String(), "\n") {
+			if strings.Contains(line, "level=WARN") && strings.Contains(line, refusedLine) {
+				n++
+			}
+		}
+		return n
+	}
+	st := newSocketTest(t, "amer", "apac")
+	st.c.sockets.refusedRetry = 20 * time.Millisecond
+	st.f.Answer("apac", faketeams.Answer{Status: http.StatusForbidden, Body: `{"error":"Socket mode is not enabled for this bot."}`})
+	st.run(t)
+	st.f.WaitSocket(t, "amer", 0, 5*time.Second)
+	st.f.WaitConnects(t, "apac", 5, 5*time.Second)
+	if got := warns(st); got != 1 {
+		t.Errorf("%d WARN lines for 5 refusals of the same answer; want 1", got)
+	}
+	if got := strings.Count(st.logs.String(), "teams: a region refused the bot's socket again"); got < 3 {
+		t.Errorf("%d DEBUG lines for the repeated refusals; want at least 3", got)
+	}
+	testutil.Eventually(t, "each refusal to be counted", func() bool {
+		return st.series(t, "agentkourier_teams_socket_reconnects_total", "apac", "refused") >= 4
+	})
+
+	st.f.Answer("apac", faketeams.Answer{Status: http.StatusForbidden, Body: `{"error":"Another refusal."}`})
+	testutil.Eventually(t, "a changed refusal to be logged at WARN", func() bool { return warns(st) == 2 })
+
+	st.f.Answer("apac", faketeams.Answer{})
+	testutil.Eventually(t, "apac's socket to be ready", func() bool { return st.series(t, "agentkourier_teams_socket_ready", "apac") == 1 })
+	st.f.Answer("apac", faketeams.Answer{Status: http.StatusForbidden, Body: `{"error":"Another refusal."}`})
+	st.f.RegionSockets("apac")[0].Drop()
+	testutil.Eventually(t, "the first refusal after a ready socket to be logged at WARN", func() bool { return warns(st) == 3 })
+}
