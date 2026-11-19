@@ -146,9 +146,13 @@ the code is Entra's OAuth error code. The same exit follows when the Bot Connect
 admin disabled the app (403 `BotDisabledByAdmin`), with the Bot Connector's code, and in socket mode when the socket's connect call is
 answered 401, with no code. Entra's refusal of the token for Microsoft Graph does not end the process. A client secret stored with a
 newline at its end is sent with it ([Store the client secret](configure-teams.md#2-store-the-client-secret)). The dry run reads only
-Slack, so it does not test these credentials. Make the Secret `teams` again as that step says, then restart:
+Slack, so it does not test these credentials. Write the right value in the file as that step says, replace the Secret `teams` from it, then
+restart, and delete the file:
 
 ```sh
+kubectl -n agent-kourier create secret generic teams \
+  --from-env-file="$HOME/.config/agent-kourier/teams-secret.env" \
+  --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n agent-kourier rollout restart deploy/agent-kourier
 ```
 
