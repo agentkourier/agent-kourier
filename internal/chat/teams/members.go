@@ -76,7 +76,9 @@ type rosterPageOf struct {
 // object ID of want (its aadObjectId), which it keeps (names) and returns by ID; an ID the last page leaves unfound is not in the map.
 // Each page takes one of *pages, which the caller shares across the rosters of one read: a page past them is errRosterTooLong, and no
 // call. A page whose next names a page this roster already gave (a cycle) is an error, as is any failure of a page: the read fails
-// closed, with the accounts found before it, whatever a later page would have held. ctx bounds it.
+// closed, with the accounts found before it, whatever a later page would have held. ctx bounds it. The IDs of want must be distinct:
+// the read stops before the last page only once it has as many accounts as want has IDs, so a repeated ID makes it read on to the
+// last page or to the bound of *pages.
 func (c *Client) findIn(ctx context.Context, pages *int, serviceURL, conv string, want ...string) (map[string]account, error) {
 	found := make(map[string]account, len(want))
 	token := ""
@@ -360,16 +362,16 @@ func (n *ttlCache[K, V]) put(k K, v V) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if _, ok := n.m[k]; !ok && len(n.m) >= n.most {
-		for k, e := range n.m {
+		for old, e := range n.m {
 			if now.Sub(e.kept) >= n.ttl {
-				delete(n.m, k)
+				delete(n.m, old)
 			}
 		}
-		for k := range n.m {
+		for old := range n.m {
 			if len(n.m) < n.most {
 				break
 			}
-			delete(n.m, k)
+			delete(n.m, old)
 		}
 	}
 	n.m[k] = ttlEntry[V]{v, now}
