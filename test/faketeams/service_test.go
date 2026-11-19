@@ -409,8 +409,12 @@ func TestTheInstallCarriesTheTeamsRecordAlone(t *testing.T) {
 	}))
 	t.Cleanup(bot.Close)
 	fake, _ := fakeOnly(t, bot.URL)
-	if _, err := faketeams.NewControl(controlURL(t, fake)).Install(t.Context(), faketeams.Install{App: app, Channel: channel}); err != nil {
+	delivered, err := faketeams.NewControl(controlURL(t, fake)).Install(t.Context(), faketeams.Install{App: app, Channel: channel})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if delivered.Status != http.StatusOK {
+		t.Fatalf("the bot answered the install %+v; want 200", delivered)
 	}
 	var a struct {
 		Type         string `json:"type"`
@@ -424,8 +428,8 @@ func TestTheInstallCarriesTheTeamsRecordAlone(t *testing.T) {
 		if err := json.Unmarshal(body, &a); err != nil {
 			t.Fatalf("the install is not an activity in JSON: %v", err)
 		}
-	case <-t.Context().Done():
-		t.Fatal("the bot was sent no install")
+	default: // Install returns once the bot has answered, so the bot has the install by now if it was sent one
+		t.Fatalf("the bot was sent no install: %+v", delivered)
 	}
 	if a.Type != "conversationUpdate" || a.Conversation.ID != team {
 		t.Errorf("the install is a %q on %q; want a conversationUpdate on the team's conversation %q", a.Type, a.Conversation.ID, team)
