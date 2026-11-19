@@ -8,7 +8,7 @@ die() {
 }
 
 # renovate: datasource=go depName=golang.org/x/vuln
-GOVULNCHECK_VERSION=v1.9.0
+GOVULNCHECK_VERSION=v1.10.0
 MODULE_DIR=${1:-.}
 
 [ -d "${MODULE_DIR}" ] || die "module directory does not exist: ${MODULE_DIR}"
