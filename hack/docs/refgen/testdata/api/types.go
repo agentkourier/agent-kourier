@@ -48,6 +48,9 @@ type WidgetSpec struct {
 	Ref *Ref `json:"ref,omitempty"`
 	// Paint maps a color to a shade.
 	Paint map[Color]string `json:"paint,omitempty"`
+	// Trim maps a color to a trim. A striped widget names its own keys.
+	// +doc:keysOf=a plain widget
+	Trim map[Color]string `json:"trim,omitempty"`
 	// Every is a duration.
 	// +doc:default=Larger of `1h` and the interval | minimum
 	Every metav1.Duration `json:"every,omitzero"`
