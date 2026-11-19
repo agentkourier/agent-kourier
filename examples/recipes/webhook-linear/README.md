@@ -56,7 +56,7 @@ by whoever filed, edited or commented on it.
   repository has not checked them against a live delivery.
 - **A Linear account for the agent**: an OAuth application whose client-credentials token acts as the application's own
   user, or a personal API key, which acts as its user. That user's ID is the `identity`.
-- **An A2A agent that has Linear tools** using that key, and its URL. The AgentBackend's `url` is a placeholder
+- **An A2A agent that has Linear tools** using that account's token, and its URL. The AgentBackend's `url` is a placeholder
   (`REPLACE-ME`).
 - **The broker's clock within a minute of Linear's.** A delivery whose timestamp is further off either way is answered
   `401`, with the reason `stale`. Whether Linear gives a delivery that it sends again a new `webhookTimestamp` is
