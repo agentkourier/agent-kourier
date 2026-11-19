@@ -317,7 +317,7 @@ Kourier's loader. The agent keeps its conversations in memory and runs one repli
 
 !!! warning "Experimental"
 
-    Microsoft Teams support needs a release later than 0.4.0, and has not yet been run as a full install against Microsoft
+    Microsoft Teams support needs a release later than 0.5.0, and has not yet been run as a full install against Microsoft
     Teams: [Configure Microsoft Teams](configure-teams.md) says what was checked.
 
 The `prompt-agent-teams` recipe reuses the `prompt-agent` recipe's agent as it is, and binds it to a Microsoft Teams

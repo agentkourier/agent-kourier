@@ -1007,10 +1007,8 @@ Binding that 0.4.0 took loads as it did. What changes:
   `charts/agent-kourier/files/crds` again.
 - **Two more reasons a Binding can be refused for.** The broker checks a Binding once more against the platform of its ChatConnection when
   it reads the two together, and refuses one that names an ID of another shape with `InvalidPlatformID` or asks for a feature the platform
-  does not serve with `UnsupportedOnPlatform` ([What each platform supports](../reference/platforms.md)). The schema of this release holds
-  Slack's shapes and Slack serves every feature the broker checks, so no Binding on Slack gets either until
-  [the release that takes Microsoft Teams ChatConnections](#upgrade-to-the-release-that-takes-microsoft-teams-chatconnections) widens the
-  schema. `agentkourier_config_binding_rejections`
+  does not serve with `UnsupportedOnPlatform` ([What each platform supports](../reference/platforms.md)). The schema holds Slack's shapes
+  already and Slack serves every feature the broker checks, so no Binding on Slack gets either. `agentkourier_config_binding_rejections`
   has a series for each, at 0.
 
 **Roll back.** No stored object depends on this release: the chat ID rules are 0.4.0's. The CRDs of 0.4.0 have neither column.
@@ -1045,7 +1043,7 @@ its chat listener, or in `socket` mode, with what [What each platform supports](
 - **The broker holds each Binding to its own platform.** A Microsoft Teams ID on a Slack connection, a Slack ID on a teams connection,
   and a Slack channel or sender ID of 33 to 140 bytes (36 for a sender), which the schema now takes, are refused when the broker reads the
   Binding with its ChatConnection, with `InvalidPlatformID`; `approverGroups` on a teams connection is refused with
-  `UnsupportedOnPlatform` ([What each platform supports](../reference/platforms.md)). A Binding that 0.4.0 took has Slack's shapes within
+  `UnsupportedOnPlatform` ([What each platform supports](../reference/platforms.md)). A Binding that 0.5.0 took has Slack's shapes within
   Slack's caps, and loads as it did. `agent-kourier dry-run` holds a Binding to Slack's shapes and caps, as before.
 - **The Binding and ChatConnection CRDs change**, and their schema hashes with them: the chart applies them with the release when
   `crds.install` is true, or unset on `config.source: crds`; if you apply the CRDs yourself, apply `charts/agent-kourier/files/crds` again.

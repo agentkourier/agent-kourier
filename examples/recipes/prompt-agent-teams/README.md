@@ -47,7 +47,7 @@ your message while the agent works ([What Microsoft Teams shows while the agent 
   its Slack resources are not used here.
 - **A Microsoft 365 tenant**, a bot registered in it, and the right to upload a custom app to a team:
   [Configure Microsoft Teams](../../../docs/how-to/configure-teams.md).
-- **Agent Kourier from a chart release that runs Microsoft Teams connections**, on Kubernetes 1.33 or later. The 0.4.0
+- **Agent Kourier from a chart release that runs Microsoft Teams connections**, on Kubernetes 1.33 or later. The 0.5.0
   chart does not: its broker refuses `platform: teams`.
 - **In `http` mode, the default:** a host name that Microsoft Teams can reach over HTTPS and that routes to the chat
   listener, as the how-to's step for the chart values says.

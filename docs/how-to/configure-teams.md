@@ -7,7 +7,7 @@ Workflows, where a `botMessage` trigger starts an investigation.
 
 !!! warning "Experimental"
 
-    Microsoft Teams support needs a release later than 0.4.0: the 0.4.0 broker refuses `platform: teams`. The tests
+    Microsoft Teams support needs a release later than 0.5.0: the 0.5.0 broker refuses `platform: teams`. The tests
     of Agent Kourier run it against fakes of Microsoft's services. A full install of the broker has not yet been run
     against Microsoft Teams. Parts of it were checked on one test tenant in November 2026, in Teams' web client, by a test
     program that sent Agent Kourier's own messages and cards. The steps below mark what was checked
