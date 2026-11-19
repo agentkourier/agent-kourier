@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    agentkourier.dev/schema-sha256: 906e59e6bd9fcdf256135b2307abfa04b9dd3537b65cdd65da5976b73584521b
+    agentkourier.dev/schema-sha256: 2c818dac6876ca2ef1cfb2a9f9652b0d9e2ca9fd6f6029e34179ebf9446b36f0
     controller-gen.kubebuilder.io/version: v0.23.0
   name: chatconnections.agentkourier.dev
 spec:
@@ -80,8 +80,9 @@ spec:
                 type: object
               platform:
                 description: |-
-                  Platform is the chat platform: slack, or teams, Microsoft Teams. A broker runs a teams connection in http mode only: one in
-                  socket mode that is the broker's own connection stops its start, and a team one is not started.
+                  Platform is the chat platform: slack, or teams, Microsoft Teams. A broker runs a teams connection in http or socket mode
+                  (spec.teams.mode). One in http mode, or with a spec.teams.notificationURL in either mode, needs the broker's chat listener: on a
+                  broker with none, the broker's own connection stops its start, and a team one is not started.
                 enum:
                 - slack
                 - teams
@@ -138,7 +139,8 @@ spec:
                       channel that a Binding of the connection names, with this URL for its notifications, and reads each new message that Graph
                       notifies: that is how a post of another app, such as an alert's card that Workflows posts, reaches the connection, since Teams
                       sends a bot no other bot's post. It needs the chat listener in either mode, and Graph must reach the leader at this URL. Unset,
-                      no other app's post reaches the connection.
+                      the leader polls Microsoft Graph for the messages of each bound channel instead, which needs no public route: another app's
+                      post reaches the connection later, and a reply only in a channel's newest threads.
                     maxLength: 2048
                     type: string
                     x-kubernetes-validations:

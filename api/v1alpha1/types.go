@@ -272,8 +272,9 @@ type ChatConnectionList struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.teams) || self.platform == 'teams'",message="is set, but only a teams connection has one",fieldPath=".teams"
 // +kubebuilder:validation:XValidation:rule="self.platform != 'teams' || has(self.teams)",message="is required on a teams connection: it names the tenant and the app",fieldPath=".teams"
 type ChatConnectionSpec struct {
-	// Platform is the chat platform: slack, or teams, Microsoft Teams. A broker runs a teams connection in http mode only: one in
-	// socket mode that is the broker's own connection stops its start, and a team one is not started.
+	// Platform is the chat platform: slack, or teams, Microsoft Teams. A broker runs a teams connection in http or socket mode
+	// (spec.teams.mode). One in http mode, or with a spec.teams.notificationURL in either mode, needs the broker's chat listener: on a
+	// broker with none, the broker's own connection stops its start, and a team one is not started.
 	// +kubebuilder:validation:Enum=slack;teams
 	Platform string `json:"platform"`
 	// CredentialsSecretRef names one Secret whose keys are fixed by the platform and its mode. A Slack connection in Socket Mode needs
@@ -362,7 +363,8 @@ type TeamsConnectionSpec struct {
 	// channel that a Binding of the connection names, with this URL for its notifications, and reads each new message that Graph
 	// notifies: that is how a post of another app, such as an alert's card that Workflows posts, reaches the connection, since Teams
 	// sends a bot no other bot's post. It needs the chat listener in either mode, and Graph must reach the leader at this URL. Unset,
-	// no other app's post reaches the connection.
+	// the leader polls Microsoft Graph for the messages of each bound channel instead, which needs no public route: another app's
+	// post reaches the connection later, and a reply only in a channel's newest threads.
 	// +kubebuilder:validation:MaxLength=2048
 	// +kubebuilder:validation:XValidation:rule=`self == '' || self.matches('(?i)^https://[^/?#]')`,message="must be an https URL with a host"
 	// +kubebuilder:validation:XValidation:rule=`!self.matches('(?i)^https?://[^/?#]*@')`,message="must not contain credentials"

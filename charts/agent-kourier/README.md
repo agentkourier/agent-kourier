@@ -394,7 +394,10 @@ do for you, and `podDisruptionBudget.enabled` with `minAvailable: 1` so a drain 
 ## Chat listener
 
 `chatListener.enabled` opens the chat listener (`AGENTKOURIER_CHAT_LISTEN`, on `chatListener.port`, 8081 by default), the port a chat
-platform sends its requests to: `POST /chat/<platform>/<namespace>/<name>`. A Slack ChatConnection with `spec.slack.mode: http` needs it.
+platform sends its requests to: `POST /chat/<platform>/<namespace>/<name>`. A Slack ChatConnection with `spec.slack.mode: http` needs it,
+and so does a Microsoft Teams one in `http` mode (`spec.teams.mode` unset or `http`) or with a `spec.teams.notificationURL` in either
+mode, to which Microsoft Graph sends its notifications. Without the listener such a connection is not run: the broker's own connection
+fails the start (exit code 2), and a team's is not started.
 It is apart from the metrics port, so `/metrics` is never on it. Off, the default, the broker opens no such port.
 
 Only the leader serves the chat routes; a standby answers 503 to each. So the chat Service, `<fullname>-chat`, selects the Deployment's
@@ -416,7 +419,9 @@ pods that carry the label `agentkourier.dev/role: leader`, and the broker keeps 
   that is missing RBAC, a policy that denies it, or a wrong pod name or namespace, none of which a retry mends.
 
 While no pod carries the label, during a takeover, the chat Service has no endpoint and the platform's requests fail; Slack sends a
-request again when it gets no answer (Slack's own behaviour, not checked here). The health and metrics Service (`service.enabled`) selects
+request again when it gets no answer (Slack's own behaviour, not checked here). Microsoft Teams sends a message that was answered 503
+again once, about 0.6 seconds later, and a connection that polls Microsoft Graph reads back what was posted in the 10 minutes before its
+leader's run starts ([What each platform supports](../../docs/reference/platforms.md#catch-up-reads)). The health and metrics Service (`service.enabled`) selects
 every Ready pod, a standby's included.
 
 The pod's name and namespace come from the downward API (`AGENTKOURIER_POD_NAME`, `AGENTKOURIER_POD_NAMESPACE`), and the label needs
@@ -435,7 +440,10 @@ chat Service's requests to it. Keep Agent Kourier in a namespace of its own, whe
 controller's pods, say), and the render requires it.
 
 The chat port is meant to be reachable from the internet. Before it decodes anything of a request, the Slack adapter checks the
-request's signature with the connection's signing secret and its timestamp against a 5 minute window, and the listener caps
+request's signature with the connection's signing secret and its timestamp against a 5 minute window, and the Microsoft Teams adapter
+checks an activity's Bot Framework token (Microsoft Graph's notifications carry none: a change or lifecycle notification is refused unless its `clientState` is the
+connection's).
+The listener caps
 the body, the requests it handles at once and the body bytes it holds
 ([Limits](../../docs/reference/limits.md#run-the-broker), [Security model](../../docs/explanation/security.md#the-chat-port)).
 
