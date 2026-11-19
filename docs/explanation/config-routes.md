@@ -49,7 +49,8 @@ they do with a failure.
 
 **Files are all or nothing.** One resource that does not load fails the config. At start the broker exits with code 2 and names the
 file and field. On a reload it keeps the last good config, logs `config reload failed; keeping the last good snapshot` and sets
-`agentkourier_config_stale` to 1. One owner and one reviewed artifact make that an honest rule.
+`agentkourier_config_stale` to 1. A reload whose directory no longer holds just the ChatConnection the broker started with is refused in the
+same way ([Which ChatConnections a broker serves](#which-chatconnections-a-broker-serves)). One owner and one reviewed artifact make that an honest rule.
 
 **Custom resources are judged one at a time**, because different teams own them and one team's typo must not freeze everyone:
 
@@ -165,7 +166,13 @@ no annotation reads `unannotated`. To end the mismatch, bring the CRDs and the i
 ## Which ChatConnections a broker serves
 
 On files the directory holds exactly one `ChatConnection`: the broker refuses to start with none or with more, and `AGENTKOURIER_CHAT_CONNECTION`,
-`AGENTKOURIER_CONNECTION_NAMESPACES` and `AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR` are refused.
+`AGENTKOURIER_CONNECTION_NAMESPACES` and `AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR` are refused. While it runs it serves the connection it
+started with, by namespace and name, until it restarts: a reload whose directory renames that connection, adds a second or takes it away is
+refused, so the broker keeps the last good config, its Bindings included, sets `agentkourier_config_stale` to 1 and logs
+`config reload failed; keeping the last good snapshot` with the error
+`the directory holds the ChatConnections [acme-webhooks/github2], and the files route serves the ChatConnection it started with, acme-webhooks/github, until the broker restarts`.
+A restart reads the directory as it is then: the chart's roll does it when the ConfigMap changes (unless `config.existingConfigMap` is set or
+`config.rollOnChange` is `false`). An edit of the connection under the same name is taken, and applies at a restart as above.
 
 On custom resources a cluster can hold many connections. A broker may have an own connection, named as `namespace/name` in
 `AGENTKOURIER_CHAT_CONNECTION`; if it has one, it always serves it. It also serves the ChatConnections of the namespaces it admits, except a second
