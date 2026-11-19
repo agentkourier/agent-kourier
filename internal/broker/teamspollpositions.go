@@ -48,6 +48,11 @@ func (t teamsPollPositions) Forget(ctx context.Context, conn, channel string) er
 	return written(t.s.DeleteTeamsPollPosition(ctx, conn, channel))
 }
 
+// ForgetUnbound implements teams.PollPositions.
+func (t teamsPollPositions) ForgetUnbound(ctx context.Context, conn string, bound []string) error {
+	return written(t.s.DeleteTeamsPollPositionsExcept(ctx, conn, bound))
+}
+
 // written is the error of a write of the positions: store.ErrDeposed wraps teams.ErrNotLeader too, so that the poller stops.
 func written(err error) error {
 	switch {

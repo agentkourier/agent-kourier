@@ -155,9 +155,13 @@ type polled struct {
 	savedAt         time.Time
 	saveWarned      bool
 	// Guarded by the poller's mu, since the channel's lane writes them: pending counts the delta reads whose messages are on the lane
-	// and not yet handed on, and handed is the newest position whose read's messages, and every earlier read's, have been.
+	// and not yet handed on, and handed is the newest position whose read's messages, and every earlier read's, have been. gen counts
+	// the deltaLinks that Graph refused in the run: a read put on the lane before one is not recorded after it. cut says that the stop
+	// of Serve cut a read's messages: nothing later is recorded in the run.
 	pending int
 	handed  position
+	gen     int
+	cut     bool
 }
 
 // root is a thread whose replies a poll reads: when its root was made, when the newest reply that a read gave was made (zero before
@@ -209,6 +213,13 @@ type poller struct {
 	lastCall time.Time // when the last read began
 	paused   time.Time // no read before this: a 429's Retry-After, for the whole connection
 	stopped  bool      // the store refused a write because this broker no longer leads: the run reads nothing more
+	// The positions that the run deletes of the channels that no Binding names (pruneUnbound): pruned says it is done, pruneAt when it
+	// is tried again after a failure, pruneWarned that the failure was told at WARN, and stale the channels whose position a failed
+	// delete left in the store (forget), which a Binding that names them again in the run does not resume.
+	pruned      bool
+	pruneAt     time.Time
+	pruneWarned bool
+	stale       map[string]bool
 }
 
 // newPoller returns the poller of c, which keeps each channel's read position in positions (nil: in memory alone).
@@ -259,6 +270,7 @@ func (p *poller) groupKnown(channel string) {
 func (p *poller) run(ctx context.Context, lister chat.ChannelLister) {
 	clear(p.chans)
 	p.lastCall, p.paused, p.stopped = time.Time{}, time.Time{}, false
+	p.pruned, p.pruneAt, p.pruneWarned, p.stale = false, time.Time{}, false, map[string]bool{}
 	p.mu.Lock()
 	p.gapFrom, p.grouped = time.Time{}, nil
 	p.mu.Unlock()
@@ -286,8 +298,10 @@ func (p *poller) run(ctx context.Context, lister chat.ChannelLister) {
 
 // round reads each bound channel that is due, in the order of their IDs, while the connection takes messages. A channel new to the run
 // is due within one interval of now, the new ones spread over it, and its first poll makes a catch-up read of the look-back; one that no
-// Binding names any longer is forgotten, with what was read of it and its stored position (forget). A channel that waits for its team's
-// group is due at once when the receiver has recorded the group since the last round (groupKnown).
+// Binding names any longer is forgotten, with what was read of it and its stored position (forget). The run's first round deletes the
+// stored positions of the channels that no Binding names (pruneUnbound), so that a channel whose Binding went while no run saw it go is
+// read anew when a Binding names it again. A channel that waits for its team's group is due at once when the receiver has recorded the
+// group since the last round (groupKnown).
 func (p *poller) round(ctx context.Context, lister chat.ChannelLister) {
 	if ctx.Err() != nil || p.stopped {
 		return
@@ -314,9 +328,17 @@ func (p *poller) round(ctx context.Context, lister chat.ChannelLister) {
 		}
 	}
 	for i, ch := range added {
-		p.chans[ch] = &polled{roots: map[string]*root{}, state: channelPolling,
+		st := &polled{roots: map[string]*root{}, state: channelPolling,
 			next:    now.Add(p.interval * time.Duration(i) / time.Duration(len(added))),
 			catchUp: now.Add(-p.lookback), catchUpWhy: catchUpStart}
+		if p.stale[ch] { // its position is the one from before it was unbound: it is read anew, and the next write replaces it
+			st.loaded = true
+			delete(p.stale, ch)
+		}
+		p.chans[ch] = st
+	}
+	if !p.pruneUnbound(ctx, bound, now) {
+		return
 	}
 	p.mu.Lock()
 	gapFrom, grouped := p.gapFrom, p.grouped
@@ -589,7 +611,8 @@ func (p *poller) readDelta(ctx context.Context, s *serving, ch string, st *polle
 		}
 		st.link, st.sync, st.pages, st.resumed = "", "", 0, false
 		p.mu.Lock()
-		st.handed = position{} // a link Graph refuses is not written to the store
+		st.handed = position{} // a link Graph refuses is not written to the store, nor one of a read put on the lane before it
+		st.gen++
 		p.mu.Unlock()
 		return polledReset, nil
 	}
@@ -620,8 +643,12 @@ func (p *poller) readDelta(ctx context.Context, s *serving, ch string, st *polle
 }
 
 // handOnDelta puts what a delta read of ch gave on the channel's lane (handOnAll), and records the read's position pos as handed on once
-// the lane has handed on all of it: an item cut by the stop of Serve leaves the position where it was for the rest of the run. A read
-// that gave nothing to hand on is recorded at once (handedOn).
+// the lane has handed on all of it. Not recorded: a read whose items the stop of Serve cut, which leaves the position where it was for
+// the rest of the run (cut), and a read put on the lane before Graph refused the channel's deltaLink (gen), whose link may be the
+// refused one. A read that gave nothing to hand on is recorded at once (handedOn). A message that a Bot Framework activity gave too is
+// skipped as a duplicate here when the receiver claimed its dedup key, which it does when it takes the activity (take), before the
+// activity's item on the lane has handed it on: a position may then be recorded past an activity still on the lane, which a crash then
+// loses. That window was there before the position was stored (the dedup held it across the run alone), and is accepted.
 func (p *poller) handOnDelta(ctx context.Context, s *serving, ch string, st *polled, fresh []found, pos position) error {
 	if len(fresh) == 0 {
 		p.handedOn(st, pos)
@@ -629,15 +656,19 @@ func (p *poller) handOnDelta(ctx context.Context, s *serving, ch string, st *pol
 	}
 	p.mu.Lock()
 	st.pending++
+	gen := st.gen
 	p.mu.Unlock()
 	err := p.c.handOnAll(ctx, s, ch, fresh, func(done bool) {
-		if !done {
-			return // pending stays: no later read of the run is recorded past these messages
-		}
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		st.pending--
-		st.handed = pos
+		if !done {
+			st.cut = true // no later read of the run is recorded past these messages
+			return
+		}
+		if st.gen == gen && !st.cut {
+			st.handed = pos
+		}
 	})
 	if err != nil {
 		p.mu.Lock()
@@ -652,7 +683,7 @@ func (p *poller) handOnDelta(ctx context.Context, s *serving, ch string, st *pol
 func (p *poller) handedOn(st *polled, pos position) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if st.pending == 0 {
+	if st.pending == 0 && !st.cut {
 		st.handed = pos
 	}
 }
@@ -733,7 +764,8 @@ func (p *poller) save(ctx context.Context, ch string, st *polled, now time.Time)
 
 // forget deletes the stored position of ch, a channel that no Binding names any longer, so that a Binding that names it later does not
 // resume from where it stood: what was posted while it was not bound is not handed on. It says false when the store refused the delete
-// because this broker no longer leads, which stops the poller (stop); a delete that fails otherwise is logged at WARN.
+// because this broker no longer leads, which stops the poller (stop). A delete that fails otherwise is logged at WARN; the channel is
+// then stale, read anew if a Binding names it again in the run, and the delete is made again by pruneUnbound.
 func (p *poller) forget(ctx context.Context, ch string) bool {
 	if p.positions == nil {
 		return true
@@ -743,11 +775,49 @@ func (p *poller) forget(ctx context.Context, ch string) bool {
 	case errors.Is(err, ErrNotLeader):
 		p.stop(ctx, err)
 		return false
-	case err != nil && ctx.Err() == nil:
-		p.log.WarnContext(ctx, "teams: the stored read position of a channel that no Binding names any longer could not be deleted; a "+
-			"Binding that names the channel again within the resume bound resumes from it", "channel", ch, "resumeMax", p.resumeMax.String(),
-			"error", err.Error())
+	case err != nil:
+		p.stale[ch], p.pruned = true, false
+		if ctx.Err() == nil {
+			p.log.WarnContext(ctx, "teams: the stored read position of a channel that no Binding names any longer could not be deleted; "+
+				"the delete is made again, and a Binding that names the channel again reads it anew", "channel", ch, "error", err.Error())
+		}
 	}
+	return true
+}
+
+// pruneUnbound deletes, at the run's first round, the stored positions of the connection's channels that no Binding names (bound): a
+// Binding that went while no run of the connection saw it go (a restart, a change of leader), or whose delete failed (forget), would
+// otherwise resume its channel from where it stood when a Binding names the channel again, and hand on what was posted while it was not
+// bound. It says false when the store refused the delete because this broker no longer leads, which stops the poller (stop). A delete
+// that fails otherwise never holds the polls: it is told once at WARN until one succeeds (told at INFO), and made again at the first
+// round saveEvery later.
+func (p *poller) pruneUnbound(ctx context.Context, bound []string, now time.Time) bool {
+	if p.positions == nil || p.pruned || now.Before(p.pruneAt) {
+		return true
+	}
+	err := p.positions.ForgetUnbound(ctx, p.c.conn, bound)
+	switch {
+	case errors.Is(err, ErrNotLeader):
+		p.stop(ctx, err)
+		return false
+	case err != nil && ctx.Err() != nil:
+		return true
+	case err != nil:
+		p.pruneAt = now.Add(p.saveEvery)
+		if !p.pruneWarned {
+			p.pruneWarned = true
+			p.log.WarnContext(ctx, "teams: the stored read positions of the channels that no Binding names could not be deleted; the "+
+				"channels are polled on, and the delete is tried again", "retry", p.saveEvery.String(), "error", err.Error())
+		} else {
+			p.log.DebugContext(ctx, "teams: the stored read positions of the channels that no Binding names could not be deleted again",
+				"error", err.Error())
+		}
+		return true
+	}
+	if p.pruneWarned {
+		p.log.InfoContext(ctx, "teams: the stored read positions of the channels that no Binding names are deleted")
+	}
+	p.pruned, p.pruneAt, p.pruneWarned, p.stale = true, time.Time{}, false, map[string]bool{}
 	return true
 }
 

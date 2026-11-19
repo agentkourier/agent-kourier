@@ -21,7 +21,10 @@ type memPositions struct {
 	kept                        map[[2]string]PollPosition
 	saves                       int
 	forgot                      []string
+	unbound                     [][]string // the bound lists of each ForgetUnbound that the store took
+	unboundCalls                int        // the ForgetUnbound calls, those that failed included
 	loadErr, saveErr, forgetErr error
+	unboundErr                  error
 }
 
 func (m *memPositions) Load(_ context.Context, conn, channel string) (PollPosition, bool, error) {
@@ -56,6 +59,22 @@ func (m *memPositions) Forget(_ context.Context, conn, channel string) error {
 	}
 	m.forgot = append(m.forgot, channel)
 	delete(m.kept, [2]string{conn, channel})
+	return nil
+}
+
+func (m *memPositions) ForgetUnbound(_ context.Context, conn string, bound []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.unboundCalls++
+	if m.unboundErr != nil {
+		return m.unboundErr
+	}
+	m.unbound = append(m.unbound, slices.Clone(bound))
+	for k := range m.kept {
+		if k[0] == conn && !slices.Contains(bound, k[1]) {
+			delete(m.kept, k)
+		}
+	}
 	return nil
 }
 
@@ -434,6 +453,10 @@ func TestPollStopsWhenTheStoreSaysThisBrokerNoLongerLeads(t *testing.T) {
 			pos.set(func(m *memPositions) { m.forgetErr = errDeposed })
 			pt.sink.bind()
 		},
+		"a delete of the channels no Binding names": func(pt *pollTest, pos *memPositions) {
+			pos.set(func(m *memPositions) { m.forgetErr, m.unboundErr = errStoreDown, errDeposed }) // a failed delete makes it again
+			pt.sink.bind()
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			pos := &memPositions{}
@@ -453,5 +476,229 @@ func TestPollStopsWhenTheStoreSaysThisBrokerNoLongerLeads(t *testing.T) {
 				t.Errorf("WARN lines of the stop = %d; want 1", n)
 			}
 		})
+	}
+}
+
+// unboundOf is what ForgetUnbound of pos was given, call by call, and how many calls it took, failed ones included.
+func unboundOf(pos *memPositions) ([][]string, int) {
+	pos.mu.Lock()
+	defer pos.mu.Unlock()
+	return slices.Clone(pos.unbound), pos.unboundCalls
+}
+
+// A run's first round deletes the stored positions of the connection's channels that no Binding names, once: a Binding that went while
+// no run saw it go leaves no position that a Binding naming the channel again would resume. A bound channel keeps its position, and
+// another connection's are not touched.
+func TestPollDeletesAtARunsStartThePositionsOfChannelsNoBindingNames(t *testing.T) {
+	pt, pos := newPositionTest(t)
+	stored, _ := pos.get()
+	const gone = "19:gone@thread.tacv2"
+	pos.set(func(m *memPositions) {
+		m.kept[[2]string{testConn, gone}] = PollPosition{Channel: gone, DeltaLink: stored.DeltaLink + "-gone", PolledAt: stored.PolledAt}
+		m.kept[[2]string{"ns/other", gone}] = PollPosition{Channel: gone, DeltaLink: stored.DeltaLink + "-other", PolledAt: stored.PolledAt}
+	})
+	_, before := unboundOf(pos)
+	pt.restart(t)
+	pt.clk.advance(time.Minute)
+	pt.round(t)
+	pt.next(t)
+	if got, calls := unboundOf(pos); calls != before+1 || !slices.Equal(got[len(got)-1], []string{testChannel}) {
+		t.Errorf("ForgetUnbound took %v in %d calls; want the bound channel, once in the run", got, calls)
+	}
+	pos.mu.Lock()
+	_, goneKept := pos.kept[[2]string{testConn, gone}]
+	_, otherKept := pos.kept[[2]string{"ns/other", gone}]
+	pos.mu.Unlock()
+	if goneKept || !otherKept {
+		t.Errorf("after the run's start: the unbound channel's position kept = %v, another connection's = %v; want false, true", goneKept,
+			otherKept)
+	}
+	if got, ok := pos.get(); !ok || got.DeltaLink != stored.DeltaLink {
+		t.Errorf("the bound channel's position = %+v, %v; want %q kept", got, ok, stored.DeltaLink)
+	}
+}
+
+// A channel whose Binding was removed while no run polled, and that a Binding names again after the next run started, is read anew: the
+// run's start deleted its position, so what was posted while it was not bound is not handed on.
+func TestPollReadsAnewAChannelUnboundWhileNoRunPolled(t *testing.T) {
+	pt, pos := newPositionTest(t)
+	pt.sink.bind()
+	pt.restart(t)
+	pt.clk.advance(30 * time.Minute)
+	const during = "1794971800300"
+	pt.f.putMessage(testChannel, made(person(during, "", testUser, "<p>posted while the channel was not bound</p>"), pt.ago(20*time.Minute)))
+	pt.round(t)
+	if p, ok := pos.get(); ok {
+		t.Fatalf("stored %+v after the start of a run that the channel is not bound in; want none", p)
+	}
+	pt.sink.bind(testChannel)
+	pt.calls()
+	pt.next(t)
+	if got := freshSyncs(pt.calls()); got != 1 {
+		t.Errorf("syncs anew of the channel bound again = %d; want 1", got)
+	}
+	if got := pt.sink.callsOf(during); got != 0 {
+		t.Errorf("the post made while the channel was not bound was handed on %d times; want never", got)
+	}
+}
+
+// A delete of an unbound channel's position that fails leaves the channel stale: a Binding that names it again in the run reads it anew,
+// not from the position the store still keeps, and the polls go on while the delete fails. The delete of the unbound channels' positions
+// is made again saveEvery later, told once at WARN until it succeeds (told at INFO).
+func TestPollReadsAnewAChannelWhosePositionCouldNotBeDeleted(t *testing.T) {
+	pt, pos := newPositionTest(t)
+	pos.set(func(m *memPositions) { m.forgetErr, m.unboundErr = errStoreDown, errStoreDown })
+	_, before := unboundOf(pos)
+	pt.sink.bind()
+	pt.next(t)
+	if _, ok := pos.get(); !ok {
+		t.Fatal("the failing store deleted the position")
+	}
+	if _, calls := unboundOf(pos); calls != before+1 {
+		t.Errorf("ForgetUnbound calls after the failed delete = %d; want %d", calls, before+1)
+	}
+	const during = "1794971800310"
+	pt.f.putMessage(testChannel, made(person(during, "", testUser, "<p>posted while the channel was not bound</p>"), pt.ago(time.Second)))
+	pt.sink.bind(testChannel)
+	pt.calls()
+	pt.next(t)
+	if got := freshSyncs(pt.calls()); got != 1 {
+		t.Errorf("syncs anew of the channel bound again = %d; want 1, not a resume from the position left in the store", got)
+	}
+	pt.next(t)
+	if _, calls := unboundOf(pos); calls != before+1 {
+		t.Errorf("ForgetUnbound calls within saveEvery of the failure = %d; want %d", calls, before+1)
+	}
+	pos.set(func(m *memPositions) { m.forgetErr, m.unboundErr = nil, nil })
+	pt.clk.advance(pt.p.saveEvery)
+	pt.round(t)
+	if got, calls := unboundOf(pos); calls != before+2 || !slices.Equal(got[len(got)-1], []string{testChannel}) {
+		t.Errorf("ForgetUnbound took %v, %d calls; want a second try, with the bound channel", got, calls)
+	}
+	pt.next(t)
+	if got, _ := pos.get(); got.DeltaLink != pt.p.chans[testChannel].link {
+		t.Errorf("stored %q; want the deltaLink of the channel read anew", got.DeltaLink)
+	}
+	logs := pt.logs.String()
+	for line, want := range map[string]int{
+		"the stored read position of a channel that no Binding names any longer could not be deleted": 1,
+		"the channels that no Binding names could not be deleted;":                                    1,
+		"the channels that no Binding names are deleted":                                              1,
+	} {
+		if n := strings.Count(logs, line); n != want {
+			t.Errorf("lines %q = %d; want %d", line, n, want)
+		}
+	}
+}
+
+// A run whose delete of the unbound channels' positions fails polls its channels all the same, the stored position resumed.
+func TestPollPollsOnWhenThePositionsOfUnboundChannelsCannotBeDeleted(t *testing.T) {
+	pt, pos := newPositionTest(t)
+	pos.set(func(m *memPositions) { m.unboundErr = errStoreDown })
+	pt.restart(t)
+	pt.clk.advance(time.Minute)
+	pt.calls()
+	pt.round(t)
+	if got := freshSyncs(pt.calls()); got != 0 || pt.polls(t, polledRead) < 1 {
+		t.Errorf("syncs anew = %d, polls{polled} = %v; want 0 and the stored position read", got, pt.polls(t, polledRead))
+	}
+}
+
+// A read put on the lane before Graph refused the channel's deltaLink is not recorded once the lane hands it on: its link may be the
+// refused one. The lane's count of pending reads comes back to nothing, so a read after the re-sync that gives nothing is recorded, and
+// stored.
+func TestPollDoesNotStoreAReadPutOnTheLaneBeforeGraphRefusedItsLink(t *testing.T) {
+	pt, pos := newPositionTest(t)
+	before, _ := pos.get()
+	pt.sink.block, pt.sink.blockChannel = make(chan struct{}), testChannel
+	pt.f.putMessage(testChannel, made(person("1794971800320", "", testUser, "<p>new root</p>"), pt.clk.now().Add(time.Second)))
+	pt.clk.advance(pt.p.saveEvery)
+	pt.p.round(pt.obs.ctx, pt.sink) // the read gives the root, which the lane holds
+	refused := pt.p.chans[testChannel].link
+	// A post before the re-sync moves the fake's delta on, so that the re-sync's deltaLink is not the refused one's text.
+	pt.f.putMessage(testChannel, made(person("1794971800321", "", testUser, "<p>before the re-sync</p>"), pt.clk.now().Add(time.Second)))
+	pt.f.setGraph(func(g *fakeGraph) { g.deltaGone = true })
+	pt.clk.advance(pt.p.interval)
+	pt.p.round(pt.obs.ctx, pt.sink) // Graph refuses the read's deltaLink: the channel syncs anew while the root is on the lane
+	pt.f.setGraph(func(g *fakeGraph) { g.deltaGone = false })
+	if got := pt.polls(t, polledReset); got != 1 {
+		t.Fatalf("polls{reset} = %v; want 1", got)
+	}
+	close(pt.sink.block)
+	s := pt.c.recv.live.Load()
+	testutil.Eventually(t, "the lanes idle", func() bool { return s.lanes.Held() == 0 })
+	pt.clk.advance(pt.p.saveEvery)
+	pt.round(t) // a write is due at the start of the poll, and nothing was recorded since the reset; then a read that gives nothing
+	if got, _ := pos.get(); got != before {
+		t.Errorf("stored %+v once the lane handed on the read made before the reset; want %+v kept", got, before)
+	}
+	want := pt.p.chans[testChannel].link
+	if want == refused {
+		t.Fatal("the re-sync gave the refused deltaLink's text")
+	}
+	pt.clk.advance(pt.p.saveEvery)
+	pt.round(t)
+	if got, _ := pos.get(); got.DeltaLink != want {
+		t.Errorf("stored %q after the re-sync; want the read's %q, recorded once nothing was pending", got.DeltaLink, want)
+	}
+}
+
+// A link recorded as handed on before Graph refused it is not written while the channel syncs anew over several polls.
+func TestPollDoesNotStoreARefusedLinkWhileTheChannelSyncsAnew(t *testing.T) {
+	pt, pos := newPositionTest(t)
+	before, _ := pos.get()
+	pt.f.putMessage(testChannel, made(person("1794971800330", "", testUser, "<p>new root</p>"), pt.clk.now().Add(time.Second)))
+	pt.next(t) // the read is handed on and recorded, and not yet due to be written
+	if pt.p.chans[testChannel].link == before.DeltaLink {
+		t.Fatal("the read of the new root gave no new deltaLink")
+	}
+	if got, _ := pos.get(); got != before {
+		t.Fatalf("stored %+v within saveEvery of the last write; want %+v", got, before)
+	}
+	pt.f.setGraph(func(g *fakeGraph) { g.deltaGone, g.deltaPages[testChannel] = true, pt.p.syncPages })
+	pt.next(t) // Graph refuses it: the re-sync reads its first pages
+	pt.f.setGraph(func(g *fakeGraph) { g.deltaGone = false })
+	if pt.p.chans[testChannel].link != "" {
+		t.Fatal("the re-sync reached its deltaLink in one poll; want it to take two")
+	}
+	pt.clk.advance(pt.p.saveEvery)
+	pt.round(t) // a write is due at the start of the poll
+	if got, _ := pos.get(); got != before {
+		t.Errorf("stored %+v while the channel synced anew; want %+v kept", got, before)
+	}
+}
+
+// A read whose items the stop of Serve cut is not recorded as handed on, nor a read after it in the run: what it gave was not all handed
+// on.
+func TestPollDoesNotRecordAReadThatTheStopOfServeCut(t *testing.T) {
+	pt, pos := newPositionTest(t)
+	before, _ := pos.get()
+	st := pt.p.chans[testChannel]
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	s := &serving{ctx: ctx, sink: pt.sink, lanes: lanes.New()}
+	const id = "1794971800340"
+	cut := position{link: before.DeltaLink + "-cut", polled: pt.clk.now()}
+	if err := pt.p.handOnDelta(pt.obs.ctx, s, testChannel, st, []found{{root: id, m: graphMessage{ID: id}}}, cut); err != nil {
+		t.Fatal(err)
+	}
+	s.lanes.Wait()
+	pt.p.handedOn(st, position{link: before.DeltaLink + "-later", polled: pt.clk.now()}) // a later read that gave nothing
+	const later = "1794971800341"                                                        // and one that gave a message, handed on by another Serve
+	live := pt.c.recv.live.Load()
+	if err := pt.p.handOnDelta(pt.obs.ctx, live, testChannel, st, []found{{root: later, m: graphMessage{ID: later}}},
+		position{link: before.DeltaLink + "-after", polled: pt.clk.now()}); err != nil {
+		t.Fatal(err)
+	}
+	testutil.Eventually(t, "the lanes idle", func() bool { return live.lanes.Held() == 0 })
+	pt.clk.advance(pt.p.saveEvery)
+	if !pt.p.save(pt.obs.ctx, testChannel, st, pt.clk.now()) {
+		t.Fatal("save stopped the poller")
+	}
+	if got, _ := pos.get(); got != before {
+		t.Errorf("stored %+v after a read that the stop of Serve cut; want %+v kept", got, before)
+	}
+	if got := pt.sink.callsOf(id); got != 0 {
+		t.Errorf("the cut read's message was handed on %d times; want never", got)
 	}
 }

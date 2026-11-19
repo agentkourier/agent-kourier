@@ -19,7 +19,7 @@ type PollPosition struct {
 
 // PollPositions keeps the PollPosition of each polled channel of a connection, so that a run of the connection resumes the channel's
 // delta where the last run left it: a restart or a change of leader then reads what was posted meanwhile. Only the leader polls, so only
-// the leader writes. All three are safe for concurrent use.
+// the leader writes. All four are safe for concurrent use.
 type PollPositions interface {
 	// Load returns the position of channel of the connection conn ("namespace/name"), and false when none is kept.
 	Load(ctx context.Context, conn, channel string) (PollPosition, bool, error)
@@ -27,6 +27,9 @@ type PollPositions interface {
 	Save(ctx context.Context, conn string, p PollPosition) error
 	// Forget deletes the position of channel of conn; a channel with none is not an error.
 	Forget(ctx context.Context, conn, channel string) error
+	// ForgetUnbound deletes the position of each channel of conn that is not in bound, the channels that the connection's Bindings
+	// name; an empty bound deletes them all.
+	ForgetUnbound(ctx context.Context, conn string, bound []string) error
 }
 
 // ErrNotLeader is what a write of PollPositions wraps when the store refused it because this broker no longer leads: the poller stops.
