@@ -2,10 +2,14 @@ package broker
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/interact"
+	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/session"
 )
 
@@ -47,6 +51,33 @@ func (s quietSink) QueueNotice(ctx context.Context, key session.Key, n session.N
 		return nil
 	}
 	return s.renderSink.QueueNotice(ctx, key, n)
+}
+
+// quietOutbox is the outbox of the interactions without the posts of a connection whose platform has no replies (quietSink's twin):
+// the interactions write their notices (a refused pause, an answer that came too late or never arrived) to the outbox and not through
+// the sink, so they are held here. Enqueue writes nothing for such a connection and returns no ID and no error, so that what asked
+// for the notice goes on as if it were written, and Send refuses the post with an error wrapping chat.ErrInvalid, as such a
+// platform's Fits refuses the prompt before it is sent.
+type quietOutbox struct {
+	interact.Sender
+	quiet func(conn string) bool // noRepliesIn, as for quietSink
+}
+
+// Enqueue writes the post for the outbox to deliver, unless its connection has no replies: then it writes nothing and returns "", nil.
+func (o quietOutbox) Enqueue(ctx context.Context, p outbox.Post) (string, error) {
+	if o.quiet(p.Connection) {
+		return "", nil
+	}
+	return o.Sender.Enqueue(ctx, p)
+}
+
+// Send posts at once, unless the post's connection has no replies: then it posts nothing and returns an error wrapping
+// chat.ErrInvalid.
+func (o quietOutbox) Send(ctx context.Context, p outbox.Post) (chat.Ref, error) {
+	if o.quiet(p.Connection) {
+		return chat.Ref{}, fmt.Errorf("broker: connection %s has no replies, so nothing is posted on it: %w", p.Connection, chat.ErrInvalid)
+	}
+	return o.Sender.Send(ctx, p)
 }
 
 // noRepliesIn says whether the ChatConnection conn ("namespace/name") of the config that snapshot gives now is on a platform with no

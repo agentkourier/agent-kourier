@@ -127,7 +127,7 @@ func (d *triggerDigest) pass(ctx context.Context) {
 func (d *triggerDigest) post(ctx context.Context, dg store.TriggerDigest) {
 	if d.cfg.NoReplies != nil && d.cfg.NoReplies(dg.Connection) {
 		if err := d.cfg.Store.MarkTriggerDigested(ctx, dg.Binding, dg.Trigger, dg.Start); err != nil {
-			d.cfg.Logger.WarnContext(ctx, "triggers: the window of a connection with no replies could not be recorded as digested; it will be tried again", "binding", dg.Binding, "trigger", dg.Trigger, "err", err)
+			d.cfg.Logger.WarnContext(ctx, "triggers: the window of a connection with no replies could not be recorded as digested; it will be tried again", "binding", dg.Binding, "trigger", dg.Trigger, "connection", dg.Connection, "err", err)
 			return
 		}
 		d.cfg.Logger.DebugContext(ctx, "triggers: no digest line for a window of a connection with no replies", "binding", dg.Binding, "trigger", dg.Trigger, "connection", dg.Connection, "window", dg.End.Sub(dg.Start))

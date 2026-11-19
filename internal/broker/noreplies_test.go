@@ -16,6 +16,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/session"
@@ -120,10 +121,11 @@ func TestAConnectionWithNoRepliesHasNothingRenderedOrQueued(t *testing.T) {
 	}
 }
 
-// Run gives the quiet sink to everything that queues a notice, and the config's connections to the digest loop: on a broker whose
-// config has a webhook connection, a reply of that connection waiting for its acknowledgment queues nothing, and the window of its
-// stopped starts is marked digested with no line in the outbox, while a connection the config does not have (whose rows the outbox
-// abandons) is given both. The broker runs no webhook connection yet, so the rows are the store's from an earlier run.
+// Run gives the quiet sink to everything that queues a notice, the quiet outbox to the interactions, and the config's connections
+// to the digest loop: on a broker whose config has a webhook connection, a reply of that connection waiting for its acknowledgment
+// queues nothing, an answer that never reached its task (the interactions' backstop) gets no notice in the outbox, and the window
+// of its stopped starts is marked digested with no line in the outbox, while a connection the config does not have (whose rows the
+// outbox abandons) is given all three. The broker runs no webhook connection yet, so the rows are the store's from an earlier run.
 func TestRunQueuesNothingForAConnectionWithNoReplies(t *testing.T) {
 	// The files route serves one ChatConnection, so the webhook connection is a custom resource of an admitted team namespace,
 	// beside spec 7's Slack one, in place of the minimal Binding.
@@ -153,6 +155,16 @@ func TestRunQueuesNothingForAConnectionWithNoReplies(t *testing.T) {
 			EnqueuedAt: time.Now(), Acknowledgment: "eyes"}); err != nil {
 			t.Fatal(err)
 		}
+		// Answered past the backstop's grace, never delivered, and with no session on its task: the backstop tells the thread. The
+		// webhook's is decided first, and the backstop goes in that order, so once the other's notice is written it has passed it.
+		ix := store.Interaction{ID: "ix-" + strconv.Itoa(i), Key: key, TaskID: "task-" + strconv.Itoa(i), Kind: store.InteractionAskUser, Request: []byte(`{}`),
+			CreatedAt: at, Deadline: time.Now().Add(time.Hour)}
+		if _, err := seed.CreateInteraction(t.Context(), ix); err != nil {
+			t.Fatal(err)
+		}
+		if err := seed.SubmitInteraction(t.Context(), ix.ID, []byte(`{}`), "UALICE1", at.Add(time.Duration(i)*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
 		lim := store.TriggerRunLimits{MaxRuns: 1, Per: time.Hour, DigestWindow: 10 * time.Minute}
 		for _, thread := range []string{"pr-10", "pr-11"} { // the first goes ahead, the second is stopped
 			run := store.TriggerRun{Binding: "sre/b-" + strconv.Itoa(i), At: at, Key: store.ConversationKey{Connection: conn, Channel: "acme/widgets", Thread: thread}}
@@ -167,15 +179,18 @@ func TestRunQueuesNothingForAConnectionWithNoReplies(t *testing.T) {
 
 	r := start(t, c)
 	r.until("/readyz", 200)
-	marks := regexp.MustCompile(`_count\{[^}]*operation="agentkourier\.store\.MarkTriggerDigested"[^}]*\} (\d+)`)
-	testutil.Eventually(t, "the retention loop queued no acknowledgment, or the digest loop marked fewer than both windows", func() bool {
-		_, body := r.get("/metrics")
+	// The store's own metric counts the calls: both windows marked, and two rows written (the other connection's digest and notice).
+	count := func(body, op string) int {
 		n := 0
-		for _, m := range marks.FindAllStringSubmatch(body, -1) {
+		for _, m := range regexp.MustCompile(`_count\{[^}]*operation="agentkourier\.store\.`+op+`"[^}]*\} (\d+)`).FindAllStringSubmatch(body, -1) {
 			k, _ := strconv.Atoi(m[1])
 			n += k
 		}
-		return n >= 2 && slices.Contains(sink.seen(), "queue "+gone)
+		return n
+	}
+	testutil.Eventually(t, "the retention loop queued no acknowledgment, the digest loop marked fewer than both windows, or the backstop told no thread", func() bool {
+		_, body := r.get("/metrics")
+		return count(body, "MarkTriggerDigested") >= 2 && count(body, "CreateOutbox") >= 2 && slices.Contains(sink.seen(), "queue "+gone)
 	}, testutil.Within(10*time.Second), testutil.Every(20*time.Millisecond))
 	r.cancel()
 	if err := r.wait(); err != nil {
@@ -201,5 +216,48 @@ func TestRunQueuesNothingForAConnectionWithNoReplies(t *testing.T) {
 		if want := conn == gone; (err == nil) != want || (err != nil && !errors.Is(err, store.ErrNotFound)) {
 			t.Errorf("the digest row of %s: %v; want a row %v", conn, err, want)
 		}
+		_, err = st.GetOutbox(t.Context(), outbox.ID("ix-"+strconv.Itoa(i)+"/answer", store.OutboxNotice))
+		if want := conn == gone; (err == nil) != want || (err != nil && !errors.Is(err, store.ErrNotFound)) {
+			t.Errorf("the backstop's notice row of %s: %v; want a row %v", conn, err, want)
+		}
+	}
+}
+
+// spySender records the posts that reach the outbox, by how and for which connection.
+type spySender struct{ spySink }
+
+func (s *spySender) Send(_ context.Context, p outbox.Post) (chat.Ref, error) {
+	s.add("send " + p.Connection)
+	return chat.Ref{Conn: p.Connection, Channel: p.Channel, ID: "1.1"}, nil
+}
+
+func (s *spySender) Enqueue(_ context.Context, p outbox.Post) (string, error) {
+	s.add("enqueue " + p.Connection)
+	return outbox.ID(p.Source, p.Role), nil
+}
+
+// The interactions' outbox writes nothing for a connection with no replies: Enqueue says it wrote the notice, with no ID and no
+// error, so that what asked goes on, and Send refuses the post with chat.ErrInvalid, as that platform's Fits would. Another
+// connection's posts reach the outbox as they were.
+func TestTheInteractionsOutboxWritesNothingForAConnectionWithNoReplies(t *testing.T) {
+	inner := &spySender{}
+	o := quietOutbox{Sender: inner, quiet: func(conn string) bool { return conn == "platform/github" }}
+	post := func(conn string) outbox.Post {
+		return outbox.Post{Source: "ix-1/answer", Role: store.OutboxNotice, Connection: conn, Channel: "acme/widgets", Thread: "pr-1"}
+	}
+	if id, err := o.Enqueue(t.Context(), post("platform/github")); id != "" || err != nil {
+		t.Errorf("Enqueue on the connection with no replies = %q, %v; want \"\", nil", id, err)
+	}
+	if ref, err := o.Send(t.Context(), post("platform/github")); !errors.Is(err, chat.ErrInvalid) || ref != (chat.Ref{}) {
+		t.Errorf("Send on the connection with no replies = %+v, %v; want no ref and an error wrapping chat.ErrInvalid", ref, err)
+	}
+	if id, err := o.Enqueue(t.Context(), post("platform/slack")); id != outbox.ID("ix-1/answer", store.OutboxNotice) || err != nil {
+		t.Errorf("Enqueue on Slack = %q, %v; want the outbox's ID", id, err)
+	}
+	if _, err := o.Send(t.Context(), post("platform/slack")); err != nil {
+		t.Errorf("Send on Slack = %v; want nil", err)
+	}
+	if got, want := inner.seen(), []string{"enqueue platform/slack", "send platform/slack"}; !slices.Equal(got, want) {
+		t.Errorf("the outbox was given %q; want %q", got, want)
 	}
 }
