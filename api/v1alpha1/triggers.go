@@ -270,11 +270,18 @@ func (c *ChatBinding) defaultTriggers() {
 //
 //   - Fields values, State, Channel and Source: the alert-name shape, which is ASCII letters
 //     and digits and "_", ".", "-" and ":", at most 128 bytes. The empty value passes.
-//   - Key: the same, and "/", at most 128 bytes. A key of group label values holds spaces
-//     (an Alertmanager group's does), so a template should read entries of .Fields, not .Key.
+//     Channel may instead be a Microsoft Teams channel ID, the shape ChatPlatformOf gives a
+//     Teams connection's Channel: "19:", then ASCII letters, digits, ".", "_" or "-", then
+//     "@thread.tacv2" or "@thread.skype", at most 140 bytes.
+//   - Key: the same as Fields values, and "/", at most 128 bytes. A key of group label values
+//     holds spaces (an Alertmanager group's does), so a template should read entries of
+//     .Fields, not .Key.
 //   - Link: at most 256 bytes of ASCII letters, digits and "-._~:/?#=&" (so no "+" or "%",
-//     which could carry encoded prose, and no white space, quote, angle bracket, "@" or
-//     non-ASCII), an http or https scheme and a host. The empty value passes.
+//     which could carry encoded prose, and no white space, quote, angle bracket or
+//     non-ASCII), an http or https scheme and a host. An "@" is allowed only inside a path
+//     segment that is a whole Microsoft Teams channel ID of the shape above, as Teams'
+//     permalink of a message has, one for each such segment; so none in the credentials, the
+//     query or the fragment. The empty value passes.
 //
 // A template may name values only as .Name, $.Name, .Fields.name, $.Fields.name or
 // index .Fields "name"; see TemplateRefs.
