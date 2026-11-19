@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // graphPrefix is the path of the fake's Microsoft Graph, as Config.GraphURL names it.
@@ -42,10 +44,16 @@ type fakeGraph struct {
 	reqs     []graphReq
 	scopes   []string // the scope of each token grant that the fake's Entra took
 	subs     fakeSubs // the app's subscriptions (push_test.go)
+	// The delta of a channel's messages (poll_test.go): seq counts the puts, and changed is the seq of each message's last put. A read
+	// with no $deltatoken gives every root on a first page with a nextLink, then an empty page with the deltaLink, as measured; a read of a
+	// deltaLink gives the roots put since, as measured (no reply). deltaGone answers a read of a deltaLink 410.
+	seq       int
+	changed   map[string]int
+	deltaGone bool
 }
 
 func newFakeGraph() fakeGraph {
-	return fakeGraph{msgs: map[string]map[string]any{}, subs: fakeSubs{byID: map[string]map[string]any{}}}
+	return fakeGraph{msgs: map[string]map[string]any{}, subs: fakeSubs{byID: map[string]map[string]any{}}, changed: map[string]int{}}
 }
 
 // graphURL is the fake's Microsoft Graph, as Config.GraphURL takes it.
@@ -60,7 +68,10 @@ func messagePath(group, channel, id string) string {
 func (f *fakeConnector) putMessage(channel string, m map[string]any) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.graph.msgs[messagePath(testGroup, channel, m["id"].(string))] = m
+	p := messagePath(testGroup, channel, m["id"].(string))
+	f.graph.msgs[p] = m
+	f.graph.seq++
+	f.graph.changed[p] = f.graph.seq
 }
 
 // graphTaken returns, and forgets, the Graph calls taken since the last.
@@ -124,6 +135,10 @@ func (f *fakeConnector) serveGraph(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(m)
 		return
 	}
+	if channelPath, ok := strings.CutSuffix(path, "/delta"); ok {
+		f.serveDelta(w, r, channelPath)
+		return
+	}
 	root, isReplies := strings.CutSuffix(path, "/replies")
 	isRoots := strings.HasSuffix(path, "/messages")
 	if !isReplies && !isRoots {
@@ -165,7 +180,15 @@ func (f *fakeConnector) serveGraph(w http.ResponseWriter, r *http.Request) {
 	size := cmp.Or(g.pageAt, top)
 	skip, _ := strconv.Atoi(r.URL.Query().Get("$skiptoken"))
 	skip = min(skip, len(replies))
-	page := map[string]any{"value": append(slices.Clone(replies[skip:min(skip+size, len(replies))]), g.extra...)}
+	value := slices.Clone(replies[skip:min(skip+size, len(replies))])
+	if isRoots && r.URL.Query().Get("$expand") == "replies" {
+		for i, m := range value {
+			m = maps.Clone(m)
+			m["replies"] = f.repliesOf(path + "/" + m["id"].(string))
+			value[i] = m
+		}
+	}
+	page := map[string]any{"value": append(value, g.extra...)}
 	self := "https://" + r.Host + r.URL.Path
 	next := ""
 	if skip+size < len(replies) {
@@ -181,6 +204,69 @@ func (f *fakeConnector) serveGraph(w http.ResponseWriter, r *http.Request) {
 		page["padding"] = strings.Repeat("x", g.big)
 	}
 	_ = json.NewEncoder(w).Encode(page)
+}
+
+// repliesOf is the replies of the root at the resource path rootPath, newest first.
+func (f *fakeConnector) repliesOf(rootPath string) []map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	prefix, parent := rootPath[:strings.LastIndex(rootPath, "/")+1], rootPath[strings.LastIndex(rootPath, "/")+1:]
+	out := []map[string]any{}
+	for p, m := range f.graph.msgs {
+		if strings.HasPrefix(p, prefix) && m["replyToId"] == parent {
+			out = append(out, m)
+		}
+	}
+	slices.SortFunc(out, func(a, b map[string]any) int { return compareIDs(b["id"].(string), a["id"].(string)) })
+	return out
+}
+
+// serveDelta answers a read of the delta of the channel whose messages are at channelPath (fakeGraph).
+func (f *fakeConnector) serveDelta(w http.ResponseWriter, r *http.Request, channelPath string) {
+	q := r.URL.Query()
+	self := "https://" + r.Host + strings.TrimSuffix(graphPrefix, "/") + channelPath + "/delta"
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if q.Has("$deltatoken") && f.graph.deltaGone {
+		w.WriteHeader(http.StatusGone)
+		_, _ = io.WriteString(w, `{"error":{"code":"resyncRequired"}}`)
+		return
+	}
+	since := -1
+	if q.Has("$deltatoken") {
+		since, _ = strconv.Atoi(q.Get("$deltatoken"))
+	}
+	page := map[string]any{"value": []map[string]any{}}
+	if !q.Has("$deltatoken") && !q.Has("$skiptoken") {
+		var roots []map[string]any
+		for p, m := range f.graph.msgs {
+			if strings.HasPrefix(p, channelPath+"/") && m["replyToId"] == nil {
+				roots = append(roots, m)
+			}
+		}
+		page["value"] = roots
+		page["@odata.nextLink"] = self + "?$skiptoken=1"
+		_ = json.NewEncoder(w).Encode(page)
+		return
+	}
+	var roots []map[string]any
+	if since >= 0 {
+		for p, m := range f.graph.msgs {
+			if strings.HasPrefix(p, channelPath+"/") && m["replyToId"] == nil && f.graph.changed[p] > since {
+				roots = append(roots, m)
+			}
+		}
+	}
+	slices.SortFunc(roots, func(a, b map[string]any) int { return compareIDs(a["id"].(string), b["id"].(string)) })
+	page["value"] = roots
+	page["@odata.deltaLink"] = fmt.Sprintf("%s?$deltatoken=%d", self, f.graph.seq)
+	_ = json.NewEncoder(w).Encode(page)
+}
+
+// made is m with its createdDateTime at t.
+func made(m map[string]any, t time.Time) map[string]any {
+	m["createdDateTime"] = t.UTC().Format(time.RFC3339Nano)
+	return m
 }
 
 // person is a person's message with the HTML body html, by the Microsoft Entra user user; a reply to root unless root is "".

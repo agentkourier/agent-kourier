@@ -196,11 +196,12 @@ no later edit of Agent Kourier's is meant to take them off; an edit with none le
 
 Microsoft Teams sends a bot no post of another app, in either mode, so an alert's card that Workflows or any other app posts in a channel
 never comes to the broker as an activity (measured on a test tenant in November 2026). The broker reads such posts from Microsoft Graph
-instead when the ChatConnection has a `spec.teams.notificationURL`: the public HTTPS URL at which Microsoft Graph reaches the
+instead, in either mode: by Graph's notifications when the ChatConnection has a `spec.teams.notificationURL`, and by polling Graph when it
+has none ([Polling](#polling-without-a-notificationurl), below). The `notificationURL` is the public HTTPS URL at which Microsoft Graph reaches the
 connection's route on the leader's chat listener, `https://<host>/chat/teams/<namespace>/<name>`. With the chart that is the chat
 Service, which selects the leader alone, behind your ingress. The URL needs the chat listener in either mode: a broker with none refuses the
 connection with a wiring error that says to set `AGENTKOURIER_CHAT_LISTEN`. In `socket` mode the route takes Microsoft Graph's requests alone,
-and answers anything else 400. Without a `notificationURL`, no post of another app reaches the connection.
+and answers anything else 400. A connection without a `notificationURL` needs no public route for its alerts.
 
 **Subscriptions.** While it leads, the broker keeps a Microsoft Graph subscription for each channel that a Binding of the connection names,
 to the channel's messages (`/teams/{group}/channels/{channel}/messages`, for new and edited messages, with no message content in the
@@ -247,13 +248,64 @@ channel's activities:
 
 Microsoft Graph's lifecycle notifications come to the same URL: `reauthorizationRequired` renews the subscription at once,
 `subscriptionRemoved` makes it anew, and `missed`, which says that Graph did not deliver some notifications of the channel, is logged at
-WARN: the posts it did not deliver are not read.
+WARN and starts a catch-up read of the channel ([Catch-up reads](#catch-up-reads)).
 
 **What is lost.** A notification that comes while the connection does not run, before it has listed its subscriptions, or when its
 channel's lane is full is answered 503, and Microsoft Graph sends it again (for up to 4 hours, by Microsoft's documentation; not measured).
 A message that cannot be read from Graph in its tries is dropped: its notification was answered 202, and Graph does not send it again.
 `agentkourier_teams_graph_notifications_total` counts each notification by what came of it, and `agentkourier_teams_graph_channels` the bound
 channels by the state of their subscription ([Metrics](metrics.md)).
+
+### Polling without a notificationURL
+
+A connection with no `spec.teams.notificationURL` polls Microsoft Graph for the new messages of each channel that a Binding of the
+connection names, in either `spec.teams.mode`, so `botMessage` triggers work on every Microsoft Teams connection. The leader alone polls,
+while the connection runs, under the same resource-specific permission and with the same Microsoft Entra group as the subscriptions: a
+channel whose group the broker does not know yet waits, logged once at WARN with the same fix and counted as `waiting_group`.
+
+- **New posts.** Each channel is read every 10 seconds through Graph's delta of its messages (`…/messages/delta`, then the `deltaLink` it
+  gives), so a new post reaches the broker within about one interval after Graph shows it. A post is new when it was made at most 30 seconds
+  before the channel's last read began; an edit, a reaction or another change of an older post, which the delta gives again, is not handed on.
+- **Replies.** The delta does not give a reply in an existing thread (measured on a test tenant in November 2026). The broker reads the
+  replies of the 3 newest threads of each channel that it has seen begin, within the last hour, at each poll (`…/messages/{id}/replies`,
+  its newest 50), and hands on each reply newer than the last one it read. **A reply in an older thread, or in a thread past the newest 3,
+  is not read by polling.** A person's mention there still comes as an activity; another app's reply there does not reach the broker.
+- **What it hands on.** Each message goes the way of a notified message (above): another app's post is a bot's message when a `botMessage`
+  trigger names its app, a person's post is the person's, Agent Kourier's own posts, system events and deleted messages are dropped, and a
+  post that also came as an activity is handed on once, whichever comes first. What a read gives goes on its channel's lane, and the
+  read's `deltaLink` is kept only after that, so a read whose lane had no room is made again.
+- **What it holds.** The `deltaLink` and the newest reply read of each thread are kept in memory. A run begins anew: its first read of a
+  channel fetches a fresh `deltaLink` and hands on nothing from it, then a catch-up read hands on what was posted in the 10 minutes
+  before ([Catch-up reads](#catch-up-reads)). Nothing older than that is read on a start, so an old alert does not fire a trigger. A channel
+  that no Binding names any longer is forgotten.
+- **Errors.** Graph's 429 pauses every read of the connection for its `Retry-After`, since Graph throttles an app in a tenant. A 403 (the app
+  may not read the channel's messages: install or update the app in the team), a 401, a 404 or a 400 counts the channel as `failing`, logged
+  once at WARN; another failure is logged at DEBUG. A channel whose poll fails is read again after 10 seconds, twice as long after each further
+  failure, up to 5 minutes; the other channels go on. A `deltaLink` that Graph no longer takes (410, or a 400 that asks for a new sync, by
+  Microsoft's documentation; not measured) is logged at WARN and read anew from now, and a catch-up read hands on what was posted since the
+  last poll, within the 10 minutes.
+- **Cost.** A connection makes at most 4 reads a second, one at a time. A channel costs one delta read and up to 3 reads of replies each
+  10 seconds: 24 reads a minute at most. [Limits](limits.md#run-the-broker) has the budget. On a test tenant, 22 reads at 5 seconds apart
+  drew no 429; the throttle of a channel's messages is not measured.
+
+### Catch-up reads
+
+A catch-up read is one read of a channel's 20 newest threads with their replies (`…/messages?$top=20&$expand=replies`), of which the
+messages made since a given time are handed on as a poll's are, through the same memory of what was handed on. It looks back 10 minutes
+at most, the window in which that memory holds a message, so nothing that was handed on already in this run is handed on again. A reply in
+a thread past the 20 newest is not recovered, nor anything posted earlier than the look-back.
+
+- **At the start of a run**, on a connection that polls: what was posted in the 10 minutes before. That covers a change of leader and a
+  restart, in `socket` mode the activities that came while no socket was connected included.
+- **When a gap of the sockets ends** (`socket` mode): with no `notificationURL`, every channel is read at once, its delta and its recent
+  threads' replies as at a poll, and a catch-up read back to the gap's start, at most 10 minutes. With a `notificationURL` nothing more is
+  read: Graph notified the posts of the gap all the same (measured on a test tenant in November 2026), mentions included.
+- **On Graph's `missed`** (a `notificationURL`): what was posted in the channel in the 10 minutes before.
+
+**After a restart.** What a run handed on is held in memory, so a post that a catch-up read gives again after a restart is handed on
+again. The broker keeps in its store what such a post did, and drops it there: a turn of a session is named by its message, a trigger
+that threads by key finds the thread the message already opened, and a trigger's note is one row whatever asks for it. A metric of the
+intake, `agentkourier_trigger_matched_total` say, counts it again.
 
 ## Earlier replies on Microsoft Teams
 
@@ -276,9 +328,9 @@ dropped, a paragraph, a list item or a line break begins a line, and its charact
 as an alert's card that Workflows posted, is read as a bot's message, whose body is the text of its card; a person's mention leaves
 bots' messages out of the replies it carries, as on Slack. A system event and a deleted message are left out.
 
-The thread's first message is the exception. Teams sends a bot no other app's posts, so on a connection with no `notificationURL` no
-trigger takes an alert's card ([Alerts on Microsoft Teams](#alerts-on-microsoft-teams)), and a person who mentions Agent Kourier in the
-card's thread starts a session there. That session's first turn carries the message that opened the thread,
+The thread's first message is the exception. Teams sends a bot no other app's posts, so an alert's card reaches a trigger only through
+Microsoft Graph ([Alerts on Microsoft Teams](#alerts-on-microsoft-teams)); when no trigger takes it, a person who mentions Agent Kourier in
+the card's thread starts a session there. That session's first turn carries the message that opened the thread,
 whoever posted it, Workflows or a person, whatever `chat.threadReplies` says; it carries no reply of the thread. Agent Kourier's own post,
 a blank one and one that was already a turn are not carried. The broker reads the first message alone, with one request,
 `GET /teams/{team}/channels/{channel}/messages/{thread}`, and none of the replies, so a thread with too many replies still gives it,
@@ -352,6 +404,6 @@ bounds it at 21, and neither can an approver group, whose field's cap is Slack's
 | Questions to a person: `interactions.askUser` | Works: Agent Kourier asks in the thread with buttons. | Works: the question is a card that a member of the channel's team presses ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
 | Tool approvals: `interactions.toolApprovals`, and `interactions.approverGroups`, which requires it | Works: Agent Kourier asks in the thread with buttons. | `toolApprovals` works: the approval is a card that a member of the channel's team presses ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). `approverGroups` is refused: `UnsupportedOnPlatform`. Remove it. | Refused: `UnsupportedOnPlatform`. Set `toolApprovals` to `false` and remove `approverGroups`. |
 | The useful and not-useful buttons: `feedback.enabled` | Works. | Works: the buttons are a card of their own, posted after the reply, and a vote of a member of the channel's team is counted ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
-| Alert triggers: a `botMessage` trigger in `chat.triggers` | Works. | Works, in either `spec.teams.mode`, on a connection with a `spec.teams.notificationURL`: Microsoft Teams does not send a bot the posts of another app (measured on a test tenant in November 2026), so the broker reads them through Microsoft Graph's notifications of the bound channels ([Alerts on Microsoft Teams](#alerts-on-microsoft-teams)). On a connection without one it is taken, and no alert starts a turn. | Refused: `UnsupportedOnPlatform`. Remove the trigger. |
+| Alert triggers: a `botMessage` trigger in `chat.triggers` | Works. | Works, in either `spec.teams.mode`: Microsoft Teams does not send a bot the posts of another app (measured on a test tenant in November 2026), so the broker reads them through Microsoft Graph, by its notifications of the bound channels on a connection with a `spec.teams.notificationURL`, and by polling them on one without ([Alerts on Microsoft Teams](#alerts-on-microsoft-teams)). | Refused: `UnsupportedOnPlatform`. Remove the trigger. |
 | The earlier replies a mentioned turn carries: `chat.threadReplies: mention`, the thread of a `personMessage` trigger, and a bot's mention | Works. | Works for a person's mention, read through Microsoft Graph ([Earlier replies on Microsoft Teams](#earlier-replies-on-microsoft-teams)). The first turn of a session that a person's mention starts in a thread also carries the thread's first message, such as an alert's card, whatever `chat.threadReplies` says. A bot's mention reaches it only on a connection with a `spec.teams.notificationURL` ([Alerts on Microsoft Teams](#alerts-on-microsoft-teams)), since Teams sends a bot no other app's posts. | Served: the turn carries the mentioned message alone. |
 | The acknowledgment reaction: `chat.acknowledgment` | Works. With no `emoji` the reaction is `hourglass_flowing_sand`. | Taken, and no reaction is shown, as on a platform without it. | Served, and no reaction is shown. A Binding whose acknowledgment is enabled and names an `emoji` has the condition `AcknowledgmentShown`, `False` with the reason `NoReactions` ([Binding status](binding-status.md#acknowledgmentshown)). |

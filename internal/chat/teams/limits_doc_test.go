@@ -70,6 +70,18 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Duration(t, "teamsNamesTTL", namesTTL)
 	limitsdoc.Count(t, "teamsNameUnits", nameUnits)
 
+	// The polls of a connection with no notificationURL, read from the poller that New built.
+	limitsdoc.Duration(t, "teamsPollInterval", c.poll.interval)
+	limitsdoc.Count(t, "teamsPollPages", c.poll.maxPages)
+	limitsdoc.Duration(t, "teamsPollSkew", c.poll.skew)
+	limitsdoc.Count(t, "teamsPollRoots", c.poll.rootCap)
+	limitsdoc.Duration(t, "teamsPollRootWindow", c.poll.rootWindow)
+	limitsdoc.Count(t, "teamsPollReplyTop", graphPageTop)
+	limitsdoc.Duration(t, "teamsPollCallGap", c.poll.callGap)
+	limitsdoc.Duration(t, "teamsPollFailMax", c.poll.failMax)
+	limitsdoc.Count(t, "teamsCatchUpTop", catchUpTop)
+	limitsdoc.Duration(t, "teamsPollLookback", c.poll.lookback)
+
 	// The reads of a thread through Microsoft Graph, and Find's of a channel: the bound a Client is built with, and the pages, answers and
 	// cards it reads.
 	limitsdoc.Duration(t, "teamsThreadTimeout", c.threadTimeout)

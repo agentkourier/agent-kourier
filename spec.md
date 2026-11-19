@@ -565,8 +565,7 @@ Rules:
   sends activities to `POST /chat/teams/<namespace>/<name>` on the chat listener, and in `socket` the broker opens an outbound WebSocket
   and needs no public endpoint. `notificationURL` is optional in either mode, an `https` URL (Microsoft Graph's subscription resource
   requires https) whose path must be the connection's own route, `/chat/teams/<namespace>/<name>`; set, alerts arrive by Graph
-  change notifications (TEAMS-7, below), and unset, no other app's post reaches the connection (polling Graph instead is TEAMS-7P, not
-  built). A Binding of a teams connection takes questions, tool approvals, feedback and
+  change notifications (TEAMS-7, below), and unset, the leader polls Graph for them (TEAMS-7P, below). A Binding of a teams connection takes questions, tool approvals, feedback and
   `botMessage` triggers in either mode, and is refused `approverGroups` (`UnsupportedOnPlatform`). The chat IDs of a Binding are held, by
   the schema and `Validate`, to the union of Slack's and Teams' shapes (a channel `19:…@thread.tacv2` or `@thread.skype`; a sender, the
   posting app's Microsoft Entra application ID; a mention's user, the person's Microsoft Entra object ID), with the union's caps: 140
@@ -587,7 +586,7 @@ Rules:
   region's socket is ready is lost (measured, 2026-11-18: the newest socket takes all traffic, and nothing is queued for later); each
   such interval is logged (the first, from the run's start, as the time to the first ready socket; each later one with its start and
   end), observed in `agentkourier_teams_socket_gap_seconds`, and given to
-  `teams.Config.OnSocketGap`, the seam for a Graph backfill (TEAMS-7P), which is not built. A change of mode is an edit of the
+  `teams.Config.OnSocketGap`; a connection with no `notificationURL` reads every channel back to the gap's start (TEAMS-7P, below). A change of mode is an edit of the
   ChatConnection: a team's connection is restarted in the new mode, and the broker's own takes it when the broker restarts (as any
   edit of it). A run told to stop closes a socket still in its handshake at once, so a stopped run's socket never becomes ready after
   the next run's and takes its traffic. A failed replacement waits as a connect does after the same failure (a 429's Retry-After, a
@@ -665,9 +664,16 @@ Rules:
   and a person's is the person's; `updated` and `deleted` are dropped. A message is deduplicated with its activity by one key
   (`message`, channel, ID) in the receiver's recent set: the Graph intake checks it before the read and claims it after, so a read that
   fails takes nothing from the activity, and an activity that comes second still records its channel. Lifecycle: `reauthorizationRequired`
-  renews at once, `subscriptionRemoved` remakes, and `missed` is logged and told to `teams.Config.OnNotificationsMissed`, the seam of
-  the backfill (TEAMS-7P), not built. A notification that comes before the run, before the listing, or that its lane sheds is 503, for
+  renews at once, `subscriptionRemoved` remakes, and `missed` is logged, told to `teams.Config.OnNotificationsMissed`, and
+  starts one catch-up read of that channel (TEAMS-7P). A notification that comes before the run, before the listing, or that its lane sheds is 503, for
   Graph to send again; a read that fails after 3 tries (429, 5xx, timeout) is dropped and counted.
+  Polling (TEAMS-7P): with no `notificationURL`, the leader reads each bound channel every 10 s through Graph's channel
+  `messages/delta` (a run's first read follows the delta to its `deltaLink` and hands on nothing), and the newest replies of the 3
+  newest threads it saw begin within the last hour; reads are one at a time, 250 ms apart, and a 429 pauses them all. The read
+  position lives in memory only: a run's start, a socket gap's end and a `missed` notification each make a catch-up read of the 20
+  newest threads with their replies and hand on what was posted within the last 10 minutes (the receiver's dedup window). A repeat is
+  dropped by the receiver's recent set and, across a restart, by the session's MessageID dedup and the trigger thread's own message;
+  an unthreaded trigger that opens no session can fire again for a post re-read within the look-back after a restart.
   Post carries its tag where people do not see it: `kourier` and the first 16 bytes of the tag's SHA-256 in hex, as an empty
   `<span title>` in a paragraph of its own at the end of a text (after the closing fence of a block; a zero-width tag at the start
   changed how Teams parsed the first line, and the span was measured only at the end), or as the `id` of the first element of a card's

@@ -232,6 +232,10 @@ var connectionSeries = []struct {
 	{"agentkourier_teams_socket_ready", []string{"amer"}},
 	{"agentkourier_teams_graph_notifications_total", []string{"change", "taken"}},
 	{"agentkourier_teams_graph_channels", []string{"subscribed"}},
+	{"agentkourier_teams_graph_polls_total", []string{"polled"}},
+	{"agentkourier_teams_graph_read_messages_total", []string{"taken"}},
+	{"agentkourier_teams_graph_catchups_total", []string{"start", "read"}},
+	{"agentkourier_teams_graph_throttled_total", []string{}},
 }
 
 // seriesOf returns the values of the connection label of every series of the named family.

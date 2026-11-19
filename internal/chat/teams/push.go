@@ -306,8 +306,8 @@ func (p *push) take(ctx context.Context, s *serving, n notification) (kind, outc
 
 // lifecycle acts on the lifecycle event of sub, and returns the outcome it is counted under. reauthorizationRequired renews the
 // subscription and subscriptionRemoved makes it anew, both on the subscriptions' loop, at once. missed means that Graph did not deliver
-// some notifications of the channel: it is logged at WARN and told to Config.OnNotificationsMissed, the seam of a backfill that reads the
-// channel again, which is not built (what was missed is lost).
+// some notifications of the channel: it is logged at WARN, told to Config.OnNotificationsMissed, and the channel is read back once, within
+// the look-back (missed, poll.go); what was posted before that is not read.
 func (p *push) lifecycle(ctx context.Context, sub subscription, event string) string {
 	switch event {
 	case "reauthorizationRequired":
@@ -318,11 +318,12 @@ func (p *push) lifecycle(ctx context.Context, sub subscription, event string) st
 		p.subs.flag(sub.id, flagRecreate)
 		return notifiedRemoved
 	case "missed":
-		p.c.log.WarnContext(ctx, "teams: Microsoft Graph did not deliver some notifications of a channel; the posts they told of are not read",
-			"channel", sub.channel)
+		p.c.log.WarnContext(ctx, "teams: Microsoft Graph did not deliver some notifications of a channel; its recent posts are read back",
+			"channel", sub.channel, "lookback", pollLookback.String())
 		if p.onMissed != nil {
 			p.onMissed(sub.channel)
 		}
+		p.missed(ctx, sub)
 		return notifiedMissed
 	}
 	p.c.log.DebugContext(ctx, "teams: a lifecycle event the adapter does not know was dropped", "event", quote(event))
@@ -435,29 +436,36 @@ func (p *push) intake(s *serving, sub subscription, ref messageRef) {
 	if root == "" {
 		root = ref.id
 	}
-	h := p.c.historyOf(sub.channel, root, m)
+	p.count(tctx, notifyChange, p.c.handOn(s, sub.channel, root, m))
+}
+
+// handOn hands the message m of channel, of the thread root, read from Graph (a notified message, or one that a poll or a catch-up read
+// found, poll.go), to s's sink as Run hands a person's post, unless it is no post for the sink, and returns its outcome: own, ignored,
+// not_named, duplicate, taken or not_taken (the notified* constants). It runs on the channel's lane. The message is decoded as a thread's
+// message is (historyOf): the bot's own post, and anything that is no post, is dropped; another app's post is handed on only if the sink
+// takes that bot in the channel (botTaken); the dedup key (messageKey) is claimed last, so a message dropped for another reason takes
+// nothing from its activity.
+func (c *Client) handOn(s *serving, channel, root string, m graphMessage) string {
+	r := c.recv
+	key := messageKey(channel, m.ID)
+	h := c.historyOf(channel, root, m)
 	switch {
 	case h.Own:
-		p.count(tctx, notifyChange, notifiedOwn)
-		return
+		return notifiedOwn
 	case h.Ignored:
-		p.count(tctx, notifyChange, notifiedIgnored)
-		return
+		return notifiedIgnored
 	}
 	msg := h.Message
 	if msg.Bot != nil && !botTaken(s.sink, msg) {
-		p.count(tctx, notifyChange, notifiedNotNamed)
-		return
+		return notifiedNotNamed
 	}
 	if !r.seen.claim(key) {
-		p.count(tctx, notifyChange, notifiedDuplicate)
-		return
+		return notifiedDuplicate
 	}
 	if r.deliver(s, work{msg: &msg, key: key}) {
-		p.count(tctx, notifyChange, notifiedTaken)
-		return
+		return notifiedTaken
 	}
-	p.count(tctx, notifyChange, notifiedNotTaken)
+	return notifiedNotTaken
 }
 
 // botTaken says whether the sink takes the bot's message m: a mention of Agent Kourier by its BotMentionFilter, anything else by its

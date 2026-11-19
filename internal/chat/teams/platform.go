@@ -57,16 +57,19 @@ type Config struct {
 	// certificate. The connect call and the negotiate go through HTTPClient.
 	SocketTLS *tls.Config
 	// OnSocketGap, if set, is told of each interval in socket mode in which no socket was ready, when a socket is ready again (Gap): what
-	// Teams sent in it was not delivered. It is called from the goroutine of Run, in order; it must not block.
+	// Teams sent in it was not delivered. With no NotificationURL the Client then polls every bound channel at once, with a catch-up read
+	// of what was posted since the gap began (poll.go); with one, Graph notified those posts all the same, and nothing more is read. It is
+	// called from the goroutine of Run, in order; it must not block.
 	OnSocketGap func(Gap)
 	// NotificationURL is the connection's spec.teams.notificationURL: when set, Run keeps a Microsoft Graph subscription to the messages
 	// of each channel that a Binding of the connection names (subscriptions.go), with this as its notification and lifecycle URL, and
 	// the connection's route on the chat listener takes what Graph sends there, in either mode (push.go). It is how another app's post,
-	// an alert's that Workflows posted, reaches the connection, since Teams sends a bot none. Unset, the connection subscribes to nothing.
+	// an alert's that Workflows posted, reaches the connection, since Teams sends a bot none. Unset, the connection subscribes to nothing,
+	// and Run polls each bound channel's messages from Graph instead (poll.go).
 	NotificationURL string
 	// OnNotificationsMissed, if set, is told the channel of each lifecycle notification missed: Graph did not deliver some notifications
-	// of the channel's messages, which are not read. It is the seam of a backfill, which is not built. It is called from a request's
-	// goroutine; it must not block.
+	// of the channel's messages. The Client then makes one catch-up read of the channel's recent posts, within the look-back (poll.go). It is
+	// called from a request's goroutine; it must not block.
 	OnNotificationsMissed func(channel string)
 }
 
@@ -100,6 +103,7 @@ type Client struct {
 	onConnection  func(bool)
 	sockets       *sockets // the connection's sockets in socket mode, nil in http mode
 	push          *push    // the Graph intake of a connection with a notificationURL, nil without one
+	poll          *poller  // the Graph intake of a connection with no notificationURL, nil with one
 }
 
 // New returns the Client of cfg. It refuses a config with no connection, tenant, app or secret.
@@ -144,6 +148,16 @@ func New(cfg Config) (*Client, error) {
 		return nil, err
 	}
 	c.recv = recv
+	if cfg.NotificationURL == "" {
+		c.poll = newPoller(c)
+		onGap := cfg.OnSocketGap
+		cfg.OnSocketGap = func(g Gap) {
+			if onGap != nil {
+				onGap(g)
+			}
+			c.poll.gap(g)
+		}
+	}
 	if cfg.Socket {
 		c.sockets = newSockets(cfg.Connection, recv, tokens, direct, cfg, log)
 	}
@@ -170,16 +184,21 @@ func New(cfg Config) (*Client, error) {
 // sockets before it returns, so a run that ends, as the leader's does when it stops leading, leaves none open.
 //
 // With a NotificationURL, Run keeps the subscriptions of the channels that sink names (chat.ChannelLister; a sink that names none has
-// none made) while it runs, and stops keeping them before it returns. It leaves them in Graph, for the next leader to adopt.
+// none made) while it runs, and stops keeping them before it returns. It leaves them in Graph, for the next leader to adopt. With none,
+// Run polls the messages of those channels from Graph while it runs (poller.run), and what it read is lost when it returns.
 func (c *Client) Run(ctx context.Context, sink chat.Sink) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	if c.push != nil {
-		lister, _ := sink.(chat.ChannelLister)
+	lister, _ := sink.(chat.ChannelLister)
+	if c.push != nil || c.poll != nil {
 		kept := make(chan struct{})
 		go func() {
 			defer close(kept)
-			c.push.subs.run(ctx, lister)
+			if c.push != nil {
+				c.push.subs.run(ctx, lister)
+				return
+			}
+			c.poll.run(ctx, lister)
 		}()
 		defer func() {
 			cancel()

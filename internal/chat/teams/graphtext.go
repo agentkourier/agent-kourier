@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"html"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -30,6 +31,8 @@ const graphTextMax = 128 << 10
 // wrote.
 type graphMessage struct {
 	ID              string          `json:"id"`
+	ReplyToID       string          `json:"replyToId"`
+	CreatedDateTime graphDate       `json:"createdDateTime"`
 	MessageType     string          `json:"messageType"`
 	DeletedDateTime *string         `json:"deletedDateTime"`
 	From            *graphFrom      `json:"from"`
@@ -38,6 +41,8 @@ type graphMessage struct {
 	Mentions        []struct {
 		Mentioned *graphFrom `json:"mentioned"`
 	} `json:"mentions"`
+	// Replies are a root's replies, which a read of the channel's messages with $expand=replies gives (poll.go).
+	Replies []graphMessage `json:"replies"`
 }
 
 // graphFrom is a message's sender, or a mention's party: a user, or an application (a bot, Workflows among them).
@@ -338,4 +343,23 @@ func isMessageID(id string) bool {
 func compareIDs(a, b string) int {
 	a, b = strings.TrimLeft(a, "0"), strings.TrimLeft(b, "0")
 	return cmp.Or(cmp.Compare(len(a), len(b)), strings.Compare(a, b))
+}
+
+// graphDate is a time that Graph gives (createdDateTime, say), the zero time if it is null or not one that RFC 3339 reads: one message
+// with a time of another form must not fail the read of its page.
+type graphDate struct{ time.Time }
+
+// UnmarshalJSON implements json.Unmarshaler, leniently.
+func (d *graphDate) UnmarshalJSON(b []byte) error {
+	var s string
+	if json.Unmarshal(b, &s) != nil {
+		d.Time = time.Time{}
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		t = time.Time{}
+	}
+	d.Time = t
+	return nil
 }
