@@ -59,7 +59,8 @@ type Replay struct {
 
 // NewReplay compiles the botMessage and personMessage triggers of b, which the loader has defaulted and validated, as the
 // intake does. A trigger that does not compile is an error here, where the intake would log it and skip it: a
-// dry run over a trigger that never matches would mislead.
+// dry run over a trigger that never matches would mislead. The table holds a webhookEvent trigger too, as the intake's does,
+// but the dry run reads Slack's history, and a webhookEvent trigger takes no message of it.
 func NewReplay(b *v1alpha1.Binding) (*Replay, error) {
 	var table triggerTable
 	for i := range b.Spec.Chat.Triggers {

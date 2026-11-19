@@ -73,9 +73,9 @@ const (
 	maxWebhookHeaderNameLen = 64
 	// maxWebhookFieldNameLen is the longest name of a field, as a mention name and an extract name are bounded.
 	maxWebhookFieldNameLen = 63
-	// maxWebhookChannelLen is the longest webhook channel, fixed or a Binding's: an owner/repo of GitHub is at most 140 bytes
+	// MaxWebhookChannelLen is the longest webhook channel, fixed or a Binding's: an owner/repo of GitHub is at most 140 bytes
 	// (39 + 1 + 100, GitHub's own rules, unverified here).
-	maxWebhookChannelLen = 140
+	MaxWebhookChannelLen = 140
 )
 
 // The shapes of a webhook connection's values. Each literal must equal the Pattern marker or the CEL rule that copies it
@@ -301,7 +301,7 @@ func ValidWebhookPointer(s string) bool {
 // event: letters, digits, '.', '_' and '-', starting with a letter or a digit, with '/' between parts, at most 140 bytes. It is the
 // channel shape of the webhook platform's ChatPlatformOf entry, for a caller that holds no connection spec.
 func ValidWebhookChannel(s string) bool {
-	return len(s) <= maxWebhookChannelLen && webhookChannel.MatchString(s)
+	return len(s) <= MaxWebhookChannelLen && webhookChannel.MatchString(s)
 }
 
 // webhookEventsOnly says whether every trigger of a Binding is webhookEvent, and there is one: such a Binding's channel and output are
@@ -442,8 +442,8 @@ func (p *problems) webhookFields(at string, h *WebhookSpec) {
 // webhookChannel checks a webhook channel: a fixed one of a connection, or a Binding's.
 func (p *problems) webhookChannel(path, c string) {
 	switch {
-	case len(c) > maxWebhookChannelLen:
-		p.maxBytes(path, c, maxWebhookChannelLen) // not shown: as long as it may be
+	case len(c) > MaxWebhookChannelLen:
+		p.maxBytes(path, c, MaxWebhookChannelLen) // not shown: as long as it may be
 	case !webhookChannel.MatchString(c):
 		p.add(path, "invalid channel %q: letters, digits, '.', '_' and '-', starting with a letter or a digit, with '/' between parts", c)
 	}

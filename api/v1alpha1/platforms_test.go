@@ -35,7 +35,7 @@ func shapes(p ChatPlatform) map[string]struct {
 	for name, f := range map[string]struct {
 		shape IDShape
 		cap   int
-	}{"channel": {p.Channel, maxWebhookChannelLen}, "sender": {p.Sender, maxChatIDLen}, "user": {p.User, maxMentionUserLen}, "group": {p.Group, maxChatIDLen}} {
+	}{"channel": {p.Channel, MaxWebhookChannelLen}, "sender": {p.Sender, maxChatIDLen}, "user": {p.User, maxMentionUserLen}, "group": {p.Group, maxChatIDLen}} {
 		if f.shape.Taken() {
 			out[name] = f
 		}

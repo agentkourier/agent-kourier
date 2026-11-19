@@ -47,6 +47,11 @@ func TestIntakeConfigConnectsTheTriggerPath(t *testing.T) {
 		t.Errorf("OnStart = %v with %d turns submitted; want the starter to submit the one turn", err, len(s.sub.got))
 	}
 
+	if cfg.TakesBotMention == nil || cfg.TakesTurn == nil {
+		t.Errorf("TakesBotMention %t, TakesTurn %t; want both set: a turn the session will not take would spend a place in the limits",
+			cfg.TakesBotMention != nil, cfg.TakesTurn != nil)
+	}
+
 	if cfg.TurnQueued == nil {
 		t.Fatal("TurnQueued is not set: a lost mark would give the key a second turn")
 	}

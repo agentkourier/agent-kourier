@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -166,27 +165,10 @@ func TestOnStartRefusesAWebhookTemplateThatReadsAnInvalidField(t *testing.T) {
 	}
 }
 
-// The session of a webhook event is asked about as a start on a platform with no replies, as its start is made.
-func TestTakesBotMentionOfAWebhookEventAsksWithNoReplies(t *testing.T) {
-	var asked session.Inbound
-	s, err := newTriggerStarter(triggerStarterConfig{
-		Submit: &startSubmitter{}, Notice: (&startNotes{}).take, Audit: &startAudit{}, Links: noPermalink(), Log: slog.Default(),
-		Takes: func(_ context.Context, in session.Inbound) (bool, error) { asked = in; return true, nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.TakesBotMention(t.Context(), webhookMatch("e1")); err != nil {
-		t.Fatal(err)
-	}
-	if want := (session.Key{Connection: hooksConn, Channel: hooksRepo, Thread: "pr-42"}); asked.Key != want || !asked.NoReplies || asked.WholeThread {
-		t.Errorf("asked %+v; want the thread %+v, with no replies and not the whole thread", asked, want)
-	}
-}
-
-// From the Intake through the starter: a webhook event whose ended session the session manager will not replace yet is taken, so
-// that the platform answers 200 and the sender does not send it again for ever, and decided not_started.
-func TestAWithheldWebhookReplacementIsTakenAndDropped(t *testing.T) {
+// webhookWorld is the Intake of the webhook connection hooks as the broker builds it (newIntakeConfig), over the starter s and a
+// database of the test's, in which hooksRepo is bound to startBinding with one webhookEvent trigger of the limits given.
+func webhookWorld(t *testing.T, s *starter, limits v1alpha1.TriggerLimits) *trigger.Intake {
+	t.Helper()
 	meta := func(ns, name string) metav1.ObjectMeta { return metav1.ObjectMeta{Namespace: ns, Name: name} }
 	conn := v1alpha1.ChatConnection{ObjectMeta: meta("agent-kourier-system", "hooks"), Spec: webhookConnectionSpec()}
 	conn.Spec.AllowedNamespaces = []string{"sre"}
@@ -200,8 +182,7 @@ func TestAWithheldWebhookReplacementIsTakenAndDropped(t *testing.T) {
 		Agent:    v1alpha1.AgentRef{BackendRef: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "kagent"}, Namespace: "kagent", Name: "sre-agent"},
 		Identity: v1alpha1.Identity{UserID: "agent-kourier-sre"},
 		Chat: v1alpha1.ChatBinding{ConnectionRef: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "hooks"}, Channel: hooksRepo, Output: v1alpha1.OutputNone,
-			Triggers: []v1alpha1.Trigger{{Type: v1alpha1.TriggerWebhookEvent, PromptTemplate: "Review pull request #{{ .Fields.number }}.",
-				Limits: v1alpha1.TriggerLimits{RateLimit: &v1alpha1.RateLimit{MaxRuns: 10, Per: metav1.Duration{Duration: time.Hour}, MaxConcurrent: 10}, MaxRunsPerDay: new(int32(0))}}}}}}
+			Triggers: []v1alpha1.Trigger{{Type: v1alpha1.TriggerWebhookEvent, PromptTemplate: "Review pull request #{{ .Fields.number }}.", Limits: limits}}}}}
 	b.Default()
 	if err := b.Validate(); err != nil {
 		t.Fatal(err)
@@ -215,12 +196,72 @@ func TestAWithheldWebhookReplacementIsTakenAndDropped(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := sqlitetest.Open(t)
+	cfg, err := newIntakeConfig(intakeParts{
+		conn: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "hooks"}, snapshot: func() *config.Snapshot { return snap },
+		submitter: s.sub, interactions: func(context.Context, chat.Interaction) error { return nil }, notice: s.notes.take,
+		starter: s.triggerStarter, threads: st, runs: st, replies: st, log: s.log,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return trigger.NewIntake(cfg)
+}
+
+// wideLimits are a webhookEvent trigger's limits that no test here reaches.
+func wideLimits() v1alpha1.TriggerLimits {
+	return v1alpha1.TriggerLimits{RateLimit: &v1alpha1.RateLimit{MaxRuns: 10, Per: metav1.Duration{Duration: time.Hour}, MaxConcurrent: 10}, MaxRunsPerDay: new(int32(0))}
+}
+
+// A webhook event whose thread's ended session the session manager will not replace yet (past its threadTTL, or its Binding gone,
+// with the old session still at work or the body queued before) is asked about before the limits, as the start would be made: on a
+// platform with no replies, by the event's message ID. It is taken, so that the platform answers 200, decided not_started and logged
+// with its thread and delivery, and it spends no place in the limits: with one run an hour and one a day, the next event starts.
+func TestAWithheldWebhookReplacementSpendsNoPlaceInTheLimits(t *testing.T) {
+	s := newWebhookStarter(t)
+	withhold := true
+	var asked []session.Inbound
+	s.takes = func(_ context.Context, in session.Inbound) (bool, error) {
+		asked = append(asked, in)
+		return !withhold, nil
+	}
+	in := webhookWorld(t, s, v1alpha1.TriggerLimits{RateLimit: &v1alpha1.RateLimit{MaxRuns: 1, Per: metav1.Duration{Duration: time.Hour}, MaxConcurrent: 1}, MaxRunsPerDay: new(int32(1))})
+	if err := in.Message(s.tel.Ctx, webhookMatch("e1").Message); err != nil {
+		t.Fatalf("Message e1 = %v; want the event taken", err)
+	}
+	if len(s.sub.got) != 0 || len(s.notes.got) != 0 {
+		t.Fatalf("submitted %+v, noted %+v; want nothing for a withheld replacement", s.sub.got, s.notes.got)
+	}
+	withhold = false
+	if err := in.Message(s.tel.Ctx, webhookMatch("e2").Message); err != nil {
+		t.Fatalf("Message e2 = %v", err)
+	}
+	if len(s.sub.got) != 1 {
+		t.Fatalf("%d turns submitted; want e2's, in the place e1 did not take", len(s.sub.got))
+	}
+	for decision, want := range map[string]float64{"not_started": 1, "started": 1, "limited": 0} {
+		if got := s.tel.Counter(t, "agentkourier_trigger_decisions_total", map[string]string{"binding": startBinding, "decision": decision}); got != want {
+			t.Errorf("decisions %s = %v; want %v", decision, got, want)
+		}
+	}
+	key := session.Key{Connection: hooksConn, Channel: hooksRepo, Thread: "pr-42"}
+	if len(asked) != 2 || asked[0].Key != key || !asked[0].NoReplies || !asked[0].Create || asked[0].WholeThread ||
+		!strings.HasSuffix(asked[0].MessageID, ":e1") || asked[1].MessageID != s.sub.got[0].MessageID {
+		t.Errorf("asked %+v; want each event asked about in thread %+v, with no replies, by its message ID", asked, key)
+	}
+	for _, want := range []string{"chat: a webhook event's thread cannot be continued yet, so the event was dropped", "thread=pr-42", "delivery=d-e1"} {
+		if !strings.Contains(s.logs.String(), want) {
+			t.Errorf("the log lacks %q:\n%s", want, s.logs)
+		}
+	}
+}
+
+// From the Intake through the starter: a webhook event that the session said it would take, and that the session manager then did
+// not (the old session took a turn meanwhile), is taken, so that the platform answers 200 and the sender does not send it again for
+// ever, and decided not_started.
+func TestAWithheldWebhookReplacementIsTakenAndDropped(t *testing.T) {
 	s := newWebhookStarter(t)
 	s.sub.res = session.Result{Disposition: session.Expired, Admission: session.Admission{Kind: session.AdmitNotice, Notice: session.NoticeExpired}}
-	in := trigger.NewIntake(trigger.IntakeConfig{
-		Connection: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "hooks"}, Snapshot: func() *config.Snapshot { return snap },
-		Submitter: s.sub, Notice: s.notes.take, TriggerThreads: st, TriggerRuns: st, OnStart: s.OnStart, Logger: s.log,
-	})
+	in := webhookWorld(t, s, wideLimits())
 	m := webhookMatch("e1").Message
 	for range 2 {
 		if err := in.Message(s.tel.Ctx, m); err != nil {

@@ -276,6 +276,8 @@ type cleanedField struct {
 	value string
 	label bool
 	cap   int
+	// cut says the cleaning cut the value (clean), so it holds only the start of the text, however short it is now.
+	cut bool
 }
 
 // cleanedItem is an item whose fields are cleaned.
@@ -285,21 +287,24 @@ type cleanedItem struct {
 	pinned  bool
 }
 
-// clean returns s as the field's kind cleans it. A kind it does not know is free text, the strictest. A field that is
-// one line is read joined as well as with its lines, and not redacted and joined after: a flag and its value, or a
-// URL's password, that a line break cuts apart is taken. Identifier text is one line already.
-func (f untrustedField) clean(s string) string {
+// clean returns s as the field's kind cleans it, and whether none of it was cut. A kind it does not know is free text, the
+// strictest. A field that is one line is read joined as well as with its lines, and not redacted and joined after: a flag and
+// its value, or a URL's password, that a line break cuts apart is taken. Identifier text is one line already.
+//
+// whole is redact's own answer (its Whole functions): a cut cannot be told from the text, which may have shrunk under its cap
+// once its invisible characters were deleted.
+func (f untrustedField) clean(s string) (string, bool) {
 	switch {
 	case f.Kind == kindIdentifier:
-		return redact.IdentifierText(s)
+		return redact.IdentifierTextWhole(s)
 	case f.Kind == kindWindow && f.OneLine:
-		return redact.FreeTextCutLine(s, f.Window)
+		return redact.FreeTextCutLineWhole(s, f.Window)
 	case f.Kind == kindWindow:
-		return redact.FreeTextCut(s, f.Window)
+		return redact.FreeTextCutWhole(s, f.Window)
 	case f.OneLine:
-		return redact.FreeTextLine(s)
+		return redact.FreeTextLineWhole(s)
 	default:
-		return redact.FreeText(s)
+		return redact.FreeTextWhole(s)
 	}
 }
 
@@ -320,7 +325,8 @@ func (b untrustedBlock) cleanItems() []cleanedItem {
 			if !validName(f.Name) {
 				continue
 			}
-			cf := cleanedField{name: f.Name, value: f.clean(f.Value), label: f.Label, cap: f.Cap}
+			value, whole := f.clean(f.Value)
+			cf := cleanedField{name: f.Name, value: value, label: f.Label, cap: f.Cap, cut: !whole}
 			c.fields = append(c.fields, cf)
 			if !f.Label && !blank(cf.value) {
 				content = true
@@ -350,10 +356,10 @@ func (it cleanedItem) name() string {
 	return it.fields[0].name
 }
 
-// fitsCaps says whether every field of the item shows whole within its cap, as escaped.
+// fitsCaps says whether every field of the item shows whole within its cap, as escaped, and none was cut as it was cleaned.
 func (it cleanedItem) fitsCaps() bool {
 	for _, f := range it.fields {
-		if !blank(f.value) && chat.Units(escapeCut(f.value, math.MaxInt/4)) > f.cap {
+		if f.cut || !blank(f.value) && chat.Units(escapeCut(f.value, math.MaxInt/4)) > f.cap {
 			return false
 		}
 	}

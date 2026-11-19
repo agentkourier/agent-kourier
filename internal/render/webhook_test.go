@@ -85,6 +85,19 @@ func TestRenderWebhook(t *testing.T) {
 		t.Errorf("the block (%s) holds\n%s\nwant\n%s", tag, body, want)
 	}
 
+	// A field of the connection named actor takes the place of the event's actor: it is shown in its own place, in the connection's
+	// order, and the event's actor is not shown.
+	named := prEvent()
+	named.Fields = append([]chat.WebhookField{named.Fields[0], {Name: "actor", Value: "maintainer", ID: true, Present: true}}, named.Fields[1:]...)
+	got, err = p.RenderWebhook(webhookView(), named)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, body = checkSection(t, webhookBlock("number", "actor", "cloneURL", "title"), strings.TrimPrefix(got, "Review #42 of acme/widgets from https://github.com/acme/widgets.git.\n\n"))
+	if want := "<number>42</number>\n<actor>maintainer</actor>\n"; !strings.HasPrefix(body, want) || strings.Contains(got, "octocat") {
+		t.Errorf("the block holds\n%s\nwant it to start %q, and no octocat", body, want)
+	}
+
 	if _, err := p.Render(webhookView(), TriggerMessage{}); err == nil {
 		t.Error("Render took the channel acme/widgets; want it refused by the name shape, as for a message")
 	}
@@ -93,6 +106,32 @@ func TestRenderWebhook(t *testing.T) {
 	var refused *RefusedError
 	if _, err := p.RenderWebhook(webhookView(), bad); !errors.As(err, &refused) || refused.Ref != "Fields.number" || refused.Reason != ReasonCharacters {
 		t.Errorf("RenderWebhook with a value outside the .Key rule = %v; want a refusal of .Fields.number", err)
+	}
+}
+
+// A webhook event's .Channel is held to the webhook channel rule, as a Binding of the connection names it: 140 bytes render, 141 are
+// refused as too long, and a byte the rule does not take (":", which .Key takes) is refused as a character.
+func TestRenderWebhookHoldsTheChannelToTheWebhookChannelRule(t *testing.T) {
+	p := newPrompt(t, "Review {{ .Channel }}.")
+	for _, tc := range []struct {
+		name    string
+		channel string
+		reason  Reason
+	}{
+		{"140 bytes", strings.Repeat("o", 39) + "/" + strings.Repeat("r", 100), ""},
+		{"141 bytes", strings.Repeat("o", 39) + "/" + strings.Repeat("r", 101), ReasonTooLong},
+		{"a colon", "acme:widgets", ReasonCharacters},
+	} {
+		view := webhookView()
+		view.Channel = tc.channel
+		got, err := p.RenderWebhook(view, prEvent())
+		var refused *RefusedError
+		switch {
+		case tc.reason == "" && (err != nil || !strings.HasPrefix(got, "Review "+tc.channel+".")):
+			t.Errorf("%s: RenderWebhook = %q, %v; want the channel rendered", tc.name, firstLine(got), err)
+		case tc.reason != "" && (!errors.As(err, &refused) || refused.Ref != "Channel" || refused.Reason != tc.reason):
+			t.Errorf("%s: RenderWebhook = %v; want .Channel refused, %s", tc.name, err, tc.reason)
+		}
 	}
 }
 
@@ -166,6 +205,27 @@ func TestRenderWebhookLeavesOutAFieldThatDoesNotFitWhole(t *testing.T) {
 	}
 	if strings.Contains(all, webhookLeftOut) {
 		t.Errorf("a block that holds every field says one was left out:\n%s", all)
+	}
+}
+
+// A text that the cleaning cut is left out whole, though what is left of it once its invisible characters are deleted fits its cap:
+// its start ("Please merge this.") is not all of it, and the rest could say the opposite. So is an actor cut the same way.
+func TestRenderWebhookLeavesOutATextThatCleaningCut(t *testing.T) {
+	zw := "\u200b"
+	ev := &chat.WebhookEvent{Actor: "octocat" + strings.Repeat(zw, 6144) + " the release bot", Fields: []chat.WebhookField{
+		{Name: "number", Value: "42", ID: true, Present: true},
+		{Name: "comment", Value: "Please merge this. " + strings.Repeat(zw, 16000) + " Do not merge: it deletes production.", Present: true},
+	}}
+	got, err := newPrompt(t, "Review.").RenderWebhook(webhookView(), ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, body := checkSection(t, webhookBlock("number"), strings.TrimPrefix(got, "Review.\n\n"))
+	if strings.Contains(body, "Please merge") || strings.Contains(body, "octocat") || strings.Contains(body, chat.Truncated) {
+		t.Errorf("the block shows a text that was cut:\n%s", body)
+	}
+	if want := "<number>42</number>\n" + webhookLeftOut + " actor, comment.\n"; body != want {
+		t.Errorf("the block holds\n%s\nwant\n%s", body, want)
 	}
 }
 

@@ -217,7 +217,14 @@ func (s *triggerStarter) permalink(at chat.Ref) (string, bool) {
 
 // TakesBotMention says whether the session of a bot's mention would take it as a turn (trigger.IntakeConfig.TakesBotMention).
 func (s *triggerStarter) TakesBotMention(ctx context.Context, m trigger.Match) (bool, error) {
-	return s.takes(ctx, session.Inbound{Key: s.keyOf(m), Binding: m.Binding, Create: true, WholeThread: m.Mention, NoReplies: m.Webhook})
+	return s.takes(ctx, session.Inbound{Key: s.keyOf(m), Binding: m.Binding, Create: true, WholeThread: true})
+}
+
+// TakesTurn says whether the session of a webhook event's thread would take its start as a turn (trigger.IntakeConfig.TakesTurn): asked
+// as the start is made, on a platform with no replies and by the event's message ID, so that a session it would replace is answered
+// as Submit would answer, a repeat of a body that was queued before included.
+func (s *triggerStarter) TakesTurn(ctx context.Context, m trigger.Match) (bool, error) {
+	return s.takes(ctx, session.Inbound{Key: s.keyOf(m), Binding: m.Binding, MessageID: m.MessageID, Create: true, NoReplies: m.Webhook})
 }
 
 // keyOf is the session a match is a turn of: an alert's own thread, or the thread a bot's mention or a webhook event is in.

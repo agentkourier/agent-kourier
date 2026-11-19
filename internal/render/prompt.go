@@ -115,8 +115,9 @@ func (p *Prompt) Render(view v1alpha1.PromptView, msg TriggerMessage) (string, e
 }
 
 // RenderWebhook is Render for an event of a webhook connection (spec 8.2, "Webhook events"). The template reads .Channel and the
-// connection's id fields (.Fields.<name>), which resolution holds it to, and both are held to the .Key rule (ASCII letters, digits
-// and "_.-:/", at most 128 bytes) in place of the name shape, so that a repository's owner/name and a URL render. The values of
+// connection's id fields (.Fields.<name>), which resolution holds it to, in place of the name shape: .Channel to the webhook
+// channel rule (checkWebhookChannel, at most 140 bytes, as a Binding names it), and the id fields to the .Key rule (ASCII letters,
+// digits and "_.-:/", at most 128 bytes), so that a repository's owner/name and a URL render. The values of
 // .Fields are ev's, not view's: an id field the event has no value for is empty. One the template reads that is Invalid (it had
 // values and none passed the id check) refuses the render, with ReasonInvalid, so that its absence is never shown for a value; one
 // that is not an id field of ev, which resolution refuses, fails it. The untrusted block holds the event's actor and then each field
@@ -160,12 +161,13 @@ func (p *Prompt) render(view v1alpha1.PromptView, wide bool, section func() stri
 }
 
 // safeView checks the values of view that the template reads, and returns a view that holds
-// only those. So whatever the template does with the view, an unchecked value is not in it. wide
-// holds .Channel and the .Fields values to the .Key rule, for an event of a webhook connection.
+// only those. So whatever the template does with the view, an unchecked value is not in it. wide,
+// for an event of a webhook connection, holds .Channel to the webhook channel rule and the .Fields
+// values to the .Key rule.
 func (p *Prompt) safeView(view v1alpha1.PromptView, wide bool) (v1alpha1.PromptView, error) {
-	idRule := checkName
+	idRule, channelRule := checkName, checkName
 	if wide {
-		idRule = checkKey
+		idRule, channelRule = checkKey, checkWebhookChannel
 	}
 	var safe v1alpha1.PromptView
 	for _, name := range p.refs.View {
@@ -174,7 +176,7 @@ func (p *Prompt) safeView(view v1alpha1.PromptView, wide bool) (v1alpha1.PromptV
 		rule := checkName
 		switch name {
 		case "Channel":
-			src, dst, rule = view.Channel, &safe.Channel, idRule
+			src, dst, rule = view.Channel, &safe.Channel, channelRule
 		case "State":
 			src, dst = view.State, &safe.State
 		case "Key":

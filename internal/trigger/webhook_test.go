@@ -2,6 +2,7 @@ package trigger_test
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"maps"
@@ -15,6 +16,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/config"
+	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
@@ -292,6 +294,87 @@ func TestTwoEventsOfOneThreadAreTwoStartsInIt(t *testing.T) {
 	}
 	if d := h.decisions(t); !maps.Equal(d, map[string]float64{"started": 2, "dedup": 1}) {
 		t.Errorf("decisions = %v; want two starts and the redelivery's dedup", d)
+	}
+}
+
+// The session of a webhook event's thread is asked whether it takes the start before the limits (TakesTurn): one that will not (its
+// ended session's replacement withheld) is not_started, started nothing and spent no place, so that with one run an hour and one a
+// day the next event starts. An error of the ask is the event's, for the platform to answer 503, and decides nothing. A Slack
+// trigger's message is not asked about.
+func TestAWebhookEventIsAskedAboutBeforeTheLimits(t *testing.T) {
+	h := newWebhook(t, webhookTrigger(func(tr *v1alpha1.Trigger) {
+		tr.Limits = v1alpha1.TriggerLimits{RateLimit: &v1alpha1.RateLimit{MaxRuns: 1, Per: metav1.Duration{Duration: time.Hour}, MaxConcurrent: 1}, MaxRunsPerDay: new(int32(1))}
+	}))
+	errAsk := errors.New("the session store is down")
+	answer := map[string]error{"e1": nil, "e2": errAsk}
+	var asked []string
+	h.cfg.TakesTurn = func(_ context.Context, m trigger.Match) (bool, error) {
+		asked = append(asked, m.Message.At.ID)
+		err, withheld := answer[m.Message.At.ID]
+		return !withheld, err
+	}
+	h.in = trigger.NewIntake(h.cfg)
+	if err := h.in.Message(h.ctx, prEvent("e1", "d1")); err != nil {
+		t.Fatalf("Message e1 = %v; want the withheld event taken", err)
+	}
+	if err := h.in.Message(h.ctx, prEvent("e2", "d2")); !errors.Is(err, errAsk) {
+		t.Fatalf("Message e2 = %v; want the ask's error", err)
+	}
+	if err := h.in.Message(h.ctx, prEvent("e3", "d3")); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.started(); !slices.Equal(got, []string{"e3"}) || !slices.Equal(asked, []string{"e1", "e2", "e3"}) {
+		t.Errorf("started %v after asking about %v; want e3 alone, each event asked about", got, asked)
+	}
+	if d := h.decisions(t); !maps.Equal(d, map[string]float64{"not_started": 1, "started": 1}) {
+		t.Errorf("decisions = %v; want e1 not_started and e3 started, and nothing for e2", d)
+	}
+	if got := h.limitedCount(t, "0"); len(got) != 0 {
+		t.Errorf("agentkourier_trigger_limited_total = %v; want none", got)
+	}
+	if recs := h.records(t, "chat: a webhook event's thread cannot be continued yet, so the event was dropped"); len(recs) != 1 || recs[0]["thread"] != "pr-42" || recs[0]["delivery"] != "d1" {
+		t.Errorf("drop lines %v; want one, naming the thread and the delivery", recs)
+	}
+}
+
+// A webhook event holds its place in the trigger's concurrency for its own turn alone, in the session of its thread: while that
+// turn's task runs, the next event is limited; once the task is another turn's, the next event starts. Every turn of a webhook
+// event's session is an event's start, so the session manager records each task as its turn's own start (session's startOf): the
+// task of a later event's turn holds that event's place, as the first one's does.
+func TestAWebhookEventHoldsItsConcurrencyPlaceForItsOwnTurnAlone(t *testing.T) {
+	h := newWebhook(t, webhookTrigger(func(tr *v1alpha1.Trigger) {
+		tr.Limits.RateLimit = &v1alpha1.RateLimit{MaxRuns: 100, Per: metav1.Duration{Duration: time.Hour}, MaxConcurrent: 1}
+	}))
+	deliver := func(id string) {
+		t.Helper()
+		if err := h.in.Message(h.ctx, prEvent(id, "d-"+id)); err != nil {
+			t.Fatal(err)
+		}
+		h.clk.advance(time.Second)
+	}
+	key := store.ConversationKey{Connection: hooksConn, Channel: repo, Thread: "pr-42"}
+	runs := func(id string) {
+		t.Helper()
+		turn := store.TaskTurn{ID: "webhook:" + hooksConn + ":" + repo + ":" + id, MessageRef: id, Mention: id}
+		if err := h.st.SetSessionTask(t.Context(), key, "c1", "t-"+id, turn); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deliver("e1")
+	if err := h.st.UpsertSession(t.Context(), store.Session{Key: key, Binding: bindingName, Origin: store.Origin{Source: store.OriginWebhookEvent}, LastActivity: h.clk.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	runs("e1")    // the first event's own task runs
+	deliver("e2") // limited: e1 holds the one place
+	runs("e9")    // a turn whose start holds no place of this trigger's
+	deliver("e3") // starts
+	runs("e3")    // the task of a later event's turn, recorded as its own start
+	deliver("e4") // limited: e3 holds the place
+	if got := h.started(); !slices.Equal(got, []string{"e1", "e3"}) {
+		t.Errorf("turns started for %v; want e1, and e3 once the task was not a start of the trigger's", got)
+	}
+	if got := h.limitedCount(t, "0"); got["concurrent"] != 2 || len(got) != 1 {
+		t.Errorf("agentkourier_trigger_limited_total = %v; want two, for e2 and e4, by the concurrency limit", got)
 	}
 }
 

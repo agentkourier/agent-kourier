@@ -80,6 +80,12 @@ type IntakeConfig struct {
 	// posts nothing and queues nothing, so it is not_started, with no count against the limits and no report that they stopped
 	// it. Its error is the event's: the platform delivers it again.
 	TakesBotMention func(ctx context.Context, m Match) (bool, error)
+	// TakesTurn, if set, says whether the session that a webhook event's start would be a turn of takes it now, reading only, as
+	// TakesBotMention does for a bot's mention. It is asked before the event meets the limits: an event whose thread's session has
+	// ended (past its threadTTL, or its Binding gone) and whose replacement the session manager withholds (the old session may still
+	// be at work, or the body was queued before) is not_started. It is taken, logged, and spends no place in the limits. Its
+	// error is the event's: the platform answers 503, and the sender delivers it again.
+	TakesTurn func(ctx context.Context, m Match) (bool, error)
 	// TurnQueued, if set, says whether the turn with this ID (the MessageID of the message that started it) was
 	// durably taken: queued or already sent. It closes the window between OnStart queueing a turn and the
 	// thread being marked started (a failed write, a crash, an event Slack never delivered again): a later fire
@@ -352,6 +358,23 @@ func (in *Intake) webhookEvent(ctx context.Context, snap *config.Snapshot, m cha
 	return in.matchTriggers(ctx, snap, rb, m, "webhook event", "thread", m.At.Thread, "delivery", m.Webhook.Delivery)
 }
 
+// decideWebhook decides a webhook event's match, once the session of its thread has said that it takes the start (TakesTurn), as
+// decideMention does a mention's: a thread whose ended session the session manager will not replace yet would take no turn, so the
+// event is not_started with no place taken in the limits, and dropped. Its log line names the thread and the sender's delivery.
+func (in *Intake) decideWebhook(ctx context.Context, m Match) (decided, error) {
+	if in.cfg.TakesTurn != nil {
+		switch takes, err := in.cfg.TakesTurn(ctx, m); {
+		case err != nil:
+			return decided{}, fmt.Errorf("ask whether the session takes the turn: %w", err)
+		case !takes:
+			in.log.InfoContext(ctx, "chat: a webhook event's thread cannot be continued yet, so the event was dropped", "binding", m.Binding, "trigger", m.Index,
+				"channel", m.Message.At.Channel, "thread", m.sessionThread(), "message", m.Message.At.ID, "delivery", m.Message.Webhook.Delivery)
+			return decided{decision: DecisionNotStarted, thread: m.sessionThread()}, nil
+		}
+	}
+	return in.decide(ctx, m)
+}
+
 // triedAsPerson says whether m is the input of the personMessage triggers among triggers: a person's message at the top level of
 // the channel, not a direct message, in a Binding that has such a trigger. A message that mentions Agent Kourier, where the
 // Binding has a mention trigger, is that trigger's, so that a person who asks for the agent is not also a report that uses a
@@ -383,7 +406,11 @@ func (in *Intake) matchTriggers(ctx context.Context, snap *config.Snapshot, rb c
 	}
 	match := Match{Binding: name, Index: trigger.index, Fields: fields, Thread: trigger.thread, Limits: trigger.limits, PromptTemplate: trigger.prompt, MessageID: in.messageID(m), Received: in.now(), Message: m, Person: trigger.person, Webhook: trigger.webhook}
 	in.log.InfoContext(ctx, "chat: "+what+" matched a trigger", append(where, "trigger", trigger.index)...)
-	out, err := in.decide(ctx, match)
+	decide := in.decide
+	if match.Webhook {
+		decide = in.decideWebhook
+	}
+	out, err := decide(ctx, match)
 	attrs := []any{"binding", name, "trigger", trigger.index, "decision", out.decision, "keyHash", out.keyHash, "channel", m.At.Channel, "message", m.At.ID, "thread", out.thread}
 	if err != nil {
 		in.log.WarnContext(ctx, "chat: trigger decision not taken; its redelivery decides again", attrs...)

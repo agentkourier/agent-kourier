@@ -389,7 +389,7 @@ func TestSchemaCapsEqualTheBrokersCaps(t *testing.T) {
 		{"backend url", backends.at(t, "spec.url"), "maxLength", maxURLLen},
 		{"header value", backends.at(t, "spec.headers[].value"), "maxLength", maxHeaderValueLen},
 		// Slack's cap of 32 is the CEL rule's (TestCELLiteralsEqualTheBrokersConstants); the field's is a webhook channel's.
-		{"channel", bindings.at(t, "spec.chat.channel"), "maxLength", maxWebhookChannelLen},
+		{"channel", bindings.at(t, "spec.chat.channel"), "maxLength", MaxWebhookChannelLen},
 		{"sender ID", bindings.at(t, trigger+".from.id"), "maxLength", maxChatIDLen},
 		{"approver group", bindings.at(t, "spec.interactions.approverGroups[]"), "maxLength", maxChatIDLen},
 		{"emoji", bindings.at(t, "spec.chat.acknowledgment.emoji"), "maxLength", maxEmojiLen},
@@ -419,7 +419,7 @@ func TestSchemaCapsEqualTheBrokersCaps(t *testing.T) {
 		{"webhook timestamp pointer", connections.at(t, "spec.webhook.verify.timestamp.from"), "maxLength", MaxWebhookPointerLen},
 		{"webhook channel pointers", connections.at(t, "spec.webhook.channel.from"), "maxItems", MaxWebhookFrom},
 		{"webhook channel pointer", connections.at(t, "spec.webhook.channel.from[]"), "maxLength", MaxWebhookPointerLen},
-		{"webhook channel value", connections.at(t, "spec.webhook.channel.value"), "maxLength", maxWebhookChannelLen},
+		{"webhook channel value", connections.at(t, "spec.webhook.channel.value"), "maxLength", MaxWebhookChannelLen},
 		{"webhook actor pointers", connections.at(t, "spec.webhook.actor.from"), "maxItems", MaxWebhookFrom},
 		{"webhook actor pointer", connections.at(t, "spec.webhook.actor.from[]"), "maxLength", MaxWebhookPointerLen},
 		{"webhook thread field", connections.at(t, "spec.webhook.thread.field"), "maxLength", maxWebhookFieldNameLen},

@@ -3,6 +3,8 @@ package render
 import (
 	"fmt"
 	"net/url"
+
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 )
 
 // The rules a value of a PromptView must pass to reach a prompt's instruction part (spec R2).
@@ -88,6 +90,19 @@ func checkName(s string) Reason { return checkShape(s, maxNameBytes, "_.-:") }
 // payments", as the Alertmanager example extracts) is refused if a template reads .Key: such a
 // template should read the entries it needs from .Fields.
 func checkKey(s string) Reason { return checkShape(s, maxKeyBytes, "_.-:/") }
+
+// checkWebhookChannel is the rule of a webhook event's Channel: the webhook channel shape (v1alpha1.ValidWebhookChannel), letters,
+// digits, ".", "_" and "-" in parts with "/" between them, at most v1alpha1.MaxWebhookChannelLen bytes, which a Binding of the
+// connection may name and the connection resolves from an event.
+func checkWebhookChannel(s string) Reason {
+	switch {
+	case len(s) > v1alpha1.MaxWebhookChannelLen:
+		return ReasonTooLong
+	case !v1alpha1.ValidWebhookChannel(s):
+		return ReasonCharacters
+	}
+	return ""
+}
 
 // checkShape returns ReasonTooLong if s is longer than limit bytes, and ReasonCharacters if
 // it holds a byte that is no ASCII letter or digit and not among extra.
