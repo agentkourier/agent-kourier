@@ -19,7 +19,7 @@ import (
 
 // The control API. It has no authentication: the fake runs only behind a ClusterIP Service, as the fake Slack does.
 //
-//	POST /_control/install    {app, channel}: the bot is added to the channel, which Teams tells it with a conversationUpdate
+//	POST /_control/install    {app, channel}: the bot's app is added to the team, which Teams tells it with a conversationUpdate on the team
 //	POST /_control/mention    {app, channel, user, name, text, thread, plain}: a person's post, with a mention of the bot unless plain
 //	POST /_control/press      {app, message, user, name, action, inputs}: a press of an Action.Execute of a bot's card
 //	POST /_control/workflows  {app, channel, card, text}: another app's post, such as Workflows' alert card; no bot is sent it
@@ -106,9 +106,14 @@ func (s *Service) controlInstall(w http.ResponseWriter, r *http.Request) {
 	s.channelLocked(in.Channel)
 	id := s.nextIDLocked(time.Now())
 	s.mu.Unlock()
-	a := s.activity("conversationUpdate", id, in.Channel)
+	// As Microsoft's documentation of the bot's install describes it, and not measured here: a conversationUpdate of eventType
+	// teamMemberAdded, the bot in membersAdded, on the team's conversation (its General channel's ID). The channel the test names is
+	// in channelData alone. So the install tells the bot the team's record, not the channel's: a channel's comes with the first
+	// activity in it, a person's mention of the bot, which is the setup a team does.
+	a := s.activity("conversationUpdate", id, s.cfg.TeamID)
 	a["membersAdded"] = []any{map[string]string{"id": "28:" + in.App, "name": botName}}
-	a["channelData"].(map[string]any)["eventType"] = "channelCreated"
+	data := a["channelData"].(map[string]any)
+	data["eventType"], data["teamsChannelId"], data["channel"] = "teamMemberAdded", in.Channel, map[string]string{"id": in.Channel}
 	writeJSON(w, s.sendActivity(r.Context(), in.App, a))
 }
 
@@ -261,8 +266,9 @@ func (s *Service) controlSubscriptions(w http.ResponseWriter, _ *http.Request) {
 func (s *Service) controlStats(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Lock()
 	st := Stats{Reads: maps.Clone(s.stats.Reads), SubscriptionCreates: maps.Clone(s.stats.SubscriptionCreates),
-		SubscriptionDeletes: maps.Clone(s.stats.SubscriptionDeletes), Notifications: slices.Clone(s.stats.Notifications),
-		Activities: slices.Clone(s.stats.Activities)}
+		SubscriptionDeletes: maps.Clone(s.stats.SubscriptionDeletes), SubscriptionRenewals: maps.Clone(s.stats.SubscriptionRenewals),
+		Notifications: slices.Clone(s.stats.Notifications),
+		Activities:    slices.Clone(s.stats.Activities)}
 	s.mu.Unlock()
 	writeJSON(w, st)
 }

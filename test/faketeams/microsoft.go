@@ -149,7 +149,10 @@ func readActivity(w http.ResponseWriter, r *http.Request) (outActivity, bool) {
 	return a, true
 }
 
-// send is a bot's post: to a channel, which starts a thread, or to a thread of it (conversation "<channel>;messageid=<root>").
+// send is a bot's post: to a channel, which starts a thread, or to a thread of it (conversation "<channel>;messageid=<root>"). An
+// activity of both text and attachments is answered 202 with no body and no ID, and kept as two messages, the text and then a card
+// of its own, as Teams was measured to answer and show one (on a test tenant, web client, 2026-11-18; internal/chat/teams/buttons.go).
+// Where Teams puts the card when the text starts a thread was not measured: the fake puts it beside the text.
 func (s *Service) send(w http.ResponseWriter, r *http.Request, app string) {
 	channel, root := splitConv(r.PathValue("conv"))
 	a, ok := readActivity(w, r)
@@ -160,6 +163,13 @@ func (s *Service) send(w http.ResponseWriter, r *http.Request, app string) {
 	if !slices.Contains(s.channels, channel) || (root != "" && s.messages[root] == nil) {
 		s.mu.Unlock()
 		apiError(w, http.StatusNotFound, "ConversationNotFound")
+		return
+	}
+	if text := deref(a.Text); text != "" && len(a.Attachments) > 0 {
+		s.notifyLocked(s.postLocked(&message{channel: channel, root: root, kind: SenderBot, from: app, name: botName, text: text}), "created")
+		s.notifyLocked(s.postLocked(&message{channel: channel, root: root, kind: SenderBot, from: app, name: botName, attachments: a.Attachments}), "created")
+		s.mu.Unlock()
+		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 	m := s.postLocked(&message{channel: channel, root: root, kind: SenderBot, from: app, name: botName, text: deref(a.Text), attachments: a.Attachments})

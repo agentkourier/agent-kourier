@@ -10,6 +10,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,6 +25,8 @@ import (
 const (
 	teamsAda = "7e2e7ea5-0000-4000-8000-0000000000d1"
 	teamsBob = "7e2e7ea5-0000-4000-8000-0000000000d2"
+	// teamsSetupPerson is who mentions the bot in each channel at setup (prepare, and lib.sh's deploy_teams_connections).
+	teamsSetupPerson = "7e2e7ea5-0000-4000-8000-0000000000d0"
 )
 
 // teamsScenario is a scenario with the fake Teams service's control API.
@@ -54,9 +57,19 @@ func newTeams(t *testing.T) *teamsScenario {
 	return ts
 }
 
-// prepare waits for the leader to say both Teams connections are up, and adds each bot to its channels again: the fake keeps nothing over a restart,
-// and the conversationUpdate is what tells a connection a channel's team and group, which its subscriptions and polls need. A 200 from the bot is the
-// broker serving the connection on its chat listener; anything else is tried again for a while (a rollout, a takeover).
+// teamsSetup records whether this run has made the team's setup, which prepare makes once, retried until it is made: an approval channel's
+// setup mention starts a turn that waits on its card, which is not to pile up with each test. The fake keeps nothing over a restart, and the
+// broker's store keeps what Teams told it, so once a run is enough.
+var teamsSetup struct {
+	sync.Mutex
+	done bool
+}
+
+// prepare waits for the leader to say both Teams connections are up, then makes the team's setup, as a team does with a real bot: the bot's app
+// is added to the team (a conversationUpdate on the team's conversation, which tells the connection the team's record and no channel's), and a
+// person mentions the bot in each bound channel, which tells the connection that channel's team, Microsoft Entra group and service URL: what its
+// subscriptions and polls need, and the only way they learn it. A 200 from the bot is the broker serving the connection on its chat listener;
+// anything else is tried again for a while (a rollout, a takeover).
 func (ts *teamsScenario) prepare() {
 	ts.t.Helper()
 	if err := ts.teams.Healthy(ts.ctx); err != nil {
@@ -65,15 +78,34 @@ func (ts *teamsScenario) prepare() {
 	for _, conn := range []string{ConnTeamsPush, ConnTeamsPoll} {
 		ts.waitUp(conn)
 	}
+	teamsSetup.Lock()
+	defer teamsSetup.Unlock()
+	if teamsSetup.done {
+		return
+	}
 	for _, channel := range slices.Sorted(maps.Keys(teamsChannels)) {
 		app := teamsChannels[channel]
-		err := Wait(ts.ctx, 2*time.Minute, "the bot "+app+" to take its install in "+channel, func(ctx context.Context) (bool, error) {
-			d, err := ts.teams.Install(ctx, faketeams.Install{App: app, Channel: channel})
-			return err == nil && d.Status == 200, nil
+		ts.until("the bot "+app+" to take its install in the team", func(ctx context.Context) (faketeams.Delivered, error) {
+			return ts.teams.Install(ctx, faketeams.Install{App: app, Channel: channel})
 		})
-		if err != nil {
-			ts.t.Fatal(err)
-		}
+		ts.until("the bot "+app+" to take a person's setup mention in "+channel, func(ctx context.Context) (faketeams.Delivered, error) {
+			return ts.teams.Mention(ctx, faketeams.Mention{App: app, Channel: channel, User: teamsSetupPerson, Name: "Setup", Text: teamsUnique("setup ")})
+		})
+	}
+	teamsSetup.done = true
+}
+
+// until calls send until the bot answers its activity 200, for two minutes.
+func (ts *teamsScenario) until(what string, send func(context.Context) (faketeams.Delivered, error)) {
+	ts.t.Helper()
+	var last faketeams.Delivered
+	err := Wait(ts.ctx, 2*time.Minute, what, func(ctx context.Context) (bool, error) {
+		d, err := send(ctx)
+		last = d
+		return err == nil && d.Status == 200, nil
+	})
+	if err != nil {
+		ts.t.Fatalf("%v; the bot's last answer: %d %q", err, last.Status, last.Body)
 	}
 }
 
@@ -204,7 +236,11 @@ func (ts *teamsScenario) stats() faketeams.Stats {
 	return st
 }
 
-// investigated waits for the bot's investigation of the alert in its thread: the final text, and the feedback buttons, which the Teams adapter posts as a
+// investigated waits for the bot's investigation of the alert in its thread. The alert Bindings' promptTemplate reads .Channel, a Teams channel ID
+// (19:…@thread.tacv2), so the render of the prompt must allow its '@': where it does not, the trigger refuses the prompt and no investigation
+// comes (test/kindmanifests' TestTheTeamsAlertPromptsRenderWithATeamsChannel fails first, with no tier).
+//
+// It waits for the final text, and the feedback buttons, which the Teams adapter posts as a
 // card of their own after the text. It returns the message with the buttons.
 func (ts *teamsScenario) investigated(channel, alert, name string) faketeams.MessageView {
 	ts.t.Helper()

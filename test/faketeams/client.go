@@ -27,8 +27,9 @@ func (c *Control) Healthy(ctx context.Context) error {
 	return c.do(ctx, http.MethodGet, "/_control/healthz", nil, nil)
 }
 
-// Install adds the bot of in.App to in.Channel, which Teams tells it with a conversationUpdate: the bot then knows the channel's
-// team, its Microsoft Entra group and its service URL.
+// Install adds the bot of in.App to the team, which Teams tells it with a conversationUpdate on the team's conversation, with
+// in.Channel in its channelData alone: the bot then knows the team's record (its General channel's), and learns a channel's with the
+// first activity in it, such as Mention.
 func (c *Control) Install(ctx context.Context, in Install) (Delivered, error) {
 	var out Delivered
 	return out, c.do(ctx, http.MethodPost, "/_control/install", in, &out)

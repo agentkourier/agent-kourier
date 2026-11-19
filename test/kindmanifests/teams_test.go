@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/test/e2e"
 )
 
@@ -252,7 +253,10 @@ func TestTheFakeTeamsHostsTheConnectionsOfTheTests(t *testing.T) {
 		env[e.Name] = e
 	}
 	public := flags["public-url"]
-	if len(public) != 1 || env["AGENTKOURIER_TEAMS_URL"].Value != public[0] {
+	if len(public) != 1 {
+		t.Fatalf("the fake's -public-url = %q; want one", public)
+	}
+	if env["AGENTKOURIER_TEAMS_URL"].Value != public[0] {
 		t.Errorf("AGENTKOURIER_TEAMS_URL = %q; want the fake's -public-url %q", env["AGENTKOURIER_TEAMS_URL"].Value, public)
 	}
 	if ref := env["AGENTKOURIER_TEAMS_CA"].ValueFrom; ref == nil || ref.ConfigMapKeyRef == nil || ref.ConfigMapKeyRef.Name != "faketeams-ca" || ref.ConfigMapKeyRef.Key != "ca.crt" {
@@ -314,5 +318,38 @@ func TestUpFastRefusesTeamsItCannotRun(t *testing.T) {
 				t.Errorf("up-fast.sh called %q before it refused; want no tool called", called)
 			}
 		})
+	}
+}
+
+// TestTheTeamsAlertPromptsRenderWithATeamsChannel: the promptTemplate of each alert Binding of teams.yaml reads .Channel, which is a Teams channel ID
+// (19:…@thread.tacv2), and renders through the broker's own render with that channel and what the trigger extracts from an alert's card. The TEAMS_
+// alert tests need it to, and this fails with no tier when the render refuses the channel's '@'.
+func TestTheTeamsAlertPromptsRenderWithATeamsChannel(t *testing.T) {
+	_, bindings, _, _ := teamsObjects(t)
+	for _, name := range []string{"alert-push", "alert-poll", "failover"} {
+		b, ok := bindings[name]
+		if !ok || len(b.Spec.Chat.Triggers) != 1 {
+			t.Errorf("Binding %s has no one trigger", name)
+			continue
+		}
+		tmpl := b.Spec.Chat.Triggers[0].PromptTemplate
+		if !strings.Contains(tmpl, "{{ .Channel }}") {
+			t.Errorf("Binding %s's promptTemplate does not read .Channel; this test guards that a Teams channel ID renders there", name)
+		}
+		p, err := render.NewPrompt(name, tmpl)
+		if err != nil {
+			t.Errorf("Binding %s: %v", name, err)
+			continue
+		}
+		view := v1alpha1.PromptView{Channel: b.Spec.Chat.Channel, State: "FIRING", Key: "TeamsPush123", Source: "botMessage",
+			Fields: map[string]string{"state": "FIRING", "key": "TeamsPush123", "alertname": "TeamsPush123"}}
+		out, err := p.Render(view, render.TriggerMessage{Body: "[FIRING] TeamsPush123 shop\nnamespace: shop"})
+		if err != nil {
+			t.Errorf("Binding %s's prompt with the channel %s: %v", name, b.Spec.Chat.Channel, err)
+			continue
+		}
+		if !strings.Contains(out, "An alert is FIRING in channel "+b.Spec.Chat.Channel+": TeamsPush123.") {
+			t.Errorf("Binding %s's prompt is %q; want the channel and the alert's name in its first line", name, out)
+		}
 	}
 }

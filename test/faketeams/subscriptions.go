@@ -136,7 +136,8 @@ func (s *Service) countLocked(m *map[string]int, key string) {
 	(*m)[key]++
 }
 
-// renewSubscription moves a subscription's expiry.
+// renewSubscription moves a subscription's expiry, after the validation handshake with both of its URLs, as Graph does on every renewal
+// (the plan's spike; not measured here): a renewal whose URLs no longer answer it is refused with 400, and the expiry stays.
 func (s *Service) renewSubscription(w http.ResponseWriter, r *http.Request, app string) {
 	var body struct {
 		ExpirationDateTime time.Time `json:"expirationDateTime"`
@@ -152,7 +153,22 @@ func (s *Service) renewSubscription(w http.ResponseWriter, r *http.Request, app 
 		apiError(w, http.StatusNotFound, "ResourceNotFound")
 		return
 	}
+	urls := slices.Compact([]string{sub.notificationURL, sub.lifecycleURL})
+	s.mu.Unlock()
+	for _, u := range urls {
+		if u != "" && !s.validate(r.Context(), u) {
+			apiError(w, http.StatusBadRequest, "ValidationError")
+			return
+		}
+	}
+	s.mu.Lock()
+	if s.subs[sub.id] != sub {
+		s.mu.Unlock()
+		apiError(w, http.StatusNotFound, "ResourceNotFound")
+		return
+	}
 	sub.expires = body.ExpirationDateTime
+	s.countLocked(&s.stats.SubscriptionRenewals, sub.channel)
 	out := sub.json()
 	s.mu.Unlock()
 	writeJSON(w, out)

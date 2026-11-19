@@ -273,9 +273,11 @@ func (m *message) view() MessageView {
 type Stats struct {
 	// Reads are Graph's reads of each channel's messages.
 	Reads map[string]Reads `json:"reads"`
-	// SubscriptionCreates counts the subscriptions made, by channel, and SubscriptionDeletes those deleted.
-	SubscriptionCreates map[string]int `json:"subscriptionCreates"`
-	SubscriptionDeletes map[string]int `json:"subscriptionDeletes"`
+	// SubscriptionCreates counts the subscriptions made, by channel, SubscriptionDeletes those deleted, and SubscriptionRenewals the
+	// renewals that passed their validation handshake.
+	SubscriptionCreates  map[string]int `json:"subscriptionCreates"`
+	SubscriptionDeletes  map[string]int `json:"subscriptionDeletes"`
+	SubscriptionRenewals map[string]int `json:"subscriptionRenewals"`
 	// Notifications are the change notifications sent, each with how it went.
 	Notifications []Notification `json:"notifications"`
 	// Activities are the activities sent to the bots, each with the answer.

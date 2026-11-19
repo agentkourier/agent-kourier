@@ -553,10 +553,12 @@ deploy_fake_teams() {
 
 # deploy_teams_connections: the tier's Microsoft Teams connections (E2E_TEAMS=1; custom resources only): the namespace teams-e2e, its Secrets (the client
 # secret that the fake Teams service takes, and an agent token), and fast/teams/teams.yaml: the Role that grants the broker those Secrets, the ChatConnections
-# teams-push and teams-poll, the AgentBackend and the Bindings. It returns once the broker answers the fake's conversationUpdate for each bound channel with
-# 200, which is the broker serving both connections on its chat listener, and dies if it does not in three minutes. That also gives the broker the record of each
-# channel (its team and Microsoft Entra group), which a subscription and a poll need; the TEAMS_ tests send it again, since the fake keeps nothing over a
-# restart. Needs HERE, K, jq, and the CRDs served (deploy_agentkourier with crds).
+# teams-push and teams-poll, the AgentBackend and the Bindings. Then the setup a team makes with a real bot: the bot's app added to the team (the fake's
+# install, a conversationUpdate on the team's conversation) and a person's mention of the bot in each bound channel, which is what gives the broker the
+# record of that channel (its team, Microsoft Entra group and service URL) that a subscription and a poll need. The approval channel's mention starts a turn
+# that waits on its card. It returns once the broker answers each of those activities with 200, which is the broker serving both connections on its chat
+# listener, and dies if it does not in three minutes. The TEAMS_ tests make the setup again once a run, since the fake keeps nothing over a restart.
+# Needs HERE, K, jq, and the CRDs served (deploy_agentkourier with crds).
 deploy_teams_connections() {
   local pod deadline ok="" fake=http://faketeams.e2e.svc.cluster.local:8080/_control
   "${K[@]}" create namespace teams-e2e --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
@@ -573,10 +575,15 @@ deploy_teams_connections() {
     if "${K[@]}" -n e2e run "${pod}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" --command -- sh -c '
       set -e
       fake=$1
-      install() { curl -sf -m 40 -X POST -H "Content-Type: application/json" -d "{\"app\":\"$1\",\"channel\":\"$2\"}" "$fake/install" | grep -q "\"status\":200"; }
+      ok() { grep -q "\"status\":200"; }
+      setup() {
+        curl -sf -m 40 -X POST -H "Content-Type: application/json" -d "{\"app\":\"$1\",\"channel\":\"$2\"}" "$fake/install" | ok
+        curl -sf -m 40 -X POST -H "Content-Type: application/json" \
+          -d "{\"app\":\"$1\",\"channel\":\"$2\",\"user\":\"7e2e7ea5-0000-4000-8000-0000000000d0\",\"name\":\"Setup\",\"text\":\"setup\"}" "$fake/mention" | ok
+      }
       push=7e2e7ea5-0000-4000-8000-0000000000a1 poll=7e2e7ea5-0000-4000-8000-0000000000a2
-      for c in teams-mention teams-approval teams-alert-push teams-failover; do install "$push" "19:$c@thread.tacv2"; done
-      install "$poll" "19:teams-alert-poll@thread.tacv2"' sh "${fake}" >/dev/null 2>&1; then
+      for c in teams-mention teams-approval teams-alert-push teams-failover; do setup "$push" "19:$c@thread.tacv2"; done
+      setup "$poll" "19:teams-alert-poll@thread.tacv2"' sh "${fake}" >/dev/null 2>&1; then
       ok=1
       break
     fi
@@ -584,7 +591,7 @@ deploy_teams_connections() {
   done
   [ -n "${ok}" ] || {
     "${K[@]}" -n agent-kourier logs deploy/agent-kourier --tail=40 >&2 || true
-    die "the broker never answered the fake Teams service's conversationUpdate with 200; is teams-e2e in config.connectionNamespaces, does its Role name its Secrets, and is the chat listener on?"
+    die "the broker never answered the fake Teams service's install and setup mentions with 200; is teams-e2e in config.connectionNamespaces, does its Role name its Secrets, and is the chat listener on?"
   }
   echo "ok: the broker serves the Teams connections teams-e2e/teams-push and teams-e2e/teams-poll"
 }

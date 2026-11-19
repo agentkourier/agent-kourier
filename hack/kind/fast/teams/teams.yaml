@@ -4,7 +4,12 @@
 # teams-e2e (hack/kind/teams-values.yaml). test/e2e's TEAMS_ tests drive it, and its teams.go names the same IDs, channels and Bindings.
 #
 # teams-push has a notificationURL, so the leader keeps a Graph subscription to each bound channel and reads what Graph notifies; teams-poll has none, so
-# the leader polls the channels of its botMessage triggers. Both are in http mode: the fake sends their activities to the chat listener.
+# the leader polls its bound channels (the channels of its Bindings). Both are in http mode: the fake sends their activities to the chat listener. A
+# connection learns a channel's team and group from the first activity in it, a person's mention, which deploy_teams_connections and the tests send.
+#
+# The alert Bindings (alert-push, alert-poll, failover) read .Channel in their promptTemplate, and a Teams channel ID holds '@' (19:…@thread.tacv2). The
+# render of a prompt must allow it in .Channel, or the trigger refuses every alert's prompt and the TEAMS_ alert tests fail.
+# test/kindmanifests' TestTheTeamsAlertPromptsRenderWithATeamsChannel renders the three templates with no tier and fails while it is refused.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata: {name: agent-kourier-reads-teams-e2e, namespace: teams-e2e}
