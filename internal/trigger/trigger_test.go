@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -864,5 +865,24 @@ func TestMentionsAreUnchangedByBotTriggers(t *testing.T) {
 				t.Errorf("submitted %+v; want create=%v in thread %s", got[0], tt.create, tt.thread)
 			}
 		})
+	}
+}
+
+// BoundChannels names the channels of the connection's Bindings in the current config, sorted, and none of another connection's; a
+// reload changes the answer, and there is none before the first config.
+func TestBoundChannelsAreTheConnectionsBindings(t *testing.T) {
+	h := newTriggered(t, v1alpha1.Trigger{Type: v1alpha1.TriggerMention})
+	if got := h.in.BoundChannels(); !slices.Equal(got, []string{"C1", "G1"}) {
+		t.Errorf("BoundChannels = %v, want [C1 G1]", got)
+	}
+	other := h.cfg
+	other.Connection.Name = "slack-other"
+	if got := trigger.NewIntake(other).BoundChannels(); len(got) != 0 {
+		t.Errorf("BoundChannels of another connection = %v, want none", got)
+	}
+	none := h.cfg
+	none.Snapshot = func() *config.Snapshot { return nil }
+	if got := trigger.NewIntake(none).BoundChannels(); got != nil {
+		t.Errorf("BoundChannels with no config = %v, want none", got)
 	}
 }

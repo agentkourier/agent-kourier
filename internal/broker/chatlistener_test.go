@@ -272,6 +272,81 @@ func TestChatRoutesGiveTheHandlerADeadline(t *testing.T) {
 	}
 }
 
+// A route whose handler asks for a longer deadline (chat.HTTPDeadline) is given it, counted from when its body was read; one that asks
+// for less than the default, or does not ask, is given the default.
+func TestChatRoutesGiveARouteTheLongerDeadlineItAsksFor(t *testing.T) {
+	t.Parallel()
+	r := newChatRig(t)
+	for name, tc := range map[string]struct {
+		asks time.Duration // 0: the handler does not ask
+		want time.Duration
+	}{
+		"longer":  {9 * time.Second, 9 * time.Second},
+		"shorter": {time.Second, chatHandlerTimeout},
+		"none":    {0, chatHandlerTimeout},
+	} {
+		h := &heard{}
+		var route http.Handler = h
+		if tc.asks > 0 {
+			route = withDeadline{h, tc.asks}
+		}
+		r.routes.register(v1alpha1.PlatformTeams, "ns/"+name, route)
+		if code, _, _, _ := r.do(http.MethodPost, "/chat/teams/ns/"+name, nil); code != http.StatusOK {
+			t.Fatalf("%s: POST = %d", name, code)
+		}
+		_, _, dl := h.got()
+		if len(dl) != 1 || dl[0] > tc.want || dl[0] < tc.want-time.Second {
+			t.Errorf("%s: the handler's context had %v left, want about %s", name, dl, tc.want)
+		}
+	}
+}
+
+// A route given a longer deadline may answer after the server's own write bound, which is set for the default: it gets the same time to
+// answer after its own deadline as any route. Here the server's write bound is cut to 100 ms, so a handler that answers after 300 ms is
+// cut on a route with the default, and answered on one with its own deadline.
+func TestChatRoutesLetARouteWithALongerDeadlineAnswerAfterTheDefault(t *testing.T) {
+	t.Parallel()
+	routes := newChatRoutes(mustMetrics(t, nil), testutil.DiscardLogger())
+	srv := httptest.NewUnstartedServer(routes)
+	srv.Config = newChatServer(routes)
+	srv.Config.WriteTimeout = 100 * time.Millisecond
+	srv.Start()
+	t.Cleanup(srv.Close)
+	late := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+		_, _ = io.WriteString(w, "late")
+	})
+	routes.register(v1alpha1.PlatformTeams, "ns/long", withDeadline{late, 5 * time.Second})
+	routes.register(v1alpha1.PlatformSlack, "ns/short", late)
+	post := func(path string) (string, error) {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			return "", err
+		}
+		defer func() { _ = resp.Body.Close() }()
+		b, err := io.ReadAll(resp.Body)
+		return string(b), err
+	}
+	if body, err := post("/chat/teams/ns/long"); err != nil || body != "late" {
+		t.Errorf("the route with a longer deadline: %q, %v; want its late answer", body, err)
+	}
+	if body, err := post("/chat/slack/ns/short"); err == nil && body == "late" {
+		t.Error("the route with the default deadline answered past the server's write bound: the test does not show the extension")
+	}
+}
+
+// withDeadline is a handler that asks for a deadline of its own (chat.HTTPDeadline).
+type withDeadline struct {
+	http.Handler
+	timeout time.Duration
+}
+
+func (d withDeadline) HandlerTimeout() time.Duration { return d.timeout }
+
 // The server's bounds are the constants, and they fit together: the headers are read within the time of the whole request, and the write
 // bound, which net/http starts once the headers are read, holds the body, the handler and a second to answer.
 func TestChatServerHasItsBounds(t *testing.T) {
@@ -280,7 +355,7 @@ func TestChatServerHasItsBounds(t *testing.T) {
 		srv.IdleTimeout != chatIdleTimeout || srv.MaxHeaderBytes != chatMaxHeaderBytes || srv.ErrorLog == nil {
 		t.Errorf("the chat server is %+v, want the chat listener's bounds", srv)
 	}
-	if chatReadHeaderTimeout > chatReadTimeout || chatWriteTimeout < chatReadTimeout+chatHandlerTimeout {
+	if chatReadHeaderTimeout > chatReadTimeout || chatWriteTimeout != chatReadTimeout+chatHandlerTimeout+chatAnswerTimeout {
 		t.Errorf("headers %s, request %s, handler %s, write %s: the headers must fit in the request, and the write bound must hold the body and the handler",
 			chatReadHeaderTimeout, chatReadTimeout, chatHandlerTimeout, chatWriteTimeout)
 	}
@@ -485,7 +560,7 @@ func TestChatListenerOutcomesAreBounded(t *testing.T) {
 	if want := []string{"served", "not_found", "method", "no_route", "too_large", "unreadable", "busy"}; !slices.Equal(chatOutcomes, want) {
 		t.Errorf("the outcomes are %q, want %q as docs/reference/metrics.md lists them", chatOutcomes, want)
 	}
-	if want := []string{"slack", "webhook"}; !slices.Equal(chatPlatforms, want) {
+	if want := []string{"slack", "teams", "webhook"}; !slices.Equal(chatPlatforms, want) {
 		t.Errorf("the platforms are %q, want %q as docs/reference/metrics.md lists them", chatPlatforms, want)
 	}
 }
@@ -547,6 +622,11 @@ func TestChatListenerCountsEachOutcomeUnderItsRoute(t *testing.T) {
 		"no route, its route went":   {req: post("/chat/slack/ns/gone"), want: listenerKey{chatNoRoute, "slack", "ns/gone"}},
 		"no route, never a route":    {req: post("/chat/slack/ns/never"), want: listenerKey{chatNoRoute, "slack", unknownLabel}},
 		"no route, another platform": {req: post("/chat/github/ns/a"), want: listenerKey{chatNoRoute, otherLabel, unknownLabel}},
+		"served, teams":              {req: post("/chat/teams/ns/t"), want: listenerKey{chatServed, "teams", "ns/t"}},
+		"no route, a Slack connection under teams": {
+			req:  post("/chat/teams/ns/a"),
+			want: listenerKey{chatNoRoute, "teams", unknownLabel},
+		},
 		"too large, declared": {
 			req: func(*chatRoutes) *http.Request {
 				req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat/slack/ns/a", strings.NewReader("x"))
@@ -579,6 +659,7 @@ func TestChatListenerCountsEachOutcomeUnderItsRoute(t *testing.T) {
 			routes := newChatRoutes(m, testutil.DiscardLogger())
 			routes.register(v1alpha1.PlatformSlack, "ns/a", &heard{})
 			routes.register(v1alpha1.PlatformSlack, "ns/gone", &heard{}).drop()
+			routes.register(v1alpha1.PlatformTeams, "ns/t", &heard{})
 			routes.ServeHTTP(httptest.NewRecorder(), tc.req(routes))
 			if got, want := listenerSeries(t, m), map[listenerKey]int{tc.want: 1}; !maps.Equal(got, want) {
 				t.Errorf("series = %v, want %v", got, want)
@@ -593,7 +674,7 @@ func TestChatListenerNeverLabelsASenderChosenPath(t *testing.T) {
 	m := mustMetrics(t, nil)
 	routes := newChatRoutes(m, testutil.DiscardLogger())
 	routes.register(v1alpha1.PlatformSlack, "ns/a", &heard{})
-	paths := []string{"/chat/slack/ns/b", "/chat/slack/evil/a", "/chat/SLACK/ns/a", "/chat/github/ns/a", "/chat/other/ns/a", "/chat/slack/ns/a/x",
+	paths := []string{"/chat/slack/ns/b", "/chat/slack/evil/a", "/chat/SLACK/ns/a", "/chat/github/ns/a", "/chat/teams/ns/a", "/chat/other/ns/a", "/chat/slack/ns/a/x",
 		"/chat/slack/ns/a%2Fx", "/chat/slack/unknown/x", "/chat/" + strings.Repeat("p", 300) + "/ns/a", "/chat/slack/" + strings.Repeat("n", 300) + "/a",
 		"/chat//ns/a", "/x/slack/ns/a"}
 	for i := range 100 {
@@ -606,7 +687,7 @@ func TestChatListenerNeverLabelsASenderChosenPath(t *testing.T) {
 	}
 	got := listenerSeries(t, m)
 	for k := range got {
-		if !slices.Contains([]string{"ns/a", unknownLabel}, k.connection) || !slices.Contains([]string{"slack", otherLabel}, k.platform) {
+		if !slices.Contains([]string{"ns/a", unknownLabel}, k.connection) || !slices.Contains(append(slices.Clone(chatPlatforms), otherLabel), k.platform) {
 			t.Errorf("a series is labelled %+v: a value the sender chose", k)
 		}
 		if k.connection == "ns/a" && k.platform != "slack" {

@@ -396,8 +396,8 @@ func TestDeployWebhookAppliesTheRecipes(t *testing.T) {
 
 // TestTheWebhookConnectionsAreServedOnCustomResourcesOnly: webhook-values.yaml admits the recipes' namespace and lets the fake vendors and the
 // fake Slack (whose HTTP mode the overlay must not shut out, as it replaces http-values.yaml's list) reach the chat port, by the labels
-// doubles.yaml gives their pods; up-fast.sh gives it to the route upgrade of crds alone, unless the tier serves two Slack apps (whose admission
-// list the MC_ tests hold), and deploys the recipes then; the runner's Job runs the WH_ tests.
+// doubles.yaml gives their pods; up-fast.sh gives it to the route upgrade of crds alone, unless the tier serves two Slack apps or Microsoft
+// Teams (whose admission lists the MC_ and TEAMS_ tests hold), and deploys the recipes then; the runner's Job runs the WH_ tests.
 func TestTheWebhookConnectionsAreServedOnCustomResourcesOnly(t *testing.T) {
 	var values struct {
 		Config struct {
@@ -438,7 +438,7 @@ func TestTheWebhookConnectionsAreServedOnCustomResourcesOnly(t *testing.T) {
 
 	up := readHackKind(t, "up-fast.sh")
 	for _, want := range []string{
-		"if [ \"${E2E_TWO_APPS}\" = 1 ]; then\n  AGENTKOURIER_CRDS_ARGS=(-f \"${HERE}/two-apps-values.yaml\")\nelif [ \"${E2E_CONFIG_SOURCE}\" = crds ]; then\n  WEBHOOKS=1\n  AGENTKOURIER_CRDS_ARGS=(-f \"${HERE}/webhook-values.yaml\")\nfi",
+		"if [ \"${E2E_TWO_APPS}\" = 1 ]; then\n  AGENTKOURIER_CRDS_ARGS=(-f \"${HERE}/two-apps-values.yaml\")\nelif [ \"${E2E_CONFIG_SOURCE}\" = crds ] && [ \"${E2E_TEAMS}\" = 0 ]; then\n  WEBHOOKS=1\n  AGENTKOURIER_CRDS_ARGS=(-f \"${HERE}/webhook-values.yaml\")\nfi",
 		"if [ \"${WEBHOOKS}\" = 1 ]; then\n  step ",
 		"\n  deploy_webhook\nfi",
 	} {

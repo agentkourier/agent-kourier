@@ -219,3 +219,52 @@ func TestTheGuardReadsOnlyTheBotsOfItsOwnPlatform(t *testing.T) {
 		t.Error("the guard of team-a no longer reads team-b's Slack bot as another connection's; want Slack's guard unchanged")
 	}
 }
+
+// A press whose platform waits for its decision is the Intake's, as every press is: the guard passes it and what it came to on.
+func TestTheGuardPassesAPressDecidedInTheWaitToTheIntake(t *testing.T) {
+	want := chat.PressOutcome{Decided: true, Text: "Your answer was recorded."}
+	var got []chat.Interaction
+	in := trigger.NewIntake(trigger.IntakeConfig{Logger: testutil.DiscardLogger(), DecidePress: func(_ context.Context, i chat.Interaction) (chat.PressOutcome, error) {
+		got = append(got, i)
+		return want, nil
+	}})
+	g := botGuard{in: in, self: "team-a/teams", platform: v1alpha1.PlatformTeams, log: testutil.DiscardLogger()}
+	out, err := g.DecidePress(t.Context(), chat.Interaction{User: "U1", PromptID: "ix-1"})
+	if err != nil || out != want || len(got) != 1 || got[0].PromptID != "ix-1" {
+		t.Errorf("DecidePress = %+v, %v, the Intake given %+v; want the Intake's outcome for the press", out, err, got)
+	}
+}
+
+// On Microsoft Teams a bot's post reaches the broker only through Microsoft Graph, which names the bot by its bare Microsoft Entra app ID, the
+// form a botMessage trigger names too: a mention by the bot of another Teams connection that the broker serves is dropped, as on Slack, and so
+// is the identity the platform gives that connection (teamsIdentityOf).
+func TestTheGuardDropsAGraphMentionByAnotherTeamsConnectionsBot(t *testing.T) {
+	const own, otherApp, stranger = "22222222-3333-4444-8555-666666666666", "22222222-3333-4444-8555-777777777777",
+		"44444444-5555-4666-8777-888888888888"
+	g := newGuardRig(t)
+	for conn, app := range map[string]string{"team-a/teams": own, "team-b/teams": otherApp} {
+		id, err := teamsIdentityOf(t.Context(), RunConfig{}, Connection{Platform: v1alpha1.PlatformTeams, Teams: v1alpha1.TeamsConnectionSpec{AppID: app}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		id.Platform = v1alpha1.PlatformTeams
+		g.table.identify(conn, id)
+	}
+	guard := botGuard{in: g.guard.in, self: "team-a/teams", platform: v1alpha1.PlatformTeams, bots: g.table, log: testutil.DiscardLogger()}
+	graphMention := func(bot string) chat.Inbound { // as the Teams adapter decodes another app's post that Graph notified
+		return chat.Inbound{At: chat.Ref{Platform: "teams", Conn: "team-a/teams", Channel: "C1", ID: "1794971777722"}, Text: "<at>Agent Kourier</at> look",
+			Mentioned: true, Bot: &chat.BotMessage{ID: bot, Kind: v1alpha1.SenderKindBot}}
+	}
+	if guard.AcceptsBotMention("C1", otherApp) {
+		t.Error("AcceptsBotMention(another Teams connection's app) = true; want it dropped (spec D52)")
+	}
+	if err := guard.Message(t.Context(), graphMention(otherApp)); err != nil {
+		t.Fatal(err)
+	}
+	if got := g.started(); len(got) != 0 {
+		t.Errorf("a mention by another Teams connection's bot started %v; want nothing", got)
+	}
+	if !guard.AcceptsBotMention("C1", stranger) {
+		t.Error("AcceptsBotMention(an app none of this broker's) = false; want it the Intake's")
+	}
+}

@@ -37,6 +37,10 @@ type IntakeConfig struct {
 	Submitter Submitter
 	// Interactions takes the presses of buttons. Nil drops them, acknowledged.
 	Interactions func(ctx context.Context, i chat.Interaction) error
+	// DecidePress takes the press of a platform that waits for its decision in the press's request (chat.InlineDecider): it records
+	// the press as Interactions does and waits, until ctx ends, for what it came to. Nil gives such a press to Interactions, and
+	// the platform is told it was not decided in the wait.
+	DecidePress func(ctx context.Context, i chat.Interaction) (chat.PressOutcome, error)
 	// Notice, if set, tells a thread that Agent Kourier cannot continue it: session.NoticeExpired for a
 	// thread past its threadTTL, session.NoticeBindingGone for one whose Binding left the config. It also
 	// takes the notes of a trigger's thread: session.NoticeTriggerRepeat and session.NoticeTriggerClosed.
@@ -130,6 +134,8 @@ var (
 	_ chat.Sink             = (*Intake)(nil)
 	_ chat.BotFilter        = (*Intake)(nil)
 	_ chat.BotMentionFilter = (*Intake)(nil)
+	_ chat.InlineDecider    = (*Intake)(nil)
+	_ chat.ChannelLister    = (*Intake)(nil)
 )
 
 // NewIntake returns an Intake over cfg.
@@ -292,16 +298,34 @@ func (in *Intake) Message(ctx context.Context, m chat.Inbound) (telemetryErr err
 
 // Interaction passes a press to IntakeConfig.Interactions, and returns its error.
 func (in *Intake) Interaction(ctx context.Context, i chat.Interaction) (telemetryErr error) {
-	ctx, op := telemetry.Start(ctx, "agentkourier.intake", attribute.String("agentkourier.source", "interaction"))
-	defer func() {
-		telemetry.Count(ctx, "agentkourier_intake_total", "interaction", telemetry.ErrorClass(telemetryErr), in.conn)
-		op.Finish(telemetryErr)
-	}()
+	ctx, finish := in.pressed(ctx)
+	defer func() { finish(telemetryErr) }()
 	if in.cfg.Interactions == nil {
 		in.log.WarnContext(ctx, "chat: press dropped; no handler", "channel", i.At.Channel, "message", i.At.ID)
 		return nil
 	}
 	return in.cfg.Interactions(ctx, i)
+}
+
+// DecidePress implements chat.InlineDecider: it passes a press to IntakeConfig.DecidePress, and returns what it says. With no
+// DecidePress it is Interaction, and the press is not decided in the wait.
+func (in *Intake) DecidePress(ctx context.Context, i chat.Interaction) (_ chat.PressOutcome, telemetryErr error) {
+	if in.cfg.DecidePress == nil {
+		return chat.PressOutcome{}, in.Interaction(ctx, i)
+	}
+	ctx, finish := in.pressed(ctx)
+	defer func() { finish(telemetryErr) }()
+	return in.cfg.DecidePress(ctx, i)
+}
+
+// pressed starts the span of a press and returns its context and the function that counts the press and ends the span, given the
+// press's error.
+func (in *Intake) pressed(ctx context.Context) (context.Context, func(error)) {
+	ctx, op := telemetry.Start(ctx, "agentkourier.intake", attribute.String("agentkourier.source", "interaction"))
+	return ctx, func(err error) {
+		telemetry.Count(ctx, "agentkourier_intake_total", "interaction", telemetry.ErrorClass(err), in.conn)
+		op.Finish(err)
+	}
 }
 
 // botMessage tries a bot's message against the botMessage triggers of the Binding that owns its channel, and
@@ -469,6 +493,23 @@ func (in *Intake) AcceptsBot(channel, botID string) bool {
 		return false
 	}
 	return botMessageTriggerNames(rb.Binding.Spec.Chat.Triggers, botID)
+}
+
+// BoundChannels implements chat.ChannelLister: the channels that the Bindings of the current config place on this connection,
+// sorted, each once. None before the first config.
+func (in *Intake) BoundChannels() []string {
+	snap := in.cfg.Snapshot()
+	if snap == nil {
+		return nil
+	}
+	var out []string
+	for _, rb := range snap.Bindings() {
+		if rb.Connection != nil && rb.Connection.Namespace == in.cfg.Connection.Namespace && rb.Connection.Name == in.cfg.Connection.Name {
+			out = append(out, rb.Binding.Spec.Chat.Channel)
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // botMessageTriggerNames says whether a botMessage trigger of triggers names the bot botID.

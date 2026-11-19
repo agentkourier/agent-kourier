@@ -332,7 +332,7 @@ func supersede(t *testing.T, r *pressRig, snapshot store.Interaction, user strin
 		t.Fatalf("ExtractDecisions = %+v, %v", problems, err)
 	}
 	pd := interact.PressDecision{Interaction: snapshot, In: in, Answer: answer, User: user, PressedAt: r.now.Add(time.Second), BindingName: "ns/b", Binding: approvalBinding()}
-	if err := r.d.Decide(t.Context(), pd); err != nil {
+	if _, err := r.d.Decide(t.Context(), pd); err != nil {
 		t.Fatalf("Decide = %v", err)
 	}
 }

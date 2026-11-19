@@ -13,6 +13,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/bindingcheck"
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/chat/teams"
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
@@ -52,10 +53,17 @@ type leaderHalf struct {
 // makes (the outbox's posts and reactions, the renderer's streams and edits, the interactions' prompts, edits and ephemerals)
 // goes through the platform that this returns, and nothing else builds one. The platform's logger names the connection, as the broker's other
 // lines of a connection do ("connection", "namespace/name"), so that the lines of the Socket Mode connection of two connections can be told apart.
+// A Microsoft Teams platform keeps what it learns of its channels, and where its poll of each stands, in the broker's store, whose writes
+// are the leader's alone (on Postgres a write of a replica that no longer leads is store.ErrDeposed, and ends the process, spec D37).
 // ctx holds the broker's instruments, which a platform that counts its own requests (the webhook platform) records on.
 func (h *leaderHalf) openPlatform(ctx context.Context, conn Connection, onConnection func(connected bool)) (builtPlatform, error) {
 	log := h.log.With("connection", v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name))
-	p, err := h.cfg.newPlatform(ctx, conn, log, onConnection)
+	var convs teams.ConversationStore
+	var positions teams.PollPositions
+	if h.st != nil {
+		convs, positions = newTeamsConversations(h.st), newTeamsPollPositions(h.st)
+	}
+	p, err := h.cfg.newPlatform(ctx, conn, log, onConnection, convs, positions)
 	if err != nil {
 		return builtPlatform{}, err
 	}
@@ -180,6 +188,13 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	if err != nil {
 		return nil, err
 	}
+	if cfg.outcomesBuilt != nil {
+		cfg.outcomesBuilt(ix.outcomes)
+	}
+	// A press that waits for its decision in its request is let go as the chat listener begins its drain, and answered inside it.
+	if h.routes != nil {
+		h.routes.onDrain(ix.outcomes.Close)
+	}
 	// A mentioned turn of a mention-only Binding carries the replies since the previous turn, which are read through the
 	// platform as it is built here (fenced with an election: the read is not a write, so the fence passes it).
 	threads, err := newThreadContext(threadContextConfig{Platforms: platforms, Replies: st, Logger: log})
@@ -230,7 +245,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	var served *servedRecord
 	retentionKnows := bindings.ThreadTTLsAndUnserved
 	if h.status != nil && boot.Source != nil {
-		served = newServedRecord(st, boot.Source.ConnectionBindings, nil)
+		served = leaderServedRecord(st, boot.Source.ConnectionBindings, table)
 		retentionKnows = served.retentionKnows(runCtx, boot.Reloader.Report, log, retentionKnows)
 	}
 	retain, err := retention.New(retention.Config{Store: st, Interval: cfg.retentionEvery, AuditRetention: cfg.AuditRetention, ThreadTTLsAndUnserved: retentionKnows,
@@ -301,7 +316,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	}
 	stops.add("binding-verification", startLoop(runCtx, func(c context.Context) error { prober.Run(c); return nil }))
 
-	interactions, err := parts.start(runCtx, mgr, ix, &stops)
+	presses, err := parts.start(runCtx, mgr, ix, &stops)
 	if err != nil {
 		return nil, err
 	}
@@ -319,7 +334,7 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	newIntake := func(conn Connection) (chat.Sink, error) {
 		ref := conn.Ref
 		intakeCfg, err := newIntakeConfig(intakeParts{
-			conn: ref, snapshot: boot.Reloader.Current, submitter: mgr, interactions: interactions, log: log,
+			conn: ref, snapshot: boot.Reloader.Current, submitter: mgr, interactions: presses.Interaction, decidePress: presses.DecidePress, log: log,
 			notice: sink.QueueNotice, starter: starter, threads: st, runs: st, replies: st,
 		})
 		if err != nil {

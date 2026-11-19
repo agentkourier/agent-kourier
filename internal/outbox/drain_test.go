@@ -74,8 +74,9 @@ func TestEnqueueIsOneLocalWrite(t *testing.T) {
 }
 
 // TestRunDeliversWhatWasLeftAndWhatIsEnqueued: Run drains at start, with no signal, the row a
-// crash left; then delivers an enqueued one on its signal. Both are looked up first, and the one
-// Slack already has is not posted again.
+// crash left; then delivers an enqueued one on its signal. The row a crash left is looked up first,
+// and as Slack already has it, it is not posted again; the row enqueued since Run started is posted
+// with no lookup, as nothing can have posted it.
 func TestRunDeliversWhatWasLeftAndWhatIsEnqueued(t *testing.T) {
 	st := sqlitetest.Open(t)
 	left := store.OutboxEntry{ID: "left/notice", EventID: "left", Role: store.OutboxNotice, Channel: "C1", CreatedAt: t0, Payload: neutral("hi")}
@@ -98,8 +99,8 @@ func TestRunDeliversWhatWasLeftAndWhatIsEnqueued(t *testing.T) {
 		}
 	}
 	testutil.Eventually(t, "the enqueued post", func() bool { return ref(st, "ev1/reply") != "" })
-	if posts, finds := p.counts(); posts != 1 || finds != 2 || ref(st, "s1/reply") != "" {
-		t.Fatalf("posts = %d, finds = %d, stream ref %q; want 1 post, 2 finds, and the stream left alone", posts, finds, ref(st, "s1/reply"))
+	if posts, finds := p.counts(); posts != 1 || finds != 1 || ref(st, "s1/reply") != "" {
+		t.Fatalf("posts = %d, finds = %d, stream ref %q; want 1 post, 1 find (the left row's), and the stream left alone", posts, finds, ref(st, "s1/reply"))
 	}
 }
 

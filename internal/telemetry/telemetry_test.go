@@ -222,6 +222,20 @@ var connectionSeries = []struct {
 	{"agentkourier_chat_api_calls_total", []string{"Post", "success"}},
 	{"agentkourier_slack_events_shed_total", []string{"channel_backlog"}},
 	{"agentkourier_slack_ack_duration_seconds", []string{"acked"}},
+	{"agentkourier_teams_requests_total", []string{"accepted"}},
+	{"agentkourier_teams_tokens_refused_total", []string{"expired"}},
+	{"agentkourier_teams_activities_shed_total", []string{"channel_backlog"}},
+	{"agentkourier_teams_activities_lost_total", []string{"not_taken"}},
+	{"agentkourier_teams_socket_envelopes_total", []string{"activity", "accepted"}},
+	{"agentkourier_teams_socket_reconnects_total", []string{"amer", "expiry"}},
+	{"agentkourier_teams_socket_gap_seconds", []string{}},
+	{"agentkourier_teams_socket_ready", []string{"amer"}},
+	{"agentkourier_teams_graph_notifications_total", []string{"change", "taken"}},
+	{"agentkourier_teams_graph_channels", []string{"subscribed"}},
+	{"agentkourier_teams_graph_polls_total", []string{"polled"}},
+	{"agentkourier_teams_graph_read_messages_total", []string{"taken"}},
+	{"agentkourier_teams_graph_catchups_total", []string{"start", "read"}},
+	{"agentkourier_teams_graph_throttled_total", []string{}},
 	{"agentkourier_webhook_requests_total", []string{"accepted", "none"}},
 }
 
@@ -256,9 +270,12 @@ func TestForgetConnectionDeletesOnlyThatConnectionsSeries(t *testing.T) {
 	for _, conn := range []string{kept, gone} {
 		for _, s := range connectionSeries {
 			labels := append(slices.Clone(s.labels), conn)
-			if strings.HasSuffix(s.name, "_seconds") {
+			switch {
+			case strings.HasSuffix(s.name, "_seconds"):
 				Observe(ctx, s.name, time.Second, labels...)
-			} else {
+			case strings.HasSuffix(s.name, "_ready"), s.name == "agentkourier_teams_graph_channels": // the gauges
+				SetGauge(ctx, s.name, 1, labels...)
+			default:
 				Count(ctx, s.name, labels...)
 			}
 		}

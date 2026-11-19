@@ -46,7 +46,11 @@ func TestEachCallReachesThePlatformOfItsRowsConnection(t *testing.T) {
 	apps := newTwoApps()
 	reacts := map[string]*reactor{connA: {}, connB: {}}
 	apps.a.reactor, apps.b.reactor = reacts[connA], reacts[connB]
-	o := mustNew(t, outbox.Config{Store: st, Platforms: apps.set, Now: func() time.Time { return t0 }, CallTimeout: time.Second, Logger: testutil.DiscardLogger()})
+	cfg := outbox.Config{Store: st, Platforms: apps.set, Now: func() time.Time { return t0 }, CallTimeout: time.Second, Logger: testutil.DiscardLogger()}
+	o := mustNew(t, cfg)
+	// The notices are queued by an earlier process, so that the drain of this one looks them up: a row this Outbox enqueued
+	// itself would be posted with no lookup.
+	prev := mustNew(t, cfg)
 	ctx := t.Context()
 
 	if _, err := o.Send(ctx, onConn(connA, "sent-a")); err != nil {
@@ -57,7 +61,7 @@ func TestEachCallReachesThePlatformOfItsRowsConnection(t *testing.T) {
 	}
 	for _, p := range []outbox.Post{onConn(connA, "queued-a1"), onConn(connB, "queued-b"), onConn(connA, "queued-a2")} {
 		p.Role = store.OutboxNotice
-		if _, err := o.Enqueue(ctx, p); err != nil {
+		if _, err := prev.Enqueue(ctx, p); err != nil {
 			t.Fatalf("Enqueue %s: %v", p.Source, err)
 		}
 	}
@@ -89,7 +93,7 @@ func TestEachCallReachesThePlatformOfItsRowsConnection(t *testing.T) {
 		}
 		p.mu.Unlock()
 	}
-	// The drain looks each row up before it posts it: two notices on a; the notice and the lost row on b.
+	// The drain looks each row of the earlier process up before it posts it: two notices on a; the notice and the lost row on b.
 	if posts, finds := apps.a.counts(); posts != 3 || finds != 2 {
 		t.Errorf("a: %d posts, %d finds; want 3 posts (its Send and two notices) and 2 finds", posts, finds)
 	}

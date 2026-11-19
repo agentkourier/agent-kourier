@@ -23,6 +23,8 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/chat/teams"
+	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/retention"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -110,6 +112,10 @@ type RunConfig struct {
 	// package's tests, which run Run offline with a client that does not call Slack. It is
 	// unexported, so no other package, and no config, can replace the client.
 	newSlack func(slack.Config) slackAPI
+	// teamsFakes edits the config of a Microsoft Teams client before it is built: a seam for this package's tests, which point its token,
+	// key and Bot Connector calls at fakes of their own. It is unexported, so no config can send the client secret or the bot's token
+	// anywhere else (the Bot Framework's metadata URL, above all, is set here and by nothing in a production build).
+	teamsFakes func(*teams.Config)
 	// wrapPlatform replaces a connection's chat platform, as newPlatform built it, with one that wraps it, before the lease fence does: a
 	// seam for this package's tests, which give a platform a way to take requests over HTTP (chat.HTTPReceiver) of their own.
 	wrapPlatform func(chat.Platform) chat.Platform
@@ -179,6 +185,8 @@ type RunConfig struct {
 	transportClosed func(conn string)
 	// outboxBuilt is given the outbox as the leader half builds it, so a test can post through it and look at its lanes.
 	outboxBuilt func(*outbox.Outbox)
+	// outcomesBuilt is given the press outcomes as the leader half builds them, so a test can wait on them and read their cap.
+	outcomesBuilt func(*interact.Outcomes)
 	// leaderLaunched is called once Run has launched the leader half (or its candidacy), before it waits for the
 	// signal, so a test can hold Run there and send the signal while the leader half is up.
 	leaderLaunched func()

@@ -477,7 +477,7 @@ func (w *statusWriter) unservedBindings(ctx context.Context, rep config.Report) 
 		switch {
 		case err != nil && !w.recordFailed:
 			w.recordFailed = true
-			w.cfg.Log.Warn("binding status: the served connections cannot be compared with the record in the store, or cannot be recorded; "+
+			w.cfg.Log.Warn("binding status: the served connections cannot be compared with the record in the store, or cannot be recorded, or what the store keeps of a deleted connection's Microsoft Teams channels cannot be deleted; "+
 				"the statuses of the Bindings are written, and this is tried again at every pass that moves and said once until it works", "error", telemetry.LogText(err))
 		case err == nil:
 			w.recordFailed = false

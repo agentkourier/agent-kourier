@@ -1,5 +1,5 @@
 # rule: chatconnection/spec.platform: unsupported
-# want: spec.platform: unsupported value "teams"
+# want: spec.platform: unsupported value "discord"
 # schema: refuses
 apiVersion: agentkourier.dev/v1alpha1
 kind: ChatConnection
@@ -7,7 +7,7 @@ metadata:
   name: slack
   namespace: sre
 spec:
-  platform: teams
+  platform: discord
   credentialsSecretRef:
     name: slack
 ---
@@ -406,6 +406,304 @@ spec:
     name: slack
   slack:
     mode: HTTP
+---
+# rule: chatconnection/spec.teams: missing on a teams connection
+# want: spec.teams: is required on a teams connection: it names the tenant and the app
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: teams
+  namespace: sre
+spec:
+  platform: teams
+  credentialsSecretRef:
+    name: teams
+---
+# rule: chatconnection/spec.teams: set on a slack connection
+# want: spec.teams: is set, but only a teams connection has one
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: teams
+  namespace: sre
+spec:
+  platform: slack
+  credentialsSecretRef:
+    name: teams
+  teams:
+    tenantID: 11111111-2222-3333-4444-555555555555
+    appID: 66666666-7777-4888-9999-aaaaaaaaaaaa
+---
+# rule: chatconnection/spec.slack: set on a teams connection
+# want: spec.slack: is set, but only a slack connection has one
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: teams
+  namespace: sre
+spec:
+  platform: teams
+  credentialsSecretRef:
+    name: teams
+  slack:
+    mode: http
+  teams:
+    tenantID: 11111111-2222-3333-4444-555555555555
+    appID: 66666666-7777-4888-9999-aaaaaaaaaaaa
+---
+# rule: chatconnection/spec.teams.tenantID: missing
+# want: spec.teams.tenantID: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: teams
+  namespace: sre
+spec:
+  platform: teams
+  credentialsSecretRef:
+    name: teams
+  teams:
+    appID: 66666666-7777-4888-9999-aaaaaaaaaaaa
+---
+# rule: chatconnection/spec.teams.tenantID: capitals, which a GUID in lowercase hex is not
+# want: spec.teams.tenantID: invalid tenant ID "66666666-7777-4888-9999-AAAAAAAAAAAA"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: teams
+  namespace: sre
+spec:
+  platform: teams
+  credentialsSecretRef:
+    name: teams
+  teams:
+    tenantID: 66666666-7777-4888-9999-AAAAAAAAAAAA
+    appID: 66666666-7777-4888-9999-aaaaaaaaaaaa
+---
+# rule: chatconnection/spec.teams.tenantID: a domain, not the tenant's GUID
+# want: spec.teams.tenantID: invalid tenant ID "contoso.onmicrosoft.com"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: teams
+  namespace: sre
+spec:
+  platform: teams
+  credentialsSecretRef:
+    name: teams
+  teams:
+    tenantID: contoso.onmicrosoft.com
+    appID: 66666666-7777-4888-9999-aaaaaaaaaaaa
+---
+# rule: chatconnection/spec.teams.appID: missing
+# want: spec.teams.appID: required
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: teams
+  namespace: sre
+spec:
+  platform: teams
+  credentialsSecretRef:
+    name: teams
+  teams:
+    tenantID: 11111111-2222-3333-4444-555555555555
+---
+# rule: chatconnection/spec.teams.appID: the bot's Teams ID, 28:<app>
+# want: spec.teams.appID: invalid application ID
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: teams
+  namespace: sre
+spec:
+  platform: teams
+  credentialsSecretRef:
+    name: teams
+  teams:
+    tenantID: 11111111-2222-3333-4444-555555555555
+    appID: "28:66666666-7777-4888-9999-aaaaaaaaaaaa"
+---
+# rule: chatconnection/spec.teams.notificationURL: http
+# want: spec.teams.notificationURL: invalid URL "http://kourier.example.com": must be an https URL with a host
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: teams
+  namespace: sre
+spec:
+  platform: teams
+  credentialsSecretRef:
+    name: teams
+  teams:
+    tenantID: 11111111-2222-3333-4444-555555555555
+    appID: 66666666-7777-4888-9999-aaaaaaaaaaaa
+    notificationURL: http://kourier.example.com/chat/teams/sre/teams
+---
+# rule: chatconnection/spec.teams.notificationURL: credentials
+# want: spec.teams.notificationURL: must not contain credentials
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: teams
+  namespace: sre
+spec:
+  platform: teams
+  credentialsSecretRef:
+    name: teams
+  teams:
+    tenantID: 11111111-2222-3333-4444-555555555555
+    appID: 66666666-7777-4888-9999-aaaaaaaaaaaa
+    notificationURL: https://user:secret@kourier.example.com/chat/teams/sre/teams
+---
+# rule: chatconnection/spec.teams.notificationURL: a query
+# want: spec.teams.notificationURL: must not have a query or fragment
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: teams
+  namespace: sre
+spec:
+  platform: teams
+  credentialsSecretRef:
+    name: teams
+  teams:
+    tenantID: 11111111-2222-3333-4444-555555555555
+    appID: 66666666-7777-4888-9999-aaaaaaaaaaaa
+    notificationURL: https://kourier.example.com/chat/teams/sre/teams?token=x
+---
+# rule: chatconnection/spec.teams.notificationURL: a fragment
+# want: spec.teams.notificationURL: must not have a query or fragment
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: teams
+  namespace: sre
+spec:
+  platform: teams
+  credentialsSecretRef:
+    name: teams
+  teams:
+    tenantID: 11111111-2222-3333-4444-555555555555
+    appID: 66666666-7777-4888-9999-aaaaaaaaaaaa
+    notificationURL: https://kourier.example.com/chat/teams/sre/teams#top
+---
+# rule: chatconnection/spec.teams.notificationURL: a path that is no connection's route
+# want: spec.teams.notificationURL: must have the path /chat/teams/sre/teams
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: teams
+  namespace: sre
+spec:
+  platform: teams
+  credentialsSecretRef:
+    name: teams
+  teams:
+    tenantID: 11111111-2222-3333-4444-555555555555
+    appID: 66666666-7777-4888-9999-aaaaaaaaaaaa
+    notificationURL: https://kourier.example.com/api/messages
+---
+# rule: chatconnection/spec.teams.notificationURL: another connection's route
+# want: spec.teams.notificationURL: must have the path /chat/teams/sre/teams
+# schema: accepts
+# broker-only: a rule of a spec field cannot read the object's namespace and name, so the schema checks the form of the path, /chat/teams/<namespace>/<name>, and the broker that it is the connection's own
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: teams
+  namespace: sre
+spec:
+  platform: teams
+  credentialsSecretRef:
+    name: teams
+  teams:
+    tenantID: 11111111-2222-3333-4444-555555555555
+    appID: 66666666-7777-4888-9999-aaaaaaaaaaaa
+    notificationURL: https://kourier.example.com/chat/teams/payments/teams
+---
+# rule: chatconnection/spec.teams.notificationURL: over 2048 characters
+# want: spec.teams.notificationURL: is 2049 bytes, longer than the 2048 byte limit
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: teams
+  namespace: sre
+spec:
+  platform: teams
+  credentialsSecretRef:
+    name: teams
+  teams:
+    tenantID: 11111111-2222-3333-4444-555555555555
+    appID: 66666666-7777-4888-9999-aaaaaaaaaaaa
+    notificationURL: https://kourier.example.com/chat/teams/sre/teamsaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+---
+# rule: chatconnection/spec.teams.mode: unsupported
+# want: spec.teams.mode: unsupported value "webhook"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: teams
+  namespace: sre
+spec:
+  platform: teams
+  credentialsSecretRef:
+    name: teams
+  teams:
+    tenantID: 11111111-2222-3333-4444-555555555555
+    appID: 66666666-7777-4888-9999-aaaaaaaaaaaa
+    mode: webhook
+---
+# rule: chatconnection/spec.teams.mode: wrong case
+# want: spec.teams.mode: unsupported value "HTTP"
+# schema: refuses
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: teams
+  namespace: sre
+spec:
+  platform: teams
+  credentialsSecretRef:
+    name: teams
+  teams:
+    tenantID: 11111111-2222-3333-4444-555555555555
+    appID: 66666666-7777-4888-9999-aaaaaaaaaaaa
+    mode: HTTP
+---
+# rule: chatconnection/spec.teams.notificationURL: another connection's route, in socket mode
+# want: spec.teams.notificationURL: must have the path /chat/teams/sre/teams
+# schema: accepts
+# broker-only: a rule of a spec field cannot read the object's namespace and name, so the schema checks the form of the path, /chat/teams/<namespace>/<name>, and the broker that it is the connection's own; the check holds in either mode
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: teams
+  namespace: sre
+spec:
+  platform: teams
+  credentialsSecretRef:
+    name: teams
+  teams:
+    tenantID: 11111111-2222-3333-4444-555555555555
+    appID: 66666666-7777-4888-9999-aaaaaaaaaaaa
+    mode: socket
+    notificationURL: https://kourier.example.com/chat/teams/sre/other
 ---
 # rule: chatconnection/spec.webhook: missing on the webhook platform
 # want: spec.webhook: is required on a webhook connection

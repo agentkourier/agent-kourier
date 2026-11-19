@@ -204,8 +204,19 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 		name := t.Name()
 		st := s.teams[name]
 		if t.Err != nil {
-			// Its Secret is not readable now, or its platform has no adapter. What runs keeps running on the tokens it was started with: a
-			// cache that is relisting is no reason to drop a connection. Otherwise it starts once it can.
+			// Its Secret is not readable now, or its platform has no adapter. What runs
+			// keeps running on the tokens it was started with when its Secret is at fault: a cache that is relisting is no reason to drop a
+			// connection. A ChatConnection that now asks for what this broker cannot run (one edited to such a platform) is stopped instead, as
+			// one that changed is, and not left running on the spec it no longer has; its entry goes, and its bot with it, so that it starts
+			// afresh once it can. Otherwise it starts once it can.
+			if st != nil && unrunnable(t.Err) {
+				s.host.table.forgetBot(name) // it posts nothing from here, and its identity is asked again when it can start
+				s.retire(name)
+				s.stop(ctx, name, st, "its ChatConnection changed to what this broker cannot run")
+				delete(s.teams, name)
+				delete(s.said, name)
+				st = nil
+			}
 			if st != nil && st.held() {
 				// It holds its app unless an older connection claimed it in this pass (desired is oldest first): then it is the second
 				// connection of the app and is refused, as it would be if its Secret could be read, and not left running beside the older.
@@ -216,7 +227,7 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 				}
 			}
 			if st != nil && st.refused {
-				refused[name] = refusedMessage
+				refused[name] = refusedMessage(t.Platform)
 			}
 			if st == nil || st.rt == nil {
 				msg := "the ChatConnection is not started yet: its credentials cannot be used"
@@ -287,7 +298,7 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 				// refusal it was under, and it holds the app of its previous tokens unless an older connection holds it now (it is then not
 				// refused on that, since its new tokens may be another app's). A connection that was never asked holds nothing.
 				if st.refused {
-					refused[name] = refusedMessage
+					refused[name] = refusedMessage(t.Platform)
 				} else if _, taken := claimed[st.id.key()]; st.id.known() && !taken {
 					claimed[st.id.key()] = name
 				}
@@ -328,21 +339,23 @@ func (s *supervisor) reconcile(ctx context.Context, desired []TeamConnection) {
 	}
 }
 
-// refuse refuses the connection name as a second connection of the Slack app that holder, an older connection, uses: it is not served from here, so
-// its bot is no longer one of the broker's, its runtime (if any) is stopped, and it is recorded in refused.
+// refuse refuses the connection name as a second connection of the app (of its platform: a Slack app, a Microsoft Teams app) that holder, an older
+// connection, uses: it is not served from here, so its bot is no longer one of the broker's, its runtime (if any) is stopped, and it is recorded in
+// refused.
 func (s *supervisor) refuse(ctx context.Context, name string, st *teamRuntime, holder string, refused map[string]string) {
 	newly := !st.refused
 	st.refused = true
-	refused[name] = refusedMessage
+	app := appOf(st.id.Platform)
+	refused[name] = refusedMessage(st.id.Platform)
 	s.host.table.forgetBot(name) // not served, so it posts nothing and its bot is no longer one of the broker's
 	s.retire(name)
-	s.stop(ctx, name, st, "it is a second connection of the Slack app that "+holder+" uses")
+	s.stop(ctx, name, st, "it is a second connection of the "+app+" that "+holder+" uses")
 	// Not served from here, so the series of its earlier run would only go stale. Not only when this entry ran: a restart that
 	// ends in a refusal (its Secret now holds another app's tokens) made this entry fresh, and the run it replaced left series.
 	if newly && s.removed != nil {
 		s.removed(ctx, name)
 	}
-	s.say(ctx, name, "the ChatConnection is not served: it uses the same Slack app as the older ChatConnection "+holder+", and an app is served once", nil)
+	s.say(ctx, name, "the ChatConnection is not served: it uses the same "+app+" as the older ChatConnection "+holder+", and an app is served once", nil)
 }
 
 // recoverTurns asks for the turns that were left while the connection did not run to be taken up, now that it runs, and asks again at the next
@@ -423,6 +436,12 @@ func (s *supervisor) retire(name string) {
 		l.retired.Store(true)
 		delete(s.lives, name)
 	}
+}
+
+// unrunnable says whether err is a ChatConnection's own, and not its Secret's: a platform with no adapter. No Secret that is mended
+// starts it, and what ran on its earlier spec is not what it asks for now.
+func unrunnable(err error) bool {
+	return errors.Is(err, errNoAdapter)
 }
 
 // stop stops the runtime of st, if it has one, and says why. The connection is down from here.
@@ -513,11 +532,12 @@ func (s *supervisor) publish(desired []TeamConnection) {
 	}
 }
 
-// sameConnections says whether a and b list the same connections with the same credentials, and the same spec.webhook for a webhook
-// connection, in the same order: a team webhook connection restarted on an edit of its spec.webhook alone is a change of the list too.
+// sameConnections says whether a and b list the same connections with the same credentials, the same spec.teams for a Microsoft Teams
+// connection and the same spec.webhook for a webhook connection, in the same order: a team connection restarted on an edit of its
+// spec.teams or its spec.webhook alone is a change of the list too.
 func sameConnections(a, b []Connection) bool {
 	return slices.EqualFunc(a, b, func(x, y Connection) bool {
-		return x.Ref == y.Ref && x.Platform == y.Platform && x.Secret == y.Secret && reflect.DeepEqual(x.Webhook, y.Webhook) &&
+		return x.Ref == y.Ref && x.Platform == y.Platform && x.Secret == y.Secret && x.Teams == y.Teams && reflect.DeepEqual(x.Webhook, y.Webhook) &&
 			maps.EqualFunc(x.Credentials, y.Credentials, func(p, q secret.Value) bool { return p.Reveal() == q.Reveal() })
 	})
 }

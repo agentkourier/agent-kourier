@@ -1058,8 +1058,8 @@ spec:
     - t254
     - t255
 ---
-# The longest chat identifiers and names: a channel, a sender and an approver group of 32 characters, a reaction name of 100,
-# a mention name of 63 and a user of 21, an extract name of 63 and a closeWhen value of 256.
+# The longest chat identifiers and names at Slack's caps: a channel, a sender and an approver group of 32 characters, a reaction
+# name of 100, a mention name of 63 and a user of 21, an extract name of 63 and a closeWhen value of 256.
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata:
@@ -1468,3 +1468,166 @@ spec:
   platform: slack
   credentialsSecretRef: {name: slack-main}
   slack: {}
+---
+# Slack-shaped IDs at the union's caps, which the load and the schema take and the resolution of a Slack connection refuses:
+# a channel of 140 bytes and a sender of 36. (A Slack user ID has the union's own bound, 21, in its pattern.)
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: edges-slack-shaped-at-the-union-caps
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: slack}
+    channel: C0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: B00000000000000000000000000000000000}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert."
+---
+# A Microsoft Teams connection with no mode and no notification URL: the broker reads the mode as http.
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: edges-teams
+  namespace: sre
+spec:
+  platform: teams
+  credentialsSecretRef:
+    name: teams-client
+  teams:
+    tenantID: 11111111-2222-3333-4444-555555555555
+    appID: 66666666-7777-4888-9999-aaaaaaaaaaaa
+---
+# A Teams connection in each mode, each with a notification URL that is its own route: in http mode with a port and the
+# scheme and host in upper case, and in socket mode.
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: edges-teams-http
+  namespace: sre
+spec:
+  platform: teams
+  credentialsSecretRef:
+    name: teams-client
+  teams:
+    tenantID: 11111111-2222-3333-4444-555555555555
+    appID: 66666666-7777-4888-9999-aaaaaaaaaaaa
+    mode: http
+    notificationURL: HTTPS://Kourier.Example.com:8443/chat/teams/sre/edges-teams-http
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: edges-teams-socket
+  namespace: sre
+spec:
+  platform: teams
+  credentialsSecretRef:
+    name: teams-client
+  teams:
+    tenantID: 11111111-2222-3333-4444-555555555555
+    appID: 66666666-7777-4888-9999-aaaaaaaaaaaa
+    mode: socket
+    notificationURL: https://kourier.example.com/chat/teams/sre/edges-teams-socket
+---
+# A Teams connection in socket mode with no notification URL, and one that writes the mode and the URL out empty, which the
+# broker reads as unset.
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: edges-teams-socket-no-url
+  namespace: sre
+spec:
+  platform: teams
+  credentialsSecretRef:
+    name: teams-client
+  teams:
+    tenantID: 11111111-2222-3333-4444-555555555555
+    appID: 66666666-7777-4888-9999-aaaaaaaaaaaa
+    mode: socket
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata:
+  name: edges-teams-empty
+  namespace: sre
+spec:
+  platform: teams
+  credentialsSecretRef:
+    name: teams-client
+  teams:
+    tenantID: 11111111-2222-3333-4444-555555555555
+    appID: 66666666-7777-4888-9999-aaaaaaaaaaaa
+    mode: ""
+    notificationURL: ""
+---
+# Microsoft Teams' IDs: a channel of @thread.tacv2, an Entra object ID as a mention's user and an application ID as a sender,
+# with the questions, tool approvals and feedback that Teams serves, on a connection with no notification URL. The load, the
+# schema and the resolution of a Teams connection take them; the resolution of a Slack connection refuses them.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: edges-teams-ids
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: edges-teams}
+    channel: "19:KourierStandInChannelForTestsOnly0000000000a@thread.tacv2"
+    mentions:
+      - {name: oncall, user: 0b7a9c1e-3f2d-4a5b-8c6d-9e0f1a2b3c4d}
+    triggers:
+      - {type: mention}
+      - type: botMessage
+        from: {id: 66666666-7777-4888-9999-aaaaaaaaaaaa}
+        limits: {rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}, maxRunsPerDay: 20}
+        promptTemplate: "An alert."
+  interactions: {askUser: true, toolApprovals: true}
+  feedback: {enabled: true}
+---
+# The longest Teams channel the load takes, 140 bytes, and one of an older team, @thread.skype.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: edges-teams-longest-channel
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: edges-teams}
+    channel: "19:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@thread.tacv2"
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata:
+  name: edges-teams-skype-channel
+  namespace: sre
+spec:
+  agent:
+    backendRef: {name: kagent}
+    name: k8s-agent
+    namespace: kagent
+  identity:
+    userId: agent-kourier-sre
+  chat:
+    connectionRef: {name: edges-teams}
+    channel: "19:a1b2c3d4e5f6@thread.skype"

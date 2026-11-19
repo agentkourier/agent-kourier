@@ -18,7 +18,9 @@ import (
 // The thread context of a mentioned turn (spec 8.2, D38): in a Binding with chat.threadReplies: mention, the replies that
 // people wrote in the thread since the session's previous turn, which were not turns themselves. The session manager asks for
 // it (session.Config.ThreadContext) once for each turn it sends; this is what answers: read the thread through the platform,
-// leave out what is not a person's unmentioned reply, name the authors, and render the block (render.ThreadRepliesCounted).
+// leave out what is not a person's unmentioned reply, name the authors, and render the block (render.ThreadRepliesCounted). The
+// first turn of a session that a person's mention opened inside a thread carries the thread's root instead, on a platform that
+// carries roots (chat.Caps.RootContext, D56; render.ThreadRoot).
 const (
 	// threadFetchLimit is how many messages of the window the read asks for. The platform's limit and its count of what it
 	// left out are of every message, Agent Kourier's own, other bots' and those that were turns included, so a window holds
@@ -87,15 +89,25 @@ func newThreadContext(cfg threadContextConfig) (*threadContext, error) {
 // Section is session.Config.ThreadContext: the section of the replies in the thread key between the messages after and
 // before (both exclusive) for a mentioned turn of binding, or the fixed line that says they could not be read, or "". It
 // never fails, and it logs no content (DP-2): a failure is counted and logged by Binding and error alone.
+//
+// A window with no lower bound that is not the whole thread is the first turn of a session that a person's mention opened inside the
+// thread (session.Config.ThreadContext), which carries the thread's root alone (root). A platform that does not carry roots is not
+// read for it and the turn is not counted, so its first turns go and count as they did before roots were carried. The session asks
+// for it only on a Backend whose platform carries roots (session.Backend.RootContext); the check here is a defence.
 func (t *threadContext) Section(ctx context.Context, key session.Key, binding, after, before string, whole bool) string {
 	section, outcome := t.build(ctx, key, binding, after, before, whole)
-	telemetry.Count(ctx, "agentkourier_thread_context_total", binding, outcome)
+	if outcome != "" {
+		telemetry.Count(ctx, "agentkourier_thread_context_total", binding, outcome)
+	}
 	return section
 }
 
 func (t *threadContext) build(ctx context.Context, key session.Key, binding, after, before string, whole bool) (section, outcome string) {
-	if after == before || (whole && key.Thread == before) { // a mention that opens its own thread has nothing before it; and nothing lies between a message and itself; an inverted window is the platform's to say (chat.ThreadReader)
+	if after == before || ((whole || after == "") && key.Thread == before) { // a mention that opens its own thread has nothing before it; and nothing lies between a message and itself; an inverted window is the platform's to say (chat.ThreadReader)
 		return "", threadEmpty
+	}
+	if after == "" && !whole {
+		return t.root(ctx, key, binding, before)
 	}
 	target := chat.Target{Conn: key.Connection, Channel: key.Channel, Thread: key.Thread}
 	pl, err := t.platforms.Platform(key.Connection)
@@ -103,7 +115,7 @@ func (t *threadContext) build(ctx context.Context, key session.Key, binding, aft
 		return t.failed(ctx, binding, "find the platform of the connection", err)
 	}
 	fromStart := whole && after == "" // no turn has carried the thread: what opened it is no reply, and may be what it is all about
-	msgs, dropped, err := t.read(ctx, pl, target, after, before, fromStart)
+	msgs, dropped, err := t.read(ctx, pl, target, after, before, fromStart, threadFetchLimit)
 	tooLong := errors.Is(err, chat.ErrThreadTooLong) && fromStart && len(msgs) > 0 // what opened it came back with the error
 	switch {
 	case errors.Is(err, chat.ErrNoThreadReads):
@@ -141,28 +153,117 @@ func (t *threadContext) build(ctx context.Context, key session.Key, binding, aft
 	return section, threadRead
 }
 
-// read reads the window, from the thread's start if fromStart says so, and once more if the platform said to wait a few seconds: a
-// rate limit that asks for up to threadRateWaitMax is waited out once; any other error, a longer wait, or a second refusal is the
-// caller's to do without.
-func (t *threadContext) read(ctx context.Context, pl chat.Platform, target chat.Target, after, before string, fromStart bool) ([]chat.HistoryMessage, int, error) {
-	once := func() ([]chat.HistoryMessage, int, error) {
-		if fromStart {
-			return pl.ThreadFromStart(ctx, target, before, threadFetchLimit)
-		}
-		return pl.ThreadBetween(ctx, target, after, before, threadFetchLimit)
+// root is the section of the first turn of a session that a person's mention opened inside the thread key, before the mention: the
+// message that opened the thread, by whoever wrote it, if the platform carries roots (chat.Caps.RootContext) and the message is one
+// the context shows (eligible, as a whole thread's message: not Agent Kourier's own, not Ignored, not blank, not a turn). The rest of
+// the thread stays out, a person's replies and other apps' alike. On a platform that does not carry roots, and for a connection that
+// is not running, whose platform cannot say whether it does, it returns "" with no outcome: nothing is read, logged or counted.
+//
+// The root is read alone where the platform can (chat.RootReader: one call on Microsoft Teams), and otherwise from the thread's start
+// up to the mention, for one reply, which is left out (readRoot). A thread too long to read that came back with its root has given all
+// that the turn carries.
+func (t *threadContext) root(ctx context.Context, key session.Key, binding, before string) (section, outcome string) {
+	pl, err := t.platforms.Platform(key.Connection)
+	if err != nil || !pl.Capabilities().RootContext {
+		return "", ""
 	}
-	msgs, dropped, err := once()
+	target := chat.Target{Conn: key.Connection, Channel: key.Channel, Thread: key.Thread}
+	msgs, err := t.readRoot(ctx, pl, target, before)
+	tooLong := errors.Is(err, chat.ErrThreadTooLong) && len(msgs) > 0 // the root came back with the error
+	switch {
+	case errors.Is(err, chat.ErrNoThreadReads):
+		return "", t.unsupported(ctx, binding)
+	case err != nil && !tooLong:
+		return t.failed(ctx, binding, "read the thread's root", err)
+	case len(msgs) == 0 || msgs[0].Message.At.ID != key.Thread: // the platform no longer has it: a reply is no root
+		return "", threadEmpty
+	}
+	shown, err := t.eligible(ctx, msgs[:1], true)
+	if err != nil {
+		return t.failed(ctx, binding, "ask whether the thread's root was a turn", err)
+	}
+	if len(shown) == 0 {
+		return "", threadEmpty
+	}
+	if section = render.ThreadRoot(t.named(ctx, pl, shown)[0]); section == "" {
+		return "", threadEmpty
+	}
+	return section, threadRead
+}
+
+// readRoot reads the message that opened the thread target, first of what it returns: alone, in one call of the platform's, where the
+// platform reads a root alone (chat.RootReader, which the lease fence passes through), and otherwise as the start of the thread up to
+// before, for one reply. A short rate limit is waited out once, as read waits it out; a root that is gone is nothing.
+func (t *threadContext) readRoot(ctx context.Context, pl chat.Platform, target chat.Target, before string) ([]chat.HistoryMessage, error) {
+	rr, ok := rootReaderOf(pl)
+	if !ok {
+		msgs, _, err := t.read(ctx, pl, target, "", before, true, 1)
+		return msgs, err
+	}
+	once := func() ([]chat.HistoryMessage, error) {
+		m, found, err := rr.ThreadRoot(ctx, target)
+		if err != nil || !found {
+			return nil, err
+		}
+		return []chat.HistoryMessage{m}, nil
+	}
+	msgs, err := once()
+	if wait, ok := t.shortWait(pl, err); ok {
+		if err := t.wait(ctx, wait); err != nil {
+			return nil, err
+		}
+		return once()
+	}
+	return msgs, err
+}
+
+// rootReaderOf is p's read of a thread's root alone (chat.RootReader), through the lease fence, which checks writes and passes reads
+// through, and false if p has none.
+func rootReaderOf(p chat.Platform) (chat.RootReader, bool) {
+	if f, ok := p.(fencedPlatform); ok {
+		p = f.Platform
+	}
+	rr, ok := p.(chat.RootReader)
+	return rr, ok
+}
+
+// shortWait is the wait that the platform asked for after the read that failed with err, if it is one that the read waits out once: a
+// rate limit of at most threadRateWaitMax. Any other error, ErrNoThreadReads and ErrThreadTooLong among them, is no wait.
+func (t *threadContext) shortWait(pl chat.Platform, err error) (time.Duration, bool) {
 	if err == nil || errors.Is(err, chat.ErrNoThreadReads) || errors.Is(err, chat.ErrThreadTooLong) {
-		return msgs, dropped, err
+		return 0, false
 	}
 	wait := pl.Classify(chat.OpOther, err).RetryAfter
-	if wait <= 0 || wait > threadRateWaitMax {
+	return wait, wait > 0 && wait <= threadRateWaitMax
+}
+
+// wait waits for d, or until ctx ends, which is its error.
+func (t *threadContext) wait(ctx context.Context, d time.Duration) error {
+	select {
+	case <-t.after(d):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// read reads the window, the newest limit of it, from the thread's start if fromStart says so, and once more if the platform said to
+// wait a few seconds: a rate limit that asks for up to threadRateWaitMax is waited out once; any other error, a longer wait, or a
+// second refusal is the caller's to do without.
+func (t *threadContext) read(ctx context.Context, pl chat.Platform, target chat.Target, after, before string, fromStart bool, limit int) ([]chat.HistoryMessage, int, error) {
+	once := func() ([]chat.HistoryMessage, int, error) {
+		if fromStart {
+			return pl.ThreadFromStart(ctx, target, before, limit)
+		}
+		return pl.ThreadBetween(ctx, target, after, before, limit)
+	}
+	msgs, dropped, err := once()
+	wait, ok := t.shortWait(pl, err)
+	if !ok {
 		return msgs, dropped, err
 	}
-	select {
-	case <-t.after(wait):
-	case <-ctx.Done():
-		return nil, 0, ctx.Err()
+	if err := t.wait(ctx, wait); err != nil {
+		return nil, 0, err
 	}
 	return once()
 }

@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/agentkourier/agent-kourier/internal/chat/lanes"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 
 	slackgo "github.com/slack-go/slack"
@@ -87,7 +88,7 @@ type Client struct {
 	url   string                // the workspace's origin, from auth.test, once Run has asked; guarded by mu
 
 	// lanes is the lanes of the Run that is going, for a test to read what they hold (PendingEvents in export_test.go).
-	lanes atomic.Pointer[lanes]
+	lanes atomic.Pointer[lanes.Lanes]
 	// http is the latest Run in HTTP mode, which the handler of HTTPHandler hands requests to while it is open; nil before the first.
 	http atomic.Pointer[httpRun]
 
@@ -137,8 +138,8 @@ func (c *Client) overHTTP() bool { return !c.signing.IsEmpty() }
 // What Slack sends is handled alike on either transport. The events of one channel reach the sink one at a time and in the order they
 // arrived, and the events of different channels at the same time, so a sink that is slow for one channel (a Binding whose regexes are
 // costly to try) holds up that channel's events, and not the reading of the others. It does not keep the CPU for the others: with many
-// busy channels the acknowledgments of healthy ones slow too. The adapter holds at most maxChannelBacklog events for a channel, and
-// maxPendingEvents in all, past which a channel that already has an event held is refused another; a channel with none always gets its
+// busy channels the acknowledgments of healthy ones slow too. The adapter holds at most lanes.PerChannel events for a channel, and
+// lanes.Total in all, past which a channel that already has an event held is refused another; a channel with none always gets its
 // first. An event refused is not queued but left unacknowledged, which is what a sink's error does, so Slack may send it again (how often
 // is Slack's), and it can be lost; one that comes back after a later event of its channel was taken is handled after it. It is counted as
 // agentkourier_slack_events_shed_total and logged at WARN (shedLog). When ctx ends, the events still waiting on a lane are not given to
@@ -164,11 +165,11 @@ func (c *Client) Run(ctx context.Context, sink Sink) error {
 	c.url = workspaceOrigin(auth.URL)
 	c.mu.Unlock()
 	ctx, cancel := context.WithCancel(ctx)
-	r := &runState{me: self{user: auth.UserID, bot: auth.BotID}, sink: sink, lanes: newLanes(maxChannelBacklog, maxPendingEvents), shed: &shedLog{}}
+	r := &runState{me: self{user: auth.UserID, bot: auth.BotID}, sink: sink, lanes: lanes.New(), shed: &shedLog{}}
 	c.lanes.Store(r.lanes)
 	// Events in flight see the end of Run, those waiting on a lane are dropped unhandled, and Run returns when the ones in flight have
 	// returned: the next Run must not overlap the lanes of this one. Each transport has stopped submitting to the lanes when it returns.
-	defer func() { cancel(); r.lanes.wait(); c.flushShed(r.shed) }()
+	defer func() { cancel(); r.lanes.Wait(); c.flushShed(r.shed) }()
 	if c.overHTTP() {
 		return c.serveHTTP(ctx, &httpRun{runState: r, ctx: ctx})
 	}
@@ -180,7 +181,7 @@ func (c *Client) Run(ctx context.Context, sink Sink) error {
 type runState struct {
 	me    self
 	sink  Sink
-	lanes *lanes
+	lanes *lanes.Lanes
 	shed  *shedLog
 }
 

@@ -55,12 +55,12 @@ func someListener(t *testing.T) net.Listener {
 func TestNewPlatformInHTTPModeNeedsTheChatListener(t *testing.T) {
 	var saw slack.Config
 	cfg := RunConfig{newSlack: func(sc slack.Config) slackAPI { saw = sc; return idleSlack{} }}
-	built, err := cfg.newPlatform(t.Context(), httpModeConn("team"), nil, nil)
+	built, err := cfg.newPlatform(t.Context(), httpModeConn("team"), nil, nil, nil, nil)
 	if !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), "AGENTKOURIER_CHAT_LISTEN") || built.Platform != nil {
 		t.Errorf("newPlatform in HTTP mode with no chat listener = %+v, %v; want a wiring error that names AGENTKOURIER_CHAT_LISTEN", built, err)
 	}
 	cfg.ChatListener = someListener(t)
-	if _, err := cfg.newPlatform(t.Context(), httpModeConn("team"), nil, nil); err != nil {
+	if _, err := cfg.newPlatform(t.Context(), httpModeConn("team"), nil, nil, nil, nil); err != nil {
 		t.Fatalf("newPlatform in HTTP mode = %v; want the Slack adapter", err)
 	}
 	if saw.BotToken.Reveal() != "xoxb-fake" || saw.SigningSecret.Reveal() != fakeSigning || !saw.AppToken.IsEmpty() {
@@ -153,7 +153,7 @@ func TestASlackConnectionInHTTPModeServesItsRouteWhileItRuns(t *testing.T) {
 	}}
 	r := newHostRig(t, true)
 	r.host.open = func(ctx context.Context, conn Connection, onConn func(bool)) (builtPlatform, error) {
-		return cfg.newPlatform(ctx, conn, testutil.DiscardLogger(), onConn)
+		return cfg.newPlatform(ctx, conn, testutil.DiscardLogger(), onConn, nil, nil)
 	}
 	rt, err := r.host.build(httpModeConn("team"))
 	if err != nil {

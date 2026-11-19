@@ -13,6 +13,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
+	"github.com/agentkourier/agent-kourier/internal/chat/teams"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/secret"
@@ -29,6 +30,13 @@ import (
 // clients already use (dry-run, init).
 const slackAPITimeout = 30 * time.Second
 
+// teamsAPITimeout bounds one call of a Microsoft Teams connection as a whole, from the dial to the end of the answer's body: a token
+// from Microsoft Entra, a post, reply or edit through the Bot Connector, a read of a thread's page through Microsoft Graph, and a fetch
+// of the Bot Framework's keys. The adapter bounds a token fetch (15 s), a key fetch (10 s) and a read of a thread, all its pages
+// (10 s), more closely itself, so this is the bound of a Bot Connector call, which answers a small JSON body. It is Slack's
+// bound (slackAPITimeout), for the same reason: a connection that a network blip left dead does not hold a post for minutes.
+const teamsAPITimeout = 30 * time.Second
+
 // Connection is the one ChatConnection v1 serves, with its credentials as read at startup: the Secret keys that
 // its platform and mode need (v1alpha1.CredentialKeys), as secret.Values, which print as redacted.
 type Connection struct {
@@ -38,6 +46,8 @@ type Connection struct {
 	// Secret is the credentials Secret, "namespace/name", which an error about a credential names in place of its value.
 	Secret      string
 	Credentials map[string]secret.Value
+	// Teams is spec.teams of a Microsoft Teams connection, its tenant, app and mode, and zero for any other.
+	Teams v1alpha1.TeamsConnectionSpec
 	// Webhook is a webhook connection's spec.webhook, as it was when the ChatConnection was read: a copy that shares nothing with the
 	// snapshot (cloneWebhook). Nil on any other platform.
 	Webhook *v1alpha1.WebhookSpec
@@ -63,10 +73,21 @@ func platformFor(name string) (platformSpec, bool) {
 	switch name {
 	case v1alpha1.PlatformSlack:
 		return platformSpec{Identify: slackIdentityOf}, true
+	case v1alpha1.PlatformTeams:
+		return platformSpec{Identify: teamsIdentityOf}, true
 	case v1alpha1.PlatformWebhook:
 		return platformSpec{}, true
 	}
 	return platformSpec{}, false
+}
+
+// teamsIdentityOf is Microsoft Teams' identity call (platformSpec.Identify), which asks Teams nothing: a Teams bot is its Entra app, which
+// spec.teams.appID names. Two connections of one app are then one app to the supervisor, and the older serves it, as two of one Slack app
+// do. Its bot is the bare app ID, not its Teams ID (28:<app ID>): a bot's post reaches the broker only through Microsoft Graph, which names
+// the app by that ID (chat.BotMessage.ID), as a botMessage trigger does, so the bot guard (botGuard) knows another connection's bot by it.
+// Whether the client secret is the app's is for the connection's run to find (a FatalAuth).
+func teamsIdentityOf(_ context.Context, _ RunConfig, conn Connection) (appIdentity, error) {
+	return appIdentity{App: conn.Teams.AppID, Bot: conn.Teams.AppID}, nil
 }
 
 // actorPlatform is the platform a ChatConnection's users are on, as the dialects attribute a turn to them: the ID is
@@ -88,13 +109,19 @@ type builtPlatform struct {
 	closeIdle func()
 }
 
-// newPlatform builds the adapter of the connection's platform: the one place that names a platform. slack and webhook
-// exist; any other platform is a wiring error, which no retry mends. The Slack client gets a transport of its
-// own, so that its idle connections can be closed at shutdown; the webhook platform sends nothing and has none, and counts its requests
-// through the broker's instruments in ctx (newWebhookPlatform). onConnection, if set, is told whether the platform's connection is up: it
-// is Config.OnConnection of the Slack adapter and of the webhook platform.
-// It refuses a connection that needs the chat listener on a broker that has none (needsChatListener).
-func (c RunConfig) newPlatform(ctx context.Context, conn Connection, log *slog.Logger, onConnection func(connected bool)) (builtPlatform, error) {
+// newPlatform builds the adapter of the connection's platform: the one place that names a platform. Slack, Microsoft Teams (in http or
+// socket mode, spec.teams.mode) and webhook exist; any other platform is a wiring error, which no retry mends. The Slack and the Teams
+// clients each get a transport of their own, so that their idle connections can be closed at shutdown; the webhook platform sends nothing
+// and has none, and counts its requests through the broker's instruments in ctx (newWebhookPlatform). onConnection, if set, is told
+// whether the platform's connection is up: it is Config.OnConnection of the adapter, and of the webhook platform. convs keeps what a
+// Microsoft Teams connection's activities say of each channel: the leader gives the broker's store (newTeamsConversations), so that a
+// restart or a takeover does not post through the global route until an activity comes, and a Teams connection with none is a wiring
+// error; no other platform reads it. positions keeps where a Microsoft Teams connection's poll of each channel stands: the leader gives
+// the broker's store (newTeamsPollPositions), so that a restart or a takeover resumes the polls; with nil a run polls each channel anew.
+// It refuses a connection that needs the chat listener on a broker that has none (needsChatListener). In a test image, testhooks.Teams
+// points every call of a Teams connection at the fake Teams service, and at nothing else; a production build has no such fake.
+func (c RunConfig) newPlatform(ctx context.Context, conn Connection, log *slog.Logger, onConnection func(connected bool),
+	convs teams.ConversationStore, positions teams.PollPositions) (builtPlatform, error) {
 	name := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
 	if err := c.needsChatListener(conn); err != nil {
 		return builtPlatform{}, err
@@ -115,14 +142,44 @@ func (c RunConfig) newPlatform(ctx context.Context, conn Connection, log *slog.L
 		}
 		return builtPlatform{Platform: slack.NewPlatform(api, name).WithLogger(log), closeIdle: transport.CloseIdleConnections}, nil
 	}
+	if conn.Platform == v1alpha1.PlatformTeams {
+		if convs == nil {
+			return builtPlatform{}, fmt.Errorf("%w: ChatConnection %s: a Microsoft Teams connection needs a store for its channels' conversations", ErrWiring, name)
+		}
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		var rt http.RoundTripper = transport
+		fake, faked, err := testhooks.Teams(c.hooks) // never faked in a production build
+		if err != nil {
+			return builtPlatform{}, fmt.Errorf("%w: ChatConnection %s: %w", ErrWiring, name, err)
+		}
+		if faked {
+			transport.TLSClientConfig, rt = fake.TLS, fake.Wrap(transport)
+		}
+		tc := teams.Config{Connection: name, TenantID: conn.Teams.TenantID, AppID: conn.Teams.AppID,
+			ClientSecret: conn.Credentials[v1alpha1.TeamsClientSecretKey], Logger: log, OnConnection: onConnection,
+			HTTPClient: &http.Client{Transport: telemetry.Transport(rt, false), Timeout: teamsAPITimeout}, Conversations: convs,
+			Positions: positions, Socket: conn.Teams.Mode == v1alpha1.TeamsModeSocket, NotificationURL: conn.Teams.NotificationURL}
+		if faked {
+			tc.TokenURL, tc.MetadataURL, tc.GraphURL, tc.SocketURL, tc.SocketTLS = fake.TokenURL, fake.MetadataURL, fake.GraphURL, fake.SocketURL, fake.TLS
+		}
+		if c.teamsFakes != nil {
+			c.teamsFakes(&tc)
+		}
+		client, err := teams.New(tc)
+		if err != nil {
+			return builtPlatform{}, fmt.Errorf("%w: ChatConnection %s: %w", ErrWiring, name, err)
+		}
+		return builtPlatform{Platform: client, closeIdle: transport.CloseIdleConnections}, nil
+	}
 	return builtPlatform{}, fmt.Errorf("%w: ChatConnection %s: the platform %q has no adapter", ErrWiring, name, conn.Platform)
 }
 
 // needsChatListener refuses, with a wiring error, a connection that takes its platform's requests on the chat listener when the broker has
 // none (AGENTKOURIER_CHAT_LISTEN unset): a Slack connection in HTTP mode, whose credentials are read with the signing secret
-// (v1alpha1.CredentialKeys), and every webhook connection. Its sender could not reach it, and it would show as connected while nothing
-// came in. Run checks its own connection with it at start, on every replica, so that a standby refuses the config as the leader does
-// (checkOwnConnection); newPlatform checks each connection it builds.
+// (v1alpha1.CredentialKeys), a Microsoft Teams connection in http mode (spec.teams.mode unset or http), one in socket mode with a
+// spec.teams.notificationURL, to which Microsoft Graph sends the notifications of its channels' messages, and every webhook connection.
+// Its sender could not reach it, and it would show as connected while nothing came in. Run checks its own connection with it at start, on
+// every replica, so that a standby refuses the config as the leader does (checkOwnConnection); newPlatform checks each connection it builds.
 func (c RunConfig) needsChatListener(conn Connection) error {
 	if c.ChatListener != nil {
 		return nil
@@ -134,6 +191,12 @@ func (c RunConfig) needsChatListener(conn Connection) error {
 			ErrWiring, name)
 	case conn.Platform == v1alpha1.PlatformSlack && !conn.Credentials[v1alpha1.SlackSigningSecretKey].IsEmpty():
 		return fmt.Errorf("%w: ChatConnection %s is in Slack HTTP mode, and the broker has no chat listener for Slack to send to: set AGENTKOURIER_CHAT_LISTEN",
+			ErrWiring, name)
+	case conn.Platform == v1alpha1.PlatformTeams && conn.Teams.Mode != v1alpha1.TeamsModeSocket:
+		return fmt.Errorf("%w: ChatConnection %s is a Microsoft Teams connection in http mode, and the broker has no chat listener for Teams to send to: set AGENTKOURIER_CHAT_LISTEN",
+			ErrWiring, name)
+	case conn.Platform == v1alpha1.PlatformTeams && conn.Teams.NotificationURL != "":
+		return fmt.Errorf("%w: ChatConnection %s is a Microsoft Teams connection with a notificationURL, and the broker has no chat listener for Microsoft Graph to send to: set AGENTKOURIER_CHAT_LISTEN",
 			ErrWiring, name)
 	}
 	return nil

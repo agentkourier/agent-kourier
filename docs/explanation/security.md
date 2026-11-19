@@ -149,7 +149,7 @@ What a team that may write a ChatConnection in an admitted namespace can do, and
 
 ## The chat port
 
-A ChatConnection in Slack HTTP mode takes Slack's requests on the chat listener, a port that the internet reaches by design, through the
+A ChatConnection in Slack HTTP mode, and a Microsoft Teams one, takes its platform's requests on the chat listener, a port that the internet reaches by design, through the
 chart's Ingress or a load balancer of your own. It is a port of its own (`chatListener.port`), apart from the health and metrics port, so
 `/metrics` is never on it, and it is closed unless `chatListener.enabled` is set. Every request is bounded, and checked, before any work is
 done for it ([Limits](../reference/limits.md#run-the-broker) has each value and what happens past it):
@@ -171,6 +171,13 @@ done for it ([Limits](../reference/limits.md#run-the-broker) has each value and 
   outcome, at debug level. A request signed by one app does not pass on the route of another app's connection. A signed request
   replayed within the 5 minutes is taken as Slack's own retry would be: a message that has already made a turn makes no other, since
   turns are queued by message ID, and a press is checked against its question as any press is.
+- **Microsoft Teams' token before the body.** A Microsoft Teams connection's route first checks the request's bearer token: signed
+  RS256 by a key that the Bot Framework publishes and endorses for Microsoft Teams, for the connection's `spec.teams.appID`, with an
+  expiry and a not-before time within 5 minutes of the broker's clock. Only then is the body read and decoded; its service URL must be the token's, and its
+  tenant the connection's. A request that fails is answered 401, or 403 for another tenant, and counted on
+  `agentkourier_teams_requests_total` and `agentkourier_teams_tokens_refused_total`. The bot's own token, from Microsoft Entra, goes
+  only to the service URL that the channel's activities named (or Microsoft's global route for Teams), over HTTPS, with no redirect
+  followed.
 - **Who may reach the port.** With `networkPolicy.enabled`, ingress to the chat port is only from `networkPolicy.chatFrom` (the chart
   refuses the policy and the listener without it), and to the metrics port only from `metricsFrom`. The chart's Ingress sends only the
   path prefix `/chat/`.

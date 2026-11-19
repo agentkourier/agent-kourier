@@ -33,6 +33,10 @@ const (
 	textUnrecorded = "Your answer could not be recorded, so it was not taken. An operator must fix this."
 	// textFirstWords follows the mention of the one who did, in the message that tells the loser.
 	textFirstWords = "answered this question first."
+	// textTaken and textAlready are a question's words for a press that decided it, and for the same person's press after their
+	// answer was recorded (words.taken, words.already).
+	textTaken   = "Your answer was recorded."
+	textAlready = "Your answer to this question is already recorded."
 )
 
 // Ephemeral shows a message to one person alone: a chat.Platform.
@@ -156,7 +160,12 @@ const (
 //
 // The interaction is recorded as answered at PressedAt, so a press made before the deadline wins even if
 // it is decided after it. One made at or after the deadline is no decision: it is told so and not audited.
-func (d *Decider) Decide(ctx context.Context, pd PressDecision) (telemetryErr error) {
+//
+// told is the words for the presser of what the press came to, for a platform that answers the press itself (chat.PressOutcome): the
+// plain text of what the person was told alone (invalid, unrecorded, late, or decided first by another), or, for a press that decided,
+// that the answer was recorded, and for the same person's press that finds their answer recorded before, that it already is. It is
+// "" with an error, and for an interaction that is gone.
+func (d *Decider) Decide(ctx context.Context, pd PressDecision) (told string, telemetryErr error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.interaction.decide", attribute.String("agentkourier.interaction.id", pd.Interaction.ID), attribute.String("agentkourier.interaction.kind", string(pd.Interaction.Kind)), attribute.String("agentkourier.binding", pd.BindingName))
 	telemetry.Link(ctx, pd.Interaction.TraceParent, pd.Interaction.TraceState)
 	defer func() { op.Finish(telemetryErr) }()
@@ -165,9 +174,9 @@ func (d *Decider) Decide(ctx context.Context, pd PressDecision) (telemetryErr er
 	msg, err := AnswerMessage(pd.Binding.Dialect, row.ID, pd.In, pd.Answer, pd.User, pd.Binding.Platform)
 	if err != nil {
 		d.cfg.Logger.InfoContext(ctx, "interact: the dialect refused an answer", "interaction", row.ID, "err", err)
-		d.tell(ctx, row, pd.User, chat.Message{Fallback: w.invalid})
+		told = d.tell(ctx, row, pd.User, chat.Message{Fallback: w.invalid})
 		d.count("invalid")
-		return nil
+		return told, nil
 	}
 	d.mu.Lock()
 	v, cur, err := d.take(ctx, pd)
@@ -178,39 +187,41 @@ func (d *Decider) Decide(ctx context.Context, pd PressDecision) (telemetryErr er
 		// press is finished and not retried: a retry would hold the later presses of the interaction, and the sweep, until the
 		// worker's cap. The person is told in fixed words, and the operator by one Error line naming the Binding and the interaction.
 		d.cfg.Logger.ErrorContext(ctx, "interact: the audit row of a decision cannot be written as built; the press is ended and nothing is decided", "binding", pd.BindingName, "interaction", row.ID, "err", err)
-		d.tell(ctx, row, pd.User, chat.Message{Fallback: w.unrecorded})
+		told = d.tell(ctx, row, pd.User, chat.Message{Fallback: w.unrecorded})
 		d.count("unrecorded")
-		return nil
+		return told, nil
 	} else if err != nil {
-		return err
+		return "", err
 	}
+	told = w.taken
 	switch v {
 	case won:
 		d.count("answered")
 		d.countApproval(pd)
 	case again: // a retry: the decision was taken and counted before, and it is the recorded answer that is sent
+		told = w.already
 		var ok bool
 		if msg, ok, err = d.recorded(ctx, pd, cur); err != nil {
-			return err
+			return "", err
 		} else if !ok {
-			return nil
+			return told, nil
 		}
 	case late:
-		d.tell(ctx, row, pd.User, chat.Message{Fallback: w.late})
+		told = d.tell(ctx, row, pd.User, chat.Message{Fallback: w.late})
 		d.count("late")
-		return nil
+		return told, nil
 	case lost:
-		d.tell(ctx, row, pd.User, lostMessage(w, cur))
+		told = d.tell(ctx, row, pd.User, lostMessage(w, cur))
 		d.count("superseded")
-		return nil
+		return told, nil
 	case gone:
-		return nil
+		return "", nil
 	}
 	if err := d.send(ctx, pd, msg, v == again); err != nil {
-		return err
+		return "", err
 	}
 	d.replacePrompt(ctx, row.ID)
-	return nil
+	return told, nil
 }
 
 // recorded is the message that sends the answer an interaction has recorded, built from its stored request and answer as
@@ -410,9 +421,9 @@ func (d *Decider) countApproval(pd PressDecision) {
 	d.cfg.OnApprovalOutcome(pd.BindingName, outcome)
 }
 
-// tell shows m to the person alone. It is told once and kept nowhere, so a failure is only logged (at debug on a platform
-// that has no ephemeral messages: see untoldLevel).
-func (d *Decider) tell(ctx context.Context, row store.Interaction, user string, m chat.Message) {
+// tell shows m to the person alone, and returns its plain text (Fallback), the words for the presser. It is told once and kept
+// nowhere, so a failure is only logged (at debug on a platform that has no ephemeral messages: see untoldLevel).
+func (d *Decider) tell(ctx context.Context, row store.Interaction, user string, m chat.Message) string {
 	to := chat.Target{Conn: row.Key.Connection, Channel: row.Key.Channel, Thread: row.Key.Thread}
 	e, err := d.cfg.Ephemerals.Platform(row.Key.Connection)
 	if err == nil {
@@ -421,6 +432,7 @@ func (d *Decider) tell(ctx context.Context, row store.Interaction, user string, 
 	if err != nil {
 		d.cfg.Logger.Log(ctx, untoldLevel(err), "interact: a person could not be told the outcome of their press", "interaction", row.ID, "err", err)
 	}
+	return m.Fallback
 }
 
 func (d *Decider) count(result string) {

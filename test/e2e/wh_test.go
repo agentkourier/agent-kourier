@@ -51,7 +51,8 @@ type whScenario struct {
 
 // requireWebhooks returns when the run is in the fast tier with the webhook connections served: on custom resources, with their namespace
 // admitted. It skips in another tier, on the files route, which serves the one ChatConnection of its directory, and on the admission of the
-// tier with two Slack apps, which admits team-a's namespace in place of the recipes' (the MC_ tests hold it to that). Any other admission on
+// tier with two Slack apps or with Microsoft Teams, which admits their teams' namespaces in place of the recipes' (the MC_ and TEAMS_ tests
+// hold it to that). Any other admission on
 // custom resources fails the test: up-fast.sh admits the namespace there (webhook-values.yaml), and a bring-up that lost the overlay must not
 // pass as a skip. A selector or namespaces it cannot read fail the test too (Env.Admits).
 func requireWebhooks(t *testing.T) {
@@ -72,6 +73,9 @@ func requireWebhooks(t *testing.T) {
 	}
 	if teams, terr := env.Admits(kube.MultiTeamNamespace); terr == nil && teams {
 		t.Skipf("the broker admits the namespaces of the tier with two Slack apps (%s), which leaves %s out: bring the tier up without E2E_TWO_APPS", env.Admission(), WebhookNamespace)
+	}
+	if teams, terr := env.Admits(TeamsNamespace); terr == nil && teams {
+		t.Skipf("the broker admits the namespace of the tier with Microsoft Teams (%s), which leaves %s out: bring the tier up without E2E_TEAMS", env.Admission(), WebhookNamespace)
 	}
 	if err != nil {
 		t.Fatal(err)

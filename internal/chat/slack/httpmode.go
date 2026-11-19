@@ -65,17 +65,17 @@ type httpRun struct {
 	closed bool // guarded by mu
 }
 
-// submit queues fn on the lane of channel (lanes.submit, whose refusal is reason), unless the run has ended: open is false then, and
+// submit queues fn on the lane of channel (Lanes.Submit, whose refusal is reason), unless the run has ended: open is false then, and
 // nothing is queued. It never blocks on fn.
 func (r *httpRun) submit(channel string, fn func()) (reason string, open bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	// Not redundant with the lanes' own state: lanes.submit must not run while lanes.wait waits (lanes.go), and Run waits on the lanes
+	// Not redundant with the lanes' own state: Lanes.Submit must not run while Lanes.Wait waits (internal/chat/lanes), and Run waits on the lanes
 	// once serveHTTP has set closed under the write lock, so a handler still in flight after Run ended is refused here instead.
 	if r.closed {
 		return "", false
 	}
-	return r.lanes.submit(channel, fn), true
+	return r.lanes.Submit(channel, fn), true
 }
 
 // serveHTTP is Run in HTTP mode. It opens no connection: Slack sends its requests to the handler of HTTPHandler, which the broker serves

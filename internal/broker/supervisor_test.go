@@ -42,7 +42,8 @@ var errRejected = errors.New("fake: token rejected")
 type fakeConn struct {
 	chat.Platform
 	token  string
-	keys   []string // the keys of the credentials it was built with, sorted
+	keys   []string           // the keys of the credentials it was built with, sorted
+	mode   v1alpha1.TeamsMode // the spec.teams.mode it was built with
 	live   *atomic.Int32
 	reject chan struct{} // closed: Run returns the rejection
 	// onConn is the adapter's OnConnection, which Run calls when its connection is up.
@@ -147,7 +148,7 @@ func newSupWorldWith(t *testing.T, withOwn bool) *supWorld {
 		cfg: RunConfig{transportClosed: func(conn string) { w.mu.Lock(); w.closed = append(w.closed, conn); w.mu.Unlock() }},
 		log: log, metrics: newTestMetrics(t), table: w.table, parent: t.Context(),
 		open: func(_ context.Context, c Connection, onConn func(bool)) (builtPlatform, error) {
-			f := &fakeConn{token: c.Credentials["botToken"].Reveal(), keys: slices.Sorted(maps.Keys(c.Credentials)), live: &w.live, reject: make(chan struct{}), onConn: onConn, errs: map[string]error{}, calls: map[string]int{}}
+			f := &fakeConn{token: c.Credentials["botToken"].Reveal(), keys: slices.Sorted(maps.Keys(c.Credentials)), mode: c.Teams.Mode, live: &w.live, reject: make(chan struct{}), onConn: onConn, errs: map[string]error{}, calls: map[string]int{}}
 			w.mu.Lock()
 			defer w.mu.Unlock()
 			if err := w.openErr[f.token]; err != nil {
@@ -469,6 +470,39 @@ func TestSupervisorRestartsATeamConnectionSwitchedToAnotherMode(t *testing.T) {
 	w.reconcile(unready("team-a/slack", 4, 1), younger) // moved to HTTP mode again, and its Secret has no signingSecret yet
 	if got := w.running(); !slices.Equal(got, []string{ownName, "team-a/slack"}) || len(w.tokens()) != 4 {
 		t.Errorf("running = %v, platforms built = %v, when the new mode's keys cannot be read; want team-a left running in Socket Mode", got, w.tokens())
+	}
+}
+
+// A Microsoft Teams connection whose ChatConnection is switched between http and socket mode keeps its credentials, the client secret, and
+// is restarted in the new mode all the same: the edit is a new generation, which a runtime is started for, as for any other change of its
+// spec.
+func TestSupervisorRestartsATeamsConnectionSwitchedToAnotherMode(t *testing.T) {
+	w := newSupWorld(t)
+	w.ids["tok-teams"] = appIdentity{App: "22222222-3333-4444-8555-666666666666", Bot: "22222222-3333-4444-8555-666666666666"}
+	inMode := func(gen int64, mode v1alpha1.TeamsMode) TeamConnection {
+		c := teamOn(v1alpha1.PlatformTeams, "team-c/teams", gen, "tok-teams", 3)
+		c.Teams = v1alpha1.TeamsConnectionSpec{TenantID: "11111111-2222-4333-8444-555555555555", AppID: w.ids["tok-teams"].App, Mode: mode}
+		return c
+	}
+	modes := func() []v1alpha1.TeamsMode {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		var out []v1alpha1.TeamsMode
+		for _, f := range w.opened {
+			if f.token == "tok-teams" {
+				out = append(out, f.mode)
+			}
+		}
+		return out
+	}
+	w.reconcile(inMode(1, v1alpha1.TeamsModeHTTP))
+	w.reconcile(inMode(2, v1alpha1.TeamsModeSocket))
+	w.reconcile(inMode(3, v1alpha1.TeamsModeHTTP))
+	if got := w.running(); !slices.Equal(got, []string{ownName, "team-c/teams"}) {
+		t.Errorf("running = %v; want the teams connection running", got)
+	}
+	if got := modes(); !slices.Equal(got, []v1alpha1.TeamsMode{v1alpha1.TeamsModeHTTP, v1alpha1.TeamsModeSocket, v1alpha1.TeamsModeHTTP}) {
+		t.Errorf("the teams connection was built in %v; want http, then socket, then http again: a restart at each switch", got)
 	}
 }
 
@@ -1575,12 +1609,12 @@ func TestSupervisorWithNoOwnPublishesTheTeamConnectionsAlone(t *testing.T) {
 	}
 }
 
-// A served connection of a platform the broker has no adapter for is not started, and the supervisor says so as that, not as credentials to
-// mend, which would start nothing; one whose Secret cannot be read yet is told the credentials cannot be used.
+// A served connection of a platform the broker has no adapter for is not started, and the supervisor says so as that, not as credentials to mend, which would start nothing; one whose Secret cannot be read yet is told the credentials cannot
+// be used.
 func TestSupervisorSaysAConnectionOfAPlatformWithNoAdapterIsNotStarted(t *testing.T) {
 	w := newSupWorld(t)
-	unknown := teamOn("teams", "team-a/teams", 1, "tok-teams", 1)
-	c := &v1alpha1.ChatConnection{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "teams"}, Spec: v1alpha1.ChatConnectionSpec{Platform: "teams"}}
+	unknown := teamOn("discord", "team-a/discord", 1, "tok-discord", 1)
+	c := &v1alpha1.ChatConnection{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "discord"}, Spec: v1alpha1.ChatConnectionSpec{Platform: "discord"}}
 	if _, unknown.Err = connectionOf(t.Context(), c, &reader{}); !errors.Is(unknown.Err, errNoAdapter) {
 		t.Fatalf("connectionOf of a platform with no adapter = %v; want errNoAdapter", unknown.Err)
 	}
@@ -1591,11 +1625,127 @@ func TestSupervisorSaysAConnectionOfAPlatformWithNoAdapterIsNotStarted(t *testin
 	}
 	logs := w.logs.String()
 	for _, want := range []string{
-		`msg="the ChatConnection is not started: this broker has no adapter for its platform" connection=team-a/teams`,
+		`msg="the ChatConnection is not started: this broker has no adapter for its platform" connection=team-a/discord`,
 		`msg="the ChatConnection is not started yet: its credentials cannot be used" connection=team-b/slack`,
 	} {
 		if !strings.Contains(logs, want) {
 			t.Errorf("the logs do not say %s:\n%s", want, logs)
 		}
 	}
+}
+
+// A running connection whose ChatConnection comes to name a platform with no adapter is stopped and says why, not left running on the spec it no longer has; edited back, it starts again. One whose Secret cannot be
+// read for a moment keeps running.
+func TestSupervisorStopsARunningConnectionEditedToWhatItCannotRun(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		msg  string
+	}{
+		{"no adapter", fmt.Errorf("%w: ChatConnection team-c/teams is \"discord\", %w", ErrWiring, errNoAdapter),
+			`msg="the ChatConnection is not started: this broker has no adapter for its platform" connection=team-c/teams`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newSupWorld(t)
+			w.ids["tok-teams"] = appIdentity{App: "22222222-3333-4444-8555-666666666666", Bot: "22222222-3333-4444-8555-666666666666"}
+			running := teamOn(v1alpha1.PlatformTeams, "team-c/teams", 1, "tok-teams", 3)
+			w.reconcile(running)
+			if got := w.running(); !slices.Equal(got, []string{ownName, "team-c/teams"}) {
+				t.Fatalf("running = %v; want the teams connection started", got)
+			}
+			bot := w.ids["tok-teams"].Bot
+			if got, _ := w.table.botOwner(v1alpha1.PlatformTeams, bot); got != "team-c/teams" {
+				t.Fatalf("the bot guard has %q for the running connection's bot; want team-c/teams", got)
+			}
+
+			unreadable := running
+			unreadable.Credentials, unreadable.Err = nil, errors.New("Secret not synced")
+			w.reconcile(unreadable)
+			if got := w.running(); !slices.Equal(got, []string{ownName, "team-c/teams"}) {
+				t.Errorf("running = %v with its Secret unreadable; want it left running", got)
+			}
+
+			edited := running
+			edited.Generation, edited.Credentials, edited.Err = 2, nil, tc.err
+			w.reconcile(edited)
+			if got := w.running(); !slices.Equal(got, []string{ownName}) {
+				t.Errorf("running = %v after the edit; want the teams connection stopped", got)
+			}
+			if got, _ := w.table.botOwner(v1alpha1.PlatformTeams, bot); got != "" {
+				t.Errorf("the bot guard still has %q for the stopped connection's bot; want none", got)
+			}
+			logs := w.logs.String()
+			for _, want := range []string{
+				`msg="chat connection stopped" connection=team-c/teams why="its ChatConnection changed to what this broker cannot run"`,
+				tc.msg,
+			} {
+				if !strings.Contains(logs, want) {
+					t.Errorf("the logs do not say %s:\n%s", want, logs)
+				}
+			}
+
+			back := running
+			back.Generation = 3
+			w.reconcile(back)
+			if got := w.running(); !slices.Equal(got, []string{ownName, "team-c/teams"}) {
+				t.Errorf("running = %v once edited back; want the teams connection started again", got)
+			}
+		})
+	}
+}
+
+// A Microsoft Teams bot is its Entra app: its identity is the connection's spec.teams.appID, asked of no service, so of two Teams connections of
+// one app the older is served and the younger refused, as two of one Slack app are, and one of another app is served beside them.
+func TestSupervisorServesTheOlderConnectionOfATeamsApp(t *testing.T) {
+	const app, other = "22222222-3333-4444-8555-666666666666", "22222222-3333-4444-8555-777777777777"
+	id, err := RunConfig{}.identityOf(t.Context(), Connection{Platform: v1alpha1.PlatformTeams, Teams: v1alpha1.TeamsConnectionSpec{AppID: app}})
+	if want := (appIdentity{App: app, Bot: app}); err != nil || id != want {
+		t.Fatalf("identityOf a teams connection = %+v, %v; want %+v", id, err, want)
+	}
+
+	w := newTeamOnlySupWorld(t)
+	var lookupFails atomic.Bool // the younger's lookup fails in a way that may pass
+	w.sup.identify = func(ctx context.Context, c Connection) (appIdentity, error) {
+		if lookupFails.Load() && c.Ref.Namespace == "team-b" {
+			return appIdentity{}, mayPass("the lookup timed out")
+		}
+		return RunConfig{}.identityOf(ctx, c)
+	}
+	teamsOf := func(name, appID string, age int) TeamConnection {
+		c := teamOn(v1alpha1.PlatformTeams, name, 1, "secret-"+name, age)
+		c.Teams = v1alpha1.TeamsConnectionSpec{TenantID: "11111111-2222-4333-8444-555555555555", AppID: appID, Mode: v1alpha1.TeamsModeHTTP}
+		return c
+	}
+	older, younger, another := teamsOf("team-a/teams", app, 1), teamsOf("team-b/teams", app, 2), teamsOf("team-c/teams", other, 3)
+	w.reconcile(older, younger, another) // oldest first, as the Snapshot gives them
+	if got := w.running(); !slices.Equal(got, []string{"team-a/teams", "team-c/teams"}) {
+		t.Errorf("running = %v; want the older connection of the app, and the one of another app", got)
+	}
+	if got := w.sup.refusals.names(); !slices.Equal(got, []string{"team-b/teams"}) {
+		t.Errorf("refused = %v; want the younger connection of the app", got)
+	}
+	if want := `msg="the ChatConnection is not served: it uses the same Microsoft Teams app as the older ChatConnection team-a/teams, and an app is served once" connection=team-b/teams`; !strings.Contains(w.logs.String(), want) {
+		t.Errorf("the logs do not say %s:\n%s", want, w.logs.String())
+	}
+	// What the younger's Bindings are told names the Teams app: when it is refused, while its Secret cannot be read, and while the lookup
+	// of its new credentials fails in a way that may pass.
+	wantTold := func(when string) {
+		t.Helper()
+		w.sup.refusals.mu.Lock()
+		got := w.sup.refusals.refused["team-b/teams"]
+		w.sup.refusals.mu.Unlock()
+		if want := refusedMessage(v1alpha1.PlatformTeams); got != want || !strings.Contains(got, "Microsoft Teams app") {
+			t.Errorf("%s: the younger's Bindings are told %q; want %q", when, got, want)
+		}
+	}
+	wantTold("refused")
+	unreadable := younger
+	unreadable.Credentials, unreadable.Err = nil, errors.New("Secret not synced")
+	w.reconcile(older, unreadable, another)
+	wantTold("its Secret unreadable")
+	changed := younger
+	changed.Generation = 2
+	lookupFails.Store(true)
+	w.reconcile(older, changed, another)
+	wantTold("its lookup failing")
 }

@@ -1,0 +1,22 @@
+# The Microsoft Teams bot, in http mode (the default when spec.teams.mode is unset): Teams sends the bot's activities to the
+# leader's chat listener at https://<host>/chat/teams/agent-kourier/teams. The Secret teams, in namespace agent-kourier,
+# holds the key clientSecret, the client secret of the bot's Microsoft Entra app; you make it, and no secret belongs here.
+#
+# Replace the two GUIDs with your own, in lowercase hex: tenantID is the Microsoft Entra tenant (directory) ID, and appID
+# the bot's Microsoft Entra application (client) ID, which is also the bot's ID in teams-app/manifest.json. The placeholders
+# load as they are and name no real tenant or app.
+#
+# With no notificationURL, the leader polls Microsoft Graph for the posts of the bound channels. That is how an alert that
+# Workflows posts reaches the Binding's botMessage trigger. To have Graph notify the leader instead, add
+#   notificationURL: https://<host>/chat/teams/agent-kourier/teams
+# under teams, with your chat listener's host. For socket mode, which needs no public endpoint, add mode: socket.
+# Configure Microsoft Teams (docs/how-to/configure-teams.md) covers the four combinations.
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: teams, namespace: agent-kourier}
+spec:
+  platform: teams
+  credentialsSecretRef: {name: teams}
+  teams:
+    tenantID: 11111111-1111-4111-8111-111111111111
+    appID: 22222222-2222-4222-8222-222222222222

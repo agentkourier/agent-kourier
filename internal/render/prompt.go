@@ -115,7 +115,7 @@ func (p *Prompt) Render(view v1alpha1.PromptView, msg TriggerMessage) (string, e
 }
 
 // RenderWebhook is Render for an event of a webhook connection (spec 8.2, "Webhook events"). The template reads .Channel and the
-// connection's id fields (.Fields.<name>), which resolution holds it to, in place of the name shape: .Channel to the webhook
+// connection's id fields (.Fields.<name>), which resolution holds it to, in place of the chat rules: .Channel to the webhook
 // channel rule (checkWebhookChannel, at most 140 bytes, as a Binding names it), and the id fields to the .Key rule (ASCII letters,
 // digits and "_.-:/", at most 128 bytes), so that a repository's owner/name and a URL render. The values of
 // .Fields are ev's, not view's: an id field the event has no value for is empty. One the template reads that is Invalid (it had
@@ -161,11 +161,12 @@ func (p *Prompt) render(view v1alpha1.PromptView, wide bool, section func() stri
 }
 
 // safeView checks the values of view that the template reads, and returns a view that holds
-// only those. So whatever the template does with the view, an unchecked value is not in it. wide,
-// for an event of a webhook connection, holds .Channel to the webhook channel rule and the .Fields
-// values to the .Key rule.
+// only those. So whatever the template does with the view, an unchecked value is not in it. .Channel
+// is held to the chat channel rule (checkChannel: the name shape, or a Microsoft Teams channel ID);
+// wide, for an event of a webhook connection, holds it to the webhook channel rule instead, and the
+// .Fields values to the .Key rule.
 func (p *Prompt) safeView(view v1alpha1.PromptView, wide bool) (v1alpha1.PromptView, error) {
-	idRule, channelRule := checkName, checkName
+	idRule, channelRule := checkName, checkChannel
 	if wide {
 		idRule, channelRule = checkKey, checkWebhookChannel
 	}

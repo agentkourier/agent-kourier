@@ -88,6 +88,21 @@ func ThreadMessagesCounted(entries []ThreadReply, pinned, dropped int) (section 
 		leftOutNoun{One: "earlier message", Many: "earlier messages"}, entries, pinned, dropped).render()
 }
 
+// ThreadRoot returns the section that the first turn of a session opened inside a thread carries of the message that opened the
+// thread (spec 8.2, D56): the sentence and a block of that one message, whoever wrote it, a person or another app, cut as a reply is.
+// It says nothing of the thread's other messages, which the turn does not carry. It returns "" if the message has nothing to show.
+func ThreadRoot(root ThreadReply) string {
+	section, _ := untrustedBlock{
+		Opening: "The message that opened this thread, which a person or another app wrote before the mention " +
+			"(the id is who wrote it, by the platform's ID, and the from is only the name they go by),",
+		TagPrefix:     threadTagPrefix,
+		MaxUnits:      MaxThreadBlockUnits,
+		OmitWhenEmpty: true,
+		Items:         []untrustedItem{threadItem(root)},
+	}.render()
+	return section
+}
+
 func threadBlock(opening string, noun leftOutNoun, entries []ThreadReply, pinned, dropped int) untrustedBlock {
 	items := make([]untrustedItem, len(entries))
 	for i, r := range entries {
