@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -542,34 +543,44 @@ func TestGraphReconcilesTheSubscriptionsWithTheBindings(t *testing.T) {
 	}
 }
 
-// A subscription is renewed once it expires within subscriptionRenewLead, to subscriptionLifetime from the renew, after the handshake; one
-// that expires later is left.
+// A subscription is renewed once it expires within subscriptionRenewLead, or within half the lifetime Graph granted when that is shorter,
+// to subscriptionLifetime from the renew, after the handshake: one that Graph made shorter than asked is not renewed at every reconcile,
+// and one with the full lifetime is left until it nears its expiry.
 func TestGraphRenewsASubscriptionBeforeItExpires(t *testing.T) {
 	pt := newPushTest(t, false)
+	clock := &fakeClock{t: time.Now()}
+	pt.c.push.subs.now = clock.now
 	pt.f.setGraph(func(g *fakeGraph) { g.subs.expiresIn = time.Hour }) // Graph made it shorter than asked
-	pt.record(t, testChannel, testChannel)
-	pt.sink.bind(testChannel)
-	pt.run(t)
-	testutil.Eventually(t, "a renew", func() bool {
-		return slices.ContainsFunc(pt.f.subCalls(), func(c string) bool { return strings.HasPrefix(c, "/subscriptions/sub-") })
-	})
-	pt.f.setGraph(func(g *fakeGraph) { g.subs.expiresIn = 0 })
-	testutil.Eventually(t, "a renew to the full lifetime", func() bool {
-		s, _ := pt.c.push.subs.snapshot(testChannel)
-		return s.expires.After(time.Now().Add(subscriptionRenewLead))
-	})
-	pt.f.subCalls()
+	pt.subscribed(t, testChannel)
+	sub := pt.subOf(testChannel)
+	pt.settle(t)
 	pt.settle(t)
 	if calls := pt.f.subCalls(); len(calls) != 0 {
-		t.Errorf("calls after the renew = %v; want none until the subscription nears its expiry", calls)
+		t.Errorf("calls with %v of the hour Graph granted left = %v; want none before half of it has passed", time.Hour, calls)
+	}
+	pt.f.setGraph(func(g *fakeGraph) { g.subs.expiresIn = 0 })
+	clock.advance(31 * time.Minute)
+	testutil.Eventually(t, "a renew to the full lifetime", func() bool {
+		s, _ := pt.c.push.subs.snapshot(testChannel)
+		return s.expires.After(clock.now().Add(subscriptionRenewLead))
+	})
+	if calls := pt.f.subCalls(); countOf(calls, "/subscriptions/"+sub) != 1 {
+		t.Errorf("calls once half the granted hour passed = %v; want one renew", calls)
 	}
 	pt.f.mu.Lock()
 	last := pt.f.graph.subs.bodies[len(pt.f.graph.subs.bodies)-1]
 	pt.f.mu.Unlock()
 	if exp, err := time.Parse(time.RFC3339Nano, str(last["expirationDateTime"])); err != nil || len(last) != 1 ||
-		exp.Before(time.Now().Add(subscriptionLifetime-time.Minute)) {
+		exp.Before(clock.now().Add(subscriptionLifetime-time.Minute)) {
 		t.Errorf("the renew's body = %v; want only an expirationDateTime %v from now", last, subscriptionLifetime)
 	}
+	clock.advance(subscriptionLifetime - subscriptionRenewLead - time.Minute)
+	pt.settle(t)
+	if calls := pt.f.subCalls(); len(calls) != 0 {
+		t.Errorf("calls with more than %v left = %v; want none", subscriptionRenewLead, calls)
+	}
+	clock.advance(2 * time.Minute)
+	testutil.Eventually(t, "a renew within the lead", func() bool { return countOf(pt.f.subCalls(), "/subscriptions/"+sub) == 1 })
 }
 
 // A bound channel whose team's Microsoft Entra group is not known yet waits, told once at WARN with the fix, and is subscribed at the
@@ -688,9 +699,13 @@ func TestGraphNotificationsWaitForTheRun(t *testing.T) {
 	}
 }
 
-// A sink that names no bound channel, as one that is not the broker's intake, has nothing subscribed.
+// A sink that names no bound channel, as one that is not the broker's intake, has nothing subscribed: the app's subscriptions are listed
+// once, and those to the connection's URL, which nothing reads, are deleted; one to another URL is left as it is.
 func TestGraphSinkThatNamesNoChannelHasNoneSubscribed(t *testing.T) {
 	pt := newPushTest(t, false)
+	other := "https://another.example.test/chat/teams/ns/other"
+	pt.f.putSub("sub-stale", testChannel, pt.url, pt.url, time.Now().Add(20*time.Hour))
+	pt.f.putSub("sub-other", testGraphChannel, other, other, time.Now().Add(20*time.Hour))
 	pt.record(t, testChannel, testChannel)
 	ctx, cancel := context.WithCancel(pt.obs.ctx)
 	done := make(chan error, 1)
@@ -698,8 +713,14 @@ func TestGraphSinkThatNamesNoChannelHasNoneSubscribed(t *testing.T) {
 	testutil.Eventually(t, "reconciles", func() bool { return pt.c.push.subs.rounds.Load() >= 3 })
 	cancel()
 	_ = <-done
-	if calls := pt.f.subCalls(); len(calls) != 0 {
-		t.Errorf("calls = %v; want none", calls)
+	if calls := pt.f.subCalls(); countOf(calls, "/subscriptions") != 1 || countOf(calls, "/subscriptions/sub-stale") != 1 || len(calls) != 2 {
+		t.Errorf("calls = %v; want one listing and the stale subscription deleted", calls)
+	}
+	if subs := pt.f.subsTo(pt.url); len(subs) != 0 {
+		t.Errorf("subscriptions to the connection's URL = %v; want none", subs)
+	}
+	if _, ok := pt.f.subsTo(other)[testGraphChannel]; !ok {
+		t.Error("the subscription to another URL was deleted; want it left as it is")
 	}
 }
 
@@ -1096,5 +1117,235 @@ func TestCardsTextIsCapped(t *testing.T) {
 	m := graphMessage{Attachments: []graphAttached{{ContentType: cardContentTypeIn, Content: json.RawMessage(mustJSON(t, string(block)))}}}
 	if got := m.cardsText(); len(got) > graphTextMax || len(got) < graphTextMax-1 || !strings.HasPrefix(got, "é") {
 		t.Errorf("cardsText is %d bytes; want at most %d, cut at a rune", len(got), graphTextMax)
+	}
+}
+
+// A listing after a 409 keeps the subscriptions the run holds already: a bound channel's create refused because the app has a
+// subscription to the connection's URL that the run's listing did not show lists again, adopts that one, and leaves the held one of
+// another channel as it is, in Graph and in the run.
+func TestGraphListingAfterAConflictKeepsTheHeldSubscriptions(t *testing.T) {
+	pt := newPushTest(t, false)
+	pt.subscribed(t, testChannel)
+	held := pt.subOf(testChannel)
+	pt.record(t, testGraphChannel, testChannel)
+	pt.f.putSub("sub-unlisted", testGraphChannel, pt.url, pt.url, time.Now().Add(20*time.Hour)) // made after the run's listing
+	pt.sink.bind(testChannel, testGraphChannel)
+	testutil.Eventually(t, "the unlisted subscription adopted", func() bool {
+		s, ok := pt.c.push.subs.snapshot(testGraphChannel)
+		return ok && s.id == "sub-unlisted"
+	})
+	pt.settle(t)
+	if s, _ := pt.c.push.subs.snapshot(testChannel); s.id != held {
+		t.Errorf("the held subscription is %q; want %q", s.id, held)
+	}
+	if got := pt.subOf(testChannel); got != held {
+		t.Errorf("Graph holds %q for the first channel; want %q, which the listing after the 409 kept", got, held)
+	}
+	if calls := pt.f.subCalls(); countOf(calls, "/subscriptions/"+held) != 0 {
+		t.Errorf("calls = %v; want none to the held subscription", calls)
+	}
+}
+
+// A bound channel whose resource the app has a subscription to on another URL (a changed notificationURL, or another broker of the
+// app) is not a loop of creates that Graph refuses: the listing that shows it holds the channel back, failing, told once at WARN with
+// the fix and the other subscription's expiry (and never a clientState), until subscriptionConflictRetry has passed; a 409 then lists
+// again at the next reconcile, and not at once. Once the other subscription is gone the channel is subscribed.
+func TestGraphConflictWithAnotherURLIsNotALoop(t *testing.T) {
+	pt := newPushTest(t, false)
+	clock := &fakeClock{t: time.Now()}
+	pt.c.push.subs.now = clock.now
+	pt.c.push.subs.every = time.Hour // only the test's pokes reconcile
+	other := "https://another.example.test/chat/teams/ns/other"
+	otherExpires := time.Now().Add(20 * time.Hour)
+	pt.f.putSub("sub-other", testChannel, other, other, otherExpires)
+	pt.record(t, testChannel, testChannel)
+	pt.sink.bind(testChannel)
+	subs := pt.c.push.subs
+	pt.run(t)
+	testutil.Eventually(t, "the first reconcile", func() bool { return subs.rounds.Load() >= 1 })
+	round := func() {
+		t.Helper()
+		n := subs.rounds.Load()
+		subs.poke()
+		testutil.Eventually(t, "a reconcile", func() bool { return subs.rounds.Load() >= n+1 })
+	}
+	quiet := func(what string, want ...string) {
+		t.Helper()
+		n := subs.rounds.Load()
+		time.Sleep(200 * time.Millisecond)
+		if got := subs.rounds.Load(); got != n {
+			t.Errorf("%s: %d reconciles that nothing asked for; want none", what, got-n)
+		}
+		if calls := pt.f.subCalls(); !slices.Equal(calls, want) {
+			t.Errorf("%s: calls = %v; want %v", what, calls, want)
+		}
+	}
+	quiet("the first reconcile", "/subscriptions") // the listing, and no create
+	round()
+	round()
+	quiet("two reconciles while the channel is held back")
+	if got := pt.obs.series(t, "agentkourier_teams_graph_channels", channelFailing); got != 1 {
+		t.Errorf("channels{failing} = %v; want 1", got)
+	}
+
+	clock.advance(subscriptionConflictRetry + time.Second)
+	round()
+	quiet("the try after subscriptionConflictRetry", "/subscriptions") // the create, refused with 409, and no listing at once
+	round()
+	quiet("the reconcile after the 409", "/subscriptions") // the listing, which holds the channel back again
+	round()
+	quiet("a reconcile after that")
+
+	logs := pt.logs.String()
+	if n := strings.Count(logs, "for another notification URL"); n != 1 {
+		t.Errorf("the WARN with the fix was written %d times; want once:\n%s", n, logs)
+	}
+	if !strings.Contains(logs, "otherExpires="+otherExpires.UTC().Format("2006-01-02T15:04:05")) {
+		t.Errorf("the WARN names no expiry of the other subscription:\n%s", logs)
+	}
+	if n := strings.Count(logs, "level=WARN msg=\"teams: a bound channel's Microsoft Graph subscription could not be made"); n != 0 {
+		t.Errorf("the 409 was written at WARN %d times; want only the WARN with the fix", n)
+	}
+	for _, s := range []string{pt.state, "from-another-run"} {
+		if strings.Contains(logs, s) {
+			t.Errorf("the logs hold a clientState %q", s)
+		}
+	}
+
+	pt.f.mu.Lock()
+	delete(pt.f.graph.subs.byID, "sub-other")
+	pt.f.mu.Unlock()
+	clock.advance(subscriptionConflictRetry + time.Second)
+	round()
+	if pt.subOf(testChannel) == "" {
+		t.Fatal("the channel is not subscribed once the other subscription is gone")
+	}
+	if got := pt.obs.series(t, "agentkourier_teams_graph_channels", channelFailing); got != 0 {
+		t.Errorf("channels{failing} = %v once subscribed; want 0", got)
+	}
+}
+
+// A notification is answered 503, and counted as not_running, until the subscriptions of the run have been listed: while the listing
+// fails or has not answered, the connection does not know which subscriptions it holds. After a listing it is answered 202.
+func TestGraphNotificationsWaitForTheListing(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		stall func(pt *pushTest) (release func())
+	}{
+		{"fails", func(pt *pushTest) func() {
+			var failing atomic.Bool
+			failing.Store(true)
+			pt.f.setGraph(func(g *fakeGraph) {
+				g.fail = func(r *http.Request) (int, string, bool) {
+					return http.StatusServiceUnavailable, `{"error":{"code":"Failed"}}`,
+						failing.Load() && r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/subscriptions")
+				}
+			})
+			return func() { failing.Store(false) }
+		}},
+		{"blocks", func(pt *pushTest) func() {
+			hold := make(chan struct{})
+			pt.f.setGraph(func(g *fakeGraph) { g.hold = hold })
+			return func() { close(hold) }
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pt := newPushTest(t, false)
+			release := tc.stall(pt)
+			pt.record(t, testChannel, testChannel)
+			pt.sink.bind(testChannel)
+			pt.run(t)
+			testutil.Eventually(t, "a listing asked for", func() bool { return len(pt.f.subCalls()) > 0 })
+			n := pt.change("sub-not-held", testChannel, "created", "", "1794971777722")
+			if status, _ := pt.notify(t, n); status != http.StatusServiceUnavailable {
+				t.Errorf("a notification before the listing = %d; want 503", status)
+			}
+			if got := pt.counted(t, notifyChange, notifiedNotRunning); got != 1 {
+				t.Errorf("notifications{change,not_running} = %v; want 1", got)
+			}
+			release()
+			testutil.Eventually(t, "the subscription", func() bool { return pt.subOf(testChannel) != "" })
+			if status, _ := pt.notify(t, n); status != http.StatusAccepted {
+				t.Errorf("a notification after the listing = %d; want 202", status)
+			}
+			if got := pt.counted(t, notifyChange, notifiedUnknownSub); got != 1 {
+				t.Errorf("notifications{change,unknown_subscription} = %v; want 1", got)
+			}
+		})
+	}
+}
+
+// A body that anyone may send is bounded before its notifications are checked: one with more than notificationMaxItems is answered 400
+// and nothing of it is taken; the notifications of a body whose clientState is not the connection's are logged in one WARN line for
+// the body, and the lines are paced, as is that of a body too long.
+func TestGraphBodiesThatAnyoneMaySendAreBounded(t *testing.T) {
+	pt := newPushTest(t, false)
+	pt.subscribed(t, testChannel)
+	items := func(n int) []byte {
+		return []byte(`{"value":[` + strings.TrimSuffix(strings.Repeat(`{},`, n), ",") + `]}`)
+	}
+	warns := func() int { return strings.Count(pt.logs.String(), "level=WARN") }
+	if status, _ := pt.post(t, "", items(notificationMaxItems+1)); status != http.StatusBadRequest {
+		t.Errorf("a body of %d notifications = %d; want 400", notificationMaxItems+1, status)
+	}
+	if got := pt.counted(t, notifyChange, notifiedClientState); got != 0 {
+		t.Errorf("notifications{change,client_state} = %v after a body refused; want none taken", got)
+	}
+	before := warns()
+	if status, _ := pt.post(t, "", items(notificationMaxItems)); status != http.StatusAccepted {
+		t.Errorf("a body of %d notifications = %d; want 202", notificationMaxItems, status)
+	}
+	for range 5 {
+		pt.post(t, "", items(1))
+	}
+	if got := warns() - before; got != 1 {
+		t.Errorf("WARN lines for 6 bodies of notifications with another clientState = %d; want 1:\n%s", got, pt.logs.String())
+	}
+	if !strings.Contains(pt.logs.String(), fmt.Sprintf("count=%d", notificationMaxItems)) {
+		t.Errorf("the WARN line does not count the body's notifications:\n%s", pt.logs.String())
+	}
+	if got := pt.counted(t, notifyChange, notifiedClientState); got != notificationMaxItems+5 {
+		t.Errorf("notifications{change,client_state} = %v; want %d", got, notificationMaxItems+5)
+	}
+	before = warns()
+	long := []byte(`{"value":[{}],"padding":"` + strings.Repeat("x", notificationMaxBody) + `"}`)
+	for range 3 {
+		if status, _ := pt.post(t, "", long); status != http.StatusRequestEntityTooLarge {
+			t.Errorf("a body too long = %d; want 413", status)
+		}
+	}
+	if got := warns() - before; got != 1 {
+		t.Errorf("WARN lines for 3 bodies too long = %d; want 1", got)
+	}
+}
+
+// A 403 of a call about a channel's messages (a make or a renew of its subscription) is told the fix of the resource-specific
+// permission; one of a listing or a delete of the subscriptions, which that permission does not grant, is not.
+func TestGraphForbiddenNamesThePermissionOnlyForAChannel(t *testing.T) {
+	pt := newPushTest(t, false)
+	pt.f.setGraph(func(g *fakeGraph) {
+		g.fail = func(*http.Request) (int, string, bool) {
+			return http.StatusForbidden, `{"error":{"code":"Forbidden"}}`, true
+		}
+	})
+	subs := pt.c.push.subs
+	for _, tc := range []struct {
+		operation, method string
+		link              string
+		fix               bool
+	}{
+		{"Subscribe", http.MethodPost, pt.c.graph.resource("subscriptions"), true},
+		{"Renew", http.MethodPatch, pt.c.graph.resource("subscriptions", "sub-001"), true},
+		{"ListSubscriptions", http.MethodGet, pt.c.graph.resource("subscriptions"), false},
+		{"Unsubscribe", http.MethodDelete, pt.c.graph.resource("subscriptions", "sub-001"), false},
+	} {
+		err := subs.call(t.Context(), tc.operation, tc.method, tc.link, nil, nil)
+		var ge *GraphError
+		if !errors.As(err, &ge) || ge.Status != http.StatusForbidden {
+			t.Fatalf("%s: err = %v; want a GraphError 403", tc.operation, err)
+		}
+		if got := strings.Contains(err.Error(), "ChannelMessage.Read.Group"); got != tc.fix {
+			t.Errorf("%s: err = %q; names the permission's fix: %v, want %v", tc.operation, err, got, tc.fix)
+		}
 	}
 }

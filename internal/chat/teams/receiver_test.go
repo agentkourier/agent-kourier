@@ -863,7 +863,7 @@ func TestReceiverWarnsOfASignedTokenItRefuses(t *testing.T) {
 // TestRefusalLogCountsSinceTheLastLine: a reason gets a line at once and then one each refusalLogEvery, which counts the refusals since
 // the line before it, and not those before that; each reason is paced on its own.
 func TestRefusalLogCountsSinceTheLastLine(t *testing.T) {
-	l := refusalLog{last: map[Reason]time.Time{}, suppressed: map[Reason]int{}}
+	var l refusalLog[Reason]
 	t0 := time.Unix(1_800_000_000, 0)
 	for i, step := range []struct {
 		reason Reason

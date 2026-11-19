@@ -41,6 +41,11 @@ import (
 // most that a body holds; a longer body is no batch of Graph's, and is answered 413.
 const notificationMaxBody = 256 << 10
 
+// notificationMaxItems caps the notifications of one body: a body with more is answered 400 and none of it is taken. Microsoft documents
+// no most; a body of Graph's at notificationMaxBody holds about 500. Anyone may send a body, before any clientState is checked, so the
+// cap bounds the work one request causes.
+const notificationMaxItems = 1000
+
 // A notified message is read with one GET, cut at fetchTimeout, on its channel's lane. A read that may pass on another try (a 429, a 5xx,
 // a timeout) is made again, fetchAttempts times in all, after fetchRetry and twice as long after each further failure up to fetchRetryMax,
 // or after a 429's Retry-After when that is longer, up to fetchRetryMax; the channel's later activities wait behind it. A read that fails
@@ -117,7 +122,10 @@ type push struct {
 	state string // the clientState (clientStateOf); never logged
 	subs  *subscriber
 	// onMissed is Config.OnNotificationsMissed.
-	onMissed      func(channel string)
+	onMissed func(channel string)
+	// refusals paces the WARN lines of bodies that anyone may send: one too long, and one with notifications whose clientState is not
+	// the connection's.
+	refusals      refusalLog[string]
 	fetchTimeout  time.Duration // fetchTimeout; a test shortens it
 	fetchRetry    time.Duration // fetchRetry; a test shortens it
 	fetchRetryMax time.Duration // fetchRetryMax; a test shortens it
@@ -179,7 +187,10 @@ func (p *push) serveGraph(w http.ResponseWriter, req *http.Request) bool {
 		return false
 	}
 	if len(body) > notificationMaxBody {
-		p.c.log.WarnContext(ctx, "teams: a body of Graph notifications was refused for its length; answered 413", "bytes", len(body))
+		if ok, n := p.refusals.admit("too_long", p.c.recv.now()); ok {
+			p.c.log.WarnContext(ctx, "teams: a body of Graph notifications was refused for its length; answered 413", "bytes", len(body),
+				"alsoRefusedSinceLastLine", n)
+		}
 		http.Error(w, "the body is too long for Microsoft Graph's notifications", http.StatusRequestEntityTooLarge)
 		return true
 	}
@@ -205,13 +216,27 @@ func (p *push) takeNotifications(ctx context.Context, body []byte) (int, string)
 		p.c.log.DebugContext(ctx, "teams: a body of Graph notifications could not be read; answered 400", "bytes", len(body))
 		return http.StatusBadRequest, "not a body of Microsoft Graph's notifications"
 	}
+	if len(batch.Value) > notificationMaxItems {
+		p.c.log.DebugContext(ctx, "teams: a body of Graph notifications was refused for its number of notifications; answered 400",
+			"notifications", len(batch.Value))
+		return http.StatusBadRequest, "too many notifications in one body"
+	}
 	s := r.live.Load()
-	again := false
+	again, mismatched := false, 0
 	for _, n := range batch.Value {
 		kind, outcome, retry := p.take(ctx, s, n)
 		again = again || retry
+		if outcome == notifiedClientState {
+			mismatched++
+		}
 		if outcome != "" {
 			p.count(tctx, kind, outcome)
+		}
+	}
+	if mismatched > 0 {
+		if ok, n := p.refusals.admit(notifiedClientState, r.now()); ok {
+			p.c.log.WarnContext(ctx, "teams: Graph notifications whose clientState is not the connection's were dropped", "count", mismatched,
+				"bodiesAlsoDroppedSinceLastLine", n)
 		}
 	}
 	if again {
@@ -233,10 +258,8 @@ func (p *push) take(ctx context.Context, s *serving, n notification) (kind, outc
 	if n.LifecycleEvent != "" {
 		kind = notifyLifecycle
 	}
-	if !p.clientStateOK(n.ClientState) {
+	if !p.clientStateOK(n.ClientState) { // logged once a body, and paced, by takeNotifications: anyone may send one
 		p.subs.mismatch(n.SubscriptionID)
-		p.c.log.WarnContext(ctx, "teams: a Graph notification whose clientState is not the connection's was dropped",
-			"kind", kind, "subscription", quote(n.SubscriptionID))
 		return kind, notifiedClientState, false
 	}
 	if n.TenantID != p.c.tenant {

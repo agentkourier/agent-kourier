@@ -53,17 +53,21 @@ const verifyWait = 3 * time.Second
 // request, and would otherwise write a line for each.
 const refusalLogEvery = 10 * time.Second
 
-// refusalLog paces the WARN lines of refused tokens, by reason. The handlers of requests that come at once call it, so it has a lock.
-type refusalLog struct {
+// refusalLog paces the WARN lines of refusals, by reason: of tokens (Reason), and of the bodies of Graph's notifications that anyone may
+// send (push.go). The handlers of requests that come at once call it, so it has a lock. Its zero value is ready.
+type refusalLog[K comparable] struct {
 	mu         sync.Mutex
-	last       map[Reason]time.Time // guarded by mu
-	suppressed map[Reason]int       // guarded by mu
+	last       map[K]time.Time // guarded by mu
+	suppressed map[K]int       // guarded by mu
 }
 
 // admit says whether a refusal for reason at now gets a line, and how many were refused for it since the last line.
-func (l *refusalLog) admit(reason Reason, now time.Time) (bool, int) {
+func (l *refusalLog[K]) admit(reason K, now time.Time) (bool, int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.last == nil {
+		l.last, l.suppressed = map[K]time.Time{}, map[K]int{}
+	}
 	if last, ok := l.last[reason]; ok && now.Sub(last) < refusalLogEvery {
 		l.suppressed[reason]++
 		return false, 0
@@ -152,7 +156,7 @@ type Receiver struct {
 	verifyWait          time.Duration // verifyWait; a test shortens it
 	keysCheckEvery      time.Duration // keysCheckEvery; a test shortens it
 	now                 func() time.Time
-	refusals            refusalLog
+	refusals            refusalLog[Reason]
 
 	// live is the Serve that takes activities, or nil when none does.
 	live atomic.Pointer[serving]
@@ -210,7 +214,7 @@ func NewReceiver(cfg ReceiverConfig) (*Receiver, error) {
 	if now == nil {
 		now = time.Now
 	}
-	r.now, r.refusals = now, refusalLog{last: map[Reason]time.Time{}, suppressed: map[Reason]int{}}
+	r.now = now
 	r.verifier = newVerifier(cfg.AppID, cfg.MetadataURL, cfg.HTTPClient, now)
 	r.seen = newRecent(now)
 	return r, nil

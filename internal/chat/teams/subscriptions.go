@@ -27,17 +27,20 @@ import (
 // is refused with 409.
 
 // The life of a subscription. It is made to expire subscriptionLifetime after it is made or renewed, and renewed once it would expire
-// within subscriptionRenewLead, so that a renew that fails is tried again, at each reconcile, for half a day before the subscription
-// lapses. Each call to Graph to list, make, renew or delete one is cut at subscriptionCallTimeout: a create and a renew take 7 to 8
+// within subscriptionRenewLead, or within half the lifetime that Graph granted when that is shorter (Graph may grant less than it was
+// asked, and 24 hours was not measured), so that a renew that fails is tried again, at each reconcile, for half its life before the
+// subscription lapses. Each call to Graph to list, make, renew or delete one is cut at subscriptionCallTimeout: a create and a renew take 7 to 8
 // seconds (measured), the time of Graph's validation handshake. The subscriptions are reconciled with the connection's Bindings every
 // subscriptionReconcileEvery, and at once when a lifecycle notification or a clientState that is not the connection's asks for it. A
-// listing reads at most subscriptionListPages pages.
+// listing reads at most subscriptionListPages pages. A bound channel whose resource the app has a subscription to on another URL, which
+// Graph lets an app have once (409), is tried again after subscriptionConflictRetry, or once that subscription expires if sooner.
 const (
 	subscriptionLifetime       = 24 * time.Hour
 	subscriptionRenewLead      = 12 * time.Hour
 	subscriptionCallTimeout    = 30 * time.Second
 	subscriptionReconcileEvery = time.Minute
 	subscriptionListPages      = 10
+	subscriptionConflictRetry  = 10 * time.Minute
 )
 
 // The states of a bound channel's subscription, the label of agentkourier_teams_graph_channels.
@@ -51,8 +54,10 @@ const (
 type subscription struct {
 	id, channel, group string
 	expires            time.Time
-	renew              bool // a lifecycle notification asked for a renew (reauthorizationRequired)
-	recreate           bool // it is to be deleted and made anew: removed by Graph, or its clientState is not the connection's
+	// granted is the lifetime Graph granted when it was made or renewed; for one adopted, which a listing does not say, the lifetime asked for.
+	granted  time.Duration
+	renew    bool // a lifecycle notification asked for a renew (reauthorizationRequired)
+	recreate bool // it is to be deleted and made anew: removed by Graph, or its clientState is not the connection's
 }
 
 // subFlag is what a notification asks of a subscription.
@@ -70,6 +75,7 @@ type subscriber struct {
 	url, state                       string
 	lifetime, renewLead, callTimeout time.Duration
 	every                            time.Duration
+	conflictRetry                    time.Duration
 	now                              func() time.Time
 	log                              *slog.Logger
 	wake                             chan struct{} // a reconcile is wanted now; holds one
@@ -81,14 +87,16 @@ type subscriber struct {
 	ids  map[string]*subscription // by ID; guarded by mu
 
 	// What run's goroutine alone reads and writes.
-	listed           bool            // the app's subscriptions were listed in this run
-	listFailing      bool            // the last listing failed, which was told at WARN
-	waiting, failing map[string]bool // by channel: told at WARN
+	listed           bool                 // the app's subscriptions were listed since the run began or the last 409
+	listFailing      bool                 // the last listing failed, which was told at WARN
+	waiting, failing map[string]bool      // by channel: told at WARN
+	blocked          map[string]time.Time // by channel: the app's subscription on another URL holds its resource; no create before then
+	conflicts        map[string]bool      // by channel: the blocked channel was told at WARN
 }
 
 func newSubscriber(c *Client, url, state string) *subscriber {
 	return &subscriber{c: c, url: url, state: state, lifetime: subscriptionLifetime, renewLead: subscriptionRenewLead,
-		callTimeout: subscriptionCallTimeout, every: subscriptionReconcileEvery, now: c.graph.now, log: c.log,
+		callTimeout: subscriptionCallTimeout, every: subscriptionReconcileEvery, conflictRetry: subscriptionConflictRetry, now: c.graph.now, log: c.log,
 		wake: make(chan struct{}, 1), held: map[string]*subscription{}, ids: map[string]*subscription{}}
 }
 
@@ -173,13 +181,15 @@ func (s *subscriber) snapshot(channel string) (subscription, bool) {
 // run reconciles the subscriptions with the channels that lister names until ctx ends, every s.every and when poked. It starts from
 // nothing held, and lists the app's subscriptions again first (adopt): another leader may have made or renewed them since this one last
 // ran. It leaves the subscriptions in Graph when it stops: the next leader adopts them, and Graph sends to the same URL meanwhile, which
-// the leader-labeled Service routes to whichever replica leads. With no lister nothing is bound, and nothing is made.
+// the leader-labeled Service routes to whichever replica leads. With no lister nothing is bound: the subscriptions to the connection's URL
+// are deleted, and nothing is made.
 func (s *subscriber) run(ctx context.Context, lister chat.ChannelLister) {
 	s.mu.Lock()
 	clear(s.held)
 	clear(s.ids)
 	s.mu.Unlock()
 	s.listed, s.listFailing, s.waiting, s.failing = false, false, map[string]bool{}, map[string]bool{}
+	s.blocked, s.conflicts = map[string]time.Time{}, map[string]bool{}
 	s.ready.Store(false)
 	tick := time.NewTicker(s.every)
 	defer tick.Stop()
@@ -199,7 +209,8 @@ func (s *subscriber) run(ctx context.Context, lister chat.ChannelLister) {
 	}
 }
 
-// reconcile makes the held subscriptions those of the bound channels: it adopts the app's subscriptions to the connection's URL once,
+// reconcile makes the held subscriptions those of the bound channels. It lists the app's subscriptions at the start of the run and after
+// a 409 (adopt), with no channel bound too, so that a subscription to the connection's URL that nothing reads any longer is deleted. It
 // deletes those of channels no Binding names any longer, makes those of bound channels with none (once the channel's team's Microsoft
 // Entra group is known), remakes those flagged for it, and renews those flagged or near their expiry. A call that fails is tried again
 // at the next reconcile.
@@ -215,7 +226,7 @@ func (s *subscriber) reconcile(ctx context.Context, lister chat.ChannelLister) {
 	for _, ch := range bound {
 		want[ch] = true
 	}
-	if !s.listed && len(want) > 0 {
+	if !s.listed {
 		if err := s.adopt(ctx, want); err != nil {
 			if ctx.Err() == nil && !s.listFailing {
 				s.log.WarnContext(ctx, "teams: the app's Microsoft Graph subscriptions could not be listed; nothing is subscribed until they are, "+
@@ -231,7 +242,7 @@ func (s *subscriber) reconcile(ctx context.Context, lister chat.ChannelLister) {
 		}
 		s.listed = true
 	}
-	s.ready.Store(s.listed || len(want) == 0)
+	s.ready.Store(true)
 	s.mu.Lock()
 	heldChannels := slices.Sorted(maps.Keys(s.held))
 	s.mu.Unlock()
@@ -245,9 +256,16 @@ func (s *subscriber) reconcile(ctx context.Context, lister chat.ChannelLister) {
 			delete(s.waiting, ch)
 		}
 	}
-	for ch := range s.failing {
+	for _, m := range []map[string]bool{s.failing, s.conflicts} {
+		for ch := range m {
+			if !want[ch] {
+				delete(m, ch)
+			}
+		}
+	}
+	for ch := range s.blocked {
 		if !want[ch] {
-			delete(s.failing, ch)
+			delete(s.blocked, ch)
 		}
 	}
 	for _, ch := range bound {
@@ -283,10 +301,13 @@ func (s *subscriber) keep(ctx context.Context, ch string) {
 		held = false
 	}
 	if !held {
+		if until, ok := s.blocked[ch]; ok && s.now().Before(until) {
+			return // failing since the 409; told at WARN once (adopt)
+		}
 		s.subscribe(ctx, ch)
 		return
 	}
-	if !sub.renew && sub.expires.Sub(s.now()) > s.renewLead {
+	if !sub.renew && sub.expires.Sub(s.now()) > min(s.renewLead, sub.granted/2) {
 		s.recovered(ctx, ch)
 		return
 	}
@@ -303,12 +324,13 @@ func (s *subscriber) keep(ctx context.Context, ch string) {
 	}
 }
 
-// renewed records the new expiry of the subscription id, and clears its renew flag; a remake asked for meanwhile stands.
+// renewed records the new expiry of the subscription id and the lifetime Graph granted, and clears its renew flag; a remake asked for
+// meanwhile stands.
 func (s *subscriber) renewed(id string, expires time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if sub, ok := s.ids[id]; ok {
-		sub.expires, sub.renew = expires, false
+		sub.expires, sub.granted, sub.renew = expires, expires.Sub(s.now()), false
 	}
 }
 
@@ -336,16 +358,17 @@ func (s *subscriber) subscribe(ctx context.Context, ch string) {
 	sub, err := s.create(ctx, group, ch)
 	var ge *GraphError
 	if errors.As(err, &ge) && ge.Status == http.StatusConflict {
-		// The app has a subscription to the resource already, which the listing did not show as this connection's: listed again at
-		// the next reconcile, which adopts it if it is to the connection's URL.
+		// The app has a subscription to the resource already, which the last listing did not show: listed again at the next reconcile,
+		// and not before, which adopts it if it is to the connection's URL, and holds the channel back if it is to another (adopt).
 		s.listed = false
-		s.poke()
 	}
 	if err != nil {
 		s.failed(ctx, ch, "made", err)
 		return
 	}
 	s.hold(sub)
+	delete(s.blocked, ch)
+	delete(s.conflicts, ch)
 	s.recovered(ctx, ch)
 	s.log.InfoContext(ctx, "teams: subscribed to a bound channel's messages on Microsoft Graph", "channel", ch, "expires", sub.expires)
 }
@@ -409,13 +432,17 @@ type graphSubscription struct {
 }
 
 // adopt lists the app's subscriptions, and holds those to the connection's URL that it can keep: to the messages of a channel of want
-// that it holds none of yet, for the change types it makes, with the lifecycle URL, and not expired. It deletes the others to the
-// connection's URL, which nothing reads. A subscription to another URL is another connection's, or another broker's, and is left as it
-// is. A listing longer than subscriptionListPages, or one that names a page off the Graph endpoint, is an error, since a subscription it
-// did not read would be made again and refused (409).
+// that it holds none of yet, for the change types it makes, with the lifecycle URL, and not expired. One it holds already (a listing
+// after a 409) is kept as it is. It deletes the others to the connection's URL, which nothing reads, a second of a held channel among
+// them. A subscription to another URL is another connection's, or another broker's, and is left as it is; if it is to the messages of a
+// bound channel that holds none, that channel cannot have one until it is gone, since Graph lets an app have one subscription to a
+// resource and change types (409): the channel is blocked, failing, until it expires or subscriptionConflictRetry has passed, and told
+// at WARN once, with the fix. A listing longer than subscriptionListPages, or one that names a page off the Graph endpoint, is an error,
+// since a subscription it did not read would be made again and refused.
 func (s *subscriber) adopt(ctx context.Context, want map[string]bool) error {
 	link := s.c.graph.resource("subscriptions")
 	var mine []graphSubscription
+	others := map[string]graphSubscription{} // by bound channel: the app's subscription to its messages on another URL that expires last
 	for page := 0; link != ""; page++ {
 		if page == subscriptionListPages {
 			return fmt.Errorf("teams: the app's Microsoft Graph subscriptions take more than %d pages", subscriptionListPages)
@@ -430,6 +457,11 @@ func (s *subscriber) adopt(ctx context.Context, want map[string]bool) error {
 		for _, sub := range p.Value {
 			if sub.NotificationURL == s.url {
 				mine = append(mine, sub)
+				continue
+			}
+			if _, ch, ok := parseSubscriptionResource(sub.Resource); ok && want[ch] &&
+				sub.ExpirationDateTime.After(others[ch].ExpirationDateTime) {
+				others[ch] = sub
 			}
 		}
 		link = p.NextLink
@@ -437,10 +469,14 @@ func (s *subscriber) adopt(ctx context.Context, want map[string]bool) error {
 	now := s.now()
 	for _, sub := range mine {
 		group, ch, ok := parseSubscriptionResource(sub.Resource)
-		_, taken := s.snapshot(ch)
-		if ok && want[ch] && !taken && sub.LifecycleNotificationURL == s.url && sub.ChangeType == subscriptionChangeTypes &&
-			sub.ExpirationDateTime.After(now) {
-			s.hold(&subscription{id: sub.ID, channel: ch, group: group, expires: sub.ExpirationDateTime})
+		held, isHeld := s.snapshot(ch)
+		switch {
+		case isHeld && held.id == sub.ID:
+			continue // this run's own
+		case ok && want[ch] && !isHeld && sub.LifecycleNotificationURL == s.url && sub.ChangeType == subscriptionChangeTypes &&
+			sub.ExpirationDateTime.After(now):
+			s.hold(&subscription{id: sub.ID, channel: ch, group: group, expires: sub.ExpirationDateTime, granted: s.lifetime})
+			delete(s.blocked, ch)
 			s.log.InfoContext(ctx, "teams: adopted the Microsoft Graph subscription of a bound channel", "channel", ch,
 				"expires", sub.ExpirationDateTime)
 			continue
@@ -448,6 +484,26 @@ func (s *subscriber) adopt(ctx context.Context, want map[string]bool) error {
 		if err := s.remove(ctx, sub.ID); err != nil && ctx.Err() == nil {
 			s.log.WarnContext(ctx, "teams: a stale Microsoft Graph subscription to the connection's URL could not be deleted",
 				"subscription", sub.ID, "error", err.Error())
+		}
+	}
+	for ch := range want {
+		other, found := others[ch]
+		if _, isHeld := s.snapshot(ch); isHeld || !found {
+			delete(s.blocked, ch)
+			continue
+		}
+		until := now.Add(s.conflictRetry)
+		if other.ExpirationDateTime.Before(until) {
+			until = other.ExpirationDateTime
+		}
+		s.blocked[ch] = until
+		s.failing[ch] = true
+		if !s.conflicts[ch] {
+			s.conflicts[ch] = true
+			s.log.WarnContext(ctx, "teams: a bound channel cannot be subscribed to: the app has a Microsoft Graph subscription to its messages "+
+				"for another notification URL, and Graph lets an app have one. Delete that subscription, or wait for it to expire; the "+
+				"channel is tried again every "+s.conflictRetry.String()+" until then", "channel", ch,
+				"otherNotificationURL", other.NotificationURL, "otherExpires", other.ExpirationDateTime)
 		}
 	}
 	return nil
@@ -479,7 +535,8 @@ func (s *subscriber) create(ctx context.Context, group, ch string) (*subscriptio
 	if got.ID == "" {
 		return nil, errors.New("teams: Microsoft Graph named no ID for a subscription it made")
 	}
-	return &subscription{id: got.ID, channel: ch, group: group, expires: s.expiry(got.ExpirationDateTime)}, nil
+	expires := s.expiry(got.ExpirationDateTime)
+	return &subscription{id: got.ID, channel: ch, group: group, expires: expires, granted: expires.Sub(s.now())}, nil
 }
 
 // renewCall sets the expiry of the subscription id to subscriptionLifetime from now, and returns what Graph set.
@@ -511,13 +568,19 @@ func (s *subscriber) remove(ctx context.Context, id string) error {
 	return err
 }
 
-// call is one call to Graph about the subscriptions, cut at s.callTimeout and counted as operation.
+// call is one call to Graph about the subscriptions, cut at s.callTimeout and counted as operation. A make or a renew is about a
+// channel's messages, which the resource-specific permission grants, so its 403 is told that fix; a listing's or a delete's is not.
 func (s *subscriber) call(ctx context.Context, operation, method, link string, body, out any) (err error) {
 	ctx, op := telemetry.Start(ctx, "agentkourier.chat."+operation)
 	defer func() { s.c.finish(ctx, op, operation, err) }()
 	ctx, cancel := context.WithTimeout(ctx, s.callTimeout)
 	defer cancel()
-	return s.c.graph.call(ctx, method, link, body, out)
+	err = s.c.graph.call(ctx, method, link, body, out)
+	var ge *GraphError
+	if errors.As(err, &ge) && (operation == "Subscribe" || operation == "Renew") {
+		ge.channel = true
+	}
+	return err
 }
 
 // parseSubscriptionResource reads a subscription's resource, /teams/{group}/channels/{channel}/messages as it is made, or with the

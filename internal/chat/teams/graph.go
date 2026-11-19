@@ -53,6 +53,9 @@ type GraphError struct {
 	Code string
 	// RetryAfter is the wait that the answer asked for (Retry-After), or 0.
 	RetryAfter time.Duration
+	// channel says that the call was about a channel's messages: a read of them, or a subscription to them. Only such a 403 is told the
+	// fix of the resource-specific permission.
+	channel bool
 }
 
 func (e *GraphError) Error() string {
@@ -60,7 +63,7 @@ func (e *GraphError) Error() string {
 	if e.Code != "" {
 		s += " " + e.Code
 	}
-	if e.Status == http.StatusForbidden {
+	if e.Status == http.StatusForbidden && e.channel {
 		// Microsoft documents this read under the resource-specific permission alone; the body of the 403 that an app without it gets
 		// was not seen, so every 403 is told the fix.
 		s += ": the app may not read the channel's messages. Its manifest must ask for the resource-specific permission " +
@@ -162,7 +165,8 @@ func (g *graphClient) call(ctx context.Context, method, link string, body, out a
 		return fmt.Errorf("teams: reading Microsoft Graph's answer: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		e := &GraphError{Status: resp.StatusCode, RetryAfter: retryAfter(resp.Header.Get("Retry-After"), g.now())}
+		e := &GraphError{Status: resp.StatusCode, RetryAfter: retryAfter(resp.Header.Get("Retry-After"), g.now()),
+			channel: strings.Contains(link, "/channels/")}
 		var wire struct {
 			Error struct {
 				Code string `json:"code"`
