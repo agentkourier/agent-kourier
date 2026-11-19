@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -23,6 +24,10 @@ import (
 
 // otherLabel is the value of a label whose input is outside the fixed set it takes.
 const otherLabel = "other"
+
+// unknownLabel is the connection label of a request to the chat listener whose path names no connection that the listener serves. A
+// ChatConnection's name has a slash in it, so no connection is called this.
+const unknownLabel = "unknown"
 
 // Metrics is the broker's Prometheus registry and the hooks that feed it. It is not the global
 // registry: each broker has its own, so tests and a second broker in one process do not collide.
@@ -52,6 +57,13 @@ type Metrics struct {
 	crdSchema     *prometheus.GaugeVec   // series only once set, which only a broker on the custom resources does (crdschema.go)
 	chatRequests  *prometheus.CounterVec // series only once a request comes, which only a broker with a chat listener takes
 	labelWrites   *prometheus.CounterVec // series only once a write is tried, which only a broker told its pod makes (podlabel.go)
+
+	// listenerMu guards listenerConns, and is held by ChatListenerRequest while it counts and by ConnectionRemoved while it deletes, so that
+	// a request to a connection that is being removed is counted either before its series are deleted, and goes with them, or after, as unknown.
+	listenerMu sync.RWMutex
+	// listenerConns is the platform of each connection ("namespace/name") whose route has been on the chat listener since it was last
+	// removed: the connections that agentkourier_chat_listener_requests_total names.
+	listenerConns map[string]string
 }
 
 // The kinds and reasons that the config gauges carry, a closed set each.
@@ -66,7 +78,8 @@ var (
 // may be nil (never stale): it is Config.Stale.
 func NewMetrics(stale func() bool) (*Metrics, error) {
 	m := &Metrics{
-		reg: prometheus.NewRegistry(),
+		reg:           prometheus.NewRegistry(),
+		listenerConns: map[string]string{},
 		auditFailures: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_audit_write_failures_total",
 			Help: "Audit entries that could not be written, by kind."}, []string{"kind"}),
 		rejections: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_credential_rejections_total",
@@ -108,7 +121,7 @@ func NewMetrics(stale func() bool) (*Metrics, error) {
 		crdSchema: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "agentkourier_crd_schema_state",
 			Help: "1 for what the broker found when it compared each CRD's schema hash with the one it was built with, at start and every minute, and 0 for the other states, by CRD and state (match, mismatch, unannotated or unknown). Only a broker that reads custom resources has these series; with files there are none."}, []string{"crd", "state"}),
 		chatRequests: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_chat_listener_requests_total",
-			Help: "Requests to the chat listener, by outcome: served (a connection's handler was called), not_found (the path is no route), method (not POST), no_route (the connection does not run on this replica: answered 503), too_large (the body is past the cap), unreadable (the body could not be read whole) or busy (the listener already held as many requests as it may: answered 503). Only a broker with a chat listener has these series."}, []string{"outcome"}),
+			Help: "Requests to the chat listener, by outcome, platform and connection. Outcome: served (a connection's handler was called), not_found (the path is no route), method (not POST), no_route (the connection does not run on this replica: answered 503), too_large (the body is past the cap), unreadable (the body could not be read whole) or busy (the listener already held as many requests as it may: answered 503). Platform: the one the path names (slack), or other. Connection: the ChatConnection the path names, once its route has been on this replica's listener and until it is no longer served, else unknown; not_found and method are always unknown. Only a broker with a chat listener has these series."}, []string{"outcome", "platform", "connection"}),
 		labelWrites: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_leader_pod_label_writes_total",
 			Help: "Writes of the leader label (agentkourier.dev/role=leader) on this replica's own pod, by result: labeled (put on, as the replica began to lead), unlabeled (taken off, as the replica started or stopped) or failed (the API server refused or could not be reached; it is tried again). Only a broker with a chat listener that is told its pod has these series."}, []string{"result"}),
 	}
@@ -268,12 +281,19 @@ func (m *Metrics) ChatConnected(connection string, up bool) {
 
 // ConnectionRemoved is told that the ChatConnection named connection ("namespace/name") is not served by this broker: it was taken out of
 // the config or out of the set the broker serves, or it was stopped as a second connection of a Slack app another connection uses. It deletes the
-// series the connection has: agentkourier_chat_connected, which would otherwise say 0 for a connection that is not served, and the ones that
-// carry its name in the telemetry (telemetry.ForgetConnection). It is the one place that lists them, so a series that gains a connection label is
-// deleted here. A connection that restarts, or is stopped for its credentials, is still served and keeps its series. A connection with no series
-// is no error.
+// series the connection has: agentkourier_chat_connected, which would otherwise say 0 for a connection that is not served, its series of
+// agentkourier_chat_listener_requests_total, and the ones that carry its name in the telemetry (telemetry.ForgetConnection). It is the one place
+// that lists them, so a series that gains a connection label is deleted here. A connection that restarts, or is stopped for its credentials, is
+// still served and keeps its series. A connection with no series is no error.
+//
+// The chat listener counts a later request to the connection's route as unknown, until the route is on the listener again
+// (ChatListenerServes): the path is the sender's, so a request can come at any time, and it must not bring the series back.
 func (m *Metrics) ConnectionRemoved(ctx context.Context, connection string) {
 	m.chatUp.DeleteLabelValues(connection)
+	m.listenerMu.Lock()
+	delete(m.listenerConns, connection)
+	m.chatRequests.DeletePartialMatch(prometheus.Labels{"connection": connection})
+	m.listenerMu.Unlock()
 	telemetry.ForgetConnection(ctx, connection)
 }
 
@@ -289,13 +309,32 @@ func (m *Metrics) Leader(leading bool) {
 // Takeover counts a leadership taken: the lease won and the epoch bumped.
 func (m *Metrics) Takeover() { m.takeovers.Inc() }
 
-// ChatListenerRequest counts a request to the chat listener by its outcome (chatOutcomes), and one outside them as "other", so that no
-// value can grow the series. The path is not a label: it is the sender's to choose.
-func (m *Metrics) ChatListenerRequest(outcome string) {
+// ChatListenerServes records that the connection ("namespace/name") of platform has its route on the chat listener: chatRoutes.register
+// tells it before the route takes a request. From then until ConnectionRemoved, ChatListenerRequest counts the requests to that route
+// under the connection's name, including those answered no_route while it restarts or is down.
+func (m *Metrics) ChatListenerServes(platform, connection string) {
+	m.listenerMu.Lock()
+	defer m.listenerMu.Unlock()
+	m.listenerConns[connection] = platform
+}
+
+// ChatListenerRequest counts a request to the chat listener by its outcome (chatOutcomes), and one outside them as "other", and by the
+// platform and the connection that its path names. The path is the sender's to choose, so neither is taken as it is: the platform is
+// counted as itself only when it is one of chatPlatforms, and as "other" otherwise; the connection only when ChatListenerServes was told it
+// for that platform since it was last removed, and as "unknown" otherwise. No value the sender chooses can grow the series.
+func (m *Metrics) ChatListenerRequest(outcome, platform, connection string) {
 	if !slices.Contains(chatOutcomes, outcome) {
 		outcome = otherLabel
 	}
-	m.chatRequests.WithLabelValues(outcome).Inc()
+	m.listenerMu.RLock()
+	defer m.listenerMu.RUnlock()
+	if served, ok := m.listenerConns[connection]; !ok || served != platform {
+		connection = unknownLabel
+	}
+	if !slices.Contains(chatPlatforms, platform) {
+		platform = otherLabel
+	}
+	m.chatRequests.WithLabelValues(outcome, platform, connection).Inc()
 }
 
 // PodLabelWrite counts a write of the leader label on the replica's own pod by its result: labeled, unlabeled or failed (podlabel.go).
