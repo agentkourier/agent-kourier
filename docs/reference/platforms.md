@@ -8,7 +8,8 @@ listener does not run one: as the broker's own connection it stops the start wit
 started. The broker builds the platform of its own connection when it starts and when a replica takes the lead, so an edit to that
 connection's `spec.webhook` applies when Agent Kourier restarts; on the files route the chart rolls the pod when its ConfigMap
 changes, unless `config.existingConfigMap` is set or `config.rollOnChange` is `false`. A team connection restarts by itself when
-its ChatConnection changes.
+its ChatConnection changes. [Start agents from webhooks](../how-to/receive-webhooks.md) sets one up, with a page for each service the
+recipes cover.
 
 The API server and the broker's load hold each chat ID of a Binding to Slack's shape, but the channel of a Binding whose triggers
 are all `webhookEvent`, which they hold to a webhook channel's (see [Chat IDs](#chat-ids)). A Binding that names a channel's name

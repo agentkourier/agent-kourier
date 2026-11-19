@@ -28,6 +28,13 @@ The guides assume you know Kubernetes and Helm, and link to [explanation](../exp
   bot.
 - [Tune triggers with a dry run](tune-triggers.md): replay a channel's history before going live.
 
+## Webhooks
+
+- [Start agents from webhooks](receive-webhooks.md): a signed webhook from another service starts a session of your agent,
+  with what each answer means and how to follow a delivery. One page for each service the recipes cover:
+  [GitHub](webhooks/github.md), [Jira Cloud](webhooks/jira.md), [Bitbucket Cloud](webhooks/bitbucket.md) and
+  [Linear](webhooks/linear.md).
+
 ## Recipes
 
 - [Start from a recipe](recipes.md): a worked example with its Agent Kourier resources, its checks and, for one of
