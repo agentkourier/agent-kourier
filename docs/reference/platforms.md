@@ -332,8 +332,8 @@ at the next poll round once an activity has told the group: at once, or as soon 
   Microsoft's documentation; not measured), is logged at WARN, and the channel is read to a new `deltaLink` as at a start, with a
   catch-up read of what was posted since the last poll, within the 10 minutes. A stored position that cannot be read fails the channel's
   poll, which is made again after the same backoff. A write of a position that fails is logged once at WARN, until one succeeds, and
-  tried again a minute later; the channel is polled on. A write that the store refuses because the broker no longer leads stops the
-  connection's polls; on Postgres the process then exits, as on any write a replaced leader makes.
+  tried again at the channel's first poll a minute or more later; the channel is polled on. A write that the store refuses because
+  the broker no longer leads stops the connection's polls; on Postgres the process then exits, as on any write a replaced leader makes.
 - **Cost.** A connection makes at most 4 reads a second, one at a time, at least 250 milliseconds apart: 240 reads a minute, which no
   setting changes. Once it has its `deltaLink`, a channel costs one delta read and 3 reads of replies each 10 seconds; at a poll that
   finds new threads, 4 to 6 reads of replies (6 when three or more threads begin): 24 to 42 reads a minute. While it is read to its
@@ -371,8 +371,8 @@ not recovered, nor anything posted earlier than the look-back.
 - **On Graph's `missed`** (a `notificationURL`): what was posted in the channel in the 10 minutes before.
 
 **After a restart.** What a run handed on is held in memory, so a post that a catch-up read, or a delta resumed from the stored
-position, gives again after a restart is handed on again: the stored position is the last one written, a minute or more behind what
-the run had handed on (a write is made at a poll, at most once a minute, once the lane has handed on the read; longer while writes
+position, gives again after a restart is handed on again: the stored position is the last one written, which can be about a minute
+behind what the run had handed on (a write is made at a poll, at most once a minute, once the lane has handed on the read; longer while writes
 fail). The broker keeps in its store what such a post did, and drops it there: a trigger that threads by key finds the thread the message
 already opened; a trigger that starts a turn of its own finds that turn, which is named by the message, queued already, and starts no
 second investigation; a start that a trigger's limits stopped is not counted or told again; and a trigger's note is one row whatever asks
