@@ -597,10 +597,12 @@ func (t *tstate) outputTurn() store.TaskTurn {
 }
 
 // startOf is the message of the trigger's start that the turn r is, for a start that holds its place in the trigger's limits for
-// its own turn alone (store.TaskTurn.Mention): a bot's mention, which carries the thread, or the person's message at the root
-// of a session that a personMessage trigger began. Any other turn, an alert's included, is none, and says "".
+// its own turn alone (store.TaskTurn.Mention): a bot's mention, which carries the thread, the person's message at the root
+// of a session that a personMessage trigger began, or any turn of a session that a webhookEvent trigger began, each of which is
+// an event's start. Any other turn, an alert's included, is none, and says "".
 func (t *tstate) startOf() string {
-	if t.r.WholeThread || (t.sess.Origin.Source == store.OriginPersonMessage && t.r.MessageRef == t.key.Thread) {
+	if t.r.WholeThread || (t.sess.Origin.Source == store.OriginPersonMessage && t.r.MessageRef == t.key.Thread) ||
+		t.sess.Origin.Source == store.OriginWebhookEvent {
 		return t.r.MessageRef
 	}
 	return ""

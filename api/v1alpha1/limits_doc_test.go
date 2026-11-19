@@ -57,7 +57,7 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Count(t, "extractName", maxExtractNameLen)
 	limitsdoc.Count(t, "closeWhenValue", maxCloseWhenValueLen)
 	limitsdoc.Count(t, "durationText", maxDurationTextLen)
-	limitsdoc.Count(t, "webhookChannel", maxWebhookChannelLen)
+	limitsdoc.Count(t, "webhookChannel", MaxWebhookChannelLen)
 	limitsdoc.Count(t, "webhookFields", MaxWebhookFields)
 	limitsdoc.Count(t, "webhookFieldName", maxWebhookFieldNameLen)
 	limitsdoc.Count(t, "webhookFrom", MaxWebhookFrom)

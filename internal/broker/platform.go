@@ -42,10 +42,15 @@ const teamsAPITimeout = 30 * time.Second
 type Connection struct {
 	Ref v1alpha1.ObjectRef
 	// Platform is ChatConnection.spec.platform, which chooses the adapter (newPlatform).
-	Platform    string
+	Platform string
+	// Secret is the credentials Secret, "namespace/name", which an error about a credential names in place of its value.
+	Secret      string
 	Credentials map[string]secret.Value
 	// Teams is spec.teams of a Microsoft Teams connection, its tenant, app and mode, and zero for any other.
 	Teams v1alpha1.TeamsConnectionSpec
+	// Webhook is a webhook connection's spec.webhook, as it was when the ChatConnection was read: a copy that shares nothing with the
+	// snapshot (cloneWebhook). Nil on any other platform.
+	Webhook *v1alpha1.WebhookSpec
 }
 
 // platformSpec is what the broker knows of a platform: the call that tells whose bot a connection's credentials are. The name it is
@@ -60,15 +65,18 @@ type platformSpec struct {
 	Identify func(ctx context.Context, c RunConfig, conn Connection) (appIdentity, error)
 }
 
-// platformFor is the one place that names a platform: a platform is a case here, with its identity call, one in newPlatform for its
-// adapter, and its keys in v1alpha1.CredentialKeys. One that is not here has no adapter, and a ChatConnection of it is a wiring error. It
-// is a func and not a table, so that there is no state to change.
+// platformFor is the one place that names a platform: a platform is one case here, with its identity call, one in newPlatform for its
+// adapter, and its keys in v1alpha1.CredentialKeys. One that is not here has no adapter, and a ChatConnection of it is a wiring error. The
+// webhook platform has no identity call: a service's webhooks name no app of a workspace, so its connections take part in no comparison of
+// apps. It is a func and not a table, so that there is no state to change.
 func platformFor(name string) (platformSpec, bool) {
 	switch name {
 	case v1alpha1.PlatformSlack:
 		return platformSpec{Identify: slackIdentityOf}, true
 	case v1alpha1.PlatformTeams:
 		return platformSpec{Identify: teamsIdentityOf}, true
+	case v1alpha1.PlatformWebhook:
+		return platformSpec{}, true
 	}
 	return platformSpec{}, false
 }
@@ -101,23 +109,27 @@ type builtPlatform struct {
 	closeIdle func()
 }
 
-// newPlatform builds the adapter of the connection's platform: the one place that names a platform. Slack and Microsoft Teams
-// (in http or socket mode, spec.teams.mode) exist; any other platform is a wiring error, which no retry mends. Each client gets
-// a transport of its own, so that its idle connections can be closed at shutdown. onConnection, if set, is told whether the
-// platform's connection is up: it is Config.OnConnection of the adapter. convs keeps what a Microsoft Teams connection's activities say
-// of each channel: the leader gives the broker's store (newTeamsConversations), so that a restart or a takeover does not post through
-// the global route until an activity comes, and a Teams connection with none is a wiring error; a Slack connection does not read it.
-// positions keeps where a Microsoft Teams connection's poll of each channel stands: the leader gives the broker's store
-// (newTeamsPollPositions), so that a restart or a takeover resumes the polls; with nil a run polls each channel anew. It refuses a
-// connection that needs the chat listener on a broker that has none (needsChatListener). In a test image, testhooks.Teams points
-// every call of a Teams connection at the fake Teams service, and at nothing else; a production build has no such fake.
-func (c RunConfig) newPlatform(conn Connection, log *slog.Logger, onConnection func(connected bool),
+// newPlatform builds the adapter of the connection's platform: the one place that names a platform. Slack, Microsoft Teams (in http or
+// socket mode, spec.teams.mode) and webhook exist; any other platform is a wiring error, which no retry mends. The Slack and the Teams
+// clients each get a transport of their own, so that their idle connections can be closed at shutdown; the webhook platform sends nothing
+// and has none, and counts its requests through the broker's instruments in ctx (newWebhookPlatform). onConnection, if set, is told
+// whether the platform's connection is up: it is Config.OnConnection of the adapter, and of the webhook platform. convs keeps what a
+// Microsoft Teams connection's activities say of each channel: the leader gives the broker's store (newTeamsConversations), so that a
+// restart or a takeover does not post through the global route until an activity comes, and a Teams connection with none is a wiring
+// error; no other platform reads it. positions keeps where a Microsoft Teams connection's poll of each channel stands: the leader gives
+// the broker's store (newTeamsPollPositions), so that a restart or a takeover resumes the polls; with nil a run polls each channel anew.
+// It refuses a connection that needs the chat listener on a broker that has none (needsChatListener). In a test image, testhooks.Teams
+// points every call of a Teams connection at the fake Teams service, and at nothing else; a production build has no such fake.
+func (c RunConfig) newPlatform(ctx context.Context, conn Connection, log *slog.Logger, onConnection func(connected bool),
 	convs teams.ConversationStore, positions teams.PollPositions) (builtPlatform, error) {
 	name := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
 	if err := c.needsChatListener(conn); err != nil {
 		return builtPlatform{}, err
 	}
-	if conn.Platform == v1alpha1.PlatformSlack { // a second platform is one more case here, and one in platformFor
+	if conn.Platform == v1alpha1.PlatformWebhook {
+		return newWebhookPlatform(ctx, conn, log, onConnection)
+	}
+	if conn.Platform == v1alpha1.PlatformSlack { // a platform is one case here, and one in platformFor
 		sc := c.slackConfig(conn, log)
 		transport := http.DefaultTransport.(*http.Transport).Clone()
 		sc.HTTPClient = &http.Client{Transport: telemetry.Transport(transport, false), Timeout: cmp.Or(c.slackHTTPTimeout, slackAPITimeout)}
@@ -164,16 +176,19 @@ func (c RunConfig) newPlatform(conn Connection, log *slog.Logger, onConnection f
 
 // needsChatListener refuses, with a wiring error, a connection that takes its platform's requests on the chat listener when the broker has
 // none (AGENTKOURIER_CHAT_LISTEN unset): a Slack connection in HTTP mode, whose credentials are read with the signing secret
-// (v1alpha1.CredentialKeys), a Microsoft Teams connection in http mode (spec.teams.mode unset or http), and one in socket mode with a
-// spec.teams.notificationURL, to which Microsoft Graph sends the notifications of its channels' messages. The platform could not reach
-// it, and it would show as connected while nothing came in. Run checks its own connection with it at start, on every replica, so that a
-// standby refuses the config as the leader does; newPlatform checks each connection it builds.
+// (v1alpha1.CredentialKeys), a Microsoft Teams connection in http mode (spec.teams.mode unset or http), one in socket mode with a
+// spec.teams.notificationURL, to which Microsoft Graph sends the notifications of its channels' messages, and every webhook connection.
+// Its sender could not reach it, and it would show as connected while nothing came in. Run checks its own connection with it at start, on
+// every replica, so that a standby refuses the config as the leader does (checkOwnConnection); newPlatform checks each connection it builds.
 func (c RunConfig) needsChatListener(conn Connection) error {
 	if c.ChatListener != nil {
 		return nil
 	}
 	name := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
 	switch {
+	case conn.Platform == v1alpha1.PlatformWebhook:
+		return fmt.Errorf("%w: ChatConnection %s is a webhook connection, and the broker has no chat listener for its service to send to: set AGENTKOURIER_CHAT_LISTEN",
+			ErrWiring, name)
 	case conn.Platform == v1alpha1.PlatformSlack && !conn.Credentials[v1alpha1.SlackSigningSecretKey].IsEmpty():
 		return fmt.Errorf("%w: ChatConnection %s is in Slack HTTP mode, and the broker has no chat listener for Slack to send to: set AGENTKOURIER_CHAT_LISTEN",
 			ErrWiring, name)
@@ -183,6 +198,19 @@ func (c RunConfig) needsChatListener(conn Connection) error {
 	case conn.Platform == v1alpha1.PlatformTeams && conn.Teams.NotificationURL != "":
 		return fmt.Errorf("%w: ChatConnection %s is a Microsoft Teams connection with a notificationURL, and the broker has no chat listener for Microsoft Graph to send to: set AGENTKOURIER_CHAT_LISTEN",
 			ErrWiring, name)
+	}
+	return nil
+}
+
+// checkOwnConnection is what Run checks of its own connection at start, on every replica, before it opens the store or seeks to lead: the
+// chat listener it needs (needsChatListener), and, for a webhook connection, that its platform can be built (checkWebhookConnection), so
+// that a spec or a credential the platform refuses stops every replica, and not only the one that leads.
+func (c RunConfig) checkOwnConnection(conn Connection) error {
+	if err := c.needsChatListener(conn); err != nil {
+		return err
+	}
+	if conn.Platform == v1alpha1.PlatformWebhook {
+		return checkWebhookConnection(conn)
 	}
 	return nil
 }

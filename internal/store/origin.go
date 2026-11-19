@@ -14,6 +14,11 @@ const OriginBotMention = "botMention"
 // alert, so feedback attributes no alert to it.
 const OriginPersonMessage = "personMessage"
 
+// OriginWebhookEvent is the source of a session that a webhookEvent trigger made, from an event of a webhook connection. Every turn of
+// it is an event's start, which holds its place in the trigger's limits for its own turn alone. It is no alert, so feedback attributes
+// no alert to it.
+const OriginWebhookEvent = "webhookEvent"
+
 // Origin identifies the bounded external source and subject that caused a
 // session. The zero value is an ordinary conversation. Source may be present
 // without Subject when a source has no subject to retain.

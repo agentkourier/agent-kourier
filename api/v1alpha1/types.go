@@ -282,11 +282,11 @@ type ChatConnectionList struct {
 // +kubebuilder:validation:XValidation:rule="self.platform != 'webhook' || has(self.webhook)",message="is required on a webhook connection",fieldPath=".webhook"
 type ChatConnectionSpec struct {
 	// Platform is the chat platform: slack; teams, Microsoft Teams; or webhook, which takes signed JSON webhooks from a service such
-	// as a code host or an issue tracker (spec.webhook) and posts nothing there: the agent posts on the service with its own tools. A
-	// broker runs a teams connection in http or socket mode (spec.teams.mode). One in http mode, or with a spec.teams.notificationURL
-	// in either mode, needs the broker's chat listener: on a broker with none, the broker's own connection stops its start, and a team
-	// one is not started. The broker does not run a webhook connection yet: it refuses one as a wiring error, so that one as the
-	// broker's own stops its start, and a team's is not started.
+	// as a code host or an issue tracker (spec.webhook). The broker takes a webhook connection's webhooks on its chat listener
+	// (AGENTKOURIER_CHAT_LISTEN) at POST /chat/webhook/<namespace>/<name>, and posts nothing there: the agent posts on the service
+	// with its own tools. A broker runs a teams connection in http or socket mode (spec.teams.mode). A webhook connection, and a teams
+	// one in http mode or with a spec.teams.notificationURL in either mode, need the broker's chat listener: on a broker with none,
+	// the broker's own connection fails its start, and a team's is not started.
 	// +kubebuilder:validation:Enum=slack;teams;webhook
 	Platform string `json:"platform"`
 	// CredentialsSecretRef names one Secret whose keys are fixed by the platform and its mode. A Slack connection in Socket Mode needs
@@ -477,7 +477,7 @@ type Identity struct {
 
 // The rules below copy Validate: a Binding whose triggers are all webhookEvent takes a webhook channel and output none, and any other
 // Binding takes a chat platform's channel (Slack's or Microsoft Teams') and live or final. The two literals are channelID, the union of
-// the chat platforms' channels, and webhookChannel; the field's maxLength, 140, is both maxChannelIDLen and maxWebhookChannelLen
+// the chat platforms' channels, and webhookChannel; the field's maxLength, 140, is both maxChannelIDLen and MaxWebhookChannelLen
 // (TestCELLiteralsEqualTheBrokersConstants). (Not in the doc comment below, which the reference pages print.)
 
 // ChatBinding places the Binding in a channel.

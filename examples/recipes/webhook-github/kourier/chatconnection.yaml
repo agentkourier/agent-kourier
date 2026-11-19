@@ -1,0 +1,31 @@
+# GitHub: a GitHub App's webhook (pull requests, issue comments, pull request reviews and review comments). The App's
+# webhook URL is https://<host>/chat/webhook/acme-webhooks/github. The Secret github-webhook, in namespace acme-webhooks,
+# holds the key webhookSecret, the App's webhook secret; you make it, and no secret belongs in this file.
+# Replace acme-review-agent with your App's slug: the agent posts as the App, so its own reviews and comments are dropped.
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: github, namespace: acme-webhooks}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: github-webhook}
+  webhook:
+    identity: acme-review-agent[bot]          # the App's login: its slug, then [bot]
+    verify: {scheme: hmac-sha256, header: X-Hub-Signature-256, prefix: "sha256="}
+    channel: {from: [/repository/full_name]}
+    actor: {from: [/sender/login, /comment/user/login, /review/user/login]}
+    thread: {field: number, prefix: pr-}      # one session for each pull request: pr-42
+    delivery: {header: X-GitHub-Delivery}
+    fields:
+      - {name: event, header: X-GitHub-Event, kind: id}
+      - {name: action, from: [/action], kind: id}
+      - {name: number, from: [/pull_request/number, /issue/number], kind: id}
+      - {name: prNumber, from: [/pull_request/number], kind: id}
+      - {name: draft, from: [/pull_request/draft], kind: id}
+      - {name: repo, from: [/repository/full_name], kind: id}
+      - {name: headSHA, from: [/pull_request/head/sha], kind: id}
+      - {name: baseSHA, from: [/pull_request/base/sha], kind: id}
+      - {name: title, from: [/pull_request/title, /issue/title]}
+      - {name: body, from: [/pull_request/body]}
+      - {name: headRef, from: [/pull_request/head/ref]}
+      - {name: url, from: [/pull_request/html_url, /issue/pull_request/html_url]}
+      - {name: comment, from: [/comment/body]}

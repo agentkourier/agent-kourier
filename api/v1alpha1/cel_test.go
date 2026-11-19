@@ -277,7 +277,7 @@ func TestCELLiteralsEqualTheBrokersConstants(t *testing.T) {
 		if len(literals) != 2 || literals[0][1] != channelID.String() || literals[1][1] != webhookChannel.String() {
 			t.Errorf("the channel rule copies %q, want channelID %q and webhookChannel %q", literals, channelID, webhookChannel)
 		}
-		for name, want := range map[string]int{"maxChannelIDLen": maxChannelIDLen, "maxWebhookChannelLen": maxWebhookChannelLen} {
+		for name, want := range map[string]int{"maxChannelIDLen": maxChannelIDLen, "MaxWebhookChannelLen": MaxWebhookChannelLen} {
 			if got := bindings.at(t, "spec.chat.channel").num("maxLength"); got != want {
 				t.Errorf("channel: maxLength %d, %s %d", got, name, want)
 			}

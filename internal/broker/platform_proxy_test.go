@@ -67,7 +67,7 @@ func TestSlackClientSendsThroughTheProxyEnvironment(t *testing.T) {
 		Ref: v1alpha1.ObjectRef{Namespace: "platform", Name: "slack"}, Platform: v1alpha1.PlatformSlack,
 		Credentials: map[string]secret.Value{"botToken": secret.New("xoxb-fake"), "appToken": secret.New("xapp-fake")},
 	}
-	built, err := cfg.newPlatform(conn, nil, nil, nil, nil)
+	built, err := cfg.newPlatform(t.Context(), conn, nil, nil, nil, nil)
 	if err != nil || saw.HTTPClient == nil {
 		t.Fatalf("newPlatform = %v; client config %+v", err, saw)
 	}

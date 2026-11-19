@@ -235,6 +235,9 @@ func FreeTextWhole(s string) (text string, whole bool) { return freeText(s, fals
 // before joining leaks those, and joining first loses the lines a YAML block scalar needs, so the text is matched both ways.
 func FreeTextLine(s string) string { text, _ := freeText(s, true); return text }
 
+// FreeTextLineWhole is FreeTextLine that also says whether none of s was cut (FreeTextWhole).
+func FreeTextLineWhole(s string) (text string, whole bool) { return freeText(s, true) }
+
 func freeText(s string, line bool) (text string, whole bool) {
 	s, cut := capRaw(s)
 	s = Normalize(rawSecrets(s))
@@ -257,17 +260,29 @@ func freeText(s string, line bool) (text string, whole bool) {
 // matched text goes before the mark: back to the last white space in its final tailDrop bytes, or if there is none
 // the final tailDrop bytes. A secret that holds white space and straddles the cut (a URL password with a space in
 // it) loses only its last word to this, and shows the rest of itself, if no other rule has taken it.
-func FreeTextCut(s string, limit int) string { return freeTextCut(s, limit, false) }
+func FreeTextCut(s string, limit int) string { text, _ := freeTextCut(s, limit, false); return text }
 
 // FreeTextCutLine is FreeTextCut for a field that is shown on one line, as FreeTextLine is FreeText: the text is read
 // through its first limit bytes with its lines, and joined and read again.
-func FreeTextCutLine(s string, limit int) string { return freeTextCut(s, limit, true) }
+func FreeTextCutLine(s string, limit int) string { text, _ := freeTextCut(s, limit, true); return text }
+
+// FreeTextCutWhole is FreeTextCut that also says whether none of s was cut, as FreeTextWhole is FreeText: whole is false when
+// the text was cut at limit or at the raw read, and the returned text then ends in the mark of the cut, or in what a rule made
+// of it. A caller that must not show part of a text as if it were all of it reads whole, never the end of the text.
+func FreeTextCutWhole(s string, limit int) (text string, whole bool) {
+	return freeTextCut(s, limit, false)
+}
+
+// FreeTextCutLineWhole is FreeTextCutLine that also says whether none of s was cut (FreeTextCutWhole).
+func FreeTextCutLineWhole(s string, limit int) (text string, whole bool) {
+	return freeTextCut(s, limit, true)
+}
 
 // cutRawFactor is how many times limit bytes of a text FreeTextCut reads as it came: the text left after deleting the
 // invisible characters is usually the shorter, and a window's worth of it is what the caller can show.
 const cutRawFactor = 4
 
-func freeTextCut(s string, limit int, line bool) string {
+func freeTextCut(s string, limit int, line bool) (string, bool) {
 	limit = max(limit, 0)
 	s, cut := capAt(s, rawLimit(limit))
 	s = Normalize(rawSecrets(s))
@@ -276,9 +291,9 @@ func freeTextCut(s string, limit int, line bool) string {
 	}
 	s = match(s, line)
 	if cut {
-		return dropTail(s) + Truncated
+		return dropTail(s) + Truncated, false
 	}
-	return s
+	return s, true
 }
 
 // rawLimit is cutRawFactor times limit, without overflowing.
@@ -379,13 +394,17 @@ var freeSteps = []freeStep{
 // (a text over rawCap is cut and marked); the caller caps an identifier after it is redacted, so that no
 // token is cut short of its pattern. Like FreeText, it runs the token layer on
 // the text as it came as well, before the invisible characters are deleted.
-func IdentifierText(s string) string {
+func IdentifierText(s string) string { text, _ := IdentifierTextWhole(s); return text }
+
+// IdentifierTextWhole is IdentifierText that also says whether none of s was cut (FreeTextWhole): whole is false for a text over
+// what the token layer reads, which ends in the mark of the cut however short it is once normalized.
+func IdentifierTextWhole(s string) (text string, whole bool) {
 	s, cut := capRaw(s)
 	s = secrets(joinLines(Normalize(rawSecrets(s))))
 	if cut {
 		s += Truncated
 	}
-	return s
+	return s, !cut
 }
 
 // valueRule is how redactNamed reads what follows a name.

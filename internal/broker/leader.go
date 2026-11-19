@@ -55,14 +55,15 @@ type leaderHalf struct {
 // lines of a connection do ("connection", "namespace/name"), so that the lines of the Socket Mode connection of two connections can be told apart.
 // A Microsoft Teams platform keeps what it learns of its channels, and where its poll of each stands, in the broker's store, whose writes
 // are the leader's alone (on Postgres a write of a replica that no longer leads is store.ErrDeposed, and ends the process, spec D37).
-func (h *leaderHalf) openPlatform(conn Connection, onConnection func(connected bool)) (builtPlatform, error) {
+// ctx holds the broker's instruments, which a platform that counts its own requests (the webhook platform) records on.
+func (h *leaderHalf) openPlatform(ctx context.Context, conn Connection, onConnection func(connected bool)) (builtPlatform, error) {
 	log := h.log.With("connection", v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name))
 	var convs teams.ConversationStore
 	var positions teams.PollPositions
 	if h.st != nil {
 		convs, positions = newTeamsConversations(h.st), newTeamsPollPositions(h.st)
 	}
-	p, err := h.cfg.newPlatform(conn, log, onConnection, convs, positions)
+	p, err := h.cfg.newPlatform(ctx, conn, log, onConnection, convs, positions)
 	if err != nil {
 		return builtPlatform{}, err
 	}

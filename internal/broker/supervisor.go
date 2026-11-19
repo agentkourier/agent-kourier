@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"maps"
+	"reflect"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -531,9 +532,11 @@ func (s *supervisor) publish(desired []TeamConnection) {
 	}
 }
 
-// sameConnections says whether a and b list the same connections with the same credentials, in the same order.
+// sameConnections says whether a and b list the same connections with the same credentials, and the same spec.webhook for a webhook
+// connection, in the same order: a team webhook connection restarted on an edit of its spec.webhook alone is a change of the list too.
 func sameConnections(a, b []Connection) bool {
 	return slices.EqualFunc(a, b, func(x, y Connection) bool {
-		return x.Ref == y.Ref && x.Platform == y.Platform && maps.EqualFunc(x.Credentials, y.Credentials, func(p, q secret.Value) bool { return p.Reveal() == q.Reveal() })
+		return x.Ref == y.Ref && x.Platform == y.Platform && x.Secret == y.Secret && reflect.DeepEqual(x.Webhook, y.Webhook) &&
+			maps.EqualFunc(x.Credentials, y.Credentials, func(p, q secret.Value) bool { return p.Reveal() == q.Reveal() })
 	})
 }

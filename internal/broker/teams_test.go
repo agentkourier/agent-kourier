@@ -102,7 +102,7 @@ func TestNewPlatformBuildsTheTeamsAdapter(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = ln.Close() })
 	cfg := RunConfig{ChatListener: ln}
-	built, err := cfg.newPlatform(teamsConn("team-a", "teams"), nil, nil, teams.NewMemoryConversations(), nil)
+	built, err := cfg.newPlatform(t.Context(), teamsConn("team-a", "teams"), nil, nil, teams.NewMemoryConversations(), nil)
 	if err != nil || built.Platform == nil || built.closeIdle == nil {
 		t.Fatalf("newPlatform(teams, nil) = %+v, %v; want the Teams adapter, and a way to close its connections", built, err)
 	}
@@ -117,7 +117,7 @@ func TestNewPlatformBuildsTheTeamsAdapter(t *testing.T) {
 	}
 
 	var none RunConfig
-	if _, err := none.newPlatform(teamsConn("team-a", "teams"), nil, nil, teams.NewMemoryConversations(), nil); !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), "AGENTKOURIER_CHAT_LISTEN") {
+	if _, err := none.newPlatform(t.Context(), teamsConn("team-a", "teams"), nil, nil, teams.NewMemoryConversations(), nil); !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), "AGENTKOURIER_CHAT_LISTEN") {
 		t.Errorf("a teams connection on a broker with no chat listener: %v; want a wiring error that names AGENTKOURIER_CHAT_LISTEN", err)
 	}
 	if err := none.needsChatListener(teamsConn("team-a", "teams")); !errors.Is(err, ErrWiring) {
@@ -129,7 +129,7 @@ func TestNewPlatformBuildsTheTeamsAdapter(t *testing.T) {
 	if err := none.needsChatListener(socket); err != nil {
 		t.Errorf("needsChatListener(teams in socket mode) with no chat listener = %v; want none", err)
 	}
-	built, err = none.newPlatform(socket, nil, nil, teams.NewMemoryConversations(), nil)
+	built, err = none.newPlatform(t.Context(), socket, nil, nil, teams.NewMemoryConversations(), nil)
 	if err != nil {
 		t.Fatalf("newPlatform(teams in socket mode, nil) with no chat listener = %v; want the adapter", err)
 	}
@@ -143,7 +143,7 @@ func TestNewPlatformBuildsTheTeamsAdapter(t *testing.T) {
 	if err := none.needsChatListener(notified); !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), "notificationURL") {
 		t.Errorf("needsChatListener(teams in socket mode with a notificationURL) with no chat listener = %v; want a wiring error that names the notificationURL", err)
 	}
-	built, err = cfg.newPlatform(notified, nil, nil, teams.NewMemoryConversations(), nil)
+	built, err = cfg.newPlatform(t.Context(), notified, nil, nil, teams.NewMemoryConversations(), nil)
 	if err != nil {
 		t.Fatalf("newPlatform(teams in socket mode with a notificationURL, nil) = %v; want the adapter", err)
 	}
@@ -157,11 +157,11 @@ func TestNewPlatformBuildsTheTeamsAdapter(t *testing.T) {
 	} {
 		c := teamsConn("team-a", "teams")
 		edit(&c)
-		if built, err := cfg.newPlatform(c, nil, nil, teams.NewMemoryConversations(), nil); !errors.Is(err, ErrWiring) || built.Platform != nil {
+		if built, err := cfg.newPlatform(t.Context(), c, nil, nil, teams.NewMemoryConversations(), nil); !errors.Is(err, ErrWiring) || built.Platform != nil {
 			t.Errorf("%s: newPlatform = %+v, %v; want a wiring error and no platform", name, built, err)
 		}
 	}
-	if built, err := cfg.newPlatform(teamsConn("team-a", "teams"), nil, nil, nil, nil); !errors.Is(err, ErrWiring) || built.Platform != nil {
+	if built, err := cfg.newPlatform(t.Context(), teamsConn("team-a", "teams"), nil, nil, nil, nil); !errors.Is(err, ErrWiring) || built.Platform != nil {
 		t.Errorf("no conversation store: newPlatform = %+v, %v; want a wiring error and no platform, not one that forgets its channels at a restart", built, err)
 	}
 }
@@ -291,7 +291,7 @@ func TestOpenPlatformKeepsTheTeamsConversationsInTheStore(t *testing.T) {
 	h := &leaderHalf{log: testutil.DiscardLogger(), st: st, cfg: RunConfig{ChatListener: ln, teamsFakes: func(tc *teams.Config) {
 		tc.TokenURL, tc.HTTPClient = "https://login.example.test/token", &http.Client{Transport: calls}
 	}}}
-	built, err := h.openPlatform(teamsConn("team-a", "teams"), nil)
+	built, err := h.openPlatform(t.Context(), teamsConn("team-a", "teams"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +320,7 @@ func TestOpenPlatformKeepsTheTeamsPollPositionsInTheStore(t *testing.T) {
 	h := &leaderHalf{log: testutil.DiscardLogger(), st: st, cfg: RunConfig{ChatListener: ln, teamsFakes: func(tc *teams.Config) {
 		positions = tc.Positions
 	}}}
-	if _, err := h.openPlatform(teamsConn("team-a", "teams"), nil); err != nil {
+	if _, err := h.openPlatform(t.Context(), teamsConn("team-a", "teams"), nil); err != nil {
 		t.Fatal(err)
 	}
 	if positions == nil {
@@ -372,7 +372,7 @@ func TestAGraphRefusalLeavesTheTeamsConnectionUp(t *testing.T) {
 				t.Fatal(err)
 			}
 			h := &leaderHalf{log: testutil.DiscardLogger(), st: st, cfg: RunConfig{ChatListener: ln, teamsFakes: ms.point}}
-			built, err := h.openPlatform(teamsConn("team-a", "teams"), nil)
+			built, err := h.openPlatform(t.Context(), teamsConn("team-a", "teams"), nil)
 			if err != nil {
 				t.Fatal(err)
 			}

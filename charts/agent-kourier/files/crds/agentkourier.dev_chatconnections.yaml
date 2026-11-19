@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    agentkourier.dev/schema-sha256: 99c9f86b0f1c6e071f9e5fe4e09197c96daebb391c46cd1e0eb20a8476d42133
+    agentkourier.dev/schema-sha256: 9b9896775ed4e21982b091c242b78ee35dbdda126d4a207872241ac0d0bc9c84
     controller-gen.kubebuilder.io/version: v0.23.0
   name: chatconnections.agentkourier.dev
 spec:
@@ -82,11 +82,11 @@ spec:
               platform:
                 description: |-
                   Platform is the chat platform: slack; teams, Microsoft Teams; or webhook, which takes signed JSON webhooks from a service such
-                  as a code host or an issue tracker (spec.webhook) and posts nothing there: the agent posts on the service with its own tools. A
-                  broker runs a teams connection in http or socket mode (spec.teams.mode). One in http mode, or with a spec.teams.notificationURL
-                  in either mode, needs the broker's chat listener: on a broker with none, the broker's own connection stops its start, and a team
-                  one is not started. The broker does not run a webhook connection yet: it refuses one as a wiring error, so that one as the
-                  broker's own stops its start, and a team's is not started.
+                  as a code host or an issue tracker (spec.webhook). The broker takes a webhook connection's webhooks on its chat listener
+                  (AGENTKOURIER_CHAT_LISTEN) at POST /chat/webhook/<namespace>/<name>, and posts nothing there: the agent posts on the service
+                  with its own tools. A broker runs a teams connection in http or socket mode (spec.teams.mode). A webhook connection, and a teams
+                  one in http mode or with a spec.teams.notificationURL in either mode, need the broker's chat listener: on a broker with none,
+                  the broker's own connection fails its start, and a team's is not started.
                 enum:
                 - slack
                 - teams

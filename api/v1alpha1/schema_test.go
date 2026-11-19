@@ -399,7 +399,7 @@ func TestSchemaCapsEqualTheBrokersCaps(t *testing.T) {
 		{"header value", backends.at(t, "spec.headers[].value"), "maxLength", maxHeaderValueLen},
 		// The field's cap is both a chat platform's channel's (maxChannelIDLen, Microsoft Teams') and a webhook channel's.
 		{"channel", bindings.at(t, "spec.chat.channel"), "maxLength", maxChannelIDLen},
-		{"webhook channel", bindings.at(t, "spec.chat.channel"), "maxLength", maxWebhookChannelLen},
+		{"webhook channel", bindings.at(t, "spec.chat.channel"), "maxLength", MaxWebhookChannelLen},
 		{"sender ID", bindings.at(t, trigger+".from.id"), "maxLength", maxSenderIDLen},
 		{"approver group", bindings.at(t, "spec.interactions.approverGroups[]"), "maxLength", maxApproverGroupIDLen},
 		{"teams notification url", connections.at(t, "spec.teams.notificationURL"), "maxLength", maxURLLen},
@@ -432,7 +432,7 @@ func TestSchemaCapsEqualTheBrokersCaps(t *testing.T) {
 		{"webhook timestamp pointer", connections.at(t, "spec.webhook.verify.timestamp.from"), "maxLength", MaxWebhookPointerLen},
 		{"webhook channel pointers", connections.at(t, "spec.webhook.channel.from"), "maxItems", MaxWebhookFrom},
 		{"webhook channel pointer", connections.at(t, "spec.webhook.channel.from[]"), "maxLength", MaxWebhookPointerLen},
-		{"webhook channel value", connections.at(t, "spec.webhook.channel.value"), "maxLength", maxWebhookChannelLen},
+		{"webhook channel value", connections.at(t, "spec.webhook.channel.value"), "maxLength", MaxWebhookChannelLen},
 		{"webhook actor pointers", connections.at(t, "spec.webhook.actor.from"), "maxItems", MaxWebhookFrom},
 		{"webhook actor pointer", connections.at(t, "spec.webhook.actor.from[]"), "maxLength", MaxWebhookPointerLen},
 		{"webhook thread field", connections.at(t, "spec.webhook.thread.field"), "maxLength", maxWebhookFieldNameLen},

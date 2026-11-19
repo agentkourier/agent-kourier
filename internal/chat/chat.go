@@ -1,6 +1,6 @@
 // Package chat is Agent Kourier's chat-neutral model: what a conversation platform has to be for Agent Kourier to
-// run on it. A platform is one implementation of Platform, in its own package: Slack and Microsoft Teams, which the broker
-// runs, and the webhook platform, which it does not run yet. No session, interact, render, outbox or store code names
+// run on it. A platform is one implementation of Platform, in its own package: Slack, Microsoft Teams and the webhook
+// platform, all of which the broker runs. No session, interact, render, outbox or store code names
 // one (spec 13: adding a platform requires implementing one interface).
 //
 // # The security contract (spec 8.4, R2)

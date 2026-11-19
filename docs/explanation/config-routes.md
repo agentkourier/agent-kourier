@@ -19,6 +19,11 @@ supported. [Move the config between a ConfigMap and custom resources](../how-to/
 | Unknown fields | The loader refuses the file | The API server refuses them at apply, or drops them; the broker ignores one its own types lack (see below) |
 | A change is read | At the next check of the files, every 10 seconds, and the chart rolls the pod when its ConfigMap changes | At the next check, every 10 seconds |
 
+A change that is read is not always applied then. The broker builds the platform of its own ChatConnection when it starts and when a
+replica takes the lead, so an edit to a webhook connection's `spec.webhook` applies, for the own connection, when Agent Kourier
+restarts: on files that is the chart's roll (unless `config.existingConfigMap` is set or `config.rollOnChange` is `false`), and on
+custom resources a restart of the Deployment. A team connection restarts by itself when its ChatConnection changes.
+
 The two are never merged and there is no fallback. A broker on `files` ignores any custom resources in the cluster, and a broker on
 `crds` has no config directory. The route is chosen at start: a reload cannot change it, so moving is an upgrade of the release.
 

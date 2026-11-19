@@ -147,7 +147,7 @@ func newSupWorldWith(t *testing.T, withOwn bool) *supWorld {
 	w.host = &runtimeHost{
 		cfg: RunConfig{transportClosed: func(conn string) { w.mu.Lock(); w.closed = append(w.closed, conn); w.mu.Unlock() }},
 		log: log, metrics: newTestMetrics(t), table: w.table, parent: t.Context(),
-		open: func(c Connection, onConn func(bool)) (builtPlatform, error) {
+		open: func(_ context.Context, c Connection, onConn func(bool)) (builtPlatform, error) {
 			f := &fakeConn{token: c.Credentials["botToken"].Reveal(), keys: slices.Sorted(maps.Keys(c.Credentials)), mode: c.Teams.Mode, live: &w.live, reject: make(chan struct{}), onConn: onConn, errs: map[string]error{}, calls: map[string]int{}}
 			w.mu.Lock()
 			defer w.mu.Unlock()

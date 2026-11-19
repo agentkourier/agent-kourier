@@ -38,6 +38,7 @@ type hostileTarget struct {
 	maxUnits int
 	elements []string // every element the block writes
 	many     bool     // the block has more than one item, so an element is written more than once
+	whole    bool     // the block cuts no field: one over its cap is left out whole (wholePolicy)
 	places   []hostilePlace
 	build    func(t *testing.T, texts []string) string
 }
@@ -143,7 +144,7 @@ func moduleTarget(oldest bool) hostileTarget {
 }
 
 func hostileTargets() []hostileTarget {
-	return []hostileTarget{alertTarget(), threadTarget(), moduleTarget(true), moduleTarget(false)}
+	return []hostileTarget{alertTarget(), threadTarget(), webhookTarget(), moduleTarget(true), moduleTarget(false)}
 }
 
 // fill returns a text for every place of tg: s in the places chosen, "" in the others.
@@ -374,7 +375,7 @@ func TestUntrustedBlockTakesTheSplitSecretCorpusOutOfEveryKind(t *testing.T) {
 }
 
 // A place shows at most its cap, whole at exactly the cap and cut, with the mark, one unit over it, as escaped text
-// and by UTF-16 units.
+// and by UTF-16 units. In a block that cuts no field, a text one unit over is left out whole, escaped or not.
 func TestUntrustedBlockCapsEachPlaceAtItsUnit(t *testing.T) {
 	t.Parallel()
 	for _, tg := range hostileTargets() {
@@ -384,6 +385,18 @@ func TestUntrustedBlockCapsEachPlaceAtItsUnit(t *testing.T) {
 				whole := strings.Repeat("a", p.cap)
 				if got := elemText(tg.build(t, tg.fill(whole, i)), p.elem); got != whole {
 					t.Errorf("%s: a text of exactly %d units shows as %d units, want it whole", p.name, p.cap, chat.Units(got))
+				}
+				if tg.whole {
+					astral := strings.Repeat("\U0001F600", p.cap/2)
+					if got := elemText(tg.build(t, tg.fill(astral, i)), p.elem); got != astral {
+						t.Errorf("%s: %d units of astral runes are not whole", p.name, p.cap)
+					}
+					for _, over := range []string{whole + "a", strings.Repeat("<&", p.cap/4+1), astral + "\U0001F600"} {
+						if got := tg.build(t, tg.fill(over, i)); strings.Contains(got, "<"+p.elem+">") || strings.Contains(got, chat.Truncated) {
+							t.Errorf("%s: a text of %d units over its cap is shown, or cut; want it left out whole", p.name, chat.Units(escapeCut(over, 1<<30))-p.cap)
+						}
+					}
+					continue
 				}
 				cut := elemText(tg.build(t, tg.fill(whole+"a", i)), p.elem)
 				if want := whole[:p.cap-chat.Units(chat.Truncated)] + chat.Truncated; cut != want {

@@ -39,6 +39,10 @@ import (
 // (checkAcross) refuses an object other than a ChatConnection that two recipes share, and a channel that two Bindings
 // name. A new recipe that ships a different ChatConnection of its platform, reuses a name or reuses a channel
 // placeholder fails it.
+//
+// A webhook recipe ships a ChatConnection of its own (spec.platform webhook), which is the point of it: one connection for each
+// service that signs its webhooks. It is applied alone, so it is checked alone, and has the broker choose its one ChatConnection;
+// it takes no part in the first pass.
 func TestRecipesApplyTogether(t *testing.T) {
 	recipes, err := recipeDirs(recipesDir)
 	if err != nil {
@@ -60,29 +64,37 @@ func TestRecipesApplyTogether(t *testing.T) {
 	}
 }
 
-// everyPlatform is the name, in checkAll's results, of the pass of checkAcross over the recipes of every platform.
+// everyPlatform is the name, in checkAll's results, of the pass of checkAcross over the recipes of every platform but the
+// webhook platform, whose recipes are each applied alone.
 const everyPlatform = "every platform"
 
 // checkAll runs over the recipes at dirs the checks of TestRecipesApplyTogether, and returns the error of each by its
-// name, nil for one that passed: checkAcross over all of them (everyPlatform), then checkTogether over the recipes of
-// each platform (the platform). A failure to group the recipes by platform is its error, with the result of the pass
-// over every platform.
+// name, nil for one that passed: checkAcross over all of them but the webhook recipes (everyPlatform), checkTogether over
+// the recipes of each other platform (the platform), and checkTogether over each webhook recipe alone (its directory's
+// name). A failure to group the recipes by platform is its error, with the result of the pass over every recipe.
 func checkAll(ctx context.Context, dirs []string) (map[string]error, error) {
-	results := map[string]error{everyPlatform: checkAcross(ctx, dirs)}
 	byPlatform, err := recipesByPlatform(ctx, dirs)
 	if err != nil {
-		return results, err
+		return map[string]error{everyPlatform: checkAcross(ctx, dirs)}, err
 	}
+	alone := byPlatform[v1alpha1.PlatformWebhook]
+	delete(byPlatform, v1alpha1.PlatformWebhook)
+	shared := slices.DeleteFunc(slices.Clone(dirs), func(dir string) bool { return slices.Contains(alone, dir) })
+	results := map[string]error{everyPlatform: checkAcross(ctx, shared)}
 	for platform, group := range byPlatform {
 		results[platform] = checkTogether(ctx, group)
+	}
+	for _, dir := range alone {
+		results[filepath.Base(dir)] = checkTogether(ctx, []string{dir})
 	}
 	return results, nil
 }
 
 // TestCheckAll runs the checks of TestRecipesApplyTogether on recipes built here, so that each check must run for the test
 // to pass: a Slack recipe and a Teams recipe that ship one AgentBackend, which each platform's check passes and only the
-// pass over every platform refuses; and a second Slack recipe whose ChatConnection is of another name, which only the
-// check of the Slack recipes refuses.
+// pass over every platform refuses; a second Slack recipe whose ChatConnection is of another name, which only the
+// check of the Slack recipes refuses; and two webhook recipes, each with a ChatConnection of its own, that ship that
+// AgentBackend and name one channel, which are each checked alone and pass, and which the pass over every platform leaves out.
 func TestCheckAll(t *testing.T) {
 	const teamsSpec = "platform: teams, teams: { tenantID: 11111111-1111-4111-8111-111111111111, appID: 22222222-2222-4222-8222-222222222222 }"
 	recipe := func(name, backend, connection, spec, channel string) map[string]string {
@@ -107,12 +119,25 @@ spec:
 `, name, backend, connection, channel),
 		}
 	}
+	// webhookRecipe is a webhook recipe whose ChatConnection is its own, named name, on the channel OPS.
+	webhookRecipe := func(name string) map[string]string {
+		files := recipe(name, "agents", name, "platform: webhook", "OPS")
+		files["c.yaml"] = strings.Replace(files["c.yaml"], "credentialsSecretRef: { name: "+name+" } }",
+			"credentialsSecretRef: { name: "+name+" }, webhook: { identity: agent, verify: { scheme: hmac-sha256, header: X-Signature },"+
+				" channel: { value: OPS }, actor: { from: [/sender] }, fields: [{ name: action, from: [/action], kind: id }] } }", 1)
+		files["x.yaml"] = strings.Replace(files["x.yaml"], `channel: "OPS" }`,
+			`channel: "OPS", output: none, triggers: [{ type: webhookEvent, match: { action: "." }, promptTemplate: "Read the event.",`+
+				` limits: { rateLimit: { maxRuns: 1, per: 1h, maxConcurrent: 1 }, maxRunsPerDay: 1 } }] }`, 1)
+		return files
+	}
 	root := t.TempDir()
 	var dirs []string
 	for name, files := range map[string]map[string]string{
 		"a": recipe("a", "agents", "chat", "platform: slack", "CAAAAAAAA"),
 		"b": recipe("b", "agents", "chat", teamsSpec, "19:recipe-channel@thread.tacv2"),
 		"c": recipe("c", "c-agents", "chat2", "platform: slack", "CCCCCCCCC"),
+		"d": webhookRecipe("d"),
+		"e": webhookRecipe("e"),
 	} {
 		dir := filepath.Join(root, name)
 		dirs = append(dirs, dir)
@@ -129,18 +154,23 @@ spec:
 	if err != nil {
 		t.Fatalf("checkAll: %v", err)
 	}
-	if got, want := slices.Sorted(maps.Keys(results)), []string{everyPlatform, "slack", "teams"}; !slices.Equal(got, want) {
+	if got, want := slices.Sorted(maps.Keys(results)), []string{"d", "e", everyPlatform, "slack", "teams"}; !slices.Equal(got, want) {
 		t.Fatalf("checkAll ran %q, want %q", got, want)
 	}
 	if err := results[everyPlatform]; err == nil || !strings.Contains(err.Error(), "recipe b: AgentBackend recipe/agents is in recipe a too") ||
-		strings.Contains(err.Error(), "recipe c") {
-		t.Errorf("check %q = %v, want the AgentBackend that recipes a and b ship refused, and nothing of recipe c", everyPlatform, err)
+		strings.Contains(err.Error(), "recipe c") || strings.Contains(err.Error(), "recipe d") || strings.Contains(err.Error(), "recipe e") {
+		t.Errorf("check %q = %v, want the AgentBackend that recipes a and b ship refused, and nothing of recipes c, d and e", everyPlatform, err)
 	}
 	if err := results["slack"]; err == nil || !strings.Contains(err.Error(), "exactly one ChatConnection") {
 		t.Errorf("check %q = %v, want the two ChatConnections of the Slack recipes refused", "slack", err)
 	}
 	if err := results["teams"]; err != nil {
 		t.Errorf("check %q = %v, want the Teams recipe to apply", "teams", err)
+	}
+	for _, name := range []string{"d", "e"} {
+		if err := results[name]; err != nil {
+			t.Errorf("check %q = %v, want the webhook recipe to apply alone", name, err)
+		}
 	}
 }
 

@@ -89,7 +89,7 @@ func TestWebhookConnectionValidate(t *testing.T) {
 		{"a channel from neither", hook(func(w *WebhookSpec) { w.Channel = WebhookChannel{} }), at + ".channel: set from or value, and not both"},
 		{"a fixed channel with a colon", hook(func(w *WebhookSpec) { w.Channel = WebhookChannel{Value: "a:b"} }),
 			at + `.channel.value: invalid channel "a:b": letters, digits, '.', '_' and '-', starting with a letter or a digit, with '/' between parts`},
-		{"a fixed channel over the cap", hook(func(w *WebhookSpec) { w.Channel = WebhookChannel{Value: strings.Repeat("a", maxWebhookChannelLen+1)} }),
+		{"a fixed channel over the cap", hook(func(w *WebhookSpec) { w.Channel = WebhookChannel{Value: strings.Repeat("a", MaxWebhookChannelLen+1)} }),
 			at + ".channel.value: is 141 bytes, longer than the 140 byte limit"},
 		{"a pointer without its slash", hook(func(w *WebhookSpec) { w.Channel.From = []string{"repository/full_name"} }),
 			at + ".channel.from[0]: must be a JSON Pointer that is not the root, at most 256 bytes"},
@@ -266,8 +266,8 @@ func TestWebhookBindingChannelAndOutput(t *testing.T) {
 	runMutations[Binding](t, "webhook/binding.yaml", []mutation[Binding]{
 		{"a project key ok", func(o *Binding) { o.Spec.Chat.Channel = "OPS" }, ""},
 		{"a Slack channel ID ok", func(o *Binding) { o.Spec.Chat.Channel = "C0123456789" }, ""},
-		{"a channel at the webhook cap ok", func(o *Binding) { o.Spec.Chat.Channel = strings.Repeat("a", maxWebhookChannelLen) }, ""},
-		{"a channel over the webhook cap", func(o *Binding) { o.Spec.Chat.Channel = strings.Repeat("a", maxWebhookChannelLen+1) },
+		{"a channel at the webhook cap ok", func(o *Binding) { o.Spec.Chat.Channel = strings.Repeat("a", MaxWebhookChannelLen) }, ""},
+		{"a channel over the webhook cap", func(o *Binding) { o.Spec.Chat.Channel = strings.Repeat("a", MaxWebhookChannelLen+1) },
 			"spec.chat.channel: is 141 bytes, longer than the 140 byte limit"},
 		{"a channel with a colon", func(o *Binding) { o.Spec.Chat.Channel = "a:b" },
 			`spec.chat.channel: invalid channel "a:b": letters, digits, '.', '_' and '-', starting with a letter or a digit, with '/' between parts`},
@@ -325,7 +325,7 @@ func TestTheWebhookPlatform(t *testing.T) {
 		want bool
 	}{
 		{"acme/widgets", true}, {"OPS", true}, {"C0123456789", true}, {"a.b_c-d/e", true}, {"0", true},
-		{strings.Repeat("a", maxWebhookChannelLen), true}, {strings.Repeat("a", maxWebhookChannelLen+1), false},
+		{strings.Repeat("a", MaxWebhookChannelLen), true}, {strings.Repeat("a", MaxWebhookChannelLen+1), false},
 		{"", false}, {"/acme", false}, {"acme/", false}, {"acme//w", false}, {"-acme", false}, {"a:b", false}, {"a b", false}, {"é", false},
 	} {
 		if got := p.Channel.Matches(tc.in); got != tc.want {
