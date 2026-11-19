@@ -423,3 +423,22 @@ func TestTheTeamsRouteIsAnsweredBeforeTeamsGivesUpOnAnInvoke(t *testing.T) {
 			bound, teamsClientShows, teamsNetworkMargin)
 	}
 }
+
+// The list of connections the verification goes by changes when a Microsoft Teams connection's spec.teams does, so that a team connection
+// restarted on an edit of its spec.teams alone is a change of the list, and not when nothing does.
+func TestSameConnectionsComparesTheTeamsSpec(t *testing.T) {
+	a := []Connection{teamsConn("team-a", "teams")}
+	if !sameConnections(a, []Connection{teamsConn("team-a", "teams")}) {
+		t.Error("two lists of one connection with equal specs are not the same")
+	}
+	for name, edit := range map[string]func(*v1alpha1.TeamsConnectionSpec){
+		"appID": func(s *v1alpha1.TeamsConnectionSpec) { s.AppID = "33333333-4444-4555-8666-777777777777" },
+		"mode":  func(s *v1alpha1.TeamsConnectionSpec) { s.Mode = v1alpha1.TeamsModeSocket },
+	} {
+		edited := []Connection{teamsConn("team-a", "teams")}
+		edit(&edited[0].Teams)
+		if sameConnections(a, edited) {
+			t.Errorf("a list whose connection's spec.teams.%s was edited is the same", name)
+		}
+	}
+}
