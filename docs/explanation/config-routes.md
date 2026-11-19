@@ -20,7 +20,7 @@ supported. [Move the config between a ConfigMap and custom resources](../how-to/
 | A change is read | At the next check of the files, every 10 seconds, and the chart rolls the pod when its ConfigMap changes | At the next check, every 10 seconds |
 
 A change that is read is not always applied then. The broker builds the platform of its own ChatConnection when it starts and when a
-replica takes the lead, so an edit to a webhook connection's `spec.webhook` applies, for the own connection, when Agent Kourier
+replica takes the lead, so an edit to that connection's `spec.teams` or `spec.webhook` applies when Agent Kourier
 restarts: on files that is the chart's roll (unless `config.existingConfigMap` is set or `config.rollOnChange` is `false`), and on
 custom resources a restart of the Deployment. A team connection restarts by itself when its ChatConnection changes.
 
