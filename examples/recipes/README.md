@@ -61,8 +61,9 @@ name in `docs-agent`, the whole `agent.yaml` in `prompt-agent`); each recipe's "
 ## Applying several recipes
 
 Each recipe installs the chart with `config.chatConnection` set (`agent-kourier/slack`, or `agent-kourier/teams` for
-`prompt-agent-teams`) and neither `config.connectionNamespaces` nor `config.connectionNamespaceSelector`, so its broker
-serves that one ChatConnection, with the Bindings whose `connectionRef` names it. To run more than one recipe on one broker, apply each recipe's `kourier/` directory. Then:
+`prompt-agent-teams`) and neither `config.connectionNamespaces` nor `config.connectionNamespaceSelector`, so its
+broker serves that one ChatConnection, with the Bindings whose `connectionRef` names it. To run more than one recipe
+on one broker, apply each recipe's `kourier/` directory. Then:
 
 - **One platform.** A ChatConnection is on one platform, so a broker runs the Slack recipes or `prompt-agent-teams`,
   whose ChatConnection is `teams` in the namespace `agent-kourier`, not both. To run both in one cluster, install the
