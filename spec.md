@@ -564,8 +564,9 @@ Rules:
   production and calls Socket mode a public preview (Microsoft's "Connect an agent without the SDK" page, read 2026-11-17): in `http` Teams
   sends activities to `POST /chat/teams/<namespace>/<name>` on the chat listener, and in `socket` the broker opens an outbound WebSocket
   and needs no public endpoint. `notificationURL` is optional in either mode, an `https` URL (Microsoft Graph's subscription resource
-  requires https) whose path must be the connection's own route, `/chat/teams/<namespace>/<name>`; set, alerts are to arrive by Graph
-  change notifications, unset by polling Graph. A Binding of a teams connection takes questions, tool approvals, feedback and
+  requires https) whose path must be the connection's own route, `/chat/teams/<namespace>/<name>`; set, alerts arrive by Graph
+  change notifications (TEAMS-7, below), and unset, no other app's post reaches the connection (polling Graph instead is TEAMS-7P, not
+  built). A Binding of a teams connection takes questions, tool approvals, feedback and
   `botMessage` triggers in either mode, and is refused `approverGroups` (`UnsupportedOnPlatform`). The chat IDs of a Binding are held, by
   the schema and `Validate`, to the union of Slack's and Teams' shapes (a channel `19:…@thread.tacv2` or `@thread.skype`; a sender, the
   posting app's Microsoft Entra application ID; a mention's user, the person's Microsoft Entra object ID), with the union's caps: 140
@@ -637,6 +638,31 @@ Rules:
   thread read must not stop the connection: Graph's 404 is ChannelGone; its 401, 403 and 400, and Entra's refusal of the Graph token
   alone (a scope or a consent), are Permanent (the 403's error names the permission and the install); a 429 is Transient with its
   Retry-After (at least a second), and a 5xx Transient. A wrong or revoked client secret is still FatalAuth, through the bot's token.
+  Alerts reach a teams connection through Graph change notifications when `notificationURL` is set (TEAMS-7, built 2026-11-18): Teams
+  sends a bot no other app's post, Workflows' among them, and Graph tells of every post. The URL needs the chat listener in either mode
+  (`needsChatListener`), and the connection's route serves Graph's requests in both: in `http` mode before the Receiver, which takes
+  the rest, and in `socket` mode alone, anything else 400. Graph's requests are told apart without a token, since Graph sends none: the
+  validation handshake by its `validationToken` query (200, the token decoded, `text/plain`, whether or not the run is up), and a body
+  of notifications by its shape (`{"value":[…]}` with no `type`, which every activity has), capped at 256 KiB. The leader, while it
+  runs the connection, keeps one subscription per bound channel (`chat.ChannelLister`: the channels of the Bindings that name the
+  connection) on `/teams/{group}/channels/{channel}/messages`, `created,updated`, `includeResourceData` false, the notification and
+  the lifecycle URL both `notificationURL` (Microsoft documents that they may be the same; the lifecycle body has `lifecycleEvent`),
+  24 h, renewed within 12 h of its expiry, each call cut at 30 s (create 8.0 s and renew 7.1 s measured, the handshake's time), compared
+  with the Bindings every minute. A channel whose `aadGroupId` the store does not hold waits, logged once at WARN with the fix and
+  counted. At the start of each run the app's subscriptions are listed: those to the connection's URL with its lifecycle URL, change
+  types, a bound channel and a future expiry are adopted (one per channel), the rest to that URL deleted, and those to other URLs left;
+  a 409 on a create lists again. The `clientState` is HKDF-SHA256 of the client secret under `agent-kourier/teams/graph-client-state/v1`
+  and the connection, the same on every replica and across a failover (a listing gives it back as null, so it cannot be read again),
+  compared in constant time; a mismatch is dropped, counted, and remakes the subscription it names (a secret's rotation). Each `created`
+  is answered 202 and put on its channel's lane, where its message is read (`GET …/messages/{id}`, or `…/messages/{root}/replies/{id}`)
+  and decoded as a thread's message is (historyOf): Own and Ignored (a system event's `unknownFutureValue`, a deleted message) are
+  dropped, another app's post is a bot's message handed on only if the sink's BotFilter (BotMentionFilter for a mention) takes it,
+  and a person's is the person's; `updated` and `deleted` are dropped. A message is deduplicated with its activity by one key
+  (`message`, channel, ID) in the receiver's recent set: the Graph intake checks it before the read and claims it after, so a read that
+  fails takes nothing from the activity, and an activity that comes second still records its channel. Lifecycle: `reauthorizationRequired`
+  renews at once, `subscriptionRemoved` remakes, and `missed` is logged and told to `teams.Config.OnNotificationsMissed`, the seam of
+  the backfill (TEAMS-7P), not built. A notification that comes before the run, before the listing, or that its lane sheds is 503, for
+  Graph to send again; a read that fails after 3 tries (429, 5xx, timeout) is dropped and counted.
   Post carries its tag where people do not see it: `kourier` and the first 16 bytes of the tag's SHA-256 in hex, as an empty
   `<span title>` in a paragraph of its own at the end of a text (after the closing fence of a block; a zero-width tag at the start
   changed how Teams parsed the first line, and the span was measured only at the end), or as the `id` of the first element of a card's
