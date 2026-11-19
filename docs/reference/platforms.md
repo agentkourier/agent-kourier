@@ -5,7 +5,10 @@ platform, the shape of the chat IDs a Binding names, the trigger types and outpu
 the platform serves. The platforms are `slack` and `webhook`. The broker takes a `webhook` connection's deliveries on its chat
 listener (`AGENTKOURIER_CHAT_LISTEN`, the chart's `chatListener`) at `POST /chat/webhook/<namespace>/<name>`. A broker with no chat
 listener does not run one: as the broker's own connection it stops the start with a wiring error, and a team's connection is not
-started.
+started. The broker builds the platform of its own connection when it starts and when a replica takes the lead, so an edit to that
+connection's `spec.webhook` applies when Agent Kourier restarts; on the files route the chart rolls the pod when its ConfigMap
+changes, unless `config.existingConfigMap` is set or `config.rollOnChange` is `false`. A team connection restarts by itself when
+its ChatConnection changes.
 
 The API server and the broker's load hold each chat ID of a Binding to Slack's shape, but the channel of a Binding whose triggers
 are all `webhookEvent`, which they hold to a webhook channel's (see [Chat IDs](#chat-ids)). A Binding that names a channel's name

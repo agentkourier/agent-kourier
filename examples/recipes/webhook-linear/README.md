@@ -58,7 +58,9 @@ by whoever filed, edited or commented on it.
 - **An A2A agent that has Linear tools** using that key, and its URL. The AgentBackend's `url` is a placeholder
   (`REPLACE-ME`).
 - **The broker's clock within a minute of Linear's.** A delivery whose timestamp is further off either way is answered
-  `401`, with the reason `stale`.
+  `401`, with the reason `stale`. Whether Linear gives a delivery that it sends again a new `webhookTimestamp` is
+  not verified. If it does not, a delivery sent again more than a minute after the first is answered `401`
+  (`stale`) and never reaches a trigger.
 - **The chat listener reachable over HTTPS** from Linear: the chart's `chatListener.enabled: true`, and an Ingress
   (`chatListener.ingress`) or another way to reach the chat Service. A broker with no chat listener does not run a webhook
   connection: as its own connection it does not start, and as a team's connection it is not started.
@@ -102,7 +104,9 @@ kourier/
 
     The connection is then a team connection of the broker, served beside the broker's own connection if it has one. To
     make it the broker's own connection instead, set `config.chatConnection: acme-webhooks/linear` and
-    `config.chatConnectionSecret: linear-webhook`.
+    `config.chatConnectionSecret: linear-webhook`. The broker builds the platform of its own connection when it starts and
+    when a replica takes the lead, so an edit to that connection's `spec.webhook` applies when Agent Kourier restarts. A
+    team connection restarts by itself when its ChatConnection changes.
 4. Apply the resources:
 
     ```sh
@@ -135,7 +139,9 @@ kourier/
 - A plan and a revised plan: at most 10 of each start in any hour, 1 of each runs at once, and 30 of each start in a
   day. A reply: 20 an hour, 1 at once, 60 a day. A start that a limit stops is answered `200`, and no investigation
   begins. The broker logs it at WARN ("a webhook event was not investigated"), with its delivery ID: the event is lost
-  unless it is delivered again. A later delivery of it is decided again.
+  unless it is delivered again. A later delivery of it is decided again, if it still passes the one-minute window: whether
+  Linear sends it again with a new `webhookTimestamp` is not checked, and one sent again with the old timestamp more than a
+  minute later is answered `401` (`stale`) and never reaches a trigger.
 - A delivery that is not verified is answered `401`, and one that is not a JSON object `400`; both are counted on
   `agentkourier_webhook_requests_total` with the reason, and neither reaches a trigger. The other bounds of a delivery
   and of a webhook connection are in [Limits](../../../docs/reference/limits.md).

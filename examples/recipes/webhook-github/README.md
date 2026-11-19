@@ -98,7 +98,9 @@ kourier/
 
     The connection is then a team connection of the broker, served beside the broker's own connection if it has one. To
     make it the broker's own connection instead, set `config.chatConnection: acme-webhooks/github` and
-    `config.chatConnectionSecret: github-webhook`.
+    `config.chatConnectionSecret: github-webhook`. The broker builds the platform of its own connection when it starts and
+    when a replica takes the lead, so an edit to that connection's `spec.webhook` applies when Agent Kourier restarts. A
+    team connection restarts by itself when its ChatConnection changes.
 4. Apply the resources:
 
     ```sh
