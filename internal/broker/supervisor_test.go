@@ -942,6 +942,30 @@ func TestSupervisorNamesTheConfiguredConnectionsToTheChatListener(t *testing.T) 
 	if got := listenerSeries(t, m)[listenerKey{chatNoRoute, v1alpha1.PlatformSlack, unknownLabel}]; got != 2 {
 		t.Errorf("unknown counted %d, want 2: the refused connection's request and the removed one's", got)
 	}
+
+	// A pass that ends early names the connections all the same: one with no team connection to look at names the own connection, and one that
+	// cannot learn the own connection's identity, and so starts no team connection, names the team connections it is configured to serve.
+	t.Run("a pass with no team connection", func(t *testing.T) {
+		w := newSupWorld(t)
+		w.reconcile()
+		w.host.metrics.ChatListenerRequest(chatNoRoute, v1alpha1.PlatformSlack, ownName)
+		if _, ok := listenerSeries(t, w.host.metrics)[listenerKey{chatNoRoute, v1alpha1.PlatformSlack, ownName}]; !ok {
+			t.Errorf("after a pass with no team connection, a request to the own connection was not counted under its name: %v", listenerSeries(t, w.host.metrics))
+		}
+	})
+	t.Run("a pass that cannot learn the own identity", func(t *testing.T) {
+		w := newSupWorld(t)
+		w.idErr["own-token"] = mayPass("auth.test: timeout")
+		w.reconcile(team("team-a/slack", 1, "tok-a", 1))
+		if got := w.running(); !slices.Equal(got, []string{ownName}) {
+			t.Fatalf("running = %v; want no team connection started while the own identity is not known", got)
+		}
+		w.host.metrics.ChatListenerRequest(chatNoRoute, v1alpha1.PlatformSlack, "team-a/slack")
+		if _, ok := listenerSeries(t, w.host.metrics)[listenerKey{chatNoRoute, v1alpha1.PlatformSlack, "team-a/slack"}]; !ok {
+			t.Errorf("after a pass that ended on the own identity, a request to a configured team connection was not counted under its name: %v",
+				listenerSeries(t, w.host.metrics))
+		}
+	})
 }
 
 // A connection that restarts keeps the Slack app it held, and a refusal it was under, while the identity of its new tokens is being asked: a
