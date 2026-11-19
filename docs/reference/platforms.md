@@ -210,13 +210,23 @@ on a test tenant in November 2026, Graph made one under that permission alone. T
 every minute: a channel that a Binding names gets one, and one whose channel no Binding names any longer is deleted. Graph names a team by
 its Microsoft Entra group, which the broker learns from an activity of the channel: a channel whose group it does not know yet waits, which
 it logs once at WARN with the fix (install the app in the channel's team and mention the bot in the channel), and is subscribed at the first
-comparison after an activity has told it. A subscription is made to expire 24 hours later and renewed once it would expire within 12 hours.
+comparison after an activity has told it. A subscription is made to expire 24 hours later and renewed once it would expire within 12 hours,
+or within half the lifetime that Graph granted when it made or last renewed it, if Graph granted less than it was asked.
 Making or renewing one took about 8 seconds on a test tenant, while Microsoft Graph sent its validation request to the URL, which the broker
-answers with the token that Graph sent. At the start of each run the leader lists the app's subscriptions,
+answers with the token that Graph sent. At the start of each run the leader lists the app's subscriptions, even with no channel bound,
 keeps those to the connection's URL that it can, renewing any near its expiry, and deletes the others to that URL; a subscription to any
 other URL, another connection's or another broker's, is left as it is. When the leader stops, its subscriptions stay in Graph, which goes on
 sending to the URL, and the next leader takes them over. A call that fails is made again at the next comparison. The bounds are on
 [Limits](limits.md#run-the-broker).
+
+**Changing the `notificationURL`.** Microsoft Graph lets an app have one subscription to a channel's messages, and refuses a second with
+409 (Microsoft's documentation). A subscription that the app made for the old URL, or that another broker of the same app holds for its
+own URL, therefore holds the channel: the broker cannot subscribe it for the new URL, and leaves the other subscription as it is, since it
+cannot tell whether another broker still reads it. It logs that once at WARN for each channel, with the other subscription's URL and
+expiry and the fix, counts the channel as `failing`, and tries again every 10 minutes, or when that subscription expires if sooner. Until
+it expires, up to 24 hours after its broker last renewed it, or until someone deletes it, no alert of that channel reaches the connection.
+To move without that gap, delete the old subscriptions in Microsoft Graph (`DELETE /subscriptions/{id}`, as the app) once nothing serves
+the old URL.
 
 **Notifications.** A notification carries a `clientState`, which the broker derives from the connection's client secret, so every replica
 and every restart has the same. A notification whose `clientState` is not the connection's is dropped, and the subscription it names is

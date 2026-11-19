@@ -643,15 +643,19 @@ Rules:
   (`needsChatListener`), and the connection's route serves Graph's requests in both: in `http` mode before the Receiver, which takes
   the rest, and in `socket` mode alone, anything else 400. Graph's requests are told apart without a token, since Graph sends none: the
   validation handshake by its `validationToken` query (200, the token decoded, `text/plain`, whether or not the run is up), and a body
-  of notifications by its shape (`{"value":[…]}` with no `type`, which every activity has), capped at 256 KiB. The leader, while it
+  of notifications by its shape (`{"value":[…]}` with no `type`, which every activity has), capped at 256 KiB and 1000 notifications
+  (400 past it, since anyone may send one; a clientState mismatch is one WARN line a body, paced as the Receiver's token refusals). The leader, while it
   runs the connection, keeps one subscription per bound channel (`chat.ChannelLister`: the channels of the Bindings that name the
   connection) on `/teams/{group}/channels/{channel}/messages`, `created,updated`, `includeResourceData` false, the notification and
   the lifecycle URL both `notificationURL` (Microsoft documents that they may be the same; the lifecycle body has `lifecycleEvent`),
-  24 h, renewed within 12 h of its expiry, each call cut at 30 s (create 8.0 s and renew 7.1 s measured, the handshake's time), compared
+  24 h, renewed within 12 h of its expiry or half the lifetime Graph granted if shorter, each call cut at 30 s (create 8.0 s and renew 7.1 s measured, the handshake's time), compared
   with the Bindings every minute. A channel whose `aadGroupId` the store does not hold waits, logged once at WARN with the fix and
-  counted. At the start of each run the app's subscriptions are listed: those to the connection's URL with its lifecycle URL, change
+  counted. At the start of each run, with nothing bound too, the app's subscriptions are listed: those to the connection's URL with its lifecycle URL, change
   types, a bound channel and a future expiry are adopted (one per channel), the rest to that URL deleted, and those to other URLs left;
-  a 409 on a create lists again. The `clientState` is HKDF-SHA256 of the client secret under `agent-kourier/teams/graph-client-state/v1`
+  a 409 on a create lists again at the next reconcile (not at once), keeping what the run holds. Graph lets an app have one subscription
+  per resource, so one to another URL (a changed `notificationURL`, another broker of the app) blocks a bound channel: failing, one WARN
+  with its URL and expiry and the fix, tried again after 10 min or at its expiry; no alerts of that channel until it expires (up to
+  24 h) or is deleted. The `clientState` is HKDF-SHA256 of the client secret under `agent-kourier/teams/graph-client-state/v1`
   and the connection, the same on every replica and across a failover (a listing gives it back as null, so it cannot be read again),
   compared in constant time; a mismatch is dropped, counted, and remakes the subscription it names (a secret's rotation). Each `created`
   is answered 202 and put on its channel's lane, where its message is read (`GET …/messages/{id}`, or `…/messages/{root}/replies/{id}`)
