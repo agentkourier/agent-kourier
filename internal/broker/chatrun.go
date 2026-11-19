@@ -191,7 +191,38 @@ func connectionOf(ctx context.Context, c *v1alpha1.ChatConnection, secrets ident
 		}
 		creds[key] = v
 	}
-	return Connection{Ref: v1alpha1.ObjectRef{Namespace: c.Namespace, Name: c.Name}, Platform: c.Spec.Platform, Credentials: creds}, nil
+	return Connection{Ref: v1alpha1.ObjectRef{Namespace: c.Namespace, Name: c.Name}, Platform: c.Spec.Platform,
+		Secret: v1alpha1.NamespacedName(c.Namespace, c.Spec.CredentialsSecretRef.Name), Credentials: creds, Webhook: cloneWebhook(c.Spec.Webhook)}, nil
+}
+
+// cloneWebhook is a copy of s that shares nothing with it, so that a Connection keeps what its ChatConnection said when it was read
+// whatever later becomes of the snapshot's object, or nil. It is written by hand, as the API has no generated DeepCopy: every field
+// of v1alpha1.WebhookSpec that is a pointer or a slice, at any depth, is copied here, and TestCloneWebhookSharesNothing fails for a
+// field that is added and not.
+func cloneWebhook(s *v1alpha1.WebhookSpec) *v1alpha1.WebhookSpec {
+	if s == nil {
+		return nil
+	}
+	c := *s
+	if ts := s.Verify.Timestamp; ts != nil {
+		t := *ts
+		c.Verify.Timestamp = &t
+	}
+	c.Channel.From = slices.Clone(s.Channel.From)
+	c.Actor.From = slices.Clone(s.Actor.From)
+	if th := s.Thread; th != nil {
+		t := *th
+		c.Thread = &t
+	}
+	c.Fields = slices.Clone(s.Fields)
+	for i := range c.Fields {
+		c.Fields[i].From = slices.Clone(s.Fields[i].From)
+	}
+	if d := s.Delivery; d != nil {
+		dd := *d
+		c.Delivery = &dd
+	}
+	return &c
 }
 
 // Connections are the ChatConnections a broker runs: its own, if it has one, and the team connections it serves besides (spec D52, D53).

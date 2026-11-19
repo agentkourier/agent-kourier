@@ -339,8 +339,8 @@ type runtimeHost struct {
 	log     *slog.Logger
 	metrics *Metrics
 	table   *runtimeTable
-	// open builds the platform of a connection (leaderHalf.openPlatform).
-	open func(conn Connection, onConnection func(connected bool)) (builtPlatform, error)
+	// open builds the platform of a connection (leaderHalf.openPlatform), on parent, which holds the broker's instruments.
+	open func(ctx context.Context, conn Connection, onConnection func(connected bool)) (builtPlatform, error)
 	// parent is the context the runs hang from: the broker's own, which only the shutdown ends.
 	parent context.Context
 	// routes is the chat listener's route table, nil when the broker has no chat listener.
@@ -353,7 +353,7 @@ func (h *runtimeHost) build(conn Connection) (*connRuntime, error) {
 	name := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
 	h.metrics.ChatConnected(name, false)
 	gauge := &connGauge{m: h.metrics, name: name}
-	p, err := h.open(conn, gauge.set)
+	p, err := h.open(h.parent, conn, gauge.set)
 	if err != nil {
 		return nil, err
 	}

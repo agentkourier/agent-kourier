@@ -125,7 +125,8 @@ func TestAConnectionWithNoRepliesHasNothingRenderedOrQueued(t *testing.T) {
 // to the digest loop: on a broker whose config has a webhook connection, a reply of that connection waiting for its acknowledgment
 // queues nothing, an answer that never reached its task (the interactions' backstop) gets no notice in the outbox, and the window
 // of its stopped starts is marked digested with no line in the outbox, while a connection the config does not have (whose rows the
-// outbox abandons) is given all three. The broker runs no webhook connection yet, so the rows are the store's from an earlier run.
+// outbox abandons) is given all three. The test gives the broker no chat listener, so the team webhook connection is not started, and
+// the rows are the store's from an earlier run.
 func TestRunQueuesNothingForAConnectionWithNoReplies(t *testing.T) {
 	// The files route serves one ChatConnection, so the webhook connection is a custom resource of an admitted team namespace,
 	// beside spec 7's Slack one, in place of the minimal Binding.

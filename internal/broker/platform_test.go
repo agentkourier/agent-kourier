@@ -4,10 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"strings"
 	"testing"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/chat/slack"
@@ -15,57 +12,29 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/secret"
 )
 
-// The adapter is chosen by ChatConnection.platform: slack builds the Slack adapter over a client of its own, and any
-// other value is a wiring error, which no retry mends.
+// The adapter is chosen by ChatConnection.platform: slack builds the Slack adapter over a client of its own, webhook the
+// webhook platform (TestNewPlatformBuildsAWebhookConnectionOnTheChatListener), and any other value is a wiring error, which no
+// retry mends.
 func TestNewPlatformIsChosenByThePlatformOfTheConnection(t *testing.T) {
 	slackConn := Connection{
 		Ref: v1alpha1.ObjectRef{Namespace: "platform", Name: "slack"}, Platform: v1alpha1.PlatformSlack,
 		Credentials: map[string]secret.Value{"botToken": secret.New("xoxb-fake"), "appToken": secret.New("xapp-fake")},
 	}
 	var cfg RunConfig
-	built, err := cfg.newPlatform(slackConn, nil, nil)
+	built, err := cfg.newPlatform(t.Context(), slackConn, nil, nil)
 	if err != nil || built.Platform == nil || built.closeIdle == nil {
 		t.Fatalf("newPlatform(slack) = %+v, %v; want the Slack adapter, and a way to close its connections", built, err)
 	}
 	if got := built.Capabilities(); !got.Streams || got.AckReaction == "" {
 		t.Errorf("the adapter's capabilities are %+v; want Slack's", got)
 	}
-	for _, name := range []string{v1alpha1.PlatformWebhook, "teams", "", "Slack"} {
+	for _, name := range []string{"teams", "", "Slack", "Webhook"} {
 		bad := slackConn
 		bad.Platform = name
-		built, err := cfg.newPlatform(bad, nil, nil)
+		built, err := cfg.newPlatform(t.Context(), bad, nil, nil)
 		if !errors.Is(err, ErrWiring) || built.Platform != nil {
 			t.Errorf("newPlatform(%q) = %+v, %v; want a wiring error and no platform", name, built, err)
 		}
-	}
-}
-
-// The API takes a webhook ChatConnection before this broker has its adapter: one that Validate accepts is a wiring error that names
-// the platform, and no Secret is read for it, so the supervisor reports it as having no adapter and does not wait on a Secret to
-// start it. The reader has no values: a read would fail with an empty value, which is not errNoAdapter.
-func TestAWebhookConnectionIsAWiringErrorUntilItsAdapterLands(t *testing.T) {
-	c := &v1alpha1.ChatConnection{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "platform", Name: "github"},
-		Spec: v1alpha1.ChatConnectionSpec{
-			Platform:             v1alpha1.PlatformWebhook,
-			CredentialsSecretRef: v1alpha1.SecretRef{Name: "github-webhook"},
-			Webhook: &v1alpha1.WebhookSpec{
-				Identity: "pr-reviewer[bot]",
-				Verify:   v1alpha1.WebhookVerify{Scheme: v1alpha1.WebhookHMACSHA256, Header: "X-Hub-Signature-256", Prefix: "sha256="},
-				Channel:  v1alpha1.WebhookChannel{From: []string{"/repository/full_name"}},
-				Actor:    v1alpha1.WebhookActor{From: []string{"/sender/login"}},
-			},
-		},
-	}
-	if err := c.Validate(); err != nil {
-		t.Fatalf("the webhook connection is refused: %v", err)
-	}
-	_, err := connectionOf(t.Context(), c, &reader{})
-	if !errors.Is(err, ErrWiring) || !errors.Is(err, errNoAdapter) {
-		t.Fatalf("connectionOf(webhook) = %v; want a wiring error for a platform with no adapter", err)
-	}
-	if !strings.Contains(err.Error(), `"webhook"`) {
-		t.Errorf("the error %q does not name the platform", err)
 	}
 }
 
@@ -77,7 +46,7 @@ func TestTheSlackSeamBuildsTheClientTheAdapterRunsOn(t *testing.T) {
 		Ref: v1alpha1.ObjectRef{Namespace: "platform", Name: "slack"}, Platform: v1alpha1.PlatformSlack,
 		Credentials: map[string]secret.Value{"botToken": secret.New("xoxb-fake"), "appToken": secret.New("xapp-fake")},
 	}
-	built, err := cfg.newPlatform(conn, nil, nil)
+	built, err := cfg.newPlatform(t.Context(), conn, nil, nil)
 	if err != nil || saw.BotToken.Reveal() != "xoxb-fake" || saw.AppToken.Reveal() != "xapp-fake" || saw.HTTPClient == nil {
 		t.Fatalf("newPlatform = %+v, %v; client config %+v; want the client built from the credentials, on a transport of its own", built, err, saw)
 	}
@@ -96,14 +65,14 @@ func TestNewPlatformPassesTheConnectionHookToTheClient(t *testing.T) {
 		Credentials: map[string]secret.Value{"botToken": secret.New("xoxb-fake"), "appToken": secret.New("xapp-fake")},
 	}
 	var told []bool
-	if _, err := cfg.newPlatform(conn, nil, func(up bool) { told = append(told, up) }); err != nil || saw.OnConnection == nil {
+	if _, err := cfg.newPlatform(t.Context(), conn, nil, func(up bool) { told = append(told, up) }); err != nil || saw.OnConnection == nil {
 		t.Fatalf("newPlatform = %v; client config %+v; want OnConnection set", err, saw)
 	}
 	saw.OnConnection(true)
 	if len(told) != 1 || !told[0] {
 		t.Errorf("the hook was told %v; want the call of OnConnection", told)
 	}
-	if _, err := cfg.newPlatform(conn, nil, nil); err != nil || saw.OnConnection != nil {
+	if _, err := cfg.newPlatform(t.Context(), conn, nil, nil); err != nil || saw.OnConnection != nil {
 		t.Errorf("newPlatform with no hook = %v; OnConnection set = %v; want none", err, saw.OnConnection != nil)
 	}
 }
@@ -116,7 +85,7 @@ func TestNewPlatformTellsTheClientItsConnection(t *testing.T) {
 	for _, ref := range []v1alpha1.ObjectRef{{Namespace: "platform", Name: "slack"}, {Namespace: "team-a", Name: "slack"}} {
 		conn := Connection{Ref: ref, Platform: v1alpha1.PlatformSlack,
 			Credentials: map[string]secret.Value{"botToken": secret.New("xoxb-fake"), "appToken": secret.New("xapp-fake")}}
-		if _, err := cfg.newPlatform(conn, nil, nil); err != nil {
+		if _, err := cfg.newPlatform(t.Context(), conn, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}

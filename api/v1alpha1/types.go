@@ -274,9 +274,9 @@ type ChatConnectionList struct {
 // +kubebuilder:validation:XValidation:rule="self.platform != 'webhook' || has(self.webhook)",message="is required on a webhook connection",fieldPath=".webhook"
 type ChatConnectionSpec struct {
 	// Platform is the chat platform: slack, or webhook, which takes signed JSON webhooks from a service such as a code host or an
-	// issue tracker (spec.webhook) and posts nothing there: the agent posts on the service with its own tools. The broker does not
-	// run a webhook connection yet: it refuses one as a wiring error, so that one as the broker's own stops its start, and a team's
-	// is not started.
+	// issue tracker (spec.webhook). The broker takes them on its chat listener (AGENTKOURIER_CHAT_LISTEN) at POST
+	// /chat/webhook/<namespace>/<name>, and posts nothing there: the agent posts on the service with its own tools. A broker with no
+	// chat listener does not run a webhook connection: its own fails the start, and a team's is not started.
 	// +kubebuilder:validation:Enum=slack;webhook
 	Platform string `json:"platform"`
 	// CredentialsSecretRef names one Secret whose keys are fixed by the platform and its mode. A Slack connection in Socket Mode needs

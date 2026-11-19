@@ -365,7 +365,7 @@ func newHostRig(t *testing.T, routes bool) *hostRig {
 // start builds and runs the runtime of the connection ns/name on p, fenced or not, as the leader half does.
 func (r *hostRig) start(name string, p chat.Platform, fenced bool) *connRuntime {
 	r.t.Helper()
-	r.host.open = func(Connection, func(bool)) (builtPlatform, error) {
+	r.host.open = func(context.Context, Connection, func(bool)) (builtPlatform, error) {
 		if fenced {
 			p = fenceChat(p, newLeaseFence(ElectionConfig{}, newLeaseClock(nil), func(string) {}))
 		}
@@ -485,7 +485,7 @@ func TestChatListenerOutcomesAreBounded(t *testing.T) {
 	if want := []string{"served", "not_found", "method", "no_route", "too_large", "unreadable", "busy"}; !slices.Equal(chatOutcomes, want) {
 		t.Errorf("the outcomes are %q, want %q as docs/reference/metrics.md lists them", chatOutcomes, want)
 	}
-	if want := []string{"slack"}; !slices.Equal(chatPlatforms, want) {
+	if want := []string{"slack", "webhook"}; !slices.Equal(chatPlatforms, want) {
 		t.Errorf("the platforms are %q, want %q as docs/reference/metrics.md lists them", chatPlatforms, want)
 	}
 }

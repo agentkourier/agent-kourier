@@ -1,0 +1,27 @@
+# Linear: a workspace webhook with a signing secret, for issues and comments. Its URL is
+# https://<host>/chat/webhook/acme-webhooks/linear. The Secret linear-webhook, in namespace acme-webhooks, holds the key
+# webhookSecret, the webhook's signing secret; you make it, and no secret belongs in this file.
+# Replace the identity with the user ID the agent's API key acts as, so its own comments are dropped.
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: linear, namespace: acme-webhooks}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: linear-webhook}
+  webhook:
+    identity: "00000000-0000-0000-0000-000000000002"   # the user ID of the agent's API key
+    verify:
+      scheme: hmac-sha256
+      header: Linear-Signature                         # the hex signature, with no prefix
+      timestamp: {from: /webhookTimestamp, unit: ms, window: 1m}
+    channel: {from: [/data/team/key, /data/issue/team/key]}   # an issue's team, or a comment's issue's team
+    actor: {from: [/actor/id, /data/userId, /data/user/id]}
+    thread: {field: issue}                             # one session for each issue: ENG-7
+    delivery: {header: Linear-Delivery}
+    fields:
+      - {name: type, from: [/type], kind: id}
+      - {name: action, from: [/action], kind: id}
+      - {name: issue, from: [/data/identifier, /data/issue/identifier], kind: id}
+      - {name: title, from: [/data/title, /data/issue/title]}
+      - {name: prevDescription, from: [/updatedFrom/description]}
+      - {name: comment, from: [/data/body]}

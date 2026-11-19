@@ -107,7 +107,7 @@ Outbox
 
 Platform
 :   A chat platform behind the `chat.Platform` interface, which a ChatConnection's `spec.platform` names. The API takes `slack` and
-    `webhook`; this release's broker runs Slack alone ([What each platform supports](platforms.md)).
+    `webhook`, and the broker runs both ([What each platform supports](platforms.md)).
 
 Post
 :   A message Agent Kourier writes into a channel or thread.
