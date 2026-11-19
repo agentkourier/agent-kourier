@@ -898,6 +898,52 @@ func TestSupervisorDeletesTheSeriesOfAConnectionThatRestartsIntoARefusal(t *test
 	}
 }
 
+// The chat listener counts a request under the name of every connection the broker is configured to serve, whether or not it ever ran: one whose
+// Secret cannot be read, one whose credentials were rejected, and the own connection. A refused second connection of an app is not served, and a
+// connection that left the Snapshot is removed, so a request to either is counted as unknown and brings back no series of theirs.
+func TestSupervisorNamesTheConfiguredConnectionsToTheChatListener(t *testing.T) {
+	w := newSupWorld(t)
+	m := w.host.metrics
+	app := appIdentity{App: "AAPP", Team: "T1", User: "UAPP", Bot: "BAPP"}
+	w.ids["tok-old"], w.ids["tok-young"] = app, app
+	w.idErr["tok-rej"] = fmt.Errorf("auth.test: Slack answered %q: %w", "invalid_auth", errCredentialsRejected)
+	noSecret, rejected := unready("team-n/slack", 1, 1), team("team-r/slack", 1, "tok-rej", 2)
+	old, young := team("team-a/slack", 1, "tok-old", 3), team("team-b/slack", 1, "tok-young", 4)
+	request := func(conn string) { m.ChatListenerRequest(chatNoRoute, v1alpha1.PlatformSlack, conn) }
+	named := func(conn string) bool {
+		_, ok := listenerSeries(t, m)[listenerKey{chatNoRoute, v1alpha1.PlatformSlack, conn}]
+		return ok
+	}
+
+	w.reconcile(noSecret, rejected, old, young)
+	if got := w.sup.refusals.names(); !slices.Equal(got, []string{"team-b/slack"}) {
+		t.Fatalf("refused = %v; want the younger connection of the app", got)
+	}
+	for _, conn := range []string{ownName, "team-n/slack", "team-r/slack", "team-a/slack", "team-b/slack"} {
+		request(conn)
+	}
+	for _, conn := range []string{ownName, "team-n/slack", "team-r/slack", "team-a/slack"} {
+		if !named(conn) {
+			t.Errorf("a request to %s, which the broker is configured to serve, was not counted under its name: %v", conn, listenerSeries(t, m))
+		}
+	}
+	if named("team-b/slack") {
+		t.Error("a request to the refused connection was counted under its name, which is not served")
+	}
+
+	w.reconcile(rejected, old, young) // team-n left the Snapshot
+	request("team-n/slack")
+	if named("team-n/slack") {
+		t.Errorf("a request to a removed connection brought back its series: %v", listenerSeries(t, m))
+	}
+	if !named("team-r/slack") || !named(ownName) {
+		t.Error("the removal of team-n took the series of the connections still served")
+	}
+	if got := listenerSeries(t, m)[listenerKey{chatNoRoute, v1alpha1.PlatformSlack, unknownLabel}]; got != 2 {
+		t.Errorf("unknown counted %d, want 2: the refused connection's request and the removed one's", got)
+	}
+}
+
 // A connection that restarts keeps the Slack app it held, and a refusal it was under, while the identity of its new tokens is being asked: a
 // younger connection of the app is not served for the one look that Slack did not answer, to be refused again at the next.
 func TestSupervisorKeepsTheAppOfAHolderWhoseIdentityIsBeingAsked(t *testing.T) {

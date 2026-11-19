@@ -95,8 +95,8 @@ var chatPlatforms = []string{v1alpha1.PlatformSlack}
 
 // chatCounter is what the chat listener reports to: Metrics.
 type chatCounter interface {
-	// ChatListenerServes says that the connection conn ("namespace/name") of platform has its route on the listener: from then until the
-	// connection is removed, the requests to its route are counted under its name.
+	// ChatListenerServes says that the connection conn ("namespace/name") of platform is served, here because its route is put on the
+	// listener: from then until the connection is removed, the requests to its route are counted under its name.
 	ChatListenerServes(platform, conn string)
 	// ChatListenerRequest counts a request by its outcome and by the platform and the connection that its path names, which are the
 	// sender's to choose: empty when the path names none.

@@ -435,9 +435,9 @@ signature holds, but only on the replica that leads, while it runs the connectio
 3. **The request reaches the chat listener.** On the leader, `agentkourier_chat_listener_requests_total` grows with each attempt. If it does
    not, the request stops before the pod: the host's DNS, the certificate, the Ingress (it sends only the prefix `/chat/`), or the
    NetworkPolicy, which admits only `networkPolicy.chatFrom` to the chat port. `not_found` is a path that is not
-   `/chat/<platform>/<namespace>/<name>`; `no_route` (503) is a connection that does not run on that replica. Once the connection's route
-   has been on the leader's listener, its requests carry `connection="<namespace>/<name>"`. A request URL that names a connection the leader
-   has never served there, such as one with a misspelt namespace, is counted under `connection="unknown"` with `platform="slack"`:
+   `/chat/<platform>/<namespace>/<name>`; `no_route` (503) is a connection that does not run on that replica. On the leader, the requests to
+   a connection it serves carry `connection="<namespace>/<name>"`, whether the connection runs or not. A request URL that names a connection
+   the leader does not serve, such as one with a misspelt namespace, is counted under `connection="unknown"` with `platform="slack"`:
 
     ```promql
     sum by (outcome, connection) (increase(agentkourier_chat_listener_requests_total{platform="slack"}[15m]))
@@ -467,8 +467,9 @@ A 503 tells Slack to send the request again. Which part answered it says why:
   the leader's pod lacks the label or is not Ready. Whatever is in front of the Service, your Ingress controller or load balancer,
   answered it. See
   [High availability](../explanation/high-availability.md#slack-in-http-mode) for how long a takeover takes.
-- **`agentkourier_chat_listener_requests_total`**, with `Retry-After`, under the connection's name in `connection` once its route has been
-  on that replica's listener, and under `unknown` before that:
+- **`agentkourier_chat_listener_requests_total`**, with `Retry-After`. The leader counts a request under the connection's name in
+  `connection` while it serves the connection, running or not; a standby, and the leader for a connection it does not serve, count it under
+  `unknown`:
     - `no_route`: the connection does not run on that replica. A standby answers so, and so does a leader whose connection is not
       started, has stopped (its credentials rejected, say) or is not served. A standby should get none: if it does, something other than
       the chart's chat Service sends requests to every pod.

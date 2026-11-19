@@ -652,3 +652,34 @@ func TestConnectionRemovedDeletesItsListenerSeries(t *testing.T) {
 		t.Errorf("once the connection is served again the series are %v, want %v: named again, from zero", got, want)
 	}
 }
+
+// A request counted while its connection is being removed does not bring the connection's series back: it is counted before the series are
+// deleted, and goes with them, or after, as unknown. Each round races requests against the removal.
+func TestConnectionRemovedRacingRequestsLeavesNoSeries(t *testing.T) {
+	m := mustMetrics(t, nil)
+	for round := range 200 {
+		m.ChatListenerServes(v1alpha1.PlatformSlack, "ns/a")
+		var stop atomic.Bool
+		var counting sync.WaitGroup // each request goroutine has counted once, so the removal comes while they count
+		var wg sync.WaitGroup
+		counting.Add(4)
+		for range 4 {
+			wg.Go(func() {
+				m.ChatListenerRequest(chatNoRoute, v1alpha1.PlatformSlack, "ns/a")
+				counting.Done()
+				for !stop.Load() {
+					m.ChatListenerRequest(chatNoRoute, v1alpha1.PlatformSlack, "ns/a")
+				}
+			})
+		}
+		counting.Wait()
+		m.ConnectionRemoved(t.Context(), "ns/a")
+		stop.Store(true)
+		wg.Wait()
+		for k := range listenerSeries(t, m) {
+			if k.connection == "ns/a" {
+				t.Fatalf("round %d: a request counted during the removal brought back the series %+v", round, k)
+			}
+		}
+	}
+}
