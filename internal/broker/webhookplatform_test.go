@@ -75,7 +75,7 @@ func TestNewPlatformBuildsAWebhookConnectionOnTheChatListener(t *testing.T) {
 	}
 }
 
-// A credential the platform refuses (spec D55, defect D1) is a wiring error that names its Secret and key and never holds its value: one with
+// A credential the platform refuses (spec D55) is a wiring error that names its Secret and key and never holds its value: one with
 // a control character, most often the trailing newline of a file read into the Secret, which is refused and not trimmed; an empty one; and a
 // token shorter than the token scheme takes.
 func TestAWebhookCredentialThePlatformRefusesIsAWiringErrorThatNamesTheSecretAndKey(t *testing.T) {
@@ -107,6 +107,9 @@ func TestAWebhookCredentialThePlatformRefusesIsAWiringErrorThatNamesTheSecretAnd
 				msg := err.Error()
 				if !strings.Contains(msg, "ns/hooks-webhook") || !strings.Contains(msg, `"`+tt.key+`"`) {
 					t.Errorf("%s: the error %q does not name the Secret ns/hooks-webhook and the key %s", what, msg, tt.key)
+				}
+				if n := strings.Count(strings.ToLower(msg), "connection ns/hooks:"); n != 1 {
+					t.Errorf("%s: the error %q names the connection %d times; want once", what, msg, n)
 				}
 				if tt.value != "" && strings.Contains(msg, strings.TrimSpace(tt.value)) {
 					t.Errorf("%s: the error %q holds the credential's value", what, msg)

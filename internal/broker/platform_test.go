@@ -12,8 +12,9 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/secret"
 )
 
-// The adapter is chosen by ChatConnection.platform: slack builds the Slack adapter over a client of its own, and any
-// other value is a wiring error, which no retry mends.
+// The adapter is chosen by ChatConnection.platform: slack builds the Slack adapter over a client of its own, webhook the
+// webhook platform (TestNewPlatformBuildsAWebhookConnectionOnTheChatListener), and any other value is a wiring error, which no
+// retry mends.
 func TestNewPlatformIsChosenByThePlatformOfTheConnection(t *testing.T) {
 	slackConn := Connection{
 		Ref: v1alpha1.ObjectRef{Namespace: "platform", Name: "slack"}, Platform: v1alpha1.PlatformSlack,
@@ -27,7 +28,7 @@ func TestNewPlatformIsChosenByThePlatformOfTheConnection(t *testing.T) {
 	if got := built.Capabilities(); !got.Streams || got.AckReaction == "" {
 		t.Errorf("the adapter's capabilities are %+v; want Slack's", got)
 	}
-	for _, name := range []string{v1alpha1.PlatformWebhook, "teams", "", "Slack"} {
+	for _, name := range []string{"teams", "", "Slack", "Webhook"} {
 		bad := slackConn
 		bad.Platform = name
 		built, err := cfg.newPlatform(t.Context(), bad, nil, nil)

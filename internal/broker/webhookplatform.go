@@ -26,7 +26,7 @@ func newWebhookPlatform(ctx context.Context, conn Connection, log *slog.Logger, 
 	cfg.OnConnection, cfg.Logger = onConnection, log
 	p, err := webhook.New(cfg)
 	if err != nil {
-		return builtPlatform{}, fmt.Errorf("%w: ChatConnection %s: %w", ErrWiring, cfg.Connection, err)
+		return builtPlatform{}, fmt.Errorf("%w: %w", ErrWiring, err) // New names the connection
 	}
 	// The platform sends nothing, so it has no transport to close.
 	return builtPlatform{Platform: p, closeIdle: func() {}}, nil
@@ -36,11 +36,11 @@ func newWebhookPlatform(ctx context.Context, conn Connection, log *slog.Logger, 
 // whose platform the leader could not build: a standby would otherwise start and say Ready, and fail only when it took over.
 func checkWebhookConnection(conn Connection) error {
 	cfg, err := webhookConfig(conn)
-	if err == nil {
-		_, err = webhook.New(cfg)
-	}
 	if err != nil {
-		return fmt.Errorf("%w: ChatConnection %s: %w", ErrWiring, v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name), err)
+		return err
+	}
+	if _, err := webhook.New(cfg); err != nil {
+		return fmt.Errorf("%w: %w", ErrWiring, err) // New names the connection
 	}
 	return nil
 }
