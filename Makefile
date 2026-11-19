@@ -4,7 +4,7 @@ LDFLAGS := -X main.version=$(VERSION)
 LINT    := go tool golangci-lint
 
 .DEFAULT_GOAL := help
-.PHONY: help fmt lint test test-race test-testhooks test-scripts test-postgres lint-workflows security security-govulncheck security-gitleaks security-image-scan build tidy crds crd-corpus image image-testhooks image-check release-image e2e-fast-up e2e-fast e2e-fast-down e2e-full-up e2e-full-down e2e-full e2e-down e2e-crs-scenarios e2e-crs-migration e2e-two-apps sandbox-up sandbox-down sandbox-heal sandbox-alert
+.PHONY: help fmt lint test test-race test-testhooks test-scripts test-postgres lint-workflows security security-govulncheck security-gitleaks security-image-scan build tidy crds crd-corpus image image-testhooks image-check release-image e2e-fast-up e2e-fast e2e-fast-down e2e-full-up e2e-full-down e2e-full e2e-down e2e-crs-scenarios e2e-crs-migration e2e-two-apps e2e-teams sandbox-up sandbox-down sandbox-heal sandbox-alert
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z0-9-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -105,7 +105,7 @@ image-check: image image-testhooks ## Prove the production image's binary lacks 
 release-image: ## Build the multi-arch release images (Agent Kourier, the prompt and echo agents) and the chart to bin/release (VERSION=vX.Y.Z); PUSH=1 REGISTRY=<repo> CHART_REGISTRY=oci://<repo> also pushes; see RELEASING.md
 	VERSION="$(VERSION)" REGISTRY="$(REGISTRY)" CHART_REGISTRY="$(CHART_REGISTRY)" PUSH="$(PUSH)" hack/release/release.sh
 
-e2e-fast-up: ## Bring up the fast E2E tier (kind, Alertmanager, fake Slack, stub agent, sink); E2E_STORE=postgres runs Agent Kourier on Postgres, with E2E_REPLICAS=2 on two replicas (S16, failover); E2E_CONFIG_SOURCE=crds reads the config from custom resources, not the ConfigMap, and with E2E_TWO_APPS=1 serves a team's Slack app beside the platform's (make e2e-two-apps runs the MC_ tests)
+e2e-fast-up: ## Bring up the fast E2E tier (kind, Alertmanager, fake Slack, stub agent, sink); E2E_STORE=postgres runs Agent Kourier on Postgres, with E2E_REPLICAS=2 on two replicas (S16, failover); E2E_CONFIG_SOURCE=crds reads the config from custom resources, not the ConfigMap, and with E2E_TWO_APPS=1 serves a team's Slack app beside the platform's (make e2e-two-apps runs the MC_ tests), or with E2E_TEAMS=1 a team's Microsoft Teams connections on a fake Teams service (make e2e-teams runs the TEAMS_ tests)
 	hack/kind/up-fast.sh
 
 e2e-fast: ## Run the E2E tests in the fast tier, as a Job (the tier must be up)
@@ -134,6 +134,9 @@ e2e-crs-migration: ## Move the fast tier between the ConfigMap and the custom re
 
 e2e-two-apps: ## Run the MC_ tests (a broker with two Slack apps) as a Job of their own, then take a team off the platform's admission list with Helm and put it back, then run with no ChatConnection of its own, the platform's namespace off the list and then on it (with a leader takeover on Postgres with two replicas), then admit a team by a namespace label with no restart, and serve every namespace with nothing set and with the selector {}: the fast tier up on E2E_TWO_APPS=1 E2E_CONFIG_SOURCE=crds
 	hack/kind/two-apps.sh
+
+e2e-teams: ## Run the TEAMS_ tests (Microsoft Teams connections on the fake Teams service: a mention, live edits, a tool approval, alerts through Graph's notifications and through polling, feedback, and a leader takeover on Postgres with two replicas) as a Job of their own: the fast tier up on E2E_TEAMS=1 E2E_CONFIG_SOURCE=crds
+	E2E_RUN='^TestTEAMS_' hack/kind/e2e-run.sh fast
 
 sandbox-up: ## Dogfood tier on the full tier: Agent Kourier on a real Slack, a read-only SRE agent on a real model, seeded faults (secrets file: SANDBOX_ENV)
 	hack/kind/sandbox/up.sh

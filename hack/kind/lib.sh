@@ -147,7 +147,7 @@ build_doubles_image() {
     *) die "unsupported Docker architecture" ;;
   esac
   BUILD=$(mktemp -d)
-  for double in fakeslack stubagent sink signaler hitlagent; do
+  for double in fakeslack faketeams stubagent sink signaler hitlagent; do
     GOOS=linux GOARCH=${goarch} CGO_ENABLED=0 go build -C "${ROOT}" -o "${BUILD}/${double}" "./test/${double}/cmd/${double}"
   done
   docker build -q -f "${HERE}/fast/Dockerfile" --build-arg "RUNTIME_IMAGE=${RUNTIME_IMAGE}" -t "${DOUBLES_IMAGE}" "${BUILD}" >/dev/null
@@ -531,6 +531,62 @@ deploy_two_apps() {
     die "the broker never connected team-a's Slack app to the fake Slack; is team-a in config.connectionNamespaces, and does team-a's Role name its Secret?"
   }
   echo "ok: team-a's Slack app is connected to the fake Slack"
+}
+
+# deploy_fake_teams: the fake Microsoft Teams service (fast/teams/faketeams.yaml, in namespace e2e; E2E_TEAMS=1), before deploy_agentkourier, whose pod reads
+# the fake's certificate from the ConfigMap faketeams-ca in agent-kourier (hack/kind/teams-values.yaml, AGENTKOURIER_TEAMS_CA). The certificate and its key are
+# made here for the fake's Service name (faketeams cert), on each bring-up, in a scratch directory that goes with the function: the key goes to the cluster
+# as the Secret faketeams-tls in e2e and nowhere else, and only the certificate to agent-kourier. A test key, for a fake that is published nowhere.
+# Restarted, so that a rebuilt image (same tag) or a new certificate is picked up. Needs ROOT, HERE, K and the doubles image.
+deploy_fake_teams() {
+  local dir
+  dir=$(mktemp -d)
+  trap 'rm -rf "${dir}"; trap - RETURN' RETURN
+  go run -C "${ROOT}" ./test/faketeams/cmd/faketeams cert -host faketeams.e2e.svc.cluster.local -dir "${dir}"
+  "${K[@]}" -n e2e create secret tls faketeams-tls --cert="${dir}/tls.crt" --key="${dir}/tls.key" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" create namespace agent-kourier --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" -n agent-kourier create configmap faketeams-ca --from-file=ca.crt="${dir}/tls.crt" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" apply -f "${HERE}/fast/teams/faketeams.yaml" >/dev/null
+  "${K[@]}" -n e2e rollout restart deploy/faketeams >/dev/null
+  "${K[@]}" -n e2e rollout status deploy/faketeams --timeout=180s
+}
+
+# deploy_teams_connections: the tier's Microsoft Teams connections (E2E_TEAMS=1; custom resources only): the namespace teams-e2e, its Secrets (the client
+# secret that the fake Teams service takes, and an agent token), and fast/teams/teams.yaml: the Role that grants the broker those Secrets, the ChatConnections
+# teams-push and teams-poll, the AgentBackend and the Bindings. It returns once the broker answers the fake's conversationUpdate for each bound channel with
+# 200, which is the broker serving both connections on its chat listener, and dies if it does not in three minutes. That also gives the broker the record of each
+# channel (its team and Microsoft Entra group), which a subscription and a poll need; the TEAMS_ tests send it again, since the fake keeps nothing over a
+# restart. Needs HERE, K, jq, and the CRDs served (deploy_agentkourier with crds).
+deploy_teams_connections() {
+  local pod deadline ok="" fake=http://faketeams.e2e.svc.cluster.local:8080/_control
+  "${K[@]}" create namespace teams-e2e --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" -n teams-e2e create secret generic teams-bot --from-literal=clientSecret=fake-teams-client-secret \
+    --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" -n teams-e2e create secret generic teams-e2e-agent-token --from-literal=token="$(unsigned_jwt teams-e2e@example.test)" \
+    --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+  "${K[@]}" apply --dry-run=server -f "${HERE}/fast/teams/teams.yaml" >/dev/null
+  "${K[@]}" apply -f "${HERE}/fast/teams/teams.yaml" >/dev/null
+  deadline=$((SECONDS + 180))
+  while [ "${SECONDS}" -lt "${deadline}" ]; do
+    pod=install-teams-${RANDOM}
+    # shellcheck disable=SC2016 # the script runs in the pod
+    if "${K[@]}" -n e2e run "${pod}" --rm -i --quiet --restart=Never --image="${CURL_IMAGE}" --command -- sh -c '
+      set -e
+      fake=$1
+      install() { curl -sf -m 40 -X POST -H "Content-Type: application/json" -d "{\"app\":\"$1\",\"channel\":\"$2\"}" "$fake/install" | grep -q "\"status\":200"; }
+      push=7e2e7ea5-0000-4000-8000-0000000000a1 poll=7e2e7ea5-0000-4000-8000-0000000000a2
+      for c in teams-mention teams-approval teams-alert-push teams-failover; do install "$push" "19:$c@thread.tacv2"; done
+      install "$poll" "19:teams-alert-poll@thread.tacv2"' sh "${fake}" >/dev/null 2>&1; then
+      ok=1
+      break
+    fi
+    sleep 5
+  done
+  [ -n "${ok}" ] || {
+    "${K[@]}" -n agent-kourier logs deploy/agent-kourier --tail=40 >&2 || true
+    die "the broker never answered the fake Teams service's conversationUpdate with 200; is teams-e2e in config.connectionNamespaces, does its Role name its Secrets, and is the chat listener on?"
+  }
+  echo "ok: the broker serves the Teams connections teams-e2e/teams-push and teams-e2e/teams-poll"
 }
 
 # runner_admission DIR: the broker's admission (spec D54) for the E2E runner, as the Deployment agent-kourier has it: its AGENTKOURIER_CHAT_CONNECTION,

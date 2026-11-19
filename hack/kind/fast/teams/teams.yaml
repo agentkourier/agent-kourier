@@ -1,0 +1,197 @@
+# The fast tier's Microsoft Teams connections (E2E_TEAMS=1 in up-fast.sh, on custom resources), against the fake Teams service (faketeams.yaml): a team,
+# teams-e2e, that brings two Teams bots to the broker the way a team brings a Slack app. lib.sh's deploy_teams_connections makes the namespace and the
+# Secrets this file names (fake constants: the client secret the fake takes, and an agent token the stub agent accepts) and applies it. The platform admits
+# teams-e2e (hack/kind/teams-values.yaml). test/e2e's TEAMS_ tests drive it, and its teams.go names the same IDs, channels and Bindings.
+#
+# teams-push has a notificationURL, so the leader keeps a Graph subscription to each bound channel and reads what Graph notifies; teams-poll has none, so
+# the leader polls the channels of its botMessage triggers. Both are in http mode: the fake sends their activities to the chat listener.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: agent-kourier-reads-teams-e2e, namespace: teams-e2e}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [teams-bot, teams-e2e-agent-token]
+    verbs: [list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: agent-kourier-reads-teams-e2e, namespace: teams-e2e}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agent-kourier-reads-teams-e2e}
+subjects: [{kind: ServiceAccount, name: agent-kourier, namespace: agent-kourier}]
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: teams-push, namespace: teams-e2e}
+spec:
+  platform: teams
+  credentialsSecretRef: {name: teams-bot}
+  teams:
+    tenantID: 7e2e7ea5-0000-4000-8000-000000000001
+    appID: 7e2e7ea5-0000-4000-8000-0000000000a1
+    mode: http
+    notificationURL: https://agent-kourier-chat.agent-kourier.svc.cluster.local:8081/chat/teams/teams-e2e/teams-push
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: teams-poll, namespace: teams-e2e}
+spec:
+  platform: teams
+  credentialsSecretRef: {name: teams-bot}
+  teams:
+    tenantID: 7e2e7ea5-0000-4000-8000-000000000001
+    appID: 7e2e7ea5-0000-4000-8000-0000000000a2
+    mode: http
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: agents, namespace: teams-e2e}
+spec:
+  dialect: kagent-v1
+  url: http://stubagent.e2e.svc.cluster.local:8080
+---
+# A mention, answered by the stub's scenario-gated: "No gate named, not holding." to any text, and a held turn on a gate the text names ("gate:G"),
+# whose reply is edited in place as the stream goes on (output live).
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: mention, namespace: teams-e2e}
+spec:
+  agent:
+    backendRef: {name: agents}
+    namespace: kagent
+    name: scenario-gated
+  identity:
+    userId: teams-e2e
+    tokenSecretRef: {name: teams-e2e-agent-token}
+  chat:
+    connectionRef: {name: teams-push}
+    channel: "19:teams-mention@thread.tacv2"
+    output: live
+---
+# A tool approval: the stub's spike-approve asks to run add_numbers, which the broker posts as a card with Approve and Deny.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: approval, namespace: teams-e2e}
+spec:
+  agent:
+    backendRef: {name: agents}
+    namespace: kagent
+    name: spike-approve
+  identity:
+    userId: teams-e2e
+    tokenSecretRef: {name: teams-e2e-agent-token}
+  chat:
+    connectionRef: {name: teams-push}
+    channel: "19:teams-approval@thread.tacv2"
+    output: live
+  interactions: {toolApprovals: true}
+---
+# An alert: a Workflows card (the app 7e2e7ea5-…-f1) that starts an investigation of the stub's scenario-alert in its thread, read through Graph's
+# notifications. The final message of an investigation carries the feedback buttons. The card's text is the trigger's body field (Teams has no title,
+# link or fallback).
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: alert-push, namespace: teams-e2e}
+spec:
+  agent:
+    backendRef: {name: agents}
+    namespace: kagent
+    name: scenario-alert
+  identity:
+    userId: teams-e2e
+    tokenSecretRef: {name: teams-e2e-agent-token}
+  chat:
+    connectionRef: {name: teams-push}
+    channel: "19:teams-alert-push@thread.tacv2"
+    output: live
+    triggers:
+      - type: botMessage
+        from: {id: 7e2e7ea5-0000-4000-8000-0000000000f1}
+        match:
+          body: '\[(?:FIRING|RESOLVED)\] '
+        extract:
+          state: {field: body, regex: '\[(?P<state>FIRING|RESOLVED)\]'}
+          key: {field: body, regex: '\[[A-Z]+\] (?P<key>[A-Za-z0-9]+)'}
+          alertname: {field: body, regex: '\[[A-Z]+\] (?P<alertname>[A-Za-z0-9]+)'}
+        thread:
+          by: key
+          cooldown: 4h
+          closeWhen: {state: RESOLVED}
+        limits:
+          rateLimit: {maxRuns: 20, per: 10m, maxConcurrent: 4}
+          maxRunsPerDay: 200
+        promptTemplate: |
+          An alert is {{ .State }} in channel {{ .Channel }}: {{ .Fields.alertname }}.
+          Investigate it with your read-only tools.
+---
+# The same trigger on the connection that polls: the leader reads the channel's messages/delta every 10 seconds.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: alert-poll, namespace: teams-e2e}
+spec:
+  agent:
+    backendRef: {name: agents}
+    namespace: kagent
+    name: scenario-alert
+  identity:
+    userId: teams-e2e
+    tokenSecretRef: {name: teams-e2e-agent-token}
+  chat:
+    connectionRef: {name: teams-poll}
+    channel: "19:teams-alert-poll@thread.tacv2"
+    output: live
+    triggers:
+      - type: botMessage
+        from: {id: 7e2e7ea5-0000-4000-8000-0000000000f1}
+        match:
+          body: '\[(?:FIRING|RESOLVED)\] '
+        extract:
+          state: {field: body, regex: '\[(?P<state>FIRING|RESOLVED)\]'}
+          key: {field: body, regex: '\[[A-Z]+\] (?P<key>[A-Za-z0-9]+)'}
+          alertname: {field: body, regex: '\[[A-Z]+\] (?P<alertname>[A-Za-z0-9]+)'}
+        thread:
+          by: key
+          cooldown: 4h
+          closeWhen: {state: RESOLVED}
+        limits:
+          rateLimit: {maxRuns: 20, per: 10m, maxConcurrent: 4}
+          maxRunsPerDay: 200
+        promptTemplate: |
+          An alert is {{ .State }} in channel {{ .Channel }}: {{ .Fields.alertname }}.
+          Investigate it with your read-only tools.
+---
+# The failover case's channel: the same trigger and agent on the connection with the subscriptions, which the next leader adopts.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: failover, namespace: teams-e2e}
+spec:
+  agent:
+    backendRef: {name: agents}
+    namespace: kagent
+    name: scenario-alert
+  identity:
+    userId: teams-e2e
+    tokenSecretRef: {name: teams-e2e-agent-token}
+  chat:
+    connectionRef: {name: teams-push}
+    channel: "19:teams-failover@thread.tacv2"
+    output: live
+    triggers:
+      - type: botMessage
+        from: {id: 7e2e7ea5-0000-4000-8000-0000000000f1}
+        match:
+          body: '\[(?:FIRING|RESOLVED)\] '
+        extract:
+          state: {field: body, regex: '\[(?P<state>FIRING|RESOLVED)\]'}
+          key: {field: body, regex: '\[[A-Z]+\] (?P<key>[A-Za-z0-9]+)'}
+          alertname: {field: body, regex: '\[[A-Z]+\] (?P<alertname>[A-Za-z0-9]+)'}
+        thread:
+          by: key
+          cooldown: 4h
+          closeWhen: {state: RESOLVED}
+        limits:
+          rateLimit: {maxRuns: 20, per: 10m, maxConcurrent: 4}
+          maxRunsPerDay: 200
+        promptTemplate: |
+          An alert is {{ .State }} in channel {{ .Channel }}: {{ .Fields.alertname }}.
+          Investigate it with your read-only tools.

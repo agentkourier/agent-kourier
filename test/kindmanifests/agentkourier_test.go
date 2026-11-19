@@ -340,6 +340,14 @@ func TestTheRunnerJobRunsEveryE2ETest(t *testing.T) {
 				}
 				continue
 			}
+			// The TEAMS_ tests (Microsoft Teams on the fake Teams service) are make e2e-teams's, on a tier brought up with E2E_TEAMS=1, in a Job of their own
+			// (TestTheTeamsTargetRunsEveryTEAMSTest).
+			if strings.HasPrefix(m[1], "TestTEAMS_") {
+				if re.MatchString(m[1]) {
+					t.Errorf("the Job's pattern %q selects %s (%s): the TEAMS_ tests are run by make e2e-teams, not by the main Job", pattern, m[1], filepath.Base(f))
+				}
+				continue
+			}
 			seen++
 			if !re.MatchString(m[1]) {
 				t.Errorf("the Job's pattern %q does not select %s (%s), so the Job would never run it", pattern, m[1], filepath.Base(f))

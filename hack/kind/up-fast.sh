@@ -47,6 +47,13 @@
 # (hack/kind/fast/two-apps). The fake Slack hosts the second app and a third (team-b's) in every tier (fast/doubles.yaml). On E2E_STORE=postgres with
 # E2E_REPLICAS=2 the failover scenarios of that suite run too. Bringing the tier up again without it takes the admission list away, and the team's
 # objects stay in the cluster, not served. hack/kind/two-apps.sh (make e2e-two-apps) runs the scenarios that change the admission list with Helm.
+#
+# E2E_TEAMS=1 (with E2E_CONFIG_SOURCE=crds, and not with E2E_TWO_APPS=1, whose admission list is another) adds Microsoft Teams to the tier: the fake Teams
+# service (hack/kind/fast/teams/faketeams.yaml, test/faketeams), its certificate, and the broker on the test hooks that point a Teams connection at it and
+# nowhere else (hack/kind/teams-values.yaml: AGENTKOURIER_TEAMS_URL, AGENTKOURIER_TEAMS_CA, the chat listener, and the admission of namespace teams-e2e), then
+# a team's two Teams connections in http mode, one with Graph's notifications and one that polls, with their Bindings (hack/kind/fast/teams/teams.yaml). The
+# TEAMS_ tests of test/e2e drive it; make e2e-teams runs them, and make e2e-fast does not. On E2E_STORE=postgres with E2E_REPLICAS=2 their failover case runs
+# too. Bringing the tier up again without it takes the hooks and the admission away; the fake and the team's objects stay in the cluster, not served.
 set -eEuo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -78,6 +85,15 @@ case "${E2E_TWO_APPS}" in
     [ "${E2E_SLACK_MODE}" = socket ] || die "E2E_TWO_APPS=1 needs E2E_SLACK_MODE=socket: the MC_ tests run in Socket Mode only"
     ;;
   *) die "E2E_TWO_APPS must be 0 or 1" ;;
+esac
+E2E_TEAMS=${E2E_TEAMS:-0}
+case "${E2E_TEAMS}" in
+  0) ;;
+  1)
+    [ "${E2E_CONFIG_SOURCE}" = crds ] || die "E2E_TEAMS=1 needs E2E_CONFIG_SOURCE=crds: the Teams ChatConnections are a team's custom resources"
+    [ "${E2E_TWO_APPS}" = 0 ] || die "E2E_TEAMS=1 and E2E_TWO_APPS=1 each set the platform's admission list; bring the tier up with one of them"
+    ;;
+  *) die "E2E_TEAMS must be 0 or 1" ;;
 esac
 CTX=kind-${CLUSTER}
 K=(kubectl --context "${CTX}")
@@ -149,6 +165,11 @@ AGENTKOURIER_CRDS_ARGS=()
 if [ "${E2E_TWO_APPS}" = 1 ]; then
   AGENTKOURIER_CRDS_ARGS=(-f "${HERE}/two-apps-values.yaml")
 fi
+if [ "${E2E_TEAMS}" = 1 ]; then
+  AGENTKOURIER_CRDS_ARGS=(-f "${HERE}/teams-values.yaml")
+  step "fake Microsoft Teams service, its certificate"
+  deploy_fake_teams
+fi
 
 step "agent-kourier: namespace, config, Secrets, chart"
 # Created and updated with apply, so a re-run changes what changed. The Secrets are fake constants made
@@ -167,6 +188,11 @@ if [ "${E2E_TWO_APPS}" = 1 ]; then
   deploy_two_apps
 fi
 
+if [ "${E2E_TEAMS}" = 1 ]; then
+  step "teams-e2e: two Teams connections on the fake Teams service, their Secrets and Bindings"
+  deploy_teams_connections
+fi
+
 step "verify"
 "${FAST}/verify.sh"
-echo "fast tier up in ${SECONDS}s (context ${CTX}, store ${E2E_STORE}, ${E2E_REPLICAS} Agent Kourier replica(s), config source ${E2E_CONFIG_SOURCE}, Slack mode ${E2E_SLACK_MODE}, two apps ${E2E_TWO_APPS})"
+echo "fast tier up in ${SECONDS}s (context ${CTX}, store ${E2E_STORE}, ${E2E_REPLICAS} Agent Kourier replica(s), config source ${E2E_CONFIG_SOURCE}, Slack mode ${E2E_SLACK_MODE}, two apps ${E2E_TWO_APPS}, Teams ${E2E_TEAMS})"

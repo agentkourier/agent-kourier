@@ -221,7 +221,8 @@ spec:
           # E2E_CHAT_CONNECTION, E2E_CONNECTION_NAMESPACES and E2E_CONNECTION_NAMESPACE_SELECTOR are the broker's admission, as its Deployment has it, and
           # E2E_NAMESPACES the labels of the namespaces the MC_ tests ask about: e2e-run.sh puts them in the ConfigMap e2e-admission (lib.sh's runner_admission),
           # and not here, since a selector holds quotes, braces and slashes. The MC_ tests (not in this pattern; E2E_RUN=^TestMC_ or make e2e-two-apps) skip
-          # unless it admits team-a.
+          # unless it admits team-a. The TEAMS_ tests (not in it either; make e2e-teams) skip unless it admits teams-e2e (E2E_TEAMS=1 in up-fast.sh); they drive the
+          # fake Teams service's control API by its Service name and read nothing in teams-e2e, so they need no Role there.
           env:
             - {name: E2E_TIER, value: "@TIER@"}
             - {name: E2E_STUB_URL, value: "@STUB_URL@"}
