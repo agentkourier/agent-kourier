@@ -91,7 +91,7 @@ Counts are of entries. A length in bytes is of bytes.
 | `spec.webhook.fields` of a ChatConnection | `32`<!--limit:webhookFields--> fields | Refused at load, and by the API server. | None |
 | The name of an entry of `spec.webhook.fields` | `63`<!--limit:webhookFieldName--> bytes | Refused at load, and by the API server. | None |
 | A `from` list of `spec.webhook` (`channel.from`, `actor.from`, and a field's `from`) | `8`<!--limit:webhookFrom--> JSON Pointers | Refused at load, and by the API server. | None |
-| A JSON Pointer of `spec.webhook` (an entry of a `from` list, and `verify.timestamp.from`) | `256`<!--limit:webhookPointerLen--> bytes | Refused at load, by the API server, and when the broker builds the connection, with an error that names the pointer. | None |
+| A JSON Pointer of `spec.webhook` (an entry of a `from` list, and `verify.timestamp.from`) | `256`<!--limit:webhookPointerLen--> bytes | Refused at load, and by the API server; the broker checks it again when it builds the connection, and the error names the pointer. | None |
 | A header that `spec.webhook` names (`verify.header`, a field's `header`, `delivery.header`) | `64`<!--limit:webhookHeaderName--> bytes | Refused at load, and by the API server. | None |
 | `spec.webhook.verify.prefix` and `spec.webhook.thread.prefix` | `32`<!--limit:webhookPrefix--> bytes each | Refused at load, and by the API server. | None |
 | `spec.webhook.identity` | `128`<!--limit:webhookIdentity--> bytes | Refused at load, and by the API server. | None |
