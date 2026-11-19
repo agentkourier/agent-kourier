@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -604,6 +605,134 @@ func TestSubmitBindingGone(t *testing.T) {
 	res, err := f.submitAny(inbound("1700.01"))
 	if got, _ := f.session(); err != nil || res.Disposition != BindingGone || got != seeded || f.st.touches != 0 || f.woke != 0 || len(f.drain()) != 0 {
 		t.Errorf("Submit = %+v, %v; session %+v, %d touches, woke %d; want BindingGone and no change", res, err, got, f.st.touches, f.woke)
+	}
+}
+
+// On a platform with no replies, no notice can tell a thread that it has expired or that its Binding is gone, and a turn that may
+// create the session (a webhook connection's every event) would be refused in silence for good: so it makes a fresh session under the
+// same key, under the Binding that owns the channel now, and is Created and queued, and no notice is asked for. Where there are
+// replies (Slack) the same turn is still answered with the notice and changes nothing, and a session that has a task is not replaced.
+func TestSubmitOnAPlatformWithoutRepliesReplacesAnEndedSession(t *testing.T) {
+	ended := func(binding string, age time.Duration) func(f *fixture) store.Session {
+		return func(f *fixture) store.Session {
+			f.t.Helper()
+			sess := store.Session{Key: key, ContextID: "c-old", Binding: binding, Origin: store.Origin{Source: store.OriginPersonMessage, Subject: "old"},
+				Agent: "kagent/old", LastActivity: t0.Add(-age)}
+			if err := f.st.UpsertSession(f.t.Context(), sess); err != nil {
+				f.t.Fatal(err)
+			}
+			f.st.upserts = 0
+			return sess
+		}
+	}
+	withTask := func(seed func(f *fixture) store.Session) func(f *fixture) store.Session {
+		return func(f *fixture) store.Session {
+			sess := seed(f)
+			sess.TaskID = "t-old"
+			if err := f.st.UpsertSession(f.t.Context(), sess); err != nil {
+				f.t.Fatal(err)
+			}
+			f.st.upserts = 0
+			return sess
+		}
+	}
+	// withReply queues the reply id on the thread after seed, as a turn of the old session would be; delivered marks the thread's queued
+	// replies delivered, as the runner does once their turn was sent.
+	withReply := func(id string, seed func(f *fixture) store.Session) func(f *fixture) store.Session {
+		return func(f *fixture) store.Session {
+			sess := seed(f)
+			if _, err := f.st.EnqueueReply(f.t.Context(), store.Reply{ID: id, Key: key, UserID: "U1", MessageRef: "1700.01", Text: "earlier", EnqueuedAt: t0.Add(-3 * time.Hour)}); err != nil {
+				f.t.Fatal(err)
+			}
+			return sess
+		}
+	}
+	delivered := func(seed func(f *fixture) store.Session) func(f *fixture) store.Session {
+		return func(f *fixture) store.Session {
+			sess := seed(f)
+			f.drain()
+			return sess
+		}
+	}
+	for _, tc := range []struct {
+		name      string
+		seed      func(f *fixture) store.Session
+		noReplies bool
+		want      Result
+	}{
+		{"no replies, expired", ended("ns/b1", 2*time.Hour), true, Result{Disposition: Created, Admission: Admission{Kind: AdmitTurn, Replaces: true}}},
+		{"no replies, Binding gone", ended("ns/gone", 0), true, Result{Disposition: Created, Admission: Admission{Kind: AdmitTurn, Replaces: true}}},
+		{"no replies, expired, with a task", withTask(ended("ns/b1", 2*time.Hour)), true, Result{Disposition: Expired, Admission: admExpired}},
+		{"no replies, expired, with a reply undelivered", withReply("slack:slack:C1:1700.01", ended("ns/b1", 2*time.Hour)), true, Result{Disposition: Expired, Admission: admExpired}},
+		{"no replies, Binding gone, with a reply undelivered", withReply("slack:slack:C1:1700.01", ended("ns/gone", 0)), true, Result{Disposition: BindingGone, Admission: admGone}},
+		{"no replies, expired, the turn taken before", delivered(withReply("slack:slack:C1:1700.02", ended("ns/b1", 2*time.Hour))), true, Result{Disposition: Expired, Admission: admExpired}},
+		{"no replies, Binding gone, the turn taken before", delivered(withReply("slack:slack:C1:1700.02", ended("ns/gone", 0))), true, Result{Disposition: BindingGone, Admission: admGone}},
+		{"replies, expired", ended("ns/b1", 2*time.Hour), false, Result{Disposition: Expired, Admission: admExpired}},
+		{"replies, Binding gone", ended("ns/gone", 0), false, Result{Disposition: BindingGone, Admission: admGone}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			seeded := tc.seed(f)
+			in := inbound("1700.02")
+			in.Origin, in.NoReplies = store.Origin{Source: store.OriginPersonMessage, Subject: "new"}, tc.noReplies
+			res, err := f.submitAny(in)
+			if err != nil || res != tc.want {
+				t.Fatalf("Submit = %+v, %v; want %+v", res, err, tc.want)
+			}
+			got, _ := f.session()
+			if tc.want.Disposition != Created {
+				// The queue keeps only what the seed put there: a reply of the old session that is not delivered yet.
+				if got != seeded || f.st.upserts != 0 || f.st.touches != 0 || f.woke != 0 || slices.ContainsFunc(f.drain(), func(r store.Reply) bool { return r.ID == in.MessageID }) {
+					t.Errorf("session %+v (seeded %+v), %d upserts, %d touches, woke %d; want nothing written, queued or woken", got, seeded, f.st.upserts, f.st.touches, f.woke)
+				}
+				return
+			}
+			want := store.Session{Key: key, Binding: "ns/b1", Origin: in.Origin, Agent: "kagent/agent-1", LastActivity: t0}
+			if got != want {
+				t.Errorf("session = %+v; want a fresh one under the channel's Binding: %+v", got, want)
+			}
+			if queued := f.drain(); len(queued) != 1 || queued[0].ID != in.MessageID || f.woke != 1 {
+				t.Errorf("queued %+v, woke %d; want the turn queued and the runner woken once", queued, f.woke)
+			}
+		})
+	}
+}
+
+// The runner records a turn's task, and then marks its reply delivered, without the intake lock. When both land after the intake read
+// the session (no task) and before it reads the queue (now empty), the intake reads the session again and finds the task: the old
+// session is not replaced, and the task the runner recorded is kept.
+func TestSubmitOnAPlatformWithoutRepliesKeepsATaskRecordedWhileItDecides(t *testing.T) {
+	f := newFixture(t)
+	old := store.Session{Key: key, ContextID: "c-old", Binding: "ns/b1", Origin: store.Origin{Source: store.OriginPersonMessage, Subject: "old"},
+		Agent: "kagent/old", LastActivity: t0.Add(-2 * time.Hour)}
+	if err := f.st.UpsertSession(t.Context(), old); err != nil {
+		t.Fatal(err)
+	}
+	earlier := store.Reply{ID: "slack:slack:C1:1700.01", Key: key, UserID: "U1", MessageRef: "1700.01", Text: "earlier", EnqueuedAt: t0.Add(-3 * time.Hour)}
+	if _, err := f.st.EnqueueReply(t.Context(), earlier); err != nil {
+		t.Fatal(err)
+	}
+	f.st.upserts = 0
+	var once sync.Once
+	f.st.onNext = func() { // just before the intake reads the queue, the runner accepts the earlier turn, as accept does
+		once.Do(func() {
+			if err := f.st.Store.SetSessionTask(t.Context(), key, "c-old", "t-old", store.TaskTurn{ID: earlier.ID, User: "U1", MessageRef: "1700.01"}); err != nil {
+				t.Error(err)
+			}
+			if err := f.st.Store.MarkReplyDelivered(t.Context(), earlier.ID, t0); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+
+	in := inbound("1700.02")
+	in.Origin, in.NoReplies = store.Origin{Source: store.OriginPersonMessage, Subject: "new"}, true
+	res, err := f.submitAny(in)
+	if want := (Result{Disposition: Expired, Admission: admExpired}); err != nil || res != want {
+		t.Fatalf("Submit = %+v, %v; want %+v: the session has the task the runner recorded", res, err, want)
+	}
+	if got, _ := f.session(); got.TaskID != "t-old" || got.ContextID != "c-old" || f.st.upserts != 0 {
+		t.Errorf("session %+v after %d upserts; want the old one, with the task the runner recorded", got, f.st.upserts)
 	}
 }
 
