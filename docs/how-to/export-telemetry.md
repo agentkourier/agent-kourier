@@ -110,12 +110,23 @@ sum by (binding, limit) (increase(agentkourier_trigger_limited_total{binding=~"a
 # No connection label here either: filter by binding
 sum by (binding, reason) (increase(agentkourier_trigger_refused_total{binding=~"acme-webhooks/.*"}[30m])) > 0
 
-# No event taken for a day: the webhook may be off at the sender, or point elsewhere
-sum by (connection) (increase(agentkourier_webhook_requests_total{outcome="accepted"}[24h])) == 0
+# Events taken slowly: the 99th percentile is past half of the 2 second wait, after which a delivery is answered 503 (timeout)
+histogram_quantile(0.99, sum by (le, connection) (rate(agentkourier_webhook_ack_duration_seconds_bucket{outcome="accepted"}[15m]))) > 1
+
+# No event taken for a day: the webhook may be off at the sender, point elsewhere, or no longer fit the mapping
+time() - max by (connection) (max_over_time(agentkourier_webhook_last_accepted_timestamp_seconds{connection="acme-webhooks/github"}[2d])) > 86400
+
+# No event taken in the whole range, as for a connection that has taken none since it was set up: the rule above has no value then
+absent_over_time(agentkourier_webhook_last_accepted_timestamp_seconds{connection="acme-webhooks/github"}[2d])
 ```
 
-The last rule has a value only because the series start at 0. Pick its window from how often the service sends events. Each
-answer is also a log line, `webhook: delivery answered`, with the delivery ID that the sender's own log shows
+The last two rules are for a connection whose service sends events every day; name each such connection, and pick the threshold from
+how often its service sends them. `agentkourier_webhook_last_accepted_timestamp_seconds` is the time of the connection's last request
+answered `accepted`. Only the leader sets it, and a broker that has just started has no series of it until its first, so the rule
+reads it with `max_over_time` over a range longer than the threshold: the value from before a restart or a change of leader still
+counts. Use `max`, not `sum`: the value is a time. An event dropped as `self`, `ignored` or `unmapped` does not set it, as the
+broker never took it; the unmapped rule above, and `agentkourier_webhook_requests_total` by `outcome`, say which it was. Each answer is
+also a log line, `webhook: delivery answered`, with the delivery ID that the sender's own log shows
 ([Follow a delivery](receive-webhooks.md#follow-a-delivery)).
 
 ## Export traces

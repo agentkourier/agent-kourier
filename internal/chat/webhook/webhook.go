@@ -19,7 +19,8 @@
 //
 // Every answer but the 401, the 400 and the 503 is 200: some senders count any other as a failed delivery. A request that cannot be
 // read (400, malformed, unreadable) is refused before step 1. Each answer is counted once on the Config's Recorder, and every
-// outcome and reason it can count exists at zero from when a Run starts. Each verified request is logged once, at INFO; an
+// outcome and reason it can count exists at zero from when a Run starts; the Recorder is also given each answer's duration, from when
+// the handler was called, and the time of each accepted one. Each verified request is logged once, at INFO; an
 // unverified one at DEBUG, and in a WARN that sums them for the connection at most once a minute, so that a scanner of a public
 // URL cannot flood the log.
 //
@@ -113,9 +114,11 @@ type Config struct {
 	// ValidChannel says whether a value is a webhook channel's shape, the API's, which the broker hands in so that the platform and
 	// the Bindings hold one shape. Required. The platform refuses a value with ':' whatever it says, since chat.MessageID joins with it.
 	ValidChannel func(string) bool
-	// Recorder counts each answer (agentkourier_webhook_requests_total); nil, nothing is counted.
+	// Recorder records each answer: its outcome and reason (agentkourier_webhook_requests_total), its duration
+	// (agentkourier_webhook_ack_duration_seconds) and, for accepted, its time (agentkourier_webhook_last_accepted_timestamp_seconds),
+	// by Now. Nil, nothing is recorded.
 	Recorder Recorder
-	// Now is the clock of the body timestamps and the WARN summary; time.Now if nil.
+	// Now is the clock of the body timestamps, the WARN summary and the time of the last accepted request; time.Now if nil.
 	Now func() time.Time
 	// OnConnection, if set, is told true when a Run starts to take requests and false when it stops: the connection is up while a
 	// Run takes them, as a Slack connection in HTTP mode is.
@@ -186,12 +189,17 @@ type Thread struct {
 	Prefix string
 }
 
-// Recorder counts the requests of one connection, by outcome and reason (telemetry.WebhookRequests).
+// Recorder records the requests of one connection (telemetry.WebhookRequests): each answer by outcome and reason, how long it took,
+// and when the connection last answered accepted.
 type Recorder interface {
 	// Init makes the series of outcome and reason exist, at zero if it did not.
 	Init(outcome, reason string)
 	// Count adds one to the series of outcome and reason.
 	Count(outcome, reason string)
+	// Observe records how long a request answered with outcome took, from when the handler was called to its answer.
+	Observe(outcome string, d time.Duration)
+	// Accepted records at as the time of the connection's last request answered accepted.
+	Accepted(at time.Time)
 }
 
 // field is a configured field, parsed.
@@ -395,8 +403,10 @@ func (p *Platform) channelShape(s string) bool { return !strings.Contains(s, ":"
 // noRecorder is the Recorder of a Config that has none: it counts nothing.
 type noRecorder struct{}
 
-func (noRecorder) Init(string, string)  {}
-func (noRecorder) Count(string, string) {}
+func (noRecorder) Init(string, string)           {}
+func (noRecorder) Count(string, string)          {}
+func (noRecorder) Observe(string, time.Duration) {}
+func (noRecorder) Accepted(time.Time)            {}
 
 // run is one Run, as the handler finds it. The handler calls the Sink under mu held for reading, and Run sets closed under mu held for
 // writing once its context has ended, so that no event is handed to the Sink of a Run that has returned.
