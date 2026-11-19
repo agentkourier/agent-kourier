@@ -236,6 +236,7 @@ var connectionSeries = []struct {
 	{"agentkourier_teams_graph_read_messages_total", []string{"taken"}},
 	{"agentkourier_teams_graph_catchups_total", []string{"start", "read"}},
 	{"agentkourier_teams_graph_throttled_total", []string{}},
+	{"agentkourier_webhook_requests_total", []string{"accepted", "none"}},
 }
 
 // seriesOf returns the values of the connection label of every series of the named family.

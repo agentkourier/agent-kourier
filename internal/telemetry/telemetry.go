@@ -90,6 +90,7 @@ func New(reg prometheus.Registerer, provider trace.TracerProvider) (*Observer, e
 		{"agentkourier_teams_graph_catchups_total", "Catch-up reads of a bound channel's recent messages through Microsoft Graph by a teams connection, by trigger (start, socket_gap, missed) and outcome (read, failed, not_running).", []string{"trigger", "outcome", ConnectionLabel}},
 		{"agentkourier_teams_graph_throttled_total", "Reads of Microsoft Graph by the polls of a teams connection that Graph answered 429, each of which paused every read of the connection for its Retry-After.", []string{ConnectionLabel}},
 		{"agentkourier_slack_http_retries_total", "Signed requests to a connection in HTTP mode that Slack marked as a retry (X-Slack-Retry-Num): a request it sent again because an earlier one was not answered 200 in time.", []string{ConnectionLabel}},
+		{webhookRequests, "Requests sent to a webhook connection, by what they were answered (outcome) and why (reason): accepted, ignored, self and unmapped (200), unverified (401), malformed (400), not_running, withheld, timeout and cancelled (503).", []string{"outcome", "reason", ConnectionLabel}},
 	} {
 		c := prometheus.NewCounterVec(prometheus.CounterOpts{Name: d.name, Help: d.help}, d.labels)
 		if err := reg.Register(c); err != nil {
@@ -251,6 +252,41 @@ func Count(ctx context.Context, name string, labels ...string) {
 		if c := o.counts[name]; c != nil {
 			c.WithLabelValues(labels...).Inc()
 		}
+	}
+}
+
+// webhookRequests is the counter of the requests to a webhook connection, which WebhookRequests records.
+const webhookRequests = "agentkourier_webhook_requests_total"
+
+// WebhookRequests records agentkourier_webhook_requests_total for one webhook connection: the platform is given it when it is built,
+// and counts each answer it gives through it, with no context of the request's or of a Run's. The zero value records nothing.
+type WebhookRequests struct {
+	vec        *prometheus.CounterVec
+	connection string
+}
+
+// WebhookRecorder returns the recorder of agentkourier_webhook_requests_total for connection ("namespace/name"), on the broker's
+// instruments in ctx; with none there, it records nothing. Its series are the connection's, which ForgetConnection deletes.
+func WebhookRecorder(ctx context.Context, connection string) WebhookRequests {
+	o := observer(ctx)
+	if o == nil {
+		return WebhookRequests{}
+	}
+	return WebhookRequests{vec: o.counts[webhookRequests], connection: connection}
+}
+
+// Init makes the series of outcome and reason exist, at zero if it did not, so that a rule over it has a value before the first
+// such request. outcome and reason come from the platform's closed sets.
+func (w WebhookRequests) Init(outcome, reason string) {
+	if w.vec != nil {
+		w.vec.WithLabelValues(outcome, reason, w.connection)
+	}
+}
+
+// Count adds one to the series of outcome and reason.
+func (w WebhookRequests) Count(outcome, reason string) {
+	if w.vec != nil {
+		w.vec.WithLabelValues(outcome, reason, w.connection).Inc()
 	}
 }
 

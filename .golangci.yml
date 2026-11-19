@@ -56,6 +56,19 @@ linters:
               desc: "package chat is the chat-neutral model and the Platform contract, and chattest tests it: what keeps trigger threads and limits is the intake's, in internal/trigger"
             - pkg: github.com/agentkourier/agent-kourier/internal/telemetry
               desc: "package chat is the chat-neutral model and the Platform contract, and chattest tests it: what counts and traces the intake is the intake's, in internal/trigger"
+        webhook-is-a-platform-alone:
+          files: ["**/internal/chat/webhook/**", "!$test"]
+          deny:
+            - pkg: github.com/agentkourier/agent-kourier/internal/session
+              desc: "the webhook platform speaks chat.Platform and hands events to a chat.Sink: what feeds the session manager is the intake's, in internal/trigger"
+            - pkg: github.com/agentkourier/agent-kourier/internal/config
+              desc: "the webhook platform is given its Config by the broker, which maps the ChatConnection onto it: it reads no config"
+            - pkg: github.com/agentkourier/agent-kourier/internal/store
+              desc: "the webhook platform keeps nothing: a repeat is dropped by the intake, by the event's ID"
+            - pkg: github.com/agentkourier/agent-kourier/api/v1alpha1
+              desc: "the webhook platform is built from its own Go Config, which the broker maps the ChatConnection onto: it reads no API type"
+            - pkg: github.com/agentkourier/agent-kourier/internal/telemetry
+              desc: "the webhook platform counts through the Recorder of its Config, which the broker builds: it does not reach the broker's instruments itself"
     nolintlint:
       require-explanation: true
       require-specific: true
