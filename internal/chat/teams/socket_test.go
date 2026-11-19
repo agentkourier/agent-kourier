@@ -622,13 +622,19 @@ func TestSocketModeClosesASilentSocket(t *testing.T) {
 		st.f.Silence("amer", true)
 		st.run(t)
 		first := st.f.WaitSocket(t, "amer", 0, 5*time.Second)
+		// A region counts the reason of a connect before it makes the call, so the second call's is counted once the fake has it. The
+		// read loop's deadline is the ready deadline too, and a read that times out with it is the same ready timeout.
 		st.f.WaitConnects(t, "amer", 2, 5*time.Second)
+		timedOut := st.series(t, "agentkourier_teams_socket_reconnects_total", "amer", "ready_timeout")
+		failed := st.series(t, "agentkourier_teams_socket_reconnects_total", "amer", "failed")
+		closed := st.series(t, "agentkourier_teams_socket_reconnects_total", "amer", "server_timeout")
+		if timedOut < 1 || failed != 0 || closed != 0 {
+			t.Errorf("reconnects{amer} = ready_timeout %v, failed %v, server_timeout %v; want every socket that was never ready counted ready_timeout",
+				timedOut, failed, closed)
+		}
 		<-first.Closed()
 		st.f.Silence("amer", false)
 		testutil.Eventually(t, "a ready socket", func() bool { c, _ := st.told(); return len(c) > 0 })
-		if got := st.series(t, "agentkourier_teams_socket_reconnects_total", "amer", "ready_timeout"); got < 1 {
-			t.Errorf("reconnects{amer,ready_timeout} = %v; want at least 1", got)
-		}
 	})
 	t.Run("no message for the server timeout", func(t *testing.T) {
 		st := newSocketTest(t)

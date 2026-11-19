@@ -802,6 +802,11 @@ func (s *sockets) open(ctx context.Context, region, replaces string) (*socket, e
 		reason, _ := sk.why()
 		sk.close()
 		<-sk.done
+		// Until SocketReady the read deadline is the ready deadline, unless a message moved it on, so the read loop can time out at the
+		// same moment as t and win the select: a read that timed out at or past the deadline is the ready timeout, not the server's.
+		if reason == reasonServerTimeout && !time.Now().Before(deadline) {
+			return nil, fmt.Errorf("%w: the socket of %s", errReadyTimeout, region)
+		}
 		return nil, fmt.Errorf("teams socket mode: the socket of %s ended before SocketReady (%s)", region, reason)
 	case <-t.C:
 		sk.close()
