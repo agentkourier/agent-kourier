@@ -80,13 +80,13 @@ ChatConnection of their own, in the namespace `acme-webhooks`, which a broker se
 namespace (`config.connectionNamespaces`): each webhook recipe's "Apply it" says how. To run more than one chat recipe
 on one broker, apply each recipe's `kourier/` directory. Then:
 
-- **One platform.** A ChatConnection is on one platform, so a broker runs the Slack recipes or `prompt-agent-teams`,
-  whose ChatConnection is `teams` in the namespace `agent-kourier`, not both. To run both in one cluster, install the
-  Teams recipe's broker as a second release in the same namespace, named apart (`agent-kourier-teams`), with
-  `crds.install: false`, since the CRDs are the first release's: its README's
-  [Apply it](prompt-agent-teams/README.md#apply-it) step says how. Each broker then serves its own ChatConnection alone,
-  as a broker with a `config.chatConnection` and no namespace list or selector does, and writes the status of its own
-  Bindings only. What follows is for the Slack recipes.
+- **The Slack and Teams recipes on two brokers.** Installed as these recipes install it, a broker serves its own
+  ChatConnection alone (`config.chatConnection` set, and no namespace list or selector), so the broker of the Slack
+  recipes does not serve `prompt-agent-teams`' ChatConnection, `teams` in the namespace `agent-kourier`. To run both in
+  one cluster, install the Teams recipe's broker as a second release in the same namespace, named apart
+  (`agent-kourier-teams`), with `crds.install: false`, since the CRDs are the first release's: its README's
+  [Apply it](prompt-agent-teams/README.md#apply-it) step says how. Each broker then serves its own ChatConnection and
+  writes the status of its own Bindings only. What follows is for the Slack recipes.
 - **One ChatConnection.** Every Slack recipe ships the same one: `slack` in the namespace `agent-kourier`, whose Secret
   `slack` holds the keys `botToken` and `appToken` (`botToken` and `signingSecret` in [HTTP mode](#slack-in-http-mode)).
   The copies are one object, so applying a second recipe leaves it as it is (in HTTP mode, only once every copy you
