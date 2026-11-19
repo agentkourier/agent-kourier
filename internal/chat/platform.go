@@ -50,7 +50,8 @@ type WebhookEvent struct {
 // set:
 //
 //   - Present: a value resolved and, for an id field, passed the id check. Value is it: an id field's an identifier, a text field's
-//     the raw, untrusted text.
+//     the raw, untrusted text. An empty value resolves and passes the id check, so a field can be Present with an empty Value; it
+//     ends the first-of list as any other value does.
 //   - Invalid: an id field one of whose sources resolved, but only to values that fail the id check. Value is empty. It is not
 //     absent: a reader that would act on the field's absence fails closed instead.
 //   - absent (neither): nothing resolved. Value is empty.

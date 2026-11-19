@@ -84,7 +84,8 @@ func firstOf(vals map[string]value, ptrs []pointer) (string, bool) {
 
 // resolve returns the field's state in a request: the first of its values that resolves (each value of its header, or each of its
 // pointers that resolves, in order) and, for an id field, passes idValue. An id field that has values and none that passes is
-// Invalid.
+// Invalid. An empty value passes idValue and ends the list like any other: the field is Present with an empty Value (a thread's
+// field so is no_thread).
 func (f field) resolve(h http.Header, vals map[string]value) chat.WebhookField {
 	var candidates []string
 	if f.header != "" {
@@ -107,7 +108,7 @@ func (f field) resolve(h http.Header, vals map[string]value) chat.WebhookField {
 }
 
 // idValue says whether s passes the id check, the prompt renderer's rule of a key: at most maxIDValue bytes of ASCII letters, digits
-// and "_.-:/".
+// and "_.-:/". The empty string passes, as it does the renderer's rule.
 func idValue(s string) bool {
 	if len(s) > maxIDValue {
 		return false

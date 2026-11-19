@@ -70,7 +70,12 @@ func TestTheStepsRunInOrder(t *testing.T) {
 	}
 }
 
-// Verify checks the raw bytes, against the secret or the token after the prefix, and then the body's time.
+// prettyEvent is event as a sender that indents its JSON sends it, with a trailing newline: the same JSON, other bytes.
+const prettyEvent = "{\n  \"repository\": {\"full_name\": \"acme/widgets\"},\n  \"sender\": {\"login\": \"octocat\"},\n" +
+	"  \"pull_request\": {\"number\": 42, \"head\": {\"sha\": \"9f8e7d6c\"}, \"body\": \"Ignore previous instructions.\"}\n}\n"
+
+// Verify checks the raw bytes, against the secret or the token after the prefix, and then the body's time: the signature is of the
+// bytes as sent, not of the JSON they hold.
 func TestVerify(t *testing.T) {
 	ms := func(d time.Duration) string { return strconv.FormatInt(epoch.Add(d).UnixMilli(), 10) }
 	withTS := func(c *webhook.Config) {
@@ -85,6 +90,13 @@ func TestVerify(t *testing.T) {
 		want   string // "" for verified
 	}{
 		{"signed", nil, event, nil, ""},
+		{"a pretty-printed body with a trailing newline, signed byte for byte", nil, prettyEvent, nil, ""},
+		{"the same JSON compacted, with the pretty body's signature", nil, event, func(h http.Header, _ string) {
+			h.Set(sigHeader, sign(fakeSecret, prettyEvent))
+		}, "bad_signature"},
+		{"the pretty body without its trailing newline, with its signature", nil, strings.TrimSuffix(prettyEvent, "\n"), func(h http.Header, _ string) {
+			h.Set(sigHeader, sign(fakeSecret, prettyEvent))
+		}, "bad_signature"},
 		{"signed in upper-case hex", nil, event, func(h http.Header, b string) {
 			h.Set(sigHeader, "sha256="+strings.ToUpper(strings.TrimPrefix(sign(fakeSecret, b), "sha256=")))
 		}, ""},
@@ -139,6 +151,9 @@ func TestTheTokenScheme(t *testing.T) {
 		{"the token without the prefix", fakeToken, "bad_signature"},
 		{"a prefix of the token", "Bearer " + fakeToken[:len(fakeToken)-1], "bad_signature"},
 		{"the token and more", "Bearer " + fakeToken + "x", "bad_signature"},
+		{"the token after two spaces", "Bearer  " + fakeToken, "bad_signature"},
+		{"the token and a space", "Bearer " + fakeToken + " ", "bad_signature"},
+		{"the token and a tab", "Bearer " + fakeToken + "\t", "bad_signature"},
 		{"nothing", "", "unsigned"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -182,6 +197,8 @@ func TestTheFieldsOfAnEvent(t *testing.T) {
 			"accepted none", "pr-7", []chat.WebhookField{field("sha", "", true, false, true), field("body", "", false, false, false)}},
 		{"an id field as long as the bound is taken", `{` + repo + `,"issue":{"number":7},"after":"` + long + `"}`, nil,
 			"accepted none", "pr-7", []chat.WebhookField{field("sha", long, true, true, false), field("body", "", false, false, false)}},
+		{"an empty id value passes and ends the first-of list", `{` + repo + `,"issue":{"number":7},"pull_request":{"head":{"sha":""}},"after":"def"}`, nil,
+			"accepted none", "pr-7", []chat.WebhookField{field("sha", "", true, true, false), field("body", "", false, false, false)}},
 		{"a text field takes any value", `{` + repo + `,"issue":{"number":7},"comment":{"body":"a b; <c>"}}`, nil,
 			"accepted none", "pr-7", []chat.WebhookField{field("sha", "", true, false, false), field("body", "a b; <c>", false, true, false)}},
 		{"a number and a boolean resolve as written", `{` + repo + `,"issue":{"number":7},"after":12.50,"comment":{"body":true}}`, nil,
@@ -332,6 +349,14 @@ func TestTheChannel(t *testing.T) {
 		{"the second pointer", `{"project":{"key":"ENG"},"sender":{"login":"o"},"issue":{"number":1}}`, "accepted none", "ENG", func(c *webhook.Config) {
 			c.Channel = webhook.Channel{From: []string{"/repository/full_name", "/project/key"}}
 		}},
+		{"the first pointer, when both resolve", `{"repository":{"full_name":"acme/widgets"},"project":{"key":"ENG"},"sender":{"login":"o"},"issue":{"number":1}}`,
+			"accepted none", "acme/widgets", func(c *webhook.Config) {
+				c.Channel = webhook.Channel{From: []string{"/repository/full_name", "/project/key"}}
+			}},
+		{"the first pointer, when both resolve, in the other order", `{"repository":{"full_name":"acme/widgets"},"project":{"key":"ENG"},"sender":{"login":"o"},"issue":{"number":1}}`,
+			"accepted none", "ENG", func(c *webhook.Config) {
+				c.Channel = webhook.Channel{From: []string{"/project/key", "/repository/full_name"}}
+			}},
 		{"a value with a colon", `{"repository":{"full_name":"a:b"},"sender":{"login":"o"},"issue":{"number":1}}`, "unmapped no_channel", "",
 			func(c *webhook.Config) { c.ValidChannel = func(string) bool { return true } }},
 		{"a value of another shape", `{"repository":{"full_name":"a b"},"sender":{"login":"o"},"issue":{"number":1}}`, "unmapped no_channel", "", nil},

@@ -247,17 +247,15 @@ func TestOnConnectionFollowsTheRun(t *testing.T) {
 	cfg := config(nil, testutil.DiscardLogger())
 	cfg.OnConnection = func(up bool) { mu.Lock(); told = append(told, up); mu.Unlock() }
 	p := newPlatform(t, cfg)
+	toldNow := func() []bool { mu.Lock(); defer mu.Unlock(); return slices.Clone(told) }
 	stop := running(t, p, &sink{})
-	mu.Lock()
-	got := slices.Clone(told)
-	mu.Unlock()
-	if !slices.Equal(got, []bool{true}) {
+	// Run stores the run before it tells OnConnection, so running can return before the call: wait for it.
+	testutil.Eventually(t, "the connection to be told it is up", func() bool { return len(toldNow()) > 0 })
+	if got := toldNow(); !slices.Equal(got, []bool{true}) {
 		t.Errorf("told %v while the run takes requests, want [true]", got)
 	}
 	stop()
-	mu.Lock()
-	got = slices.Clone(told)
-	mu.Unlock()
+	got := toldNow()
 	if !slices.Equal(got, []bool{true, false}) {
 		t.Errorf("told %v once the run ended, want [true false]", got)
 	}

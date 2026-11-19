@@ -145,7 +145,8 @@ type sink struct {
 	got   []chat.Inbound
 	ctxs  []context.Context
 	fail  error
-	block bool // wait for the context to end, and fail with its error
+	block bool   // wait for the context to end, and fail with its error
+	hook  func() // if set, called as each call comes in, once its context is recorded
 	in    atomic.Int32
 	twice atomic.Bool // two calls were in at once
 }
@@ -156,9 +157,12 @@ func (s *sink) Message(ctx context.Context, m chat.Inbound) error {
 	}
 	defer s.in.Add(-1)
 	s.mu.Lock()
-	block, fail := s.block, s.fail
+	block, fail, hook := s.block, s.fail, s.hook
 	s.ctxs = append(s.ctxs, ctx)
 	s.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	if block {
 		<-ctx.Done()
 		return ctx.Err()

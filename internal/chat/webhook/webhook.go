@@ -13,7 +13,7 @@
 //  4. the actor: 200, self, when any actor value that resolves is the connection's identity; 200, ignored (no_actor), when none
 //     resolves and the connection keeps no such event;
 //  5. the fields, then the thread from its field: 200, unmapped, when the thread's field resolves to no value that passes the id
-//     check (bad_id) or does not resolve (no_thread);
+//     check or to one that holds ':' (bad_id), or does not resolve or is empty (no_thread);
 //  6. the Sink, after the connection's events before it: 200, accepted, once it has taken the event; 503, not_running, withheld,
 //     timeout or cancelled, with a Retry-After, when it did not.
 //

@@ -115,7 +115,9 @@ func TestTheSinkIsCalledOnRunsContext(t *testing.T) {
 // not take the event after the sender was told to send it again.
 func TestTheHandlerAnswers503WhenTheSinkDoesNotAnswerInTime(t *testing.T) {
 	p := newPlatform(t, config(nil, nil))
-	p.SetAckWait(20 * time.Millisecond)
+	// Long enough that the handler reaches the sink inside it, which the wait counts from the handler's start, even on a loaded
+	// machine.
+	p.SetAckWait(200 * time.Millisecond)
 	sk := &sink{block: true}
 	running(t, p, sk)
 
@@ -227,7 +229,7 @@ func TestEveryOutcomeAndReasonIsCountedOnce(t *testing.T) {
 	cfg := config(rec, nil)
 	cfg.Verify.Timestamp = nil
 	p := newPlatform(t, cfg)
-	p.SetAckWait(50 * time.Millisecond)
+	p.SetAckWait(time.Hour) // the wait ends none of these steps: timeout has a platform of its own, below
 	sk := &sink{}
 	signed := func(body string) func() *http.Request { return func() *http.Request { return request(body, true) } }
 	pr := func(edit func(string) string) func() *http.Request { return signed(edit(event)) }
@@ -258,12 +260,6 @@ func TestEveryOutcomeAndReasonIsCountedOnce(t *testing.T) {
 		{"malformed depth", http.StatusBadRequest, signed(`{"a":` + strings.Repeat("[", 64) + strings.Repeat("]", 64) + `}`), nil},
 		{"malformed duplicate_key", http.StatusBadRequest, signed(`{"repository":{"full_name":"a/b"},"repository":{}}`), nil},
 		{"withheld none", http.StatusServiceUnavailable, signed(event), func() { sk.set(errors.New("the store is busy"), false) }},
-		{"timeout none", http.StatusServiceUnavailable, signed(event), func() { sk.set(nil, true) }},
-		{"cancelled none", http.StatusServiceUnavailable, func() *http.Request {
-			ctx, cancel := context.WithCancel(context.Background())
-			time.AfterFunc(10*time.Millisecond, cancel)
-			return request(event, true).WithContext(ctx)
-		}, nil},
 	}
 	// stale needs a timestamp: its own platform, on the same recorder.
 	staleCfg := config(rec, nil)
@@ -287,6 +283,29 @@ func TestEveryOutcomeAndReasonIsCountedOnce(t *testing.T) {
 	}
 	checkOneMore(t, "unverified stale", before, rec.snapshot())
 	covered["unverified stale"] = true
+	// cancelled: a platform whose wait does not end, and a Sink that holds the event until the sender goes away, which it makes
+	// happen, so that nothing but the cancel can end the take.
+	reqCtx, cancelReq := context.WithCancel(context.Background())
+	defer cancelReq()
+	held := newPlatform(t, config(rec, nil))
+	held.SetAckWait(time.Hour)
+	running(t, held, &sink{block: true, hook: cancelReq})
+	before = rec.snapshot()
+	if w := serve(t, held, request(event, true).WithContext(reqCtx)); w.Code != http.StatusServiceUnavailable {
+		t.Errorf("cancelled: status %d, want 503", w.Code)
+	}
+	checkOneMore(t, "cancelled none", before, rec.snapshot())
+	covered["cancelled none"] = true
+	// timeout: a platform with a short wait and a Sink that holds the event, so that nothing but the wait can end the take.
+	slow := newPlatform(t, config(rec, nil))
+	slow.SetAckWait(20 * time.Millisecond)
+	running(t, slow, &sink{block: true})
+	before = rec.snapshot()
+	if w := serve(t, slow, request(event, true)); w.Code != http.StatusServiceUnavailable {
+		t.Errorf("timeout: status %d, want 503", w.Code)
+	}
+	checkOneMore(t, "timeout none", before, rec.snapshot())
+	covered["timeout none"] = true
 	for _, s := range webhook.Series() {
 		if !covered[s] {
 			t.Errorf("the series %q has no case here", s)
