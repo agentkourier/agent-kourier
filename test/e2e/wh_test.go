@@ -440,6 +440,7 @@ func TestWH_EachRecipeTakesASignedDeliveryAndDropsTheAgentsOwnPost(t *testing.T)
 			st := startOf(t, vendor, n)
 			accepted, self, served := w.requests(vendor, "accepted", "none"), w.requests(vendor, "self", "none"), w.served(vendor)
 
+			// A start of the recipe's trigger that whStartsARun counts.
 			started := w.start(vendor, 0, func() fakevendors.Delivery { return startOf(t, vendor, n).d }, "the "+vendor+" delivery")
 			sent := started.sent
 			p := w.waitPosts(vendor, st.target, 1, "the agent's post on "+st.target)[0]
@@ -515,6 +516,7 @@ func TestWH_ARedeliveryIsTakenOnceAndStartsNoSecondTurn(t *testing.T) {
 	const vendor = fakevendors.GitHub
 	n := whNumber()
 	st := startOf(t, vendor, n)
+	// A start of the recipe's trigger that whStartsARun counts.
 	pr := w.start(vendor, 0, func() fakevendors.Delivery { return startOf(t, vendor, n).d }, "the pull request").d
 	w.waitPosts(vendor, st.target, 1, "the review")
 
@@ -536,6 +538,7 @@ func TestWH_ARedeliveryIsTakenOnceAndStartsNoSecondTurn(t *testing.T) {
 	mention := func() fakevendors.Delivery {
 		return fakevendors.GitHubComment{Repo: whRepo, Number: n, CommentID: n, Text: "@acme-review-agent is the retry bounded now?", Author: "octocat"}.Delivery()
 	}
+	// A start of the recipe's trigger that whStartsARun counts.
 	w.start(vendor, 1, mention, "the comment that mentions the agent")
 	reply := w.waitPosts(vendor, st.target, 2, "the reply to the mention")[1]
 	if want := fmt.Sprintf("Reply on %s (turn 2)", st.target); reply.Kind != "comment" || !strings.Contains(reply.Body, want) {
