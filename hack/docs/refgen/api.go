@@ -214,7 +214,13 @@ func (p *apiPackage) row(rootKind bool, f *ast.Field) (string, string, bool) {
 		extra = append(extra, "One of "+codeList(slices.DeleteFunc(strings.Split(v, ";"), func(e string) bool { return e == `""` }))+".")
 	}
 	if keys := p.mapKeys(f.Type); len(keys) > 0 {
-		extra = append(extra, "Keys: "+codeList(keys)+".")
+		// +doc:keysOf= says whose keys the constants are, for a map that another kind of object keys with names of its own, which
+		// the doc comment says: "Keys of a botMessage trigger: ...", where a bare "Keys: ..." would read as every object's.
+		label := "Keys"
+		if v, ok := marker(ms, "+doc:keysOf="); ok {
+			label = "Keys of " + escapeText(v, true)
+		}
+		extra = append(extra, label+": "+codeList(keys)+".")
 	}
 	if v, ok := marker(ms, "+kubebuilder:validation:Pattern="); ok {
 		extra = append(extra, "Pattern `"+strings.Trim(v, "`")+"`.")

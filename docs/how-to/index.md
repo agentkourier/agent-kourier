@@ -30,11 +30,21 @@ The guides assume you know Kubernetes and Helm, and link to [explanation](../exp
   bot.
 - [Tune triggers with a dry run](tune-triggers.md): replay a channel's history before going live.
 
+## Webhooks
+
+- [Start agents from webhooks](receive-webhooks.md): a signed webhook from another service starts a session of your agent,
+  with what each answer means and how to follow a delivery. One page for each service the recipes cover:
+  [GitHub](webhooks/github.md), [Jira Cloud](webhooks/jira.md), [Bitbucket Cloud](webhooks/bitbucket.md) and
+  [Linear](webhooks/linear.md).
+
 ## Recipes
 
-- [Start from a recipe](recipes.md): a worked example with its Agent Kourier resources, its checks and, for one of
-  them, its agent. Two recipes: `sre-triage`, Alertmanager alerts to a read-only kagent agent, and
-  `custom-bot-trigger`, a CI bot's failure posts to an agent of your own, with a hand-written trigger.
+- [Start from a recipe](recipes.md): a worked example with its Agent Kourier resources, its checks and, for some of
+  them, its agent. Four recipes for Slack: `sre-triage`, Alertmanager alerts to a read-only kagent agent,
+  `custom-bot-trigger`, a CI bot's failure posts to an agent of your own, `docs-agent`, answers from documentation, and
+  `prompt-agent`, an agent defined by a prompt. One for Microsoft Teams, `prompt-agent-teams`, that agent with
+  Alertmanager's alerts in a Teams channel. Four for webhooks, from GitHub, Jira Cloud, Bitbucket Cloud and Linear,
+  each walked through from [Start agents from webhooks](receive-webhooks.md).
 
 ## Security
 

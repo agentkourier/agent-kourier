@@ -144,6 +144,12 @@ nav:
       - Investigate Alertmanager alerts: how-to/investigate-alertmanager-alerts.md
       - Start investigations from any bot's messages: how-to/any-bot-trigger.md
       - Tune triggers with a dry run: how-to/tune-triggers.md
+      - Webhooks:
+          - Start agents from webhooks: how-to/receive-webhooks.md
+          - GitHub: how-to/webhooks/github.md
+          - Jira Cloud: how-to/webhooks/jira.md
+          - Bitbucket Cloud: how-to/webhooks/bitbucket.md
+          - Linear: how-to/webhooks/linear.md
       - Start from a recipe: how-to/recipes.md
       - Connect a kagent agent: how-to/connect-kagent.md
       - Connect a generic A2A agent: how-to/connect-a2a-agent.md

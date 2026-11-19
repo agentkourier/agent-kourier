@@ -8,7 +8,8 @@ no chat listener does not run one: as the broker's own connection it stops the s
 not started. The broker builds the platform of its own connection when it starts and when a replica takes the lead, so an edit to
 that connection's `spec.teams` or `spec.webhook` applies when Agent Kourier restarts; on the files route the chart rolls the pod when its ConfigMap
 changes, unless `config.existingConfigMap` is set or `config.rollOnChange` is `false`. A team connection restarts by itself when
-its ChatConnection changes.
+its ChatConnection changes. [Start agents from webhooks](../how-to/receive-webhooks.md) sets up a webhook connection, with a page for each
+service the recipes cover.
 
 The broker runs a teams connection ([ChatConnection](chatconnection.md)) in `http` mode, the default, on its chat listener
 (`AGENTKOURIER_CHAT_LISTEN`): only the leader takes Teams' requests, at `POST /chat/teams/<namespace>/<name>`, and it posts, replies

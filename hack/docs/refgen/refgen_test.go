@@ -90,6 +90,7 @@ func TestAPIReferenceFieldRows(t *testing.T) {
 		"| `parts` | [][Part](#part) | No | None | Parts are the widget's parts. |",
 		"| `ref` | [Ref](#ref) | No | None | Ref points elsewhere. |",
 		"| `paint` | map[string]string | No | None | Paint maps a color to a shade. Keys: `red`, `blue`. |",
+		"| `trim` | map[string]string | No | None | Trim maps a color to a trim. A striped widget names its own keys. Keys of a plain widget: `red`, `blue`. |",
 		"| `every` | duration | No | Larger of `1h` and the interval \\| minimum | Every is a duration. |",
 		"| `count` | integer | No | None | Minimum 0. |",
 		"| `enabled` | boolean | No | None |  |",

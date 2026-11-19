@@ -3,11 +3,14 @@
 For a team that wants an agent in a Slack or Microsoft Teams channel and would rather start from a working example than from a
 blank file:
 at the end, you have applied a recipe's Agent Kourier resources, and its agent if the recipe has one, and know which
-checks come with it. There are five recipes: one for Alertmanager alerts, with an agent, one for another bot's
-posts, which holds the Agent Kourier resources only, one that answers questions from documentation, with an agent that
-runs on any cluster, and one whose agent you define in a YAML file: a prompt, a model and the MCP tools it may call. A
-team that is new to Agent Kourier should start with the documentation agent; a team that wants its own agent without
-writing one, with the fourth. The fifth puts that agent in a Microsoft Teams channel instead, with Alertmanager's alerts.
+checks come with it. There are nine recipes. Five are on this page: one for Alertmanager alerts, with an agent, one for
+another bot's posts, which holds the Agent Kourier resources only, one that answers questions from documentation, with an
+agent that runs on any cluster, and one whose agent you define in a YAML file: a prompt, a model and the MCP tools it may
+call. A team that is new to Agent Kourier should start with the documentation agent; a team that wants its own agent
+without writing one, with the fourth. The fifth puts that agent in a Microsoft Teams channel instead, with Alertmanager's
+alerts. The other four, `webhook-github`, `webhook-jira`, `webhook-bitbucket` and `webhook-linear`, start an agent from
+another service's webhooks and hold the Agent Kourier resources only: [Start agents from webhooks](receive-webhooks.md)
+and its page for each service walk through them.
 
 A recipe is a directory under
 [`examples/recipes`](https://github.com/agentkourier/agent-kourier/tree/main/examples/recipes) with the resources that
