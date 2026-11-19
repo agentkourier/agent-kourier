@@ -1,7 +1,8 @@
 # Recipes
 
-A recipe is a worked example of one use case: the Agent Kourier resources that connect a Slack channel to an agent, the
-agent they talk to (for three of the four), and checks that show the mapping does what the recipe says.
+A recipe is a worked example of one use case: the Agent Kourier resources that connect a Slack channel, or a service's
+signed webhooks, to an agent, the agent they talk to (for three of the Slack recipes), and checks that show the mapping
+does what the recipe says.
 
 **A new team should start with [`docs-agent`](docs-agent/README.md).** It needs a model key and any cluster, and it
 shows the whole path: a mention in a channel, an agent, an answer in the thread. **A team that wants its own agent
@@ -17,10 +18,22 @@ from a prompt, a model and a few MCP tools, without writing one, should start wi
 | [`custom-bot-trigger`](custom-bot-trigger/README.md) | Another bot's post, such as a failed CI run. A hand-written `botMessage` trigger: `match`, `exclude`, `extract`, `thread` with a cooldown and `closeWhen`, `limits` and `promptTemplate`. | Your own A2A agent, and Slack. The recipe ships Agent Kourier resources only. Its `identity.userId` works only if your agent trusts the `X-User-Id` header. | Wherever your agent is. |
 | [`sre-triage`](sre-triage/README.md) | An Alertmanager alert posted to Slack. A `botMessage` trigger written in full for Alertmanager's posts, one thread per alert group, and a read-only kagent agent that reads the cluster and can ask a question. | For the agent half: kagent 1.0.0-alpha5, Agent Substrate, a verifying front door and an OIDC token. Plus an Alertmanager Slack receiver, a model, and Slack. | The agent half runs only on this repository's kind full tier (a local cluster; `make e2e-full-up`). The Agent Kourier resources work with any agent. |
 
+Four recipes start from a service's signed webhooks instead of Slack, through a ChatConnection of the `webhook` platform.
+Agent Kourier posts nothing on the service: the agent posts there with its own tools. Each ships the Agent Kourier
+resources only, for your own A2A agent with that service's tools, and needs the chart's chat listener reachable over
+HTTPS from the service.
+
+| Recipe | Starts from | The agent |
+|---|---|---|
+| [`webhook-github`](webhook-github/README.md) | A GitHub App's webhook: a pull request opened or pushed to, and a comment that mentions the App. | Reviews the pull request, and replies to the mention. |
+| [`webhook-bitbucket`](webhook-bitbucket/README.md) | A Bitbucket Cloud repository webhook: a pull request created or updated, and a comment that mentions the agent. | Reviews the pull request, and replies to the mention. |
+| [`webhook-jira`](webhook-jira/README.md) | A Jira Cloud admin webhook: an issue created, and an edit of its summary or description. | Comments with a plan, and with a revised plan. |
+| [`webhook-linear`](webhook-linear/README.md) | A Linear webhook: an issue created, an edit of its description, and a comment that mentions the agent. | Comments with a plan, a revised plan, and a reply. |
+
 The [glossary](../../docs/reference/glossary.md) defines kind full tier, Agent Substrate, front door, dialect and A2A.
 Each recipe's README defines them again where it first uses them.
 
-All four also need a Slack app with a bot token and an app-level token, and the bot invited to the channel:
+The four Slack recipes also need a Slack app with a bot token and an app-level token, and the bot invited to the channel:
 [Configure Slack](../../docs/how-to/configure-slack.md). The recipes use Socket Mode; to run one with Slack's Events API
 instead, see [Slack in HTTP mode](#slack-in-http-mode). The recipes call the Slack Secret `slack`, as that guide and
 [Install with Helm](../../docs/how-to/install-with-helm.md) do; each recipe's
@@ -44,9 +57,10 @@ resource's validation. Replace each one before you apply the recipe:
 
 | Placeholder | Where | Replace it with |
 |---|---|---|
-| `CREPLACESRE`, `CREPLACECI`, `CREPLACEDOCS`, `CREPLACEPROMPT` | the channel in each recipe's `kourier/binding.yaml` | The channel's ID (a Slack channel ID must match `^[CG][A-Z0-9]+$`, so the placeholder starts with `CREPLACE` and ends with the recipe). Each recipe has its own, so that recipes applied together never put two Bindings on one channel. |
+| `CREPLACESRE`, `CREPLACECI`, `CREPLACEDOCS`, `CREPLACEPROMPT` | the channel in each Slack recipe's `kourier/binding.yaml` | The channel's ID (a Slack channel ID must match `^[CG][A-Z0-9]+$`, so the placeholder starts with `CREPLACE` and ends with the recipe). Each recipe has its own, so that recipes applied together never put two Bindings on one channel. |
 | `B0REPLACEME` | `sre-triage` and `custom-bot-trigger`: `from.id` in the Binding, and the `bot` of the cases in `evals/triggers.yaml` | The `bot_id` of the bot whose posts the trigger reads. The dry run in the recipe's README prints it. |
-| `REPLACE-ME` | `custom-bot-trigger`: the host in the AgentBackend's `url` (`http://REPLACE-ME.agents.svc.cluster.local:8080`) | Your A2A agent's URL. |
+| `REPLACE-ME` | `custom-bot-trigger` and the webhook recipes: the host in the AgentBackend's `url` (`http://REPLACE-ME.agents.svc.cluster.local:8080`) | Your A2A agent's URL. |
+| `acme-...`, `acme/widgets`, `OPS`, `ENG`, and the zero account IDs | the webhook recipes: the agent's `identity` in `kourier/chatconnection.yaml`, the repository, project or team in `kourier/binding.yaml`'s `channel`, and the names the mention regexes look for | Your account, repository, project or team, as each recipe's "Apply it" says. |
 
 Other values are meant to be changed too (the receiver in `sre-triage`, the regexes in `custom-bot-trigger`, the model
 name in `docs-agent`, the whole `agent.yaml` in `prompt-agent`); each recipe's "What to change" lists them.
@@ -54,9 +68,12 @@ name in `docs-agent`, the whole `agent.yaml` in `prompt-agent`); each recipe's "
 ## Applying several recipes
 
 A broker serves exactly one ChatConnection, the one `config.chatConnection` names, and the Bindings whose
-`connectionRef` names it. To run more than one recipe on one broker, apply each recipe's `kourier/` directory. Then:
+`connectionRef` names it, unless it also admits the ChatConnections of other namespaces (`config.connectionNamespaces`).
+The webhook recipes each ship a ChatConnection of their own, in the namespace `acme-webhooks`, which a broker serves
+beside its own when it admits that namespace: each webhook recipe's "Apply it" says how. To run more than one of the
+Slack recipes on one broker, apply each recipe's `kourier/` directory. Then:
 
-- **One ChatConnection.** Every recipe ships the same one: `slack` in the namespace `agent-kourier`, whose Secret
+- **One ChatConnection.** Every Slack recipe ships the same one: `slack` in the namespace `agent-kourier`, whose Secret
   `slack` holds the keys `botToken` and `appToken` (`botToken` and `signingSecret` in [HTTP mode](#slack-in-http-mode)).
   The copies are one object, so applying a second recipe leaves it as it is (in HTTP mode, only once every copy you
   apply has `slack: {mode: http}`: see below). You create the Secret once.
@@ -78,7 +95,7 @@ On a ConfigMap, the files of several recipes go in one directory under names tha
 
 ## Slack in HTTP mode
 
-Every recipe connects to Slack over Socket Mode, where Agent Kourier opens a WebSocket to Slack. Any of them can use
+Every Slack recipe connects to Slack over Socket Mode, where Agent Kourier opens a WebSocket to Slack. Any of them can use
 Slack's Events API instead, where Slack sends the app's events and button presses to Agent Kourier as signed HTTPS
 requests. HTTP mode is experimental and needs 0.5.0 or later: the 0.4.0 chart's values schema refuses
 `chatListener`, and its broker does not know `spec.slack.mode`. The Bindings, the agents and the checks stay as they are;
@@ -151,11 +168,14 @@ test fails, naming the file or directory, for a field the resources do not have,
 Binding. It does not check the Secrets, since you create them, and it does not check anything in `agent/` (a recipe's
 own tests may: `go test ./test/kindmanifests` pins the manifests in `sre-triage/agent/`).
 
-A recipe you add follows the rules above: the `slack` ChatConnection as it is, names no other recipe uses, and a channel
-placeholder of its own. The test also copies every recipe's files into one directory, keeping one copy of a
+A Slack recipe you add follows the rules above: the `slack` ChatConnection as it is, names no other recipe uses, and a
+channel placeholder of its own. The test also copies every Slack recipe's files into one directory, keeping one copy of a
 ChatConnection that is identical in several (the decoded objects are compared, so comments and layout do not matter),
 then loads and resolves them and has the broker choose its one ChatConnection. It fails on a different ChatConnection
-under the same name, a second ChatConnection, any other duplicate, and two Bindings on one channel.
+under the same name, a second ChatConnection, any other duplicate, and two Bindings on one channel. A recipe whose
+`kourier/` holds a ChatConnection of the `webhook` platform is checked alone in the same way, since it ships its own.
+`go test ./internal/broker -run TestWebhookRecipe` also runs each webhook recipe's files end to end, with a fake of its
+service and a stub agent.
 
 ### Trigger evals
 

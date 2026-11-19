@@ -1,0 +1,25 @@
+# Jira Cloud: an admin webhook with a secret, for issues created and updated and comments created, filtered by JQL to one
+# project. Its URL is https://<host>/chat/webhook/acme-webhooks/jira. The Secret jira-webhook, in namespace acme-webhooks,
+# holds the key webhookSecret, the webhook's secret; you make it, and no secret belongs in this file.
+# Replace the identity with the account ID of the service account the agent comments as, so its own comments are dropped.
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: jira, namespace: acme-webhooks}
+spec:
+  platform: webhook
+  credentialsSecretRef: {name: jira-webhook}
+  webhook:
+    identity: "712020:00000000-0000-0000-0000-000000000000"   # the service account's account ID
+    verify: {scheme: hmac-sha256, header: X-Hub-Signature, prefix: "sha256="}
+    channel: {from: [/issue/fields/project/key]}
+    actor: {from: [/comment/author/accountId, /user/accountId]}   # a comment's delivery has no /user
+    thread: {field: issue}                                         # one session for each issue: OPS-7
+    delivery: {header: X-Atlassian-Webhook-Identifier}
+    fields:
+      - {name: event, from: [/webhookEvent], kind: id}
+      - {name: issue, from: [/issue/key], kind: id}
+      - {name: changed, from: [/changelog/items/0/field], kind: id}   # the first changed field only
+      - {name: type, from: [/issue/fields/issuetype/name]}
+      - {name: summary, from: [/issue/fields/summary]}
+      - {name: description, from: [/issue/fields/description]}
+      - {name: comment, from: [/comment/body]}

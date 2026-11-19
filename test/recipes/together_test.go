@@ -33,6 +33,9 @@ import (
 //   - no two Bindings are on one channel.
 //
 // A new recipe that ships a different ChatConnection, reuses a name or reuses a channel placeholder fails it.
+//
+// A webhook recipe ships a ChatConnection of its own (spec.platform webhook), which is the point of it: one connection for each
+// service that signs its webhooks. It is applied alone, so it is checked alone, and has the broker choose its one ChatConnection.
 func TestRecipesApplyTogether(t *testing.T) {
 	recipes, err := recipeDirs(recipesDir)
 	if err != nil {
@@ -41,9 +44,85 @@ func TestRecipesApplyTogether(t *testing.T) {
 	if len(recipes) == 0 {
 		t.Skipf("no recipes under %s: nothing to apply together", recipesDir)
 	}
-	if err := checkTogether(t.Context(), recipes); err != nil {
+	var together []string
+	for _, dir := range recipes {
+		webhook, err := shipsWebhookConnection(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !webhook {
+			together = append(together, dir)
+			continue
+		}
+		t.Run(filepath.Base(dir), func(t *testing.T) {
+			if err := checkTogether(t.Context(), []string{dir}); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	if err := checkTogether(t.Context(), together); err != nil {
 		t.Error(err)
 	}
+}
+
+// TestShipsWebhookConnection pins which recipes are applied alone: those whose kourier/ holds a webhook ChatConnection.
+func TestShipsWebhookConnection(t *testing.T) {
+	for _, tt := range []struct {
+		name, files string
+		want        bool
+	}{
+		{name: "slack", files: "apiVersion: agentkourier.dev/v1alpha1\nkind: ChatConnection\nmetadata: {name: slack, namespace: recipe}\nspec: {platform: slack}\n"},
+		{name: "webhook", want: true, files: "kind: Binding\nmetadata: {name: b}\n---\napiVersion: agentkourier.dev/v1alpha1\nkind: ChatConnection\n" +
+			"metadata: {name: github, namespace: recipe}\nspec: {platform: webhook}\n"},
+		{name: "no connection", files: "apiVersion: agentkourier.dev/v1alpha1\nkind: Binding\nmetadata: {name: b, namespace: recipe}\nspec: {}\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(dir, "kourier"), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "kourier", "objects.yaml"), []byte(tt.files), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got, err := shipsWebhookConnection(dir)
+			if err != nil || got != tt.want {
+				t.Errorf("shipsWebhookConnection = %t, %v; want %t", got, err, tt.want)
+			}
+		})
+	}
+}
+
+// shipsWebhookConnection says whether the kourier/ files of the recipe at dir hold a ChatConnection of the webhook platform.
+func shipsWebhookConnection(dir string) (bool, error) {
+	kourier := filepath.Join(dir, "kourier")
+	entries, err := os.ReadDir(kourier)
+	if err != nil {
+		return false, fmt.Errorf("read %s: %w", kourier, err)
+	}
+	for _, e := range entries {
+		if ext := filepath.Ext(e.Name()); e.IsDir() || (ext != ".yaml" && ext != ".yml") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(kourier, e.Name()))
+		if err != nil {
+			return false, fmt.Errorf("read recipe file: %w", err)
+		}
+		r := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(data)))
+		for {
+			doc, err := r.Read()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				return false, fmt.Errorf("%s: read documents: %w", filepath.Join(kourier, e.Name()), err)
+			}
+			var c v1alpha1.ChatConnection
+			if yaml.Unmarshal(doc, &c) == nil && c.Kind == "ChatConnection" && c.Spec.Platform == v1alpha1.PlatformWebhook {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 // TestCheckTogether runs the checker on recipes built here: ones that coexist, and the clashes it must refuse.
