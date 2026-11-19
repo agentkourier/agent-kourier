@@ -185,6 +185,9 @@ type RunConfig struct {
 	transportClosed func(conn string)
 	// outboxBuilt is given the outbox as the leader half builds it, so a test can post through it and look at its lanes.
 	outboxBuilt func(*outbox.Outbox)
+	// supervisorStarted is given a read of the supervisor's count of passes as the leader half starts it, so a test can wait for it to
+	// have looked at the config again.
+	supervisorStarted func(passes func() int64)
 	// outcomesBuilt is given the press outcomes as the leader half builds them, so a test can wait on them and read their cap.
 	outcomesBuilt func(*interact.Outcomes)
 	// leaderLaunched is called once Run has launched the leader half (or its candidacy), before it waits for the

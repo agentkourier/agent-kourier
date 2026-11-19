@@ -172,7 +172,7 @@ refused, so the broker keeps the last good config, its Bindings included, sets `
 `config reload failed; keeping the last good snapshot` with the error
 `the directory holds the ChatConnections [acme-webhooks/github2], and the files route serves the ChatConnection it started with, acme-webhooks/github, until the broker restarts`.
 A restart reads the directory as it is then: the chart's roll does it when the ConfigMap changes (unless `config.existingConfigMap` is set or
-`config.rollOnChange` is `false`). An edit of the connection under the same name is taken, and applies at a restart as above.
+`config.rollOnChange` is `false`). An edit of the connection under the same name is taken, and applies at a restart, or when another replica takes the lead.
 
 On custom resources a cluster can hold many connections. A broker may have an own connection, named as `namespace/name` in
 `AGENTKOURIER_CHAT_CONNECTION`; if it has one, it always serves it. It also serves the ChatConnections of the namespaces it admits, except a second

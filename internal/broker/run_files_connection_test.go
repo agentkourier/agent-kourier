@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,14 +23,23 @@ import (
 // filesSuperviseEvery is how often the supervisor of these tests looks at the team connections.
 const filesSuperviseEvery = 10 * time.Millisecond
 
+// filesBroker is a broker of these tests, ready: its config directory, its log, and a read of its supervisor's count of passes.
+type filesBroker struct {
+	dir    string
+	logs   *syncBuffer
+	passes atomic.Pointer[func() int64]
+}
+
 // filesConnectionBroker runs the GitHub webhook recipe on the files route, its ChatConnection acme-webhooks/github the broker's own, and
-// returns the config directory and the broker's log once it is ready.
-func filesConnectionBroker(t *testing.T) (string, *syncBuffer) {
+// returns it once it is ready.
+func filesConnectionBroker(t *testing.T) *filesBroker {
 	t.Helper()
 	rc := whRecipe{vendor: fakevendors.GitHub}
 	logs := &syncBuffer{}
+	b := &filesBroker{logs: logs}
 	c := startConfig(t)
 	runsAlongside(&c)
+	c.supervisorStarted = func(passes func() int64) { b.passes.Store(&passes) }
 	c.ChatListener = someListener(t)
 	c.Logger = slog.New(slog.NewTextHandler(logs, nil))
 	c.superviseEvery, c.reloadPoll = filesSuperviseEvery, 20*time.Millisecond
@@ -38,7 +48,8 @@ func filesConnectionBroker(t *testing.T) (string, *syncBuffer) {
 		Data: map[string][]byte{v1alpha1.WebhookSecretKey: []byte(whSigningSecret)}})
 	r := start(t, c)
 	r.until("/readyz", http.StatusOK)
-	return c.ConfigDir, logs
+	b.dir = c.ConfigDir
+	return b
 }
 
 // rewrite replaces from with to in the file name of dir, and fails the test if from is not there exactly once.
@@ -81,14 +92,27 @@ func served(logs, conn string) bool {
 	return false
 }
 
-// letTheSupervisorLook waits for the supervisor to have looked some 30 times after the refusal, so that a connection that a pass would
-// start has been started.
-func letTheSupervisorLook() { time.Sleep(30 * filesSuperviseEvery) }
+// letTheSupervisorLook waits for the supervisor to have begun and ended a few passes from now, each of which reads the config as it is
+// then, so that a connection that a pass would start has been started.
+func (b *filesBroker) letTheSupervisorLook(t *testing.T) {
+	t.Helper()
+	var read func() int64
+	testutil.Eventually(t, "the supervisor's start", func() bool {
+		if p := b.passes.Load(); p != nil {
+			read = *p
+		}
+		return read != nil
+	}, testutil.Within(40*time.Second), testutil.Every(5*time.Millisecond))
+	from := read()
+	testutil.Eventually(t, "three passes of the supervisor", func() bool { return read() >= from+3 },
+		testutil.Within(40*time.Second), testutil.Every(5*time.Millisecond))
+}
 
 // On the files route a reload that renames the one ChatConnection, its Binding following it, is refused: the broker keeps the last good
 // config and the connection it started with, and serves no other beside it.
 func TestRunOnTheFilesRefusesAReloadThatRenamesTheConnection(t *testing.T) {
-	dir, logs := filesConnectionBroker(t)
+	b := filesConnectionBroker(t)
+	dir, logs := b.dir, b.logs
 	if !served(logs.String(), "acme-webhooks/github") {
 		t.Fatalf("the own connection is not served:\n%s", logs.String())
 	}
@@ -96,7 +120,7 @@ func TestRunOnTheFilesRefusesAReloadThatRenamesTheConnection(t *testing.T) {
 	rewrite(t, dir, "chatconnection.yaml", "name: github, namespace: acme-webhooks", "name: github2, namespace: acme-webhooks")
 	testutil.Eventually(t, "the refusal of the renamed connection", func() bool { return refusedFor(logs.String(), "acme-webhooks/github2") },
 		testutil.Within(40*time.Second), testutil.Every(5*time.Millisecond))
-	letTheSupervisorLook()
+	b.letTheSupervisorLook(t)
 	if served(logs.String(), "acme-webhooks/github2") {
 		t.Fatalf("the renamed connection is served beside the one the broker started with:\n%s", logs.String())
 	}
@@ -105,19 +129,20 @@ func TestRunOnTheFilesRefusesAReloadThatRenamesTheConnection(t *testing.T) {
 // On the files route a reload that adds a second ChatConnection file is refused, and the second is not served; the directory put back
 // is loaded again.
 func TestRunOnTheFilesRefusesAReloadThatAddsASecondConnection(t *testing.T) {
-	dir, logs := filesConnectionBroker(t)
-	b, err := os.ReadFile(filepath.Join(dir, "chatconnection.yaml"))
+	b := filesConnectionBroker(t)
+	dir, logs := b.dir, b.logs
+	conn, err := os.ReadFile(filepath.Join(dir, "chatconnection.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	second := filepath.Join(dir, "chatconnection2.yaml")
-	if err := os.WriteFile(second, []byte(strings.Replace(string(b), "name: github,", "name: github2,", 1)), 0o600); err != nil {
+	if err := os.WriteFile(second, []byte(strings.Replace(string(conn), "name: github,", "name: github2,", 1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	testutil.Eventually(t, "the refusal of the second connection", func() bool {
 		return refusedFor(logs.String(), "acme-webhooks/github, acme-webhooks/github2")
 	}, testutil.Within(40*time.Second), testutil.Every(5*time.Millisecond))
-	letTheSupervisorLook()
+	b.letTheSupervisorLook(t)
 	if served(logs.String(), "acme-webhooks/github2") {
 		t.Fatalf("the second connection is served beside the one the broker started with:\n%s", logs.String())
 	}

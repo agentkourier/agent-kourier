@@ -364,6 +364,9 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 		removed: metrics.ConnectionRemoved, recover: mgr.RecoverConnection,
 		done: make(chan struct{}), teams: map[string]*teamRuntime{}, seen: map[string]bool{}, lives: map[string]*connLife{}, said: map[string]string{},
 	}
+	if cfg.supervisorStarted != nil {
+		cfg.supervisorStarted(sup.passes.Load)
+	}
 	supCtx, stopSup := context.WithCancel(runCtx)
 	go sup.run(supCtx, chosen.Team)
 	sd.add(stepIntake, func(c context.Context) { // the intakes stop before the interactions and the manager they feed

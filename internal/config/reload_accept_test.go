@@ -83,7 +83,10 @@ func TestReloaderRefusesASnapshotThatAcceptRefuses(t *testing.T) {
 func TestReloaderStartFailsWhenAcceptRefusesTheFirstLoad(t *testing.T) {
 	r := NewReloader(ReloaderConfig{Dir: specDir(t), Secrets: specSecrets(), Logger: testutil.DiscardLogger(),
 		Accept: func(*Snapshot, *Snapshot) error { return errTwoConnections }})
-	if err := r.Start(context.Background()); !errors.Is(err, errTwoConnections) || r.Current() != nil {
+	ctx, cancel := context.WithCancel(context.Background())
+	err := r.Start(ctx)
+	cancel() // a Start that wrongly succeeded has a loop, which this ends
+	if !errors.Is(err, errTwoConnections) || r.Current() != nil {
 		t.Errorf("Start = %v, snapshot %v; want the refusal and no snapshot", err, r.Current())
 	}
 	r.Wait()
