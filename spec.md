@@ -148,9 +148,12 @@ upstream webhook trigger stays compatible with Agent Kourier.
 - kagent 0.10.x support. The pilot uses a separate kagent 1.0 alpha environment (D24).
 - Replacing existing alert notifications or sitting in the paging path. A mention an agent asks for is a convenience post, and no user group can be mentioned (D48).
 - Tool approvals before a write-capable agent is bound (Phase 5).
-- Chat platforms other than Slack, and alert sources other than Alertmanager. The
-  chat interface and the `botMessage` trigger (8.2) allow them; v1 does not ship them.
-  The `webhook` platform (D55) is not a chat platform: it takes events and posts nothing.
+- Chat platforms other than Slack and Microsoft Teams, and alert sources other than Alertmanager.
+  The broker runs Slack and Microsoft Teams connections (section 7); the chat interface and the
+  `botMessage` trigger (8.2) allow more. The API also takes the `webhook` platform (D55), which is
+  not a chat platform: it takes events and posts nothing. The broker has no adapter for it yet and
+  refuses a webhook ChatConnection as a wiring error (`ErrWiring`, "no adapter"): as the broker's own
+  connection it stops the start, and a team's is not started.
 - A direct Alertmanager webhook receiver. Dropped for good, not deferred (D39). Alertmanager
   is not a supported source of the `webhook` platform either: alerts enter only through
   `chat.triggers` (D55).
@@ -566,7 +569,7 @@ Rules:
   Slack's is `spec.slack`, whose `mode` is `socket` or `http` and is Socket Mode when unset (D40). Microsoft Teams' Secret key is
   `clientSecret`, the Microsoft Entra app's client secret, in either mode. A webhook connection's Secret has one key, by
   `spec.webhook.verify.scheme`: `webhookSecret` for `hmac-sha256` and `token` for `token` (D55).
-- **Microsoft Teams (API only).** `ChatConnection.spec.platform` takes `teams` (owner, 2026-11-16; scope revised 2026-11-17). Its
+- **Microsoft Teams.** `ChatConnection.spec.platform` takes `teams` (owner, 2026-11-16; scope revised 2026-11-17). Its
   `spec.teams` block is required on a teams connection and refused on any other: `tenantID` and `appID`, each a GUID in lowercase hex,
   are required; `mode` is `http` or `socket` and is `http` when unset, because Microsoft recommends an HTTPS messaging endpoint in
   production and calls Socket mode a public preview (Microsoft's "Connect an agent without the SDK" page, read 2026-11-17): in `http` Teams
