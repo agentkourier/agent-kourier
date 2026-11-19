@@ -149,6 +149,7 @@ func New(cfg Config) (*Client, error) {
 		return nil, err
 	}
 	c.recv = recv
+	recv.onGroup = c.groupKnown
 	if cfg.NotificationURL == "" {
 		c.poll = newPoller(c)
 		onGap := cfg.OnSocketGap
@@ -172,6 +173,17 @@ func New(cfg Config) (*Client, error) {
 		c.push.subs = newSubscriber(c, cfg.NotificationURL, state)
 	}
 	return c, nil
+}
+
+// groupKnown is told that the receiver recorded the Microsoft Entra group of channel's team, which the Graph intake needs to read the
+// channel: the subscriptions are reconciled at once, or the poller reads the channel at its next round, if it was waiting for it.
+func (c *Client) groupKnown(channel string) {
+	if c.push != nil {
+		c.push.subs.poke()
+	}
+	if c.poll != nil {
+		c.poll.groupKnown(channel)
+	}
 }
 
 // Run takes the activities that Teams sends the connection and hands them to sink until ctx ends (Receiver.Serve). Serve starts

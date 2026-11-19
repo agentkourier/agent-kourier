@@ -171,6 +171,10 @@ type Receiver struct {
 
 	recMu    sync.Mutex
 	recorded map[string]Conversation // by channel: what this receiver last wrote to the store; guarded by recMu
+
+	// onGroup, if set, is told the channel of a record that names its team's Microsoft Entra group for the first time in this receiver's
+	// life, or a group other than the one it last wrote: the Graph intake waits for it (Client.groupKnown). Set before the first Serve.
+	onGroup func(channel string)
 }
 
 // serving is one Serve, as the handler finds it. The handler submits under mu held for reading, and Serve sets closed under mu held
@@ -363,6 +367,9 @@ func (r *Receiver) remember(ctx context.Context, c Conversation) {
 	r.recMu.Lock()
 	r.recorded[c.Channel] = merged
 	r.recMu.Unlock()
+	if merged.AADGroupID != "" && merged.AADGroupID != last.AADGroupID && r.onGroup != nil {
+		r.onGroup(c.Channel)
+	}
 }
 
 // submit queues fn on the lane of channel unless Serve has stopped (open false) or the lanes shed it (shed, a reason). It never blocks.

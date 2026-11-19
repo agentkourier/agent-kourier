@@ -1068,3 +1068,40 @@ func TestRootSawForgetsRepliesPastTheSkew(t *testing.T) {
 		}
 	}
 }
+
+// A bound channel that waits for its team's group is polled at the next round once the receiver records the group, without waiting out
+// the interval, and that round is asked for at once.
+func TestPollReadsAChannelAsSoonAsItsGroupIsKnown(t *testing.T) {
+	pt := newPollTest(t)
+	pt.sink.bind(testChannel)
+	pt.round(t)
+	if got := pt.obs.series(t, "agentkourier_teams_graph_channels", channelWaitingGroup); got != 1 {
+		t.Fatalf("channels{waiting_group} = %v; want 1", got)
+	}
+	select {
+	case <-pt.p.wake:
+	default:
+	}
+	pt.c.recv.remember(t.Context(), Conversation{Channel: testChannel, ServiceURL: pt.f.serviceURL(), TeamID: testChannel,
+		AADGroupID: testGroup, TenantID: testTenant})
+	select {
+	case <-pt.p.wake:
+	default:
+		t.Error("the group's record asked for no round")
+	}
+	pt.round(t) // the clock has not moved: the channel is due because its group is known
+	if got := pt.polls(t, polledStarted); got != 1 {
+		t.Errorf("polls{started} at the round after the group is known = %v; want 1", got)
+	}
+}
+
+// A channel that a Binding names anew is read at the next round, with no wait of an interval.
+func TestPollReadsANewlyBoundChannelAtTheNextRound(t *testing.T) {
+	pt := newPollTest(t)
+	pt.round(t)
+	pt.bound(t, testChannel)
+	pt.round(t)
+	if got := pt.polls(t, polledStarted); got != 1 {
+		t.Errorf("polls{started} at the round after the Binding = %v; want 1", got)
+	}
+}

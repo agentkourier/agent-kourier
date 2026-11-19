@@ -166,7 +166,8 @@ type poller struct {
 	rounds                                                 atomic.Uint64 // the rounds done, which a test waits on
 
 	mu      sync.Mutex
-	gapFrom time.Time // the earliest start of the gaps not yet acted on; guarded by mu
+	gapFrom time.Time       // the earliest start of the gaps not yet acted on; guarded by mu
+	grouped map[string]bool // the channels whose team's group the receiver recorded since the last round; guarded by mu
 
 	// What run's goroutine alone reads and writes.
 	chans    map[string]*polled
@@ -198,13 +199,28 @@ func (p *poller) gap(g Gap) {
 	}
 }
 
+// groupKnown is told that the receiver recorded the Microsoft Entra group of channel's team: a channel that waits for it is read at the
+// next round, which is asked for now.
+func (p *poller) groupKnown(channel string) {
+	p.mu.Lock()
+	if p.grouped == nil {
+		p.grouped = map[string]bool{}
+	}
+	p.grouped[channel] = true
+	p.mu.Unlock()
+	select {
+	case p.wake <- struct{}{}:
+	default:
+	}
+}
+
 // run polls the channels that lister names until ctx ends: a round every tick, and at once when a gap asks. It starts from nothing
 // held, a gap told after the last run ended included. With no lister nothing is bound, and nothing is read.
 func (p *poller) run(ctx context.Context, lister chat.ChannelLister) {
 	clear(p.chans)
 	p.lastCall, p.paused = time.Time{}, time.Time{}
 	p.mu.Lock()
-	p.gapFrom = time.Time{}
+	p.gapFrom, p.grouped = time.Time{}, nil
 	p.mu.Unlock()
 	select {
 	case <-p.wake:
@@ -227,7 +243,8 @@ func (p *poller) run(ctx context.Context, lister chat.ChannelLister) {
 
 // round reads each bound channel that is due, in the order of their IDs, while the connection takes messages. A channel new to the run
 // is due within one interval of now, the new ones spread over it, and its first poll makes a catch-up read of the look-back; one that no
-// Binding names any longer is forgotten, with what was read of it.
+// Binding names any longer is forgotten, with what was read of it. A channel that waits for its team's group is due at once when the
+// receiver has recorded the group since the last round (groupKnown).
 func (p *poller) round(ctx context.Context, lister chat.ChannelLister) {
 	if ctx.Err() != nil {
 		return
@@ -256,9 +273,14 @@ func (p *poller) round(ctx context.Context, lister chat.ChannelLister) {
 			catchUp: now.Add(-p.lookback), catchUpWhy: catchUpStart}
 	}
 	p.mu.Lock()
-	gapFrom := p.gapFrom
-	p.gapFrom = time.Time{}
+	gapFrom, grouped := p.gapFrom, p.grouped
+	p.gapFrom, p.grouped = time.Time{}, nil
 	p.mu.Unlock()
+	for ch := range grouped {
+		if st, ok := p.chans[ch]; ok && st.state == channelWaitingGroup {
+			st.next = now
+		}
+	}
 	if !gapFrom.IsZero() { // catchUpDue bounds the read by the look-back
 		for _, st := range p.chans {
 			st.next = now

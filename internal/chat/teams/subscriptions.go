@@ -32,7 +32,9 @@ import (
 // asked, and 24 hours was not measured), so that a renew that fails is tried again, at each reconcile, for half its life before the
 // subscription lapses. Each call to Graph to list, make, renew or delete one is cut at subscriptionCallTimeout: a create and a renew take 7 to 8
 // seconds (measured), the time of Graph's validation handshake. The subscriptions are reconciled with the connection's Bindings every
-// subscriptionReconcileEvery, and at once when a lifecycle notification or a clientState that is not the connection's asks for it. A
+// subscriptionReconcileEvery, and at once when a lifecycle notification or a clientState that is not the connection's asks for it, when
+// the receiver records the Microsoft Entra group of a channel's team, and when the bound channels change, which the subscriber looks at
+// every subscriptionWatchEvery (a read of the config in memory, with no call). A
 // listing reads at most subscriptionListPages pages. A bound channel whose resource the app has a subscription to on another URL, which
 // Graph lets an app have once (409), is tried again after subscriptionConflictRetry, or once that subscription expires if sooner.
 const (
@@ -40,6 +42,7 @@ const (
 	subscriptionRenewLead      = 12 * time.Hour
 	subscriptionCallTimeout    = 30 * time.Second
 	subscriptionReconcileEvery = time.Minute
+	subscriptionWatchEvery     = time.Second
 	subscriptionListPages      = 10
 	subscriptionConflictRetry  = 10 * time.Minute
 )
@@ -76,6 +79,7 @@ type subscriber struct {
 	url, state                       string
 	lifetime, renewLead, callTimeout time.Duration
 	every                            time.Duration
+	watch                            time.Duration // how often the bound channels are compared with the last reconcile's
 	conflictRetry                    time.Duration
 	now                              func() time.Time
 	log                              *slog.Logger
@@ -88,6 +92,7 @@ type subscriber struct {
 	ids  map[string]*subscription // by ID; guarded by mu
 
 	// What run's goroutine alone reads and writes.
+	bound            []string             // the bound channels of the last reconcile
 	listed           bool                 // the app's subscriptions were listed since the run began or the last 409
 	listFailing      bool                 // the last listing failed, which was told at WARN
 	waiting, failing map[string]bool      // by channel: told at WARN
@@ -97,7 +102,7 @@ type subscriber struct {
 
 func newSubscriber(c *Client, url, state string) *subscriber {
 	return &subscriber{c: c, url: url, state: state, lifetime: subscriptionLifetime, renewLead: subscriptionRenewLead,
-		callTimeout: subscriptionCallTimeout, every: subscriptionReconcileEvery, conflictRetry: subscriptionConflictRetry, now: c.graph.now, log: c.log,
+		callTimeout: subscriptionCallTimeout, every: subscriptionReconcileEvery, watch: subscriptionWatchEvery, conflictRetry: subscriptionConflictRetry, now: c.graph.now, log: c.log,
 		wake: make(chan struct{}, 1), held: map[string]*subscription{}, ids: map[string]*subscription{}}
 }
 
@@ -179,7 +184,8 @@ func (s *subscriber) snapshot(channel string) (subscription, bool) {
 	return *sub, true
 }
 
-// run reconciles the subscriptions with the channels that lister names until ctx ends, every s.every and when poked. It starts from
+// run reconciles the subscriptions with the channels that lister names until ctx ends, every s.every, when poked, and when the channels
+// that lister names are not those of the last reconcile, which it looks at every s.watch. It starts from
 // nothing held, and lists the app's subscriptions again first (adopt): another leader may have made or renewed them since this one last
 // ran. It leaves the subscriptions in Graph when it stops: the next leader adopts them, and Graph sends to the same URL meanwhile, which
 // the leader-labeled Service routes to whichever replica leads. With no lister nothing is bound: the subscriptions to the connection's URL
@@ -189,11 +195,13 @@ func (s *subscriber) run(ctx context.Context, lister chat.ChannelLister) {
 	clear(s.held)
 	clear(s.ids)
 	s.mu.Unlock()
-	s.listed, s.listFailing, s.waiting, s.failing = false, false, map[string]bool{}, map[string]bool{}
+	s.bound, s.listed, s.listFailing, s.waiting, s.failing = nil, false, false, map[string]bool{}, map[string]bool{}
 	s.blocked, s.conflicts = map[string]time.Time{}, map[string]bool{}
 	s.ready.Store(false)
 	tick := time.NewTicker(s.every)
 	defer tick.Stop()
+	watch := time.NewTicker(s.watch)
+	defer watch.Stop()
 	defer func() {
 		s.ready.Store(false)
 		s.setGauges(ctx, 0, 0, 0)
@@ -201,11 +209,17 @@ func (s *subscriber) run(ctx context.Context, lister chat.ChannelLister) {
 	for {
 		s.reconcile(ctx, lister)
 		s.rounds.Add(1)
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-		case <-s.wake:
+		for due := false; !due; {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				due = true
+			case <-s.wake:
+				due = true
+			case <-watch.C:
+				due = lister != nil && !slices.Equal(lister.BoundChannels(), s.bound)
+			}
 		}
 	}
 }
@@ -223,6 +237,7 @@ func (s *subscriber) reconcile(ctx context.Context, lister chat.ChannelLister) {
 	if lister != nil {
 		bound = lister.BoundChannels()
 	}
+	s.bound = bound
 	want := map[string]bool{}
 	for _, ch := range bound {
 		want[ch] = true

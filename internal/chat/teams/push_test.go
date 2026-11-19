@@ -1480,3 +1480,31 @@ func TestGraphDoesNotReadTheConnectionsOwnPosts(t *testing.T) {
 		}
 	}
 }
+
+// The subscriptions follow the Bindings and the teams' groups at once, not at the next reconcile: with a reconcile an hour away, a
+// channel that a Binding names anew is subscribed within the watch, and a waiting channel as soon as the receiver records its group.
+func TestGraphSubscribesAtOnceOnABindingOrAGroup(t *testing.T) {
+	pt := newPushTest(t, false)
+	pt.c.push.subs.every = time.Hour
+	pt.c.push.subs.watch = 10 * time.Millisecond
+	const waiting = "19:waiting@thread.tacv2"
+	pt.subscribed(t, testChannel)
+	testutil.Eventually(t, "the first reconcile to end", func() bool { return pt.c.push.subs.rounds.Load() == 1 })
+	rounds := pt.c.push.subs.rounds.Load()
+	time.Sleep(100 * time.Millisecond) // ten watches
+	if n := pt.c.push.subs.rounds.Load() - rounds; n != 0 {
+		t.Errorf("%d reconciles with the Bindings unchanged; want none before the next reconcile is due", n)
+	}
+
+	pt.record(t, testGraphChannel, testChannel)
+	pt.sink.bind(testChannel, testGraphChannel, waiting)
+	testutil.Eventually(t, "the newly bound channel's subscription", func() bool { return pt.subOf(testGraphChannel) != "" },
+		testutil.Within(5*time.Second))
+	testutil.Eventually(t, "the channel with no group waits", func() bool {
+		return pt.obs.series(t, "agentkourier_teams_graph_channels", channelWaitingGroup) == 1
+	}, testutil.Within(5*time.Second))
+
+	pt.c.recv.remember(t.Context(), Conversation{Channel: waiting, TeamID: testChannel, AADGroupID: testGroup, TenantID: testTenant})
+	testutil.Eventually(t, "the subscription of the channel whose group is now known", func() bool { return pt.subOf(waiting) != "" },
+		testutil.Within(5*time.Second))
+}

@@ -208,10 +208,10 @@ to the channel's messages (`/teams/{group}/channels/{channel}/messages`, for new
 notification), with the `notificationURL` as both its notification URL and its lifecycle URL. The app makes it under the resource-specific
 permission `ChannelMessage.Read.Group`, which reads a thread's replies too ([Earlier replies on Microsoft Teams](#earlier-replies-on-microsoft-teams));
 on a test tenant in November 2026, Graph made one under that permission alone. The broker compares the subscriptions with the Bindings
-every minute: a channel that a Binding names gets one, and one whose channel no Binding names any longer is deleted. Graph names a team by
-its Microsoft Entra group, which the broker learns from an activity of the channel: a channel whose group it does not know yet waits, which
-it logs once at WARN with the fix (install the app in the channel's team and mention the bot in the channel), and is subscribed at the first
-comparison after an activity has told it. A subscription is made to expire 24 hours later and renewed once it would expire within 12 hours,
+every minute, and within a second of a change of the channels that the Bindings name: a channel that a Binding names gets one, and one
+whose channel no Binding names any longer is deleted. Graph names a team by its Microsoft Entra group, which the broker learns from an
+activity of the channel: a channel whose group it does not know yet waits, which it logs once at WARN with the fix (install the app in the
+channel's team and mention the bot in the channel), and is subscribed as soon as an activity has told it. A subscription is made to expire 24 hours later and renewed once it would expire within 12 hours,
 or within half the lifetime that Graph granted when it made or last renewed it, if Graph granted less than it was asked.
 Making or renewing one took about 8 seconds on a test tenant, while Microsoft Graph sent its validation request to the URL, which the broker
 answers with the token that Graph sent. At the start of each run the leader lists the app's subscriptions, even with no channel bound,
@@ -263,7 +263,8 @@ channels by the state of their subscription ([Metrics](metrics.md)).
 A connection with no `spec.teams.notificationURL` polls Microsoft Graph for the new messages of each channel that a Binding of the
 connection names, in either `spec.teams.mode`, so `botMessage` triggers work on every Microsoft Teams connection. The leader alone polls,
 while the connection runs, under the same resource-specific permission and with the same Microsoft Entra group as the subscriptions: a
-channel whose group the broker does not know yet waits, logged once at WARN with the same fix and counted as `waiting_group`.
+channel whose group the broker does not know yet waits, logged once at WARN with the same fix and counted as `waiting_group`, and is read
+at the next poll round, within a second, once an activity has told the group.
 
 - **New posts.** Each channel is read every 10 seconds through Graph's delta of its messages (`…/messages/delta`, then the `deltaLink` it
   gives), so a new post reaches the broker within about one interval after Graph shows it. A post is new when it was made at most 30 seconds

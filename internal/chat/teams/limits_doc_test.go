@@ -104,6 +104,7 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Duration(t, "teamsSubscriptionRenewLead", nc.push.subs.renewLead)
 	limitsdoc.Duration(t, "teamsSubscriptionCall", nc.push.subs.callTimeout)
 	limitsdoc.Duration(t, "teamsSubscriptionReconcile", nc.push.subs.every)
+	limitsdoc.Duration(t, "teamsSubscriptionWatch", nc.push.subs.watch)
 	limitsdoc.Count(t, "teamsSubscriptionListPages", subscriptionListPages)
 	limitsdoc.Duration(t, "teamsSubscriptionConflictRetry", nc.push.subs.conflictRetry)
 	limitsdoc.Bytes(t, "teamsNotificationBody", notificationMaxBody)
