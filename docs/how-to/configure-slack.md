@@ -22,7 +22,8 @@ Either way Agent Kourier calls Slack's Web API with the bot token to post, so it
 - For the check in the last step: Go, at the version in `go.mod`, and a checkout of the repository.
 - For HTTP mode only: a host name that Slack can reach over HTTPS and that routes to your cluster, such as an Ingress controller's,
   with a certificate for it; and, for the chart's leader label, the right to create a ValidatingAdmissionPolicy and its binding,
-  which are cluster-scoped ([Security model](../explanation/security.md#the-chat-port)).
+  which are cluster-scoped ([Security model](../explanation/security.md#the-chat-port)), on Kubernetes 1.33 or later. The policy is
+  `admissionregistration.k8s.io/v1`; the chart checks no Kubernetes version for it, and its tests run it on 1.33 and 1.37 only.
 
 === "Socket Mode"
 

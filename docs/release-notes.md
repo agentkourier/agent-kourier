@@ -3,6 +3,163 @@
 What changed in each release, newest first, and what you must do about it. The steps for an upgrade are in
 [Upgrade](how-to/upgrade.md), which has a section for each change that needs one; this page says what changed and points to it.
 
+## Version 0.5.0
+
+A Slack ChatConnection can take its events and button presses over HTTP, as Events API and interactivity requests that Slack signs,
+instead of over Socket Mode: `spec.slack.mode: http`, on a chat listener that only the leading replica serves. HTTP mode is experimental.
+Socket Mode stays the default, and the chat listener is off unless the values turn it on. Every install runs migration 0030 at its first
+start, which lets a button press that Slack delivers again be recorded once, and an install that holds the CRDs applies the Binding and
+ChatConnection CRDs again, for two new `kubectl get` columns. The chart now refuses `podLabels` that set `agentkourier.dev/role`. The image
+is built with Go 1.27.4, as 0.4.0's was. [Configure Slack](how-to/configure-slack.md) has the steps for HTTP mode, and
+[Upgrade to the release that serves Slack over HTTP](how-to/upgrade.md#upgrade-to-the-release-that-serves-slack-over-http) and
+[Upgrade to the release that shows each Binding's connection](how-to/upgrade.md#upgrade-to-the-release-that-shows-each-bindings-connection)
+have the upgrade, and how to roll it back.
+
+### Breaking changes
+
+- **The chart refuses `podLabels` that set `agentkourier.dev/role`**, whether or not the chat listener is on:
+  `podLabels must not set agentkourier.dev/role: the leader puts that label on its own pod, and the chat Service selects the leader by it, ...`.
+  In the pod template the label would put every replica, the standby included, behind the chat Service. Take the key out of `podLabels`
+  in the values you upgrade with.
+- **`kubectl get akbinding` has a new column, `CONNECTION`, before `CHANNEL`**, so `CHANNEL` is one column later. `kubectl get akconnection`
+  shows `PLATFORM` between `NAME` and `AGE`, where it showed `NAME` and `AGE` alone. A script that reads the columns by position needs the
+  new order.
+- **Apply the CRDs again.** The Binding CRD changes for its new column, and the ChatConnection CRD for its column and `spec.slack`; the
+  AgentBackend CRD is unchanged. The chart applies them with the release when `crds.install` is true, or unset on `config.source: crds`. If
+  you apply them yourself, apply `charts/agent-kourier/files/crds` of 0.5.0. Until then `kubectl get` shows the old columns, the API server
+  does not take `spec.slack`, and a broker on custom resources logs at WARN
+  `the schema hash of a CRD is not the one this broker was built with` and sets `agentkourier_crd_schema_state{state="mismatch"}` to 1 for
+  the two CRDs.
+- **A Deployment of your own that sets `AGENTKOURIER_POD_NAMESPACE` without `AGENTKOURIER_CHAT_LISTEN` exits with code 2.** The variable is
+  new, and turns the leader label on (below). The chart sets it only with `chatListener.enabled`, with the chat listener.
+
+### Slack over HTTP (experimental)
+
+- **New field `spec.slack.mode`** on a ChatConnection: `socket`, the default when it is unset, or `http`. Only a ChatConnection whose
+  `spec.platform` is `slack` may set `spec.slack`: the CRD and the broker's load refuse it on any other. The mode sets the keys of the
+  credentials Secret. Socket Mode needs `botToken` and `appToken`, as before; HTTP mode needs `botToken` and `signingSecret`, and does not
+  read `appToken`. A missing key fails the load on the ConfigMap route, fails the start for the broker's own connection (exit code 2), and
+  leaves a team's connection not started.
+- **The chat listener**, set by the new variable `AGENTKOURIER_CHAT_LISTEN`, is a port of its own, apart from the metrics port. It has no
+  default: a broker without it opens no such port. It takes `POST /chat/<platform>/<namespace>/<name>`, for Slack
+  `/chat/slack/<namespace>/<name>`, answers 404 to any other path and 405 to any other method, and answers 503 with `Retry-After: 5` for a
+  connection that takes no requests on this replica. A ChatConnection in HTTP mode needs it: without it the broker's own connection fails
+  the start (exit code 2), and a team's connection is not started.
+- **Only the leader serves.** Every replica opens the chat listener, but only the leader runs connections, so a standby answers 503. The
+  leader labels its own pod `agentkourier.dev/role=leader` once it leads, and the chart's chat Service selects that label. Every replica
+  takes the label off its own pod as it starts, and the leader takes it off at shutdown; a leader that loses its lease exits with the label
+  on, and the pod's next container takes it off. The write is a merge patch of that one label, retried after 1 s, doubling to 30 s; a first
+  write that the API server refuses with 403 or 404 fails the start with exit code 2.
+- **New variables for the leader label.** `AGENTKOURIER_POD_NAMESPACE` turns the label on. It needs `AGENTKOURIER_CHAT_LISTEN` and
+  `AGENTKOURIER_POD_NAME`, which the broker now requires with either store when the label is on (it required it with Postgres alone). The
+  chart sets both from the downward API with `chatListener.enabled`.
+- **`/readyz` has a new check, `leader-label`**, when the label is on. It fails until a write of the label has succeeded, so a pod that
+  may still carry the label of an earlier process stays out of every Service until it has taken the label off.
+- **New chart values `chatListener`**: `enabled` (false by default), `port` (8081), `service` and `ingress`. Turned on, the chart adds:
+    - the container port `chat`;
+    - the Service `<fullname>-chat`, which selects the pod that carries the leader label;
+    - with `chatListener.ingress.enabled`, an Ingress of the same name that sends the path prefix `/chat/` to it, and nothing else;
+    - with `rbac.create`, the Role `<fullname>-leader-label`, with `patch` on the pods of the release namespace (a Deployment's pods are
+      named by its ReplicaSet, so the Role cannot name the pod), and its RoleBinding.
+- **A ValidatingAdmissionPolicy holds that `patch` to the label.** With `chatListener.enabled` and `rbac.create` the chart installs a
+  ValidatingAdmissionPolicy (`admissionregistration.k8s.io/v1`, `failurePolicy: Fail`) and its binding,
+  `<fullname>-<namespace>-leader-label`. They let the broker's ServiceAccount change only the label `agentkourier.dev/role`, only to
+  `leader` or away, and only on the pod its token is bound to, and deny any change to that pod's spec, annotations, finalizers or owners.
+  Both are cluster-scoped, so whoever runs `helm install` or `helm upgrade` needs the right to create ValidatingAdmissionPolicies and
+  ValidatingAdmissionPolicyBindings. The chart checks no Kubernetes version for them, and its tests run the policy on Kubernetes 1.33 and
+  1.37 only: use 1.33 or later, which the custom resource route already requires. With `rbac.create: false` the chart makes neither the
+  Role nor the policy ([Security model](explanation/security.md#the-chat-port)).
+- **New value `networkPolicy.chatFrom`**: the NetworkPolicyPeers that may reach the chat port.
+- **The chart refuses to render:**
+    - `chatListener.port` equal to `listen.port`;
+    - `networkPolicy.enabled` with the chat listener and no `networkPolicy.chatFrom`;
+    - `chatListener.ingress.enabled` without `chatListener.enabled`;
+    - `networkPolicy.chatFrom` without `chatListener.enabled`;
+    - a `chatListener.service.type` other than `ClusterIP`, `NodePort` or `LoadBalancer` (the values schema).
+- **The chat listener's bounds.** A body is capped at 1 MiB (413) and the headers at 16 KiB (431). The headers must arrive within 1 s and
+  the whole request within 2 s, and the handler has 3 s. At most 32 handlers run at once; past that a request is answered 503 with
+  `Retry-After`. Bodies are read in 4 KiB chunks from a budget of 32 MiB across every request, and a body is read whole before it takes a
+  handler's place. A refusal made before the body is read closes the connection. At shutdown the listener waits 2 s for the requests in
+  flight, then cuts them unanswered. [Limits](reference/limits.md#run-the-broker) has each value.
+- **Slack's requests.** Agent Kourier checks a request's signature against the signing secret before it decodes anything in the body,
+  and answers 401 to a missing or wrong signature (`bad_signature`) and to a timestamp more than 5 minutes off (`stale`). It answers a
+  `url_verification` request with its challenge. It answers 200 once it has taken an event or press, and 503 when it has not taken it
+  within 2 s or cannot take it, so that Slack sends it again.
+- **New metrics:**
+    - `agentkourier_chat_listener_requests_total{outcome}`;
+    - `agentkourier_leader_pod_label_writes_total{result}`;
+    - `agentkourier_slack_http_requests_total{outcome,connection}`;
+    - `agentkourier_slack_http_retries_total{connection}`, the requests that carry Slack's `X-Slack-Retry-Num`.
+
+    In HTTP mode `agentkourier_chat_connected` is 1 from when the connection's `auth.test` passes until its run ends, as there is no
+    WebSocket, and `agentkourier_slack_ack_duration_seconds` is observed too ([Metrics](reference/metrics.md)).
+
+- **What was tested.** The kind tiers run in HTTP mode against the end-to-end tests' fake Slack, and the mode was tried once against Slack
+  itself, on one installation, as [Configure Slack](how-to/configure-slack.md) describes.
+  [High availability](explanation/high-availability.md#slack-in-http-mode) says what Slack gets during a takeover.
+
+### Fixes
+
+- **A button press that Slack delivers again is recorded once**, in Socket Mode and in HTTP mode: an answer to a question or an approval,
+  and a useful or not-useful vote. Each delivery used to be recorded, and its person told the outcome again. A press's key is a hash of
+  who pressed, the channel, the message, the button and Slack's `action_ts`; a second delivery of the key is acknowledged and logged at
+  info as processed before. A press with no `action_ts` is recorded each time it comes, and pressing the button again is a new press.
+  Migration **0030** adds the table `press_deliveries`, on SQLite and on Postgres, which keeps each key for at least an hour and is purged
+  every 10 minutes ([Stored data](reference/stored-data.md)). It only adds a table.
+- **An answer is taken only on the question its task is paused on.** A press decided again (a redelivery after its key was purged, a press
+  with no key, or a second press on a prompt that was never replaced) could answer a later question of the same task with the earlier
+  answer. Now an answer to another question is dropped with no notice, and logged at info.
+- **A prompt the chat platform reports as invalid is refused at once**, as one too large for a message was. It was retried in silence
+  until the pause timed out. Now the task gets the unusable-pause refusal: the notice "The agent paused for input in a way Agent Kourier
+  cannot use, so Agent Kourier is cancelling the task.", the interaction closed, the task cancelled, and one `unusable_pause` audit entry.
+  On Slack it is not expected to show: the Slack adapter calls a prompt invalid only when it has no ID, both questions and tools or
+  neither, or an ID over 2000 units, and the dialects build none of those.
+- **`agentkourier_trigger_decisions_total` counts a decision once its start is taken.** It was counted as soon as the decision was made,
+  so a start that then failed counted `started`, and its redelivery counted again: `started` for a trigger with no thread rules, and `dedup`
+  for a keyed one, though that delivery started the turn. A failed attempt now counts nothing here (it counts as
+  `agentkourier_intake_total{disposition="error"}`, and logs at WARN `chat: trigger decision not taken; its redelivery decides again`),
+  and the delivery that starts the turn counts `started`, so `started` counts the turns that started. Two exceptions remain:
+    - a start with no thread rules keeps no record of itself, so its redelivery after a restart counts `started` again, though its turn is
+      queued once;
+    - a change of leader with an event in flight can count one start twice.
+
+    [Metrics](reference/metrics.md#operations-intake-delivery-and-triggers) has the detail.
+
+### A Binding checked against its platform
+
+- **The broker checks a Binding once more against its ChatConnection's platform** when it reads the two together, and can refuse it with
+  two new reasons: `InvalidPlatformID`, for a chat ID of another shape, and `UnsupportedOnPlatform`, for a feature the platform does not
+  serve. Slack serves every feature that the check covers, and the schema already holds each chat ID to Slack's shape, so no Binding on
+  Slack gets either. `agentkourier_config_binding_rejections` has a series for each, at 0. The chat IDs' patterns, length caps and
+  messages are 0.4.0's. [What each platform supports](reference/platforms.md) is a new reference page.
+
+### Other changes
+
+- **Internal changes, with no change in behaviour on Slack:**
+    - each chat platform supplies its own app identity;
+    - code that is not Slack's names the chat platform rather than Slack;
+    - reactions are a capability of the platform: a Binding on a platform without them would have the condition `AcknowledgmentShown`,
+      which no Binding on Slack has;
+    - a platform without ephemeral messages has an error of its own, which Slack never returns.
+
+    The help text of `agentkourier_chat_connected` now speaks of the chat platform.
+
+- **Documentation.**
+    - Configure Slack has a tab for HTTP mode, with what the one run against Slack itself showed; High availability, the Security model's
+      chat port, Troubleshoot and Upgrade cover the mode too.
+    - The recipes' README says how to run any recipe over HTTP mode.
+    - The README, the landing page and the glossary say Slack is the only platform today, and the README lists Microsoft Teams as
+      planned.
+
+- **The release gate** runs the fast kind tier in HTTP mode on the custom resource route twice: on one replica, and on Postgres with two
+  replicas, where the failover tests check that a press sent while the leader is dead or frozen is sent again and decided by the new
+  leader. A release that changes HTTP mode also runs a probe against an install that Slack itself reaches.
+
+### Dependencies
+
+- None. `go.mod`, `go.sum`, the `Dockerfile`, the pinned images, and the recipes' and the AX example's dependencies are unchanged. The
+  image is built with `golang:1.27.4`, at the digest 0.4.0 used.
+
 ## Version 0.4.0
 
 On custom resources a broker can admit namespaces by their labels, and a broker that names nothing it serves serves the ChatConnections of every
