@@ -1012,6 +1012,13 @@ its chat listener, or in `socket` mode, with what [What each platform supports](
   that says why, and as a team's connection it is not started, and the broker logs why. In `socket` mode it needs no chat listener: the
   leader opens a WebSocket to Microsoft Teams, which Microsoft calls a public preview.
   Nothing changes for a Slack connection.
+- **Other apps' posts come through Microsoft Graph.** Microsoft Teams sends a bot no post of another app, so a teams connection reads
+  the bound channels' posts from Microsoft Graph, in either mode: by Graph's notifications at `spec.teams.notificationURL` when it is
+  set, which needs the chat listener and a public HTTPS route to it, and by polling the channels when it is not
+  ([Alerts on Microsoft Teams](../reference/platforms.md#alerts-on-microsoft-teams)). That is how an alert that Alertmanager posts
+  through a Workflows webhook reaches a `botMessage` trigger. Graph reads under the resource-specific permission
+  `ChannelMessage.Read.Group`, which the Teams app's manifest asks for and its install in the team grants.
+  [Configure Microsoft Teams](configure-teams.md) sets up the bot, the app, the connection and the alert route.
 - **Wider chat IDs at apply and load.** `chat.channel` takes a Microsoft Teams channel ID, `19:…@thread.tacv2` or `@thread.skype`, and
   its cap goes from 32 bytes to 140. A `botMessage` trigger's `from.id` and a mention's `user` take a Microsoft Entra ID, a GUID in
   lowercase hex, and their caps go to 36 bytes (a Slack user ID is still bounded at 21 by its pattern). `interactions.approverGroups`

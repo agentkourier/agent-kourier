@@ -1,6 +1,7 @@
-name: Microsoft Teams (http mode, experimental)
+name: Microsoft Teams (experimental, http or socket mode)
 app: agent-kourier-docs
 question: Can Agent Kourier post to Microsoft Teams?
-cause: 'Yes, in http mode, and experimentally. A broker with a chat listener runs a ChatConnection with platform teams: it takes a person''s posts in a team''s channel on the chat listener, and replies and edits through the Bot Connector. Socket mode is not supported yet, and there are no streams, reactions, answerable questions, tool approvals or alert triggers on Teams yet.'
+cause: 'Yes, experimentally, and only in a release later than 0.4.0. A ChatConnection with platform teams names a bot registered in one Microsoft Entra tenant, whose Teams app is installed in the team with the resource-specific permission ChannelMessage.Read.Group. It runs in http mode, where Teams sends activities to the leader''s chat listener over public HTTPS, or in socket mode, a Microsoft preview with no public endpoint, where what Teams sends while no socket is ready is lost as an activity. Mentions and posts in a channel start sessions; a live reply is one edited message; questions, tool approvals and feedback are Adaptive Cards that a member of the team presses. Alerts and other apps'' posts, such as an Alertmanager card posted through a Workflows webhook, come through Microsoft Graph, by notifications at spec.teams.notificationURL or by polling, and a botMessage trigger reads the card''s text as body. approverGroups is refused, and there is no acknowledgment reaction and no dry run on Teams.'
 evidence:
+  - how-to/configure-teams.md
   - reference/platforms.md

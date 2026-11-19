@@ -136,6 +136,7 @@ nav:
       - how-to/index.md
       - Install with Helm: how-to/install-with-helm.md
       - Configure Slack: how-to/configure-slack.md
+      - Configure Microsoft Teams: how-to/configure-teams.md
       - Create the Binding identity: how-to/create-binding-identity.md
       - Write a Binding: how-to/write-a-binding.md
       - Let a team bring its own Slack app: how-to/team-slack-app.md

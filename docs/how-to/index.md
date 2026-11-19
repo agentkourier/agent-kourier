@@ -7,6 +7,8 @@ The guides assume you know Kubernetes and Helm, and link to [explanation](../exp
 
 - [Install with Helm](install-with-helm.md): the chart, the Secrets and a first answer in a thread.
 - [Configure Slack](configure-slack.md): the Slack app, its tokens and the ChatConnection.
+- [Configure Microsoft Teams](configure-teams.md): the bot and its Teams app, its client secret, the ChatConnection, and
+  Alertmanager's alerts through Workflows (experimental).
 - [Create the Binding identity](create-binding-identity.md): choose a user ID or issue and store a bearer token.
 - [Write a Binding](write-a-binding.md): your agent in your channel.
 - [Let a team bring its own Slack app](team-slack-app.md): the team's ChatConnection and Secret, and how the platform admits the namespace: by name, by label, or every namespace.
