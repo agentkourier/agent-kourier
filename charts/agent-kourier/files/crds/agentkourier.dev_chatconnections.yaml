@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    agentkourier.dev/schema-sha256: e1dede4d4044ec82e0e3f16f94bdc729a108bbc9501af113f412161926e8b87d
+    agentkourier.dev/schema-sha256: 9b9896775ed4e21982b091c242b78ee35dbdda126d4a207872241ac0d0bc9c84
     controller-gen.kubebuilder.io/version: v0.23.0
   name: chatconnections.agentkourier.dev
 spec:
@@ -65,8 +65,9 @@ spec:
               credentialsSecretRef:
                 description: |-
                   CredentialsSecretRef names one Secret whose keys are fixed by the platform and its mode. A Slack connection in Socket Mode needs
-                  botToken and appToken; one in HTTP mode needs botToken and signingSecret. A webhook connection needs webhookSecret with the
-                  hmac-sha256 scheme, and token with the token scheme.
+                  botToken and appToken; one in HTTP mode needs botToken and signingSecret. A teams connection needs clientSecret, the client
+                  secret of its Microsoft Entra application. A webhook connection needs webhookSecret with the hmac-sha256 scheme, and token
+                  with the token scheme.
                 properties:
                   name:
                     description: |-
@@ -80,12 +81,15 @@ spec:
                 type: object
               platform:
                 description: |-
-                  Platform is the chat platform: slack, or webhook, which takes signed JSON webhooks from a service such as a code host or an
-                  issue tracker (spec.webhook). The broker takes them on its chat listener (AGENTKOURIER_CHAT_LISTEN) at POST
-                  /chat/webhook/<namespace>/<name>, and posts nothing there: the agent posts on the service with its own tools. A broker with no
-                  chat listener does not run a webhook connection: its own fails the start, and a team's is not started.
+                  Platform is the chat platform: slack; teams, Microsoft Teams; or webhook, which takes signed JSON webhooks from a service such
+                  as a code host or an issue tracker (spec.webhook). The broker takes a webhook connection's webhooks on its chat listener
+                  (AGENTKOURIER_CHAT_LISTEN) at POST /chat/webhook/<namespace>/<name>, and posts nothing there: the agent posts on the service
+                  with its own tools. A broker runs a teams connection in http or socket mode (spec.teams.mode). A webhook connection, and a teams
+                  one in http mode or with a spec.teams.notificationURL in either mode, need the broker's chat listener: on a broker with none,
+                  the broker's own connection fails its start, and a team's is not started.
                 enum:
                 - slack
+                - teams
                 - webhook
                 type: string
               slack:
@@ -105,6 +109,70 @@ spec:
                     - http
                     - ""
                     type: string
+                type: object
+              teams:
+                description: Teams holds the settings of a teams connection. A connection
+                  whose platform is teams must set it, and no other may.
+                properties:
+                  appID:
+                    description: |-
+                      AppID is the bot's Microsoft Entra application (client) ID, a GUID in lowercase hex. It is not a secret: the client secret
+                      is the credentials Secret's clientSecret.
+                    maxLength: 36
+                    pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                    type: string
+                  mode:
+                    description: |-
+                      Mode selects how Microsoft Teams delivers the bot's activities: http, as requests that Teams sends to the broker's chat listener
+                      (AGENTKOURIER_CHAT_LISTEN) at POST /chat/teams/<namespace>/<name>, or socket, over an outbound WebSocket that Agent Kourier
+                      opens to Teams, with no public endpoint. Both use the same credentials, the Secret's clientSecret. Unlike Slack's, the default
+                      is http: Microsoft's documentation recommends an HTTPS messaging endpoint for agents in production, and says that Socket mode
+                      is in public preview. In http mode a broker needs its chat listener. In socket mode only the leader connects, with a socket
+                      in each region that accepts one, and what Teams sends while no socket is ready it does not deliver, then or later.
+                    enum:
+                    - http
+                    - socket
+                    - ""
+                    type: string
+                  notificationURL:
+                    description: |-
+                      NotificationURL is the public URL of the connection's route on the broker's chat listener, for Microsoft Graph's change
+                      notifications of the bound channels' messages. Its path is /chat/teams/<namespace>/<name>, the ChatConnection's own namespace
+                      and name. It is optional, in either mode. At most 2048 bytes, https only (Microsoft Graph's documentation of a subscription's
+                      notificationUrl requires HTTPS), with no credentials, query or fragment. The API server checks the form of the path, and the
+                      broker that it is the connection's own. When it is set, the leader keeps a Microsoft Graph subscription to the messages of each
+                      channel that a Binding of the connection names, with this URL for its notifications, and reads each new message that Graph
+                      notifies: that is how a post of another app, such as an alert's card that Workflows posts, reaches the connection, since Teams
+                      sends a bot no other bot's post. It needs the chat listener in either mode, and Graph must reach the leader at this URL. Unset,
+                      the leader polls Microsoft Graph for the messages of each bound channel instead, which needs no public route: another app's
+                      post reaches the connection later, and a reply only in a channel's newest threads.
+                    maxLength: 2048
+                    type: string
+                    x-kubernetes-validations:
+                    - message: must be an https URL with a host
+                      rule: self == '' || self.matches('(?i)^https://[^/?#]')
+                    - message: must not contain credentials
+                      rule: '!self.matches(''(?i)^https?://[^/?#]*@'')'
+                    - message: 'invalid URL: must not contain control characters'
+                      rule: '!self.matches(r''^[^#]*[\x00-\x1f\x7f]'')'
+                    - message: 'invalid URL: the host must not contain a space, backslash,
+                        caret, backtick, brace or bar'
+                      rule: '!self.matches(r''(?i)^https?://[^/?#]*[ \\^\x60{|}]'')'
+                    - message: must not have a query or fragment
+                      rule: '!self.matches(''[?#]'')'
+                    - message: must have the path /chat/teams/<namespace>/<name>,
+                        the connection's route on the chat listener
+                      rule: self == '' || self.matches(r'^[^/?#]*//[^/?#]*/chat/teams/[a-z0-9-]+/[a-z0-9.-]+$')
+                  tenantID:
+                    description: |-
+                      TenantID is the Microsoft Entra tenant of the bot, a GUID in lowercase hex, such as 11111111-2222-3333-4444-555555555555.
+                      A connection has one tenant.
+                    maxLength: 36
+                    pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                    type: string
+                required:
+                - appID
+                - tenantID
                 type: object
               webhook:
                 description: |-
@@ -399,6 +467,13 @@ spec:
             - fieldPath: .slack
               message: is set, but only a slack connection has one
               rule: '!has(self.slack) || self.platform == ''slack'''
+            - fieldPath: .teams
+              message: is set, but only a teams connection has one
+              rule: '!has(self.teams) || self.platform == ''teams'''
+            - fieldPath: .teams
+              message: 'is required on a teams connection: it names the tenant and
+                the app'
+              rule: self.platform != 'teams' || has(self.teams)
             - fieldPath: .webhook
               message: is set, but only a webhook connection has one
               rule: '!has(self.webhook) || self.platform == ''webhook'''

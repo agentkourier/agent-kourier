@@ -655,10 +655,11 @@ func TestDryRunRefusesABindingWhoseRegexesAreTooCostly(t *testing.T) {
 	}
 }
 
-// A Binding file whose chat IDs are not Slack's is refused by dry-run's load, which holds them to Slack's shapes as the API server
-// does: a bot's name such as alertmanager as the sender, and a user group ID as a mention's user. The directory holds the Binding
-// alone, with no ChatConnection, and the refusal comes before the token is read or Slack is asked. The file with Slack's own IDs
-// loads, and dry-run then fails for want of a token.
+// A Binding file whose chat IDs are not Slack's is refused by dry-run, which reads only Slack: an ID of no platform's shape by its
+// load, as the API server refuses it (a bot's name such as alertmanager as the sender, a user group ID as a mention's user), and a
+// Microsoft Teams ID, which the load takes, by dry-run's own check against Slack's rules, as the broker refuses it on a Slack
+// connection. The directory holds the Binding alone, with no ChatConnection, and the refusal comes before the token is read or Slack
+// is asked. The file with Slack's own IDs loads, and dry-run then fails for want of a token.
 func TestDryRunRefusesChatIDsThatAreNotSlacks(t *testing.T) {
 	const match = "{title: 'FIRING'}"
 	slackIDs := costlyBinding(match, "{}", "{}")
@@ -669,9 +670,14 @@ func TestDryRunRefusesChatIDsThatAreNotSlacks(t *testing.T) {
 	}{
 		{"Slack's own IDs", slackIDs, "SLACK_BOT_TOKEN"},
 		{"a bot's name as the sender", strings.Replace(slackIDs, "from: {id: B0123456789}", "from: {id: alertmanager}", 1),
-			`Binding agent-kourier/trial: spec.chat.triggers[1].from.id: invalid sender ID "alertmanager": must be the sender's ID (Slack: a bot ID such as B0123456789), not a name`},
+			`Binding agent-kourier/trial: spec.chat.triggers[1].from.id: invalid sender ID "alertmanager": must be the sender's ID (Slack: a bot ID such as B0123456789; Microsoft Teams: the Microsoft Entra application ID of the app that posts, a GUID in lowercase hex), not a name`},
+		{"a Microsoft Teams channel", strings.Replace(slackIDs, "channel: C0123456789", `channel: "19:KourierStandInChannelForTestsOnly0000000000a@thread.tacv2"`, 1),
+			`Binding agent-kourier/trial: spec.chat.channel: "19:KourierStandInChannelForTestsOnly0000000000a@thread.tacv2" is not a channel ID on Slack: ` +
+				"use the channel's ID, such as C0123456789 (G… for an older private channel), not its name (see https://agentkourier.dev/reference/platforms/)"},
+		{"a Microsoft Entra application ID as the sender", strings.Replace(slackIDs, "from: {id: B0123456789}", "from: {id: 66666666-7777-4888-9999-aaaaaaaaaaaa}", 1),
+			`Binding agent-kourier/trial: spec.chat.triggers[1].from.id: "66666666-7777-4888-9999-aaaaaaaaaaaa" is not a bot ID on Slack`},
 		{"a user group ID as a mention's user", strings.Replace(slackIDs, "    channel: C0123456789\n", "    channel: C0123456789\n    mentions: [{name: oncall, user: S0123456789}]\n", 1),
-			`Binding agent-kourier/trial: spec.chat.mentions[0].user: invalid user ID "S0123456789": must be a user ID such as U0123456789`},
+			`Binding agent-kourier/trial: spec.chat.mentions[0].user: invalid user ID "S0123456789": must be a user ID such as U0123456789 (Slack) or a Microsoft Entra object ID, a GUID in lowercase hex (Microsoft Teams)`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.file == slackIDs && tc.name != "Slack's own IDs" {

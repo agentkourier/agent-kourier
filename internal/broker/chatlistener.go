@@ -34,11 +34,15 @@ const (
 	// chatReadTimeout bounds the reading of the whole request, headers and body.
 	chatReadTimeout = 2 * time.Second
 	// chatHandlerTimeout is the deadline of the context the handler is given, counted from when the body has been read: Slack's
-	// wait, past which its answer would arrive after Slack has given up.
+	// wait, past which its answer would arrive after Slack has given up. A route whose handler asks for longer (chat.HTTPDeadline) is
+	// given what it asks for instead.
 	chatHandlerTimeout = 3 * time.Second
+	// chatAnswerTimeout is the time a handler has to write what it answers at its deadline.
+	chatAnswerTimeout = time.Second
 	// chatWriteTimeout bounds what follows the headers: the body, the handler and the answer. net/http sets it once the headers are
-	// read, so it holds the body's time and the handler's, and a second to write what the handler answers at its deadline.
-	chatWriteTimeout = chatReadTimeout + chatHandlerTimeout + time.Second
+	// read, so it holds the body's time and the handler's, and chatAnswerTimeout to write what the handler answers at its deadline. A
+	// route with a longer deadline has its request's bound moved, once its body is read, to its deadline and chatAnswerTimeout.
+	chatWriteTimeout = chatReadTimeout + chatHandlerTimeout + chatAnswerTimeout
 	// chatIdleTimeout is how long a kept-alive connection may wait for its next request before it is closed.
 	chatIdleTimeout = 30 * time.Second
 	// chatRetryAfter is the Retry-After of a 503 for a connection that does not run here, or for a listener that is full: a takeover or
@@ -48,7 +52,9 @@ const (
 	// body has been read whole, so a client that sends its body slowly holds no place, only a chunk of chatBodyBudget. Each platform's
 	// handler must acknowledge in milliseconds, handing the request on and answering before the work it asks for is done: that is a
 	// requirement on the handlers, which a handler that waits on the work would break. At that pace 32 at once is room for hundreds of
-	// requests a second. While every place is taken a request is answered 503 with Retry-After before any of its body is read, and one
+	// requests a second. The one exception is a press whose platform waits for its decision in the request (chat.InlineDecider, Microsoft
+	// Teams): it holds its place until the decision, or its route's longer deadline, and such presses hold at most half the places
+	// (pressWaitsMax), past which they are answered at once. While every place is taken a request is answered 503 with Retry-After before any of its body is read, and one
 	// whose body was read while the last places were taken is answered so once it has been read.
 	chatMaxInFlight = 32
 	// chatBodyChunk is the size of the buffers a body is read into, one after another, each charged to chatBodyBudget before it is
@@ -65,9 +71,10 @@ const (
 	// connections that are mid-body, for as long as chatReadTimeout lets them, or by 32 MiB actually sent: starving the listener takes
 	// 8192 concurrent connections, not 32. The number of connections, and what net/http holds for each, is outside the budget.
 	chatBodyBudget = 32 << 20
-	// chatDrainTimeout bounds the wait, at shutdown, for the requests in flight; past it they are cut, unanswered, and the platform sends
-	// them again. It is the first part of the intake step, whose bound is 4 s, and is kept to half of it, so that the intakes, which stop
-	// after it in the same step, always keep at least 2 s.
+	// chatDrainTimeout bounds the wait, at shutdown, for the requests in flight; past it they are cut, unanswered. Slack sends such a
+	// request again; Microsoft Teams does not send an invoke again, so a press that waits for its decision is let go as the drain begins
+	// (chatRoutes.onDrain) and answered inside it. It is the first part of the intake step, whose bound is 4 s, and is kept to half of
+	// it, so that the intakes, which stop after it in the same step, always keep at least 2 s.
 	chatDrainTimeout = 2 * time.Second
 )
 
@@ -91,7 +98,7 @@ var chatOutcomes = []string{chatServed, chatNotFound, chatMethod, chatNoRoute, c
 // chatPlatforms are the platforms whose connections take requests on the chat listener, the values of the platform label of
 // agentkourier_chat_listener_requests_total besides "other": a closed set, in the order docs/reference/metrics.md lists them. A platform
 // whose adapter offers a handler (chat.HTTPReceiver) is one more entry here.
-var chatPlatforms = []string{v1alpha1.PlatformSlack, v1alpha1.PlatformWebhook}
+var chatPlatforms = []string{v1alpha1.PlatformSlack, v1alpha1.PlatformTeams, v1alpha1.PlatformWebhook}
 
 // chatCounter is what the chat listener reports to: Metrics.
 type chatCounter interface {
@@ -113,6 +120,9 @@ type chatRoutes struct {
 	mu     sync.RWMutex
 	routes map[string]*chatRoute
 	closed bool
+	// drains is what runs as the listener begins its drain at shutdown (draining): what holds a request waiting lets it go, so that
+	// the request is answered inside the drain. Guarded by mu.
+	drains []func()
 	// counter is told each connection whose route is registered, and the outcome of each request.
 	counter chatCounter
 	log     *slog.Logger
@@ -152,6 +162,17 @@ type chatRoute struct {
 	table *chatRoutes
 	key   string
 	h     http.Handler
+	// timeout is the deadline of the handler's context: chatHandlerTimeout, or the longer one the handler asks for (chat.HTTPDeadline).
+	timeout time.Duration
+}
+
+// handlerTimeout is the deadline h is given: what it asks for (chat.HTTPDeadline) when that is longer than chatHandlerTimeout, and
+// chatHandlerTimeout otherwise.
+func handlerTimeout(h http.Handler) time.Duration {
+	if d, ok := h.(chat.HTTPDeadline); ok {
+		return max(d.HandlerTimeout(), chatHandlerTimeout)
+	}
+	return chatHandlerTimeout
 }
 
 func newChatRoutes(counter chatCounter, log *slog.Logger) *chatRoutes {
@@ -172,7 +193,7 @@ func (t *chatRoutes) register(platform, conn string, h http.Handler) *chatRoute 
 		return nil
 	}
 	t.counter.ChatListenerServes(platform, conn)
-	r := &chatRoute{table: t, key: key, h: h}
+	r := &chatRoute{table: t, key: key, h: h, timeout: handlerTimeout(h)}
 	t.routes[key] = r
 	t.log.Info("the chat listener serves the connection", "connection", conn, "path", chatPathPrefix+key)
 	return r
@@ -196,14 +217,31 @@ func (t *chatRoutes) close() {
 	clear(t.routes)
 }
 
-// lookup returns the handler of key, or nil.
-func (t *chatRoutes) lookup(key string) http.Handler {
+// onDrain has fn run as the listener begins its drain at shutdown (draining), before it waits for the requests in flight: fn makes a
+// handler that waits answer now. It must not block.
+func (t *chatRoutes) onDrain(fn func()) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.drains = append(t.drains, fn)
+}
+
+// draining runs what onDrain registered, once: the listener's stop calls it before it stops taking requests and waits for those in
+// flight.
+func (t *chatRoutes) draining() {
+	t.mu.Lock()
+	drains := t.drains
+	t.drains = nil
+	t.mu.Unlock()
+	for _, fn := range drains {
+		fn()
+	}
+}
+
+// lookup returns the route of key, or nil.
+func (t *chatRoutes) lookup(key string) *chatRoute {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	if r := t.routes[key]; r != nil {
-		return r.h
-	}
-	return nil
+	return t.routes[key]
 }
 
 // ServeHTTP answers a request to the chat listener. Its checks come in order, and each costs less than the one after it: a path that is
@@ -213,8 +251,8 @@ func (t *chatRoutes) lookup(key string) http.Handler {
 // sends (up to 256 KiB, for as long as the client takes). Then the body is read, in chunks charged to chatBodyBudget: a chunk that does not
 // fit is 503 with Retry-After and Connection: close, a body past chatMaxBody 413, and one that cannot be read whole 400. Only then does the
 // request take a place among the handlers, and it is 503 with Retry-After when the last were taken while it was read: a client slow to
-// send its body holds no place. The route's handler is called with the body in memory and a context that ends chatHandlerTimeout later,
-// and the body's chunks are given back to the budget when it returns.
+// send its body holds no place. The route's handler is called with the body in memory and a context that ends chatHandlerTimeout later
+// (or the route's longer deadline: chat.HTTPDeadline), and the body's chunks are given back to the budget when it returns.
 //
 // Each request is counted once, by its outcome and by the platform and connection that its path names: none for a path that is no route's
 // shape, and the platform alone for a method other than POST, which is answered before the route is looked up.
@@ -233,8 +271,8 @@ func (t *chatRoutes) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	count := func(outcome string) { t.counter.ChatListenerRequest(outcome, platform, conn) }
-	h := t.lookup(key)
-	if h == nil {
+	route := t.lookup(key)
+	if route == nil {
 		count(chatNoRoute)
 		w.Header().Set("Retry-After", strconv.Itoa(int(chatRetryAfter/time.Second)))
 		refuse(w, http.StatusServiceUnavailable, "the connection does not run on this replica")
@@ -272,13 +310,18 @@ func (t *chatRoutes) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		busy(w, count, true)
 		return
 	}
-	ctx, cancel := context.WithTimeout(req.Context(), chatHandlerTimeout)
+	ctx, cancel := context.WithTimeout(req.Context(), route.timeout)
 	defer cancel()
+	if route.timeout > chatHandlerTimeout {
+		// The server's write bound was set, when the headers were read, for a handler with the default deadline: this route's handler
+		// gets the same time to answer after its own. A connection that cannot take a deadline any more is cut, as at the bound.
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(route.timeout + chatAnswerTimeout))
+	}
 	in := req.WithContext(ctx)
 	in.Body, in.ContentLength = chunkBody(chunks), size
 	in.GetBody = func() (io.ReadCloser, error) { return chunkBody(chunks), nil }
 	count(chatServed)
-	h.ServeHTTP(w, in)
+	route.h.ServeHTTP(w, in)
 }
 
 // busy answers 503 with Retry-After, counted as busy. A request whose body was not read whole (bodyRead false) is refused, so that its

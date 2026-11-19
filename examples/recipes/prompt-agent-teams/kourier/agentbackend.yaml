@@ -1,0 +1,10 @@
+# The prompt agent from the prompt-agent recipe, reused as it is: its agent/ directory, image and manifests. On the a2a
+# dialect the url is the exact JSON-RPC endpoint, used as written, and the agent card is served at that url plus
+# /.well-known/agent-card.json. Its name differs from the prompt-agent recipe's AgentBackend, so both recipes can be
+# applied to one cluster.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: teams-prompt-agents, namespace: agent-kourier}
+spec:
+  dialect: a2a
+  url: http://prompt-agent.prompt-agent.svc.cluster.local:8080

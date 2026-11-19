@@ -268,16 +268,19 @@ func TestCELLiteralsEqualTheBrokersConstants(t *testing.T) {
 	})
 
 	t.Run("channel and output of a webhook Binding", func(t *testing.T) {
-		// The channel is Slack's within maxChatIDLen, or a webhook channel on a Binding whose triggers are all webhookEvent, whose
-		// length the field's maxLength bounds; output none is a webhook Binding's alone.
+		// The channel is a chat platform's (channelID, the union of Slack's and Microsoft Teams'), or a webhook channel on a Binding
+		// whose triggers are all webhookEvent; the field's maxLength bounds both, and is both caps. Output none is a webhook
+		// Binding's alone.
 		chat := bindings.at(t, "spec.chat")
 		rule := ruleWith(t, chat, "self.channel.matches(")
-		literals := regexp.MustCompile(`matches\('([^']*)'\)`).FindAllStringSubmatch(rule, -1)
-		if len(literals) != 2 || literals[0][1] != slackChannelID.String() || literals[1][1] != webhookChannel.String() {
-			t.Errorf("the channel rule copies %q, want slackChannelID %q and webhookChannel %q", literals, slackChannelID, webhookChannel)
+		literals := regexp.MustCompile(`matches\(r?'([^']*)'\)`).FindAllStringSubmatch(rule, -1)
+		if len(literals) != 2 || literals[0][1] != channelID.String() || literals[1][1] != webhookChannel.String() {
+			t.Errorf("the channel rule copies %q, want channelID %q and webhookChannel %q", literals, channelID, webhookChannel)
 		}
-		if got := limit(t, rule); got != maxChatIDLen {
-			t.Errorf("channel: rule %d, maxChatIDLen %d", got, maxChatIDLen)
+		for name, want := range map[string]int{"maxChannelIDLen": maxChannelIDLen, "MaxWebhookChannelLen": MaxWebhookChannelLen} {
+			if got := bindings.at(t, "spec.chat.channel").num("maxLength"); got != want {
+				t.Errorf("channel: maxLength %d, %s %d", got, name, want)
+			}
 		}
 		webhookOnly := "has(self.triggers) && size(self.triggers) > 0 && self.triggers.all(t, t.type == 'webhookEvent')"
 		if !strings.Contains(rule, webhookOnly) {

@@ -1,12 +1,13 @@
 # Start from a recipe
 
-For a team that wants an agent in a Slack channel and would rather start from a working example than from a blank file:
+For a team that wants an agent in a Slack or Microsoft Teams channel and would rather start from a working example than from a
+blank file:
 at the end, you have applied a recipe's Agent Kourier resources, and its agent if the recipe has one, and know which
-checks come with it. There are four recipes: one for Alertmanager alerts, with an agent, one for another bot's
+checks come with it. There are five recipes: one for Alertmanager alerts, with an agent, one for another bot's
 posts, which holds the Agent Kourier resources only, one that answers questions from documentation, with an agent that
 runs on any cluster, and one whose agent you define in a YAML file: a prompt, a model and the MCP tools it may call. A
 team that is new to Agent Kourier should start with the documentation agent; a team that wants its own agent without
-writing one, with the last.
+writing one, with the fourth. The fifth puts that agent in a Microsoft Teams channel instead, with Alertmanager's alerts.
 
 A recipe is a directory under
 [`examples/recipes`](https://github.com/agentkourier/agent-kourier/tree/main/examples/recipes) with the resources that
@@ -311,3 +312,55 @@ field of `agent.yaml`, the providers that have been run, everything the agent re
 `make prompt-agent-test` drives the agent over A2A with a scripted model and a real MCP server: streaming, follow-ups,
 the tool policy, cancel, questions, and the token check. `go test ./test/recipes` loads the three resources with Agent
 Kourier's loader. The agent keeps its conversations in memory and runs one replica.
+
+## Put the prompt agent in a Microsoft Teams channel
+
+!!! warning "Experimental"
+
+    Microsoft Teams support needs a release later than 0.5.0, and has not yet been run as a full install against Microsoft
+    Teams: [Configure Microsoft Teams](configure-teams.md) says what was checked.
+
+The `prompt-agent-teams` recipe reuses the `prompt-agent` recipe's agent as it is, and binds it to a Microsoft Teams
+channel: a mention of the bot starts a session, and an alert card that Alertmanager posts to the channel through a
+Workflows webhook starts an investigation in that alert's thread. It also holds the Teams app's `manifest.json`.
+
+### Before you start
+
+- The prompt agent running, as in [Define an agent from a prompt](#define-an-agent-from-a-prompt), with its Secrets.
+- A bot registered in your Microsoft Entra tenant and its app installed in a team: steps 1 to 5 of
+  [Configure Microsoft Teams](configure-teams.md). You need the tenant ID, the bot's application ID and the channel's ID.
+- For the alerts, a Workflows flow on the channel and Alertmanager 0.28.0 or later, whose `msteamsv2` receiver posts to
+  it ([Send Alertmanager alerts to a channel](configure-teams.md#send-alertmanager-alerts-to-a-channel)).
+
+### Agent Kourier's resources
+
+Three files, in the namespace `agent-kourier`. Replace the placeholder GUIDs with your tenant ID and the bot's application
+ID, and `19:REPLACE-prompt-teams@thread.tacv2` with the channel's ID. The Binding has a `mention` trigger and a `botMessage`
+trigger for Workflows' posts, whose regexes read the card of Alertmanager's default templates.
+
+```yaml title="kourier/binding.yaml"
+--8<-- "prompt-agent-teams/kourier/binding.yaml"
+```
+
+```yaml title="kourier/agentbackend.yaml"
+--8<-- "prompt-agent-teams/kourier/agentbackend.yaml"
+```
+
+```yaml title="kourier/chatconnection.yaml"
+--8<-- "prompt-agent-teams/kourier/chatconnection.yaml"
+```
+
+The ChatConnection is in `http` mode and polls Microsoft Graph for the alerts. The recipe's
+[README](https://github.com/agentkourier/agent-kourier/blob/main/examples/recipes/prompt-agent-teams/README.md) has the
+steps in order: the app package, the Secret `teams`, the chart values with the chat listener, and the alert route.
+
+### Check it
+
+`go test ./test/recipes` loads the three resources with Agent Kourier's loader and runs the recipe's trigger evals,
+`evals/triggers.yaml`, against card text written from Alertmanager's templates:
+
+```yaml title="evals/triggers.yaml"
+--8<-- "prompt-agent-teams/evals/triggers.yaml:first-case"
+```
+
+`agent-kourier dry-run` reads only Slack, so it cannot replay a Teams channel's history.

@@ -48,7 +48,8 @@ type Options struct {
 	// (chat.Caps.AckReaction), which a Binding that names none gets: the reaction of the platform that runs the Binding's own
 	// connection. A platform whose AckReaction is empty has no reactions, and a Binding on it shows none, even one it names. A
 	// connection no platform runs (an error from Platforms, such as one wrapping chat.ErrConnectionDown) has no default to give,
-	// and is not taken to have no reactions, so a reaction its Binding names is kept; nil Platforms gives no default at all.
+	// and is not taken to have no reactions, so a reaction its Binding names is kept; nil Platforms gives no default at all. It also
+	// says whether the platform carries a thread's root (session.Backend.RootContext), which a connection no platform runs does not.
 	Platforms chat.Resolver[platformCaps]
 	// fence, when set, refuses the calls that change what the agent holds (a send, an answer, a cancel) of a leader whose
 	// lease is past its renew deadline (fenceAgent). Nil with SQLite, which has no lease. Set only by the leader half, which is
@@ -123,14 +124,9 @@ func (b *Bindings) Close() {
 // resolve finds the Binding named "namespace/name" in the current snapshot, and the kit of its
 // backend's dialect. The errors are those of Backend.
 func (b *Bindings) resolve(name string) (config.ResolvedBinding, kit, error) {
-	snap := b.snaps.Current()
-	if snap == nil {
-		return config.ResolvedBinding{}, kit{}, fmt.Errorf("broker: Binding %s: the config has not loaded yet", name)
-	}
-	ns, n, ok := strings.Cut(name, "/")
-	rb, found := snap.Binding(ns, n)
-	if !ok || !found {
-		return config.ResolvedBinding{}, kit{}, fmt.Errorf("%w: %s", session.ErrUnknownBinding, name)
+	rb, err := b.find(name)
+	if err != nil {
+		return config.ResolvedBinding{}, kit{}, err
 	}
 	k, ok := b.kits[rb.Backend.Spec.Dialect]
 	if !ok {
@@ -138,6 +134,31 @@ func (b *Bindings) resolve(name string) (config.ResolvedBinding, kit, error) {
 			name, v1alpha1.NamespacedName(rb.Backend.Namespace, rb.Backend.Name), rb.Backend.Spec.Dialect, v1alpha1.DialectKagentV1, v1alpha1.DialectA2A)
 	}
 	return rb, k, nil
+}
+
+// find finds the Binding named "namespace/name" in the current snapshot. An error wrapping session.ErrUnknownBinding means the config
+// has no such Binding; any other, that no config has loaded yet.
+func (b *Bindings) find(name string) (config.ResolvedBinding, error) {
+	snap := b.snaps.Current()
+	if snap == nil {
+		return config.ResolvedBinding{}, fmt.Errorf("broker: Binding %s: the config has not loaded yet", name)
+	}
+	ns, n, ok := strings.Cut(name, "/")
+	rb, found := snap.Binding(ns, n)
+	if !ok || !found {
+		return config.ResolvedBinding{}, fmt.Errorf("%w: %s", session.ErrUnknownBinding, name)
+	}
+	return rb, nil
+}
+
+// FeedbackEnabled is the feedback.enabled of the Binding named "namespace/name", from the snapshot that is current: whether its
+// answers to people carry the feedback buttons, so whether a vote on one is taken (feedback.Bindings). Its errors are those of find.
+func (b *Bindings) FeedbackEnabled(name string) (bool, error) {
+	rb, err := b.find(name)
+	if err != nil {
+		return false, err
+	}
+	return rb.Binding.Spec.Feedback.Enabled, nil
 }
 
 // Backend returns the backend of the Binding named "namespace/name". An error wrapping
@@ -171,6 +192,7 @@ func (b *Bindings) Backend(name string) (session.Backend, error) {
 		Progress:                 rb.Binding.Spec.Chat.Progress,
 		Feedback:                 rb.Binding.Spec.Feedback.Enabled,
 		ThreadReplies:            rb.Binding.Spec.Chat.ThreadReplies,
+		RootContext:              rootContextOf(b.opts.Platforms, v1alpha1.NamespacedName(rb.Connection.Namespace, rb.Connection.Name)),
 		Mentions:                 rb.Binding.Spec.Chat.Mentions,
 		MaxMentions:              rb.Binding.Spec.Chat.MentionCap(),
 		MentionPrompt:            render.MentionPrompt(rb.Binding.Spec.Chat.Mentions),
@@ -229,6 +251,16 @@ func reactionsOf(platforms chat.Resolver[platformCaps], conn string) platformRea
 	}
 	own := p.Capabilities().AckReaction
 	return platformReactions{own: own, none: own == ""}
+}
+
+// rootContextOf says whether the platform that platforms gives for conn ("namespace/name") carries a thread's root
+// (chat.Caps.RootContext, D56). A connection that no platform runs now, or nil platforms, gives false: its first turns ask for nothing.
+func rootContextOf(platforms chat.Resolver[platformCaps], conn string) bool {
+	if platforms == nil {
+		return false
+	}
+	p, err := platforms.Platform(conn)
+	return err == nil && p.Capabilities().RootContext
 }
 
 // ackUnshown reports whether the acknowledgment ack names a reaction that no message shows: it names one (namesReaction), and the

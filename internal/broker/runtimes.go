@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -147,13 +148,18 @@ type runtimeTable struct {
 	// know would be the loop it exists to stop. A refusal that lifts writes the bot back, since the lookup that learned it is not asked again;
 	// a restart that carries its id on writes nothing, because a connection that is held was never forgotten.
 	bots map[string]appIdentity
+	// ending is the runtimes that remove took out of rts, by connection, until their run has returned (running): a run that is stopping may
+	// still write to the store (a Microsoft Teams receiver drains what it answered), so the record of the served connections does not prune
+	// the connection before then.
+	ending map[string][]*connRuntime
 	// sealed is set by the shutdown when it halts the runtimes: a runtime added after it is halted as it is added, so that none runs on
 	// beyond the step that stops them.
 	sealed bool
 }
 
 func newRuntimeTable() *runtimeTable {
-	return &runtimeTable{rts: map[string]*connRuntime{}, down: map[string]*connectionStopped{}, bots: map[string]appIdentity{}}
+	return &runtimeTable{rts: map[string]*connRuntime{}, down: map[string]*connectionStopped{}, bots: map[string]appIdentity{},
+		ending: map[string][]*connRuntime{}}
 }
 
 var _ chat.Resolver[chat.Platform] = (*runtimeTable)(nil)
@@ -183,6 +189,28 @@ func (t *runtimeTable) Platform(conn string) (chat.Platform, error) {
 func (t *runtimeTable) runs(conn string) bool {
 	_, err := t.Platform(conn)
 	return err == nil
+}
+
+// running says whether a run of the connection conn may still be going: a runtime of it is in the table (rejected or not), or one that was
+// taken out (remove) while its run went and whose run has not told the table it ended (ended).
+func (t *runtimeTable) running(conn string) bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	_, ok := t.rts[conn]
+	return ok || len(t.ending[conn]) > 0
+}
+
+// ended forgets rt among the runtimes taken out whose run goes: its run's goroutine calls it once it has closed rt.done. remove reads done
+// under t.mu, so a runtime taken out after the close is never kept, and one taken out before it is dropped here.
+func (t *runtimeTable) ended(rt *connRuntime) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	going := slices.DeleteFunc(t.ending[rt.name], func(e *connRuntime) bool { return e == rt })
+	if len(going) == 0 {
+		delete(t.ending, rt.name)
+		return
+	}
+	t.ending[rt.name] = going
 }
 
 // downError is the error of a connection that nothing runs.
@@ -268,13 +296,17 @@ func (t *runtimeTable) seal() []*connRuntime {
 	return out
 }
 
-// remove takes rt out of the table, if it is the connection's runtime still: a runtime that was replaced is not in it to take.
+// remove takes rt out of the table, if it is the connection's runtime still: a runtime that was replaced is not in it to take. Either way rt,
+// if its run goes, is running until the run returns and says so (ended); one that never ran, or whose run has returned, is not kept.
 func (t *runtimeTable) remove(rt *connRuntime) {
 	t.mu.Lock()
+	defer t.mu.Unlock()
 	if t.rts[rt.name] == rt {
 		delete(t.rts, rt.name)
 	}
-	t.mu.Unlock()
+	if rt.ran.Load() && !isClosed(rt.done) {
+		t.ending[rt.name] = append(t.ending[rt.name], rt)
+	}
 }
 
 // identify records whose bot the connection conn has, in place of the one it had: a connection that is served keeps its bot until a new one is
@@ -384,6 +416,7 @@ func (h *runtimeHost) run(rt *connRuntime, sink chat.Sink, onEnd func(rt *connRu
 			h.closeTransport(rt) // nothing posts through it from here: the connection is down
 		}
 		close(rt.done)
+		h.table.ended(rt)
 		if onEnd != nil {
 			onEnd(rt, err)
 		}

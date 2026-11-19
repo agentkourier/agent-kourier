@@ -199,7 +199,8 @@ func webhookWorld(t *testing.T, s *starter, limits v1alpha1.TriggerLimits) *trig
 	cfg, err := newIntakeConfig(intakeParts{
 		conn: v1alpha1.ObjectRef{Namespace: "agent-kourier-system", Name: "hooks"}, snapshot: func() *config.Snapshot { return snap },
 		submitter: s.sub, interactions: func(context.Context, chat.Interaction) error { return nil }, notice: s.notes.take,
-		starter: s.triggerStarter, threads: st, runs: st, replies: st, log: s.log,
+		decidePress: func(context.Context, chat.Interaction) (chat.PressOutcome, error) { return chat.PressOutcome{}, nil }, starter: s.triggerStarter,
+		threads: st, runs: st, replies: st, log: s.log,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -238,7 +238,8 @@ func TestAgentBackendValidate(t *testing.T) {
 
 func TestChatConnectionValidate(t *testing.T) {
 	runMutations[ChatConnection](t, "chatconnection.yaml", []mutation[ChatConnection]{
-		{"bad platform", func(o *ChatConnection) { o.Spec.Platform = "teams" }, `spec.platform: unsupported value "teams", must be one of slack, webhook`},
+		{"bad platform", func(o *ChatConnection) { o.Spec.Platform = "discord" }, `spec.platform: unsupported value "discord", must be one of slack, teams, webhook`},
+		{"a platform in capitals", func(o *ChatConnection) { o.Spec.Platform = "Teams" }, `spec.platform: unsupported value "Teams", must be one of slack, teams, webhook`},
 		{"credentials without name", func(o *ChatConnection) { o.Spec.CredentialsSecretRef = SecretRef{} }, "spec.credentialsSecretRef.name: required"},
 		{"credentials with bad name", func(o *ChatConnection) { o.Spec.CredentialsSecretRef.Name = "Slack_Main" },
 			badName("spec.credentialsSecretRef.name", "Slack_Main")},
@@ -257,12 +258,12 @@ func TestChatConnectionValidate(t *testing.T) {
 }
 
 // A slack block on a connection of another platform is refused, besides the platform, so that no other platform's connection carries
-// Slack's settings.
+// Slack's settings (TestTeamsConnectionValidate has a teams connection's).
 func TestChatConnectionRefusesASlackBlockOnAnotherPlatform(t *testing.T) {
 	c := load[ChatConnection](t, "chatconnection.yaml")
-	c.Spec.Platform = "teams"
+	c.Spec.Platform = "discord"
 	c.Spec.Slack = &SlackConnectionSpec{Mode: SlackModeSocket}
-	want := []string{`spec.platform: unsupported value "teams", must be one of slack, webhook`, "spec.slack: is set, but only a slack connection has one"}
+	want := []string{`spec.platform: unsupported value "discord", must be one of slack, teams, webhook`, "spec.slack: is set, but only a slack connection has one"}
 	if got := problemsOf(c.Validate()); !slices.Equal(got, want) {
 		t.Errorf("Validate() problems = %q, want %q", got, want)
 	}
@@ -294,23 +295,32 @@ func TestBindingValidate(t *testing.T) {
 		{"connectionRef without name", func(o *Binding) { o.Spec.Chat.ConnectionRef.Name = "" }, "spec.chat.connectionRef.name: required"},
 		{"empty channel", func(o *Binding) { o.Spec.Chat.Channel = "" }, "spec.chat.channel: required"},
 		{"channel name instead of ID", func(o *Binding) { o.Spec.Chat.Channel = "#sre-alerts" },
-			`spec.chat.channel: invalid channel "#sre-alerts": must be a channel ID such as C0123456789, not a name`},
+			`spec.chat.channel: invalid channel "#sre-alerts": must be a channel ID such as C0123456789 (Slack) or 19:…@thread.tacv2 (Microsoft Teams), not a name`},
 		{"a channel's name without its #", func(o *Binding) { o.Spec.Chat.Channel = "general" },
-			`spec.chat.channel: invalid channel "general": must be a channel ID such as C0123456789, not a name`},
+			`spec.chat.channel: invalid channel "general": must be a channel ID such as C0123456789 (Slack) or 19:…@thread.tacv2 (Microsoft Teams), not a name`},
 		{"a private channel's G ID ok", func(o *Binding) { o.Spec.Chat.Channel = "G0123456789" }, ""},
 		{"a direct message's D ID", func(o *Binding) { o.Spec.Chat.Channel = "D0123456789" },
-			`spec.chat.channel: invalid channel "D0123456789": must be a channel ID such as C0123456789, not a name`},
+			`spec.chat.channel: invalid channel "D0123456789": must be a channel ID such as C0123456789 (Slack) or 19:…@thread.tacv2 (Microsoft Teams), not a name`},
 		{"a channel ID in lower case", func(o *Binding) { o.Spec.Chat.Channel = "c0123456789" },
-			`spec.chat.channel: invalid channel "c0123456789": must be a channel ID such as C0123456789, not a name`},
+			`spec.chat.channel: invalid channel "c0123456789": must be a channel ID such as C0123456789 (Slack) or 19:…@thread.tacv2 (Microsoft Teams), not a name`},
 		{"a channel with a control character", func(o *Binding) { o.Spec.Chat.Channel = "C0123456789\n" },
-			`spec.chat.channel: invalid channel "C0123456789\n": must be a channel ID such as C0123456789, not a name`},
+			`spec.chat.channel: invalid channel "C0123456789\n": must be a channel ID such as C0123456789 (Slack) or 19:…@thread.tacv2 (Microsoft Teams), not a name`},
 		{"a repository as a channel", func(o *Binding) { o.Spec.Chat.Channel = "octo-org/hello-world" },
-			`spec.chat.channel: invalid channel "octo-org/hello-world": must be a channel ID such as C0123456789, not a name`},
-		{"a channel at the length cap ok", func(o *Binding) { o.Spec.Chat.Channel = "C" + strings.Repeat("0", maxChatIDLen-1) }, ""},
-		{"a channel over the length cap", func(o *Binding) { o.Spec.Chat.Channel = "C" + strings.Repeat("0", maxChatIDLen) },
-			fmt.Sprintf("spec.chat.channel: is %d bytes, longer than the %d byte limit", maxChatIDLen+1, maxChatIDLen)},
-		{"a channel over the length cap that is not an ID is not shown", func(o *Binding) { o.Spec.Chat.Channel = "#" + strings.Repeat("x", maxChatIDLen) },
-			fmt.Sprintf("spec.chat.channel: is %d bytes, longer than the %d byte limit", maxChatIDLen+1, maxChatIDLen)},
+			`spec.chat.channel: invalid channel "octo-org/hello-world": must be a channel ID such as C0123456789 (Slack) or 19:…@thread.tacv2 (Microsoft Teams), not a name`},
+		{"a Slack channel at the length cap ok: Slack's own cap is the broker's", func(o *Binding) { o.Spec.Chat.Channel = "C" + strings.Repeat("0", maxChannelIDLen-1) }, ""},
+		{"a channel over the length cap", func(o *Binding) { o.Spec.Chat.Channel = "C" + strings.Repeat("0", maxChannelIDLen) },
+			fmt.Sprintf("spec.chat.channel: is %d bytes, longer than the %d byte limit", maxChannelIDLen+1, maxChannelIDLen)},
+		{"a channel over the length cap that is not an ID is not shown", func(o *Binding) { o.Spec.Chat.Channel = "#" + strings.Repeat("x", maxChannelIDLen) },
+			fmt.Sprintf("spec.chat.channel: is %d bytes, longer than the %d byte limit", maxChannelIDLen+1, maxChannelIDLen)},
+		{"a Teams channel of a real one's length ok", func(o *Binding) { o.Spec.Chat.Channel = testTeamsChannel }, ""},
+		{"a Teams channel of the older kind ok", func(o *Binding) { o.Spec.Chat.Channel = "19:a1b2c3d4e5f60718293a4b5c6d7e8f90@thread.skype" }, ""},
+		{"a Teams channel at the length cap ok", func(o *Binding) { o.Spec.Chat.Channel = teamsChannelOf(maxChannelIDLen) }, ""},
+		{"a Teams channel over the length cap", func(o *Binding) { o.Spec.Chat.Channel = teamsChannelOf(maxChannelIDLen + 1) },
+			fmt.Sprintf("spec.chat.channel: is %d bytes, longer than the %d byte limit", maxChannelIDLen+1, maxChannelIDLen)},
+		{"a Teams thread, a channel with its root message", func(o *Binding) { o.Spec.Chat.Channel = testTeamsChannel + ";messageid=1700000000000" },
+			`spec.chat.channel: invalid channel "` + testTeamsChannel + `;messageid=1700000000000": must be a channel ID such as C0123456789 (Slack) or 19:…@thread.tacv2 (Microsoft Teams), not a name`},
+		{"a Teams chat, not a channel", func(o *Binding) { o.Spec.Chat.Channel = "19:abc@unq.gbl.spaces" },
+			`spec.chat.channel: invalid channel "19:abc@unq.gbl.spaces": must be a channel ID such as C0123456789 (Slack) or 19:…@thread.tacv2 (Microsoft Teams), not a name`},
 		{"bad output", func(o *Binding) { o.Spec.Chat.Output = "carrier-pigeon" },
 			`spec.chat.output: unsupported value "carrier-pigeon", must be one of live, final`},
 		{"final output ok", func(o *Binding) { o.Spec.Chat.Output = OutputFinal }, ""},
@@ -328,9 +338,14 @@ func TestBindingValidate(t *testing.T) {
 		{"a mention name over the length cap", func(o *Binding) {
 			o.Spec.Chat.Mentions = []ChatMention{{Name: strings.Repeat("a", maxMentionNameLen+1), User: "U0123456789"}}
 		}, fmt.Sprintf("spec.chat.mentions[0].name: is %d bytes, longer than the %d byte limit", maxMentionNameLen+1, maxMentionNameLen)},
-		{"a mention user at the length cap ok", func(o *Binding) {
-			o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "U" + strings.Repeat("0", maxMentionUserLen-1)}}
+		{"a Slack user at its pattern's length ok", func(o *Binding) {
+			o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "U" + strings.Repeat("0", maxSlackUserIDLen-1)}}
 		}, ""},
+		{"an Entra object ID as a user ok", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: testTenant}} }, ""},
+		{"an Entra object ID in capitals", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: strings.ToUpper(testApp)}} },
+			`spec.chat.mentions[0].user: invalid user ID "66666666-7777-4888-9999-AAAAAAAAAAAA": must be a user ID such as U0123456789 (Slack) or a Microsoft Entra object ID, a GUID in lowercase hex (Microsoft Teams)`},
+		{"a Teams user's 29: ID", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "29:1a2b3c"}} },
+			`spec.chat.mentions[0].user: invalid user ID "29:1a2b3c": must be a user ID such as U0123456789 (Slack) or a Microsoft Entra object ID, a GUID in lowercase hex (Microsoft Teams)`},
 		{"a mention user over the length cap", func(o *Binding) {
 			o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "U" + strings.Repeat("0", maxMentionUserLen)}}
 		}, fmt.Sprintf("spec.chat.mentions[0].user: is %d bytes, longer than the %d byte limit", maxMentionUserLen+1, maxMentionUserLen)},
@@ -343,13 +358,13 @@ func TestBindingValidate(t *testing.T) {
 			`spec.chat.mentions[0].name: "everyone" is reserved: a broadcast cannot be declared`},
 		{"mention with no user", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam"}} }, "spec.chat.mentions[0].user: required"},
 		{"mention of a user group", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "oncall", User: "S0123456789"}} },
-			`spec.chat.mentions[0].user: invalid user ID "S0123456789": must be a user ID such as U0123456789`},
+			`spec.chat.mentions[0].user: invalid user ID "S0123456789": must be a user ID such as U0123456789 (Slack) or a Microsoft Entra object ID, a GUID in lowercase hex (Microsoft Teams)`},
 		{"mention with user markup", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "<@U0123456789>"}} },
-			`spec.chat.mentions[0].user: invalid user ID "<@U0123456789>": must be a user ID such as U0123456789`},
+			`spec.chat.mentions[0].user: invalid user ID "<@U0123456789>": must be a user ID such as U0123456789 (Slack) or a Microsoft Entra object ID, a GUID in lowercase hex (Microsoft Teams)`},
 		{"an e-mail address as a user", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "sam@example.com"}} },
-			`spec.chat.mentions[0].user: invalid user ID "sam@example.com": must be a user ID such as U0123456789`},
+			`spec.chat.mentions[0].user: invalid user ID "sam@example.com": must be a user ID such as U0123456789 (Slack) or a Microsoft Entra object ID, a GUID in lowercase hex (Microsoft Teams)`},
 		{"a user ID of one character after U", func(o *Binding) { o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "U0"}} },
-			`spec.chat.mentions[0].user: invalid user ID "U0": must be a user ID such as U0123456789`},
+			`spec.chat.mentions[0].user: invalid user ID "U0": must be a user ID such as U0123456789 (Slack) or a Microsoft Entra object ID, a GUID in lowercase hex (Microsoft Teams)`},
 		{"mention declared twice", func(o *Binding) {
 			o.Spec.Chat.Mentions = []ChatMention{{Name: "sam", User: "U0123456789"}, {Name: "sam", User: "U9876543210"}}
 		}, "spec.chat.mentions[1].name: duplicate of index 0"},
@@ -405,12 +420,16 @@ func TestBindingValidate(t *testing.T) {
 		}, `spec.interactions.approverGroups[0]: invalid group ID "oncall": must be a Slack user group ID such as S0123456789`},
 		{"an approver group at the length cap ok", func(o *Binding) {
 			o.Spec.Interactions.ToolApprovals = true
-			o.Spec.Interactions.ApproverGroups = []string{"S" + strings.Repeat("0", maxChatIDLen-1)}
+			o.Spec.Interactions.ApproverGroups = []string{"S" + strings.Repeat("0", maxApproverGroupIDLen-1)}
 		}, ""},
 		{"an approver group over the length cap", func(o *Binding) {
 			o.Spec.Interactions.ToolApprovals = true
-			o.Spec.Interactions.ApproverGroups = []string{"S" + strings.Repeat("0", maxChatIDLen)}
-		}, fmt.Sprintf("spec.interactions.approverGroups[0]: is %d bytes, longer than the %d byte limit", maxChatIDLen+1, maxChatIDLen)},
+			o.Spec.Interactions.ApproverGroups = []string{"S" + strings.Repeat("0", maxApproverGroupIDLen)}
+		}, fmt.Sprintf("spec.interactions.approverGroups[0]: is %d bytes, longer than the %d byte limit", maxApproverGroupIDLen+1, maxApproverGroupIDLen)},
+		{"an Entra group's GUID as an approver group: longer than Slack's, the only platform with approver groups", func(o *Binding) {
+			o.Spec.Interactions.ToolApprovals = true
+			o.Spec.Interactions.ApproverGroups = []string{testTenant}
+		}, fmt.Sprintf("spec.interactions.approverGroups[0]: is %d bytes, longer than the %d byte limit", entraIDLen, maxApproverGroupIDLen)},
 		{"duplicate approver group", func(o *Binding) {
 			o.Spec.Interactions.ToolApprovals = true
 			o.Spec.Interactions.ApproverGroups = []string{"S0123456789", "S0123456789"}

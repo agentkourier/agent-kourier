@@ -9,10 +9,49 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/config"
 )
 
-// capsFake is a platform that has only its capabilities, with the given acknowledgment reaction.
-type capsFake struct{ ack string }
+// capsFake is a platform that has only its capabilities, with the given acknowledgment reaction, and roots if it carries a
+// thread's root (chat.Caps.RootContext).
+type capsFake struct {
+	ack   string
+	roots bool
+}
 
-func (c capsFake) Capabilities() chat.Caps { return chat.Caps{AckReaction: c.ack} }
+func (c capsFake) Capabilities() chat.Caps {
+	return chat.Caps{AckReaction: c.ack, RootContext: c.roots}
+}
+
+// A Binding's backend carries a thread's root (session.Backend.RootContext) where its own connection's platform does: a platform that
+// does not, and a connection that no platform runs now, give false, so the session asks nothing for a first turn there (D56).
+func TestABindingCarriesRootsWhereItsConnectionsPlatformDoes(t *testing.T) {
+	f := newFixture(t)
+	f.snaps.p.Store(twoConnections(t))
+	for name, tt := range map[string]struct {
+		platforms chat.Resolver[platformCaps]
+		want      map[string]bool
+	}{
+		"slack-a carries roots":  {chat.PlatformSet[platformCaps]{connA: capsFake{roots: true}, connB: capsFake{}}, map[string]bool{"sre/oncall": true, "sre/other-bot": false}},
+		"slack-b carries roots":  {chat.PlatformSet[platformCaps]{connA: capsFake{}, connB: capsFake{roots: true}}, map[string]bool{"sre/oncall": false, "sre/other-bot": true}},
+		"slack-b is not running": {chat.PlatformSet[platformCaps]{connA: capsFake{roots: true}}, map[string]bool{"sre/oncall": true, "sre/other-bot": false}},
+		"no platforms are known": {nil, map[string]bool{"sre/oncall": false, "sre/other-bot": false}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b, err := NewBindings(f.snaps, f.reader, f.audit, Options{OnRejected: func(string) {}, Platforms: tt.platforms})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(b.Close)
+			for binding, want := range tt.want {
+				be, err := b.Backend(binding)
+				if err != nil {
+					t.Fatalf("Backend(%s) = %v", binding, err)
+				}
+				if be.RootContext != want {
+					t.Errorf("Backend(%s).RootContext = %t; want %t", binding, be.RootContext, want)
+				}
+			}
+		})
+	}
+}
 
 // A Binding that names no acknowledgment reaction gets the one of its own connection's platform: the two connections of the config run
 // platforms with different defaults, and each Binding gets the default of the platform that runs its connection. A connection that no

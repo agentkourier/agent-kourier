@@ -243,6 +243,34 @@ func TestIntakePassesInteractionsOn(t *testing.T) {
 	}
 }
 
+// TestIntakeDecidesPressesWhereAPlatformWaits: a platform that waits for a press's decision is given what the configured handler
+// decides, with its error; with no such handler the press goes to Interactions, and is not decided in the wait. A press given to
+// Interaction never goes to the waiting handler.
+func TestIntakeDecidesPressesWhereAPlatformWaits(t *testing.T) {
+	var pressed, decided []chat.Interaction
+	fail := errors.New("busy")
+	cfg := trigger.IntakeConfig{
+		Interactions: func(_ context.Context, i chat.Interaction) error { pressed = append(pressed, i); return nil },
+		DecidePress: func(_ context.Context, i chat.Interaction) (chat.PressOutcome, error) {
+			decided = append(decided, i)
+			return chat.PressOutcome{Decided: true, Text: "Your answer was recorded."}, fail
+		},
+		Logger: testutil.DiscardLogger(),
+	}
+	var in chat.InlineDecider = trigger.NewIntake(cfg)
+	press := chat.Interaction{User: "U1", At: chat.Ref{Channel: "C1", ID: "5.5"}, PromptID: "ix-1"}
+	if out, err := in.DecidePress(t.Context(), press); !errors.Is(err, fail) || out.Text != "Your answer was recorded." || len(decided) != 1 || len(pressed) != 0 {
+		t.Fatalf("DecidePress = %+v, %v, decided %d, pressed %d; want the handler's outcome and error, and Interactions not asked", out, err, len(decided), len(pressed))
+	}
+	if err := trigger.NewIntake(cfg).Interaction(t.Context(), press); err != nil || len(pressed) != 1 || len(decided) != 1 {
+		t.Fatalf("Interaction = %v, decided %d, pressed %d; want Interactions alone", err, len(decided), len(pressed))
+	}
+	cfg.DecidePress = nil
+	if out, err := trigger.NewIntake(cfg).DecidePress(t.Context(), press); err != nil || out != (chat.PressOutcome{}) || len(pressed) != 2 {
+		t.Fatalf("DecidePress with no handler = %+v, %v, pressed %d; want the press given to Interactions, undecided", out, err, len(pressed))
+	}
+}
+
 // notices records what the intake asks to tell a thread.
 type notices struct {
 	mu   sync.Mutex

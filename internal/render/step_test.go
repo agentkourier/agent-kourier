@@ -15,7 +15,7 @@ func TestStepIsTheToolLineAsAStepInTheStateGiven(t *testing.T) {
 	line := Tool(call.Name, call.Args)
 	for _, state := range []chat.StepState{chat.StepRunning, chat.StepDone, chat.StepFailed, chat.StepEnded} {
 		got := Step("s1", call, state)
-		want := chat.Step{ID: "s1", Title: line.Name, Detail: line.Summary, State: state}
+		want := chat.Step{ID: "s1", Title: line.Name, Detail: line.Summary, State: state, Call: true}
 		if got != want {
 			t.Errorf("Step in %v = %+v, want %+v", state, got, want)
 		}
@@ -92,6 +92,27 @@ func TestFailedReadsAnErrorOutOfAToolResponse(t *testing.T) {
 	} {
 		if got := Failed(tc.response); got != tc.want {
 			t.Errorf("%s: Failed(%v) = %t, want %t", name, tc.response, got, tc.want)
+		}
+	}
+}
+
+// A step is a call only where its title is the tool's name: the step of a call that waits for an approval is retitled, and a
+// card that stands for time names no tool, so a platform that words a call's step as a call ("Ran get_pods(…)") words
+// neither so.
+func TestOnlyTheStepOfACallAsMadeIsACall(t *testing.T) {
+	call := agent.ToolCallEvent{CallID: "c1", Name: "get_pods"}
+	for name, tc := range map[string]struct {
+		step chat.Step
+		want bool
+	}{
+		"a call":                   {Step("s1", call, chat.StepDone), true},
+		"a call awaiting approval": {AwaitingApproval("s1", call), false},
+		"the idle card":            {WorkingStep("s1"), false},
+		"an idle card that ended":  {WorkingEnded("s1", EndedByText), false},
+		"the activity card":        {ActivityStep("s1", Counts{Steps: 2}, 0, EndedCompleted), false},
+	} {
+		if tc.step.Call != tc.want {
+			t.Errorf("%s: Call = %t, want %t", name, tc.step.Call, tc.want)
 		}
 	}
 }

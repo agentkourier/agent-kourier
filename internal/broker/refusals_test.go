@@ -7,6 +7,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/config"
 )
 
@@ -28,7 +29,7 @@ func TestTheBindingsOfARefusedConnectionAreToldItIsNotServed(t *testing.T) {
 		t.Fatalf("before the refusal the team Binding says Accepted %+v; want True", a)
 	}
 
-	refused.set(map[string]string{teamConn: refusedMessage})
+	refused.set(map[string]string{teamConn: refusedMessage(v1alpha1.PlatformSlack)})
 	sr.pass()
 
 	a, ready := c.stored(t, teamBind)["Accepted"], c.stored(t, teamBind)["Ready"]
@@ -85,7 +86,7 @@ func TestTheOverlayLeavesTheReportAsItIs(t *testing.T) {
 	if got := refused.overlay(rep); len(got.Rejections) != 0 || got.Snapshot != rep.Snapshot {
 		t.Errorf("overlay with nothing refused = %+v; want the report", got)
 	}
-	refused.set(map[string]string{teamConn: refusedMessage})
+	refused.set(map[string]string{teamConn: refusedMessage(v1alpha1.PlatformSlack)})
 	got := refused.overlay(rep)
 	if len(got.Rejections) != 1 || got.Rejections[0].Namespace != "team-a" || got.Rejections[0].Name != "on-a" || got.Rejections[0].Served != 1 {
 		t.Errorf("overlay = %+v; want one rejection of the team Binding, served at its generation", got.Rejections)

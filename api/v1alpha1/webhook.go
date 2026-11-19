@@ -305,8 +305,8 @@ func ValidWebhookChannel(s string) bool {
 }
 
 // webhookEventsOnly says whether every trigger of a Binding is webhookEvent, and there is one: such a Binding's channel and output are
-// a webhook connection's. Any other Binding's are Slack's, as before the webhook platform. Call it after Default, which makes an empty
-// list the mention trigger.
+// a webhook connection's. Any other Binding's are a chat platform's (Slack's or Microsoft Teams'). Call it after Default, which makes
+// an empty list the mention trigger.
 func (c *ChatBinding) webhookEventsOnly() bool {
 	return len(c.Triggers) > 0 && !slices.ContainsFunc(c.Triggers, func(t Trigger) bool { return t.Type != TriggerWebhookEvent })
 }

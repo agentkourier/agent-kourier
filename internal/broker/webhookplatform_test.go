@@ -53,11 +53,11 @@ func webhookConn(name string, spec *v1alpha1.WebhookSpec, value string) Connecti
 func TestNewPlatformBuildsAWebhookConnectionOnTheChatListener(t *testing.T) {
 	conn := webhookConn("github", webhookSpec(), fakeWebhookSecret)
 	var none RunConfig
-	if built, err := none.newPlatform(t.Context(), conn, nil, nil); !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), "AGENTKOURIER_CHAT_LISTEN") || built.Platform != nil {
+	if built, err := none.newPlatform(t.Context(), conn, nil, nil, nil, nil); !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), "AGENTKOURIER_CHAT_LISTEN") || built.Platform != nil {
 		t.Errorf("newPlatform(webhook) with no chat listener = %+v, %v; want a wiring error that names AGENTKOURIER_CHAT_LISTEN", built, err)
 	}
 	cfg := RunConfig{ChatListener: someListener(t)}
-	built, err := cfg.newPlatform(t.Context(), conn, nil, nil)
+	built, err := cfg.newPlatform(t.Context(), conn, nil, nil, nil, nil)
 	if err != nil || built.closeIdle == nil {
 		t.Fatalf("newPlatform(webhook) = %+v, %v; want the webhook platform", built, err)
 	}
@@ -70,7 +70,7 @@ func TestNewPlatformBuildsAWebhookConnectionOnTheChatListener(t *testing.T) {
 	built.closeIdle() // nothing to close, and it must not panic
 	noSpec := conn
 	noSpec.Webhook = nil
-	if _, err := cfg.newPlatform(t.Context(), noSpec, nil, nil); !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), "no spec.webhook") {
+	if _, err := cfg.newPlatform(t.Context(), noSpec, nil, nil, nil, nil); !errors.Is(err, ErrWiring) || !strings.Contains(err.Error(), "no spec.webhook") {
 		t.Errorf("newPlatform(webhook with no spec.webhook) = %v; want a wiring error that says so", err)
 	}
 }
@@ -98,7 +98,7 @@ func TestAWebhookCredentialThePlatformRefusesIsAWiringErrorThatNamesTheSecretAnd
 		t.Run(tt.name, func(t *testing.T) {
 			conn := webhookConn("hooks", tt.spec, tt.value)
 			for what, err := range map[string]error{
-				"newPlatform":        func() error { _, err := cfg.newPlatform(t.Context(), conn, nil, nil); return err }(),
+				"newPlatform":        func() error { _, err := cfg.newPlatform(t.Context(), conn, nil, nil, nil, nil); return err }(),
 				"checkOwnConnection": cfg.checkOwnConnection(conn),
 			} {
 				if !errors.Is(err, ErrWiring) || !errors.Is(err, tt.want) {
@@ -355,7 +355,7 @@ func TestTheWebhookPlatformCountsOnTheBrokersInstruments(t *testing.T) {
 	ctx, stop := context.WithCancel(telemetry.WithObserver(t.Context(), obs))
 	defer stop()
 	cfg := RunConfig{ChatListener: someListener(t)}
-	built, err := cfg.newPlatform(ctx, webhookConn("github", webhookSpec(), fakeWebhookSecret), nil, nil)
+	built, err := cfg.newPlatform(ctx, webhookConn("github", webhookSpec(), fakeWebhookSecret), nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

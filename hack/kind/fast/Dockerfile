@@ -5,5 +5,5 @@
 # share one pin; it has no default, so a build that forgets it fails.
 ARG RUNTIME_IMAGE
 FROM ${RUNTIME_IMAGE}
-COPY fakeslack stubagent sink signaler hitlagent /
+COPY fakeslack faketeams stubagent sink signaler hitlagent /
 USER 65532:65532

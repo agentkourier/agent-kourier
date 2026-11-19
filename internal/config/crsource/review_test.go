@@ -37,7 +37,7 @@ func TestTheOwnConnectionIsHeldWhenDeletedAndMadeAgainInvalid(t *testing.T) {
 	bad := conn.DeepCopy()
 	bad.SetUID("uid-recreated")
 	bad.SetGeneration(1)
-	_ = unstructured.SetNestedField(bad.Object, "teams", "spec", "platform")
+	_ = unstructured.SetNestedField(bad.Object, "discord", "spec", "platform")
 	until(t, func() { c.apply(bad) }, func() bool { s, _ := set(t, src); return len(s.Invalid) == 1 && !s.Invalid[0].Deleted })
 	s, _ := set(t, src)
 	inv := s.Invalid[0]

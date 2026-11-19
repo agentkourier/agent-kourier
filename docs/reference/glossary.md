@@ -103,11 +103,12 @@ Message field
 
 Outbox
 :   The durable table of posts Agent Kourier means to make. A post is recorded before it is sent, so a crash between
-    sending and recording is found and not posted twice.
+    sending and recording is found by a tag that the post carries and not posted twice. On Microsoft Teams a post whose tag cannot
+    be looked for is posted again, and may show twice.
 
 Platform
-:   A chat platform behind the `chat.Platform` interface, which a ChatConnection's `spec.platform` names. The API takes `slack` and
-    `webhook`, and the broker runs both ([What each platform supports](platforms.md)).
+:   A chat platform behind the `chat.Platform` interface, which a ChatConnection's `spec.platform` names. The API takes `slack`,
+    `teams` and `webhook`, and the broker runs all three ([What each platform supports](platforms.md)).
 
 Post
 :   A message Agent Kourier writes into a channel or thread.
