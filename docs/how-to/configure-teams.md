@@ -28,9 +28,15 @@ because they decide whether you need a public HTTPS route to the broker.
   reach the cluster for activities. Microsoft calls Socket mode a public preview, available only to newly created bots, and
   says a bot published to the Teams Store must use HTTPS. Only the leader connects. **Teams does not queue what it sends
   while no socket is ready, and does not send it to an HTTPS endpoint instead** (measured): a mention during a restart or a
-  change of leader is lost as an activity. The broker reads the posts of the gap back from Microsoft Graph (below): all of
-  them with a `notificationURL`, and up to the last 10 minutes of the gap when it polls
-  ([Catch-up reads](../reference/platforms.md#catch-up-reads)).
+  change of leader is lost as an activity. What Microsoft Graph gives back depends on the alert route (below):
+
+    - With a `notificationURL`, while the leader keeps running, a gap of the sockets lost nothing on the test tenant:
+      Graph notified the posts of the gap, mentions included (measured). Across a restart or a change of leader, the
+      broker reads nothing back when its run starts. What was posted meanwhile reaches it only if Graph sends again the
+      notifications it could not deliver, which Microsoft's documentation says it does for up to 4 hours (not measured),
+      or if Graph reports them as `missed`, after which the broker reads the channel's last 10 minutes.
+    - When it polls, the broker reads back up to the last 10 minutes of the gap, and at the start of a run the
+      10 minutes before it ([Catch-up reads](../reference/platforms.md#catch-up-reads)).
 
 **How the broker reads other apps' posts**, such as an alert card that Workflows posts: `spec.teams.notificationURL`.
 Teams sends a bot no post of another app, in either mode (measured, and Microsoft's documentation says so), so the broker
@@ -133,7 +139,9 @@ ships:
   upload's validation without it (measured). In the Developer Portal it is under **App content**, **Channel support**.
   Only standard channels were tried.
 
-The manifest above passes Microsoft's JSON schema for manifest version 1.30. Add the icons that it names: `color.png`, 192
+The manifest above passes Microsoft's JSON schema for manifest version 1.30, the one its `$schema` names: checked with
+Python's `jsonschema` (draft 4) on 18 November 2026, with no errors. That is not Teams' own validation, which also runs at
+upload. Add the icons that it names: `color.png`, 192
 by 192 pixels, and `outline.png`, 32 by 32, white on a transparent background (Microsoft's documentation). Zip the three
 files with nothing above them in the archive:
 
@@ -141,7 +149,7 @@ files with nothing above them in the archive:
 zip agent-kourier-teams.zip manifest.json color.png outline.png
 ```
 
-The Developer Portal's **Apps** page builds the same package from a form, and can import this one.
+The Developer Portal's **Apps** page builds a package from a form instead. Importing this one there was not tried.
 
 ## 4. Install the app in a team
 
@@ -169,8 +177,8 @@ first channel of a team, its primary channel, has the team's ID as its own (meas
 
 ## 6. Declare the connection
 
-In the chart's values, in the form of step 6 of the HTTP tab of [Configure Slack](configure-slack.md). The `teams` block holds the
-tenant, the app and the two choices. Pick the tab of your combination:
+Declare it in the chart's values, in the form of step 6 of the HTTP tab of [Configure Slack](configure-slack.md). The `teams`
+block holds the tenant, the app and the two choices. Pick the tab of your combination:
 
 === "http, polling"
 
@@ -267,6 +275,9 @@ tenant, the app and the two choices. Pick the tab of your combination:
         className: ""
         host: chat.example.com
         tls: [{hosts: [chat.example.com], secretName: chat-example-com-tls}]
+    networkPolicy:
+      chatFrom: # with networkPolicy.enabled
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}
     ```
 
     The chat listener takes Microsoft Graph's requests alone on the route, and answers anything else 400.
@@ -388,7 +399,7 @@ receivers:
 ```
 
 1. A file that holds the flow's URL, from a Secret mounted into Alertmanager.
-2. The default, written out: without it Alertmanager posts no `RESOLVED` card, and the thread never closes.
+2. The default, written out. With `false`, Alertmanager posts no `RESOLVED` card, and the thread never closes.
 
 With its default templates, the card has two `TextBlock`s (Alertmanager's source, `notify/msteamsv2` and
 `template/default.tmpl`; no Alertmanager card was posted through a flow on the test tenant). The first is the title,
@@ -434,7 +445,7 @@ curl -sS -X POST -H 'Content-Type: application/json' "$TEAMS_WORKFLOW_URL" --dat
   {"type":"TextBlock","text":"Labels:\n  - alertname = KubePodCrashLooping\n  - namespace = shop","wrap":true}]}}]}'
 ```
 
-The card shows in the channel after a few seconds. With polling, the broker finds it within about 10 seconds more, and
+The card shows in the channel after about 13 seconds, as on the test tenant. With polling, the broker finds it within about 10 seconds more, and
 starts the investigation in its thread. `agentkourier_teams_graph_read_messages_total` (polling) or
 `agentkourier_teams_graph_notifications_total` (notifications) counts it as `taken`, or as `not_named` when no
 `botMessage` trigger of the channel names its app; a card that the trigger's regexes turn away counts in

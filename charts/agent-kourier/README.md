@@ -419,9 +419,11 @@ pods that carry the label `agentkourier.dev/role: leader`, and the broker keeps 
   that is missing RBAC, a policy that denies it, or a wrong pod name or namespace, none of which a retry mends.
 
 While no pod carries the label, during a takeover, the chat Service has no endpoint and the platform's requests fail; Slack sends a
-request again when it gets no answer (Slack's own behaviour, not checked here). Microsoft Teams sends a message that was answered 503
-again once, about 0.6 seconds later, and a connection that polls Microsoft Graph reads back what was posted in the 10 minutes before its
-leader's run starts ([What each platform supports](../../docs/reference/platforms.md#catch-up-reads)). The health and metrics Service (`service.enabled`) selects
+request again when it gets no answer (Slack's own behaviour, not checked here). Microsoft Teams sent a message that the broker
+answered 503 again once, about 0.6 seconds later (measured on a test tenant in November 2026). While the chat Service has no endpoint,
+the Ingress or the load balancer answers instead of the broker, and one resend 0.6 seconds later does not span a takeover. What
+recovers those posts is the catch-up read of a connection that polls Microsoft Graph, which reads back what was posted in the 10
+minutes before the new leader's run starts ([What each platform supports](../../docs/reference/platforms.md#catch-up-reads)). The health and metrics Service (`service.enabled`) selects
 every Ready pod, a standby's included.
 
 The pod's name and namespace come from the downward API (`AGENTKOURIER_POD_NAME`, `AGENTKOURIER_POD_NAMESPACE`), and the label needs
@@ -441,10 +443,9 @@ controller's pods, say), and the render requires it.
 
 The chat port is meant to be reachable from the internet. Before it decodes anything of a request, the Slack adapter checks the
 request's signature with the connection's signing secret and its timestamp against a 5 minute window, and the Microsoft Teams adapter
-checks an activity's Bot Framework token (Microsoft Graph's notifications carry none: a change or lifecycle notification is refused unless its `clientState` is the
-connection's).
-The listener caps
-the body, the requests it handles at once and the body bytes it holds
+checks an activity's Bot Framework token. Microsoft Graph's notifications carry no token: one whose `clientState` is not the
+connection's is dropped, counted as `client_state` in `agentkourier_teams_graph_notifications_total`, and logged at WARN, at a pace,
+and the body is answered 202. The listener caps the body, the requests it handles at once and the body bytes it holds
 ([Limits](../../docs/reference/limits.md#run-the-broker), [Security model](../../docs/explanation/security.md#the-chat-port)).
 
 With SQLite there is one replica and the strategy is `Recreate`, so each rollout leaves the chat Service without an endpoint

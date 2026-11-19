@@ -6,7 +6,9 @@
 # on a line of its own (cardText in internal/chat/teams/graphtext.go). The cards are those of Alertmanager's msteamsv2
 # receiver with its default templates (msteamsv2.default.title and msteamsv2.default.text in Alertmanager's
 # template/default.tmpl), grouped by alertname and namespace. They were written from those templates, not recorded from a
-# live post. The post's own text is empty for a Workflows card: its HTML body holds only an <attachment> tag.
+# live post. The first case is a whole card's text; the others are trimmed from the template's output: they leave out
+# lines that the trigger's regexes do not read (annotations, the source link, some labels). The post's own text is
+# empty for a Workflows card: its HTML body holds only an <attachment> tag.
 # --8<-- [start:first-case]
 cases:
   - name: a firing alert

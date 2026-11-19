@@ -64,8 +64,12 @@ A broker serves exactly one ChatConnection, the one `config.chatConnection` name
 `connectionRef` names it. To run more than one recipe on one broker, apply each recipe's `kourier/` directory. Then:
 
 - **One platform.** A ChatConnection is on one platform, so a broker runs the Slack recipes or `prompt-agent-teams`,
-  whose ChatConnection is `teams` in the namespace `agent-kourier`, not both: the Teams recipe goes on a broker of its own,
-  whose `config.chatConnection` names `agent-kourier/teams`. What follows is for the Slack recipes.
+  whose ChatConnection is `teams` in the namespace `agent-kourier`, not both. To run both in one cluster, install the
+  Teams recipe's broker as a second release in the same namespace, named apart (`agent-kourier-teams`), with
+  `crds.install: false`, since the CRDs are the first release's: its README's
+  [Apply it](prompt-agent-teams/README.md#apply-it) step says how. Each broker then serves its own ChatConnection alone,
+  as a broker with a `config.chatConnection` and no namespace list or selector does, and writes the status of its own
+  Bindings only. What follows is for the Slack recipes.
 - **One ChatConnection.** Every Slack recipe ships the same one: `slack` in the namespace `agent-kourier`, whose Secret
   `slack` holds the keys `botToken` and `appToken` (`botToken` and `signingSecret` in [HTTP mode](#slack-in-http-mode)).
   The copies are one object, so applying a second recipe leaves it as it is (in HTTP mode, only once every copy you

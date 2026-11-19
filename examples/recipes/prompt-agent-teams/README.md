@@ -129,6 +129,13 @@ unset TEAMS_CLIENT_SECRET
      -n agent-kourier -f prompt-agent-teams-values.yaml
    ```
 
+   If the broker of the Slack recipes already runs as the release `agent-kourier` in this namespace, install this one
+   beside it as a second release: name it `agent-kourier-teams` in both `helm upgrade --install` commands, and add
+   `crds: {install: false}` to the values. The CRDs belong to the first release, and Helm refuses a second release that
+   renders them ([Install with Helm](../../../docs/how-to/install-with-helm.md)). The chart names every object of a
+   release after the release, so the two do not collide, and each broker serves its own ChatConnection alone, since
+   neither sets a namespace list or selector. The messaging endpoint stays the same: its path is the ChatConnection's.
+
 3. Set the bot's messaging endpoint to `https://chat.example.com/chat/teams/agent-kourier/teams`
    ([Point Teams at the broker](../../../docs/how-to/configure-teams.md#7-point-teams-at-the-broker)).
 4. Post in the channel, or mention the bot there. The Binding's `ChannelJoined` condition becomes `True` only after an

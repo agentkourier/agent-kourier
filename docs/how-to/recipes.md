@@ -1,6 +1,7 @@
 # Start from a recipe
 
-For a team that wants an agent in a Slack channel and would rather start from a working example than from a blank file:
+For a team that wants an agent in a Slack or Microsoft Teams channel and would rather start from a working example than from a
+blank file:
 at the end, you have applied a recipe's Agent Kourier resources, and its agent if the recipe has one, and know which
 checks come with it. There are five recipes: one for Alertmanager alerts, with an agent, one for another bot's
 posts, which holds the Agent Kourier resources only, one that answers questions from documentation, with an agent that
