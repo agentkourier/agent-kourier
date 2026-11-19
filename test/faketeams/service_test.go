@@ -395,6 +395,51 @@ func TestTheFakeRefusesWhatMicrosoftRefuses(t *testing.T) {
 	}
 }
 
+// The install the fake sends a bot is a conversationUpdate of eventType teamMemberAdded on the team's conversation, whose channelData
+// holds the team's record and no channel: not the channel the install names, which the bot learns from the first activity in it.
+func TestTheInstallCarriesTheTeamsRecordAlone(t *testing.T) {
+	t.Parallel()
+	got := make(chan []byte, 1)
+	bot := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		select {
+		case got <- body:
+		default:
+		}
+	}))
+	t.Cleanup(bot.Close)
+	fake, _ := fakeOnly(t, bot.URL)
+	if _, err := faketeams.NewControl(controlURL(t, fake)).Install(t.Context(), faketeams.Install{App: app, Channel: channel}); err != nil {
+		t.Fatal(err)
+	}
+	var a struct {
+		Type         string `json:"type"`
+		Conversation struct {
+			ID string `json:"id"`
+		} `json:"conversation"`
+		ChannelData map[string]json.RawMessage `json:"channelData"`
+	}
+	select {
+	case body := <-got:
+		if err := json.Unmarshal(body, &a); err != nil {
+			t.Fatalf("the install is not an activity in JSON: %v", err)
+		}
+	case <-t.Context().Done():
+		t.Fatal("the bot was sent no install")
+	}
+	if a.Type != "conversationUpdate" || a.Conversation.ID != team {
+		t.Errorf("the install is a %q on %q; want a conversationUpdate on the team's conversation %q", a.Type, a.Conversation.ID, team)
+	}
+	if string(a.ChannelData["eventType"]) != `"teamMemberAdded"` || a.ChannelData["team"] == nil || a.ChannelData["tenant"] == nil {
+		t.Errorf("the install's channelData %s; want the eventType teamMemberAdded, the team and the tenant", a.ChannelData)
+	}
+	for _, key := range []string{"teamsChannelId", "channel"} {
+		if v, ok := a.ChannelData[key]; ok {
+			t.Errorf("the install's channelData has %s %s; want no channel, only the team's record", key, v)
+		}
+	}
+}
+
 // callBody makes one call of the fake with token, and returns the status and the body.
 func callBody(t *testing.T, ms *httptest.Server, method, path, token, body string) (int, string) {
 	t.Helper()

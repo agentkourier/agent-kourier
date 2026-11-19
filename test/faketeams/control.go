@@ -107,13 +107,16 @@ func (s *Service) controlInstall(w http.ResponseWriter, r *http.Request) {
 	id := s.nextIDLocked(time.Now())
 	s.mu.Unlock()
 	// As Microsoft's documentation of the bot's install describes it, and not measured here: a conversationUpdate of eventType
-	// teamMemberAdded, the bot in membersAdded, on the team's conversation (its General channel's ID). The channel the test names is
-	// in channelData alone. So the install tells the bot the team's record, not the channel's: a channel's comes with the first
-	// activity in it, a person's mention of the bot, which is the setup a team does.
+	// teamMemberAdded, the bot in membersAdded, on the team's conversation (its General channel's ID), whose channelData holds the
+	// team and the tenant and no channel. So the install tells the bot the team's record, not the channel's: the channel the test names
+	// is only made in the fake, and its record comes with the first activity in it, a person's mention of the bot, which is the setup a
+	// team does.
 	a := s.activity("conversationUpdate", id, s.cfg.TeamID)
 	a["membersAdded"] = []any{map[string]string{"id": "28:" + in.App, "name": botName}}
 	data := a["channelData"].(map[string]any)
-	data["eventType"], data["teamsChannelId"], data["channel"] = "teamMemberAdded", in.Channel, map[string]string{"id": in.Channel}
+	data["eventType"] = "teamMemberAdded"
+	delete(data, "teamsChannelId")
+	delete(data, "channel")
 	writeJSON(w, s.sendActivity(r.Context(), in.App, a))
 }
 
