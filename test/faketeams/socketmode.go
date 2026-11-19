@@ -1,9 +1,17 @@
-// Package faketeams fakes, for tests, the part of Microsoft's services that a Microsoft Teams connection in socket mode talks to:
-// the connect call of each region, Azure SignalR's negotiate and its WebSocket, and enough of SignalR's JSON hub protocol to call
-// SocketReady, Activity and SocketClosing on the client and take its completions. It follows what was measured against the real
-// service in November 2026 (connect, negotiate, handshake, the envelope and its reply frame), not more: what the real service does past
-// that is not here. As measured, the connect call's URL is the SignalR service's own, whose negotiate answers a connection token at
-// once; Redirect makes it answer a redirect first instead, which SignalR's protocol has and the service was not seen to answer.
+// Package faketeams fakes, for tests, the Microsoft services that a Microsoft Teams connection talks to.
+//
+// Service (and the faketeams command, which serves it in the E2E tiers) fakes what a connection in http mode reaches: Microsoft
+// Entra's token endpoint, the Bot Framework's OpenID metadata and keys, with activities signed by its own key, the Bot Connector
+// (post, reply, update, members, the team's channels) and Microsoft Graph (channel messages, delta, replies and subscriptions with
+// their validation handshake and change notifications), with a control API the tests drive: a person's mention, a button press, a
+// Workflows card, and what the bot posted. It holds the shapes the Teams adapter reads, not more.
+//
+// SocketMode fakes what a connection in socket mode talks to: the connect call of each region, Azure SignalR's negotiate and its
+// WebSocket, and enough of SignalR's JSON hub protocol to call SocketReady, Activity and SocketClosing on the client and take its
+// completions. It follows what was measured against the real service in November 2026 (connect, negotiate, handshake, the envelope
+// and its reply frame), not more: what the real service does past that is not here. As measured, the connect call's URL is the
+// SignalR service's own, whose negotiate answers a connection token at once; Redirect makes it answer a redirect first instead, which
+// SignalR's protocol has and the service was not seen to answer.
 package faketeams
 
 import (

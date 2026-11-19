@@ -107,7 +107,8 @@ type builtPlatform struct {
 // platform's connection is up: it is Config.OnConnection of the adapter. convs keeps what a Microsoft Teams connection's activities say
 // of each channel: the leader gives the broker's store (newTeamsConversations), so that a restart or a takeover does not post through
 // the global route until an activity comes, and a Teams connection with none is a wiring error; a Slack connection does not read it. It
-// refuses a connection that needs the chat listener on a broker that has none (needsChatListener).
+// refuses a connection that needs the chat listener on a broker that has none (needsChatListener). In a test image, testhooks.Teams points
+// every call of a Teams connection at the fake Teams service, and at nothing else; a production build has no such fake.
 func (c RunConfig) newPlatform(conn Connection, log *slog.Logger, onConnection func(connected bool),
 	convs teams.ConversationStore) (builtPlatform, error) {
 	name := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
@@ -132,10 +133,21 @@ func (c RunConfig) newPlatform(conn Connection, log *slog.Logger, onConnection f
 			return builtPlatform{}, fmt.Errorf("%w: ChatConnection %s: a Microsoft Teams connection needs a store for its channels' conversations", ErrWiring, name)
 		}
 		transport := http.DefaultTransport.(*http.Transport).Clone()
+		var rt http.RoundTripper = transport
+		fake, faked, err := testhooks.Teams(c.hooks) // never faked in a production build
+		if err != nil {
+			return builtPlatform{}, fmt.Errorf("%w: ChatConnection %s: %w", ErrWiring, name, err)
+		}
+		if faked {
+			transport.TLSClientConfig, rt = fake.TLS, fake.Wrap(transport)
+		}
 		tc := teams.Config{Connection: name, TenantID: conn.Teams.TenantID, AppID: conn.Teams.AppID,
 			ClientSecret: conn.Credentials[v1alpha1.TeamsClientSecretKey], Logger: log, OnConnection: onConnection,
-			HTTPClient: &http.Client{Transport: telemetry.Transport(transport, false), Timeout: teamsAPITimeout}, Conversations: convs,
+			HTTPClient: &http.Client{Transport: telemetry.Transport(rt, false), Timeout: teamsAPITimeout}, Conversations: convs,
 			Socket: conn.Teams.Mode == v1alpha1.TeamsModeSocket, NotificationURL: conn.Teams.NotificationURL}
+		if faked {
+			tc.TokenURL, tc.MetadataURL, tc.GraphURL, tc.SocketURL, tc.SocketTLS = fake.TokenURL, fake.MetadataURL, fake.GraphURL, fake.SocketURL, fake.TLS
+		}
 		if c.teamsFakes != nil {
 			c.teamsFakes(&tc)
 		}
