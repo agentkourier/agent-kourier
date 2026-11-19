@@ -210,7 +210,7 @@ to the channel's messages (`/teams/{group}/channels/{channel}/messages`, for new
 notification), with the `notificationURL` as both its notification URL and its lifecycle URL. The app makes it under the resource-specific
 permission `ChannelMessage.Read.Group`, which reads a thread's replies too ([Earlier replies on Microsoft Teams](#earlier-replies-on-microsoft-teams));
 on a test tenant in November 2026, Graph made one under that permission alone. The broker compares the subscriptions with the Bindings
-every minute, and within a second of a change of the channels that the Bindings name: a channel that a Binding names gets one, and one
+every minute, and within 1 s of a change of the channels that the Bindings name, once any comparison in progress ends: a channel that a Binding names gets one, and one
 whose channel no Binding names any longer is deleted. Graph names a team by its Microsoft Entra group, which the broker learns from an
 activity of the channel: a channel whose group it does not know yet waits, which it logs once at WARN with the fix (install the app in the
 channel's team and mention the bot in the channel), and is subscribed as soon as an activity has told it. A subscription is made to expire 24 hours later and renewed once it would expire within 12 hours,
@@ -246,9 +246,9 @@ channel's activities:
 - a person's post is the person's, as if Teams had sent it. A post that comes both as an activity and through Graph, such as a mention of
   the bot, is handed on once, whichever comes first;
 - Agent Kourier's own posts, edits and deletions, system events and deleted messages are dropped: an edit of an alert's card does not
-  start a turn again. An edit or a deletion is dropped without a read, and so is a post that the replica that leads made in the last 10
-  minutes (a reply, or the card of its buttons), which the broker remembers in memory; an older one, or another replica's, is read and
-  then dropped.
+  start a turn again. An edit or a deletion is dropped without a read, and so is a post that the replica that leads made (a reply, or the
+  card of its buttons), which the broker remembers in memory for at least 10 minutes; one it no longer remembers, or another replica's,
+  is read and then dropped.
 
 Microsoft Graph's lifecycle notifications come to the same URL: `reauthorizationRequired` renews the subscription at once,
 `subscriptionRemoved` makes it anew, and `missed`, which says that Graph did not deliver some notifications of the channel, is logged at
@@ -266,7 +266,7 @@ A connection with no `spec.teams.notificationURL` polls Microsoft Graph for the 
 connection names, in either `spec.teams.mode`, so `botMessage` triggers work on every Microsoft Teams connection. The leader alone polls,
 while the connection runs, under the same resource-specific permission and with the same Microsoft Entra group as the subscriptions: a
 channel whose group the broker does not know yet waits, logged once at WARN with the same fix and counted as `waiting_group`, and is read
-at the next poll round, within a second, once an activity has told the group.
+at the next poll round once an activity has told the group: at once, or as soon as a round in progress ends.
 
 - **New posts.** Each channel is read every 10 seconds through Graph's delta of its messages (`…/messages/delta`, then the `deltaLink` it
   gives), so a new post reaches the broker within about one interval after Graph shows it. A post is new when it was made at most 30 seconds
@@ -304,8 +304,11 @@ at the next poll round, within a second, once an activity has told the group.
   finds new threads, 4 to 6 reads of replies (6 when three or more threads begin): 24 to 42 reads a minute. While it is read to its
   `deltaLink`, a poll of it makes at most 5 pages, 3 reads of replies and a catch-up read, 9 reads. [Limits](limits.md#run-the-broker)
   has the budget.
-- **How many channels fit.** One connection polls up to 10 bound channels every 10 seconds when no thread begins in them, 8 when one
-  begins in each at every poll, and 5 when three or more do. Past that, nothing is skipped and no read is dropped: the reads wait their
+- **How many channels fit.** A connection makes at most 4 reads a second, 40 in 10 seconds. A poll of a channel is one read of its
+  delta (one page), and one read of the replies of each of the channel's 3 newest threads that began within the last hour, with those
+  of the threads it read at the poll before. So one connection polls every 10 seconds up to 40 bound channels in which no thread
+  began within the last hour (1 read each), 10 in which three did and none begins now (4 reads), 8 when one begins in each at every
+  poll (5 reads: the 3 newest and the one it pushed out), and 5 when three or more do (7 reads). Past that, nothing is skipped and no read is dropped: the reads wait their
   turn, so each channel's polls come later than every 10 seconds, the more so the more channels are bound, and a new post is found
   that much later. A delta read still finds every new post. Replies are where a long interval costs: a poll reads the replies of a
   channel's 3 newest threads, so when more threads begin between two polls, the replies of the older ones are not read. For more

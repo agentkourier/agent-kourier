@@ -1095,7 +1095,9 @@ func TestPollReadsAChannelAsSoonAsItsGroupIsKnown(t *testing.T) {
 	}
 }
 
-// A channel that a Binding names anew is read at the next round, with no wait of an interval.
+// A channel that a Binding names anew is read at the next round, with no wait of an interval. This pins behaviour the poller had
+// already (each round reads the bound channels from the lister), which the wake on a Binding change of the subscriber now matches; it
+// passes without that change, and guards the poller's half of it against a regression.
 func TestPollReadsANewlyBoundChannelAtTheNextRound(t *testing.T) {
 	pt := newPollTest(t)
 	pt.round(t)

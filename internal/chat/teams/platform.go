@@ -516,8 +516,10 @@ func (c *Client) Permalink(r chat.Ref) (string, bool) {
 	return "https://teams.microsoft.com/l/message/" + url.PathEscape(r.Channel) + "/" + url.PathEscape(r.ID) + "?" + q.Encode(), true
 }
 
-// knowGroup keeps group as the Microsoft Entra group of channel's team, which the Graph intake read, for Permalink. It keeps one for each
-// channel that the intake read, which are the bound channels.
+// knowGroup keeps group as the Microsoft Entra group of channel's team, for Permalink: the group of a channel's stored record, which
+// teamGroup reads for a poll, a subscription, a Find or a read of a thread (bound or not), and the group of a subscription that the
+// Graph intake made or adopted. It keeps one for each such channel in the run: at most the channels that the store has records of, and
+// the channels of the app's subscriptions.
 func (c *Client) knowGroup(channel, group string) {
 	if channel == "" || group == "" {
 		return
