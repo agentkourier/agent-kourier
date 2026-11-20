@@ -13,7 +13,7 @@ github-mcp-server, which `allowed_tools` lists and the sidecar's `--tools` regis
 
 | Prompt | What the instructions say to call |
 |---|---|
-| A review | `pull_request_read` with `get`, then `get_files` (or `get_diff`); `get_file_contents` at the head commit for a file it needs whole; then one `pull_request_review_write` with method `create`, event `COMMENT` and `commitID` the head commit. |
+| A review | `pull_request_read` with `get`, then `get_files` (or `get_diff`); `get_file_contents` at the head commit for a file it needs whole; then one `pull_request_review_write` with method `create`, `commitID` the head commit, and event `REQUEST_CHANGES` if it found a defect that must be fixed before merging, `COMMENT` otherwise. |
 | A reply | `pull_request_read` with `get`, then `get_comments`; then one `add_issue_comment` on the pull request's number. |
 
 The instructions say to act only on the repository and pull request the prompt's first lines name, and to treat the
@@ -34,10 +34,16 @@ The Binding sends the agent the token of the Secret `github-review-agent-bearer`
 The prompt-agent recipe's [rules](../../prompt-agent/README.md#what-the-agent-can-and-cannot-do) hold here; these are
 this agent's own.
 
-- **Only the prompt holds the review to a comment.** `pull_request_review_write` can also approve
-  (`event: APPROVE`), request changes (`REQUEST_CHANGES`), submit or delete a pending review, and resolve a review
-  thread; `add_issue_comment` can also react to the pull request or to a comment. `allowed_tools` bounds the tools'
-  names, not their arguments, and the instructions alone say `create` and `COMMENT`. A model can be talked out of them.
+- **Only the prompt keeps it from approving.** `pull_request_review_write` can also approve (`event: APPROVE`), submit
+  or delete a pending review, and resolve a review thread; `add_issue_comment` can also react to the pull request or to
+  a comment. `allowed_tools` bounds the tools' names, not their arguments, and the instructions alone say `create`, and
+  `REQUEST_CHANGES` or `COMMENT`, never `APPROVE`. A model can be talked out of them.
+- **It requests changes, and cannot take that back.** For a defect it posts a review of event `REQUEST_CHANGES`, and
+  the instructions give it no way to approve or dismiss one, so the request stands until someone dismisses it: a push
+  starts a new review, and if that one is a `COMMENT`, GitHub keeps the earlier request as the agent's verdict (GitHub's
+  behaviour; not run here). With the Read role its request should not block a merge: GitHub's roles page ([Prerequisites](#prerequisites)) says
+  only Write and above request changes on a pull request with required reviews. Not run here either. A model can also be
+  talked into a request, or out of one, by the pull request's own text.
 - **Untrusted text drives tools that write.** The pull request's title, body, diff and comments are written by whoever
   opened or commented on it, and they reach the model. A model can be talked into a review or comment it should not
   post, or into one on another pull request.
@@ -163,8 +169,8 @@ has a commented egress list to close it: DNS, the model provider and GitHub's AP
 - With `GITHUB_MCP_SERVER_BIN` set (`hack/ci/install-github-mcp-server.sh` installs the pinned binary and prints its
   path; CI runs these, a local run without it skips them), the real github-mcp-server runs against a fake GitHub on
   loopback, behind the agent with this `agent.yaml` and a scripted model. The review's calls reach the pull request, its
-  files and a file at the head commit, and post one GraphQL `addPullRequestReview` of event `COMMENT` on the head
-  commit; the reply's reach the comments and post one issue comment; every request to GitHub carries the token; the
+  files and a file at the head commit, and post one GraphQL `addPullRequestReview` of the event the model chose
+  (`COMMENT` or `REQUEST_CHANGES`, one run each) on the head commit; the reply's reach the comments and post one issue comment; every request to GitHub carries the token; the
   client speaks MCP `2026-07-28` and sends the `Mcp-Param-owner` and `Mcp-Param-repo` headers that github-mcp-server
   checks at that version; and the server lists exactly the four tools.
 

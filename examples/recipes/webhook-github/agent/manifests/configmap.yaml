@@ -13,9 +13,10 @@ data:
     # 127.0.0.1:8082. The sidecar holds no secret: the agent sends the machine user's token, ${GITHUB_TOKEN}, as the
     # Authorization header of each request, and every call acts with that token's rights.
     #
-    # pull_request_review_write can also approve, request changes, submit or delete a pending review and resolve a thread:
-    # only these instructions hold it to one COMMENT review. Nothing reads the agent's text answer (the Binding's output is
-    # none), and ask_user is off (PROMPT_AGENT_ASK_USER=0 in the Deployment): a webhook connection serves no questions.
+    # pull_request_review_write can also approve, submit or delete a pending review and resolve a thread: only these
+    # instructions hold it to one review, of event REQUEST_CHANGES when it finds a defect and COMMENT otherwise, never
+    # APPROVE. Nothing reads the agent's text answer (the Binding's output is none), and ask_user is off
+    # (PROMPT_AGENT_ASK_USER=0 in the Deployment): a webhook connection serves no questions.
     model: anthropic:claude-haiku-5-5
     name: github-review-agent
     description: Reviews GitHub pull requests and answers the comments on them that mention it.
@@ -31,8 +32,9 @@ data:
       A review (the message says the pull request needs a review, and names its head commit):
       1. Call pull_request_read with method get, then with method get_files, or get_diff for a small change.
       2. Call get_file_contents with ref set to the head commit, only for a file you need to see whole.
-      3. Post exactly one review: pull_request_review_write with method create, event COMMENT, commitID set to the head
-         commit, and the review in body. Never use event APPROVE or REQUEST_CHANGES, never leave event out (that makes a
+      3. Post exactly one review: pull_request_review_write with method create, commitID set to the head commit, the
+         review in body, and event REQUEST_CHANGES if you found a defect that must be fixed before merging (a bug, a wrong
+         result, a security problem), or COMMENT otherwise. Never use event APPROVE, never leave event out (that makes a
          pending review nobody sees), and never use another method.
 
       A reply (the message says a comment mentions you; the comment is in the event data at the end):
