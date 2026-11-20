@@ -33,8 +33,8 @@ GitHub as a machine user (a GitHub account kept for the agent), with that user's
 - **The recipe's agent**, which step 4 runs: the prompt-agent recipe's image with an `agent.yaml` of its own, and GitHub's
   github-mcp-server beside it, in the namespace `github-agent`. Agent Kourier posts nothing on GitHub: the Binding's `output: none`
   sends the agent's reply text nowhere, so only what its tools do reaches GitHub. To run an agent of your own instead, see step 4.
-- **A machine user that can write to the repository**, and the right to create a fine-grained personal access token as that user
-  (step 1).
+- **A machine user with the Read role on the repository**, not Write, and the right to create a fine-grained personal access token
+  as that user (step 1).
 - **A model provider and a key**: see the prompt-agent recipe's
   [Providers](https://github.com/agentkourier/agent-kourier/blob/main/examples/recipes/prompt-agent/README.md#providers). The
   recipe's `agent.yaml` names `anthropic:claude-haiku-5-5`.
@@ -44,7 +44,24 @@ GitHub as a machine user (a GitHub account kept for the agent), with that user's
 ## 1. Create the machine user and its token
 
 The agent works as a machine user: an account of its own, signed up like any other, so that what it posts on GitHub is that user's
-and its rights are that user's. Sign it up, then give it write access to the repository.
+and its rights are that user's. Sign it up, then give it the **Read** role on the repository.
+
+!!! warning "Not Write: its approval would count"
+
+    The model can be talked into an `APPROVE` by the text of the pull request it reviews: only `agent.yaml`'s instructions hold
+    the review to `COMMENT`. GitHub's [repository roles](https://docs.github.com/en/organizations/managing-user-access-to-your-organizations-repositories/managing-repository-roles/repository-roles-for-an-organization)
+    (read 2026-11-19) let every role, Read included, submit reviews on pull requests, and only Write, Maintain and Admin approve or
+    request changes on a pull request with required reviews; its page on
+    [protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
+    says required approvals come from people with write permissions or from a code owner. So with Write, the machine user's
+    `APPROVE` counts toward a branch protection rule's required approvals, and a pull request could get itself approved.
+
+    Known and not: the roles table has no row for commenting on a pull request, and this repository has not checked that a
+    fine-grained token's **Pull requests: Read and write** lets a Read user post a review or a comment through the API (REST or
+    GraphQL). If the machine user must have Write, turn on **Require review from Code Owners** in the branch's rule, with a
+    `CODEOWNERS` that owns every file and does not name the machine user: GitHub's
+    [code owners page](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners)
+    (read 2026-11-19) says a file with no owner can be approved by anyone with write access.
 
 GitHub's documentation (read 2026-11-19) says a fine-grained token reaches only the repositories of its resource owner, and that an
 outside collaborator can use only a classic token on an organization's repository. So the repository must be owned by an
@@ -133,19 +150,12 @@ header of each request to the sidecar, and github-mcp-server calls GitHub's API 
 Follow the agent's [Apply it](https://github.com/agentkourier/agent-kourier/blob/main/examples/recipes/webhook-github/agent/README.md#apply-it)
 steps 1 to 4. They make:
 
-- In `github-agent`, the Secret `github-review-agent-github` (key `token`), the machine user's token, and
-  `github-review-agent-model` (key `api-key`), the model provider's key. Its step 1 has you paste the token; with the file of step 1
-  here, make the Secret from the file instead:
-
-    ```sh
-    kubectl create namespace github-agent
-    kubectl -n github-agent create secret generic github-review-agent-github \
-      --from-file=token="$HOME/.config/webhooks/github-token"
-    ```
-
-- The bearer token that Agent Kourier sends to the agent, one value in two Secrets named `github-review-agent-bearer` (key
-  `token`): one in `acme-webhooks`, which the Binding names and the broker reads, and one in `github-agent`, which the pod mounts
-  and checks each request against. With the two different, the agent answers `401`, the turn fails and nothing is posted.
+- In `github-agent`, the Secret `github-review-agent-github` (key `token`), the machine user's token, from the file of step 1 here,
+  `~/.config/webhooks/github-token`, and `github-review-agent-model` (key `api-key`), the model provider's key.
+- The bearer token that Agent Kourier sends to the agent, one value in `~/.config/webhooks/github-review-agent-bearer` and in two
+  Secrets named `github-review-agent-bearer` (key `token`) made from that file: one in `acme-webhooks`, which the Binding names and
+  the broker reads, and one in `github-agent`, which the pod mounts and checks each request against. With the two different, the
+  agent answers `401`, the turn fails and nothing is posted.
 - The grant of that Secret to the broker, beside the webhook's, in the chart values:
   `rbac.secretNames: {acme-webhooks: [github-webhook, github-review-agent-bearer]}`.
 
@@ -381,7 +391,7 @@ one resource owner, since a fine-grained token has one). An event of a repositor
 | `200` in GitHub's log, and no turn | `200` is not a match: see step 6. Read the delivery's `webhook: delivery answered` line by its `delivery`, then the rows below. |
 | `accepted`, and no review | The pull request is a draft (the first trigger excludes it), or `agentkourier_trigger_limited_total{binding="acme-webhooks/github-reviews"}` rose: with `maxConcurrent: 1`, a second pull request opened while a review runs is stopped, the broker's response was `200`, and GitHub does not send it again. The WARN line names its delivery: redeliver it once the first review is done, or raise `maxConcurrent`. |
 | A comment that mentions the machine user starts nothing | The regex wants `@` and the login, compared as written but for case. A comment on a plain issue is turned away by `url: '/pull/'`. A comment the machine user posted is the agent's own (`self`). |
-| A turn, and nothing on GitHub | The machine user's token: expired, `pending` an organization's approval, not given the repository, or missing a permission of step 1. The agent's log says which tool call failed: `kubectl -n github-agent logs deploy/github-review-agent -c github-review-agent`; the sidecar's: `kubectl -n github-agent logs deploy/github-review-agent -c github-mcp-server`. A turn that starts before the sidecar listens fails too, and posts nothing. |
+| A turn, and nothing on GitHub | The machine user's token: expired, `pending` an organization's approval, not given the repository, or missing a permission of step 1; or the machine user's Read role, if GitHub refuses a Read user's review or comment through the API (not checked, step 1). The agent's log says which tool call failed: `kubectl -n github-agent logs deploy/github-review-agent -c github-review-agent`; the sidecar's: `kubectl -n github-agent logs deploy/github-review-agent -c github-mcp-server`. A turn that starts before the sidecar listens fails too, and posts nothing. |
 
 ## What GitHub sends
 

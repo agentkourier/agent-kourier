@@ -44,6 +44,10 @@ this agent's own.
 - **The token's rights bound everything.** Whatever the model calls, github-mcp-server acts with the machine user's
   token: give it only the one repository and the permissions in [Prerequisites](#prerequisites). Every review and
   comment it posts is that user's.
+- **With Write, its approval counts.** If the machine user has the Write role (or higher) on the repository, an
+  `APPROVE` the model is talked into counts toward a branch protection rule's required approvals, so a pull request
+  could get itself approved. Give it the Read role ([Prerequisites](#prerequisites)); if it must have Write, require
+  review from Code Owners there, with every file owned and the machine user not an owner.
 - **Its text answer goes nowhere.** The Binding's `output` is `none`: only what the tools post on GitHub is seen. A turn
   that fails posts nothing, and nothing on GitHub says so.
 - **It cannot ask.** `PROMPT_AGENT_ASK_USER=0` in the Deployment: the model is not offered `ask_user`, since a webhook
@@ -53,8 +57,18 @@ this agent's own.
 
 ## Prerequisites
 
-- **A machine user** with access to the repository, and a **fine-grained personal access token** of it limited to
-  that repository, with the repository permissions **Pull requests: read and write** (the pull request, its files, the
+- **A machine user** with the **Read** role on the repository, not Write. GitHub's
+  [repository roles](https://docs.github.com/en/organizations/managing-user-access-to-your-organizations-repositories/managing-repository-roles/repository-roles-for-an-organization)
+  (read 2026-11-19) let every role, Read included, submit reviews on pull requests, and only Write, Maintain and Admin
+  approve or request changes on a pull request with required reviews; its page on protected branches says required
+  approvals come from people with write permissions or from a code owner. With Write, an `APPROVE` the model is talked
+  into counts toward those. The roles table has no row for commenting on a pull request, and this repository has not
+  checked that a fine-grained token's **Pull requests: read and write** lets a Read user post a review or a comment
+  through the API (REST or GraphQL). If the machine user must have Write, turn on **Require review from Code Owners**
+  in the branch's rule, with a `CODEOWNERS` that owns every file and does not name the machine user: GitHub's
+  [code owners page](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners)
+  (read 2026-11-19) says a file with no owner can be approved by anyone with write access.
+- A **fine-grained personal access token** of the machine user, limited to that repository, with the repository permissions **Pull requests: read and write** (the pull request, its files, the
   review, and the comments on it) and **Contents: read** (`get_file_contents`). GitHub's
   [permissions list](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens)
   names those for the REST calls (read 2026-11-19); github-mcp-server posts the review with GraphQL's
@@ -75,13 +89,15 @@ manifests/     ConfigMap (agent.yaml), Deployment (the agent and the sidecar), S
 ## Apply it
 
 1. Make the namespace and the agent's Secrets, without echoing a value. The agent's objects go in `github-agent`, which
-   the recipe's AgentBackend URL names:
+   the recipe's AgentBackend URL names. The token's Secret comes from the file that the GitHub how-to page's step 1
+   writes, `~/.config/webhooks/github-token`; without that file, paste the token instead, with the commented lines:
 
     ```sh
     kubectl create namespace github-agent
-    read -rs GITHUB_TOKEN     # paste the machine user's fine-grained token and press Enter; nothing is echoed
-    printf %s "$GITHUB_TOKEN" | kubectl -n github-agent create secret generic github-review-agent-github --from-file=token=/dev/stdin
-    unset GITHUB_TOKEN
+    kubectl -n github-agent create secret generic github-review-agent-github --from-file=token="$HOME/.config/webhooks/github-token"
+    # read -rs GITHUB_TOKEN   # paste the machine user's fine-grained token and press Enter; nothing is echoed
+    # printf %s "$GITHUB_TOKEN" | kubectl -n github-agent create secret generic github-review-agent-github --from-file=token=/dev/stdin
+    # unset GITHUB_TOKEN
     read -rs MODEL_API_KEY    # the model provider's key
     printf %s "$MODEL_API_KEY" | kubectl -n github-agent create secret generic github-review-agent-model --from-file=api-key=/dev/stdin
     unset MODEL_API_KEY
@@ -89,16 +105,17 @@ manifests/     ConfigMap (agent.yaml), Deployment (the agent and the sidecar), S
 
 2. Make the bearer token. One value goes in two Secrets, both named `github-review-agent-bearer` with the key `token`:
    one in `acme-webhooks`, which Agent Kourier reads, and one in `github-agent`, which the pod mounts. Make the value
-   once, and both Secrets from it, without printing it:
+   once, into a file only you can read, and both Secrets from the file, so that it is never on a command line:
 
     ```sh
-    token="$(openssl rand -hex 32)"
-    kubectl create secret generic github-review-agent-bearer -n acme-webhooks --from-literal=token="$token"
-    kubectl create secret generic github-review-agent-bearer -n github-agent --from-literal=token="$token"
-    unset token
+    umask 077; mkdir -p ~/.config/webhooks
+    openssl rand -hex 32 | tr -d '\n' > ~/.config/webhooks/github-review-agent-bearer
+    kubectl create secret generic github-review-agent-bearer -n acme-webhooks --from-file=token="$HOME/.config/webhooks/github-review-agent-bearer"
+    kubectl create secret generic github-review-agent-bearer -n github-agent --from-file=token="$HOME/.config/webhooks/github-review-agent-bearer"
     ```
 
-    `--from-literal` adds no trailing newline; Agent Kourier refuses a token with a control character.
+    `tr -d '\n'` leaves no trailing newline, which `--from-file` would copy: Agent Kourier refuses a token with a
+    control character.
 3. Apply the agent:
 
     ```sh

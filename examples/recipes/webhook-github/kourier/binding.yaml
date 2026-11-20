@@ -7,12 +7,13 @@
 # namespace, acme-webhooks: Agent Kourier sends its value as Authorization: Bearer on every call to the agent, the
 # card's included. The agent checks it against its own copy, so the same value goes in two Secrets: this one, and
 # github-review-agent-bearer in namespace github-agent, which the agent mounts (../agent/manifests/deployment.yaml).
-# Make the value once, in a shell variable, and both Secrets from it, without printing it:
+# Make the value once, into a file only you can read with no newline at the end, and both Secrets from the file, so that
+# it is never on a command line:
 #
-#   token="$(openssl rand -hex 32)"
-#   kubectl create secret generic github-review-agent-bearer -n acme-webhooks --from-literal=token="$token"
-#   kubectl create secret generic github-review-agent-bearer -n github-agent --from-literal=token="$token"
-#   unset token
+#   umask 077; mkdir -p ~/.config/webhooks
+#   openssl rand -hex 32 | tr -d '\n' > ~/.config/webhooks/github-review-agent-bearer
+#   kubectl create secret generic github-review-agent-bearer -n acme-webhooks --from-file=token="$HOME/.config/webhooks/github-review-agent-bearer"
+#   kubectl create secret generic github-review-agent-bearer -n github-agent --from-file=token="$HOME/.config/webhooks/github-review-agent-bearer"
 #
 # With the chart's custom resources, grant Agent Kourier this one: rbac.secretNames: {acme-webhooks:
 # [github-webhook, github-review-agent-bearer]}. When the two values differ the agent answers 401: the turn fails and

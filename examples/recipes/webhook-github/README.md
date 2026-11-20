@@ -11,9 +11,11 @@ own and GitHub's github-mcp-server beside it ([agent/README.md](agent/README.md)
 put its A2A endpoint in the AgentBackend ([Connect a generic A2A agent](../../../docs/how-to/connect-a2a-agent.md)).
 
 > **Experimental.** Needs Agent Kourier 0.6.0 or later: 0.5.x refuses `platform: webhook`. The `webhook` platform is
-> new, and its fields may change in a later version. The setup was run end to end against GitHub on 2026-11-17, on a
-> pre-0.6.0 build of the broker; [the GitHub page](../../../docs/how-to/webhooks/github.md) says what was seen in
-> that run and what comes from GitHub's documentation.
+> new, and its fields may change in a later version. This mapping was run end to end against GitHub on 2026-11-17, on
+> a pre-0.6.0 build of the broker, with a GitHub App's webhook and a small MCP server of the run's own, not with this
+> recipe's machine user, repository webhook and agent: those were not run against GitHub or a live model.
+> [The GitHub page](../../../docs/how-to/webhooks/github.md) says what was seen in that run and what comes from
+> GitHub's documentation.
 
 ## What it does
 
@@ -50,7 +52,7 @@ by whoever opened or commented on it.
 | A pull request is opened in the repository | The agent's review on it, posted by the machine user. |
 | A comment that does not mention the machine user | Nothing. |
 | A comment that mentions `@acme-review-agent` | The agent's reply on the pull request, in the same session as its review. |
-| The agent posts its review or comment | GitHub sends the webhook of it too, with the machine user as the sender. Agent Kourier answers it `200` and drops it as the agent's own (`outcome="self"`). |
+| The agent posts its review or comment | GitHub sends the webhook of it too, with the machine user as the sender (*not run*: in the run, the App's echo carried the App's `[bot]` login). Agent Kourier answers it `200` and drops it as the agent's own (`outcome="self"`). |
 | A draft pull request | Nothing, until it is marked ready for review. |
 
 ## Prerequisites
@@ -60,8 +62,10 @@ by whoever opened or commented on it.
   the body's paths this recipe reads were seen in live deliveries of a GitHub App's webhook in the run of 2026-11-17,
   except the delivery header, `X-GitHub-Delivery`; that a repository's webhook sends the same follows GitHub's
   documentation, and was not run.
-- **A machine user** that can write to the repository, with a fine-grained personal access token, and a model
-  provider's key: the agent's [Prerequisites](agent/README.md#prerequisites). The machine user's login is the
+- **A machine user** with the Read role on the repository, with a fine-grained personal access token, and a model
+  provider's key: the agent's [Prerequisites](agent/README.md#prerequisites). Not Write: with Write, an `APPROVE` the
+  model is talked into counts toward a branch protection rule's required approvals; if it must have Write, require
+  review from Code Owners, with every file owned and the machine user not an owner (the same Prerequisites). The machine user's login is the
   `identity`. Agent Kourier posts nothing on GitHub (`output: none`): the agent's reply text goes nowhere, and only what
   its tools do reaches GitHub.
 - **The chat listener reachable over HTTPS** from GitHub: the chart's `chatListener.enabled: true`, and an Ingress
