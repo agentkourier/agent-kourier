@@ -134,10 +134,10 @@ actually calls the model.
 ### Webhook requests
 
 Each verified request a webhook connection answers is one span, `agentkourier.webhook.request`, of kind server, from when
-the connection's handler is called to its response, the time to read and verify the body included. It is always a root: the sender's trace headers are not read. The
-intake's span (`agentkourier.intake`) is its child, and the turn that the event starts is in its trace: the turn's span is
-restored from the trace context the intake stored with the turn, and goes on after the request's span has ended with the
-response.
+the connection's handler is called to its response, the time to read and verify the body included. It is always a root:
+the sender's trace headers are not read. The intake's span (`agentkourier.intake`) is its child, and the turn that the
+event starts is in its trace: the turn's span is restored from the trace context the intake stored with the turn, and
+goes on after the request's span has ended with the response.
 
 The span carries:
 

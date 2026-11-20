@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
 )
@@ -86,8 +87,10 @@ func (p *Platform) serve(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	ctx, start := req.Context(), time.Now()
-	untraced := trace.SpanFromContext(ctx) // the request's, which records nothing: what answer ends for a request with no span
-	body, err := io.ReadAll(req.Body)      // the chat listener has read it whole and capped it: this reads memory
+	// What answer ends for a request with no span: a span of its own that records nothing, not whatever span the request's context
+	// may hold, which answer must not end or mark.
+	untraced := noop.Span{}
+	body, err := io.ReadAll(req.Body) // the chat listener has read it whole and capped it: this reads memory
 	if err != nil {
 		p.log.DebugContext(ctx, "webhook: a request was refused: its body could not be read", "connection", p.conn)
 		p.answer(w, untraced, start, result{outcomeMalformed, reasonUnreadable})
@@ -120,8 +123,9 @@ func (p *Platform) serve(w http.ResponseWriter, req *http.Request) {
 // answer records res and writes its answer: it counts res, observes the time since start (when the handler was called) under its
 // outcome, and, for accepted, gives the clock's time as the last accepted request's. It records before it writes, so that what the
 // sender sees has been recorded; the answer is a status line and a short body, which the handler's return sends. It ends span, the
-// request's (one that records nothing for a request with no span of its own), with the outcome, the reason and the status code; a 503 is an error there, as an operation's failure is (telemetry.Operation):
-// the outcome is its error.type, and its status is an error unless the outcome is cancelled, since the sender went away.
+// request's (one that records nothing, for a request with no span), with the outcome, the reason and the status code; a 503 is an
+// error there, as an operation's failure is (telemetry.Operation): the outcome is its error.type, and its status is an error unless
+// the outcome is cancelled, since the sender went away.
 func (p *Platform) answer(w http.ResponseWriter, span trace.Span, start time.Time, res result) {
 	defer span.End()
 	p.rec.Count(res.outcome, res.reason)

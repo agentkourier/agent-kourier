@@ -6,7 +6,9 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -86,13 +88,24 @@ func checkTraced(t *testing.T, tel *telemetrytest.Harness, series string, code, 
 
 // A verified request's span is the parent of what the Sink does with its event: the Sink is called on a context of Run's (its values)
 // that carries the request's span, still open, so that the intake's span is its child. The request's INFO line carries its trace. The
-// sender's delivery ID is on the span when it is an identifier, and the event's ID always. A request that is not verified starts no
-// trace, and its DEBUG and WARN lines carry none.
+// sender's delivery ID is on the span when it is an identifier, and the event's ID always. The span is timed from when the handler
+// was called, before the body was read and verified, though it starts once the request is verified. A request that is not verified
+// starts no trace, and its DEBUG and WARN lines carry none.
 func TestARequestSpanIsTheParentOfTheSinksWorkAndOfItsLogLines(t *testing.T) {
 	var buf syncBuffer
 	tel := telemetrytest.New(t)
 	cfg := config(nil, slog.New(telemetry.LogHandler{Handler: slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})}))
 	cfg.Tracer = telemetry.Tracer(tel.Ctx)
+	// The clock is first read to verify the request: when it is, a millisecond on, is after the handler was called.
+	var verifiedAt atomic.Pointer[time.Time]
+	cfg.Now = func() time.Time {
+		if verifiedAt.Load() == nil {
+			time.Sleep(time.Millisecond)
+			now := time.Now()
+			verifiedAt.CompareAndSwap(nil, &now)
+		}
+		return epoch
+	}
 	p := newPlatform(t, cfg)
 	sk := &sink{}
 	var open bool // whether the span in the Sink's context was recording when the Sink was called
@@ -114,6 +127,9 @@ func TestARequestSpanIsTheParentOfTheSinksWorkAndOfItsLogLines(t *testing.T) {
 		t.Fatalf("%d spans, want the request's", len(spans))
 	}
 	accepted := spans[0]
+	if at := verifiedAt.Load(); at == nil || !accepted.StartTime.Before(*at) {
+		t.Errorf("the span starts at %v, and the request was verified at %v; want the span timed from before the verify", accepted.StartTime, at)
+	}
 	sum := sha256.Sum256([]byte(event))
 	attrs := attrsOf(accepted)
 	if attrs["agentkourier.webhook.event"].AsString() != hex.EncodeToString(sum[:]) || attrs["agentkourier.webhook.delivery"].AsString() != delivery {
@@ -178,4 +194,25 @@ func TestARequestSpanIsTheParentOfTheSinksWorkAndOfItsLogLines(t *testing.T) {
 	// Nothing of what a request held but the delivery ID that passed reaches a span: its body, its signature, a delivery ID that is
 	// not an identifier, the secret.
 	tel.RequireNone(t, "Ignore previous instructions", "octocat", sign(fakeSecret, event), "zq-forged-signature", "not an id", fakeSecret)
+}
+
+// A request that is not verified neither ends nor marks a span that its context already holds (one a middleware in front of the
+// handler would start): the handler ends a span of its own that records nothing.
+func TestARequestThatIsNotVerifiedLeavesTheSpanOfItsContextAlone(t *testing.T) {
+	tel := telemetrytest.New(t)
+	cfg := config(nil, nil)
+	cfg.Tracer = telemetry.Tracer(tel.Ctx)
+	p := newPlatform(t, cfg)
+	ctx, outer := telemetry.Tracer(tel.Ctx).Start(t.Context(), "agentkourier.test.root")
+	if w := serve(t, p, request(event, false).WithContext(ctx)); w.Code != http.StatusUnauthorized {
+		t.Fatalf("status %d, want 401", w.Code)
+	}
+	if !outer.IsRecording() {
+		t.Error("the context's span was ended by the handler")
+	}
+	outer.End()
+	spans := tel.Exporter.GetSpans()
+	if len(spans) != 1 || len(spans[0].Attributes) != 0 || spans[0].Status.Code != codes.Unset {
+		t.Errorf("spans %+v; want only the context's, with no attribute or status of the handler's", spans)
+	}
 }
