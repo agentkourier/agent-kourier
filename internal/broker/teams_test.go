@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -26,6 +27,8 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/internal/store"
 	"github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest"
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
+	"github.com/agentkourier/agent-kourier/internal/telemetry/telemetrytest"
 	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/faketeams"
 )
@@ -163,6 +166,25 @@ func TestNewPlatformBuildsTheTeamsAdapter(t *testing.T) {
 	}
 	if built, err := cfg.newPlatform(t.Context(), teamsConn("team-a", "teams"), nil, nil, nil, nil); !errors.Is(err, ErrWiring) || built.Platform != nil {
 		t.Errorf("no conversation store: newPlatform = %+v, %v; want a wiring error and no platform, not one that forgets its channels at a restart", built, err)
+	}
+}
+
+// A Microsoft Teams connection is built with the broker's tracer in ctx (telemetry.Tracer), which starts the span of each verified
+// activity request: a request comes with no telemetry of its own.
+func TestNewPlatformHandsTheTeamsAdapterTheBrokersTracer(t *testing.T) {
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	tel := telemetrytest.New(t)
+	var got trace.Tracer
+	cfg := RunConfig{ChatListener: ln, teamsFakes: func(tc *teams.Config) { got = tc.Tracer }}
+	if _, err := cfg.newPlatform(tel.Ctx, teamsConn("team-a", "teams"), nil, nil, teams.NewMemoryConversations(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if want := telemetry.Tracer(tel.Ctx); got != want {
+		t.Errorf("the Teams adapter's tracer is %v, want the broker's, %v", got, want)
 	}
 }
 

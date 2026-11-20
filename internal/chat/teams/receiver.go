@@ -13,6 +13,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
+
 	"github.com/agentkourier/agent-kourier/internal/backoff"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/lanes"
@@ -78,6 +83,9 @@ func (l *refusalLog[K]) admit(reason K, now time.Time) (bool, int) {
 	return true, n
 }
 
+// requestSpan is the name of the span of a verified request to a Teams connection (ServeHTTP).
+const requestSpan = "agentkourier.teams.request"
+
 // The outcomes of a request, the label of agentkourier_teams_requests_total: a closed set.
 const (
 	requestAccepted        = "accepted"         // 200: an activity put on its lane, or one with nothing to hand on
@@ -130,6 +138,11 @@ type ReceiverConfig struct {
 	Invokes InvokeHandler
 	// Logger is slog.Default() if nil. The caller names the connection on it.
 	Logger *slog.Logger
+	// Tracer starts the span of each verified request over HTTPS (agentkourier.teams.request), a server span from when the handler is
+	// called to the answer: the parent of what the sink and the InvokeHandler do with its activity, and the trace of the lines logged
+	// for it. It is the broker's (telemetry.Tracer), handed in because a request comes with no telemetry of its own. Nil, nothing is
+	// traced.
+	Tracer trace.Tracer
 	// Now is the clock of the tokens, the keys' age and the dedup; time.Now if nil.
 	Now func() time.Time
 }
@@ -156,6 +169,7 @@ type Receiver struct {
 	convs               ConversationStore
 	invokes             InvokeHandler
 	log                 *slog.Logger
+	tracer              trace.Tracer
 	seen                *recent
 	sinkRetryBase       time.Duration // sinkRetryBase; a test shortens it
 	verifyWait          time.Duration // verifyWait; a test shortens it
@@ -191,12 +205,22 @@ type serving struct {
 	closed bool // guarded by mu
 }
 
-// work is one accepted activity for its lane: what it tells the store, if anything, the post for the sink, if it is one, and its dedup
-// key, which is released if the post is not taken.
+// work is one accepted activity for its lane: what it tells the store, if anything, the post for the sink, if it is one, its dedup
+// key, which is released if the post is not taken, and the span context of the request that took it, if it had a span.
 type work struct {
 	conv *Conversation
 	msg  *chat.Inbound
 	key  string
+	span trace.SpanContext
+}
+
+// context is ctx under the span of the request that took w, when it had one: the store and the sink are called, and the lane's lines
+// logged, in its trace, after the span has ended with the answer.
+func (w work) context(ctx context.Context) context.Context {
+	if !w.span.IsValid() {
+		return ctx
+	}
+	return trace.ContextWithSpanContext(ctx, w.span)
 }
 
 // NewReceiver returns a Receiver for cfg, with the verifier of cfg.AppID's tokens. It refuses a config with no connection, tenant or
@@ -211,10 +235,13 @@ func NewReceiver(cfg ReceiverConfig) (*Receiver, error) {
 		return nil, errors.New("teams receiver: no app ID")
 	}
 	r := &Receiver{conn: cfg.Connection, tenant: cfg.TenantID, appID: cfg.AppID, convs: cfg.Conversations, invokes: cfg.Invokes,
-		log: cfg.Logger, recorded: map[string]Conversation{}, sinkRetryBase: sinkRetryBase,
+		log: cfg.Logger, tracer: cfg.Tracer, recorded: map[string]Conversation{}, sinkRetryBase: sinkRetryBase,
 		keysCheckEvery: keysCheckEvery, verifyWait: verifyWait}
 	if r.convs == nil {
 		r.convs = NewMemoryConversations()
+	}
+	if r.tracer == nil {
+		r.tracer = noop.NewTracerProvider().Tracer("")
 	}
 	if r.log == nil {
 		r.log = slog.Default()
@@ -294,7 +321,7 @@ func (r *Receiver) serve(ctx context.Context, sink chat.Sink, https bool) error 
 
 // handle records w's conversation and gives its post to s's sink, unless the work's context has ended. Then it drops w, and releases
 // w's dedup key if w carries a post, so that the same activity is taken if it comes again; an activity with no post keeps its key,
-// since it was answered (an invoke by the InvokeHandler) and only its record is lost.
+// since it was answered (an invoke by the InvokeHandler) and only its record is lost. The record is written in the trace of w's request.
 func (r *Receiver) handle(s *serving, w work) {
 	if s.ctx.Err() != nil {
 		if w.msg != nil {
@@ -303,7 +330,7 @@ func (r *Receiver) handle(s *serving, w work) {
 		return
 	}
 	if w.conv != nil {
-		r.remember(s.ctx, *w.conv)
+		r.remember(w.context(s.ctx), *w.conv)
 	}
 	if w.msg != nil {
 		r.deliver(s, w, lostNotTaken)
@@ -313,19 +340,21 @@ func (r *Receiver) handle(s *serving, w work) {
 // deliver gives w's post to s's sink, again after a failure, up to sinkAttempts times in all or until the work's context ends, and says
 // whether the sink took it. A post the sink never takes is dropped: its dedup key is released, so that the same activity is taken if it
 // comes again, and the drop is logged at WARN. It is counted as lost for the reason lost (lostNotTaken, or lostGraphNotTaken for a message
-// read through Graph) unless the stop cut it, which Serve counts as stopped.
+// read through Graph) unless the stop cut it, which Serve counts as stopped. The sink is called, and the drop logged, in the trace of w's
+// request, if it had one: so the intake's span is a child of the request's.
 func (r *Receiver) deliver(s *serving, w work, lost string) bool {
+	ctx := w.context(s.ctx)
 	for attempt := 1; ; attempt++ {
-		err := s.sink.Message(s.ctx, *w.msg)
+		err := s.sink.Message(ctx, *w.msg)
 		if err == nil {
 			return true
 		}
-		if attempt == sinkAttempts || s.ctx.Err() != nil || !waitFor(s.ctx, backoff.Doubling(r.sinkRetryBase, sinkRetryMax, attempt)) {
+		if attempt == sinkAttempts || ctx.Err() != nil || !waitFor(ctx, backoff.Doubling(r.sinkRetryBase, sinkRetryMax, attempt)) {
 			r.release(w)
-			if s.ctx.Err() == nil { // one that the drain at the stop cut is counted there, as stopped
-				r.count(s.ctx, "agentkourier_teams_activities_lost_total", lost)
+			if ctx.Err() == nil { // one that the drain at the stop cut is counted there, as stopped
+				r.count(ctx, "agentkourier_teams_activities_lost_total", lost)
 			}
-			r.log.WarnContext(s.ctx, "teams: the sink did not take a message, which is dropped",
+			r.log.WarnContext(ctx, "teams: the sink did not take a message, which is dropped",
 				"channel", quote(w.msg.At.Channel), "message", w.msg.At.ID, "attempts", attempt, "error", err.Error())
 			return false
 		}
@@ -383,10 +412,17 @@ func (s *serving) submit(channel string, fn func()) (shed string, open bool) {
 }
 
 // ServeHTTP answers one request Teams sends the connection. In order: the token is verified (401, or 503 when the keys cannot be
-// read within verifyWait), the body read as an activity of Teams (400), and the token's service URL checked against the activity's
-// (401); none of these work on the activity. Then the activity is taken (take), and the request answered as take says.
+// read within verifyWait), the body read as an activity of Teams (400), the token's service URL checked against the activity's
+// (401), and the activity's tenant against the connection's (403); none of these work on the activity. Then the activity is taken
+// (take), and the request answered as take says.
+//
+// A request that passes those checks is a span of its own (requestSpan), started then, timed from when the handler was called, and
+// ended once its answer is written: the parent of what the sink and the InvokeHandler do with its activity, and the trace of the lines
+// the handler and the lane log for it. A request refused before has none, as anyone who can reach the route can send one, and anyone
+// whose tenant installs the bot one of another tenant: neither may start traces at will. The span holds no value of the activity but
+// its type and ID, and never the token. A sender's trace headers are not read: its span is a root.
 func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	ctx := req.Context()
+	ctx, start := req.Context(), time.Now()
 	tctx := r.telemetryContext(ctx)
 	answered := func(outcome string) { r.count(tctx, "agentkourier_teams_requests_total", outcome) }
 	vctx, cancel := context.WithTimeout(ctx, r.verifyWait)
@@ -413,8 +449,36 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		answered(r.refuseToken(ctx, tctx, w, err))
 		return
 	}
+	if ans, ok := r.ofTenant(ctx, a); !ok {
+		answered(ans.outcome)
+		ans.write(w)
+		return
+	}
+	attrs := []attribute.KeyValue{attribute.String("agentkourier.platform", PlatformName), attribute.String("agentkourier.connection", r.conn),
+		attribute.String("agentkourier.teams.activity.type", a.Type)}
+	if a.ID != "" {
+		attrs = append(attrs, attribute.String("agentkourier.teams.activity.id", a.ID))
+	}
+	ctx, span := r.tracer.Start(ctx, requestSpan, trace.WithSpanKind(trace.SpanKindServer), trace.WithTimestamp(start),
+		trace.WithAttributes(attrs...))
+	defer span.End()
 	ans := r.take(ctx, tctx, a)
 	answered(ans.outcome)
+	ans.record(span)
+	ans.write(w)
+}
+
+// answer is what the receiver answers one activity with: the response of its request over HTTPS, and the reply frame of its envelope
+// over a socket (socket.go).
+type answer struct {
+	status  int
+	body    []byte // the InvokeHandler's answer to an invoke, or nil
+	text    string // why, for a status other than 200 with no body
+	outcome string // the request's or the envelope's outcome: requestAccepted and the rest
+}
+
+// write writes ans as the response of a request over HTTPS.
+func (ans answer) write(w http.ResponseWriter) {
 	switch {
 	case len(ans.body) > 0:
 		w.Header().Set("Content-Type", "application/json")
@@ -427,13 +491,14 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-// answer is what the receiver answers one activity with: the response of its request over HTTPS, and the reply frame of its envelope
-// over a socket (socket.go).
-type answer struct {
-	status  int
-	body    []byte // the InvokeHandler's answer to an invoke, or nil
-	text    string // why, for a status other than 200 with no body
-	outcome string // the request's or the envelope's outcome: requestAccepted and the rest
+// record sets ans on span, its request's: the outcome and the status code, and, for a 5xx, the outcome as error.type and as an error
+// status, as an operation's failure is (telemetry.Operation).
+func (ans answer) record(span trace.Span) {
+	span.SetAttributes(attribute.String("agentkourier.outcome", ans.outcome), attribute.Int("http.response.status_code", ans.status))
+	if ans.status >= http.StatusInternalServerError {
+		span.SetAttributes(attribute.String("error.type", ans.outcome))
+		span.SetStatus(codes.Error, ans.outcome)
+	}
 }
 
 // takePayload takes the activity of a socket's envelope. A socket has no token to verify: the broker opened it to Microsoft with the
@@ -445,25 +510,34 @@ func (r *Receiver) takePayload(ctx context.Context, payload []byte) answer {
 		r.log.DebugContext(ctx, "teams: an envelope holds no activity; answered 400", "bytes", len(payload), "reason", err.Error())
 		return answer{status: http.StatusBadRequest, text: "not an activity of Microsoft Teams", outcome: requestMalformed}
 	}
+	if ans, ok := r.ofTenant(ctx, a); !ok {
+		return ans
+	}
 	return r.take(ctx, r.telemetryContext(ctx), a)
 }
 
-// take works on an activity whose origin was checked (a verified token over HTTPS, or the socket it came on), and says what to answer.
-// Its series are counted on tctx. An activity of another tenant is 403, and with no Serve live it is 503, and nothing is claimed for the
-// dedup. Then:
+// ofTenant says whether a is of the connection's tenant, and if not, the answer that refuses it: 403, and nothing of it is worked on.
+func (r *Receiver) ofTenant(ctx context.Context, a activity) (answer, bool) {
+	if got := a.tenant(); got != r.tenant {
+		r.log.WarnContext(ctx, "teams: an activity of another tenant was refused; the bot is installed outside the connection's tenant",
+			"tenant", quote(got), "connectionTenant", r.tenant, "type", quote(a.Type))
+		return answer{status: http.StatusForbidden, text: "the activity is not of the connection's tenant", outcome: requestWrongTenant}, false
+	}
+	return answer{}, true
+}
+
+// take works on an activity whose origin and tenant were checked (a verified token over HTTPS, or the socket it came on; ofTenant), and
+// says what to answer. Its series are counted on tctx, and what it puts on a lane carries the span context of ctx, its request's. With no
+// Serve live it is 503, and nothing is claimed for the dedup. Then:
 //   - A message puts its post, if it is a person's, and its conversation on its channel's lane, and is answered 200 at once; an ID
 //     with ':' is 400, and lanes that shed it 503.
-//   - An invoke is answered by the InvokeHandler, in ctx, whatever the lanes do with its conversation; one whose replyToId holds ':'
-//     is 400, and one whose sender is a bot (28:…) is answered 200 with no body and handed to no handler, as a bot's message is dropped.
+//   - An invoke is answered by the InvokeHandler, in ctx with Serve's values (inRequest), whatever the lanes do with its conversation;
+//     one whose replyToId holds ':' is 400, and one whose sender is a bot (28:…) is answered 200 with no body and handed to no handler,
+//     as a bot's message is dropped.
 //   - Anything else (an edit, a deletion, an install event) puts its conversation on the lane, and is answered 200, or 503 if shed.
 //
 // An activity that came before, by its type, channel and ID, within the dedup window, is answered 200 and handed on to nothing.
 func (r *Receiver) take(ctx, tctx context.Context, a activity) answer {
-	if got := a.tenant(); got != r.tenant {
-		r.log.WarnContext(ctx, "teams: an activity of another tenant was refused; the bot is installed outside the connection's tenant",
-			"tenant", quote(got), "connectionTenant", r.tenant, "type", quote(a.Type))
-		return answer{status: http.StatusForbidden, text: "the activity is not of the connection's tenant", outcome: requestWrongTenant}
-	}
 	s := r.live.Load()
 	if s == nil {
 		r.count(tctx, "agentkourier_teams_activities_shed_total", shedNotRunning)
@@ -502,6 +576,7 @@ func (r *Receiver) take(ctx, tctx context.Context, a activity) answer {
 		}
 	}
 	channel, _ := splitConversation(a.Conversation.ID)
+	span := trace.SpanContextFromContext(ctx)
 	key := ""
 	if a.ID != "" {
 		key = dedupKey(a.Type, channel, a.ID)
@@ -510,15 +585,15 @@ func (r *Receiver) take(ctx, tctx context.Context, a activity) answer {
 			// records nothing, and the record is what posts and reads of the channel need.
 			if conv != nil {
 				c := *conv
-				s.submit(channel, func() { r.handle(s, work{conv: &c}) })
+				s.submit(channel, func() { r.handle(s, work{conv: &c, span: span}) }) //nolint:contextcheck // the lane runs on Serve's context, in the request's trace
 			}
 			r.log.DebugContext(ctx, "teams: an activity came again; acknowledged", "type", quote(a.Type), "id", a.ID)
 			return answer{status: http.StatusOK, outcome: requestDuplicate}
 		}
 	}
 	if conv != nil || msg != nil {
-		item := work{conv: conv, msg: msg, key: key}
-		shed, open := s.submit(channel, func() { r.handle(s, item) })
+		item := work{conv: conv, msg: msg, key: key, span: span}
+		shed, open := s.submit(channel, func() { r.handle(s, item) }) //nolint:contextcheck // the lane runs on Serve's context, in the request's trace, after the request is answered
 		// An invoke is answered even when its record is shed: the record is all it puts on the lane, and the next activity of the
 		// channel carries the same.
 		if !open || (shed != "" && inv == nil) {
@@ -536,9 +611,29 @@ func (r *Receiver) take(ctx, tctx context.Context, a activity) answer {
 		}
 	}
 	if inv != nil {
-		return r.answerInvoke(ctx, s.sink, *inv)
+		ictx, cancel := s.inRequest(ctx)
+		defer cancel()
+		return r.answerInvoke(ictx, s.sink, *inv)
 	}
 	return answer{status: http.StatusOK, outcome: requestAccepted}
+}
+
+// inRequest is a context with the values of s's (the broker's instruments, which a request's context lacks), and the span, the deadline
+// and the end of ctx, a request's: what an invoke is answered on, in its request, so that what the InvokeHandler hands the sink is
+// counted and in the request's trace. Its cancel must be called.
+func (s *serving) inRequest(ctx context.Context) (context.Context, context.CancelFunc) {
+	vctx := trace.ContextWithSpan(context.WithoutCancel(s.ctx), trace.SpanFromContext(ctx))
+	var cancel context.CancelFunc
+	if d, ok := ctx.Deadline(); ok {
+		vctx, cancel = context.WithDeadline(vctx, d)
+	} else {
+		vctx, cancel = context.WithCancel(vctx)
+	}
+	stop := context.AfterFunc(ctx, cancel)
+	return vctx, func() {
+		stop()
+		cancel()
+	}
 }
 
 // dedupKey is the key of the dedup (recent) of an activity of the type typ, of channel, with the ID id.

@@ -84,10 +84,11 @@ diagnostics reach stderr outside Agent Kourier's logger. Five things log, all as
 
 A Slack envelope starts a local trace: in Socket Mode its span, `agentkourier.slack.envelope`, covers the durable
 intake and the ack attempt, and in HTTP mode the handoff to the intake. A verified request to a webhook connection starts a
-local trace too (see "Webhook requests"). A queued reply restores its saved W3C ancestry when a session runner takes
+local trace too (see "Webhook requests"), and so does a verified activity request to a Microsoft Teams connection in `http`
+mode (see "Microsoft Teams requests"). A queued reply restores its saved W3C ancestry when a session runner takes
 it up. A2A HTTP calls carry `traceparent` and `tracestate` to the verifying backend
 front door after the destination and credential checks. Slack receives no trace
-headers or baggage, and the trace headers a webhook sender sends are not read.
+headers or baggage, and the trace headers a webhook sender or Microsoft Teams sends are not read.
 
 Both stores keep trace context beside replies, active tasks, outbound rows,
 interactions, button presses, and generic durable events. Duplicate inserts retain
@@ -115,6 +116,7 @@ Important span attributes include:
 
 - `agentkourier.binding`, `agentkourier.backend`, `agentkourier.agent.name`, `agentkourier.dialect`
 - `agentkourier.platform`, `agentkourier.connection`, `agentkourier.webhook.event`, `agentkourier.webhook.delivery`, `agentkourier.webhook.reason`
+- `agentkourier.teams.activity.type`, `agentkourier.teams.activity.id`
 - `agentkourier.turn.id`, `agentkourier.task.id`, `agentkourier.context.id`, `agentkourier.task.state`
 - `agentkourier.retry.count`, `agentkourier.recovered`, `agentkourier.outcome`
 - `agentkourier.interaction.id`, `agentkourier.interaction.kind`
@@ -159,6 +161,42 @@ response.
 The line `webhook: delivery answered` (INFO) is written on the span's context, so it carries its `trace_id` and
 `span_id`. The DEBUG line of a request that is not verified or could not be read, and the WARN line that sums a
 connection's unverified requests, carry no trace.
+
+### Microsoft Teams requests
+
+Each verified activity request that Microsoft Teams sends a connection in `http` mode is one span, `agentkourier.teams.request`,
+of kind server, from when the connection's handler is called to its response, the time to verify the token included. A request
+is verified once its Bot Framework token is valid for the connection's app, the token's service URL is the activity's, and the
+activity is of the connection's tenant. The span is always a root: the trace headers Microsoft Teams sends are not read.
+
+A message is answered as soon as it is on its channel's lane, and its post is handed to the intake from the lane after the
+response: the intake's span (`agentkourier.intake`) is a child of the request's span all the same, started after that span has
+ended, and the turn that the post starts is in its trace. An invoke (a press of a card's button) is answered within its request:
+the press's intake span is a child of the request's span while it is open.
+
+The span carries:
+
+- `agentkourier.platform` (`teams`) and `agentkourier.connection` (the ChatConnection, `namespace/name`)
+- `agentkourier.outcome`: the `outcome` of `agentkourier_teams_requests_total`, one of `accepted`, `duplicate`, `invoke`,
+  `malformed` (a message with no ID that can name it, or an invoke whose `replyToId` holds `:`), `not_running` or `shed`
+- `http.response.status_code`
+- `agentkourier.teams.activity.type`, the activity's type, such as `message` or `invoke`
+- `agentkourier.teams.activity.id`, the activity's ID, when it has one
+
+A `503` (`not_running`, `shed`) sets `error.type` to the outcome and the span's status to error. Nothing else of the activity
+reaches the span: not its text, its sender or its conversation, and never the token. A request refused at its token (`bad_token`,
+or `keys_unavailable` when the signing keys could not be read), whose body is no activity (`malformed`), or whose activity is of
+another tenant (`wrong_tenant`) has no span, so that a client that can reach the route, or a tenant that installs the bot, cannot
+start traces; `agentkourier_teams_requests_total` counts it. The span records no `agentkourier_operation_duration_seconds`.
+
+The lines logged for a verified request carry its `trace_id` and `span_id`: the handler's, such as the WARN of an activity it
+did not take (`teams: an activity was not taken; answered 503, ...`), and the lane's, such as `teams: the sink did not take a
+message, which is dropped`, written after the response under the request's span. The WARN of a refused token or of another
+tenant's activity carries no trace.
+
+Microsoft Graph's change notifications, which come to the same route, the polls of a connection's channels through Graph, and
+the activities and invokes of a connection in `socket` mode have no such span: the intake's span of a post or a press that comes
+through them is the root of its trace.
 
 ## Logs
 
