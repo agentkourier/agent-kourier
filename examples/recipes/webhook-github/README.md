@@ -49,7 +49,7 @@ by whoever opened or commented on it.
 
 | What happens on GitHub | What follows |
 |---|---|
-| A pull request is opened in the repository | The agent's review on it, posted by the machine user. |
+| A pull request is opened in the repository | The agent's review on it, posted by the machine user: it requests changes when it finds a defect, and comments otherwise. |
 | A comment that does not mention the machine user | Nothing. |
 | A comment that mentions `@acme-review-agent` | The agent's reply on the pull request, in the same session as its review. |
 | The agent posts its review or comment | GitHub sends the webhook of it too, with the machine user as the sender (*not run*: in the run, the App's echo carried the App's `[bot]` login). Agent Kourier answers it `200` and drops it as the agent's own (`outcome="self"`). |

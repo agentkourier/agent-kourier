@@ -313,9 +313,11 @@ PR = {"owner": "acme", "repo": "widgets", "pullNumber": 42}
 
 
 @pytest.mark.anyio
-async def test_a_review_reads_the_pull_request_and_posts_one_comment_review_with_the_token(github, spec):
+@pytest.mark.parametrize("event", ["COMMENT", "REQUEST_CHANGES"])
+async def test_a_review_reads_the_pull_request_and_posts_one_review_with_the_token(github, spec, event):
     """The review flow of agent.yaml's instructions, with the arguments it names, reaches GitHub as it should: the
-    review is one GraphQL addPullRequestReview of event COMMENT on the head commit, and every request has the token."""
+    review is one GraphQL addPullRequestReview on the head commit, of the event the model chose (COMMENT, or
+    REQUEST_CHANGES for a defect), and every request has the token."""
     fake, recorder, _ = github
     results = []
     calls = [
@@ -324,7 +326,7 @@ async def test_a_review_reads_the_pull_request_and_posts_one_comment_review_with
         ("get_file_contents", {"owner": "acme", "repo": "widgets", "path": "widget.go", "ref": HEAD}),
         (
             "pull_request_review_write",
-            {"method": "create", "event": "COMMENT", "commitID": HEAD, "body": "Fine.", **PR},
+            {"method": "create", "event": event, "commitID": HEAD, "body": "Fine.", **PR},
         ),
     ]
     async with serve(spec, scripted(calls, results), ask_user="0") as client:
@@ -340,7 +342,7 @@ async def test_a_review_reads_the_pull_request_and_posts_one_comment_review_with
     assert f"ref={HEAD}" in fake.requests[2]["path"], "the file at the head commit"
     [mutation] = [r for r in fake.requests if r["body"] and "addPullRequestReview" in r["body"]["query"]]
     review = mutation["body"]["variables"]["input"]
-    assert review == {"pullRequestId": "PR_42", "commitOID": HEAD, "event": "COMMENT", "body": "Fine."}
+    assert review == {"pullRequestId": "PR_42", "commitOID": HEAD, "event": event, "body": "Fine."}
     assert {r["authorization"] for r in fake.requests} == {f"Bearer {GITHUB_TOKEN}"}, "every request, the token"
     # MCP 2026-07-28: the server answers 400 to a tools/call whose Mcp-Param-* headers are missing or do not match the
     # body's owner and repo. The pinned client negotiates that version and sends them.
