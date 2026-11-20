@@ -322,12 +322,15 @@ func TestSupervisorWarnsOnceOfAnOwnTeamsSpecThatDriftedFromTheRunningOne(t *test
 	socket.Mode = v1alpha1.TeamsModeSocket
 	notified := ownTeamsSpec()
 	notified.NotificationURL = "https://kourier.example.test/chat/teams/ns/teams"
+	spelled := ownTeamsSpec()
+	spelled.Mode = v1alpha1.TeamsModeHTTP // the mode the running spec, which has none, runs in
 	steps := []struct {
 		what        string
 		spec        v1alpha1.TeamsConnectionSpec
 		warns, back int
 	}{
 		{"the running spec", ownTeamsSpec(), 0, 0},
+		{"the default mode spelled out", spelled, 0, 0},
 		{"socket mode", socket, 1, 0},
 		{"the same edit at the next look", socket, 1, 0},
 		{"a notificationURL", notified, 2, 0},
@@ -335,6 +338,7 @@ func TestSupervisorWarnsOnceOfAnOwnTeamsSpecThatDriftedFromTheRunningOne(t *test
 		{"the running spec again", ownTeamsSpec(), 2, 1},
 		{"the running spec at the next look", ownTeamsSpec(), 2, 1},
 		{"the first edit made again", socket, 3, 1},
+		{"the default mode spelled out, after it", spelled, 3, 2},
 	}
 	for _, st := range steps {
 		look(st.spec)
@@ -402,6 +406,31 @@ func TestSupervisorSaysNothingOfASpecTeamsThatIsNotTheOwnRunningOne(t *testing.T
 			w.sup.checkOwnSpec(t.Context(), snap)
 			if got := w.count("WARN", ownTeamsDrifted); got != 0 {
 				t.Errorf("%d spec.teams drift WARNs; want none\n%s", got, w.logs.String())
+			}
+		})
+	}
+}
+
+// A spec.teams whose mode is written out as the default, http, where the running one has none, or left out where the running one says
+// http, is the mode the platform runs in (ChatConnectionSpec.TeamsMode): no drift.
+func TestSupervisorSaysNothingOfATeamsModeSpelledAsItsDefault(t *testing.T) {
+	spelled := ownTeamsSpec()
+	spelled.Mode = v1alpha1.TeamsModeHTTP
+	cases := map[string]struct{ running, read v1alpha1.TeamsConnectionSpec }{
+		"http written out": {running: ownTeamsSpec(), read: spelled},
+		"http left out":    {running: spelled, read: ownTeamsSpec()},
+		"http on both":     {running: spelled, read: spelled},
+		"left out on both": {running: ownTeamsSpec(), read: ownTeamsSpec()},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			w := ownTeamsWorld(t, c.running)
+			w.sup.checkOwnSpec(t.Context(), ownTeamsSnapshot(t, c.read))
+			if got := w.count("WARN", ownTeamsDrifted); got != 0 {
+				t.Errorf("%d spec.teams drift WARNs; want none\n%s", got, w.logs.String())
+			}
+			if w.sup.own.Teams != c.running {
+				t.Errorf("the look changed the running connection's spec.teams to %+v", w.sup.own.Teams)
 			}
 		})
 	}

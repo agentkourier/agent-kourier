@@ -16,6 +16,7 @@ and the INFO `chat connection: its spec.webhook is the one the running connectio
 for `spec.teams` the WARN is
 `chat connection: its spec.teams was edited, and the running connection still uses the spec.teams it started with; a restart of the broker applies the edit`
 and the INFO `chat connection: its spec.teams is the one the running connection started with again`.
+A `spec.teams.mode` of `http` written out where it was unset, or taken out where it was written, is the same mode and logs nothing.
 A team connection restarts by itself when its ChatConnection changes.
 [Start agents from webhooks](../how-to/receive-webhooks.md) sets up a webhook connection, with a page for each
 service the recipes cover.

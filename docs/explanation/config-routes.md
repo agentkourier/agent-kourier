@@ -27,7 +27,7 @@ reads that leaves the spec other than the one the connection runs on, a WARN tha
 `chat connection: its spec.webhook was edited, and the running connection still uses the spec.webhook it started with; a restart of the broker applies the edit`
 for `spec.webhook`, and
 `chat connection: its spec.teams was edited, and the running connection still uses the spec.teams it started with; a restart of the broker applies the edit`
-for `spec.teams`.
+for `spec.teams`, where `mode: http` written out or taken out is the same mode and no edit.
 A team connection restarts by itself when its ChatConnection changes.
 
 The two are never merged and there is no fallback. A broker on `files` ignores any custom resources in the cluster, and a broker on

@@ -161,12 +161,13 @@ const (
 
 // restartSpec is the part of the own connection's ChatConnection that its platform reads only when it is built, which checkOwnSpec compares
 // with the snapshot's: a webhook connection's spec.webhook, and a Microsoft Teams connection's spec.teams (its tenant, app, mode and
-// notificationURL).
+// notificationURL, the mode as the platform reads it: teamsAsRun).
 type restartSpec struct {
-	// running is the part the platform was built with, and of the same part of a ChatConnection's spec: a copy that shares nothing with it, of
-	// running's type, and nil of that type when the spec has none.
+	// running is the part the platform was built with.
 	running any
-	of      func(spec *v1alpha1.ChatConnectionSpec) any
+	// of returns the same part of a ChatConnection's spec, as a copy that shares nothing with it, of running's dynamic type, and a typed nil
+	// when the spec has none: checkOwnSpec compares the two with reflect.DeepEqual, which is false when the types differ.
+	of func(spec *v1alpha1.ChatConnectionSpec) any
 	// drifted is the WARN of a spec that differs from running, and matches the INFO of one that is back to it.
 	drifted, matches string
 }
@@ -178,16 +179,21 @@ func restartSpecOf(own *Connection) (restartSpec, bool) {
 		return restartSpec{running: own.Webhook, of: func(spec *v1alpha1.ChatConnectionSpec) any { return cloneWebhook(spec.Webhook) },
 			drifted: ownWebhookDrifted, matches: ownWebhookMatches}, true
 	case v1alpha1.PlatformTeams:
-		running := own.Teams
-		return restartSpec{running: &running, of: func(spec *v1alpha1.ChatConnectionSpec) any {
+		return restartSpec{running: teamsAsRun(own.Teams), of: func(spec *v1alpha1.ChatConnectionSpec) any {
 			if spec.Teams == nil { // Validate refuses it on a Teams connection; another platform has none
 				return (*v1alpha1.TeamsConnectionSpec)(nil)
 			}
-			t := *spec.Teams
-			return &t
+			return teamsAsRun(*spec.Teams)
 		}, drifted: ownTeamsDrifted, matches: ownTeamsMatches}, true
 	}
 	return restartSpec{}, false
+}
+
+// teamsAsRun is a copy of t with its mode as the platform reads it (ChatConnectionSpec.TeamsMode: http when it is unset), so that a mode
+// written out as the default, or left out where it was written, is no drift.
+func teamsAsRun(t v1alpha1.TeamsConnectionSpec) *v1alpha1.TeamsConnectionSpec {
+	t.Mode = v1alpha1.ChatConnectionSpec{Teams: &t}.TeamsMode()
+	return &t
 }
 
 // checkOwnSpec compares the part of the own connection's ChatConnection in snap that its platform reads only when it is built (restartSpecOf:
