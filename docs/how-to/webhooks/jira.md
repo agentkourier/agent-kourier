@@ -32,8 +32,8 @@ on the issue as an Atlassian service account.
   the Binding's `output: none` sends the agent's reply text nowhere, so only what its tools do reaches Jira.
 - The Atlassian organization admin role, to create the service account, and the Jira **Administer Jira** global permission, to create
   the webhook.
-- For the recipe's plans, read access to the GitHub repository the agent searches: the [GitHub](github.md) page's App, installed on
-  that repository, or other GitHub tools of the agent's.
+- For the recipe's plans, a GitHub token with read access to the repository the agent searches, such as the [GitHub](github.md)
+  page's machine user's, given that repository, and GitHub tools of the agent's that search code and read files.
 - `kubectl`, `curl`, `jq` and `openssl`.
 
 ## 1. Create the service account
@@ -129,7 +129,7 @@ The recipe's prompts ask the agent to do these, each through the gateway URL of 
 |---|---|---|
 | Read an issue: its summary, description and comments | Both triggers | `GET /rest/api/3/issue/{key}` |
 | Add a comment on the issue | Both triggers | `POST /rest/api/3/issue/{key}/comment`, whose body is in Atlassian Document Format; version 2 of the API, `/rest/api/2/issue/{key}/comment`, takes a plain string |
-| Search a GitHub repository's code and read its files | Both triggers' plans | The [GitHub](github.md#4-run-the-agent-and-its-tools) page's tools |
+| Search a GitHub repository's code and read its files | Both triggers' plans | GitHub tools with a token that reads the repository, such as github-mcp-server, which the [GitHub](github.md#4-run-the-agent-and-its-tools) page runs, with its `search_code` and `get_file_contents` tools (its README at v2.2.0, read 2026-11-19); the GitHub page's agent registers `get_file_contents` and not `search_code` |
 
 The token expires on the date set in step 1; the tools stop working then, and Atlassian shows no warning to the agent. Put the date
 in your calendar, or give the token the shortest expiry you will renew.

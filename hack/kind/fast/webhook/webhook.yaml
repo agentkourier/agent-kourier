@@ -3,9 +3,10 @@
 # that the broker serves them beside its own connection, on the chat listener that the same file turns on. The ConfigMap route serves the one
 # ChatConnection of its directory, so they have no place there, and test/e2e's WH_ tests skip on it. deploy_webhook applies each recipe's
 # ChatConnection and Binding as they are, but for the agent token it gives the Binding (webhook_binding), and this file in place of the
-# recipes' AgentBackends, whose URL is a placeholder. The fake vendors (test/fakevendors, the Deployment fakevendors of fast/doubles.yaml) are
-# their far side, with the fake secrets that deploy_webhook puts in the Secrets the recipes name (never committed as Secrets); test/kindmanifests
-# pins that they agree, and that the names are the ones test/e2e's vendors.go uses.
+# recipes' AgentBackends, whose URL is a placeholder or, for the GitHub recipe, the Service of its own agent, which the tier does not run. The
+# fake vendors (test/fakevendors, the Deployment fakevendors of fast/doubles.yaml) are their far side, with the fake secrets that deploy_webhook
+# puts in the Secrets the recipes name (never committed as Secrets); test/kindmanifests pins that they agree, and that the names are the ones
+# test/e2e's vendors.go uses.
 #
 # What the broker must be granted to read the Secrets, as a team grants it: a Role in the namespace that names them, bound to its ServiceAccount.
 apiVersion: rbac.authorization.k8s.io/v1

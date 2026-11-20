@@ -28,7 +28,7 @@ func TestVendorsDrivesTheFakeVendors(t *testing.T) {
 	}))
 	defer chat.Close()
 	fake, err := fakevendors.New(fakevendors.Config{ChatURL: chat.URL, Sources: map[string]fakevendors.Source{
-		fakevendors.GitHub: {Path: WebhookRoute(fakevendors.GitHub), Secret: []byte("fake-secret"), Identity: "acme-review-agent[bot]"}}})
+		fakevendors.GitHub: {Path: WebhookRoute(fakevendors.GitHub), Secret: []byte("fake-secret"), Identity: "acme-review-agent"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -174,13 +174,14 @@ def check_model(path: str, model) -> None:
         raise SystemExit(f"{path}: model {model!r} ({found.group()}) makes the provider search the web itself")
 
 
-def load_agent(path: str, model=None) -> tuple[Agent, set[str]]:
+def load_agent(path: str, model=None, asks: bool = True) -> tuple[Agent, set[str]]:
     """Rule: chat and alert text is untrusted, so the agent may use only the MCP tools agent.yaml lists, nothing else.
 
     Anything else stops the agent at start, naming the file. Pydantic AI's spec offers a shell (LocalWorkspace), web
     access and more; model_settings and the model's name can make the provider add a tool of its own; and an MCP
     `url` that is a path makes it run that script over stdio. `model` replaces the spec's, which is then not checked:
-    the tests pass one. Returns the agent and the values ${NAME} expanded to.
+    the tests pass one. `asks` offers the model ask_user (PROMPT_AGENT_ASK_USER, read by asks_user()). Returns the agent
+    and the values ${NAME} expanded to.
     """
     with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f)
@@ -248,8 +249,24 @@ def load_agent(path: str, model=None) -> tuple[Agent, set[str]]:
     # is an error the model is told of and may call again, up to agent.yaml's `retries`, and then the task fails.
     # agent.yaml's `tool_timeout` does not reach MCP calls: Pydantic AI puts it on its own function tools, and the only
     # one here is ask_user, which never waits.
-    agent = Agent.from_spec(spec, model=model, tools=[ask_user], output_type=[str, DeferredToolRequests])
+    # Without ask_user nothing defers, so the output is text alone, and a call to ask_user is an unknown tool.
+    tools, output = ([ask_user], [str, DeferredToolRequests]) if asks else ([], str)
+    agent = Agent.from_spec(spec, model=model, tools=tools, output_type=output)
     return agent, secrets
+
+
+def asks_user(value: str | None) -> bool:
+    """PROMPT_AGENT_ASK_USER: unset or "1" offers the model ask_user, "0" does not. Anything else stops the agent at
+    start, so a "false" or a "no" is never taken for one or the other.
+
+    "0" is for a connection that serves no questions, such as a webhook's: the model is never offered the tool, and
+    no run pauses.
+    """
+    if value is None or value == "1":
+        return True
+    if value == "0":
+        return False
+    raise SystemExit("PROMPT_AGENT_ASK_USER must be 1 (ask_user offered, as when it is unset) or 0 (not offered)")
 
 
 def build_card(agent: Agent, url: str) -> AgentCard:
@@ -474,8 +491,18 @@ class LimitBody:
         await self.app(scope, replay, send)
 
 
-def build_app(url: str, spec_path: str = "agent.yaml", token_file: str = "", model=None, anonymous: str = ""):
-    """The ASGI app: the card at /.well-known/agent-card.json and JSON-RPC at /, so the AgentBackend's url is `url`."""
+def build_app(
+    url: str,
+    spec_path: str = "agent.yaml",
+    token_file: str = "",
+    model=None,
+    anonymous: str = "",
+    ask: str | None = None,
+):
+    """The ASGI app: the card at /.well-known/agent-card.json and JSON-RPC at /, so the AgentBackend's url is `url`.
+
+    `anonymous` and `ask` are PROMPT_AGENT_ALLOW_ANONYMOUS's and PROMPT_AGENT_ASK_USER's values (None: unset).
+    """
     # Rule: the agent fails closed. Without the Binding's token to check, any caller that reaches it could read and add
     # to every conversation and spend the model key, so it starts without one only when told to, with exactly "1": a
     # "0" or a "false" is never taken for yes.
@@ -484,7 +511,7 @@ def build_app(url: str, spec_path: str = "agent.yaml", token_file: str = "", mod
             "PROMPT_AGENT_TOKEN_FILE is not set: set it to the file of the token the Binding sends, or set"
             " PROMPT_AGENT_ALLOW_ANONYMOUS=1 to accept every caller"
         )
-    agent, secrets = load_agent(spec_path, model)
+    agent, secrets = load_agent(spec_path, model, asks_user(ask))
     card = build_card(agent, url)
     # Tasks stay in memory until a restart, unbounded like the echo agent's: GetTask must find them (-32001 reads as the
     # session gone), and so must ListTasks (a turn it cannot find is sent again). Past the pod's memory limit (512Mi in
@@ -512,5 +539,6 @@ if __name__ == "__main__":
         os.environ.get("PROMPT_AGENT_SPEC", "agent.yaml"),
         os.environ.get("PROMPT_AGENT_TOKEN_FILE", ""),
         anonymous=os.environ.get("PROMPT_AGENT_ALLOW_ANONYMOUS", ""),
+        ask=os.environ.get("PROMPT_AGENT_ASK_USER"),
     )
     uvicorn.run(app, host="0.0.0.0", port=port)  # noqa: S104 (all interfaces, so the Service can reach the pod)

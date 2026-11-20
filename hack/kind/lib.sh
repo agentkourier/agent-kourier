@@ -544,7 +544,8 @@ WEBHOOK_AGENT_TOKEN=webhook-agent-token
 WEBHOOK_AGENT_EMAIL=acme-webhooks@example.test
 
 # webhook_binding: a recipe's Binding, as JSON on stdin, on stdout with WEBHOOK_AGENT_TOKEN as its identity's tokenSecretRef, and nothing else
-# changed: the recipes are written for an agent that asks for no token, and the tier's stub agent asks for one. Needs jq.
+# changed: the tier's stub agent asks for a token of its own, in place of none (most recipes) or the token of the agent a recipe ships (the
+# GitHub recipe's github-review-agent-bearer, which the tier does not make). Needs jq.
 webhook_binding() {
   jq -c --arg secret "${WEBHOOK_AGENT_TOKEN}" '.spec.identity.tokenSecretRef = {name: $secret}'
 }

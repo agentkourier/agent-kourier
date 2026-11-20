@@ -11,11 +11,6 @@ import (
 	"testing"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes/fake"
-
-	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/testutil"
 	"github.com/agentkourier/agent-kourier/test/fakevendors"
 )
@@ -44,8 +39,7 @@ func filesConnectionBroker(t *testing.T) *filesBroker {
 	c.Logger = slog.New(slog.NewTextHandler(logs, nil))
 	c.superviseEvery, c.reloadPoll = filesSuperviseEvery, 20*time.Millisecond
 	c.ConfigDir = recipeConfigDir(t, rc, "http://agent.invalid")
-	c.Client = fake.NewClientset(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: whNamespace, Name: "github-webhook"},
-		Data: map[string][]byte{v1alpha1.WebhookSecretKey: []byte(whSigningSecret)}})
+	c.Client = rc.clientset()
 	r := start(t, c)
 	r.until("/readyz", http.StatusOK)
 	b.dir = c.ConfigDir

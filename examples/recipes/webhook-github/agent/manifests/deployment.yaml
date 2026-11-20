@@ -1,0 +1,105 @@
+# The GitHub review agent: one pod that serves A2A on 8080, calls a model, and calls GitHub through github-mcp-server, a
+# sidecar in the same pod that listens on 127.0.0.1:8082 alone.
+#
+# Apply it into the namespace github-agent, which the AgentBackend in ../../kourier names (kubectl create namespace
+# github-agent, then kubectl apply -n github-agent -f manifests/). The files name no namespace, so the Service lands
+# next to it.
+#
+# The agent's container is the prompt-agent recipe's image (../../../prompt-agent), with this recipe's agent.yaml from
+# configmap.yaml: the image this file's release publishes, signed, for linux/amd64 and linux/arm64. A tag can be moved,
+# so to pin what every node runs, name it by the digest the GitHub Release gives (image: ghcr.io/...@sha256:...).
+# PROMPT_AGENT_ASK_USER=0: the model is not offered ask_user, since a webhook connection serves no questions.
+#
+# The sidecar is GitHub's github-mcp-server, pinned by the digest of its multi-platform image (linux/amd64 and
+# linux/arm64). Its http mode takes the token in the Authorization header of each request and holds none itself, so it
+# has no Secret, no variable and no volume: the agent sends the token that agent.yaml writes as ${GITHUB_TOKEN}. It
+# registers only the four tools its --tools names (the same four as agent.yaml's allowed_tools), and answers only on
+# loopback (--listen-host), so nothing outside the pod reaches it. Its image runs as root by default; the pod's
+# securityContext runs it as 65532, on a read-only root file system, as it was run with these flags to check it (v2.2.0).
+#
+# Three Secrets are referenced here and not created here; make them before the pod can start (a missing one leaves the
+# pod in CreateContainerConfigError, or ContainerCreating for the mounted one). The recipe's README makes each:
+#   github-review-agent-model, key api-key: the model provider's key, in the variable the provider reads. This file sets
+#     ANTHROPIC_API_KEY, for agent.yaml's model: anthropic:...; change the variable's name with the model: line.
+#   github-review-agent-github, key token: the machine user's fine-grained personal access token, which agent.yaml
+#     writes as ${GITHUB_TOKEN}. Every review and comment the agent posts is that user's, with that token's rights.
+#   github-review-agent-bearer, key token: the token Agent Kourier sends as Authorization: Bearer. The same value goes
+#     in the Secret the Binding names in namespace acme-webhooks (../../kourier/binding.yaml).
+# The first two reach the agent as environment variables, so a changed value needs a restart of the pod. The third is a
+# mounted file the agent reads on every request, so a rotated token works without a restart.
+#
+# One replica on purpose: what the agent remembers of a pull request's session lives in the pod's memory, and the
+# Service does not pin a session to a pod. A restart forgets it; the next event of the pull request starts over.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: github-review-agent
+  labels: {app.kubernetes.io/name: github-review-agent}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: github-review-agent}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: github-review-agent}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: github-review-agent
+          image: ghcr.io/agentkourier/agent-kourier-prompt-agent:v0.5.0
+          imagePullPolicy: IfNotPresent # a node pulls the tag once; a :dev image loaded into kind needs no pull
+          ports:
+            - {name: a2a, containerPort: 8080}
+          env:
+            - {name: PROMPT_AGENT_URL, value: "http://github-review-agent:8080"} # the URL the agent card names; Agent Kourier ignores it
+            - {name: PROMPT_AGENT_SPEC, value: /etc/prompt-agent/agent.yaml} # the ConfigMap in configmap.yaml
+            - {name: PROMPT_AGENT_ASK_USER, value: "0"} # no ask_user: a webhook connection serves no questions
+            - name: ANTHROPIC_API_KEY
+              valueFrom: {secretKeyRef: {name: github-review-agent-model, key: api-key}}
+            - name: GITHUB_TOKEN
+              valueFrom: {secretKeyRef: {name: github-review-agent-github, key: token}}
+            - {name: PROMPT_AGENT_TOKEN_FILE, value: /etc/prompt-agent-token/token} # the bearer volume below
+          volumeMounts:
+            - {name: spec, mountPath: /etc/prompt-agent, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+            - {name: bearer, mountPath: /etc/prompt-agent-token, readOnly: true}
+          readinessProbe:
+            tcpSocket: {port: a2a}
+          livenessProbe:
+            tcpSocket: {port: a2a}
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 50m, memory: 192Mi}
+            limits: {memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+        - name: github-mcp-server
+          image: ghcr.io/github/github-mcp-server:v2.2.0@sha256:040c4e99810076035eb1d9beb4b4a96fcf589c43cefed6ff51a46a553eb4e174
+          args:
+            - http
+            - --listen-host=127.0.0.1
+            - --port=8082
+            - --tools=pull_request_read,get_file_contents,pull_request_review_write,add_issue_comment
+          # No probe: the kubelet probes the pod's IP, where the sidecar does not listen, and the image has no shell to
+          # probe from inside. A run that starts before it listens cannot connect to it, and the task fails.
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+      volumes:
+        - name: spec
+          configMap: {name: github-review-agent}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi} # for the libraries' temporary files (agent.py writes none); past it the pod is evicted
+        - name: bearer
+          secret: {secretName: github-review-agent-bearer}

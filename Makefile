@@ -45,13 +45,14 @@ else
 		go test $(TESTHOOKS_BUILD_FLAGS) -timeout 20m -tags testhooks $$pkgs
 endif
 
-test-scripts: ## Run kind, security policy, release gate, PR label, Slack HTTP-mode probe, CI tool installer, testhooks package selection, test leg split, Actions cache upkeep and docs-only classification tests (no cluster)
+test-scripts: ## Run kind, security policy, release gate, PR label, Slack HTTP-mode probe, CI tool installers, testhooks package selection, test leg split, Actions cache upkeep and docs-only classification tests (no cluster)
 	hack/kind/netpol_test.sh
 	hack/security/test.sh
 	hack/release/test.sh
 	hack/github/test.sh
 	hack/slack/test.sh
 	hack/ci/test.sh
+	hack/ci/install-github-mcp-server_test.sh
 	hack/ci/testhooks-packages_test.sh
 	hack/ci/test-shard_test.sh
 	hack/ci/actions-cache_test.sh
@@ -214,7 +215,7 @@ $(PROMPT_VENV)/.installed: $(PROMPT_AGENT)/requirements-dev.txt
 	$(PROMPT_VENV)/bin/pip install --quiet --disable-pip-version-check --require-hashes -r $(PROMPT_AGENT)/requirements-dev.txt
 	touch $@
 
-prompt-agent-test: $(PROMPT_VENV)/.installed ## Test the prompt-agent recipe's Python agent with pytest (python3.14; PROMPT_PYTHON overrides)
+prompt-agent-test: $(PROMPT_VENV)/.installed ## Test the prompt-agent recipe's Python agent with pytest (python3.14; PROMPT_PYTHON overrides; GITHUB_MCP_SERVER_BIN, from hack/ci/install-github-mcp-server.sh, runs the webhook-github agent's tests)
 	cd $(PROMPT_AGENT) && $(CURDIR)/$(PROMPT_VENV)/bin/python -m pytest -q
 
 prompt-agent-lint: $(PROMPT_VENV)/.installed ## Lint the prompt-agent recipe with ruff (check and format check) and audit its pinned runtime packages with pip-audit (needs network)

@@ -29,7 +29,7 @@ func (l lineWriter) Write(p []byte) (int, error) {
 // The fake secret and the identity of the test's GitHub source.
 const (
 	testSecret   = "fake-test-github-secret"
-	testIdentity = "acme-review-agent[bot]"
+	testIdentity = "acme-review-agent"
 	testPath     = "/chat/webhook/acme-webhooks/github"
 )
 

@@ -198,7 +198,7 @@ spec:
             - -chat-url
             - http://agent-kourier-chat.agent-kourier.svc.cluster.local:8081
             - -source
-            - vendor=github,path=/chat/webhook/acme-webhooks/github,identity=acme-review-agent[bot],secret=fake-webhook-github-secret
+            - vendor=github,path=/chat/webhook/acme-webhooks/github,identity=acme-review-agent,secret=fake-webhook-github-secret
             - -source
             - vendor=bitbucket,path=/chat/webhook/acme-webhooks/bitbucket,identity=712020:00000000-0000-0000-0000-000000000001,secret=fake-webhook-bitbucket-secret
             - -source

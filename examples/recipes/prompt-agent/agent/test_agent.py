@@ -821,6 +821,34 @@ async def test_a_token_file_turns_the_check_on_even_with_anonymous_1(spec, tmp_p
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("value", [None, "1"])
+async def test_ask_user_is_offered_when_the_switch_is_unset_or_1(spec, value):
+    seen = []
+    async with serve(spec, scripted(seen), ask_user=value) as client:
+        _, question = await say(client, "ask")
+    assert "ask_user" in seen[0] and question.status.state == INPUT
+
+
+@pytest.mark.anyio
+async def test_with_the_switch_0_ask_user_is_not_offered_and_a_call_to_it_is_refused_inside_the_run(spec, server):
+    """A connection that serves no questions (a webhook's): the model is never offered ask_user, nothing pauses."""
+    seen = []
+    async with serve(spec, scripted(seen), ask_user="0") as client:
+        _, asked = await say(client, "ask")
+        _, tool = await say(client, "runbook")
+    assert seen[0] == ["runbook", "slow_check"]
+    assert asked.status.state == DONE and artifact_text(asked).startswith("Refused: Unknown tool name: 'ask_user'")
+    assert tool.status.state == DONE and "Runbook for DiskFull" in artifact_text(tool)
+
+
+@pytest.mark.parametrize("value", ["", "true", "false", "yes", "no", " 0", "0 ", "2"])
+def test_the_ask_user_switch_takes_exactly_0_or_1_and_anything_else_stops_the_agent(spec, value):
+    """Only "1" and "0" are read, as PROMPT_AGENT_ALLOW_ANONYMOUS's "1": a "false" is never taken for either."""
+    with pytest.raises(SystemExit, match="PROMPT_AGENT_ASK_USER"):
+        agent.build_app(URL, spec, "", scripted(), "1", value)
+
+
+@pytest.mark.anyio
 async def test_a_request_body_over_the_cap_gets_413_and_one_at_the_cap_is_read(spec):
     """The broker's largest message is far below MAX_BODY; a larger body is refused before JSON-RPC parses it."""
     over, at = b"x" * (agent.MAX_BODY + 1), b"x" * agent.MAX_BODY

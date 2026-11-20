@@ -1,0 +1,12 @@
+# The Service the AgentBackend in ../../kourier names, once applied in namespace github-agent:
+# http://github-review-agent.github-agent.svc.cluster.local:8080. It serves the agent's A2A port alone: the sidecar
+# listens on the pod's loopback, and no Service reaches it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: github-review-agent
+  labels: {app.kubernetes.io/name: github-review-agent}
+spec:
+  selector: {app.kubernetes.io/name: github-review-agent}
+  ports:
+    - {name: a2a, port: 8080, targetPort: a2a}

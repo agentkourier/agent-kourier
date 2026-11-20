@@ -65,7 +65,12 @@ have the upgrade, and how to roll each back.
   `chat connection: its spec.webhook was edited, and the running connection still uses the spec.webhook it started with; a restart of the broker applies the edit`,
   and at INFO once the spec is back to the one it runs on. A team's connection restarts by itself when its ChatConnection changes.
 - **Four recipes**: `webhook-github`, `webhook-jira`, `webhook-bitbucket` and `webhook-linear`, each a ChatConnection, a Binding and an
-  AgentBackend for an A2A agent of your own. They ship no agent yet: point the Binding at an agent that has the service's tools.
+  AgentBackend. `webhook-github` ships an agent: the prompt agent's image with an `agent.yaml` of its own and GitHub's github-mcp-server
+  beside it, which reviews pull requests and replies to mentions, posting as a machine user with its fine-grained personal access
+  token ([GitHub](how-to/webhooks/github.md)). The other three ship no agent yet: point the Binding at an agent that has the service's
+  tools.
+- **The prompt agent can leave out `ask_user`.** `PROMPT_AGENT_ASK_USER=0` does not offer the model the tool, for a connection that
+  serves no questions, such as a webhook's; unset or `1` offers it, as before, and any other value stops the agent at start.
 - **What was tested.** The repository's tests run each recipe's connection against a fake of its service, and the four setups were
   run end to end against the real services on 2026-11-17, on a pre-0.6.0 build of the broker with the same mapping.
 
