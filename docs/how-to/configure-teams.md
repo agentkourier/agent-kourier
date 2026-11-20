@@ -303,6 +303,16 @@ Install or upgrade with these values. In `http` mode the leader logs `the chat l
 `path`, and `teams: taking activities over https`. In `socket` mode it logs `teams: socket ready` for each region that
 takes a socket.
 
+The broker builds the platform of its own connection when it starts and when a replica takes the lead, so a later edit of its
+`spec.teams` (another `mode`, a `notificationURL` added, changed or removed, another tenant or app) applies when Agent Kourier restarts: on
+the ConfigMap route the chart rolls the pod when its ConfigMap changes, unless `config.existingConfigMap` is set or
+`config.rollOnChange` is `false`, and on custom resources it takes a restart of the Deployment. Until then the leader logs, once for
+each edit it reads that leaves `spec.teams` other than the one the connection runs on, a WARN that names the connection in its
+`connection` attribute,
+`chat connection: its spec.teams was edited, and the running connection still uses the spec.teams it started with; a restart of the broker applies the edit`,
+and an INFO, `chat connection: its spec.teams is the one the running connection started with again`, once the spec is back to the one it runs on.
+`mode: http` written out where the mode was unset, or taken out where it was written, is the same mode and logs nothing.
+
 ## 7. Point Teams at the broker
 
 In the Developer Portal, open the bot under **Bot management** and its **Configure** page (measured on the test tenant):

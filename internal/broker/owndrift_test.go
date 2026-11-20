@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"os"
@@ -65,7 +66,7 @@ func (w *supWorld) count(level, msg string) int {
 func TestSupervisorWarnsOnceOfAnOwnWebhookSpecThatDriftedFromTheRunningOne(t *testing.T) {
 	running := webhookSpec()
 	w := ownWebhookWorld(t, running)
-	look := func(spec *v1alpha1.WebhookSpec) { w.sup.checkOwnWebhook(w.t.Context(), ownWebhookSnapshot(t, spec)) }
+	look := func(spec *v1alpha1.WebhookSpec) { w.sup.checkOwnSpec(w.t.Context(), ownWebhookSnapshot(t, spec)) }
 	added := func() *v1alpha1.WebhookSpec { // a field a new trigger may match on
 		s := webhookSpec()
 		s.Fields = append(s.Fields, v1alpha1.WebhookField{Name: "draft", From: []string{"/pull_request/draft"}})
@@ -145,7 +146,7 @@ func TestSupervisorSaysNothingOfASpecWebhookThatIsNotTheOwnRunningOne(t *testing
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			w, snap := c(t)
-			w.sup.checkOwnWebhook(t.Context(), snap)
+			w.sup.checkOwnSpec(t.Context(), snap)
 			if got := w.count("WARN", ownWebhookDrifted); got != 0 {
 				t.Errorf("%d drift WARNs; want none\n%s", got, w.logs.String())
 			}
@@ -164,8 +165,8 @@ func TestSupervisorWarnsOnceOfAnOwnWebhookConnectionWhoseSpecWebhookIsGone(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.sup.checkOwnWebhook(t.Context(), gone)
-	w.sup.checkOwnWebhook(t.Context(), gone)
+	w.sup.checkOwnSpec(t.Context(), gone)
+	w.sup.checkOwnSpec(t.Context(), gone)
 	if got := w.count("WARN", ownWebhookDrifted); got != 1 {
 		t.Errorf("%d drift WARNs for a spec.webhook that is gone, looked at twice; want 1\n%s", got, w.logs.String())
 	}
@@ -278,4 +279,315 @@ func TestRunWarnsOfAnEditOfTheOwnWebhookConnectionOnTheFiles(t *testing.T) {
 	}
 	testutil.Eventually(t, "the INFO that the own connection's spec.webhook matches again", func() bool { return matchesAgain(logs.String(), rc.connection()) },
 		testutil.Within(40*time.Second), testutil.Every(5*time.Millisecond))
+}
+
+// ownTeamsSpec is the spec.teams of the Microsoft Teams connection ns/teams that the tests of its drift run on: http mode, polling.
+func ownTeamsSpec() v1alpha1.TeamsConnectionSpec {
+	return v1alpha1.TeamsConnectionSpec{TenantID: teamsTestTenant, AppID: teamsTestApp}
+}
+
+// ownTeamsSnapshot is a snapshot whose one ChatConnection is the Microsoft Teams connection ns/teams with spec, as a reload reads it.
+func ownTeamsSnapshot(t *testing.T, spec v1alpha1.TeamsConnectionSpec) *config.Snapshot {
+	t.Helper()
+	set := &config.Set{ChatConnections: []v1alpha1.ChatConnection{{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "teams"},
+		Spec: v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformTeams, CredentialsSecretRef: v1alpha1.SecretRef{Name: "teams"},
+			Teams: &spec},
+	}}}
+	snap, err := config.Resolve(t.Context(), set, keysOf{v1alpha1.TeamsClientSecretKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snap
+}
+
+// ownTeamsWorld is a supervisor whose own connection is the Microsoft Teams connection ns/teams, running on spec.
+func ownTeamsWorld(t *testing.T, spec v1alpha1.TeamsConnectionSpec) *supWorld {
+	t.Helper()
+	w := newSupWorld(t)
+	own := teamsConn("ns", "teams")
+	own.Teams = spec
+	w.sup.own = &own
+	return w
+}
+
+// An edit of the own Microsoft Teams connection's spec.teams that a reload brought is one WARN of its own that names the connection,
+// while the running platform keeps the tenant, app, mode and notificationURL it was built with: the same edit at the next look says
+// nothing again, another edit is a WARN of its own, and a spec that is back to the running one is one INFO, after which the first edit,
+// made again, is a drift again. None of it is the spec.webhook lines.
+func TestSupervisorWarnsOnceOfAnOwnTeamsSpecThatDriftedFromTheRunningOne(t *testing.T) {
+	w := ownTeamsWorld(t, ownTeamsSpec())
+	look := func(spec v1alpha1.TeamsConnectionSpec) { w.sup.checkOwnSpec(w.t.Context(), ownTeamsSnapshot(t, spec)) }
+	socket := ownTeamsSpec()
+	socket.Mode = v1alpha1.TeamsModeSocket
+	notified := ownTeamsSpec()
+	notified.NotificationURL = "https://kourier.example.test/chat/teams/ns/teams"
+	spelled := ownTeamsSpec()
+	spelled.Mode = v1alpha1.TeamsModeHTTP // the mode the running spec, which has none, runs in
+	steps := []struct {
+		what        string
+		spec        v1alpha1.TeamsConnectionSpec
+		warns, back int
+	}{
+		{"the running spec", ownTeamsSpec(), 0, 0},
+		{"the default mode spelled out", spelled, 0, 0},
+		{"socket mode", socket, 1, 0},
+		{"the same edit at the next look", socket, 1, 0},
+		{"a notificationURL", notified, 2, 0},
+		{"the other edit again", notified, 2, 0},
+		{"the running spec again", ownTeamsSpec(), 2, 1},
+		{"the running spec at the next look", ownTeamsSpec(), 2, 1},
+		{"the first edit made again", socket, 3, 1},
+		{"the default mode spelled out, after it", spelled, 3, 2},
+	}
+	for _, st := range steps {
+		look(st.spec)
+		if got := w.count("WARN", ownTeamsDrifted); got != st.warns {
+			t.Fatalf("after %s: %d drift WARNs; want %d\n%s", st.what, got, st.warns, w.logs.String())
+		}
+		if got := w.count("INFO", ownTeamsMatches); got != st.back {
+			t.Fatalf("after %s: %d INFOs that the spec matches again; want %d\n%s", st.what, got, st.back, w.logs.String())
+		}
+	}
+	for line := range strings.Lines(w.logs.String()) {
+		if (strings.Contains(line, ownTeamsDrifted) || strings.Contains(line, ownTeamsMatches)) && !strings.Contains(line, "connection=ns/teams") {
+			t.Errorf("the line does not name the connection: %s", line)
+		}
+	}
+	if n := w.count("WARN", ownWebhookDrifted) + w.count("INFO", ownWebhookMatches); n != 0 {
+		t.Errorf("%d spec.webhook lines of a Microsoft Teams connection; want none\n%s", n, w.logs.String())
+	}
+	if strings.Contains(w.logs.String(), "fake-client-secret") {
+		t.Error("the log holds the connection's client secret")
+	}
+	if w.sup.own.Teams != ownTeamsSpec() {
+		t.Errorf("the look changed the running connection's spec.teams to %+v", w.sup.own.Teams)
+	}
+}
+
+// Nothing is said of a spec.teams that is not the own Microsoft Teams connection's: an own Slack connection of the snapshot's Teams
+// connection's name, an own webhook connection of that name (whose own WARN is of spec.webhook), a broker with no own connection, and a
+// snapshot that does not hold the own connection (another name, or the name in another namespace) have no running spec.teams to differ from.
+func TestSupervisorSaysNothingOfASpecTeamsThatIsNotTheOwnRunningOne(t *testing.T) {
+	edited := ownTeamsSpec()
+	edited.Mode = v1alpha1.TeamsModeSocket
+	cases := map[string]func(t *testing.T) (*supWorld, *config.Snapshot){
+		"an own Slack connection of the same name": func(t *testing.T) (*supWorld, *config.Snapshot) {
+			w := newSupWorld(t)
+			w.sup.own.Ref = v1alpha1.ObjectRef{Namespace: "ns", Name: "teams"} // no spec.teams, over a snapshot whose ns/teams has one
+			return w, ownTeamsSnapshot(t, edited)
+		},
+		"an own webhook connection of the same name": func(t *testing.T) (*supWorld, *config.Snapshot) {
+			w := newSupWorld(t)
+			own := webhookConn("teams", webhookSpec(), fakeWebhookSecret)
+			w.sup.own = &own
+			return w, ownTeamsSnapshot(t, edited)
+		},
+		"no own connection": func(t *testing.T) (*supWorld, *config.Snapshot) {
+			return newTeamOnlySupWorld(t), ownTeamsSnapshot(t, edited)
+		},
+		"the own connection not in the snapshot": func(t *testing.T) (*supWorld, *config.Snapshot) {
+			w := ownTeamsWorld(t, ownTeamsSpec())
+			w.sup.own.Ref.Name = "teams-2"
+			return w, ownTeamsSnapshot(t, edited)
+		},
+		"a connection of the same name in another namespace": func(t *testing.T) (*supWorld, *config.Snapshot) {
+			w := ownTeamsWorld(t, ownTeamsSpec())
+			w.sup.own.Ref.Namespace = "other"
+			return w, ownTeamsSnapshot(t, edited)
+		},
+		"no snapshot": func(t *testing.T) (*supWorld, *config.Snapshot) {
+			return ownTeamsWorld(t, ownTeamsSpec()), nil
+		},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			w, snap := c(t)
+			w.sup.checkOwnSpec(t.Context(), snap)
+			if got := w.count("WARN", ownTeamsDrifted); got != 0 {
+				t.Errorf("%d spec.teams drift WARNs; want none\n%s", got, w.logs.String())
+			}
+		})
+	}
+}
+
+// A spec.teams whose mode is written out as the default, http, where the running one has none, or left out where the running one says
+// http, is the mode the platform runs in (ChatConnectionSpec.TeamsMode): no drift.
+func TestSupervisorSaysNothingOfATeamsModeSpelledAsItsDefault(t *testing.T) {
+	spelled := ownTeamsSpec()
+	spelled.Mode = v1alpha1.TeamsModeHTTP
+	cases := map[string]struct{ running, read v1alpha1.TeamsConnectionSpec }{
+		"http written out": {running: ownTeamsSpec(), read: spelled},
+		"http left out":    {running: spelled, read: ownTeamsSpec()},
+		"http on both":     {running: spelled, read: spelled},
+		"left out on both": {running: ownTeamsSpec(), read: ownTeamsSpec()},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			w := ownTeamsWorld(t, c.running)
+			w.sup.checkOwnSpec(t.Context(), ownTeamsSnapshot(t, c.read))
+			if got := w.count("WARN", ownTeamsDrifted); got != 0 {
+				t.Errorf("%d spec.teams drift WARNs; want none\n%s", got, w.logs.String())
+			}
+			if w.sup.own.Teams != c.running {
+				t.Errorf("the look changed the running connection's spec.teams to %+v", w.sup.own.Teams)
+			}
+		})
+	}
+}
+
+// An own Microsoft Teams connection whose ChatConnection a reload moved to another platform, which has no spec.teams, runs on Teams
+// still: that is a drift too, said once.
+func TestSupervisorWarnsOnceOfAnOwnTeamsConnectionWhoseSpecTeamsIsGone(t *testing.T) {
+	w := ownTeamsWorld(t, ownTeamsSpec())
+	gone, err := config.Resolve(t.Context(), &config.Set{ChatConnections: []v1alpha1.ChatConnection{{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "teams"},
+		Spec:       v1alpha1.ChatConnectionSpec{Platform: v1alpha1.PlatformSlack, CredentialsSecretRef: v1alpha1.SecretRef{Name: "teams"}},
+	}}}, keys{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.sup.checkOwnSpec(t.Context(), gone)
+	w.sup.checkOwnSpec(t.Context(), gone)
+	if got := w.count("WARN", ownTeamsDrifted); got != 1 {
+		t.Errorf("%d drift WARNs for a spec.teams that is gone, looked at twice; want 1\n%s", got, w.logs.String())
+	}
+}
+
+// The Microsoft Teams recipe, whose ChatConnection agent-kourier/teams the broker runs as its own in the tests of its drift on both routes.
+const (
+	teamsRecipeDir  = whRecipes + "/prompt-agent-teams/kourier"
+	teamsRecipeNS   = "agent-kourier"
+	teamsRecipeConn = teamsRecipeNS + "/teams"
+)
+
+// teamsRecipeSecrets are the Secrets the Teams recipe names, with fake values: the bot's client secret and the agent's bearer token.
+func teamsRecipeSecrets() []*corev1.Secret {
+	return []*corev1.Secret{
+		{ObjectMeta: metav1.ObjectMeta{Namespace: teamsRecipeNS, Name: "teams"}, Data: map[string][]byte{v1alpha1.TeamsClientSecretKey: []byte("fake-client-secret")}},
+		{ObjectMeta: metav1.ObjectMeta{Namespace: teamsRecipeNS, Name: "prompt-agent-bearer"}, Data: map[string][]byte{"token": []byte("fake-bearer-token")}},
+	}
+}
+
+// teamsDrifted says whether logs hold the spec.teams drift WARN of the connection conn, and teamsMatchesAgain the INFO that it is the running
+// one again.
+func teamsDrifted(logs, conn string) bool      { return logged(logs, "WARN", ownTeamsDrifted, conn) }
+func teamsMatchesAgain(logs, conn string) bool { return logged(logs, "INFO", ownTeamsMatches, conn) }
+
+// On the custom resources an edit of the own Microsoft Teams connection's ChatConnection that switches spec.teams to socket mode reaches the
+// broker at the next reload, and the leader WARNs that the running connection still uses the spec.teams it started with. The edit taken back
+// is the INFO that the spec matches again: the spec.teams that the informer's object decodes to is the one the platform was built with.
+func TestRunWarnsOfAnEditOfTheOwnTeamsConnectionOnTheCustomResources(t *testing.T) {
+	ms := newFakeMicrosoft(t)
+	w := newConnWorld(t, nil)
+	runsAlongside(&w.c)
+	w.c.ChatListener = someListener(t)
+	w.c.teamsFakes = ms.point
+	identify := w.c.identify // the world's names a connection by its Slack token, which a Teams connection has none of
+	w.c.identify = func(ctx context.Context, c Connection) (appIdentity, error) {
+		if c.Platform == v1alpha1.PlatformTeams {
+			return teamsIdentityOf(ctx, w.c, c)
+		}
+		return identify(ctx, c)
+	}
+	w.c.ChatConnection = v1alpha1.ObjectRef{Namespace: teamsRecipeNS, Name: "teams"}
+	for _, s := range teamsRecipeSecrets() {
+		if _, err := w.kube.CoreV1().Secrets(teamsRecipeNS).Create(t.Context(), s, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var conn *unstructured.Unstructured
+	for _, obj := range recipeObjects(t, teamsRecipeDir) {
+		obj.SetUID(types.UID("uid-" + obj.GetName()))
+		obj.SetGeneration(1)
+		gvr := map[string]schema.GroupVersionResource{"ChatConnection": crConnections, "Binding": crBindings, "AgentBackend": crBackends}[obj.GetKind()]
+		if err := w.dyn.Tracker().Create(gvr, obj, teamsRecipeNS); err != nil {
+			t.Fatal(err)
+		}
+		if obj.GetKind() == "ChatConnection" {
+			conn = obj
+		}
+	}
+	r := start(t, w.c)
+	r.until("/readyz", http.StatusOK)
+	r.waitMetric(`agentkourier_chat_connected{connection="` + teamsRecipeConn + `"} 1`)
+	if teamsDrifted(w.logs.String(), teamsRecipeConn) {
+		t.Fatalf("a drift WARN before any edit:\n%s", w.logs.String())
+	}
+
+	original := conn.DeepCopy()
+	if err := unstructured.SetNestedField(conn.Object, string(v1alpha1.TeamsModeSocket), "spec", "teams", "mode"); err != nil {
+		t.Fatal(err)
+	}
+	conn.SetGeneration(2)
+	if err := w.dyn.Tracker().Update(crConnections, conn, teamsRecipeNS); err != nil {
+		t.Fatal(err)
+	}
+	w.eventually("the spec.teams drift WARN of the own connection", func() bool { return teamsDrifted(w.logs.String(), teamsRecipeConn) })
+
+	original.SetGeneration(3)
+	if err := w.dyn.Tracker().Update(crConnections, original, teamsRecipeNS); err != nil {
+		t.Fatal(err)
+	}
+	w.eventually("the INFO that the own connection's spec.teams matches again", func() bool {
+		return teamsMatchesAgain(w.logs.String(), teamsRecipeConn)
+	})
+	if strings.Contains(w.logs.String(), "fake-client-secret") {
+		t.Error("the log holds the connection's client secret")
+	}
+}
+
+// On the files the same edit, in the directory's one ChatConnection, is the same WARN: the chart rolls the pod on it, but not when its
+// ConfigMap is not the chart's or rolling is off, and the broker runs on the spec.teams it started with until then. The file put back is
+// the INFO that the spec matches again.
+func TestRunWarnsOfAnEditOfTheOwnTeamsConnectionOnTheFiles(t *testing.T) {
+	ms := newFakeMicrosoft(t)
+	logs := &syncBuffer{}
+	c := startConfig(t)
+	runsAlongside(&c)
+	c.ChatListener = someListener(t)
+	c.teamsFakes = ms.point
+	c.Logger = slog.New(slog.NewTextHandler(logs, nil))
+	c.superviseEvery, c.reloadPoll = 10*time.Millisecond, 20*time.Millisecond
+	c.ConfigDir = t.TempDir()
+	for _, name := range []string{"chatconnection.yaml", "binding.yaml", "agentbackend.yaml"} {
+		b, err := os.ReadFile(filepath.Join(teamsRecipeDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(c.ConfigDir, name), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	secrets := teamsRecipeSecrets()
+	c.Client = fake.NewClientset(secrets[0], secrets[1])
+	r := start(t, c)
+	r.until("/readyz", http.StatusOK)
+	r.waitMetric(`agentkourier_chat_connected{connection="` + teamsRecipeConn + `"} 1`)
+	if teamsDrifted(logs.String(), teamsRecipeConn) {
+		t.Fatalf("a drift WARN before any edit:\n%s", logs.String())
+	}
+
+	path := filepath.Join(c.ConfigDir, "chatconnection.yaml")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(string(b), "\n    appID: 22222222-2222-4222-8222-222222222222\n") {
+		t.Fatalf("the recipe's ChatConnection does not end with spec.teams.appID, under which the edit goes:\n%s", b)
+	}
+	if err := os.WriteFile(path, append(slices.Clone(b), []byte("    mode: socket\n")...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	testutil.Eventually(t, "the spec.teams drift WARN of the own connection", func() bool { return teamsDrifted(logs.String(), teamsRecipeConn) },
+		testutil.Within(40*time.Second), testutil.Every(5*time.Millisecond))
+
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	testutil.Eventually(t, "the INFO that the own connection's spec.teams matches again", func() bool { return teamsMatchesAgain(logs.String(), teamsRecipeConn) },
+		testutil.Within(40*time.Second), testutil.Every(5*time.Millisecond))
+	if strings.Contains(logs.String(), "fake-client-secret") {
+		t.Error("the log holds the connection's client secret")
+	}
 }
