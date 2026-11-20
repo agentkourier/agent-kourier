@@ -290,9 +290,11 @@ EOF
 stored_invalid() {
   echo "== a Binding stored before a tightening of the schema"
   local base=/spec/versions/0/schema/openAPIV3Schema/properties/spec/properties
-  # A rule of the CRD's CEL (a Binding with no identity at all) and one of its schema (a channel that is not a channel ID).
+  # A rule of the CRD's CEL (a Binding with no identity at all) and one of its schema (a mention whose user is not a user ID). The channel's shape is a
+  # CEL rule of chat since the webhook channel, so the schema case is the mention's user, an OpenAPI pattern that no CEL rule repeats.
   stored_case "CEL rule" "${base}/identity/x-kubernetes-validations" "$(binding ck11-stored-invalid CCRSTORED '' '{}')" 1
-  stored_case "schema pattern" "${base}/chat/properties/channel/pattern" "$(binding ck11-stored-invalid not-a-channel)" 0
+  stored_case "schema pattern" "${base}/chat/properties/mentions/items/properties/user/pattern" \
+    "$(binding ck11-stored-invalid CCRSTORED '    mentions: [{name: sam, user: not-a-user}]')" 0
 }
 
 

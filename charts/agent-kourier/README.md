@@ -175,7 +175,7 @@ from 0.1.6) reads as `files`, so that it keeps its route (rendered with `--set c
 
 What the route needs:
 
-- **Kubernetes 1.33 or later.** 1.33 is the first minor tried on which a server-side apply of a Binding's status, to a Binding stored invalid by a rule of the CRDs (which a later, stricter schema can cause), ratchets: it is refused on 1.30.13, 1.31.0, 1.32.0 and 1.32.5 and accepted on 1.33.1, 1.35.0 and 1.37.0 (measured on kind; 1.33.0 and 1.34 were not tried). The answer carries a warning when the rule that the stored spec breaks is a CEL rule, and none when it is an OpenAPI schema pattern such as the channel's (measured on 1.37.0 only). Ordinary updates of such a Binding ratchet from 1.30. The chart refuses an API server
+- **Kubernetes 1.33 or later.** 1.33 is the first minor tried on which a server-side apply of a Binding's status, to a Binding stored invalid by a rule of the CRDs (which a later, stricter schema can cause), ratchets: it is refused on 1.30.13, 1.31.0, 1.32.0 and 1.32.5 and accepted on 1.33.1, 1.35.0 and 1.37.0 (measured on kind; 1.33.0 and 1.34 were not tried). The answer carries a warning when the rule that the stored spec breaks is a CEL rule, and none when it is an OpenAPI schema pattern such as a mention's user ID (measured on 1.37.0 only). Ordinary updates of such a Binding ratchet from 1.30. The chart refuses an API server
   it can see is older, and says to set `config.source: files`, which has no minimum.
 - **The CRDs installed before a release that renders custom resources from `config.*`.** A first install that renders the CRDs and custom resources of them in
   one release fails (measured: `resource mapping not found ... ensure CRDs are installed first`), so the chart refuses to render the custom
