@@ -78,6 +78,15 @@ func TestMC_ATeamTakenOffTheAdmissionListIsNotServed(t *testing.T) {
 	m.waitPlatformBindingReady()
 
 	// team-a's app has no client, and a mention of its bot, which the fake sends to the apps that are connected and in the channel, gets no reply.
+	// The client can go after the condition: once the leader reads the change, it writes the status within a second, and stops the connection
+	// at its supervisor's next pass, up to five seconds later. A mention in between has no Binding to serve it, so the wait is for the client alone.
+	err = Wait(m.ctx, 2*time.Minute, "no client of team-a's app", func(ctx context.Context) (bool, error) {
+		n, err := m.slack.AppConnections(ctx, AppTeamA.AppID)
+		return n == 0, err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	um, err := m.say(AppTeamA, ChannelMCTeamA, mcUser, "anyone there?")
 	if err != nil {
 		t.Fatal(err)
