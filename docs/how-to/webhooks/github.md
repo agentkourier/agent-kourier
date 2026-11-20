@@ -180,13 +180,19 @@ names, not their arguments. The agent README's
 [What the agent can and cannot do](https://github.com/agentkourier/agent-kourier/blob/main/examples/recipes/webhook-github/agent/README.md#what-the-agent-can-and-cannot-do)
 says what that leaves open.
 
-Why a machine user and not a GitHub App: github-mcp-server renews an App's installation tokens by itself only in its `stdio` mode,
-and the prompt agent reaches MCP servers over HTTP only (github-mcp-server's `docs/github-app-auth.md` at v2.2.0;
-not verified here).
-
 **An agent of your own instead.** Run an A2A agent whose agent card advertises streaming, with tools that do the operations above;
 [The agent](../receive-webhooks.md#the-agent) says what it must be and do. Put its A2A endpoint in the AgentBackend (step 5), and
 its bearer token, or none, in the Binding's `identity` ([Create the Binding identity](../create-binding-identity.md)).
+
+### A GitHub App instead of a machine user
+
+The connection takes a GitHub App's events as well as a machine user's: the setup's run was made with an App, whose own reviews
+and comments carried `<app-slug>[bot]` in `/sender/login`, so with an App `spec.webhook.identity` is that login, `[bot]` included.
+The recipe's agent cannot act as an App. An App acts with installation tokens, which expire after an hour (GitHub's documentation);
+github-mcp-server renews them by itself only in its `stdio` mode, and the prompt agent reaches MCP servers over HTTP only
+(github-mcp-server's `docs/github-app-auth.md` at v2.2.0; not verified here). To act as an App, run an agent of your own that
+renews the token: one that runs github-mcp-server in `stdio` mode, or that mints installation tokens itself. The recipe's reply
+trigger matches a mention of the machine user's login; with an App, change it to the mention your users write (not run).
 
 ## 5. Apply the manifests
 

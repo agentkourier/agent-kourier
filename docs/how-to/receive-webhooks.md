@@ -7,9 +7,9 @@ and an account of its own there. Agent Kourier posts nothing on the service.
 
 Each service has a page of its own, with the setup from an empty account to a working agent:
 
-| Service | The agent works as | The recipe's flows |
+| Service | The recipe's agent works as | The recipe's flows |
 |---|---|---|
-| [GitHub](webhooks/github.md) | A machine user, with its fine-grained personal access token | A pull request opened or pushed to gets a review; a comment that mentions the machine user gets a reply. |
+| [GitHub](webhooks/github.md) | A machine user, with its fine-grained personal access token (a GitHub App needs an agent of your own: [why](webhooks/github.md#a-github-app-instead-of-a-machine-user)) | A pull request opened or pushed to gets a review; a comment that mentions the machine user gets a reply. |
 | [Jira Cloud](webhooks/jira.md) | An Atlassian service account | An issue created gets a plan as a comment; an edit of its summary or description gets a revised plan. |
 | [Bitbucket Cloud](webhooks/bitbucket.md) | A repository access token | A pull request created or updated gets a review; a comment that mentions the token gets a reply. |
 | [Linear](webhooks/linear.md) | An OAuth application with client credentials | An issue created gets a plan; a change of its description gets a revised plan; a comment that names the app gets a reply. |
