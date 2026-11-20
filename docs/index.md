@@ -73,9 +73,9 @@ whose namespace the platform admits can bring its own chat app as well ([Let a t
 
 <figure class="ak-film">
 <video controls preload="none" playsinline poster="assets/film/agent-kourier-teaser-poster-16x9.jpg" aria-label="Agent Kourier teaser, 20 seconds, narrated">
-<source src="https://media.agentkourier.dev/agent-kourier-teaser-16x9.787d2408faec.mp4" type="video/mp4">
+<source src="https://media.agentkourier.dev/agent-kourier-teaser-16x9.0dc9f043ba9a.mp4" type="video/mp4">
 <track kind="captions" src="assets/film/agent-kourier-teaser.en.vtt" srclang="en" label="English" default>
-<a href="https://media.agentkourier.dev/agent-kourier-teaser-16x9.787d2408faec.mp4">Download the teaser (MP4, 20 seconds)</a>.
+<a href="https://media.agentkourier.dev/agent-kourier-teaser-16x9.0dc9f043ba9a.mp4">Download the teaser (MP4, 20 seconds)</a>.
 </video>
 <figcaption>The teaser, 20 seconds, narrated with captions. <a href="demo/">Watch the full demo</a> (116 seconds), or <a href="demo/#a-cross-team-incident">a cross-team incident</a> (3 minutes).</figcaption>
 </figure>

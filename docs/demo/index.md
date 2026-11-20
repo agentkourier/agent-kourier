@@ -15,9 +15,9 @@ team adds its agent with one Binding.
 
 <figure class="ak-film">
 <video controls preload="none" playsinline poster="../assets/film/agent-kourier-demo-poster-16x9.jpg" aria-label="Agent Kourier demo, 116 seconds, narrated">
-<source src="https://media.agentkourier.dev/agent-kourier-demo-16x9.e867a4b092d7.mp4" type="video/mp4">
+<source src="https://media.agentkourier.dev/agent-kourier-demo-16x9.175aee3911e1.mp4" type="video/mp4">
 <track kind="captions" src="../assets/film/agent-kourier-demo.en.vtt" srclang="en" label="English" default>
-<a href="https://media.agentkourier.dev/agent-kourier-demo-16x9.e867a4b092d7.mp4">Download the demo (MP4, 116 seconds)</a>.
+<a href="https://media.agentkourier.dev/agent-kourier-demo-16x9.175aee3911e1.mp4">Download the demo (MP4, 116 seconds)</a>.
 </video>
 <figcaption>The demo, 116 seconds, narrated with captions.</figcaption>
 </figure>
