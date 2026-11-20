@@ -187,7 +187,7 @@ its bearer token, or none, in the Binding's `identity` ([Create the Binding iden
 ### A GitHub App instead of a machine user
 
 The connection takes a GitHub App's events as well as a machine user's: the setup's run was made with an App, whose own reviews
-and comments carried `<app-slug>[bot]` in `/sender/login`, so with an App `spec.webhook.identity` is that login, `[bot]` included.
+and comments carried `<app-slug>[bot]` in `/sender/login` (in the run, `acme-review-agent[bot]`), so with an App `spec.webhook.identity` is that login, `[bot]` included.
 The recipe's agent cannot act as an App. An App acts with installation tokens, which expire after an hour (GitHub's documentation);
 github-mcp-server renews them by itself only in its `stdio` mode, and the prompt agent reaches MCP servers over HTTP only
 (github-mcp-server's `docs/github-app-auth.md` at v2.2.0; not verified here). To act as an App, run an agent of your own that

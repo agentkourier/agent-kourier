@@ -447,11 +447,12 @@ What a service does with a `503` is its own. Their documentation, not checked ag
 
 ## Map another service
 
-A service can be mapped when its webhooks fit two rules, within the bounds in [Limits](../reference/limits.md). Each delivery is one JSON object. And the service proves that the delivery is
-its own in one header, in one of two ways: the HMAC-SHA256 of the raw body, in hex, after an optional fixed prefix such as `sha256=`
-(`scheme: hmac-sha256`); or a fixed secret of at least 32 bytes, after an optional fixed prefix such as `Bearer ` (`scheme: token`). A time that the connection
-checks is read from the body, not from a header. A service that signs anything but the body alone, such as a timestamp and the body
-together, or that sends its signature in base64, does not fit.
+A service can be mapped when its webhooks fit two rules, within the bounds in [Limits](../reference/limits.md). Each delivery is
+one JSON object. And the service proves that the delivery is its own in one header, in one of two ways: the HMAC-SHA256 of the raw
+body, in hex, after an optional fixed prefix such as `sha256=` (`scheme: hmac-sha256`); or a fixed secret of at least 32 bytes,
+after an optional fixed prefix such as `Bearer ` (`scheme: token`). A time that the connection checks is read from the body, not
+from a header. A service that signs anything but the body alone, such as a timestamp and the body together, or that sends its
+signature in base64, does not fit.
 
 Start from a delivery of the service, from its delivery log if it has one or its documentation's samples, and write the connection
 from it. For each thing the connection needs, find the pointer to it in the delivery. With the invented delivery of
