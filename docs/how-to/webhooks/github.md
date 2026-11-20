@@ -18,7 +18,8 @@ GitHub as a machine user (a GitHub account kept for the agent), with that user's
 ## What you end with
 
 - A pull request that is opened, reopened, pushed to or marked ready for review, and is not a draft, starts a review: a turn of the
-  session `pr-<number>`, in which the agent reads the pull request at its head commit and posts one review, of the event `COMMENT`.
+  session `pr-<number>`, in which the agent reads the pull request at its head commit and posts one review: of the event `REQUEST_CHANGES` when it finds a defect that must be
+  fixed before merging, and `COMMENT` otherwise. It never approves, and it cannot dismiss its own request (see the warning below).
 - A comment on that pull request that mentions the machine user (`@<login>`) starts a reply: a turn of the same session, so the agent
   can see the review it posted. A comment in the pull request's conversation was run (with the App); a comment on a line of its diff
   (`pull_request_review_comment`) was *not run*.
@@ -49,12 +50,17 @@ and its rights are that user's. Sign it up, then give it the **Read** role on th
 !!! warning "Not Write: its approval would count"
 
     The model can be talked into an `APPROVE` by the text of the pull request it reviews: only `agent.yaml`'s instructions hold
-    the review to `COMMENT`. GitHub's [repository roles](https://docs.github.com/en/organizations/managing-user-access-to-your-organizations-repositories/managing-repository-roles/repository-roles-for-an-organization)
+    the review to `REQUEST_CHANGES` or `COMMENT`. GitHub's [repository roles](https://docs.github.com/en/organizations/managing-user-access-to-your-organizations-repositories/managing-repository-roles/repository-roles-for-an-organization)
     let every role, Read included, submit reviews on pull requests, and only Write, Maintain and Admin approve or
     request changes on a pull request with required reviews; its page on
     [protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
     says required approvals come from people with write permissions or from a code owner. So with Write, the machine user's
     `APPROVE` counts toward a branch protection rule's required approvals, and a pull request could get itself approved.
+
+    Its `REQUEST_CHANGES` is the other side. The agent cannot dismiss one, so a request stands until someone dismisses it, even
+    after a push that the agent reviews again with a `COMMENT` (GitHub keeps the request as the agent's verdict: GitHub's
+    behaviour, *not run*). With Write, a standing request blocks a merge under a rule that requires reviews; with Read, by the
+    roles page above, it should not (*not run*).
 
     Known and not: the roles table has no row for commenting on a pull request, and this repository has not checked that a
     fine-grained token's **Pull requests: Read and write** lets a Read user post a review or a comment through the API (REST or
@@ -170,12 +176,12 @@ The recipe's prompts ask the agent to do these on GitHub, as the machine user, w
 |---|---|---|---|
 | Read a pull request: its title, description, head and base commits | Both triggers | `pull_request_read`, method `get` | `GET /repos/{owner}/{repo}/pulls/{number}` |
 | List its changed files, with their patches, and read a file at a commit | The review | `pull_request_read`, method `get_files` or `get_diff`; `get_file_contents` with `ref` | `GET /repos/{owner}/{repo}/pulls/{number}/files`, `GET /repos/{owner}/{repo}/contents/{path}?ref={sha}` |
-| Post one review on the pull request | The review | `pull_request_review_write`, method `create`, event `COMMENT` | GraphQL's `addPullRequestReview`, with the event `COMMENT` |
+| Post one review on the pull request | The review | `pull_request_review_write`, method `create`, event `REQUEST_CHANGES` or `COMMENT` | GraphQL's `addPullRequestReview`, with that event |
 | Read the comments, and post a comment on the pull request | The reply | `pull_request_read`, method `get_comments`; `add_issue_comment` | `GET /repos/{owner}/{repo}/issues/{number}/comments`, `POST /repos/{owner}/{repo}/issues/{number}/comments` |
 
 The last column is what the repository's tests see the pinned github-mcp-server send to a fake GitHub for these calls (`get_diff`
 aside, which they do not make), not what live GitHub was sent. Only the instructions in `agent.yaml`
-hold the review to `COMMENT`: `pull_request_review_write` can also approve or request changes, and `allowed_tools` bounds the tools'
+hold the review to `REQUEST_CHANGES` or `COMMENT`: `pull_request_review_write` can also approve, and `allowed_tools` bounds the tools'
 names, not their arguments. The agent README's
 [What the agent can and cannot do](https://github.com/agentkourier/agent-kourier/blob/main/examples/recipes/webhook-github/agent/README.md#what-the-agent-can-and-cannot-do)
 says what that leaves open.
