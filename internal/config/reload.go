@@ -53,6 +53,12 @@ type ReloaderConfig struct {
 	// OnReport is called with the Report of each snapshot that is published, including a recheck that finds nothing new,
 	// for a metric. It runs on the reloading goroutine, so it must not block.
 	OnReport func(Report)
+	// Accept, if set, is asked of each snapshot a reload has built, with the snapshot it would replace (nil for the first load), before it
+	// is published. An error refuses it as a problem of the config is refused: the last good snapshot stays, the status is stale and the
+	// failure counted, the error is logged and OnError told, and the first load fails Start. It is for a rule between one config and the
+	// next that Resolve, which sees one, cannot hold: the files route keeps the ChatConnection it started with. It runs on the reloading
+	// goroutine, so it must not block.
+	Accept func(current, next *Snapshot) error
 }
 
 // Status describes the health of a Reloader.
@@ -78,6 +84,7 @@ type Reloader struct {
 	onError      func(error)
 	perObject    bool
 	onReport     func(Report)
+	accept       func(current, next *Snapshot) error
 
 	snap   atomic.Pointer[published] // the Snapshot with what Revision needs, replaced as one
 	status atomic.Pointer[Status]
@@ -112,6 +119,7 @@ func NewReloader(cfg ReloaderConfig) *Reloader {
 		onError:      cfg.OnError,
 		perObject:    cfg.PerObject,
 		onReport:     cfg.OnReport,
+		accept:       cfg.Accept,
 	}
 	r.status.Store(&Status{})
 	return r
@@ -173,8 +181,9 @@ func (r *Reloader) Start(ctx context.Context) error {
 func (r *Reloader) Wait() { r.wg.Wait() }
 
 // reload rebuilds the snapshot if the source changed since the last attempt, or if force is
-// set, and publishes it. A failed rebuild is recorded and logged and returned, and leaves the
-// last good snapshot in place. A rebuild cut short by ctx is returned but not recorded.
+// set, and publishes it if Accept, when set, takes it. A failed rebuild, and one that Accept refuses,
+// is recorded and logged and returned, and leaves the last good snapshot in place. A rebuild cut
+// short by ctx is returned but not recorded.
 func (r *Reloader) reload(ctx context.Context, force bool) error {
 	if !force {
 		if r.source.Fingerprint(ctx) == r.lastFingerprint {
@@ -185,6 +194,9 @@ func (r *Reloader) reload(ctx context.Context, force bool) error {
 	if err != nil && (ctx.Err() != nil || errors.Is(err, errConfigMoving)) {
 		r.log.Info("config reload interrupted", "error", err)
 		return err
+	}
+	if err == nil && r.accept != nil {
+		err = r.accept(r.Current(), pub.snap)
 	}
 	changed := fp != r.lastFingerprint
 	r.lastFingerprint, r.lastAttempt = fp, time.Now()

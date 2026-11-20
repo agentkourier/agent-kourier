@@ -162,8 +162,8 @@ const (
 // word; a team connection restarts on such an edit instead (its fingerprint). A spec.webhook that differs is one WARN that names the
 // connection, said again only when it differs in another way, and one that is back to the running spec is one INFO, so that the last line
 // of the connection is not a WARN that no longer holds. Both routes reach here: on the files the chart rolls the pod on such an edit, unless
-// its ConfigMap is not the chart's or rolling is turned off. A snapshot without the own connection (on the files, a directory whose one
-// connection was renamed) has nothing to compare. No Secret value is read or logged.
+// its ConfigMap is not the chart's or rolling is turned off. A snapshot without the own connection has nothing to compare (on the files a
+// reload that renames it is refused: keepStartedConnection). No Secret value is read or logged.
 func (s *supervisor) checkOwnWebhook(ctx context.Context, snap *config.Snapshot) {
 	if s.own == nil || s.own.Platform != v1alpha1.PlatformWebhook || snap == nil {
 		return

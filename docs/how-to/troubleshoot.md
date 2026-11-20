@@ -168,6 +168,9 @@ it cannot use. A restart fails the same way. The text after `the broker cannot b
 - `v1 serves exactly one ChatConnection, and the config has` a count other than 1: this is the files route
   (`config.source: files`), whose directory must hold exactly one. Keep exactly one entry under `config.chatConnections`. With
   `config.source: crds` a cluster may hold many, and the broker serves its own, if it has one, and those of the namespaces it admits, so this message does not occur.
+  A broker that is running does not exit for it: a reload whose directory holds other than the ChatConnection it started with is refused,
+  and the log says `config reload failed; keeping the last good snapshot` with `the directory holds the ChatConnections [...], and the files route serves the ChatConnection it started with, ...`
+  ([Which ChatConnections a broker serves](../explanation/config-routes.md#which-chatconnections-a-broker-serves)).
 - `ChatConnection agent-kourier/slack was not found: AGENTKOURIER_CHAT_CONNECTION names the one connection this broker serves, and it must exist`:
   the custom resource route, with an own connection. The ChatConnection that `config.chatConnection` names, the broker's own, is not in the cluster. Apply it, or name the one that exists. The pod
   restarts until it does, and starts at the next restart after it exists. `ChatConnection agent-kourier/slack is invalid` says why instead, in the

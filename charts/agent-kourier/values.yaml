@@ -156,6 +156,8 @@ config:
   # Roll the pod when the rendered ConfigMap changes. Agent Kourier reloads its files in place, and follows a Secret that a
   # reload adds, in any namespace its ServiceAccount may list and watch it in; a Secret it may not read fails that reload,
   # and the last good config stays. Has no effect with existingConfigMap, and none with source crds, which renders no ConfigMap.
+  # Without the roll (rollOnChange false, or existingConfigMap), a reload that renames the ChatConnection or adds a second is refused,
+  # and the last good config stays until the pod restarts.
   rollOnChange: true
 
 # The CustomResourceDefinitions of Binding, AgentBackend and ChatConnection (group agentkourier.dev), which config.source crds reads. They are

@@ -160,8 +160,9 @@ What a service does with a `503` is its own. Their documentation, read on 2026-1
     namespace, and how a team grants its own Secrets with a Role
     ([step 2](team-slack-app.md#2-the-team-makes-the-secret-the-grant-and-the-connection)). A webhook connection can be the broker's
     own instead (`config.chatConnection` and `config.chatConnectionSecret`), which is the only way on the ConfigMap route: there the
-    broker runs exactly one ChatConnection. The broker builds the platform of its own connection when it starts and when a replica
-    takes the lead, so an edit to its `spec.webhook` applies when Agent Kourier restarts, and until then the leader logs, once for
+    broker runs exactly one ChatConnection, and refuses a reload that renames it or adds another. The broker builds the platform of
+    its own connection when it starts and when a replica takes the lead, so an edit to its `spec.webhook` applies when Agent Kourier
+    restarts, and until then the leader logs, once for
     each edit of `spec.webhook` it reads that leaves the spec other than the one the connection runs on, a WARN with the
     connection in its `connection` attribute:
     `chat connection: its spec.webhook was edited, and the running connection still uses the spec.webhook it started with; a restart of the broker applies the edit`;
