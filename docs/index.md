@@ -1,8 +1,8 @@
 ---
 description: >-
   Write the agent, not the chat integration. Agent Kourier connects streaming A2A agents to team chat and handles
-  threads, streamed replies, questions, alert investigations, restarts and failover. Slack today, and Microsoft
-  Teams in the release after 0.5.0; more platforms planned.
+  threads, streamed replies, questions, alert investigations, restarts and failover. Slack today; Microsoft Teams,
+  and webhooks from GitHub, Jira, Bitbucket and Linear, in 0.6.0 or later as experiments.
 hide:
   - navigation
   - toc
@@ -20,7 +20,9 @@ hide:
 
 <p class="ak-hero__pitch">A Binding connects a chat channel to an agent that serves streaming A2A. Agent Kourier
 handles the chat side: a session per thread, streamed replies, questions to people, investigations started by alerts,
-and recovery after a restart or failover. Slack is supported today. Microsoft Teams (experimental) is merged and not in 0.5.0, and other chat platforms are planned.</p>
+and recovery after a restart or failover. Slack is supported today. New in 0.6.0, both experimental: Microsoft Teams as a
+second chat platform, and webhooks from GitHub, Jira Cloud, Bitbucket Cloud or Linear that start a session of your agent,
+which answers on that service with its own tools.</p>
 
 <div class="ak-hero__actions">
 <a class="md-button md-button--primary" href="tutorials/first-agent-in-slack/">Try it in a kind sandbox</a>
@@ -32,6 +34,14 @@ and recovery after a restart or failover. Slack is supported today. Microsoft Te
 <div class="ak-strip__group">
 <p class="ak-strip__label">Chat</p>
 <span class="ak-strip__name">Slack</span>
+<span class="ak-strip__name">Microsoft Teams <small>(experimental)</small></span>
+</div>
+<div class="ak-strip__group">
+<p class="ak-strip__label">Events <small>(experimental)</small></p>
+<span class="ak-strip__name">GitHub</span>
+<span class="ak-strip__name">Jira</span>
+<span class="ak-strip__name">Bitbucket</span>
+<span class="ak-strip__name">Linear</span>
 </div>
 <div class="ak-strip__group">
 <p class="ak-strip__label">Agents</p>
@@ -44,7 +54,8 @@ and recovery after a restart or failover. Slack is supported today. Microsoft Te
 !!! note "Status: v0.5.0"
     The current release is `0.5.0`: install the published chart and image with [Install with Helm](how-to/install-with-helm.md).
     The `v1alpha1` resource format can change before 1.0. The [release notes](release-notes.md) say what changed in 0.5.0, in which a Slack connection can take its events over HTTP (experimental) on a chat listener that only the leader serves.
-    Not in 0.5.0: Microsoft Teams ([Configure Microsoft Teams](how-to/configure-teams.md)).
+    New in 0.6.0, both experimental: Microsoft Teams ([Configure Microsoft Teams](how-to/configure-teams.md)) and webhooks
+    ([Start agents from webhooks](how-to/receive-webhooks.md)). 0.5.x refuses either.
 
 ## What Agent Kourier handles
 
@@ -52,7 +63,8 @@ Without a broker, every agent that talks to chat needs its own code for threads,
 alerts. Agent Kourier does that work once for every agent you bind. It keeps a session per thread, queues replies that
 arrive while the agent works, streams the answer into one message, posts the agent's questions in the thread, recovers
 each conversation after a restart, and holds the thread while a suspended agent is not running. The agent keeps its
-tools and task logic.
+tools and task logic. A webhook connection (experimental, 0.6.0 or later) starts sessions from another service's signed
+events instead of chat messages, and posts nothing: the agent answers on that service with its own tools.
 
 The platform team runs Agent Kourier and owns the agent backends and the broker's own chat app. Each application team connects its
 own agent to its own channel with a namespaced Binding, committed next to the agent's manifests, and with custom resources a team
@@ -97,6 +109,17 @@ whose namespace the platform admits can bring its own chat app as well ([Let a t
 
     [:octicons-arrow-right-24: Architecture](explanation/architecture.md)
 
+-   :material-new-box:{ .lg } **Microsoft Teams and webhooks**
+
+    ---
+
+    New in 0.6.0, both experimental. Bind an agent to a Teams channel, with Alertmanager's alerts read from
+    it. Or let a signed webhook from GitHub, Jira Cloud, Bitbucket Cloud or Linear start a session for each pull request
+    or issue, where the agent answers on the service itself.
+
+    [:octicons-arrow-right-24: Configure Microsoft Teams](how-to/configure-teams.md) ·
+    [Start agents from webhooks](how-to/receive-webhooks.md)
+
 </div>
 
 ## A thread is a session
@@ -129,6 +152,6 @@ previous revision.</span>
 Agent Kourier carries them.</p>
 
 A repeat of the same alert attaches to its thread, and its resolve posts a note there. Agent Kourier reads the alert
-your alerting tool already posts to Slack, so your alerts arrive as before, whether or not Agent Kourier is running.
+your alerting tool already posts to the channel, on Slack or Teams, so your alerts arrive as before, whether or not Agent Kourier is running.
 The docs have a [worked trigger for Alertmanager](how-to/investigate-alertmanager-alerts.md);
 [another tool's bot](how-to/any-bot-trigger.md) needs a trigger of its own.

@@ -1,7 +1,7 @@
 # Chat triggers
 
-This page lists what a message in a bound channel does, the fields of a `botMessage` trigger and of a `personMessage`
-trigger, and the decisions, notes and limits of a trigger's threads. The fields' types are in the
+This page lists what a message in a bound channel does, the fields of a `botMessage` trigger, of a `personMessage`
+trigger and of a `webhookEvent` trigger, and the decisions, notes and limits of a trigger's threads. The fields' types are in the
 [Binding reference](binding.md#trigger).
 
 ## What a message does
@@ -29,7 +29,9 @@ These are the defaults, which a Binding with no `chat.triggers` gets.
   mention, in or out of a thread.
 - Triggers are tried in order, and the first that matches handles the message. A trigger's index in the list names it
   in logs and metrics.
-- v1 has three types: `mention`, `botMessage` and `personMessage`. A `mention` trigger takes no other field.
+- v1 has four types: `mention`, `botMessage` and `personMessage`, which Slack and Microsoft Teams connections take, and
+  `webhookEvent`, which a webhook connection takes and no other ([A webhook event](#a-webhook-event)). A `mention` trigger
+  takes no other field. A Binding of a webhook connection lists `webhookEvent` triggers alone.
 - Whether a reply in an owned thread needs a mention is `chat.threadReplies`, not a trigger.
 
 ## A bot's mention
@@ -115,7 +117,7 @@ on each regex, is in [Investigate Alertmanager alerts](../how-to/investigate-ale
 
 | Field | Meaning |
 |---|---|
-| `from.id` | The one sender whose messages the trigger accepts, by the platform's ID for it (Slack: the bot ID, `B...`), never by display name. Agent Kourier's own messages are never handed on, even if a trigger names its ID; that mistake is logged once, at warn. |
+| `from.id` | The one sender whose messages the trigger accepts, by the platform's ID for it (Slack: the bot ID, `B...`; Microsoft Teams: the Microsoft Entra application ID of the app that posts, a GUID in lowercase), never by display name. Agent Kourier's own messages are never handed on, even if a trigger names its ID; that mistake is logged once, at warn. |
 | `from.kind` | What kind of sender `from.id` names. `bot` is the only value, and the default. A message matches only when its sender's ID and kind both equal `from.id` and `from.kind`; on Slack every bot sender is of kind `bot`. |
 | `match` | Message field to regex. Every entry must match. |
 | `exclude` | Message field to regex. No entry may match. |
@@ -137,6 +139,10 @@ heading's URL, the main text, the small print and the plain-text summary of the 
 adapter flattens its native message into them. The Slack adapter reads the message's first legacy attachment: its
 `title` is `title`, its `title_link` is `link`, its `text` is `body`, its `footer` is `footer` and its `fallback` is
 `fallback`. All are raw, as delivered. Later attachments are not read. A field the message lacks is empty.
+On Microsoft Teams, where the broker reads another app's post through Microsoft Graph, `text` is the post's own text, which is
+empty for a post that is a card alone, and `body` is the text of its Adaptive Cards: each `TextBlock`'s text, each
+`RichTextBlock` as one line, and each fact of a `FactSet` as a line `title: value`, in the card's order. `title`, `link`,
+`footer` and `fallback` are empty there ([Alerts on Microsoft Teams](platforms.md#alerts-on-microsoft-teams)).
 
 **Regexes** are RE2 (linear time), at most 512 bytes, and compile at load, as do the named groups and the template. A
 Binding that fails any of them is rejected. A regex is also held to the size of the program it compiles to: at most
@@ -188,6 +194,10 @@ The template sees:
 | `.Link` | The platform's permalink to the triggering message (Slack: the message permalink), built by Agent Kourier, never a field of the message. Empty when the platform makes none or cannot make one. |
 | `.Source` | The type of the trigger: `botMessage`, or `personMessage`. |
 
+A `webhookEvent` trigger's template reads `.Channel` and `.Fields` alone: `.Channel` is the event's channel, and `.Fields`
+the connection's `id` fields, by name. `.State`, `.Key`, `.Link` and `.Source` refuse the Binding
+([A webhook event](#a-webhook-event)).
+
 `.Fields`, `.State` and `.Key` come out of the sender's message, so each value the template reads is checked before it
 reaches the instruction part: the alert-name shape (ASCII letters, digits and `_.-:`, at most 128 bytes) for fields,
 state, channel and source, or for the channel the shape of a Microsoft Teams channel ID (`19:…@thread.tacv2` or
@@ -196,5 +206,45 @@ bytes for the link, each of whose `@` must be the one of a path segment that is 
 permalink has: an `@` anywhere else (the credentials, the query, the fragment) fails. A value that fails refuses the turn (`not_started`). A key that holds spaces, such as the
 Alertmanager example's, fails this check, so a template should read `.Fields` entries, not `.Key`.
 
+For a `webhookEvent` trigger the checks differ: `.Channel` must be a webhook channel (ASCII letters, digits, `.`, `_` and
+`-`, starting with a letter or a digit, with `/` between parts, at most 140 bytes), and each `.Fields` entry has the key's
+rule (the alert-name shape plus `/`, at most 128 bytes). A value that fails refuses the turn as above, with no note,
+since a webhook connection posts nothing.
+
 After the rendered template, the whole message follows, normalized and with its secrets redacted, inside a block
-labelled as untrusted data.
+labelled as untrusted data. For a webhook event the block holds the event's actor and each field of the connection that
+has a value, `text` and `id` fields alike, in the connection's order; a field that does not fit is left out whole, and the
+block's last line names it ([Limits](limits.md#write-a-prompt-template)).
+
+## A webhook event
+
+A `webhookEvent` trigger starts a turn on an event of a webhook ChatConnection (`spec.platform: webhook`), which reads each
+delivery of a service into named fields ([Start agents from webhooks](../how-to/receive-webhooks.md)). The fields are the
+connection's (`spec.webhook.fields`), not the Binding's, so the trigger is shorter than a `botMessage` trigger:
+
+```yaml
+spec:
+  chat:
+    connectionRef: {name: github}
+    channel: acme/widgets        # the event's channel, exactly, letter case included
+    output: none                 # required: Agent Kourier posts nothing on a webhook connection
+    triggers:
+      - type: webhookEvent
+        match: {event: '^pull_request$', action: '^(opened|synchronize)$'}
+        exclude: {draft: '^true$'}
+        promptTemplate: |
+          Review pull request #{{ .Fields.number }} in {{ .Channel }} with your GitHub tools.
+        limits: {rateLimit: {maxRuns: 10, per: 1h, maxConcurrent: 1}, maxRunsPerDay: 40}
+```
+
+| | |
+|---|---|
+| Fields | `match` and `exclude` map the names of the connection's fields to regexes, at most 6 entries each, as for a `botMessage` trigger: every `match` regex must find a match and no `exclude` regex may. A field that did not resolve reads as empty, and an `id` field marked invalid makes the trigger miss. `promptTemplate` and `limits`, both `rateLimit` and `maxRunsPerDay`, are required. `from`, `extract` and `thread` are refused: the connection reads the actor and the thread. |
+| The template | Reads `.Channel` and `.Fields.<name>` of the connection's `id` fields, and nothing else. A template that reads `.State`, `.Key`, `.Link` or `.Source` is refused by the broker's validation; one that reads a `text` field, or a name the connection does not have, is refused when the broker reads the Binding with its connection (`UnsupportedOnPlatform`), and so is a `match` or `exclude` key that is not a field of the connection. |
+| Where the turn goes | The session of the event's thread, which the connection derives (`spec.webhook.thread`): each event of one thread that a trigger matches is a turn of the same session. |
+| Redelivery | The event's ID is the SHA-256 of its body. A body whose start was decided (a turn started, or the start was refused) is a duplicate while the broker remembers it, and starts nothing. A body that no trigger matched, or that a limit stopped, is not remembered, and is decided again when it comes again. |
+| A limit is reached | No turn, and nothing posted: the delivery is still answered `200`, and the broker logs the stop at WARN with the delivery ID. The event is lost unless it is delivered again. |
+| Output | `chat.output: none` alone. The agent posts on the service with its own tools; questions and tool approvals are refused on the platform. |
+
+Triggers are tried in order, and the first that matches takes the event. A channel of a connection belongs to one Binding
+at most, so put all of a channel's triggers in one Binding.

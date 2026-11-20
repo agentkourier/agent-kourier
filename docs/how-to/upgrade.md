@@ -1024,7 +1024,7 @@ What changes for every install:
   them with the release when `crds.install` is true, or unset on `config.source: crds`. If you apply the CRDs yourself, apply
   `charts/agent-kourier/files/crds` again. Until then the API server refuses a webhook ChatConnection, and a broker on custom resources
   logs at WARN `the schema hash of a CRD is not the one this broker was built with` and sets `agentkourier_crd_schema_state{state="mismatch"}`
-  to 1 for the two CRDs.
+  to 1 for the two CRDs. The same apply takes the changes for Microsoft Teams ([below](#upgrade-to-the-release-that-takes-microsoft-teams-chatconnections)).
 - **`agentkourier_chat_listener_requests_total` has two new labels**, `platform` and `connection` ([Metrics](../reference/metrics.md)). A
   rule that sums the counter, or selects by `outcome` alone, reads as before. A rule or a recording rule that keeps every label gets more
   series: one for each platform and connection the leader serves, and `unknown`.
@@ -1045,18 +1045,19 @@ What changes for every install:
 ## Upgrade to the release that takes Microsoft Teams ChatConnections
 
 A ChatConnection may now say `spec.platform: teams`, with a `spec.teams` block ([ChatConnection](../reference/chatconnection.md)), and
-the schema and the broker's load take Microsoft Teams' chat IDs beside Slack's. The broker runs a teams connection in `http` mode, on
-its chat listener, or in `socket` mode, with what [What each platform supports](../reference/platforms.md) says it does not do yet. What changes:
+the schema and the broker's load take Microsoft Teams' chat IDs beside Slack's. The broker runs a Microsoft Teams connection in `http` mode, on
+its chat listener, or in `socket` mode; [What each platform supports](../reference/platforms.md) lists what it does not do yet. The platform
+is experimental. What changes:
 
-- **A teams ChatConnection runs in `http` or `socket` mode.** `spec.teams.tenantID` and `spec.teams.appID` are required, each a GUID in
+- **A Teams ChatConnection runs in `http` or `socket` mode.** `spec.teams.tenantID` and `spec.teams.appID` are required, each a GUID in
   lowercase hex; `spec.teams.mode` is `http` or `socket`, and `http` when left out; `spec.teams.notificationURL` is optional, an `https`
   URL whose path is the connection's own route, `/chat/teams/<namespace>/<name>`. Its Secret needs the key `clientSecret`, in either mode.
-  `spec.teams` on a Slack connection, and `spec.slack` on a teams one, are refused. A teams ChatConnection in `http` mode needs the chat listener
+  `spec.teams` on a Slack connection, and `spec.slack` on a Teams one, are refused. A Teams ChatConnection in `http` mode needs the chat listener
   (`AGENTKOURIER_CHAT_LISTEN`); with none it is not run: as the broker's own connection it stops the broker's start with a wiring error
   that says why, and as a team's connection it is not started, and the broker logs why. In `socket` mode it needs no chat listener: the
   leader opens a WebSocket to Microsoft Teams, which Microsoft calls a public preview.
   Nothing changes for a Slack connection.
-- **Other apps' posts come through Microsoft Graph.** Microsoft Teams sends a bot no post of another app, so a teams connection reads
+- **Other apps' posts come through Microsoft Graph.** Microsoft Teams sends a bot no post of another app, so a Teams connection reads
   the bound channels' posts from Microsoft Graph, in either mode: by Graph's notifications at `spec.teams.notificationURL` when it is
   set, which needs the chat listener and a public HTTPS route to it, and by polling the channels when it is not
   ([Alerts on Microsoft Teams](../reference/platforms.md#alerts-on-microsoft-teams)). That is how an alert that Alertmanager posts
@@ -1069,32 +1070,32 @@ its chat listener, or in `socket` mode, with what [What each platform supports](
   keeps Slack's shape and its 32 bytes. The messages of an ID with neither platform's shape now name both shapes, for example
   `spec.chat.channel: invalid channel "general": must be a channel ID such as C0123456789 (Slack) or 19:…@thread.tacv2 (Microsoft Teams), not a name`.
   A script that matches the earlier message needs the new one.
-- **The broker holds each Binding to its own platform.** A Microsoft Teams ID on a Slack connection, a Slack ID on a teams connection,
+- **The broker holds each Binding to its own platform.** A Microsoft Teams ID on a Slack connection, a Slack ID on a Teams connection,
   and a Slack channel or sender ID of 33 to 140 bytes (36 for a sender), which the schema now takes, are refused when the broker reads the
-  Binding with its ChatConnection, with `InvalidPlatformID`; `approverGroups` on a teams connection is refused with
+  Binding with its ChatConnection, with `InvalidPlatformID`; `approverGroups` on a Teams connection is refused with
   `UnsupportedOnPlatform` ([What each platform supports](../reference/platforms.md)). A Binding that 0.5.0 took has Slack's shapes within
   Slack's caps, and loads as it did. `agent-kourier dry-run` holds a Binding to Slack's shapes and caps, as before.
 - **The Binding and ChatConnection CRDs change**, and their schema hashes with them: the chart applies them with the release when
   `crds.install` is true, or unset on `config.source: crds`; if you apply the CRDs yourself, apply `charts/agent-kourier/files/crds` again.
   [Limits](../reference/limits.md#write-a-binding-an-agentbackend-or-a-chatconnection) has the new caps.
 - **A database migration, 0031, runs at the first start.** On SQLite and on Postgres it adds the table `teams_conversations`, which
-  keeps, for each channel of a teams connection, where to post to it and which team it is in, so that a restart or a change of leader
+  keeps, for each channel of a Teams connection, where to post to it and which team it is in, so that a restart or a change of leader
   posts where the channel's last activity said ([Stored data](../reference/stored-data.md)). The leader writes it from the activities of a
-  teams connection, and on custom resources deletes a connection's rows when its ChatConnection is deleted. It only adds a table. A broker of
+  Teams connection, and on custom resources deletes a connection's rows when its ChatConnection is deleted. It only adds a table. A broker of
   an earlier release, after a rollback, does not read the table or delete from it, and logs at start that the database schema is newer than
   its build.
 - **A database migration, 0032, runs at the first start.** On SQLite and on Postgres it adds the table `teams_poll_positions`, which keeps
-  where the polls of each channel of a teams connection with no `notificationURL` stand, so that a restart or a change of leader resumes
+  where the polls of each channel of a Teams connection with no `notificationURL` stand, so that a restart or a change of leader resumes
   them ([Stored data](../reference/stored-data.md)). It only adds a table. A broker of an earlier release, after a rollback, does not read
   it or delete from it, and logs at start that the database schema is newer than its build.
 
 ### Roll back from the release that takes Microsoft Teams ChatConnections
 
-**Delete every teams ChatConnection, and every Binding that names a Microsoft Teams ID, before you roll back.** A broker of an earlier
+**Delete every Teams ChatConnection, and every Binding that names a Microsoft Teams ID, before you roll back.** A broker of an earlier
 release refuses `spec.platform: teams` and a Microsoft Teams ID as invalid, and on the ConfigMap route `spec.teams` as an unknown field:
 there the config does not load (exit code 2). On custom resources a Binding with a Microsoft Teams ID is refused with `InvalidSpec` and
-not served; a teams ChatConnection, which has no status, is refused when the broker reads it: as the broker's own connection it stops the
+not served; a Teams ChatConnection, which has no status, is refused when the broker reads it: as the broker's own connection it stops the
 start (exit code 2), and as a team's it is not served and each of its Bindings says `ConnectionRejected`. The CRDs of an earlier release do not
 have `spec.teams` and hold each chat ID to Slack's shape and caps, so the API server refuses a new write of such an object. No other stored
-object depends on this release. On custom resources, a teams ChatConnection deleted while this release still runs also takes its rows of
+object depends on this release. On custom resources, a Teams ChatConnection deleted while this release still runs also takes its rows of
 `teams_conversations` and `teams_poll_positions` with it; on the ConfigMap route, and for one deleted after the rollback, the rows stay, and an earlier release does not read them.

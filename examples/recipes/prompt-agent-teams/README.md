@@ -9,8 +9,8 @@ the Agent Kourier side for Teams (a ChatConnection, a Binding and an AgentBacken
 evals. [Configure Microsoft Teams](../../../docs/how-to/configure-teams.md) has every step on the Microsoft side, and
 the reasons behind each setting here.
 
-Microsoft Teams support is experimental. Parts of it were checked on a test tenant in November 2026, and the how-to says
-which.
+Microsoft Teams support is experimental, and needs Agent Kourier 0.6.0 or later. Parts of it were checked on a test tenant
+in 2026-11, and the how-to says which.
 
 ## What it does
 
@@ -47,8 +47,7 @@ your message while the agent works ([What Microsoft Teams shows while the agent 
   its Slack resources are not used here.
 - **A Microsoft 365 tenant**, a bot registered in it, and the right to upload a custom app to a team:
   [Configure Microsoft Teams](../../../docs/how-to/configure-teams.md).
-- **Agent Kourier from a chart release that runs Microsoft Teams connections**, on Kubernetes 1.33 or later. The 0.5.0
-  chart does not: its broker refuses `platform: teams`.
+- **Agent Kourier 0.6.0 or later**, on Kubernetes 1.33 or later. The 0.5.x CRDs and broker refuse `platform: teams`.
 - **In `http` mode, the default:** a host name that Microsoft Teams can reach over HTTPS and that routes to the chat
   listener, as the how-to's step for the chart values says.
 - **For the alerts:** Alertmanager with an `msteamsv2` receiver (Alertmanager 0.28.0 or later, by Alertmanager's
@@ -81,7 +80,7 @@ cd examples/recipes/prompt-agent-teams/teams-app
 zip ../agent-kourier-teams.zip manifest.json color.png outline.png
 ```
 
-Upload the zip to the team of the channel. [Install the app in a team](../../../docs/how-to/configure-teams.md#4-install-the-app-in-a-team)
+Upload the zip to the team of the channel. [Build and install the app package](../../../docs/how-to/configure-teams.md#5-build-and-install-the-app-package)
 says how, and what the install grants.
 
 ### 2. Make the Secret
@@ -98,7 +97,7 @@ unset TEAMS_CLIENT_SECRET
 
 1. In `kourier/chatconnection.yaml`, replace `tenantID` and `appID` with your tenant's ID and the bot's application ID,
    in lowercase hex. In `kourier/binding.yaml`, replace `19:REPLACE-prompt-teams@thread.tacv2` with the channel's ID
-   ([Copy the channel ID](../../../docs/how-to/configure-teams.md#5-copy-the-channel-id)).
+   ([Copy the channel ID](../../../docs/how-to/configure-teams.md#7-copy-the-channel-id)).
 2. Install the chart to read them, with the chat listener open for `http` mode. These values replace the inline `config`
    of the values file in [Install with Helm](../../../docs/how-to/install-with-helm.md); the rest of that guide applies.
 
@@ -134,18 +133,19 @@ unset TEAMS_CLIENT_SECRET
    `crds: {install: false}` to the values. The CRDs belong to the first release, and Helm refuses a second release that
    renders them ([Install with Helm](../../../docs/how-to/install-with-helm.md)). The chart names every object of a
    release after the release, so the two do not collide, and each broker serves its own ChatConnection alone, since
-   neither sets a namespace list or selector. The messaging endpoint stays the same: its path is the ChatConnection's.
+   neither sets a namespace list or selector. Give it its own `chatListener.ingress.host` if the first release has a
+   chat Ingress; the endpoint's path is the ChatConnection's.
 
 3. Set the bot's messaging endpoint to `https://chat.example.com/chat/teams/agent-kourier/teams`
-   ([Point Teams at the broker](../../../docs/how-to/configure-teams.md#7-point-teams-at-the-broker)).
-4. Post in the channel, or mention the bot there. The Binding's `ChannelJoined` condition becomes `True` only after an
-   activity of the channel has told the broker the channel's team. Then:
+   ([Point Teams at the broker](../../../docs/how-to/configure-teams.md#4-point-teams-at-the-broker)).
+4. Mention the bot in the channel and ask a question that your agent's tools can answer: the answer comes in the thread.
+   The mention also tells the broker the channel's team, which the Binding's `ChannelJoined` condition needs. The broker
+   checked the Binding when it was applied, before any activity of the channel, so the condition reads `Unknown`
+   (`ChatUnavailable`) until the next check, 5 minutes later, give or take a tenth. Allow 6 minutes:
 
    ```sh
-   kubectl -n agent-kourier wait --for=condition=Ready akbinding/teams-prompt-chat --timeout=120s
+   kubectl -n agent-kourier wait --for=condition=Ready akbinding/teams-prompt-chat --timeout=6m
    ```
-
-Then mention the bot in the channel and ask a question that your agent's tools can answer.
 
 ### 4. Send alerts to the channel
 
@@ -177,7 +177,7 @@ to match, and the cases in `evals/triggers.yaml` with them.
 
 ## Limits
 
-- **An alert reaches the trigger late.** On a test tenant in November 2026, a card posted to a Workflows webhook was in
+- **An alert reaches the trigger late.** On a test tenant in 2026-11, a card posted to a Workflows webhook was in
   the channel about 12.6 seconds after the POST. Polling then reads a channel every 10 seconds; with a `notificationURL`,
   Graph notifies the leader of the post instead
   ([Alerts on Microsoft Teams](../../../docs/reference/platforms.md#alerts-on-microsoft-teams)).

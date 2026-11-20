@@ -6,16 +6,20 @@ conversation takes through the broker.
 Agent Kourier connects declarative messaging bindings to agents deployed with a chosen runtime. The runtime hosts and
 executes the agents. The agents own their tools and task logic. Agent Kourier owns the messaging connection,
 conversation lifecycle, and delivery state. An agent that exposes a supported streaming A2A endpoint can connect through
-a `Binding` without adding Slack event handlers or reply formatting to the agent.
+a `Binding` without adding Slack or Microsoft Teams event handlers or reply formatting to the agent. A webhook connection
+takes another service's signed webhooks instead, and posts nothing: the agent answers on that service with its own tools.
 
 ```mermaid
 flowchart LR
-    Slack["Slack channel<br/>People and alert messages"]
+    Chat["Slack or Microsoft Teams channel<br/>People and alert messages"]
+    Service["Another service<br/>GitHub, Jira Cloud, any signed JSON webhook"]
     AgentKourier["agent-kourier<br/>Bindings, sessions, delivery"]
     Agents["A2A agents<br/>kagent, Google AX, any streaming A2A agent"]
 
-    Slack <-->|Messages, answers| AgentKourier
+    Chat <-->|Messages, answers| AgentKourier
+    Service -->|Webhooks| AgentKourier
     AgentKourier <-->|A2A| Agents
+    Agents -.->|its own tools| Service
 ```
 
 ## The kagent path
@@ -122,8 +126,11 @@ manifests, operator, or deployment tooling handle that lifecycle.
 
 A turn crosses two protocols. Slack delivers events to Agent Kourier over a Socket Mode connection, or, in HTTP mode, as signed
 requests to its chat listener, and Agent Kourier
-writes to Slack through its Web API. Agent Kourier calls the agent over A2A and reads the reply as a stream. The first
-diagram follows one message in a chat thread; the second shows what happens when the agent pauses for an answer.
+writes to Slack through its Web API. Microsoft Teams sends its activities to the chat listener, or over the sockets of its
+`socket` mode, and Agent Kourier writes through the Bot Connector and reads other apps' posts through Microsoft Graph
+([What each platform supports](../reference/platforms.md)). Agent Kourier calls the agent over A2A and reads the reply as a
+stream. The diagrams below are drawn for Slack; a Microsoft Teams thread takes the same path through the session manager. The
+first follows one message in a chat thread; the second shows what happens when the agent pauses for an answer.
 
 ```mermaid
 sequenceDiagram
@@ -196,6 +203,31 @@ sequenceDiagram
 If the agent rejects the answer with a JSON-RPC internal error (`-32603`), Agent Kourier cancels the paused task and
 posts a notice in the thread.
 
+### A webhook event
+
+A webhook connection has no thread to write to. Its service sends each event to the chat listener, the connection checks it
+and reads it into named fields, a `webhookEvent` trigger of the Binding that names its channel decides whether it starts a
+turn, and the turn runs as any other. Nothing is posted: the agent acts on the service with its own tools
+([Start agents from webhooks](../how-to/receive-webhooks.md)).
+
+```mermaid
+sequenceDiagram
+    participant W as Service
+    participant C as Chat listener and webhook connection
+    participant T as Trigger intake
+    participant M as Session manager
+    participant G as Agent
+    W->>C: POST /chat/webhook/namespace/name, signed
+    C->>C: verify the signature on the raw bytes, then read the channel,<br/>the actor, the thread and the fields
+    C->>T: the event, unless it is the agent's own or cannot be mapped
+    T->>T: the Binding of the channel, its triggers in order, their limits
+    T->>M: Submit the turn to the session of the event's thread
+    C-->>W: 200 (or 401, 400, 503 with Retry-After)
+    M->>G: SendStreamingMessage as the Binding's identity
+    G->>W: comments, reviews, with its own tools and credential
+    G-->>M: final status
+```
+
 A question that takes a typed answer is answered by a reply in the thread instead of a button. The reply comes in as
 a message event and Submit queues it. A session waiting on the question reads the paused task and passes
 the reply to interactions, which check it as they check a press. A reply that is not taken as the answer stays queued
@@ -252,13 +284,15 @@ lifecycle (task, template, egress policy) stays with the operator. See the
 | Resource types | [`api/v1alpha1`](https://github.com/agentkourier/agent-kourier/tree/main/api/v1alpha1) |
 | Composition and shutdown | [`internal/broker`](https://github.com/agentkourier/agent-kourier/tree/main/internal/broker) |
 | Configuration and Secret resolution | [`internal/config`](https://github.com/agentkourier/agent-kourier/tree/main/internal/config) |
-| Messaging contracts and Slack adapter | [`internal/chat`](https://github.com/agentkourier/agent-kourier/tree/main/internal/chat) |
+| Messaging contracts | [`internal/chat`](https://github.com/agentkourier/agent-kourier/tree/main/internal/chat) |
+| Platform adapters: Slack, Microsoft Teams, webhooks | [`internal/chat/slack`](https://github.com/agentkourier/agent-kourier/tree/main/internal/chat/slack), [`internal/chat/teams`](https://github.com/agentkourier/agent-kourier/tree/main/internal/chat/teams), [`internal/chat/webhook`](https://github.com/agentkourier/agent-kourier/tree/main/internal/chat/webhook) |
+| The chat listener | [`internal/broker`](https://github.com/agentkourier/agent-kourier/tree/main/internal/broker) |
 | Message intake, triggers and their limits, and the dry run's replay | [`internal/trigger`](https://github.com/agentkourier/agent-kourier/tree/main/internal/trigger) |
 | Conversation execution and recovery | [`internal/session`](https://github.com/agentkourier/agent-kourier/tree/main/internal/session) |
 | A2A clients and backend behavior | [`internal/agent`](https://github.com/agentkourier/agent-kourier/tree/main/internal/agent), [`internal/dialect`](https://github.com/agentkourier/agent-kourier/tree/main/internal/dialect) |
 | Binding verification | [`internal/bindingcheck`](https://github.com/agentkourier/agent-kourier/tree/main/internal/bindingcheck), [`internal/broker`](https://github.com/agentkourier/agent-kourier/tree/main/internal/broker) |
 | Human interactions | [`internal/interact`](https://github.com/agentkourier/agent-kourier/tree/main/internal/interact) |
-| Output and durable delivery | [`internal/render/live`](https://github.com/agentkourier/agent-kourier/tree/main/internal/render/live), [`internal/outbox`](https://github.com/agentkourier/agent-kourier/tree/main/internal/outbox) |
+| Prompts, output and durable delivery | [`internal/render`](https://github.com/agentkourier/agent-kourier/tree/main/internal/render), [`internal/render/live`](https://github.com/agentkourier/agent-kourier/tree/main/internal/render/live), [`internal/outbox`](https://github.com/agentkourier/agent-kourier/tree/main/internal/outbox) |
 | Persistence and observations | [`internal/store/sqlite`](https://github.com/agentkourier/agent-kourier/tree/main/internal/store/sqlite), [`internal/store/postgres`](https://github.com/agentkourier/agent-kourier/tree/main/internal/store/postgres), [`internal/telemetry`](https://github.com/agentkourier/agent-kourier/tree/main/internal/telemetry), [`internal/audit`](https://github.com/agentkourier/agent-kourier/tree/main/internal/audit) |
 
 See [Logs and traces](../reference/logs-and-traces.md) for the trace boundaries.

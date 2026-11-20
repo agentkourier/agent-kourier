@@ -2,7 +2,10 @@
 
 A recipe is a worked example of one use case: the Agent Kourier resources that connect a Slack or Microsoft Teams channel,
 or a service's signed webhooks, to an agent, the agent they talk to (for three of the Slack recipes; `prompt-agent-teams`
-reuses `prompt-agent`'s), and checks that show the mapping does what the recipe says.
+reuses `prompt-agent`'s), and checks that show the mapping does what the recipe says. There are nine: the five chat
+recipes and the four webhook recipes below. [`echo-agent`](echo-agent/agent/README.md) is not one of them: it is a plain
+A2A agent with no model, with Agent Kourier files for it, which other guides use to try a connection, and it has no
+recipe README of its own.
 
 **A new team should start with [`docs-agent`](docs-agent/README.md).** It needs a model key and any cluster, and it
 shows the whole path: a mention in a channel, an agent, an answer in the thread. **A team that wants its own agent
@@ -15,14 +18,16 @@ from a prompt, a model and a few MCP tools, without writing one, should start wi
 |---|---|---|---|
 | [`docs-agent`](docs-agent/README.md) | An `@mention` in a help channel. A mention trigger, thread replies and feedback buttons. | A model provider's key, Docker to build the image, and Slack. The agent is an ADK (Agent Development Kit) program that speaks plain A2A (the Agent2Agent protocol) and searches a Markdown corpus through an MCP tool, citing the pages it used. | Any Kubernetes cluster that can reach the model provider. |
 | [`prompt-agent`](prompt-agent/README.md) | An `@mention` in a channel. A mention trigger, thread replies and the agent's questions. | A model provider's key, an MCP server with the tools the agent may call, and Slack. The agent is defined in one YAML file in Pydantic AI's agent spec format (a prompt, a model, the MCP tools it may call), behind a small Python A2A server that refuses anything else; switching provider is a change to the `model:` line. | Any Kubernetes cluster that can reach the model provider and the MCP server. |
-| [`prompt-agent-teams`](prompt-agent-teams/README.md) | An `@mention` in a Microsoft Teams channel, or an Alertmanager alert that a Workflows webhook posts there. A mention trigger, and a `botMessage` trigger for the card of Alertmanager's `msteamsv2` receiver, one thread per alert group. Experimental. | The `prompt-agent` recipe's agent, a bot registered in your Microsoft Entra tenant with its Teams app installed in the team, and, for alerts, a Workflows flow and Alertmanager 0.28.0 or later. | Any Kubernetes cluster that runs `prompt-agent`, with a chart release later than 0.4.0. |
+| [`prompt-agent-teams`](prompt-agent-teams/README.md) | An `@mention` in a Microsoft Teams channel, or an Alertmanager alert that a Workflows webhook posts there. A mention trigger, and a `botMessage` trigger for the card of Alertmanager's `msteamsv2` receiver, one thread per alert group. Experimental. | The `prompt-agent` recipe's agent, a bot registered in your Microsoft Entra tenant with its Teams app installed in the team, and, for alerts, a Workflows flow and Alertmanager 0.28.0 or later. | Any Kubernetes cluster that runs `prompt-agent`, with Agent Kourier 0.6.0 or later (0.5.x refuses `platform: teams`). |
 | [`custom-bot-trigger`](custom-bot-trigger/README.md) | Another bot's post, such as a failed CI run. A hand-written `botMessage` trigger: `match`, `exclude`, `extract`, `thread` with a cooldown and `closeWhen`, `limits` and `promptTemplate`. | Your own A2A agent, and Slack. The recipe ships Agent Kourier resources only. Its `identity.userId` works only if your agent trusts the `X-User-Id` header. | Wherever your agent is. |
 | [`sre-triage`](sre-triage/README.md) | An Alertmanager alert posted to Slack. A `botMessage` trigger written in full for Alertmanager's posts, one thread per alert group, and a read-only kagent agent that reads the cluster and can ask a question. | For the agent half: kagent 1.0.0-alpha5, Agent Substrate, a verifying front door and an OIDC token. Plus an Alertmanager Slack receiver, a model, and Slack. | The agent half runs only on this repository's kind full tier (a local cluster; `make e2e-full-up`). The Agent Kourier resources work with any agent. |
 
-Four recipes start from a service's signed webhooks instead of Slack, through a ChatConnection of the `webhook` platform.
-Agent Kourier posts nothing on the service: the agent posts there with its own tools. Each ships the Agent Kourier
-resources only, for your own A2A agent with that service's tools, and needs the chart's chat listener reachable over
-HTTPS from the service.
+Four recipes start from a service's signed webhooks instead of a chat channel, through a ChatConnection of the `webhook`
+platform. They are experimental, and need Agent Kourier 0.6.0 or later (0.5.x refuses `platform: webhook`). Agent Kourier
+posts nothing on the service: the agent posts there with its own tools. Each ships the Agent Kourier resources only, and
+no agent: you run an A2A agent with that service's tools. Each needs the chart's chat listener reachable over HTTPS from
+the service. Each README points at its page under [Start agents from webhooks](../../docs/how-to/receive-webhooks.md),
+which has the steps from an empty account to a tested agent.
 
 | Recipe | Starts from | The agent |
 |---|---|---|
@@ -66,7 +71,7 @@ resource's validation. Replace each one before you apply the recipe:
 | `22222222-2222-4222-8222-222222222222` | `prompt-agent-teams`: `appID` in `kourier/chatconnection.yaml`, and the bot's ID in `bots` and `webApplicationInfo.id` in `teams-app/manifest.json` | The bot's Microsoft Entra application (client) ID, in lowercase. |
 | `33333333-3333-4333-8333-333333333333` | `prompt-agent-teams`: `id` in `teams-app/manifest.json` | A new GUID of your own, the Teams app's ID. |
 | `REPLACE-ME` | `custom-bot-trigger` and the webhook recipes: the host in the AgentBackend's `url` (`http://REPLACE-ME.agents.svc.cluster.local:8080`) | Your A2A agent's URL. |
-| `acme-...`, `acme/widgets`, `OPS`, `ENG`, and the zero account IDs | the webhook recipes: the agent's `identity` in `kourier/chatconnection.yaml`, the repository, project or team in `kourier/binding.yaml`'s `channel`, and the names the mention regexes look for | Your account, repository, project or team, as each recipe's "Apply it" says. |
+| `acme-...`, `acme/widgets`, `OPS`, `ENG`, and the zero account IDs | the webhook recipes: the agent's `identity` in `kourier/chatconnection.yaml`, the repository, project or team in `kourier/binding.yaml`'s `channel`, and the names the mention regexes look for | Your account, repository, project or team, as step 5 of the recipe's page under [Start agents from webhooks](../../docs/how-to/receive-webhooks.md) lists. |
 
 Other values are meant to be changed too (the receiver in `sre-triage`, the regexes in `custom-bot-trigger`, the model
 name in `docs-agent`, the whole `agent.yaml` in `prompt-agent`); each recipe's "What to change" lists them.
@@ -77,7 +82,7 @@ Each chat recipe installs the chart with `config.chatConnection` set (`agent-kou
 `prompt-agent-teams`) and neither `config.connectionNamespaces` nor `config.connectionNamespaceSelector`, so its
 broker serves that one ChatConnection, with the Bindings whose `connectionRef` names it. The webhook recipes each ship a
 ChatConnection of their own, in the namespace `acme-webhooks`, which a broker serves beside its own when it admits that
-namespace (`config.connectionNamespaces`): each webhook recipe's "Apply it" says how. To run more than one chat recipe
+namespace (`config.connectionNamespaces`): [Before you start](../../docs/how-to/receive-webhooks.md#before-you-start) says how. To run more than one chat recipe
 on one broker, apply each recipe's `kourier/` directory. Then:
 
 - **The Slack and Teams recipes on two brokers.** Installed as these recipes install it, a broker serves its own

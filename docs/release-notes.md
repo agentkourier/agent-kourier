@@ -5,21 +5,39 @@ What changed in each release, newest first, and what you must do about it. The s
 
 ## Version 0.6.0 (unreleased)
 
-A ChatConnection can take signed JSON webhooks from another service, such as GitHub, Jira Cloud, Bitbucket Cloud or Linear, and start
-sessions of an agent from them: `spec.platform: webhook`, on the chat listener. The webhook platform is experimental. Agent Kourier posts
-nothing on such a connection; the agent answers on the service with its own tools. [Start agents from webhooks](how-to/receive-webhooks.md)
-has the setup, and a page for each of the four services. [Upgrade to the release that takes webhooks](how-to/upgrade.md#upgrade-to-the-release-that-takes-webhooks)
-has the upgrade, and how to roll it back. The release also takes Microsoft Teams ChatConnections: [Upgrade to the release that takes
-Microsoft Teams ChatConnections](how-to/upgrade.md#upgrade-to-the-release-that-takes-microsoft-teams-chatconnections) has its upgrade.
+Two new platforms arrive beside Slack, both experimental:
+
+- **Microsoft Teams**, a second chat platform. A ChatConnection with `spec.platform: teams` serves a team's channels, in `http` mode
+  on the chat listener or in `socket` mode, and reads other apps' posts, such as Alertmanager's alerts, through Microsoft Graph.
+  [Configure Microsoft Teams](how-to/configure-teams.md) has the setup.
+- **Webhooks.** A ChatConnection with `spec.platform: webhook` takes signed JSON webhooks from another service, such as GitHub, Jira
+  Cloud, Bitbucket Cloud or Linear, on the chat listener, and starts sessions of an agent from them. Agent Kourier posts nothing on
+  such a connection; the agent answers on the service with its own tools. [Start agents from webhooks](how-to/receive-webhooks.md)
+  has the setup, and a page for each of the four services.
+
+A config of Slack connections loads as it did in 0.5.0. Every install runs migrations 0031 and 0032 at its first start, which only
+add tables, and an install that holds the CRDs applies the Binding and ChatConnection CRDs again.
+[Upgrade to the release that takes webhooks](how-to/upgrade.md#upgrade-to-the-release-that-takes-webhooks) and
+[Upgrade to the release that takes Microsoft Teams ChatConnections](how-to/upgrade.md#upgrade-to-the-release-that-takes-microsoft-teams-chatconnections)
+have the upgrade, and how to roll each back.
 
 ### Breaking changes
 
-- **Apply the CRDs again.** The ChatConnection CRD changes for `spec.webhook` and the platform `webhook`, and the Binding CRD for the trigger
-  type `webhookEvent`, the output `none` and the channel of a webhook Binding; the AgentBackend CRD is unchanged. The chart applies them with
-  the release when `crds.install` is true, or unset on `config.source: crds`. If you apply them yourself, apply
-  `charts/agent-kourier/files/crds` of this release. Until then the API server refuses the new fields and values, and a broker on custom
-  resources logs at WARN `the schema hash of a CRD is not the one this broker was built with` and sets
-  `agentkourier_crd_schema_state{state="mismatch"}` to 1 for the two CRDs. A config of Slack connections alone loads as before.
+- **Apply the CRDs again.** The ChatConnection CRD changes for the platforms `teams` and `webhook` and their blocks, `spec.teams` and
+  `spec.webhook`. The Binding CRD changes for the trigger type `webhookEvent`, the output `none` and the channel of a webhook Binding,
+  and to take Microsoft Teams' chat IDs: `chat.channel` takes a Teams channel ID and its cap goes from 32 bytes to 140, and a
+  `botMessage` trigger's `from.id` and a `chat.mentions` entry's `user` take a Microsoft Entra ID, with caps of 36 bytes (from 32 and
+  21). The AgentBackend CRD is unchanged. The chart applies them with the release when `crds.install` is true, or unset on
+  `config.source: crds`. If you apply them yourself, apply `charts/agent-kourier/files/crds` of this release. Until then the API
+  server refuses the new fields and values, and a broker on custom resources logs at WARN
+  `the schema hash of a CRD is not the one this broker was built with` and sets `agentkourier_crd_schema_state{state="mismatch"}` to 1
+  for the two CRDs.
+- **A chat ID with neither platform's shape is refused with a new message**, which names both shapes, for example
+  `spec.chat.channel: invalid channel "general": must be a channel ID such as C0123456789 (Slack) or 19:…@thread.tacv2 (Microsoft Teams), not a name`.
+  A script that matches the earlier message needs the new one.
+- **Migrations 0031 and 0032 run at the first start**, on SQLite and on Postgres. Each only adds a table, `teams_conversations` and
+  `teams_poll_positions`, which a Microsoft Teams connection writes. A broker of 0.5.0, after a rollback, does not read them, and logs at WARN
+  at its start that the database schema is newer than its build.
 
 ### Webhooks (experimental)
 
@@ -41,15 +59,72 @@ Microsoft Teams ChatConnections](how-to/upgrade.md#upgrade-to-the-release-that-t
 - **A span for each verified webhook request**, `agentkourier.webhook.request`, with the connection, the outcome and reason, the event's
   ID and the delivery ID; a request that is not verified has none. The intake's span is its child and the turn it starts is in its trace, and the delivery's log
   lines carry its `trace_id`, so a delivery is found by its delivery ID in the trace backend.
+- **`agentkourier_chat_listener_requests_total` has two new labels**: `platform` (`slack`, `teams`, `webhook` or `other`) and `connection` (the
+  ChatConnection the path names, while the leader serves it, else `unknown`). A rule that sums the counter reads as before.
+- **An edit of the broker's own webhook connection applies at a restart.** Until then the leader logs at WARN, with the connection,
+  `chat connection: its spec.webhook was edited, and the running connection still uses the spec.webhook it started with; a restart of the broker applies the edit`,
+  and at INFO once the spec is back to the one it runs on. A team's connection restarts by itself when its ChatConnection changes.
+- **Four recipes**: `webhook-github`, `webhook-jira`, `webhook-bitbucket` and `webhook-linear`, each a ChatConnection, a Binding and an
+  AgentBackend for an A2A agent of your own. They ship no agent yet: point the Binding at an agent that has the service's tools.
+- **What was tested.** The repository's tests run each recipe's connection against a fake of its service, and the four setups were
+  run end to end against the real services on 2026-11-17, on a pre-0.6.0 build of the broker with the same mapping.
+
+### Microsoft Teams (experimental)
+
+- **New platform `teams`** on a ChatConnection, with `spec.teams`: `tenantID` and `appID`, the bot's Microsoft Entra tenant and
+  application, each a GUID in lowercase hex and required; `mode`, `http` (the default) or `socket`; and `notificationURL`, optional,
+  an `https` URL whose path is the connection's own route, `/chat/teams/<namespace>/<name>`. The credentials Secret holds
+  `clientSecret`, the client secret of the bot's application, in either mode. `spec.teams` on a Slack connection, and `spec.slack` on a
+  Teams one, are refused. A Binding of a Teams connection names Teams' IDs: a channel `19:…@thread.tacv2`, and a Microsoft Entra ID
+  for a sender or a mentioned person ([What each platform supports](reference/platforms.md)).
+- **Two modes.** In `http` mode the leader takes Teams' requests at `POST /chat/teams/<namespace>/<name>` on the chat listener, which
+  a Teams connection in that mode needs; with none, the broker's own connection stops the start, and a team's is not started. In
+  `socket` mode the leader opens an outbound WebSocket to Teams in each region, `amer`, `emea` and `apac`, and needs no chat listener
+  or public endpoint for Teams' activities. Microsoft calls Socket mode a public preview, and Teams does not deliver what it sends while no socket is
+  ready, then or later. Either way the broker posts, replies and edits through the Bot Connector.
+- **What a thread shows.** A live reply is one message that Agent Kourier posts and then edits, at most once every 2 seconds, with
+  the agent's tool calls listed under the text by default. Questions, tool approvals and the useful and not-useful buttons are Adaptive Cards that
+  a member of the channel's team presses.
+- **Alerts through Microsoft Graph.** Teams sends a bot no other app's posts, so an alert that Alertmanager posts through a Workflows
+  webhook reaches a `botMessage` trigger through Microsoft Graph, in either mode: by Graph's notifications at
+  `spec.teams.notificationURL`, which needs the chat listener and a public HTTPS route to it, or, with none, by polling each bound
+  channel every 10 seconds. A poll reads replies only in a channel's newest threads. Graph reads under the resource-specific
+  permission `ChannelMessage.Read.Group`, which the Teams app's manifest asks for and its install in the team grants.
+- **Not there yet.** No reactions: the acknowledgment is taken and shows nothing. `interactions.approverGroups` is refused,
+  `UnsupportedOnPlatform`. No ephemeral messages and no live progress streams. `agent-kourier dry-run` reads only Slack, so pin a
+  Teams trigger with the recipe's trigger evals. A post whose tag cannot be looked for after a crash is posted again, and may show
+  twice ([Delivery guarantees](explanation/delivery.md)).
+- **New metrics for Teams connections**, each by `connection`: `agentkourier_teams_requests_total`,
+  `agentkourier_teams_tokens_refused_total`, `agentkourier_teams_activities_shed_total` and
+  `agentkourier_teams_activities_lost_total` for what Teams sends; `agentkourier_teams_socket_envelopes_total`,
+  `agentkourier_teams_socket_reconnects_total`, `agentkourier_teams_socket_ready` and `agentkourier_teams_socket_gap_seconds` for
+  `socket` mode; and `agentkourier_teams_graph_notifications_total`, `agentkourier_teams_graph_polls_total`,
+  `agentkourier_teams_graph_read_messages_total`, `agentkourier_teams_graph_catchups_total`,
+  `agentkourier_teams_graph_throttled_total` and `agentkourier_teams_graph_channels` for Microsoft Graph ([Metrics](reference/metrics.md)).
 - **A span for each verified Microsoft Teams activity request**, `agentkourier.teams.request`, on a connection in `http` mode, with the
   connection, the activity's type and ID, and the outcome; a request refused at its token, one whose body is no activity, and one of
   another tenant have none. The intake's span is its child, a message's too though its post is handed on after the response, and the turn
   it starts is in its trace; the lines logged for the request, on its channel's lane as well, carry its `trace_id`. Microsoft Graph's
   notifications and polls, and Socket mode, have no such span.
-- **`agentkourier_chat_listener_requests_total` has two new labels**: `platform` (`slack`, `teams`, `webhook` or `other`) and `connection` (the
-  ChatConnection the path names, while the leader serves it, else `unknown`). A rule that sums the counter reads as before.
-- **Four recipes**: `webhook-github`, `webhook-jira`, `webhook-bitbucket` and `webhook-linear`, each a ChatConnection, a Binding and an
-  AgentBackend for an A2A agent of your own.
+- **An edit of the broker's own Teams connection applies at a restart.** Until then the leader logs at WARN, with the connection,
+  `chat connection: its spec.teams was edited, and the running connection still uses the spec.teams it started with; a restart of the broker applies the edit`,
+  and at INFO once the spec is back to the one it runs on. `mode: http` written out where the mode was unset, or taken out, is the same mode and logs nothing.
+- **A recipe**, `prompt-agent-teams`: the `prompt-agent` recipe's agent in a Teams channel, with Alertmanager's alerts, the Teams
+  app's manifest and trigger evals.
+- **What was tested.** The repository's tests run the adapter against fakes of Microsoft's services, the chat conformance suite
+  among them. Parts of it were checked on one test tenant in 2026-11, in Teams' web client: `http` mode, Graph subscriptions,
+  Graph polling and `socket` mode. A full install has not yet been run against Teams; the checks still open are listed in
+  [issue 379](https://github.com/agentkourier/agent-kourier/issues/379).
+- **Where to start.** [Configure Microsoft Teams](how-to/configure-teams.md) sets up the bot, the Teams app, the connection and the
+  alert route; [Start from a recipe](how-to/recipes.md) has `prompt-agent-teams`; [What each platform supports](reference/platforms.md)
+  has what Teams serves and how it reads alerts.
+
+### Other changes
+
+- **On the files route, a reload that changes the broker's one ChatConnection is refused.** A reload whose directory renames the
+  connection the broker started with, adds a second or takes it away keeps the last good config, sets `agentkourier_config_stale` to 1
+  and logs `config reload failed; keeping the last good snapshot`. An edit of the connection under the same name is taken, and applies
+  at a restart ([Choose a config route](explanation/config-routes.md)).
 
 ## Version 0.5.0
 

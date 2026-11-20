@@ -9,6 +9,11 @@ to. It ships no agent. Point the Binding at any A2A agent (A2A is the Agent2Agen
 GitHub tools if it should search a repository as the prompt asks
 ([Connect a generic A2A agent](../../../docs/how-to/connect-a2a-agent.md)).
 
+> **Experimental.** Needs Agent Kourier 0.6.0 or later: 0.5.x refuses `platform: webhook`. The `webhook` platform is
+> new, and its fields may change in a later version. The setup was run end to end against Jira Cloud on 2026-11-17, on a
+> pre-0.6.0 build of the broker; [the Jira Cloud page](../../../docs/how-to/webhooks/jira.md) says what was seen in
+> that run and what comes from Atlassian's documentation.
+
 ## What it does
 
 The ChatConnection, `kourier/chatconnection.yaml`, takes each delivery at
@@ -47,16 +52,18 @@ filed or edited it.
 ## Prerequisites
 
 - **A Jira Cloud admin webhook** with a secret, for the events **Issue created**, **Issue updated** and **Comment
-  created**, filtered by JQL to your project (`project = OPS`). The header names, the signature's form and the body's
-  paths this recipe reads follow Atlassian's webhook documentation, and this repository has not checked them against a
-  live delivery.
+  created**, filtered by JQL to your project (`project = OPS`). The signature's header and form and the body's paths
+  this recipe reads were seen in live deliveries in the run of 2026-11-17, except the delivery header,
+  `X-Atlassian-Webhook-Identifier`, which follows Atlassian's documentation, read 2026-11-18.
 - **A service account for the agent**, whose account ID is the `identity`.
-- **An A2A agent that has Jira tools** acting as that account, and its URL. The AgentBackend's `url` is a placeholder
-  (`REPLACE-ME`).
+- **Your own A2A agent: the recipe ships none.** It needs an agent card that advertises streaming, and Jira tools that act as that account;
+  the Binding is not `Ready` until the broker can fetch that card. The AgentBackend's `url` is a placeholder
+  (`REPLACE-ME`) for its endpoint. Agent Kourier posts nothing on Jira (`output: none`): the agent's reply text goes
+  nowhere, and only what its tools do reaches Jira.
 - **The chat listener reachable over HTTPS** from Jira: the chart's `chatListener.enabled: true`, and an Ingress
   (`chatListener.ingress`) or another way to reach the chat Service. A broker with no chat listener does not run a webhook
   connection: as its own connection it does not start, and as a team's connection it is not started.
-- **A chart release that has custom resources, and Kubernetes 1.33 or later**, as the other recipes need.
+- **Agent Kourier 0.6.0 or later** (0.5.x refuses `platform: webhook`), on custom resources, and Kubernetes 1.33 or later.
 
 ## Files
 
@@ -69,47 +76,10 @@ kourier/
 
 ## Apply it
 
-1. Replace the placeholders: the `identity` with the service account's account ID, `OPS` with your project's key in
-   the Binding's `channel`, `acme/widgets` in the first prompt with the repository the agent searches, and the
-   AgentBackend's `url` with your agent's. On the `a2a` dialect the URL alone selects the agent, and the Binding's
-   `agent.name` and `agent.namespace` are labels.
-2. Make the namespace and the Secret. The secret is the one you give the webhook; keep it out of your shell's history by
-   reading it from a file:
-
-    ```sh
-    kubectl create namespace acme-webhooks
-    kubectl -n acme-webhooks create secret generic jira-webhook --from-file=webhookSecret=./jira-webhook-secret
-    ```
-
-    The file must hold the secret alone: a trailing newline or any other control character is refused, and the
-    connection is not built.
-3. Have the broker serve the namespace's connections and read the Secret. In your chart values, beside the chat
-   listener of the prerequisites:
-
-    ```yaml
-    config:
-      connectionNamespaces: [acme-webhooks]
-    rbac:
-      secretNames:
-        acme-webhooks: [jira-webhook]
-    ```
-
-    The connection is then a team connection of the broker, served beside the broker's own connection if it has one. To
-    make it the broker's own connection instead, set `config.chatConnection: acme-webhooks/jira` and
-    `config.chatConnectionSecret: jira-webhook`. The broker builds the platform of its own connection when it starts and
-    when a replica takes the lead, so an edit to that connection's `spec.webhook` applies when Agent Kourier restarts. Until then
-    the leader logs, once for each edit of `spec.webhook` it reads that leaves the spec other than the one the connection runs on,
-    a WARN with the connection in its `connection` attribute:
-    `chat connection: its spec.webhook was edited, and the running connection still uses the spec.webhook it started with; a restart of the broker applies the edit`.
-    A team connection restarts by itself when its ChatConnection changes.
-4. Apply the resources:
-
-    ```sh
-    kubectl apply -f examples/recipes/webhook-jira/kourier/
-    kubectl -n acme-webhooks get akbinding jira-plans
-    ```
-
-5. Set the webhook's URL to `https://<host>/chat/webhook/acme-webhooks/jira`, and its secret to the Secret's value.
+Follow [Jira Cloud](../../../docs/how-to/webhooks/jira.md) from its step 1. It is the one place for the steps: it
+makes the account on Jira Cloud and the Secret, has you run the agent, lists every value of these files to replace
+(step 5), applies them, turns on the webhook, and tests it. [Start agents from webhooks](../../../docs/how-to/receive-webhooks.md#before-you-start)
+has the chart values that every webhook recipe needs.
 
 ## What to change
 

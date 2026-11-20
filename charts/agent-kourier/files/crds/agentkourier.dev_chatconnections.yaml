@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    agentkourier.dev/schema-sha256: 9b9896775ed4e21982b091c242b78ee35dbdda126d4a207872241ac0d0bc9c84
+    agentkourier.dev/schema-sha256: e8a46cfdf2da1b5b2f0d001f4a49b772910ce472bf9996de7a58a4b9db59b85e
     controller-gen.kubebuilder.io/version: v0.23.0
   name: chatconnections.agentkourier.dev
 spec:
@@ -392,7 +392,9 @@ spec:
                           after the signature passes.
                         properties:
                           from:
-                            description: From is the pointer to the time, a JSON number.
+                            description: 'From is the pointer to the time: an integer
+                              JSON number of seconds or milliseconds since the Unix
+                              epoch, as unit says.'
                             maxLength: 256
                             type: string
                             x-kubernetes-validations:

@@ -6,7 +6,7 @@
 # continues the session (chat.threadReplies defaults to all).
 #
 # The botMessage trigger reads posts of Workflows, whose Microsoft Entra application ID, 358f0194-6b0e-4dd3-af35-c24fe8a9ec87,
-# is the sender of every post that a Workflows flow makes (measured on a test tenant in November 2026). Teams does not send
+# is the sender of every post that a Workflows flow makes (measured on a test tenant in 2026-11). Teams does not send
 # a bot another app's posts, so the broker reads them from Microsoft Graph. On Teams the text of a post's cards is the field
 # body: one line for each TextBlock. The regexes read the card of Alertmanager's msteamsv2 receiver with its default
 # templates. Its first TextBlock is the title, [FIRING:<n>] or [RESOLVED] followed by the group labels' values. Its second

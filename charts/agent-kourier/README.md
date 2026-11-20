@@ -396,7 +396,8 @@ do for you, and `podDisruptionBudget.enabled` with `minAvailable: 1` so a drain 
 `chatListener.enabled` opens the chat listener (`AGENTKOURIER_CHAT_LISTEN`, on `chatListener.port`, 8081 by default), the port a chat
 platform sends its requests to: `POST /chat/<platform>/<namespace>/<name>`. A Slack ChatConnection with `spec.slack.mode: http` needs it,
 and so does a Microsoft Teams one in `http` mode (`spec.teams.mode` unset or `http`) or with a `spec.teams.notificationURL` in either
-mode, to which Microsoft Graph sends its notifications. Without the listener such a connection is not run: the broker's own connection
+mode, to which Microsoft Graph sends its notifications, and every webhook ChatConnection (`spec.platform: webhook`), to which its
+service sends its webhooks. Without the listener such a connection is not run: the broker's own connection
 fails the start (exit code 2), and a team's is not started.
 It is apart from the metrics port, so `/metrics` is never on it. Off, the default, the broker opens no such port.
 
@@ -445,7 +446,9 @@ The chat port is meant to be reachable from the internet. Before it decodes anyt
 request's signature with the connection's signing secret and its timestamp against a 5 minute window, and the Microsoft Teams adapter
 checks an activity's Bot Framework token. Microsoft Graph's notifications carry no token: one whose `clientState` is not the
 connection's is dropped, counted as `client_state` in `agentkourier_teams_graph_notifications_total`, and logged at WARN, at a pace,
-and the body is answered 202. The listener caps the body, the requests it handles at once and the body bytes it holds
+and the body is answered 202. A webhook connection checks each request on its raw bytes before it parses any of it: the HMAC-SHA256
+of the body under its Secret's `webhookSecret`, or its fixed `token`, and with `verify.timestamp` a time in the body within a window of
+the broker's clock; a request that fails is answered 401. The listener caps the body, the requests it handles at once and the body bytes it holds
 ([Limits](../../docs/reference/limits.md#run-the-broker), [Security model](../../docs/explanation/security.md#the-chat-port)).
 
 With SQLite there is one replica and the strategy is `Recreate`, so each rollout leaves the chat Service without an endpoint

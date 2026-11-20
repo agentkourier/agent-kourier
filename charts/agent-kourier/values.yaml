@@ -308,8 +308,9 @@ service:
 
 # The chat listener (AGENTKOURIER_CHAT_LISTEN): a port of its own, apart from the metrics port, that a chat platform sends its requests to,
 # POST /chat/<platform>/<namespace>/<name>. A Slack ChatConnection with spec.slack.mode http needs it, and so does a Microsoft Teams one in
-# http mode (spec.teams.mode unset or http) or with a spec.teams.notificationURL in either mode, for Microsoft Graph's notifications.
-# Slack's Socket Mode, and Teams' socket mode without a notificationURL, do not. A connection that needs it on a broker without it is not
+# http mode (spec.teams.mode unset or http) or with a spec.teams.notificationURL in either mode, for Microsoft Graph's notifications, and
+# every webhook ChatConnection (spec.platform webhook), for its service's webhooks. Slack's Socket Mode, and Teams' socket mode without a
+# notificationURL, do not. A connection that needs it on a broker without it is not
 # run: the broker's own connection fails the start. Off by default, and then the broker opens no such port.
 #
 # Switched on, the chart passes the pod's name and namespace from the downward API (AGENTKOURIER_POD_NAME, AGENTKOURIER_POD_NAMESPACE).

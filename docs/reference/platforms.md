@@ -4,7 +4,7 @@ A Binding names its chat platform through its ChatConnection, whose `spec.platfo
 or `webhook`. This page lists, for each platform, the shape of the chat IDs a Binding names, the trigger types and outputs it takes,
 and the features of a Binding that the platform serves. The broker runs all three. It takes a `webhook` connection's deliveries on
 its chat listener (`AGENTKOURIER_CHAT_LISTEN`, the chart's `chatListener`) at `POST /chat/webhook/<namespace>/<name>`. A broker with
-no chat listener does not run one: as the broker's own connection it stops the start with a wiring error, and a team's connection is
+no chat listener does not run one: as the broker's own connection it stops the start with a wiring error, and a team connection (one the broker serves beside its own) is
 not started. The broker builds the platform of its own connection when it starts and when a replica takes the lead, so an edit to
 that connection's `spec.teams` or `spec.webhook` applies when Agent Kourier restarts; on the files route the chart rolls the pod when its ConfigMap
 changes, unless `config.existingConfigMap` is set or `config.rollOnChange` is `false`. Until then the leader logs, once for each
@@ -21,12 +21,12 @@ A team connection restarts by itself when its ChatConnection changes.
 [Start agents from webhooks](../how-to/receive-webhooks.md) sets up a webhook connection, with a page for each
 service the recipes cover.
 
-The broker runs a teams connection ([ChatConnection](chatconnection.md)) in `http` mode, the default, on its chat listener
+The broker runs a Microsoft Teams connection ([ChatConnection](chatconnection.md)) in `http` mode, the default, on its chat listener
 (`AGENTKOURIER_CHAT_LISTEN`): only the leader takes Teams' requests, at `POST /chat/teams/<namespace>/<name>`, and it posts, replies
 and edits through the Bot Connector with a token that Microsoft Entra issues for the connection's client secret. A broker with no
 chat listener does not run one: as its own connection it stops the broker's start with a wiring error that says to set
-`AGENTKOURIER_CHAT_LISTEN`, and a team's connection is not started. A Teams bot is its
-Microsoft Entra app, so two teams connections with one `spec.teams.appID` are one app: the broker serves the older, as it serves the
+`AGENTKOURIER_CHAT_LISTEN`, and a team connection (one the broker serves beside its own) is not started. A Teams bot is its
+Microsoft Entra app, so two Microsoft Teams connections with one `spec.teams.appID` are one app: the broker serves the older, as it serves the
 older of two connections of one Slack app, and the younger's Bindings say `ConnectionNotServed`.
 
 In `socket` mode (`spec.teams.mode: socket`) the connection needs no chat listener and no public endpoint: the leader opens an
@@ -34,23 +34,23 @@ outbound WebSocket to Microsoft Teams in each of its regions, `amer`, `emea` and
 them as it takes the requests of `http` mode, answering each over its socket. Microsoft calls Socket mode a public preview and
 recommends an HTTPS endpoint in production; its documentation has the bot's delivery method set to Socket mode first. A region that
 refuses the bot's socket answers 403, which the broker logs and tries again every 5 minutes, give or take a fifth, while the other
-regions serve (on a test tenant in November 2026, `apac` answered 403, "Socket mode is not enabled for this bot.", while `amer` and
+regions serve (on a test tenant in 2026-11, `apac` answered 403, "Socket mode is not enabled for this bot.", while `amer` and
 `emea` worked). Only the leader opens sockets,
 because Teams sends a region's activities to the newest socket of the bot and nothing to the older; the sockets close when the
 leader's run ends, and a standby opens none. Each socket is replaced before its token expires, every 9 minutes with the 10-minute
 life measured, by one that takes over its region before the old one closes. A rejected client secret, or a 401 to the call that opens
 a socket, stops the connection's run as in `http` mode; if every region answers 403 and none has a socket, the run ends and the broker
-runs it again after a wait. A team's connection that is edited from one mode to the other is restarted in the new mode; the broker's
+runs it again after a wait. A team connection that is edited from one mode to the other is restarted in the new mode; the broker's
 own connection takes the edit when the broker restarts.
 
 **What Teams sends while no socket is ready is lost.** Teams does not queue an activity for a bot with no socket, nor send it to an
 HTTPS endpoint: a message or a mention sent while the connection has no ready socket in any region (while the broker starts,
 between a socket that ended and the next, while leadership moves, or while the broker is down) never reaches the broker (measured on a
-test tenant in November 2026). The broker logs each such interval after the first with its start and end, and observes it in
+test tenant in 2026-11). The broker logs each such interval after the first with its start and end, and observes it in
 `agentkourier_teams_socket_gap_seconds`; `agentkourier_teams_socket_ready` says which regions have a socket, and
 `agentkourier_chat_connected` is 1 while one does ([Metrics](metrics.md)). The bounds and waits are on [Limits](limits.md#run-the-broker).
 
-What Microsoft Teams sends again was measured on a test tenant in November 2026, in `http` mode (over a socket it was not): a message answered 503 at once is sent once more,
+What Microsoft Teams sends again was measured on a test tenant in 2026-11, in `http` mode (over a socket it was not): a message answered 503 at once is sent once more,
 about 0.6 seconds later; an activity answered 200, or one whose request Teams held until it gave up, is not sent again. Other
 answers, and an invoke answered 503, were not measured. So a message that arrives while the connection is not taking them, or that
 its channel has no room for, is lost unless there is room when it comes again, and an activity that the broker took and then could
@@ -84,7 +84,7 @@ The API server refuses it too, with a message that also says what a Binding of `
 The broker checks the Binding against its platform once more when it reads the Binding with its ChatConnection. That check refuses a
 chat ID that does not have the shape of the platform's IDs, or has it and is longer than the platform's cap (`InvalidPlatformID`),
 and a feature, trigger type or output that the platform does not serve (`UnsupportedOnPlatform`). A Microsoft Teams channel on a
-Slack connection, a Slack channel on a teams connection, and a Binding of `webhookEvent` triggers with the channel `acme/widgets` on
+Slack connection, a Slack channel on a Microsoft Teams connection, and a Binding of `webhookEvent` triggers with the channel `acme/widgets` on
 either, for example, pass the API server and are refused then. With Slack, which serves every feature in [Features](#features), a
 Binding of Slack's triggers and IDs is not refused. A Binding it refuses is refused as a Binding that fails validation is:
 
@@ -125,10 +125,10 @@ one `Working…` line that counts the steps. An edit that Teams' budget for a me
 without it, and the reply lists no steps from then on.
 
 In a channel's thread, Teams' web client shows the list as a quote, with a bar at its left, and a bullet before each step
-(seen in a live check, November 2026). Agent Kourier sets no busy mark on Teams: in the same check Teams showed no typing indicator
+(seen in a live check, 2026-11). Agent Kourier sets no busy mark on Teams: in the same check Teams showed no typing indicator
 for the bot in a channel's thread. A reply that waits on the agent shows its latest line, `Working…` or a step, until the next edit.
 
-Teams drops every span in braces from a message's prose: in a live check (November 2026, a channel thread, the web client)
+Teams drops every span in braces from a message's prose: in a live check (2026-11, a channel thread, the web client)
 `rate(http_requests_total{code=~"5.."}[5m])` showed as `rate(http_requests_total[5m])`. So every line that Agent Kourier writes
 on Teams, other than the agent's reply, sends `{` and `}` as the character references `&#123;` and `&#125;`, and the agent's
 reply sends them with a backslash, `\{` and `\}`, in its prose. Teams showed both as braces in the same check. In the reply's
@@ -146,7 +146,7 @@ answered in time, then what was asked with each answer, or each tool with `Appro
 right after the reply's text, or, for a reply that it edits as the agent works, after the final edit. When Agent Kourier replaces a
 card, Teams marks the message `Edited`.
 
-A reply's text and its buttons are two posts because Teams did not take them as one: on a test tenant in November 2026, Teams answered
+A reply's text and its buttons are two posts because Teams did not take them as one: on a test tenant in 2026-11, Teams answered
 one message of text and a card with no ID, and showed it as two messages, the text and a card of the buttons alone, so the broker could
 not learn either one's ID. Posted apart, each is a message of its own, and the text is the message that the broker records as the reply.
 A press of the buttons is taken as a press of that text, which the card names. Each button of the card carries, beside the text's ID, an
@@ -166,7 +166,7 @@ other buttons edits their card; if that card is gone (someone deleted it), the b
 for this try only, the edit fails and is tried again. It forgets the oldest past
 4096, and remembers nothing across a restart or between replicas, where such an edit posts them a second time ([Limits](limits.md)).
 
-On a test tenant in November 2026, with the web client, a reply that opened a thread was posted this way: Teams gave the text and the
+On a test tenant in 2026-11, with the web client, a reply that opened a thread was posted this way: Teams gave the text and the
 card each its own ID, put the card in as the text's reply, and showed the text and then the card. A press of the card came with the
 card's ID as the message pressed, in the text's thread, and with the card's data whole (the button, its value, the text's ID and the
 MAC); the broker took it as a press of the text, and refused the same press with another text's ID. The answer to the press showed as
@@ -189,7 +189,7 @@ Kourier does not escape them. Arguments shown in monospace keep their braces and
 budget of a message: the pause is refused as one that cannot be shown. An ending's texts are cut until its card fits
 ([Limits](limits.md#what-a-thread-shows)).
 
-Teams sends a press to the broker in a request. On a test tenant on 18 November 2026 (web client, a channel thread), timed from the
+Teams sends a press to the broker in a request. On a test tenant on 2026-11-18 (web client, a channel thread), timed from the
 press's arrival at the server to its answer, Teams showed the person who pressed an answer given at 12.5 seconds, and showed them an
 error, "Something went wrong. Please try again.", for one given at 13 seconds or later, although Teams' service held the request
 until about 14 seconds. Agent Kourier records the press and waits up to 6 seconds in the request for the worker that decides
@@ -222,7 +222,7 @@ archive, so the reason is never `ChannelArchived` on Teams: whether the list lea
 archived team, is not known.
 
 What is written here of how Teams shows cards and answers presses was seen on a test tenant, in the web client, in a channel thread,
-in November 2026. In the same check, an edit that sent no text left the message's earlier text in place. Every edit that Agent
+in 2026-11. In the same check, an edit that sent no text left the message's earlier text in place. Every edit that Agent
 Kourier makes on Teams sends the text a message is to show: a reply's edits always hold text, and a question's card, and the card
 that replaces it, have none to leave. A reply's edits send its text alone: its buttons are a message of their own, which an edit
 of the reply posts if it has not been posted, and edits only when the buttons change. A reply gets its buttons on its last edit, and
@@ -231,7 +231,7 @@ no later edit of Agent Kourier's is meant to take them off; an edit with none le
 ## Alerts on Microsoft Teams
 
 Microsoft Teams sends a bot no post of another app, in either mode, so an alert's card that Workflows or any other app posts in a channel
-never comes to the broker as an activity (measured on a test tenant in November 2026). The broker reads such posts from Microsoft Graph
+never comes to the broker as an activity (measured on a test tenant in 2026-11). The broker reads such posts from Microsoft Graph
 instead, in either mode: by Graph's notifications when the ChatConnection has a `spec.teams.notificationURL`, and by polling Graph when it
 has none ([Polling](#polling-without-a-notificationurl), below). The `notificationURL` is the public HTTPS URL at which Microsoft Graph reaches the
 connection's route on the leader's chat listener, `https://<host>/chat/teams/<namespace>/<name>`. With the chart that is the chat
@@ -243,12 +243,13 @@ and answers anything else 400. A connection without a `notificationURL` needs no
 to the channel's messages (`/teams/{group}/channels/{channel}/messages`, for new and edited messages, with no message content in the
 notification), with the `notificationURL` as both its notification URL and its lifecycle URL. The app makes it under the resource-specific
 permission `ChannelMessage.Read.Group`, which reads a thread's replies too ([Earlier replies on Microsoft Teams](#earlier-replies-on-microsoft-teams));
-on a test tenant in November 2026, Graph made one under that permission alone. The broker compares the subscriptions with the Bindings
+on a test tenant in 2026-11, Graph made one under that permission alone. The broker compares the subscriptions with the Bindings
 every minute, and within 1 s of a change of the channels that the Bindings name, once any comparison in progress ends: a channel that a Binding names gets one, and one
 whose channel no Binding names any longer is deleted. Graph names a team by its Microsoft Entra group, which the broker learns from an
 activity of the channel: a channel whose group it does not know yet waits, which it logs once at WARN with the fix (install the app in the
 channel's team and mention the bot in the channel), and is subscribed as soon as an activity has told it. A subscription is made to expire 24 hours later and renewed once it would expire within 12 hours,
-or within half the lifetime that Graph granted when it made or last renewed it, if Graph granted less than it was asked.
+or within half the lifetime that Graph granted when it made or last renewed it, if Graph granted less than it was asked. A renewal
+near the end of the 24 hours has not yet been seen from Graph.
 Making or renewing one took about 8 seconds on a test tenant, while Microsoft Graph sent its validation request to the URL, which the broker
 answers with the token that Graph sent. At the start of each run the leader lists the app's subscriptions, even with no channel bound,
 keeps those to the connection's URL that it can, renewing any near its expiry, and deletes the others to that URL; a subscription to any
@@ -286,7 +287,8 @@ channel's activities:
 
 Microsoft Graph's lifecycle notifications come to the same URL: `reauthorizationRequired` renews the subscription at once,
 `subscriptionRemoved` makes it anew, and `missed`, which says that Graph did not deliver some notifications of the channel, is logged at
-WARN and starts a catch-up read of the channel ([Catch-up reads](#catch-up-reads)).
+WARN and starts a catch-up read of the channel ([Catch-up reads](#catch-up-reads)). What Graph sends of these is Microsoft's documentation:
+none has yet been seen from Graph.
 
 **What is lost.** A notification that comes while the connection does not run, before it has listed its subscriptions, or when its
 channel's lane is full is answered 503, and Microsoft Graph sends it again (for up to 4 hours, by Microsoft's documentation; not measured).
@@ -305,7 +307,7 @@ at the next poll round once an activity has told the group: at once, or as soon 
 - **New posts.** Each channel is read every 10 seconds through Graph's delta of its messages (`…/messages/delta`, then the `deltaLink` it
   gives), so a new post reaches the broker within about one interval after Graph shows it. A post is new when it was made at most 30 seconds
   before the channel's last read began; an edit, a reaction or another change of an older post, which the delta gives again, is not handed on.
-- **Replies.** The delta does not give a reply in an existing thread (measured on a test tenant in November 2026). At each poll the
+- **Replies.** The delta does not give a reply in an existing thread (measured on a test tenant in 2026-11). At each poll the
   broker reads the replies (`…/messages/{id}/replies`, the newest 50) of the 3 newest threads of each channel that it has seen begin
   within the last hour, and of the threads it read at the poll before, so a thread that a new one pushes out of the 3 has its replies
   read once more: at most 6 reads. It hands on each reply that no read of the thread gave before and that was made at most 30 seconds
@@ -383,7 +385,7 @@ not recovered, nor anything posted earlier than the look-back.
   pages): at each poll, what was posted since the last catch-up read of the channel began, less 30 seconds.
 - **When a gap of the sockets ends** (`socket` mode): with no `notificationURL`, every channel is read at once, its delta and its recent
   threads' replies as at a poll, and a catch-up read back to the gap's start, at most 10 minutes. With a `notificationURL` nothing more is
-  read: Graph notified the posts of the gap all the same (measured on a test tenant in November 2026), mentions included.
+  read: Graph notified the posts of the gap all the same (measured on a test tenant in 2026-11), mentions included.
 - **On Graph's `missed`** (a `notificationURL`): what was posted in the channel in the 10 minutes before.
 
 **After a restart.** What a run handed on is held in memory, so a post that a catch-up read, or a delta resumed from the stored
@@ -401,7 +403,7 @@ A mentioned turn carries the replies that people posted in its thread since the 
 On Microsoft Teams the broker reads them from Microsoft Graph, `GET /teams/{team}/channels/{channel}/messages/{thread}/replies`, with a
 token for Microsoft Graph that Microsoft Entra issues to the connection's app for the same client secret. The app may read them under
 the resource-specific permission `ChannelMessage.Read.Group`, which its manifest must ask for and which the team grants when the app
-is installed in it. On a test tenant in November 2026, Graph issued that token and answered a read of a channel's messages under that
+is installed in it. On a test tenant in 2026-11, Graph issued that token and answered a read of a channel's messages under that
 permission alone, with no tenant-wide consent.
 
 Graph names a team by its Microsoft Entra group. The broker learns it from the activities that Teams sends of the channel, and keeps
@@ -448,15 +450,15 @@ thread's replies, or, for a post that opens a thread, such as a trigger's digest
 first 200 that Graph gives. Only a post of the connection's own app counts, so a person or another app that writes the same span
 does not keep a post from being sent, and the agent cannot write one: no `<` of its text reaches Teams as HTML.
 
-On a test tenant in November 2026, with the web client, the span came back through Graph at the end of a reply and of a post that
+On a test tenant in 2026-11, with the web client, the span came back through Graph at the end of a reply and of a post that
 opened a thread, and so did the `id` of the two kinds of card element that the broker puts first on a card, the `TextBlock` and the
 `RichTextBlock`. A reply was in Graph at the first look, 1.4 seconds after it was posted. The client showed no carrier, and the span's paragraph adds a
 little space under the text. The span was tried only at the end of a text. Teams' mobile and desktop clients, screen readers, Teams'
 search and notifications, and the order in which Graph lists a channel's messages were not checked.
 
 A reply with buttons is posted as its text and then a card of its buttons, two messages that each get their own ID (seen on a test
-tenant in November 2026, for a reply that opened a thread). Teams answered one message of text and a card with no ID in November
-2026, on a test tenant, and showed it as two messages, the text with the span and a card of the buttons with no tag. If the broker stops between the two posts, the outbox's lookup finds the text by its tag and
+tenant in 2026-11, for a reply that opened a thread). Teams answered one message of text and a card with no ID in
+2026-11, on a test tenant, and showed it as two messages, the text with the span and a card of the buttons with no tag. If the broker stops between the two posts, the outbox's lookup finds the text by its tag and
 records it, and the buttons are posted only if the reply is edited with them after.
 
 A post that the pages read do not hold, a channel whose team the broker does not know yet, a read that runs out of time after Graph
@@ -481,7 +483,7 @@ What the API server and the load take is wider: for each field, the shape of eit
 and for `chat.channel` the rule that takes a webhook channel instead on a Binding whose triggers are all `webhookEvent`. A value that
 has none of them, such as the channel name `general`, is refused when it is applied, and so is a value past the field's cap: 140
 bytes for a channel, 36 for a sender and a mention's user, 32 for an approver group. A Microsoft Teams channel on a Slack connection,
-a Slack channel on a teams connection, and a Slack channel or bot ID longer than Slack's 32 bytes (up to 140 for a channel and 36 for
+a Slack channel on a Microsoft Teams connection, and a Slack channel or bot ID longer than Slack's 32 bytes (up to 140 for a channel and 36 for
 a sender) are refused by the broker with `InvalidPlatformID`, as above, and not when they are applied. A Slack user ID cannot pass
 Slack's cap, since its pattern bounds it at 21, and neither can an approver group, whose field's cap is Slack's 32. The length caps of
 each field are in [Limits](limits.md#write-a-binding-an-agentbackend-or-a-chatconnection).
@@ -501,6 +503,6 @@ each field are in [Limits](limits.md#write-a-binding-an-agentbackend-or-a-chatco
 | Questions to a person: `interactions.askUser` | Works: Agent Kourier asks in the thread with buttons. | Works: the question is a card that a member of the channel's team presses ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). | Not served. | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
 | Tool approvals: `interactions.toolApprovals`, and `interactions.approverGroups`, which requires it | Works: Agent Kourier asks in the thread with buttons. | `toolApprovals` works: the approval is a card that a member of the channel's team presses ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). `approverGroups` is refused: `UnsupportedOnPlatform`. Remove it. | Not served. | Refused: `UnsupportedOnPlatform`. Set `toolApprovals` to `false` and remove `approverGroups`. |
 | The useful and not-useful buttons: `feedback.enabled` | Works. | Works: the buttons are a card of their own, posted after the reply, and a vote of a member of the channel's team is counted ([Buttons on Microsoft Teams](#buttons-on-microsoft-teams)). | Not served. | Refused: `UnsupportedOnPlatform`. Set it to `false`. |
-| Alert triggers: a `botMessage` trigger in `chat.triggers` | Works. | Works, in either `spec.teams.mode`: Microsoft Teams does not send a bot the posts of another app (measured on a test tenant in November 2026), so the broker reads them through Microsoft Graph, by its notifications of the bound channels on a connection with a `spec.teams.notificationURL`, and by polling them on one without ([Alerts on Microsoft Teams](#alerts-on-microsoft-teams)). | Not served: the platform takes `webhookEvent` triggers alone ([Triggers and output](#triggers-and-output)). | Refused: `UnsupportedOnPlatform`. Use a trigger type that the platform takes. |
+| Alert triggers: a `botMessage` trigger in `chat.triggers` | Works. | Works, in either `spec.teams.mode`: Microsoft Teams does not send a bot the posts of another app (measured on a test tenant in 2026-11), so the broker reads them through Microsoft Graph, by its notifications of the bound channels on a connection with a `spec.teams.notificationURL`, and by polling them on one without ([Alerts on Microsoft Teams](#alerts-on-microsoft-teams)). | Not served: the platform takes `webhookEvent` triggers alone ([Triggers and output](#triggers-and-output)). | Refused: `UnsupportedOnPlatform`. Use a trigger type that the platform takes. |
 | The earlier replies a mentioned turn carries: `chat.threadReplies: mention`, the thread of a `personMessage` trigger, and a bot's mention | Works. | Works for a person's mention, read through Microsoft Graph ([Earlier replies on Microsoft Teams](#earlier-replies-on-microsoft-teams)). The first turn of a session that a person's mention starts in a thread also carries the thread's first message, such as an alert's card, whatever `chat.threadReplies` says. A bot's mention reaches it through Microsoft Graph, by its notifications or by polling ([Alerts on Microsoft Teams](#alerts-on-microsoft-teams)), since Teams sends a bot no other app's posts. | The platform reads no thread, and its Bindings take `webhookEvent` triggers alone ([Triggers and output](#triggers-and-output)). | Served: the turn carries the mentioned message alone. |
 | The acknowledgment reaction: `chat.acknowledgment` | Works. With no `emoji` the reaction is `hourglass_flowing_sand`. | Taken, and no reaction is shown, as on a platform without it. | The platform has no reactions. | Served, and no reaction is shown. A Binding whose acknowledgment is enabled and names an `emoji` has the condition `AcknowledgmentShown`, `False` with the reason `NoReactions` ([Binding status](binding-status.md#acknowledgmentshown)). |
