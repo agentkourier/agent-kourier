@@ -15,8 +15,9 @@ and `ghcr.io/agentkourier/agent-kourier-echo-agent` (linux/amd64 and linux/arm64
    the version in a label: refresh them with `go test ./test/chart -update` (with `helm` installed). For a new minor
    version (`X.Y.0`), also add `"X.Y"` at the top of `hack/docs/versions.yaml`, so the documentation site publishes
    the new release line's tags; until its first tag exists the site skips it. The same pull request points the
-   recipes' agents at the images this release publishes: `image:` in `examples/recipes/prompt-agent/agent/manifests/deployment.yaml`
-   and `examples/recipes/echo-agent/agent/manifests/deployment.yaml` names `ghcr.io/agentkourier/agent-kourier-<agent>:vX.Y.Z`,
+   recipes' agents at the images this release publishes: `image:` in every manifest under `examples/recipes` that runs one of
+   them (today `prompt-agent/agent/manifests/deployment.yaml`, `echo-agent/agent/manifests/deployment.yaml` and
+   `webhook-github/agent/manifests/deployment.yaml`) names `ghcr.io/agentkourier/agent-kourier-<agent>:vX.Y.Z`,
    and so does every page that names one of those tags (today `examples/recipes/prompt-agent/README.md`). A tag left
    behind deploys the last release's agent; `release-version` checks these tags against the chart's version too, so
    it fails the pull request. Merge it. Skip this for a prerelease tag (`vX.Y.Z-rc.1`): while one is tried, the chart
@@ -25,8 +26,8 @@ and `ghcr.io/agentkourier/agent-kourier-echo-agent` (linux/amd64 and linux/arm64
    exact commit from a push to `main`. The release gate checks the same commit and the latest attempt again; a
    missing, pending, failed or pull-request-only run blocks the release.
 4. Run the kind tiers on that commit by hand, since no workflow does ([CI](#ci) says why). The custom resource
-   route has its own runs of the tiers, two scenarios that nothing else runs, and runs of the failover tests; the last
-   two of those runs send the fake Slack's requests through the chat listener (Slack's HTTP mode), and two more add Microsoft
+   route has its own runs of the tiers, two scenarios that nothing else runs, and runs of the failover tests; runs 7
+   and 8 send the fake Slack's requests through the chat listener (Slack's HTTP mode), and runs 9 and 10 add Microsoft
    Teams and a team's second Slack app. Each tier needs Docker and
    about 8 GB free; take each down before the next comes up:
 

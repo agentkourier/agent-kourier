@@ -161,12 +161,12 @@ networkPolicy:
 - `chatListener.ingress.className`: the IngressClass; empty leaves it to the cluster's default class.
 - `chatListener.ingress.host`: the host the Ingress rule matches, the `<host>` of the route.
 - `chatListener.ingress.tls`: the Ingress's TLS, in Kubernetes' own form: the route must be HTTPS.
+- `networkPolicy.chatFrom`: who may reach the chat port, here the ingress controller's pods; required with
+  `networkPolicy.enabled`.
 
 Behind a Gateway instead of an Ingress controller, leave `chatListener.ingress` off and write an HTTPRoute of your own to the chat
 Service: [With a Gateway API HTTPRoute instead of the Ingress](receive-webhooks.md#with-a-gateway-api-httproute-instead-of-the-ingress)
 has one; the same route serves Teams' requests.
-- `networkPolicy.chatFrom`: who may reach the chat port, here the ingress controller's pods; required with
-  `networkPolicy.enabled`.
 
 In `socket` mode with polling, leave out `chatListener` and `networkPolicy.chatFrom`: nothing comes in. The chart grants the
 broker the connection's Secret, the one named as the connection (`teams`) in its namespace (`config.chatConnectionSecret`

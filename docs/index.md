@@ -53,7 +53,7 @@ which answers on that service with its own tools.</p>
 
 !!! note "Status: v0.6.0"
     The current release is `0.6.0`: install the published chart and image with [Install with Helm](how-to/install-with-helm.md).
-    The `v1alpha1` resource format can change before 1.0. The [release notes](release-notes.md) say what changed in 0.5.0, in which a Slack connection can take its events over HTTP (experimental) on a chat listener that only the leader serves.
+    The `v1alpha1` resource format can change before 1.0. The [release notes](release-notes.md) say what changed in each release.
     New in 0.6.0, both experimental: Microsoft Teams ([Configure Microsoft Teams](how-to/configure-teams.md)) and webhooks
     ([Start agents from webhooks](how-to/receive-webhooks.md)). 0.5.x refuses either.
 

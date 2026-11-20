@@ -95,8 +95,9 @@ spec:
       backendRefs: [{name: agent-kourier-chat, port: 8081}]
 ```
 
-TLS is then the Gateway listener's, not the chart's. With `networkPolicy.enabled`, `chatFrom` admits the pods that carry the Gateway's
-traffic, which your Gateway API implementation runs and labels, in place of the Ingress controller's namespace. Check the route
+TLS is then the Gateway listener's, not the chart's. With `networkPolicy.enabled`, `chatFrom` admits the pods of your Gateway's proxy, in place
+of the Ingress controller's namespace, where your Gateway API implementation runs the proxy in pods; `chatFrom` is a NetworkPolicy
+`from`, so a proxy that does not run in pods, such as one on the node, needs another rule to reach the chat port. Check the route
 with `kubectl -n agent-kourier get httproute agent-kourier-chat -o yaml`: its parent's `Accepted` and `ResolvedRefs` conditions are
 `True`. The check below is the same.
 
@@ -446,7 +447,7 @@ What a service does with a `503` is its own. Their documentation, not checked ag
 
 ## Map another service
 
-Any service can be mapped whose webhooks fit two rules. Each delivery is one JSON object. And the service proves that the delivery is
+A service can be mapped when its webhooks fit two rules, within the bounds in [Limits](../reference/limits.md). Each delivery is one JSON object. And the service proves that the delivery is
 its own in one header, in one of two ways: the HMAC-SHA256 of the raw body, in hex, after an optional fixed prefix such as `sha256=`
 (`scheme: hmac-sha256`); or a fixed secret of at least 32 bytes, after an optional fixed prefix such as `Bearer ` (`scheme: token`). A time that the connection
 checks is read from the body, not from a header. A service that signs anything but the body alone, such as a timestamp and the body
