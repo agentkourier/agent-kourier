@@ -10,10 +10,10 @@ GitHub as a machine user (a GitHub account kept for the agent), with that user's
     in a later version. This mapping was run end to end against GitHub on 2026-11-17, on a pre-0.6.0 build of the broker, with a
     GitHub App's webhook and a small MCP server of the run's own, not with this page's machine user, repository webhook and agent.
     What this page says GitHub sends was seen in that run's deliveries, from the App, and GitHub can change it. GitHub's behaviour
-    and labels that the run did not see come from GitHub's documentation, read on 2026-11-18 or 2026-11-19, and say so where they
-    appear. Not run: the machine user, its token and the recipe's agent against GitHub or a live model; a repository's webhook; the
-    delivery header `X-GitHub-Delivery`; a comment on a line of the diff (`pull_request_review_comment`); and every change marked
-    *not run* below.
+    and labels that the run did not see come from GitHub's documentation, and say so where they appear. The steps on GitHub's side
+    follow that documentation, which can change: if a menu or field has moved, GitHub's documentation is the reference. Not run: the
+    machine user, its token and the recipe's agent against GitHub or a live model; a repository's webhook; the delivery header
+    `X-GitHub-Delivery`; a comment on a line of the diff (`pull_request_review_comment`); and every change marked *not run* below.
 
 ## What you end with
 
@@ -50,7 +50,7 @@ and its rights are that user's. Sign it up, then give it the **Read** role on th
 
     The model can be talked into an `APPROVE` by the text of the pull request it reviews: only `agent.yaml`'s instructions hold
     the review to `COMMENT`. GitHub's [repository roles](https://docs.github.com/en/organizations/managing-user-access-to-your-organizations-repositories/managing-repository-roles/repository-roles-for-an-organization)
-    (read 2026-11-19) let every role, Read included, submit reviews on pull requests, and only Write, Maintain and Admin approve or
+    let every role, Read included, submit reviews on pull requests, and only Write, Maintain and Admin approve or
     request changes on a pull request with required reviews; its page on
     [protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
     says required approvals come from people with write permissions or from a code owner. So with Write, the machine user's
@@ -61,29 +61,29 @@ and its rights are that user's. Sign it up, then give it the **Read** role on th
     GraphQL). If the machine user must have Write, turn on **Require review from Code Owners** in the branch's rule, with a
     `CODEOWNERS` that owns every file and does not name the machine user: GitHub's
     [code owners page](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners)
-    (read 2026-11-19) says a file with no owner can be approved by anyone with write access.
+    says a file with no owner can be approved by anyone with write access.
 
-GitHub's documentation (read 2026-11-19) says a fine-grained token reaches only the repositories of its resource owner, and that an
+GitHub's documentation says a fine-grained token reaches only the repositories of its resource owner, and that an
 outside collaborator can use only a classic token on an organization's repository. So the repository must be owned by an
 organization that the machine user is a member of, or by the machine user itself: a collaborator on another person's repository
 cannot use a fine-grained token on it.
 
 Signed in as the machine user, open **Settings**, **Developer settings**, **Personal access tokens**, **Fine-grained tokens**,
-**Generate new token** (from the profile picture; menu path from GitHub's documentation, read 2026-11-19), and fill the form:
+**Generate new token** (from the profile picture; menu path from GitHub's documentation), and fill the form:
 
 | Field | Value |
 |---|---|
 | **Token name** | A name, such as `acme-review-agent`. |
 | **Resource owner** | The organization that owns the repository, or the machine user for its own. |
-| **Expiration** | The shortest you will renew. GitHub's documentation (read 2026-11-19) gives 30 days as the default, and says an organization or enterprise owner can set a maximum lifetime. |
+| **Expiration** | The shortest you will renew. GitHub's documentation gives 30 days as the default, and says an organization or enterprise owner can set a maximum lifetime. |
 | **Repository access** | **Only select repositories**, with the repositories the agent reviews (and, for the [Jira](jira.md) page, the repository whose code the agent searches). |
 | **Repository permissions** | **Pull requests**: Read and write (the pull request, its files, the review and the comments). **Contents**: Read-only (`get_file_contents`). **Metadata**: Read-only, which the form adds by itself (not verified here). |
 
 GitHub's [permissions list](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens)
-(read 2026-11-19) names those for the REST calls. github-mcp-server posts the review with GraphQL's `addPullRequestReview`, which
+names those for the REST calls. github-mcp-server posts the review with GraphQL's `addPullRequestReview`, which
 that list does not cover, and this repository has not checked the token against GitHub.
 
-Generate the token. GitHub's documentation (read 2026-11-19) says that an organization that requires approval of fine-grained
+Generate the token. GitHub's documentation says that an organization that requires approval of fine-grained
 tokens marks the token `pending` until an organization administrator reviews it, and that until then it reads only public
 resources: an agent with a pending token fails on a private repository, and posts nothing on any.
 
@@ -180,13 +180,19 @@ names, not their arguments. The agent README's
 [What the agent can and cannot do](https://github.com/agentkourier/agent-kourier/blob/main/examples/recipes/webhook-github/agent/README.md#what-the-agent-can-and-cannot-do)
 says what that leaves open.
 
-Why a machine user and not a GitHub App: github-mcp-server renews an App's installation tokens by itself only in its `stdio` mode,
-and the prompt agent reaches MCP servers over HTTP only (github-mcp-server's `docs/github-app-auth.md` at v2.2.0, read 2026-11-19;
-not verified here).
-
 **An agent of your own instead.** Run an A2A agent whose agent card advertises streaming, with tools that do the operations above;
 [The agent](../receive-webhooks.md#the-agent) says what it must be and do. Put its A2A endpoint in the AgentBackend (step 5), and
 its bearer token, or none, in the Binding's `identity` ([Create the Binding identity](../create-binding-identity.md)).
+
+### A GitHub App instead of a machine user
+
+The connection takes a GitHub App's events as well as a machine user's: the setup's run was made with an App, whose own reviews
+and comments carried `<app-slug>[bot]` in `/sender/login` (in the run, `acme-review-agent[bot]`), so with an App `spec.webhook.identity` is that login, `[bot]` included.
+The recipe's agent cannot act as an App. An App acts with installation tokens, which expire after an hour (GitHub's documentation);
+github-mcp-server renews them by itself only in its `stdio` mode, and the prompt agent reaches MCP servers over HTTP only
+(github-mcp-server's `docs/github-app-auth.md` at v2.2.0; not verified here). To act as an App, run an agent of your own that
+renews the token: one that runs github-mcp-server in `stdio` mode, or that mints installation tokens itself. The recipe's reply
+trigger matches a mention of the machine user's login; with an App, change it to the mention your users write (not run).
 
 ## 5. Apply the manifests
 
@@ -255,8 +261,7 @@ yet: its Secret, or the namespace's admission. Anything else is the way to the c
 
 ## 6. Turn on the webhook
 
-The webhook goes on the repository. In the repository's **Settings**, **Webhooks**, **Add webhook** (GitHub's documentation, read
-2026-11-19):
+The webhook goes on the repository. In the repository's **Settings**, **Webhooks**, **Add webhook** (GitHub's documentation):
 
 | Field | Value |
 |---|---|
@@ -267,7 +272,7 @@ The webhook goes on the repository. In the repository's **Settings**, **Webhooks
 | **Which events would you like to trigger this webhook?** | **Let me select individual events**, then **Pull requests**, **Issue comments**, **Pull request reviews** and **Pull request review comments** (the events' labels are not checked against the form). A comment in a pull request's conversation is an issue comment. |
 | **Active** | Checked. |
 
-Choose **Add webhook**. GitHub's documentation (read 2026-11-19) says it then sends a `ping`. In the webhook's **Recent Deliveries**
+Choose **Add webhook**. GitHub's documentation says it then sends a `ping`. In the webhook's **Recent Deliveries**
 it shows with the response `200`, and the leader logs:
 
 ```sh
@@ -275,7 +280,7 @@ kubectl -n agent-kourier logs "$LEADER" | grep '"webhook: delivery answered"' | 
 ```
 
 The line says the signature checked out, and the ping starts nothing; its `outcome` and `reason` depend on what the ping carries
-(*not run* on a repository's webhook). GitHub's documentation (read 2026-11-19) lists only `hook`, `hook_id` and `zen` in a ping's
+(*not run* on a repository's webhook). GitHub's documentation lists only `hook`, `hook_id` and `zen` in a ping's
 body: with no `repository`, the connection answers it `unmapped`, `no_channel`, as it did the App's ping in the run. A ping that
 carries the repository and a `sender` gets past the channel and the actor and has no pull request or issue number, so it is
 `unmapped`, `no_thread` (or `self`, if the machine user added the webhook):
@@ -308,7 +313,7 @@ kubectl -n agent-kourier logs "$LEADER" | grep 'acme-webhooks/github' | grep -E 
 
 `trigger` is the trigger's index in the Binding: `0` is the review, `1` the reply. `"decision":"started"` is a turn that started.
 `delivery` is the ID that GitHub's delivery log shows for the delivery. Then the machine user's review shows on the pull request. In
-the run of 2026-11-17, with the App and the run's own MCP server, a turn took 10 to 17 seconds.
+the run, with the App and the run's own MCP server, a turn took 10 to 17 seconds.
 
 Comment `@acme-review-agent why this approach?` on the pull request. The log shows the same lines with `"trigger":1` and the same
 `"thread":"pr-7"`, and the machine user replies.
@@ -364,7 +369,7 @@ Add a field, and match it:
 match: {event: '^pull_request$', action: '^(opened|reopened|synchronize|ready_for_review)$', prNumber: '.', baseRef: '^main$'}
 ```
 
-**Review when a label is added** (*not run*, and the path is not confirmed in GitHub's documentation, which, read 2026-11-18, says
+**Review when a label is added** (*not run*, and the path is not confirmed in GitHub's documentation, which says
 only that a `labeled` action carries the label). The label's name would be `/label/name`:
 
 ```yaml
@@ -374,7 +379,7 @@ match: {event: '^pull_request$', action: '^labeled$', prNumber: '.', label: '^ai
 
 **Several repositories** (*not run*). Write one Binding for each repository, with its `owner/repo` as the channel, all naming the same
 connection, and send each repository's events to the connection's URL: a webhook on each repository, as in step 6, or one webhook of
-the organization, which GitHub's documentation (read 2026-11-19) says subscribes to the organization's events and only an
+the organization, which GitHub's documentation says subscribes to the organization's events and only an
 organization owner can create. The machine user's token must reach each repository: add each to its **Repository access** (all of
 one resource owner, since a fine-grained token has one). An event of a repository that no Binding names starts nothing.
 
@@ -384,9 +389,9 @@ one resource owner, since a fine-grained token has one). An event of a repositor
 
 | What you see | Why, and what to do |
 |---|---|
-| A delivery failed, and nothing sent it again | GitHub's documentation (read 2026-11-19) says it does not send a failed delivery again, and that deliveries of the past three days can be sent again: in the repository's **Settings**, **Webhooks**, choose the webhook, then **Recent Deliveries**, the delivery by the ID that the broker's `delivery` names, and **Redeliver**. The body is the same, so a delivery whose start was decided (a turn started, or the start was refused) is a duplicate while the broker remembers it, and one that matched no trigger is tried against the triggers again, and starts a turn if a trigger now matches it ([Start agents from webhooks](../receive-webhooks.md#what-a-taken-event-does)). |
+| A delivery failed, and nothing sent it again | GitHub's documentation says it does not send a failed delivery again, and that deliveries of the past three days can be sent again: in the repository's **Settings**, **Webhooks**, choose the webhook, then **Recent Deliveries**, the delivery by the ID that the broker's `delivery` names, and **Redeliver**. The body is the same, so a delivery whose start was decided (a turn started, or the start was refused) is a duplicate while the broker remembers it, and one that matched no trigger is tried against the triggers again, and starts a turn if a trigger now matches it ([Start agents from webhooks](../receive-webhooks.md#what-a-taken-event-does)). |
 | `unverified`, `bad_signature`, on every delivery | The webhook's **Secret** is not the Secret's `webhookSecret`. Set it on the webhook again from the file of step 3. |
-| `malformed`, `schema` | The webhook's **Content type** is `application/x-www-form-urlencoded`, which GitHub's REST documentation (read 2026-11-18) gives as the default for a repository's webhook. Set it to `application/json`. |
+| `malformed`, `schema` | The webhook's **Content type** is `application/x-www-form-urlencoded`, which GitHub's REST documentation gives as the default for a repository's webhook. Set it to `application/json`. |
 | `unmapped` only | `no_channel`: events with no repository (the App's `ping` and `installation` in the run). `no_thread`: an event with neither `/pull_request/number` nor `/issue/number`, such as a ping that carries the repository (step 6). |
 | `200` in GitHub's log, and no turn | `200` is not a match: see step 6. Read the delivery's `webhook: delivery answered` line by its `delivery`, then the rows below. |
 | `accepted`, and no review | The pull request is a draft (the first trigger excludes it), or `agentkourier_trigger_limited_total{binding="acme-webhooks/github-reviews"}` rose: with `maxConcurrent: 1`, a second pull request opened while a review runs is stopped, the broker's response was `200`, and GitHub does not send it again. The WARN line names its delivery: redeliver it once the first review is done, or raise `maxConcurrent`. |
@@ -397,14 +402,14 @@ one resource owner, since a fine-grained token has one). An event of a repositor
 
 - GitHub signs with `X-Hub-Signature-256: sha256=<hex>`, and names the event in the `X-GitHub-Event` header, read here as the field
   `event`. The header is not signed, so the recipe's triggers also match a field of the body: `action`, `prNumber` or `url`. (Seen
-  in the 2026-11-17 run, from the App's webhook.)
+  in the run, from the App's webhook.)
 - A comment on a pull request is an `issue_comment` whose `issue.pull_request` holds the pull request's URL; a comment on a plain
   issue has none, which is what the trigger's `url: '/pull/'` checks. Its number is `/issue/number`, so `number` reads either. (Seen
   in the run.)
 - The App's webhook also sent `ping` and `installation` events when it was set up. They had no repository, so they counted as
-  `unmapped`, `no_channel`. (Seen in the run.) A repository's webhook sends a `ping` when it is added (GitHub's documentation, read
-  2026-11-19); what it counts as is in step 6.
+  `unmapped`, `no_channel`. (Seen in the run.) A repository's webhook sends a `ping` when it is added (GitHub's documentation);
+  what it counts as is in step 6.
 - The App's own reviews and comments carried `acme-review-agent[bot]` in `/sender/login`, and counted as `self`. (Seen in the run.)
   The machine user's carry its login there (*not run*).
 - That a repository's webhook sends the same headers and body paths as the App's follows GitHub's documentation, and was not run.
-- The delivery's ID is in `X-GitHub-Delivery`. (GitHub's documentation, read 2026-11-18; not part of the run.)
+- The delivery's ID is in `X-GitHub-Delivery`. (GitHub's documentation; not part of the run.)

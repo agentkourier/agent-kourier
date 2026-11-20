@@ -253,7 +253,8 @@ Either way Agent Kourier calls Slack's Web API with the bot token to post, so it
        Without the listener a connection in HTTP mode is not run: the broker's own connection fails the start (exit code 2),
        and a team's connection is not started.
     2. An Ingress, `<fullname>-chat`, that sends the path prefix `/chat/` to the chat Service and nothing else. Leave it off to
-       expose the Service another way (`chatListener.service.type: LoadBalancer`, or an Ingress or gateway of your own).
+       expose the Service another way (`chatListener.service.type: LoadBalancer`, an Ingress of your own, or an HTTPRoute as in
+       [With a Gateway API HTTPRoute instead of the Ingress](receive-webhooks.md#with-a-gateway-api-httproute-instead-of-the-ingress)).
     3. The IngressClass; empty leaves it to the cluster's default.
     4. A TLS Secret for the host, which you make, or the annotations of a certificate controller in `chatListener.ingress.annotations`.
        Slack sends its requests only to HTTPS URLs (Slack's documentation).
@@ -343,7 +344,7 @@ unaffected.
 In our testing (Slack's desktop web client, October 2026; mobile not checked), the status reached only clients that were open
 when it was set, a reply in the thread removed it, and it had not expired after nearly three minutes. It rendered for an app
 that had `assistant:write` with Slack's agent app feature switched off. To add the scope to an installed app, add it to the app's
-bot scopes and reinstall the app; removing a scope and reinstalling did not remove it from the token (observed 2026-10-18),
+bot scopes and reinstall the app; removing a scope and reinstalling did not remove it from the token in a test,
 so the token's scopes are not a check on the app's configuration.
 
 The manifest enables no direct messages: it has no `im:` scopes or events. The manifest includes `usergroups:read`. If

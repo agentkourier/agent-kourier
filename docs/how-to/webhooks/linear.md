@@ -9,7 +9,8 @@ session of its own, and the agent comments on Linear as the application's own us
     Needs Agent Kourier 0.6.0 or later: 0.5.x refuses `platform: webhook`. The `webhook` platform is new, and its fields may change
     in a later version. This setup was run end to end against Linear on 2026-11-17, with this mapping, on a pre-0.6.0 build of the
     broker. What this page says Linear sends was seen in that run's deliveries, and Linear can change it. Linear's behaviour and
-    labels that the run did not see come from Linear's documentation, read on 2026-11-18, and say so where they appear. Not run: the
+    labels that the run did not see come from Linear's documentation, and say so where they appear. The steps on Linear's side
+    follow that documentation, which can change: if a menu or field has moved, Linear's documentation is the reference. Not run: the
     delivery header `Linear-Delivery`, step 2's token request as written, a personal API key in place of the application, and a
     retried delivery's timestamp.
 
@@ -31,7 +32,7 @@ session of its own, and the agent comments on Linear as the application's own us
 - **An agent of your own.** The recipe ships no agent: you run an A2A agent with a streaming agent card and tools that act on Linear
   with the application's own token (step 4; [The agent](../receive-webhooks.md#the-agent)). Agent Kourier posts nothing on Linear:
   the Binding's `output: none` sends the agent's reply text nowhere, so only what its tools do reaches Linear.
-- Admin rights in the Linear workspace: Linear's documentation (read 2026-11-18) says the API settings page needs them.
+- Admin rights in the Linear workspace: Linear's documentation says the API settings page needs them.
 - A broker clock within seconds of the right time: the connection refuses a delivery whose time is more than a minute from it
   (`unverified`, `stale`).
 - `kubectl`, `curl`, `jq` and `helm`.
@@ -42,8 +43,8 @@ In the run the agent worked as a Linear OAuth application with client credential
 with no person signing in, and that acts as the application's own user. The recipe's comments also allow a personal API key, whose
 user is then the identity, with a webhook of the workspace; that setup was *not run*, and this page follows the run.
 
-In Linear, open **Settings**, **Administration**, **API**, and create an OAuth application (menu path from Linear's documentation,
-read 2026-11-18). Linear's documentation names the form's fields by what they hold, not by their labels:
+In Linear, open **Settings**, **Administration**, **API**, and create an OAuth application (menu path from Linear's documentation).
+Linear's documentation names the form's fields by what they hold, not by their labels:
 
 | Field | Value |
 |---|---|
@@ -87,9 +88,8 @@ fi
 unset resp tok
 ```
 
-The `id` is the identity. The run's own token request was not recorded, so this command is as Linear's documentation (read
-2026-11-18) describes it, not as the run sent it. In the run the identity was the ID that the webhooks put in `/actor/id` for what the
-application did.
+The `id` is the identity. The run's own token request was not recorded, so this command is as Linear's documentation describes it,
+not as the run sent it. In the run the identity was the ID that the webhooks put in `/actor/id` for what the application did.
 
 ## 3. Make the Secret
 
@@ -121,7 +121,7 @@ The recipe's prompts ask the agent to do these, with a client-credentials token 
 | Read an issue by its identifier, with its description and comments | Every trigger | The `issue` query, which takes the identifier, such as `issue(id: "ENG-12")` |
 | Create a comment on the issue | Every trigger | The `commentCreate` mutation, with `issueId` (the identifier works) and `body` in Markdown |
 
-The tools get their token as step 2 does, with the scopes they need: Linear's documentation (read 2026-11-18) lists `read`, and
+The tools get their token as step 2 does, with the scopes they need: Linear's documentation lists `read`, and
 `comments:create` for creating comments (or `write`); the run did not record which it used. Linear's documentation says a
 client-credentials token is valid for 30 days and has no refresh token, and that Linear's API refuses an expired one: the tools must
 get a new token before then, or when Linear refuses it.
@@ -307,14 +307,14 @@ starts nothing.
 | A description edit starts nothing | `/updatedFrom` holds the earlier values of what changed. An issue whose description was empty before may carry no earlier text there (not seen in the run); the field reads as empty, and the trigger does not match. |
 | A comment that names the application starts nothing | The regex wants the application's name as a word, with or without the `@`. The application may not be offered in Linear's mention list (not verified), so type its name. |
 | `accepted`, and no plan | `agentkourier_trigger_limited_total{binding="acme-webhooks/linear-plans"}` rose: with `maxConcurrent: 1`, an issue created while another plan runs is stopped. The broker's response was `200`, so Linear does not send it again, and the event is lost; the WARN line names its delivery. Raise `maxConcurrent`. |
-| A delivery failed | Linear's documentation (read 2026-11-18) says it waits 5 seconds for a `200`, counts any other response as a failure, such as the broker's `503`, tries again after 1 minute, 1 hour and 6 hours, and may turn off a webhook that keeps failing. Whether a try carries a new `webhookTimestamp` is not verified: one that carries the first attempt's time is refused as `unverified`, `stale`, once that time is more than a minute old, and never reaches a trigger. |
+| A delivery failed | Linear's documentation says it waits 5 seconds for a `200`, counts any other response as a failure, such as the broker's `503`, tries again after 1 minute, 1 hour and 6 hours, and may turn off a webhook that keeps failing. Whether a try carries a new `webhookTimestamp` is not verified: one that carries the first attempt's time is refused as `unverified`, `stale`, once that time is more than a minute old, and never reaches a trigger. |
 | A turn, and nothing on Linear | The agent's tools: a token older than 30 days, or one without a scope to comment. |
 
 ## What Linear sends
 
 - Linear signs with `Linear-Signature: <hex>`, with no prefix, and puts the time of the delivery in `/webhookTimestamp`, in
-  milliseconds. (Seen in the 2026-11-17 run.) The connection refuses one more than a minute from the broker's clock (`unverified`,
-  `stale`), as Linear's documentation (read 2026-11-18) advises.
+  milliseconds. (Seen in the run.) The connection refuses one more than a minute from the broker's clock (`unverified`,
+  `stale`), as Linear's documentation advises.
 - An Issue event carries the team's key in `/data/team/key` and the issue's identifier, such as `ENG-12`, in `/data/identifier`; a
   Comment event carries them in `/data/issue/team/key` and `/data/issue/identifier`. (Seen in the run.)
 - The actor is `/actor/id`; for what the application did, it is the application user's ID. (Seen in the run.)
@@ -323,4 +323,4 @@ starts nothing.
 - When the application comments on an issue, Linear also sends an update of the issue that subscribes the application to it. Its
   actor is the application, so it counts as `self` with the comment. (Seen in the run.)
 - A mention of the application stays plain text in `/data/body`. (Seen in the run.)
-- The delivery's ID is in `Linear-Delivery`. (Linear's documentation, read 2026-11-18; not part of the run.)
+- The delivery's ID is in `Linear-Delivery`. (Linear's documentation; not part of the run.)

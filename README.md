@@ -15,8 +15,8 @@ refuses either:
 
 - **Microsoft Teams**, a second chat platform (`platform: teams`):
   [Configure Microsoft Teams](docs/how-to/configure-teams.md).
-- **Webhooks** (`platform: webhook`): a signed webhook from GitHub, Jira Cloud, Bitbucket Cloud or Linear
-  starts a session of your agent, which answers on that service with its own tools:
+- **Webhooks** (`platform: webhook`): a signed JSON webhook from a service, such as GitHub, Jira Cloud, Bitbucket
+  Cloud or Linear, starts a session of your agent, which answers on that service with its own tools:
   [Start agents from webhooks](docs/how-to/receive-webhooks.md).
 
 Each chat platform is an adapter behind one chat interface and its conformance suite; the
@@ -27,7 +27,7 @@ without breaking a Slack `Binding`. Agents speak only A2A, so a new platform nee
 [Install with Helm](docs/how-to/install-with-helm.md) · [Architecture](docs/explanation/architecture.md) ·
 [Release notes](docs/release-notes.md)
 
-> **Status: v0.5.0.** Install the published chart and image with
+> **Status: v0.6.0.** Install the published chart and image with
 > [Install with Helm](docs/how-to/install-with-helm.md). The `v1alpha1` resource format can change before 1.0. See
 > [Status](#status). Slack HTTP mode, new in 0.5.0, is experimental. Teams and webhooks arrive in 0.6.0, both
 > experimental.
@@ -96,7 +96,7 @@ Without a broker, each of these is code in every agent that talks to chat:
   Binding turns it off with `chat.botMentions: none`. See
   [Let another agent start yours](docs/how-to/any-bot-trigger.md#let-another-agent-start-yours).
 - **Events from other services** (experimental, 0.6.0 or later). A webhook connection takes the
-  signed webhooks of GitHub, Jira Cloud, Bitbucket Cloud or Linear and starts a session of the agent
+  signed JSON webhooks of a service, such as GitHub, Jira Cloud, Bitbucket Cloud or Linear, and starts a session of the agent
   for each pull request or issue; a later event of the same one, such as a comment, continues it.
   Agent Kourier posts nothing there: the agent replies on the service with its own tools. See
   [Start agents from webhooks](docs/how-to/receive-webhooks.md).
@@ -266,9 +266,9 @@ the contract.
 
 ## Status
 
-The current release is v0.5.0: a signed image for `linux/amd64` and `linux/arm64`,
-`ghcr.io/agentkourier/agent-kourier:v0.5.0`, and the Helm chart `oci://ghcr.io/agentkourier/charts/agent-kourier`
-version `0.5.0`, which pins that image by digest. It runs as one
+The current release is v0.6.0: a signed image for `linux/amd64` and `linux/arm64`,
+`ghcr.io/agentkourier/agent-kourier:v0.6.0`, and the Helm chart `oci://ghcr.io/agentkourier/charts/agent-kourier`
+version `0.6.0`, which pins that image by digest. It runs as one
 replica with a SQLite store, or as two replicas on Postgres with a leader election
 and fencing, installed with the [Helm chart](charts/agent-kourier/README.md). Agent Kourier writes
 an audit log, exports Prometheus metrics and can export OpenTelemetry traces. See

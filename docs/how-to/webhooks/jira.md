@@ -9,7 +9,8 @@ on the issue as an Atlassian service account.
     Needs Agent Kourier 0.6.0 or later: 0.5.x refuses `platform: webhook`. The `webhook` platform is new, and its fields may change
     in a later version. This setup was run end to end against Jira Cloud on 2026-11-17, with this mapping, on a pre-0.6.0 build of
     the broker. What this page says Jira sends was seen in that run's deliveries, and Atlassian can change it. Jira's behaviour and
-    labels that the run did not see come from Atlassian's documentation, read on 2026-11-18, and say so where they appear. Not run:
+    labels that the run did not see come from Atlassian's documentation, and say so where they appear. The steps on Jira's side
+    follow that documentation, which can change: if a menu or field has moved, Atlassian's documentation is the reference. Not run:
     the delivery header `X-Atlassian-Webhook-Identifier`, a person's comment (the run saw only the agent's own), **Exclude body**
     checked, and the token as a bearer token.
 
@@ -39,10 +40,10 @@ on the issue as an Atlassian service account.
 ## 1. Create the service account
 
 The agent works as an Atlassian service account: an account of the organization that no person signs in to. Atlassian's
-documentation (read 2026-11-18) says each organization can create five service accounts for free; more need Atlassian Guard.
+documentation says each organization can create five service accounts for free; more need Atlassian Guard.
 
 1. In Atlassian Administration (`admin.atlassian.com`), open **Directory**, **Service accounts**, **Create a service account** (menu
-   path from Atlassian's documentation, read 2026-11-18). Give it a name (Atlassian's documentation says 6 to 30 letters and digits),
+   path from Atlassian's documentation). Give it a name (Atlassian's documentation says 6 to 30 letters and digits),
    and, under the app roles, a role on Jira. In the run the account had the Jira role **Guest**, which took no paid seat and is held
    to one space; a full user role takes a seat.
 2. Add the account to the Jira project with a role that can browse the project and add comments, as you would add a person. In the
@@ -50,7 +51,7 @@ documentation (read 2026-11-18) says each organization can create five service a
    issues there. Step 2 checks what it has.
 3. Create its API token: select the account, then **Create credentials**, **API token**. Give the token a name and an expiry
    (1 to 365 days), and the scopes `read:jira-work` (read issues), `write:jira-work` (add comments) and `read:jira-user` (step 2 reads
-   the account's own ID with it); the scopes and what each covers are from Atlassian's documentation, read 2026-11-18, which also says
+   the account's own ID with it); the scopes and what each covers are from Atlassian's documentation, which also says
    they cannot be changed afterwards. Choose **Create**, then **Copy to clipboard**, and save it where only you can read it, with the
    account's email address (Atlassian gives it one at `serviceaccount.atlassian.com`, shown on the account):
 
@@ -67,7 +68,7 @@ use the gateway.
 ## 2. Find the identity
 
 The connection's `spec.webhook.identity` is the service account's `accountId`, such as `712020:…`. Find your site's cloud ID (the
-`_edge/tenant_info` address is from Atlassian's documentation, read 2026-11-18), then ask Jira who the token is. The email and the
+`_edge/tenant_info` address is from Atlassian's documentation), then ask Jira who the token is. The email and the
 token go into a curl config file, so that neither is on a command line:
 
 ```sh
@@ -129,13 +130,13 @@ The recipe's prompts ask the agent to do these, each through the gateway URL of 
 |---|---|---|
 | Read an issue: its summary, description and comments | Both triggers | `GET /rest/api/3/issue/{key}` |
 | Add a comment on the issue | Both triggers | `POST /rest/api/3/issue/{key}/comment`, whose body is in Atlassian Document Format; version 2 of the API, `/rest/api/2/issue/{key}/comment`, takes a plain string |
-| Search a GitHub repository's code and read its files | Both triggers' plans | GitHub tools with a token that reads the repository, such as github-mcp-server, which the [GitHub](github.md#4-run-the-agent-and-its-tools) page runs, with its `search_code` and `get_file_contents` tools (its README at v2.2.0, read 2026-11-19); the GitHub page's agent registers `get_file_contents` and not `search_code` |
+| Search a GitHub repository's code and read its files | Both triggers' plans | GitHub tools with a token that reads the repository, such as github-mcp-server, which the [GitHub](github.md#4-run-the-agent-and-its-tools) page runs, with its `search_code` and `get_file_contents` tools (its README at v2.2.0); the GitHub page's agent registers `get_file_contents` and not `search_code` |
 
 The token expires on the date set in step 1; the tools stop working then, and Atlassian shows no warning to the agent. Put the date
 in your calendar, or give the token the shortest expiry you will renew.
 
-As of 2026-11-17 mcp-atlassian v0.24.6 reached the gateway URL only through the workaround in its issue #968 (that project's state on
-that date), so the run used a small MCP server of its own.
+When this setup was run, mcp-atlassian v0.24.6 reached the gateway URL only through the workaround in its issue #968 (that
+project's state then), so the run used a small MCP server of its own.
 
 ## 5. Apply the manifests
 
@@ -203,7 +204,7 @@ the leader yet: its Secret, or the namespace's admission. Anything else is the w
 ## 6. Turn on the webhook
 
 In Jira, open **Settings**, **System**, then, under **Advanced**, **WebHooks**, and create a webhook (menu path from Atlassian's
-documentation, read 2026-11-18). Atlassian's documentation does not name every field of the form, so the fields below other than
+documentation). Atlassian's documentation does not name every field of the form, so the fields below other than
 **Exclude body** are named by what they hold:
 
 | Field | Value |
@@ -314,12 +315,12 @@ the first changed field is read: see [Troubleshooting](#troubleshooting).
 | An edit starts nothing, and the field's name holds a space | `changed` is an `id` field, and a field name such as `Fix Version` is not an identifier, so the field is marked invalid and the second trigger, which matches it, misses. The event is still taken: a trigger that does not name `changed` can take it. A new issue carries a changelog too, which the first trigger does not read. |
 | An edit of the description starts nothing | `/changelog/items/0/field` is only the first field that the edit changed. An edit of several fields at once can put `description` second, and the trigger does not match it. Edit the description alone. |
 | `accepted`, and no plan | `agentkourier_trigger_limited_total{binding="acme-webhooks/jira-plans"}` rose: with `maxConcurrent: 1`, an issue created while another plan runs is stopped. The broker's response was `200`, so Jira does not send it again, and the event is lost; the WARN line names its delivery. Raise `maxConcurrent`. |
-| A delivery failed | Atlassian's documentation (read 2026-11-18) says Jira tries a failed delivery up to five more times, 5 to 15 minutes apart, on a `5xx` response such as the broker's `503`. It shows no delivery log; its REST API lists failed webhooks. |
+| A delivery failed | Atlassian's documentation says Jira tries a failed delivery up to five more times, 5 to 15 minutes apart, on a `5xx` response such as the broker's `503`. It shows no delivery log; its REST API lists failed webhooks. |
 | A turn, and nothing on the issue | The agent's tools: a token called on the site's URL instead of the gateway, an expired token, or a role without Add comments. Run the checks of step 2 again. |
 
 ## What Jira sends
 
-- Jira signs with `X-Hub-Signature: sha256=<hex>`. (Seen in the 2026-11-17 run.)
+- Jira signs with `X-Hub-Signature: sha256=<hex>`. (Seen in the run.)
 - The event name is `/webhookEvent` in the body: `jira:issue_created` and `jira:issue_updated`, but `comment_created` with no
   `jira:` prefix. (Seen in the run.)
 - An issue event names its actor in `/user/accountId`. A comment event has no `/user`, so `/comment/author/accountId` is what drops
@@ -328,4 +329,4 @@ the first changed field is read: see [Troubleshooting](#troubleshooting).
 - Jira adds `?triggeredByUser=<accountId>` to the URL. The broker routes by the path and does not read the query. (Seen in the run.)
 - `/changelog/items/0/field` is the first field that an edit changed. An issue created carries a changelog as well, with every field
   set: in the run `Status`, `priority`, `summary`, `reporter` and `description`, in that order. (Seen in the run.)
-- The delivery's ID is in `X-Atlassian-Webhook-Identifier`. (Atlassian's documentation, read 2026-11-18; not part of the run.)
+- The delivery's ID is in `X-Atlassian-Webhook-Identifier`. (Atlassian's documentation; not part of the run.)

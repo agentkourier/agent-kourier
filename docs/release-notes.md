@@ -3,7 +3,7 @@
 What changed in each release, newest first, and what you must do about it. The steps for an upgrade are in
 [Upgrade](how-to/upgrade.md), which has a section for each change that needs one; this page says what changed and points to it.
 
-## Version 0.6.0 (unreleased)
+## Version 0.6.0
 
 Two new platforms arrive beside Slack, both experimental:
 
@@ -13,7 +13,7 @@ Two new platforms arrive beside Slack, both experimental:
 - **Webhooks.** A ChatConnection with `spec.platform: webhook` takes signed JSON webhooks from another service, such as GitHub, Jira
   Cloud, Bitbucket Cloud or Linear, on the chat listener, and starts sessions of an agent from them. Agent Kourier posts nothing on
   such a connection; the agent answers on the service with its own tools. [Start agents from webhooks](how-to/receive-webhooks.md)
-  has the setup, and a page for each of the four services.
+  has the setup, a page for each of these four services, and [how to map another service](how-to/receive-webhooks.md#map-another-service) whose webhooks fit the same checks.
 
 A config of Slack connections loads as it did in 0.5.0. Every install runs migrations 0031 and 0032 at its first start, which only
 add tables, and an install that holds the CRDs applies the Binding and ChatConnection CRDs again.

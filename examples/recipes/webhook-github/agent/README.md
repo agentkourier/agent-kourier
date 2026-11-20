@@ -23,7 +23,7 @@ The sidecar listens on `127.0.0.1:8082` alone and holds no secret: the agent sen
 `${GITHUB_TOKEN}`, as the `Authorization` header of each request, and github-mcp-server calls GitHub's API with it. Its
 `http` mode takes the token with each request this way; GitHub App installation tokens, which it renews by itself, it
 supports only in its `stdio` mode, which the prompt agent does not speak: `agent.py` refuses an MCP `url` that is not
-`http(s)://` (github-mcp-server's `docs/github-app-auth.md` at v2.2.0, read 2026-11-19; not verified here). Hence a
+`http(s)://` (github-mcp-server's `docs/github-app-auth.md` at v2.2.0; not verified here). Hence a
 machine user's token, not an App.
 
 The Binding sends the agent the token of the Secret `github-review-agent-bearer`, which the agent checks
@@ -59,7 +59,7 @@ this agent's own.
 
 - **A machine user** with the **Read** role on the repository, not Write. GitHub's
   [repository roles](https://docs.github.com/en/organizations/managing-user-access-to-your-organizations-repositories/managing-repository-roles/repository-roles-for-an-organization)
-  (read 2026-11-19) let every role, Read included, submit reviews on pull requests, and only Write, Maintain and Admin
+  let every role, Read included, submit reviews on pull requests, and only Write, Maintain and Admin
   approve or request changes on a pull request with required reviews; its page on protected branches says required
   approvals come from people with write permissions or from a code owner. With Write, an `APPROVE` the model is talked
   into counts toward those. The roles table has no row for commenting on a pull request, and this repository has not
@@ -67,12 +67,12 @@ this agent's own.
   through the API (REST or GraphQL). If the machine user must have Write, turn on **Require review from Code Owners**
   in the branch's rule, with a `CODEOWNERS` that owns every file and does not name the machine user: GitHub's
   [code owners page](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners)
-  (read 2026-11-19) says a file with no owner can be approved by anyone with write access.
+  says a file with no owner can be approved by anyone with write access.
 - A **fine-grained personal access token** of the machine user, limited to that repository, with the repository
   permissions **Pull requests: read and write** (the pull request, its files, the review, and the comments on it) and
   **Contents: read** (`get_file_contents`). GitHub's [permissions
   list](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens)
-  names those for the REST calls (read 2026-11-19); github-mcp-server posts the review with GraphQL's
+  names those for the REST calls; github-mcp-server posts the review with GraphQL's
   `addPullRequestReview`, and this repository has not checked any token against GitHub. The machine user's login is
   the recipe ChatConnection's `identity`, and the name its comment trigger matches.
 - **A model provider and a key**: see the prompt-agent recipe's [Providers](../../prompt-agent/README.md#providers).

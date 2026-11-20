@@ -46,7 +46,7 @@ config:
 Then install the published chart with it:
 
 ```sh
-helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.5.0 \
+helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.6.0 \
   -n agent-kourier --create-namespace -f my-values.yaml
 ```
 
@@ -67,7 +67,7 @@ one broker. To serve fewer, uncomment `config:` and the list, the selector, or b
 ```
 
 ```sh
-helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.5.0 \
+helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.6.0 \
   -n agent-kourier --create-namespace -f my-values.yaml
 kubectl -n team-a create secret generic team-a-slack --from-env-file="$HOME/.config/team-a/slack-secret.env"   # botToken= and appToken= lines
 kubectl -n team-a create role agent-kourier-secrets-team-a --verb=list,watch --resource=secrets --resource-name=team-a-slack
@@ -440,7 +440,10 @@ chat Service's requests to it. Keep Agent Kourier in a namespace of its own, whe
 
 `chatListener.ingress.enabled` adds an Ingress, `<fullname>-chat`, that sends `/chat/` to the chat Service, with its `className`, `host`,
 `tls` and `annotations`. With `networkPolicy.enabled`, `networkPolicy.chatFrom` names who may reach the chat port (the ingress
-controller's pods, say), and the render requires it.
+controller's pods, say), and the render requires it. The chart makes no Gateway API route: behind a Gateway, leave the Ingress off and
+write an HTTPRoute that sends `/chat/` to the chat Service, as
+[With a Gateway API HTTPRoute instead of the Ingress](https://agentkourier.dev/how-to/receive-webhooks/#with-a-gateway-api-httproute-instead-of-the-ingress)
+shows.
 
 The chat port is meant to be reachable from the internet. Before it decodes anything of a request, the Slack adapter checks the
 request's signature with the connection's signing secret and its timestamp against a 5 minute window, and the Microsoft Teams adapter
@@ -572,7 +575,7 @@ for obj in serviceaccount/agent-kourier role/agent-kourier-secrets rolebinding/a
   kubectl -n agent-kourier annotate --overwrite "$obj" meta.helm.sh/release-name=agent-kourier meta.helm.sh/release-namespace=agent-kourier
   kubectl -n agent-kourier label --overwrite "$obj" app.kubernetes.io/managed-by=Helm
 done
-helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.5.0 -n agent-kourier -f my-values.yaml
+helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.6.0 -n agent-kourier -f my-values.yaml
 ```
 
 Or leave the volume out of the release: `--set persistence.existingClaim=agent-kourier-data`, and nothing the chart manages can delete it.

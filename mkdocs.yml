@@ -126,7 +126,6 @@ validation:
 
 nav:
   - Home: index.md
-  - Release notes: release-notes.md
   - Demo: demo/index.md
   - Tutorials:
       - tutorials/index.md
@@ -187,3 +186,4 @@ nav:
       - Delivery guarantees: explanation/delivery.md
       - High availability and failover: explanation/high-availability.md
       - Security model: explanation/security.md
+  - Release notes: release-notes.md

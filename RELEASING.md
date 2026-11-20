@@ -15,8 +15,9 @@ and `ghcr.io/agentkourier/agent-kourier-echo-agent` (linux/amd64 and linux/arm64
    the version in a label: refresh them with `go test ./test/chart -update` (with `helm` installed). For a new minor
    version (`X.Y.0`), also add `"X.Y"` at the top of `hack/docs/versions.yaml`, so the documentation site publishes
    the new release line's tags; until its first tag exists the site skips it. The same pull request points the
-   recipes' agents at the images this release publishes: `image:` in `examples/recipes/prompt-agent/agent/manifests/deployment.yaml`
-   and `examples/recipes/echo-agent/agent/manifests/deployment.yaml` names `ghcr.io/agentkourier/agent-kourier-<agent>:vX.Y.Z`,
+   recipes' agents at the images this release publishes: `image:` in every manifest under `examples/recipes` that runs one of
+   them (today `prompt-agent/agent/manifests/deployment.yaml`, `echo-agent/agent/manifests/deployment.yaml` and
+   `webhook-github/agent/manifests/deployment.yaml`) names `ghcr.io/agentkourier/agent-kourier-<agent>:vX.Y.Z`,
    and so does every page that names one of those tags (today `examples/recipes/prompt-agent/README.md`). A tag left
    behind deploys the last release's agent; `release-version` checks these tags against the chart's version too, so
    it fails the pull request. Merge it. Skip this for a prerelease tag (`vX.Y.Z-rc.1`): while one is tried, the chart
@@ -25,8 +26,9 @@ and `ghcr.io/agentkourier/agent-kourier-echo-agent` (linux/amd64 and linux/arm64
    exact commit from a push to `main`. The release gate checks the same commit and the latest attempt again; a
    missing, pending, failed or pull-request-only run blocks the release.
 4. Run the kind tiers on that commit by hand, since no workflow does ([CI](#ci) says why). The custom resource
-   route has its own runs of the tiers, two scenarios that nothing else runs, and runs of the failover tests; the last
-   two runs send the fake Slack's requests through the chat listener (Slack's HTTP mode). Each tier needs Docker and
+   route has its own runs of the tiers, two scenarios that nothing else runs, and runs of the failover tests; runs 7
+   and 8 send the fake Slack's requests through the chat listener (Slack's HTTP mode), and runs 9 and 10 add Microsoft
+   Teams and a team's second Slack app. Each tier needs Docker and
    about 8 GB free; take each down before the next comes up:
 
    ```sh
@@ -38,6 +40,8 @@ and `ghcr.io/agentkourier/agent-kourier-echo-agent` (linux/amd64 and linux/arm64
    E2E_CONFIG_SOURCE=crds E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up e2e-fast e2e-fast-down   # failover
    E2E_SLACK_MODE=http E2E_CONFIG_SOURCE=crds make e2e-fast-up e2e-fast e2e-fast-down                 # Slack HTTP mode
    E2E_SLACK_MODE=http E2E_CONFIG_SOURCE=crds E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up e2e-fast e2e-fast-down
+   E2E_TEAMS=1 E2E_CONFIG_SOURCE=crds E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up e2e-fast e2e-teams e2e-fast-down       # Microsoft Teams
+   E2E_TWO_APPS=1 E2E_CONFIG_SOURCE=crds E2E_STORE=postgres E2E_REPLICAS=2 make e2e-fast-up e2e-two-apps e2e-fast-down        # two Slack apps
    ```
 
    `make e2e-fast` and `make e2e-full` read which route the Deployment is on and run the tests of that route. What the
@@ -57,7 +61,7 @@ and `ghcr.io/agentkourier/agent-kourier-echo-agent` (linux/amd64 and linux/arm64
    6. The fast tier on Postgres with two replicas on the custom resource route, over Socket Mode: the suite, the `WH_`
       tests and the failover tests. S16 (`TestS16_FailoverLosesNoEventAndDuplicatesNone`) needs the fast tier with two replicas and
       runs on either route; `TestCR_FailoverDoesNotBlankStatus` needs the custom resource route as well. Both skip
-      anywhere else, so only this run and run 8 execute them.
+      anywhere else, so only this run and runs 8 and 9 execute them.
    7. The fast tier on the custom resource route with one replica, with the fake Slack in HTTP mode
       (`E2E_SLACK_MODE=http`): the same suite as run 3, with every event and press of the fake Slack's default app sent
       as a signed request to the chat listener instead of over Socket Mode. The full tier stays on Socket Mode: its
@@ -67,6 +71,12 @@ and `ghcr.io/agentkourier/agent-kourier-echo-agent` (linux/amd64 and linux/arm64
       what differs by mode: in HTTP mode a press sent while the leader is dead or frozen is sent again by the fake Slack
       and decided by the new leader, which must have answered at least one such retry, and the person whose press lost
       is told so once.
+   9. The fast tier on Postgres with two replicas on the custom resource route, with Microsoft Teams added (`E2E_TEAMS=1`:
+      the fake Teams service and two Teams connections in `http` mode): the Slack suite, to show that Teams changes nothing
+      for Slack, then the `TEAMS_` tests as a Job of their own (`make e2e-teams`), whose failover case needs two replicas.
+   10. The fast tier on Postgres with two replicas on the custom resource route, with a team's second Slack app
+      (`E2E_TWO_APPS=1`): `make e2e-two-apps`, the `MC_` tests and the admission steps that upgrade the release with Helm.
+      `make e2e-fast` leaves both the `TEAMS_` and the `MC_` tests out.
 
    `make e2e-crs-scenarios` and `make e2e-crs-migration` say what they need and stop if the tier is not as they need it. A failure blocks the tag.
 
