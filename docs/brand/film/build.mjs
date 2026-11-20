@@ -48,25 +48,28 @@ const HEADER = [1200, 66], COMPOSER = [860, 672];
 const shotFor = (ar, shot) => (Array.isArray(shot) ? shot : ar === '16x9' ? shot.wide : shot.tall);
 // A beat is one narration line. mg beats are drawn and last lead + line + tail; rec beats are footage shots
 // [source, in, length, out seconds, framing, pointer, command chip]. Thread close-ups are used in every format:
-// they are legible, and they leave the channel's setup lines out.
+// they are legible, and they leave the channel's setup lines out. A thread shot starts once Slack has drawn the pane
+// (S4's alert thread from 44.2 s, S1's mention thread from 38.3 s), never on its empty pane or spinner.
+// When the close's end card comes in: as the narrator says "Agent Kourier." after the pills.
+const CLOSE_END = 15.3;
 const DEMO = [
   { mg: 'p1', line: 'p1', lead: 0.4, dur: 7.1 },
-  { mg: 'p2', line: 'p2', lead: 0.2, dur: 4.5 },
-  { mg: 'p3', line: 'p3', lead: 0.2, dur: 6.6 },
-  { mg: 'reveal', line: 'reveal', lead: 0.4, dur: 7.0 },
-  { mg: 'promise', line: 'promise', lead: 0.2, dur: 7.8 },
+  { mg: 'p2', line: 'p2', lead: 0.2, dur: 4.8 },
+  { mg: 'p3', line: 'p3', lead: 0.2, dur: 8.5 },
+  { mg: 'reveal', line: 'reveal', lead: 0.4, dur: 7.5 },
+  { mg: 'promise', line: 'promise', lead: 0.2, dur: 6.6 },
   { rec: 'r1', line: 'r1', lead: 0.3, cap: 'An alert opens a session.', sub: 'Nobody typed a prompt.',
-    shots: [{ wide: [S4, 39.2, 2.4, 2.4, 'landing'], tall: [S4, 43.4, 2.4, 2.4, 'threadTop', HEADER] },
-      { wide: [S4, 43.4, 15.2, 7.6, 'threadTop', HEADER], tall: [S4, 45.8, 12.8, 7.6, 'threadTop', HEADER] }, [S4, 61.0, 4.0, 4.0, 'threadTop', HEADER]] },
+    shots: [{ wide: [S4, 39.2, 2.4, 2.4, 'landing'], tall: [S4, 44.2, 2.4, 2.4, 'threadTop', HEADER] },
+      { wide: [S4, 43.4, 15.2, 7.6, 'threadTop', HEADER], tall: [S4, 46.6, 12.0, 7.6, 'threadTop', HEADER] }, [S4, 61.0, 4.0, 4.0, 'threadTop', HEADER]] },
   { rec: 'r2', line: 'r2', lead: 0.3, cap: 'Reply in the thread.', sub: 'Same session, full context.',
     shots: [[S4, 105.2, 1.4, 2.0, 'threadBottom'], [S4, 106.6, 18.0, 6.0, 'threadTop', HEADER]] },
   { rec: 'r3', line: 'r3', lead: 0.3, cap: 'Or just ask.', sub: 'A mention opens its own thread.',
     shots: [{ wide: [S1, 18.0, 4.0, 2.0, 'wide', COMPOSER], tall: [S1, 18.0, 4.0, 2.0, 'wideTight', COMPOSER] },
-      { wide: [S1, 26.6, 1.6, 1.6, 'wide', COMPOSER], tall: [S1, 26.6, 1.6, 1.6, 'wideTight', COMPOSER] }, [S1, 37.2, 2.4, 2.4, 'threadTop', HEADER]] },
+      { wide: [S1, 26.6, 1.6, 1.6, 'wide', COMPOSER], tall: [S1, 26.6, 1.6, 1.6, 'wideTight', COMPOSER] }, [S1, 38.3, 1.7, 2.4, 'threadTop', HEADER]] },
   { rec: 'r4', line: 'r4', lead: 0.3, cap: 'It asks when it needs to.', sub: 'Answer in the thread and it carries on.',
     shots: [[S1, 147.5, 3.4, 3.4, 'threadTop', HEADER], [S1, 166.2, 13.8, 4.6, 'threadTop', HEADER]] },
   { mg: 'yaml', line: 'yaml', lead: 0.3, dur: 7.0 },
-  { mg: 'close', line: 'close', lead: 0.3, dur: 20.2, query: { endAt: 13.2 } },
+  { mg: 'close', line: 'close', lead: 0.3, dur: 22.5, query: { endAt: CLOSE_END } },
 ];
 // Beats written but not yet recorded: each joins DEMO after r4 once its recording is in raw/, with shots and a framing
 // of its own (FRAMINGS are Slack's page). Until then stills renders each one's caption over an empty card of the framing
@@ -77,10 +80,10 @@ const PENDING = [
 ];
 const TEASER = [
   { mg: 't-problem', line: 't-problem', lead: 0.3, dur: 4.8 },
-  { mg: 't-reveal', line: 't-reveal', lead: 0.2, dur: 6.6 },
-  { rec: 't1', line: 't-proof', lead: 0.2, cap: 'An alert opens a session.', sub: '', shots: [[S4, 43.4, 6.0, 2.0, 'threadTop', HEADER]] },
+  { mg: 't-reveal', line: 't-reveal', lead: 0.2, dur: 6.9 },
+  { rec: 't1', line: 't-proof', lead: 0.2, cap: 'An alert opens a session.', sub: '', shots: [[S4, 44.2, 5.2, 2.0, 'threadTop', HEADER]] },
   { rec: 't2', cap: 'Reply in the thread.', sub: '', shots: [[S4, 106.6, 6.0, 2.0, 'threadTop', HEADER]] },
-  { rec: 't3', cap: 'Or just ask.', sub: '', shots: [[S1, 37.2, 2.0, 2.0, 'threadTop', HEADER]] },
+  { rec: 't3', cap: 'Or just ask.', sub: '', shots: [[S1, 38.3, 1.7, 2.0, 'threadTop', HEADER]] },
   { mg: 't-end', dur: 2.6 },
 ];
 const CUTS = { demo: DEMO, teaser: TEASER };
@@ -243,7 +246,7 @@ async function stills(browser, ars) {
   const shots = [['p1', 5.5], ['p2', 3.6], ['p3', 5.6], ['reveal', 4.5], ['promise', 6.6], ['yaml', 5.0], ['close', 12.0], ['close', 19.0], ['t-problem', 3.6], ['t-reveal', 5.4], ['t-end', 3.0]];
   for (const ar of ars) {
     for (const [seg, t] of shots) {
-      const page = await openPage(browser, ar, { seg, t, ...(seg === 'close' ? { endAt: 13.2 } : {}) });
+      const page = await openPage(browser, ar, { seg, t, ...(seg === 'close' ? { endAt: CLOSE_END } : {}) });
       await page.screenshot({ path: join(dir, `${ar}-${seg}-${t}.png`) });
       await page.close();
     }
@@ -264,7 +267,7 @@ async function stills(browser, ars) {
 async function fitcheck(browser, ars) {
   const segs = [...new Set([...DEMO, ...TEASER].filter(b => b.mg).map(b => b.mg))];
   for (const ar of ars) for (const seg of segs) {
-    const page = await openPage(browser, ar, { seg, t: 30, ...(seg === 'close' ? { endAt: 13.2 } : {}) });
+    const page = await openPage(browser, ar, { seg, t: 30, ...(seg === 'close' ? { endAt: CLOSE_END } : {}) });
     const lines = await page.evaluate(() => [...document.querySelectorAll('[data-shrunk]')]
       .map(t => `${t.textContent} (${t.getAttribute('data-shrunk')} -> ${t.getAttribute('font-size')})`));
     for (const l of lines) console.log(`${ar} ${seg}: ${l}`);

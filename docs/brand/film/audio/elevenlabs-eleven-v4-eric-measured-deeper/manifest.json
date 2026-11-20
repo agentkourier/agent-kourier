@@ -11,52 +11,52 @@
     },
     "p2": {
       "cut": "demo",
-      "text": "But they only work when someone opens a prompt and asks.",
-      "say": "[confident, measured, authoritative] But they only work when someone opens a prompt and asks.",
+      "text": "But they sit behind a prompt, away from where your team works.",
+      "say": "[confident, measured, authoritative] But they sit behind a prompt, away from where your team works.",
       "treat": "-1/2",
-      "seconds": 3.77
+      "seconds": 4.02
     },
     "p3": {
       "cut": "demo",
-      "text": "Alerts and questions land in team chat. Putting your agent there is another project.",
-      "say": "[confident, measured, authoritative] Alerts and questions land in team chat. Putting your agent there is another project.",
+      "text": "Alerts and questions land in team chat. Putting your agent there means building threads, streaming and questions yourself.",
+      "say": "[confident, measured, authoritative] Alerts and questions land in team chat. Putting your agent there means building threads, streaming and questions yourself.",
       "treat": "-1/2",
-      "seconds": 5.47
+      "seconds": 7.36
     },
     "reveal": {
       "cut": "demo",
-      "text": "Introducing Agent Kourier: a Kubernetes-native broker between team chat and A2A agents.",
-      "say": "[confident, measured, authoritative] Introducing Agent Courier: a Kubernetes-native broker between team chat and A-to-A agents.",
+      "text": "Introducing Agent Kourier: a Kubernetes-native broker between team chat and streaming A2A agents.",
+      "say": "[confident, measured, authoritative] Introducing Agent Courier: a Kubernetes-native broker between team chat and streaming A-to-A agents.",
       "treat": "-1/2",
-      "seconds": 6.25
+      "seconds": 6.75
     },
     "promise": {
       "cut": "demo",
-      "text": "An alert, or a question, becomes an agent session, in the thread where it landed. Slack today.",
-      "say": "[confident, measured, authoritative] An alert, or a question, becomes an agent session, in the thread where it landed. Slack today.",
+      "text": "An alert, or a question, becomes an agent session in its own thread.",
+      "say": "[confident, measured, authoritative] An alert, or a question, becomes an agent session in its own thread.",
       "treat": "-1/2",
-      "seconds": 6.33
+      "seconds": 4.81
     },
     "r1": {
       "cut": "demo",
-      "text": "Your alerting posts to the channel as it always has. Agent Kourier reads the post and hands it to your agent, which investigates in the alert's thread, step by step.",
-      "say": "[confident, measured, authoritative] Your alerting posts to the channel as it always has. Agent Courier reads the post and hands it to your agent, which investigates in the alert's thread, step by step.",
+      "text": "Your alerts arrive in the channel as they always have. Agent Kourier reads each one and hands it to your agent. The agent investigates under the alert, step by step.",
+      "say": "[confident, measured, authoritative] Your alerts arrive in the channel as they always have. Agent Courier reads each one and hands it to your agent. The agent investigates under the alert, step by step.",
       "treat": "-1/2",
-      "seconds": 9.46
+      "seconds": 9.78
     },
     "r2": {
       "cut": "demo",
-      "text": "Reply in the thread, and the same session continues. Same context, nothing re-explained.",
-      "say": "[confident, measured, authoritative] Reply in the thread, and the same session continues. Same context, nothing re-explained.",
+      "text": "Reply in the thread, and the session continues with everything it already found.",
+      "say": "[confident, measured, authoritative] Reply in the thread, and the session continues with everything it already found.",
       "treat": "-1/2",
-      "seconds": 5.86
+      "seconds": 4.58
     },
     "r3": {
       "cut": "demo",
-      "text": "Or skip the alert, and just ask.",
-      "say": "[confident, measured, authoritative] Or skip the alert, and just ask.",
+      "text": "No alert? Mention Agent Kourier and ask.",
+      "say": "[confident, measured, authoritative] No alert? Mention Agent Courier and ask.",
       "treat": "-1/2",
-      "seconds": 2.67
+      "seconds": 3.53
     },
     "r4": {
       "cut": "demo",
@@ -74,10 +74,10 @@
     },
     "close": {
       "cut": "demo",
-      "text": "It works with kagent, or any A2A agent that streams. Agent Kourier keeps the thread, streams the reply, and carries the agent's questions and your answers. Slack today; more chat platforms are planned. Agent Kourier. Write the agent, not the chat integration.",
-      "say": "[confident, measured, authoritative] It works with K agent, or any A-to-A agent that streams. Agent Courier keeps the thread, streams the reply, and carries the agent's questions and your answers. Slack today; more chat platforms are planned. Agent Courier. Write the agent, not the chat integration.",
+      "text": "Agent Kourier works with kagent, or any A2A agent that streams. It keeps a session per thread, streams the reply, and carries the agent's questions and your answers. Slack is supported; Microsoft Teams and webhooks are experimental. Agent Kourier. Write the agent, not the chat integration.",
+      "say": "[confident, measured, authoritative] Agent Courier works with K agent, or any A-to-A agent that streams. It keeps a session per thread, streams the reply, and carries the agent's questions and your answers. Slack is supported; Microsoft Teams and webhooks are experimental. Agent Courier. Write the agent, not the chat integration.",
       "treat": "-1/2",
-      "seconds": 16.65
+      "seconds": 18.9
     },
     "t-problem": {
       "cut": "teaser",
@@ -88,17 +88,31 @@
     },
     "t-reveal": {
       "cut": "teaser",
-      "text": "Introducing Agent Kourier: a Kubernetes-native broker between team chat and A2A agents.",
-      "say": "[confident, measured, authoritative] Introducing Agent Courier: a Kubernetes-native broker between team chat and A-to-A agents.",
+      "text": "Introducing Agent Kourier: a Kubernetes-native broker between team chat and streaming A2A agents.",
+      "say": "[confident, measured, authoritative] Introducing Agent Courier: a Kubernetes-native broker between team chat and streaming A-to-A agents.",
       "treat": "-1/2",
-      "seconds": 6.32
+      "seconds": 6.67
     },
     "t-proof": {
       "cut": "teaser",
-      "text": "Alerts and questions become agent sessions in the thread. Slack today, more platforms planned.",
-      "say": "[confident, measured, authoritative] Alerts and questions become agent sessions in the thread. Slack today, more platforms planned.",
+      "text": "Alerts and questions become agent sessions in Slack, and in Microsoft Teams as an experiment.",
+      "say": "[confident, measured, authoritative] Alerts and questions become agent sessions in Slack, and in Microsoft Teams as an experiment.",
       "treat": "-1/2",
-      "seconds": 6.17
+      "seconds": 6.01
+    },
+    "teams": {
+      "cut": "demo",
+      "text": "In Microsoft Teams, the agent works the alert step by step too. Teams support is experimental.",
+      "say": "[confident, measured, authoritative] In Microsoft Teams, the agent works the alert step by step too. Teams support is experimental.",
+      "treat": "-1/2",
+      "seconds": 6.59
+    },
+    "pr": {
+      "cut": "demo",
+      "text": "Webhooks start sessions too. A pull request opens, and the agent reviews it on GitHub with its own tools.",
+      "say": "[confident, measured, authoritative] Webhooks start sessions too. A pull request opens, and the agent reviews it on GitHub with its own tools.",
+      "treat": "-1/2",
+      "seconds": 6.74
     }
   }
 }
