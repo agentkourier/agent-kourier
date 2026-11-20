@@ -136,7 +136,7 @@ For the other choices, add under `teams`:
 Then the chart's values. If the box's first way applies (Teams as a team connection beside Slack), keep your
 `config.chatConnection`; set `config.connectionNamespaces` (or its selector) to admit the Microsoft Teams connection's
 namespace, grant `teams` with `rbac.secretNames`, and take only `chatListener` and `networkPolicy.chatFrom` from this block.
-The chart grants only the Secret of `config.chatConnection`, so naming the Teams connection there would replace the broker's
+Of the ChatConnections you apply, the chart grants only `config.chatConnection`'s Secret by itself, so naming the Teams connection there would replace the broker's
 own Slack connection, and Slack would stop. Otherwise, on custom resources:
 
 ```yaml title="teams-values.yaml"
