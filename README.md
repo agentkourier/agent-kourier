@@ -42,7 +42,7 @@ as the team's agent. The wait for the Binding to turn Ready, about 25 seconds he
 
 ## What it looks like
 
-https://github.com/user-attachments/assets/1af66d63-78cd-437d-a3a2-2e178904d177
+https://github.com/user-attachments/assets/3ee659d7-1c0c-4fc5-aa61-e54d8369bf64
 
 An illustration of one alert thread, not captured output:
 

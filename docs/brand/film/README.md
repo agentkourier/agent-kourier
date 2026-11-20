@@ -103,14 +103,14 @@ on the render.
 ### The copy in the project README
 
 The project README plays the 16:9 demo from a GitHub attachment
-(`https://github.com/user-attachments/assets/1af66d63-78cd-437d-a3a2-2e178904d177`). Attachments on the
-free plan are capped at 10 MB, so that copy is a two-pass encode of the finished cut at 570 kb/s
-(8.7 MB, 1080p). After a re-cut, encode again, drop the file into any GitHub comment box in this
+(`https://github.com/user-attachments/assets/3ee659d7-1c0c-4fc5-aa61-e54d8369bf64`). Attachments on the
+free plan are capped at 10 MB, so that copy is a two-pass encode of the finished cut at 480 kb/s
+(about 8.6 MB for the 116 s cut, 1080p). After a re-cut, encode again, drop the file into any GitHub comment box in this
 repository without submitting it, and replace the URL in `README.md` with the one GitHub inserts.
 
 ```sh
-ffmpeg -y -i out/agent-kourier-demo-16x9.mp4 -c:v libx264 -preset veryslow -b:v 570k -pass 1 -an -f null /dev/null
-ffmpeg -y -i out/agent-kourier-demo-16x9.mp4 -c:v libx264 -preset veryslow -b:v 570k -pass 2 \
+ffmpeg -y -i out/agent-kourier-demo-16x9.mp4 -c:v libx264 -preset veryslow -b:v 480k -pass 1 -an -f null /dev/null
+ffmpeg -y -i out/agent-kourier-demo-16x9.mp4 -c:v libx264 -preset veryslow -b:v 480k -pass 2 \
   -c:a aac -b:a 112k -movflags +faststart build/readme/agent-kourier-demo.mp4
 ```
 
