@@ -9,7 +9,7 @@ Each service has a page of its own, with the setup from an empty account to a wo
 
 | Service | The agent works as | The recipe's flows |
 |---|---|---|
-| [GitHub](webhooks/github.md) | A GitHub App | A pull request opened or pushed to gets a review; a comment that mentions the App gets a reply. |
+| [GitHub](webhooks/github.md) | A machine user, with its fine-grained personal access token | A pull request opened or pushed to gets a review; a comment that mentions the machine user gets a reply. |
 | [Jira Cloud](webhooks/jira.md) | An Atlassian service account | An issue created gets a plan as a comment; an edit of its summary or description gets a revised plan. |
 | [Bitbucket Cloud](webhooks/bitbucket.md) | A repository access token | A pull request created or updated gets a review; a comment that mentions the token gets a reply. |
 | [Linear](webhooks/linear.md) | An OAuth application with client credentials | An issue created gets a plan; a change of its description gets a revised plan; a comment that names the app gets a reply. |
@@ -101,8 +101,11 @@ Binding names it, the Binding's `BackendReachable` condition is `True` (see [A f
 **What it must be.** Any A2A server that Agent Kourier can call: its card advertises streaming and lists a JSON-RPC interface
 ([Agent contract](../reference/agent-contract.md#discovery-and-transport)). A Binding's `Ready` waits on `BackendReachable` and
 `ChannelJoined`. `BackendReachable` is `True` only once a fresh fetch of the card succeeds and the card is one the broker can use
-(`StreamingUnsupported` when it does not advertise streaming); `ChannelJoined` is `True` while the webhook connection runs. Each recipe has an AgentBackend of the `a2a` dialect whose `url` is a placeholder, `REPLACE-ME`: the recipes ship
-no agent. See [Connect a generic A2A agent](connect-a2a-agent.md), or [Connect a kagent agent](connect-kagent.md) for a kagent agent.
+(`StreamingUnsupported` when it does not advertise streaming); `ChannelJoined` is `True` while the webhook connection runs. The
+GitHub recipe ships an agent, which its AgentBackend names ([Run the agent and its tools](webhooks/github.md#4-run-the-agent-and-its-tools)).
+The Jira, Bitbucket and Linear recipes ship none: each has an AgentBackend of the `a2a` dialect whose `url` is a placeholder,
+`REPLACE-ME`. See [Connect a generic A2A agent](connect-a2a-agent.md), or [Connect a kagent agent](connect-kagent.md) for a kagent
+agent.
 
 **What it must do.**
 
@@ -122,7 +125,8 @@ no agent. See [Connect a generic A2A agent](connect-a2a-agent.md), or [Connect a
 recipe is an A2A agent from one YAML file: a model, a prompt and the MCP tools it may call. Follow its steps 1 to 4, then:
 
 - In `agent.yaml`, write in `instructions` what the agent does with an event, and that it must never ask a question (the example's
-  line "ask with ask_user" is for chat: here nobody can answer). Give it one MCP entry: the `url` of an MCP server for the service and
+  line "ask with ask_user" is for chat: here nobody can answer). Set `PROMPT_AGENT_ASK_USER=0` in its Deployment, so that the model
+  is not offered `ask_user` at all, as the GitHub recipe's agent does. Give it one MCP entry: the `url` of an MCP server for the service and
   the tools in `allowed_tools` (see [Tools for the agent](#tools-for-the-agent)).
 - In the Binding of the webhook connection, leave `interactions` out, and name the agent's bearer token in
   `identity.tokenSecretRef`. The Secret must be in the Binding's namespace (`acme-webhooks`), so make the recipe's `prompt-agent-bearer`
@@ -139,7 +143,8 @@ As of 2026-11-17, no off-the-shelf MCP server fitted these setups when they were
 checked here):
 
 - github-mcp-server v2.2.0 renewed a GitHub App's installation token in its stdio mode only; its HTTP mode took a bearer token with
-  each request.
+  each request. The GitHub recipe's agent therefore runs it in its HTTP mode with a machine user's fine-grained personal access
+  token, not an App's (github-mcp-server's `docs/github-app-auth.md` at v2.2.0, read 2026-11-19; not verified here).
 - mcp-atlassian v0.24.6 reached the Atlassian API gateway URL, which an Atlassian service account's token needs, only through the
   workaround in its issue #968.
 - No Bitbucket MCP server took a repository access token over HTTP.

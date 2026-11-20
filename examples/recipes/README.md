@@ -24,14 +24,14 @@ from a prompt, a model and a few MCP tools, without writing one, should start wi
 
 Four recipes start from a service's signed webhooks instead of a chat channel, through a ChatConnection of the `webhook`
 platform. They are experimental, and need Agent Kourier 0.6.0 or later (0.5.x refuses `platform: webhook`). Agent Kourier
-posts nothing on the service: the agent posts there with its own tools. Each ships the Agent Kourier resources only, and
-no agent: you run an A2A agent with that service's tools. Each needs the chart's chat listener reachable over HTTPS from
+posts nothing on the service: the agent posts there with its own tools. `webhook-github` ships its agent too; the other
+three ship the Agent Kourier resources only, and no agent: you run an A2A agent with that service's tools. Each needs the chart's chat listener reachable over HTTPS from
 the service. Each README points at its page under [Start agents from webhooks](../../docs/how-to/receive-webhooks.md),
 which has the steps from an empty account to a tested agent.
 
 | Recipe | Starts from | The agent |
 |---|---|---|
-| [`webhook-github`](webhook-github/README.md) | A GitHub App's webhook: a pull request opened or pushed to, and a comment that mentions the App. | Reviews the pull request, and replies to the mention. |
+| [`webhook-github`](webhook-github/README.md) | A repository's webhook: a pull request opened or pushed to, and a comment that mentions the agent's machine user. | Reviews the pull request, and replies to the mention, as the machine user; the recipe ships it (the prompt agent's image and github-mcp-server). |
 | [`webhook-bitbucket`](webhook-bitbucket/README.md) | A Bitbucket Cloud repository webhook: a pull request created or updated, and a comment that mentions the agent. | Reviews the pull request, and replies to the mention. |
 | [`webhook-jira`](webhook-jira/README.md) | A Jira Cloud admin webhook: an issue created, and an edit of its summary or description. | Comments with a plan, and with a revised plan. |
 | [`webhook-linear`](webhook-linear/README.md) | A Linear webhook: an issue created, an edit of its description, and a comment that mentions the agent. | Comments with a plan, a revised plan, and a reply. |

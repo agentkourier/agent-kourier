@@ -12,8 +12,9 @@ which is experimental and needs Agent Kourier 0.6.0 or later. A team that is new
 documentation agent; a team that wants its own agent without writing one, with the fourth.
 
 The other four, `webhook-github`, `webhook-jira`, `webhook-bitbucket` and `webhook-linear`, start an agent from another
-service's signed webhooks. They are experimental, need Agent Kourier 0.6.0 or later, and ship no agent: they hold the
-Agent Kourier resources only, for an A2A agent of yours that acts on the service with its own tools.
+service's signed webhooks. They are experimental, and need Agent Kourier 0.6.0 or later. `webhook-github` ships an agent that
+posts on GitHub as a machine user; the other three hold the Agent Kourier resources only, for an A2A agent of yours that acts on
+the service with its own tools.
 [Start agents from webhooks](receive-webhooks.md) and its page for each service walk through them.
 
 `examples/recipes/echo-agent` is not one of the nine: it is a plain A2A agent with no model, with Agent Kourier files for

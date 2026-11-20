@@ -45,7 +45,7 @@ The guides assume you know Kubernetes and Helm, and link to [explanation](../exp
   `custom-bot-trigger`, a CI bot's failure posts to an agent of your own, `docs-agent`, answers from documentation, and
   `prompt-agent`, an agent defined by a prompt. One for Microsoft Teams (experimental), `prompt-agent-teams`, that agent
   with Alertmanager's alerts in a Teams channel. Four for webhooks (experimental), from GitHub, Jira Cloud, Bitbucket Cloud
-  and Linear, which ship no agent yet, each walked through from [Start agents from webhooks](receive-webhooks.md).
+  and Linear, of which only GitHub's ships an agent yet, each walked through from [Start agents from webhooks](receive-webhooks.md).
 
 ## Security
 
