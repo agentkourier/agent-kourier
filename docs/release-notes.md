@@ -41,6 +41,11 @@ Microsoft Teams ChatConnections](how-to/upgrade.md#upgrade-to-the-release-that-t
 - **A span for each verified webhook request**, `agentkourier.webhook.request`, with the connection, the outcome and reason, the event's
   ID and the delivery ID; a request that is not verified has none. The intake's span is its child and the turn it starts is in its trace, and the delivery's log
   lines carry its `trace_id`, so a delivery is found by its delivery ID in the trace backend.
+- **A span for each verified Microsoft Teams activity request**, `agentkourier.teams.request`, on a connection in `http` mode, with the
+  connection, the activity's type and ID, and the outcome; a request refused at its token, one whose body is no activity, and one of
+  another tenant have none. The intake's span is its child, a message's too though its post is handed on after the response, and the turn
+  it starts is in its trace; the lines logged for the request, on its channel's lane as well, carry its `trace_id`. Microsoft Graph's
+  notifications and polls, and Socket mode, have no such span.
 - **`agentkourier_chat_listener_requests_total` has two new labels**: `platform` (`slack`, `teams`, `webhook` or `other`) and `connection` (the
   ChatConnection the path names, while the leader serves it, else `unknown`). A rule that sums the counter reads as before.
 - **Four recipes**: `webhook-github`, `webhook-jira`, `webhook-bitbucket` and `webhook-linear`, each a ChatConnection, a Binding and an
