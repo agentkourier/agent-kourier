@@ -193,12 +193,14 @@ its bearer token, or none, in the Binding's `identity` ([Create the Binding iden
 ### A GitHub App instead of a machine user
 
 The connection takes a GitHub App's events as well as a machine user's: the setup's run was made with an App, whose own reviews
-and comments carried `<app-slug>[bot]` in `/sender/login` (in the run, `acme-review-agent[bot]`), so with an App `spec.webhook.identity` is that login, `[bot]` included.
-The recipe's agent cannot act as an App. An App acts with installation tokens, which expire after an hour (GitHub's documentation);
-github-mcp-server renews them by itself only in its `stdio` mode, and the prompt agent reaches MCP servers over HTTP only
-(github-mcp-server's `docs/github-app-auth.md` at v2.2.0; not verified here). To act as an App, run an agent of your own that
-renews the token: one that runs github-mcp-server in `stdio` mode, or that mints installation tokens itself. The recipe's reply
-trigger matches a mention of the machine user's login; with an App, change it to the mention your users write (not run).
+and comments carried `<app-slug>[bot]` in `/sender/login` (in the run, `acme-review-agent[bot]`), so with an App
+`spec.webhook.identity` is that login, `[bot]` included. The recipe's agent acts as an App only until its token expires. An App
+acts with installation tokens, which expire after an hour (GitHub's documentation). Given one in place of the personal access
+token, the recipe's agent posts as the App (seen in a run), and then no longer: github-mcp-server renews installation tokens by
+itself only in its `stdio` mode, and the prompt agent reaches MCP servers over HTTP only (github-mcp-server's
+`docs/github-app-auth.md` at v2.2.0; not verified here). To act as an App for good, run an agent of your own that renews the
+token: one that runs github-mcp-server in `stdio` mode, or that mints installation tokens itself. The recipe's reply trigger
+matches a mention of the machine user's login; with an App, change it to the mention your users write (not run).
 
 ## 5. Apply the manifests
 
