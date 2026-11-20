@@ -14,37 +14,37 @@
     {
       "id": "p2",
       "shot": "Problem 2",
-      "text": "But they only work when someone opens a prompt and asks."
+      "text": "But they sit behind a prompt, away from where your team works."
     },
     {
       "id": "p3",
       "shot": "Problem 3",
-      "text": "Alerts fire in your monitoring. Questions come up in chat. Your agents hear neither."
+      "text": "Alerts and questions land in team chat. Putting your agent there means building threads, streaming and questions yourself."
     },
     {
       "id": "reveal",
       "shot": "Reveal",
-      "text": "Introducing Agent Kourier: a Kubernetes-native broker between team chat and A2A agents."
+      "text": "Introducing Agent Kourier: a Kubernetes-native broker between team chat and streaming A2A agents."
     },
     {
       "id": "promise",
       "shot": "Promise",
-      "text": "An alert, or a question, becomes an agent session, in the thread where it landed. Slack today."
+      "text": "An alert, or a question, becomes an agent session in its own thread."
     },
     {
       "id": "r1",
       "shot": "R1 alert thread",
-      "text": "When an alert lands in the channel, Agent Kourier picks it up, opens the thread, and hands it to your agent. It investigates right there, step by step, and reports what it found."
+      "text": "Your alerts arrive in the channel as they always have. Agent Kourier reads each one and hands it to your agent. The agent investigates under the alert, step by step."
     },
     {
       "id": "r2",
       "shot": "R2 thread reply",
-      "text": "Reply in the thread, and the same session continues. Same context, nothing re-explained."
+      "text": "Reply in the thread, and the session continues with everything it already found."
     },
     {
       "id": "r3",
       "shot": "R3 mention",
-      "text": "Or skip the alert, and just ask."
+      "text": "No alert? Mention Agent Kourier and ask."
     },
     {
       "id": "r4",
@@ -52,14 +52,24 @@
       "text": "When the agent needs a decision, it asks, and waits for your answer."
     },
     {
+      "id": "teams",
+      "shot": "Teams thread",
+      "text": "In Microsoft Teams, the agent works the alert step by step too. Teams support is experimental."
+    },
+    {
+      "id": "pr",
+      "shot": "GitHub pull request",
+      "text": "Webhooks start sessions too. A pull request opens, and the agent reviews it on GitHub with its own tools."
+    },
+    {
       "id": "yaml",
       "shot": "T1 Binding",
-      "text": "Teams add one Binding, in YAML, next to their agent. The platform wiring is shared."
+      "text": "A team applies a Binding next to its agent. The agent needs no chat code."
     },
     {
       "id": "close",
       "shot": "Close",
-      "text": "It works with kagent, or any A2A agent that streams. It's a two-way session: it answers as it works, asks when it needs you, and keeps the context when you reply. Slack today; more chat platforms are planned. Agent Kourier. Write the agent, not the chat integration."
+      "text": "Agent Kourier works with kagent, or any A2A agent that streams. It keeps a session per thread, streams the reply, and carries the agent's questions and your answers. Slack is supported; Microsoft Teams and webhooks are experimental. Agent Kourier. Write the agent, not the chat integration."
     }
   ],
   "teaser": [
@@ -71,12 +81,12 @@
     {
       "id": "t-reveal",
       "shot": "Reveal",
-      "text": "Introducing Agent Kourier: a Kubernetes-native broker between team chat and A2A agents."
+      "text": "Introducing Agent Kourier: a Kubernetes-native broker between team chat and streaming A2A agents."
     },
     {
       "id": "t-proof",
       "shot": "R1 to R3",
-      "text": "Alerts and questions become agent sessions in the thread. Slack today, more platforms planned."
+      "text": "Alerts and questions become agent sessions in Slack, and in Microsoft Teams as an experiment."
     }
   ]
 }

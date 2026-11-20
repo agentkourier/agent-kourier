@@ -5,7 +5,7 @@ Narration of the Agent Kourier demo (docs/brand/film/narration.json, "demo").
 Cue times read from the 16:9 render with ffmpeg silencedetect.
 
 1
-00:00:00.500 --> 00:00:02.800
+00:00:00.500 --> 00:00:02.750
 You've put AI agents on Kubernetes.
 
 2
@@ -14,95 +14,107 @@ They can read logs, check rollouts,
 and find the cause.
 
 3
-00:00:07.350 --> 00:00:10.950
-But they only work when someone
-opens a prompt and asks.
+00:00:07.400 --> 00:00:11.050
+But they sit behind a prompt,
+away from where your team works.
 
 4
-00:00:11.800 --> 00:00:13.600
-Alerts fire in your monitoring.
+00:00:12.100 --> 00:00:14.450
+Alerts and questions land in team chat.
 
 5
-00:00:13.950 --> 00:00:15.300
-Questions come up in chat.
+00:00:14.800 --> 00:00:19.350
+Putting your agent there means building threads,
+streaming and questions yourself.
 
 6
-00:00:15.650 --> 00:00:17.300
-Your agents hear neither.
-
-7
-00:00:18.600 --> 00:00:20.450
+00:00:20.850 --> 00:00:22.650
 Introducing Agent Kourier:
 
-8
-00:00:20.700 --> 00:00:24.650
+7
+00:00:22.950 --> 00:00:27.250
 a Kubernetes-native broker between team chat
-and A2A agents.
+and streaming A2A agents.
+
+8
+00:00:28.200 --> 00:00:32.750
+An alert, or a question, becomes an agent session
+in its own thread.
 
 9
-00:00:25.450 --> 00:00:30.400
-An alert, or a question, becomes an agent session,
-in the thread where it landed.
+00:00:34.900 --> 00:00:37.550
+Your alerts arrive in the channel
+as they always have.
 
 10
-00:00:30.750 --> 00:00:31.600
-Slack today.
+00:00:37.950 --> 00:00:40.900
+Agent Kourier reads each one
+and hands it to your agent.
 
 11
-00:00:33.400 --> 00:00:39.450
-When an alert lands in the channel, Agent Kourier picks it up,
-opens the thread, and hands it to your agent.
+00:00:41.400 --> 00:00:44.350
+The agent investigates under the alert,
+step by step.
 
 12
-00:00:39.900 --> 00:00:43.850
-It investigates right there, step by step,
-and reports what it found.
+00:00:48.900 --> 00:00:53.250
+Reply in the thread, and the session continues
+with everything it already found.
 
 13
-00:00:47.350 --> 00:00:50.400
-Reply in the thread,
-and the same session continues.
+00:00:56.850 --> 00:01:00.100
+No alert? Mention Agent Kourier and ask.
 
 14
-00:00:50.650 --> 00:00:52.950
-Same context, nothing re-explained.
-
-15
-00:00:55.300 --> 00:00:57.700
-Or skip the alert, and just ask.
-
-16
-00:01:01.350 --> 00:01:05.650
+00:01:02.850 --> 00:01:07.100
 When the agent needs a decision,
 it asks, and waits for your answer.
 
+15
+00:01:10.900 --> 00:01:14.650
+In Microsoft Teams, the agent works the alert
+step by step too.
+
+16
+00:01:15.250 --> 00:01:17.000
+Teams support is experimental.
+
 17
-00:01:09.350 --> 00:01:12.950
-Teams add one Binding, in YAML,
-next to their agent.
+00:01:18.900 --> 00:01:20.500
+Webhooks start sessions too.
 
 18
-00:01:13.350 --> 00:01:15.250
-The platform wiring is shared.
+00:01:20.900 --> 00:01:25.400
+A pull request opens, and the agent reviews it
+on GitHub with its own tools.
 
 19
-00:01:16.950 --> 00:01:20.500
-It works with kagent,
-or any A2A agent that streams.
+00:01:26.900 --> 00:01:29.450
+A team applies a Binding next to its agent.
 
 20
-00:01:20.800 --> 00:01:26.900
-It's a two-way session: it answers as it works,
-asks when it needs you, and keeps the context when you reply.
+00:01:29.800 --> 00:01:31.600
+The agent needs no chat code.
 
 21
-00:01:27.400 --> 00:01:30.050
-Slack today; more chat platforms are planned.
+00:01:33.800 --> 00:01:38.150
+Agent Kourier works with kagent,
+or any A2A agent that streams.
 
 22
-00:01:30.700 --> 00:01:31.650
-Agent Kourier.
+00:01:38.600 --> 00:01:44.150
+It keeps a session per thread, streams the reply,
+and carries the agent's questions and your answers.
 
 23
-00:01:32.050 --> 00:01:34.450
+00:01:44.600 --> 00:01:48.300
+Slack is supported;
+Microsoft Teams and webhooks are experimental.
+
+24
+00:01:48.950 --> 00:01:49.800
+Agent Kourier.
+
+25
+00:01:50.150 --> 00:01:52.500
 Write the agent, not the chat integration.

@@ -38,11 +38,11 @@ ffmpeg needs libx264 (`brew install ffmpeg`).
 
 ## v2: the marketing cut (current)
 
-Narrated, with real Slack footage. The v1 files above are kept in `out/v1/`; they use a retired logo.
+Narrated, with real Slack, Microsoft Teams and GitHub footage. The v1 files above are kept in `out/v1/`; they use a retired logo.
 
 | File | What |
 |---|---|
-| `out/agent-kourier-demo-{16x9,9x16,1x1}.mp4` | The demo cut, 98 s: animated problem and solution, real footage, animated setup and close. |
+| `out/agent-kourier-demo-{16x9,9x16,1x1}.mp4` | The demo cut, 116 s: animated problem and solution, real footage, animated setup and close. |
 | `out/agent-kourier-teaser-{16x9,9x16,1x1}.mp4` | The 20 s teaser cut from it. |
 | `out/poster-*.png`, `out/contact-sheet-{demo,teaser}-*.png`, `out/storyboard.{pdf,png,html}` | Poster frame, contact sheets, storyboard. |
 | `film.html` | The motion graphics and the frame that sits around footage. Copy, palette and layouts at the top; the mark is `docs/brand/assets/svg/agent-kourier-mark-dark.svg`. |
@@ -62,10 +62,14 @@ REDO=close node build.mjs demo          # rebuild one beat, reuse the rest
 node build.mjs sheets && node build.mjs storyboard
 ```
 
-Rules the v2 film keeps: every Slack frame is a real recording of the kind sandbox (seeded faults, real agent
-output), cropped to the message list or the thread so the workspace name never shows; sped-up footage is
-disclosed in the note under every footage shot; the Binding on screen is the one the demo ran with, except its channel ID, which is a placeholder; Slack is named as the supported platform today, with more planned, and no other platform is named.
-The Chrome extension's pointer is painted out only where it sat on blank chrome; shots where it covered text were reframed or retimed.
+Rules the v2 film keeps: every Slack, Teams and GitHub frame is a real recording of the kind sandbox (seeded faults,
+real agent output). Slack is cropped to the message list or the thread so the workspace name never shows; Teams is
+cropped to the card and the thread so neither the tenant's name nor the "<name> used a Workflow template" footer shows;
+on GitHub the account that opened the pull request (its handle and avatars) is blurred (`BLUR` in `build.mjs`), and the
+review is the GitHub App's. Sped-up footage is disclosed in the note under every footage shot; the Binding on screen is
+the one the demo ran with, except its channel ID, which is a placeholder. Slack is named as supported, Microsoft Teams
+and webhooks as experimental. The Chrome extension's pointer is painted out only where it sat on blank chrome; shots
+where it covered text were reframed or retimed.
 
 ### The copies on the site
 
@@ -99,14 +103,14 @@ on the render.
 ### The copy in the project README
 
 The project README plays the 16:9 demo from a GitHub attachment
-(`https://github.com/user-attachments/assets/1af66d63-78cd-437d-a3a2-2e178904d177`). Attachments on the
-free plan are capped at 10 MB, so that copy is a two-pass encode of the finished cut at 570 kb/s
-(8.7 MB, 1080p). After a re-cut, encode again, drop the file into any GitHub comment box in this
+(`https://github.com/user-attachments/assets/3ee659d7-1c0c-4fc5-aa61-e54d8369bf64`). Attachments on the
+free plan are capped at 10 MB, so that copy is a two-pass encode of the finished cut at 480 kb/s
+(about 8.6 MB for the 116 s cut, 1080p). After a re-cut, encode again, drop the file into any GitHub comment box in this
 repository without submitting it, and replace the URL in `README.md` with the one GitHub inserts.
 
 ```sh
-ffmpeg -y -i out/agent-kourier-demo-16x9.mp4 -c:v libx264 -preset veryslow -b:v 570k -pass 1 -an -f null /dev/null
-ffmpeg -y -i out/agent-kourier-demo-16x9.mp4 -c:v libx264 -preset veryslow -b:v 570k -pass 2 \
+ffmpeg -y -i out/agent-kourier-demo-16x9.mp4 -c:v libx264 -preset veryslow -b:v 480k -pass 1 -an -f null /dev/null
+ffmpeg -y -i out/agent-kourier-demo-16x9.mp4 -c:v libx264 -preset veryslow -b:v 480k -pass 2 \
   -c:a aac -b:a 112k -movflags +faststart build/readme/agent-kourier-demo.mp4
 ```
 

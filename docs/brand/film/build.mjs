@@ -1,6 +1,7 @@
 // Builds the v2 film: motion graphics from film.html, real footage from raw/, narration from audio/.
 //
 //   node build.mjs stills [16x9 ...]           review stills of every motion-graphics segment and footage frame
+//   node build.mjs fitcheck [16x9 ...]         list every motion-graphics line that had to shrink to fit its width
 //   node build.mjs demo [16x9 9x16 1x1]        the demo cut
 //   node build.mjs teaser [16x9 9x16 1x1]      the 20-second teaser
 //   node build.mjs sheets                      contact sheets and posters from the finished files in out/
@@ -11,7 +12,7 @@
 import { chromium } from 'playwright';
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -30,15 +31,30 @@ const reuse = (id, file) => REDO && !REDO.has(id) && existsSync(file);
 const FORMATS = { '16x9': [1920, 1080], '9x16': [1080, 1920], '1x1': [1080, 1080] };
 // Where footage sits in each format.
 // 9:16 stops at y 1680 so nothing sits under a phone app's own controls.
-const ZONES = { '16x9': [860, 72, 1000, 936], '9x16': [60, 480, 960, 1200], '1x1': [40, 240, 1000, 760] };
-// The recordings are 2880 x 1864 captures of a 1440-point screen; Slack's page starts 344 px down while the
-// extension's "debugging this browser" bar is showing, which it is in every stretch used here.
+const ZONES = { '16x9': [860, 60, 1000, 900], '9x16': [60, 480, 960, 1200], '1x1': [40, 240, 1000, 760] };
+// The recordings are 2880 x 1864 captures of a 1440-point screen (scale 2). In the Slack takes, Slack's page starts 344 px
+// down while the extension's "debugging this browser" bar is showing, which it is in every stretch used here; the Teams
+// and GitHub takes were made without the extension, so their framings are in screen points (oy 0).
 const SRC = { scale: 2, oy: 344 };
-// Framings in Slack page coordinates [x, y, w, h]. They stop short of the right and bottom edges, where the
-// extension draws an orange glow, and start right of the sidebar, which carries the workspace name.
-const FRAMINGS = { wide: [400, 40, 1036, 717], wideTight: [400, 150, 720, 607], landing: [404, 494, 640, 254], threadTop: [1030, 40, 404, 539], threadBottom: [1030, 217, 404, 539], threadLow: [1030, 452, 404, 278] };
+const SRC_OY = { 'teams-3': 0, 'pr-4': 0 };
+const oyOf = src => SRC_OY[src] ?? SRC.oy;
+// Framings [x, y, w, h]. The Slack ones are in Slack page coordinates; they stop short of the right and bottom edges, where
+// the extension draws an orange glow, and start right of the sidebar, which carries the workspace name. The Teams and
+// GitHub ones are in screen points and leave out the owner's names: teamsCard stops above the card's "<name> used a
+// Workflow template" footer, teamsThread starts below it once the pane has scrolled (44.6 s on), and the sidebar, with the
+// tenant's name, is outside both. GitHub's handle and avatar are blurred instead (BLUR).
+const FRAMINGS = {
+  wide: [400, 40, 1036, 717], wideTight: [400, 150, 720, 607], landing: [404, 494, 640, 254], threadTop: [1030, 40, 404, 539], threadBottom: [1030, 217, 404, 539], threadLow: [1030, 452, 404, 278],
+  teamsCard: [405, 228, 680, 456], teamsThread: [1034, 308, 394, 380], prPage: [100, 320, 890, 480], prReview: [172, 210, 800, 482],
+};
+// Rectangles blurred before the crop, per recording: [from, to (source seconds), x, y, w, h (screen points)]. pr-4: the
+// owner's handle in "wants to merge", their avatar and handle on the opening comment, the commit's avatar (all until the
+// page scrolls at 20.2 s), and GitHub's Copilot promotion at the top right edge.
+const BLUR = {
+  'pr-4': [[7.5, 20.5, 200, 374, 68, 24], [7.5, 20.5, 109, 474, 46, 46], [7.5, 20.5, 183, 486, 66, 22], [7.5, 20.5, 207, 697, 24, 24], [7.5, 20.5, 930, 330, 60, 36]],
+};
 
-const S1 = 'session-1', S4 = 'session-4-alert-retake';
+const S1 = 'session-1', S4 = 'session-4-alert-retake', T3 = 'teams-3', P4 = 'pr-4';
 // Where the Chrome extension's pointer rests in a shot, in page coordinates, so it can be painted out. It is only ever
 // painted out over blank chrome (the thread header, the empty end of the composer); shots where it covered text are
 // reframed or retimed instead, so no message pixel is altered.
@@ -47,32 +63,42 @@ const HEADER = [1200, 66], COMPOSER = [860, 672];
 const shotFor = (ar, shot) => (Array.isArray(shot) ? shot : ar === '16x9' ? shot.wide : shot.tall);
 // A beat is one narration line. mg beats are drawn and last lead + line + tail; rec beats are footage shots
 // [source, in, length, out seconds, framing, pointer, command chip]. Thread close-ups are used in every format:
-// they are legible, and they leave the channel's setup lines out.
+// they are legible, and they leave the channel's setup lines out. A thread shot starts once Slack has drawn the pane
+// (S4's alert thread from 44.2 s, S1's mention thread from 38.3 s), never on its empty pane or spinner.
+// When the close's end card comes in: as the narrator says "Agent Kourier." after the pills.
+const CLOSE_END = 15.3;
 const DEMO = [
   { mg: 'p1', line: 'p1', lead: 0.4, dur: 7.1 },
-  { mg: 'p2', line: 'p2', lead: 0.2, dur: 4.5 },
-  { mg: 'p3', line: 'p3', lead: 0.2, dur: 6.6 },
-  { mg: 'reveal', line: 'reveal', lead: 0.4, dur: 7.0 },
-  { mg: 'promise', line: 'promise', lead: 0.2, dur: 7.8 },
+  { mg: 'p2', line: 'p2', lead: 0.2, dur: 4.8 },
+  { mg: 'p3', line: 'p3', lead: 0.2, dur: 8.5 },
+  { mg: 'reveal', line: 'reveal', lead: 0.4, dur: 7.5 },
+  { mg: 'promise', line: 'promise', lead: 0.2, dur: 6.6 },
   { rec: 'r1', line: 'r1', lead: 0.3, cap: 'An alert opens a session.', sub: 'Nobody typed a prompt.',
-    shots: [{ wide: [S4, 39.2, 2.4, 2.4, 'landing'], tall: [S4, 43.4, 2.4, 2.4, 'threadTop', HEADER] },
-      { wide: [S4, 43.4, 15.2, 7.6, 'threadTop', HEADER], tall: [S4, 45.8, 12.8, 7.6, 'threadTop', HEADER] }, [S4, 61.0, 4.0, 4.0, 'threadTop', HEADER]] },
+    shots: [{ wide: [S4, 39.2, 2.4, 2.4, 'landing'], tall: [S4, 44.2, 2.4, 2.4, 'threadTop', HEADER] },
+      { wide: [S4, 43.4, 15.2, 7.6, 'threadTop', HEADER], tall: [S4, 46.6, 12.0, 7.6, 'threadTop', HEADER] }, [S4, 61.0, 4.0, 4.0, 'threadTop', HEADER]] },
   { rec: 'r2', line: 'r2', lead: 0.3, cap: 'Reply in the thread.', sub: 'Same session, full context.',
     shots: [[S4, 105.2, 1.4, 2.0, 'threadBottom'], [S4, 106.6, 18.0, 6.0, 'threadTop', HEADER]] },
   { rec: 'r3', line: 'r3', lead: 0.3, cap: 'Or just ask.', sub: 'A mention opens its own thread.',
     shots: [{ wide: [S1, 18.0, 4.0, 2.0, 'wide', COMPOSER], tall: [S1, 18.0, 4.0, 2.0, 'wideTight', COMPOSER] },
-      { wide: [S1, 26.6, 1.6, 1.6, 'wide', COMPOSER], tall: [S1, 26.6, 1.6, 1.6, 'wideTight', COMPOSER] }, [S1, 37.2, 2.4, 2.4, 'threadTop', HEADER]] },
+      { wide: [S1, 26.6, 1.6, 1.6, 'wide', COMPOSER], tall: [S1, 26.6, 1.6, 1.6, 'wideTight', COMPOSER] }, [S1, 38.3, 1.7, 2.4, 'threadTop', HEADER]] },
   { rec: 'r4', line: 'r4', lead: 0.3, cap: 'It asks when it needs to.', sub: 'Answer in the thread and it carries on.',
     shots: [[S1, 147.5, 3.4, 3.4, 'threadTop', HEADER], [S1, 166.2, 13.8, 4.6, 'threadTop', HEADER]] },
-  { mg: 'yaml', line: 'yaml', lead: 0.3, dur: 7.6 },
-  { mg: 'close', line: 'close', lead: 0.3, dur: 21.0, query: { endAt: 14.1 } },
+  // Experimental platforms: real Teams (an Alertmanager card posted through Workflows; the new card is in from 38.7 s, the
+  // reply's tool list fills in to 57 s and the feedback buttons come in) and a real GitHub pull request (the App's review
+  // requests changes and is on the page at 17 s, scrolled to at 20.2 s). A no-break space (\u00a0) keeps a product name on one line.
+  { rec: 'teams', line: 'teams', lead: 0.3, cap: 'Also in Microsoft\u00a0Teams.', sub: 'Experimental. The reply fills in as the agent works.',
+    shots: [[T3, 38.8, 2.4, 2.0, 'teamsCard'], [T3, 44.6, 13.4, 6.0, 'teamsThread']] },
+  { rec: 'pr', line: 'pr', lead: 0.3, cap: 'A pull request starts one too.', sub: 'The agent posts its review on GitHub. Experimental.',
+    shots: [[P4, 8.2, 10.8, 4.0, 'prPage'], [P4, 21.0, 8.5, 4.0, 'prReview']] },
+  { mg: 'yaml', line: 'yaml', lead: 0.3, dur: 7.0 },
+  { mg: 'close', line: 'close', lead: 0.3, dur: 22.5, query: { endAt: CLOSE_END } },
 ];
 const TEASER = [
   { mg: 't-problem', line: 't-problem', lead: 0.3, dur: 4.8 },
-  { mg: 't-reveal', line: 't-reveal', lead: 0.2, dur: 6.6 },
-  { rec: 't1', line: 't-proof', lead: 0.2, cap: 'An alert opens a session.', sub: '', shots: [[S4, 43.4, 6.0, 2.0, 'threadTop', HEADER]] },
+  { mg: 't-reveal', line: 't-reveal', lead: 0.2, dur: 6.9 },
+  { rec: 't1', line: 't-proof', lead: 0.2, cap: 'An alert opens a session.', sub: '', shots: [[S4, 44.2, 5.2, 2.0, 'threadTop', HEADER]] },
   { rec: 't2', cap: 'Reply in the thread.', sub: '', shots: [[S4, 106.6, 6.0, 2.0, 'threadTop', HEADER]] },
-  { rec: 't3', cap: 'Or just ask.', sub: '', shots: [[S1, 37.2, 2.0, 2.0, 'threadTop', HEADER]] },
+  { rec: 't3', cap: 'Or just ask.', sub: '', shots: [[S1, 38.3, 1.7, 2.0, 'threadTop', HEADER]] },
   { mg: 't-end', dur: 2.6 },
 ];
 const CUTS = { demo: DEMO, teaser: TEASER };
@@ -92,11 +118,11 @@ function layoutFor(ar, framing) {
   const [zx, zy, zw, zh] = ZONES[ar], [, , fw, fh] = FRAMINGS[framing];
   const k = Math.min(zw / fw, zh / fh), w = even(fw * k), h = even(fh * k);
   // The caption, lockup and note never move between shots; only the card's size follows the framing.
-  if (ar === '16x9') return { card: [zx, even(zy + (zh - h) / 2), w, h], capx: 360, capy: 520, capw: 440, capalign: 'start', capvc: 1, lock: [360, 984], note: [zx, 1042, 'start'] };
+  if (ar === '16x9') return { card: [zx, even(zy + (zh - h) / 2), w, h], capx: 360, capy: 510, capw: 440, capalign: 'start', capvc: 1, lock: [360, 1010], note: [zx, 1016, 'start'] };
   const card = [even(zx + (zw - w) / 2), zy, w, h];
   return ar === '1x1'
-    ? { card, capx: 540, capy: 110, capw: 990, capalign: 'middle', lock: [44, 1040], note: [1036, 1046, 'end'] }
-    : { card, capx: 70, capy: 240, capw: 940, capalign: 'start', lock: [60, 1750], note: [1020, 1756, 'end'] };
+    ? { card, capx: 540, capy: 110, capw: 990, capalign: 'middle', lock: [54, 1040], note: [1026, 1046, 'end'] }
+    : { card, capx: 540, capy: 240, capw: 940, capalign: 'middle', lock: [540, 1748, 'middle'], note: [540, 1826, 'middle'] };
 }
 
 async function openPage(browser, ar, query) {
@@ -124,30 +150,51 @@ async function renderMg(browser, ar, beat, file) {
   await page.close();
 }
 
-async function renderOverlay(browser, ar, beat, shot, file) {
+// A beat's first shot brings its caption in as the motion-graphics headlines come in (film.html showHeadline): the
+// caption rises in from CAP_IN.cap and the sub-caption, or the command box, from CAP_IN.sub, each over 0.45 s.
+const CAP_IN = { cap: 0.1, sub: 0.5 }, CAP_IN_END = CAP_IN.sub + 0.45;
+
+// The overlay as one transparent PNG (file). With animate, file is a directory that gets the overlay's frames from 0
+// to CAP_IN_END, 0001.png on; cutShot holds the last one, which is the still overlay.
+async function renderOverlay(browser, ar, beat, shot, file, animate = false) {
   const [, , len, out, framing, , cmd] = shot, lay = layoutFor(ar, framing), card = lay.card, speed = len / out;
   const query = { overlay: 1, cap: beat.cap || '', sub: beat.sub || '', ...lay, card: card.join(','), lock: lay.lock.join(','), note: lay.note.join(',') };
   // The note under the footage says it is sped up in places. SPEED_CHIP=1 also labels each sped-up shot.
   if (process.env.SPEED_CHIP && speed > 1.05) query.speed = `${Math.round(speed * 10) / 10}\u00d7 speed`;
   if (cmd) query.cmd = cmd;
+  if (animate) Object.assign(query, { capin: CAP_IN.cap, subin: CAP_IN.sub });
   const page = await openPage(browser, ar, query);
-  await page.screenshot({ path: file, type: 'png', omitBackground: true });
+  if (animate) {
+    await rm(file, { recursive: true, force: true });
+    await mkdir(file, { recursive: true });
+    for (let i = 0; i <= frames(CAP_IN_END); i++) {
+      await page.evaluate(t => window.renderAt(t), i / FPS);
+      await page.screenshot({ path: join(file, `${String(i + 1).padStart(4, '0')}.png`), type: 'png', omitBackground: true });
+    }
+  } else await page.screenshot({ path: file, type: 'png', omitBackground: true });
   await page.close();
   return card;
 }
 
+// overlay is a PNG, or a directory of frames from renderOverlay's animate, whose last frame stays on to the end.
 function cutShot(ar, shot, card, overlay, file) {
   const [src, tin, len, out, framing, pointer] = shot, [W, H] = FORMATS[ar];
-  const [fx, fy, fw, fh] = FRAMINGS[framing], k = SRC.scale;
+  const [fx, fy, fw, fh] = FRAMINGS[framing], k = SRC.scale, oy = oyOf(src);
   // The pointer is an arrow about 20 x 28 points whose tip is where it was aimed, with a soft glow around it. It is
   // covered with the same 38 x 46 point box of blank chrome taken 60 points to its right, in the same rows.
-  const bx = (pointer ? pointer[0] - 12 : 0) * k, by = SRC.oy + (pointer ? pointer[1] - 13 : 0) * k;
+  const bx = (pointer ? pointer[0] - 12 : 0) * k, by = oy + (pointer ? pointer[1] - 13 : 0) * k;
   const unpoint = pointer ? `split[m][p];[p]crop=${38 * k}:${46 * k}:${bx + 60 * k}:${by}[pp];[m][pp]overlay=${bx}:${by},` : '';
-  const crop = `${fw * k}:${fh * k}:${fx * k}:${SRC.oy + fy * k}`, [cx, cy, cw, ch] = card;
-  const filter = `[0:v]${unpoint}crop=${crop},setpts=(PTS-STARTPTS)*${(out / len).toFixed(6)},fps=${FPS},scale=${cw}:${ch}:flags=lanczos[fg];` +
-    `color=c=0x0A1530:s=${W}x${H}:r=${FPS}[bg];[bg][fg]overlay=${cx}:${cy}:eof_action=repeat[a];[a][1:v]overlay=0:0[v]`;
+  // -ss before -i starts the input's clock at 0, so a blur's source seconds are taken relative to tin.
+  const blur = (BLUR[src] || []).filter(([t0, t1]) => t1 > tin && t0 < tin + len).map(([t0, t1, x, y, w, h], i) =>
+    `split[b${i}][c${i}];[c${i}]crop=${w * k}:${h * k}:${x * k}:${oy + y * k},boxblur=14:3:10:3[d${i}];` +
+    `[b${i}][d${i}]overlay=${x * k}:${oy + y * k}:enable='between(t,${(t0 - tin).toFixed(3)},${(t1 - tin).toFixed(3)})',`).join('');
+  const crop = `${fw * k}:${fh * k}:${fx * k}:${oy + fy * k}`, [cx, cy, cw, ch] = card;
+  const filter = `[0:v]${unpoint}${blur}crop=${crop},setpts=(PTS-STARTPTS)*${(out / len).toFixed(6)},fps=${FPS},scale=${cw}:${ch}:flags=lanczos[fg];` +
+    `color=c=0x0A1530:s=${W}x${H}:r=${FPS}[bg];[bg][fg]overlay=${cx}:${cy}:eof_action=repeat[a];` +
+    '[a][1:v]overlay=0:0:eof_action=repeat[v]';
+  const seq = !overlay.endsWith('.png');
   run(FFMPEG, ['-y', '-loglevel', 'error', '-nostdin', '-ss', String(tin), '-t', String(len), '-i', join(HERE, 'raw', `${src}.mp4`),
-    '-loop', '1', '-i', overlay, '-filter_complex', filter, '-map', '[v]', '-frames:v', String(frames(out)),
+    ...(seq ? ['-framerate', String(FPS), '-i', join(overlay, '%04d.png')] : ['-loop', '1', '-i', overlay]), '-filter_complex', filter, '-map', '[v]', '-frames:v', String(frames(out)),
     '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '12', '-pix_fmt', 'yuv420p', '-r', String(FPS), '-an', file]);
 }
 
@@ -177,7 +224,14 @@ async function buildCut(browser, name, ar) {
       for (const [j, variants] of beat.shots.entries()) {
         const shot = shotFor(ar, variants);
         const base = join(dir, `${String(i).padStart(2, '0')}-${beat.rec}-${j}`);
-        if (!reuse(beat.rec, `${base}.mp4`)) cutShot(ar, shot, await renderOverlay(browser, ar, beat, shot, `${base}.png`), `${base}.png`, `${base}.mp4`);
+        if (!reuse(beat.rec, `${base}.mp4`)) {
+          // Only the first shot of a beat brings its caption in; the beat's later shots keep it on screen.
+          const overlay = j === 0 ? `${base}-in` : `${base}.png`;
+          const card = await renderOverlay(browser, ar, beat, shot, overlay, j === 0);
+          cutShot(ar, shot, card, overlay, `${base}.mp4`);
+          // The frames take about 25 MB a beat and nothing reads them again.
+          if (j === 0) await rm(overlay, { recursive: true, force: true });
+        }
         segs.push(`${base}.mp4`);
       }
     }
@@ -203,18 +257,19 @@ async function buildCut(browser, name, ar) {
   console.log(`wrote ${file} (${at.toFixed(1)} s)`);
 }
 
-// One still per motion-graphics segment and one footage frame per rec beat, to look at before a full build.
+// One still per motion-graphics segment and one footage frame per shot of every rec beat, demo and teaser, to look at
+// before a full build.
 async function stills(browser, ars) {
   const dir = join(WORK, 'stills');
   await mkdir(dir, { recursive: true });
-  const shots = [['p1', 5.5], ['p2', 3.6], ['p3', 5.6], ['reveal', 4.5], ['promise', 6.6], ['yaml', 4.0], ['close', 13.0], ['close', 19.0], ['t-problem', 3.6], ['t-reveal', 5.4], ['t-end', 3.0]];
+  const shots = [['p1', 5.5], ['p2', 3.6], ['p3', 5.6], ['reveal', 4.5], ['promise', 6.6], ['yaml', 5.0], ['close', 12.0], ['close', 19.0], ['t-problem', 3.6], ['t-reveal', 5.4], ['t-end', 3.0]];
   for (const ar of ars) {
     for (const [seg, t] of shots) {
-      const page = await openPage(browser, ar, { seg, t, ...(seg === 'close' ? { endAt: 14.1 } : {}) });
+      const page = await openPage(browser, ar, { seg, t, ...(seg === 'close' ? { endAt: CLOSE_END } : {}) });
       await page.screenshot({ path: join(dir, `${ar}-${seg}-${t}.png`) });
       await page.close();
     }
-    for (const [beat, j] of DEMO.filter(b => b.rec).flatMap(b => b.shots.map((_, j) => [b, j]))) {
+    for (const [beat, j] of [...DEMO, ...TEASER].filter(b => b.rec).flatMap(b => b.shots.map((_, j) => [b, j]))) {
       const shot = shotFor(ar, beat.shots[j]), base = join(dir, `${ar}-${beat.rec}-${j}`);
       const card = await renderOverlay(browser, ar, beat, shot, `${base}-overlay.png`);
       const one = [shot[0], shot[1] + shot[2] * 0.8, 0.2, 0.2, shot[4], shot[5], shot[6]];
@@ -222,6 +277,19 @@ async function stills(browser, ars) {
       run(FFMPEG, ['-y', '-loglevel', 'error', '-nostdin', '-i', `${base}.mp4`, '-frames:v', '1', `${base}.png`]);
     }
     console.log(`stills for ${ar} in ${dir}`);
+  }
+}
+
+// Lines film.html shrank to fit (it marks them data-shrunk with the size they were set at). A headline line that
+// shrinks while its neighbours do not reads as a mistake: break it differently in COPY instead. Pills shrink together.
+async function fitcheck(browser, ars) {
+  const segs = [...new Set([...DEMO, ...TEASER].filter(b => b.mg).map(b => b.mg))];
+  for (const ar of ars) for (const seg of segs) {
+    const page = await openPage(browser, ar, { seg, t: 30, ...(seg === 'close' ? { endAt: CLOSE_END } : {}) });
+    const lines = await page.evaluate(() => [...document.querySelectorAll('[data-shrunk]')]
+      .map(t => `${t.textContent} (${t.getAttribute('data-shrunk')} -> ${t.getAttribute('font-size')})`));
+    for (const l of lines) console.log(`${ar} ${seg}: ${l}`);
+    await page.close();
   }
 }
 
@@ -265,7 +333,7 @@ async function storyboard(browser) {
     h2{font-size:17px;margin:2px 0 8px} .span{font-family:"SF Mono",Menlo,monospace;font-size:12.5px;opacity:.65;margin-left:6px;font-weight:400}
     dl{margin:0;display:grid;grid-template-columns:96px 1fr;gap:5px 12px} dt{opacity:.6;font-size:12px;text-transform:uppercase;letter-spacing:.06em;padding-top:2px} dd{margin:0}
     </style><h1>Agent Kourier · storyboard (demo cut)</h1>
-    <p class="lead">Write the agent, not the chat integration. A Kubernetes-native broker between team chat and streaming A2A agents. Slack today; more chat platforms planned.</p>
+    <p class="lead">Write the agent, not the chat integration. A Kubernetes-native broker between team chat and streaming A2A agents. Slack is supported; Microsoft Teams and webhooks are experimental.</p>
     <p class="meta">${at.toFixed(1)} s · 30 fps · 16:9, 9:16, 1:1 · narration: ElevenLabs Eleven v4 "Eric" via OpenRouter, directed measured, lowered one semitone · footage: the kind sandbox, real Slack, real agent output, seeded faults</p>
     ${rows.map(r => `<section class="shot"><img src="${r.img}" alt=""><div><h2><span class="n">${r.n}</span>${esc(r.id)}<span class="span">${r.span}</span></h2><dl>
       ${r.said ? `<dt>Narration</dt><dd>${esc(r.said)}</dd>` : ''}${r.cap ? `<dt>On screen</dt><dd>${esc(r.cap)}</dd>` : ''}<dt>Source</dt><dd>${esc(r.source)}</dd></dl></div></section>`).join('')}</html>`;
@@ -285,6 +353,7 @@ else {
   const browser = await chromium.launch();
   try {
     if (cmd === 'stills') await stills(browser, ars);
+    else if (cmd === 'fitcheck') await fitcheck(browser, ars);
     else if (cmd === 'storyboard') await storyboard(browser);
     else if (CUTS[cmd]) for (const ar of ars) await buildCut(browser, cmd, ar);
     else throw new Error(`unknown command ${cmd}`);
