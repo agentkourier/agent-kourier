@@ -531,7 +531,7 @@ func (r *Receiver) ofTenant(ctx context.Context, a activity) (answer, bool) {
 // Serve live it is 503, and nothing is claimed for the dedup. Then:
 //   - A message puts its post, if it is a person's, and its conversation on its channel's lane, and is answered 200 at once; an ID
 //     with ':' is 400, and lanes that shed it 503.
-//   - An invoke is answered by the InvokeHandler, in ctx with Serve's values (inRequest), whatever the lanes do with its conversation;
+//   - An invoke is answered by the InvokeHandler, in ctx with Serve's values (valuesOf), whatever the lanes do with its conversation;
 //     one whose replyToId holds ':' is 400, and one whose sender is a bot (28:…) is answered 200 with no body and handed to no handler,
 //     as a bot's message is dropped.
 //   - Anything else (an edit, a deletion, an install event) puts its conversation on the lane, and is answered 200, or 503 if shed.
@@ -611,29 +611,26 @@ func (r *Receiver) take(ctx, tctx context.Context, a activity) answer {
 		}
 	}
 	if inv != nil {
-		ictx, cancel := s.inRequest(ctx)
-		defer cancel()
-		return r.answerInvoke(ictx, s.sink, *inv)
+		return r.answerInvoke(valuesOf{Context: ctx, values: s.ctx}, s.sink, *inv) //nolint:contextcheck // ctx itself, its deadline, end and values, over Serve's values (valuesOf)
 	}
 	return answer{status: http.StatusOK, outcome: requestAccepted}
 }
 
-// inRequest is a context with the values of s's (the broker's instruments, which a request's context lacks), and the span, the deadline
-// and the end of ctx, a request's: what an invoke is answered on, in its request, so that what the InvokeHandler hands the sink is
-// counted and in the request's trace. Its cancel must be called.
-func (s *serving) inRequest(ctx context.Context) (context.Context, context.CancelFunc) {
-	vctx := trace.ContextWithSpan(context.WithoutCancel(s.ctx), trace.SpanFromContext(ctx))
-	var cancel context.CancelFunc
-	if d, ok := ctx.Deadline(); ok {
-		vctx, cancel = context.WithDeadline(vctx, d)
-	} else {
-		vctx, cancel = context.WithCancel(vctx)
+// valuesOf is a request's context over the values of another, Serve's: its deadline, its end and its error are the request's exactly,
+// and so is each value it holds (its span among them), while a key it does not hold is looked up in values (the broker's instruments,
+// which a request's context lacks). An invoke is answered on it, in its request, so that what the InvokeHandler hands the sink is
+// counted and in the request's trace.
+type valuesOf struct {
+	context.Context
+	values context.Context
+}
+
+// Value is the request's value of key, or values' when the request holds none.
+func (c valuesOf) Value(key any) any {
+	if v := c.Context.Value(key); v != nil {
+		return v
 	}
-	stop := context.AfterFunc(ctx, cancel)
-	return vctx, func() {
-		stop()
-		cancel()
-	}
+	return c.values.Value(key)
 }
 
 // dedupKey is the key of the dedup (recent) of an activity of the type typ, of channel, with the ID id.

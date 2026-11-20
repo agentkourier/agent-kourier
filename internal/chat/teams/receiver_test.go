@@ -21,9 +21,10 @@ import (
 // flushPrefix begins the IDs of flush's posts, which got leaves out; no other post of the tests has an ID that begins so.
 const flushPrefix = "1799999"
 
-// recordingSink records what it is given, with the context of each call that took a message, and counts every call by message ID. While block is open, Message waits on it for a message
-// of blockChannel, or of any channel when blockChannel is "", or until its context ends, and then returns after unwind and records
-// nothing. A message ID in failing is refused as many times as it says (failAlways: every time).
+// recordingSink records what it is given, with the context of each call that took a message, and counts every call by message ID.
+// While block is open, Message waits on it for a message of blockChannel, or of any channel when blockChannel is "", or until its
+// context ends, and then returns after unwind and records nothing. A message ID in failing is refused as many times as it says
+// (failAlways: every time).
 type recordingSink struct {
 	mu           sync.Mutex
 	messages     []chat.Inbound
@@ -142,16 +143,17 @@ func (h *invokeRecorder) count() int {
 	return len(h.invokes)
 }
 
-// recordingStore is a MemoryConversations that also keeps every record it was given.
+// recordingStore is a MemoryConversations that also keeps every record it was given, with the context it was given on.
 type recordingStore struct {
 	*MemoryConversations
 	mu   sync.Mutex
 	recs []Conversation
+	ctxs []context.Context // the context of each record in recs
 }
 
 func (s *recordingStore) Remember(ctx context.Context, conn string, c Conversation) error {
 	s.mu.Lock()
-	s.recs = append(s.recs, c)
+	s.recs, s.ctxs = append(s.recs, c), append(s.ctxs, ctx)
 	s.mu.Unlock()
 	return s.MemoryConversations.Remember(ctx, conn, c)
 }
@@ -160,6 +162,13 @@ func (s *recordingStore) given() []Conversation {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]Conversation(nil), s.recs...)
+}
+
+// contexts is the context of each record given, in order.
+func (s *recordingStore) contexts() []context.Context {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]context.Context(nil), s.ctxs...)
 }
 
 // receiverTest is a Receiver of the test connection, with the fake Bot Framework's keys, and what it hands on. Serve runs on base, or

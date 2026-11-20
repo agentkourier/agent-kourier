@@ -3,6 +3,7 @@ package teams
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -141,6 +142,10 @@ func TestAMessagesRequestSpanIsTheParentOfTheSinksWork(t *testing.T) {
 	if !telemetry.Enabled(ctx) {
 		t.Error("the sink's context lacks Serve's values, the broker's instruments")
 	}
+	// The channel's record is written on the lane under the request's span too, before the post goes to the sink.
+	if recs := rt.convs.contexts(); len(recs) != 1 || !trace.SpanContextFromContext(recs[0]).Equal(req.SpanContext) {
+		t.Errorf("%d records written; want the message's, under the request's span %s", len(recs), req.SpanContext.SpanID())
+	}
 	// A child of the sink's context is a child of the request's span, in its trace: as the intake's span is.
 	_, child := telemetry.Tracer(tel.Ctx).Start(ctx, "agentkourier.intake")
 	child.End()
@@ -171,15 +176,14 @@ func TestAMessagesRequestSpanIsTheParentOfTheSinksWork(t *testing.T) {
 }
 
 // spanInvokes records the context of each invoke as it is answered: its span context, whether the span was recording, whether it held
-// Serve's values, and its deadline. With wait set, it answers once its context ends.
+// Serve's values, and its deadline. With ended set, it answers once its context ends, and sends ended the context's error.
 type spanInvokes struct {
 	mu        sync.Mutex
 	spans     []trace.SpanContext
 	recording []bool
 	enabled   []bool
 	deadlines []time.Time
-	wait      bool
-	ended     chan struct{} // closed once an invoke's context has ended, with wait
+	ended     chan error
 }
 
 func (h *spanInvokes) Invoke(ctx context.Context, _ chat.Sink, _ Invoke) InvokeAnswer {
@@ -187,17 +191,18 @@ func (h *spanInvokes) Invoke(ctx context.Context, _ chat.Sink, _ Invoke) InvokeA
 	d, _ := ctx.Deadline()
 	h.spans, h.recording = append(h.spans, trace.SpanContextFromContext(ctx)), append(h.recording, trace.SpanFromContext(ctx).IsRecording())
 	h.enabled, h.deadlines = append(h.enabled, telemetry.Enabled(ctx)), append(h.deadlines, d)
-	wait := h.wait
+	ended := h.ended
 	h.mu.Unlock()
-	if wait {
+	if ended != nil {
 		<-ctx.Done()
-		close(h.ended)
+		ended <- ctx.Err()
 	}
 	return InvokeAnswer{Status: http.StatusOK}
 }
 
 // An invoke is answered in its request, under its span: the InvokeHandler is called with the span still open, with Serve's values (the
-// broker's instruments) so that what it hands the sink is in the trace and counted, and with the request's deadline and end.
+// broker's instruments) so that what it hands the sink is in the trace and counted, and with the request's deadline and end: its
+// context ends as the request's does, with the same error.
 func TestAnInvokeIsAnsweredUnderItsRequestSpan(t *testing.T) {
 	tel := telemetrytest.New(t)
 	h := &spanInvokes{}
@@ -218,8 +223,10 @@ func TestAnInvokeIsAnsweredUnderItsRequestSpan(t *testing.T) {
 	}
 	h.mu.Unlock()
 
-	// The request's end ends the handler's context, though its values are Serve's.
-	h.wait, h.ended = true, make(chan struct{})
+	// The request's end ends the handler's context, with the request's error, though its values are Serve's.
+	h.mu.Lock()
+	h.ended = make(chan error, 1)
+	h.mu.Unlock()
 	gone, hangUp := context.WithCancel(t.Context())
 	body, authz := editFixture(t, "invoke_action", func(m map[string]any) { m["id"] = "f:another-press" }), bearer(t, rt.key, claimsAt(rt.clock.now()))
 	done := make(chan struct{})
@@ -234,11 +241,20 @@ func TestAnInvokeIsAnsweredUnderItsRequestSpan(t *testing.T) {
 	})
 	hangUp()
 	select {
-	case <-h.ended:
+	case err := <-h.ended:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("the handler's context ended with %v when its sender went; want context.Canceled", err)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the handler's context did not end with its request's")
 	}
 	<-done
+	late, stop := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer stop()
+	rt.postIn(late, t, editFixture(t, "invoke_action", func(m map[string]any) { m["id"] = "f:a-late-press" }), "")
+	if err := <-h.ended; !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("the handler's context ended with %v at the request's deadline; want context.DeadlineExceeded", err)
+	}
 }
 
 // A request refused at its token (401, or 503 when the keys cannot be read), whose body is no activity (400), or whose activity is of
@@ -312,25 +328,33 @@ func TestARequestSpanCarriesItsOutcome(t *testing.T) {
 		}
 		checkRequestSpan(t, spans[0], requestShed, http.StatusServiceUnavailable, "message", "1794969999999")
 	})
+	// A duplicate's record is still written, in its request's trace: here the post was taken first as a Graph notification's, which
+	// claims its dedup key and records nothing.
 	t.Run("duplicate and malformed", func(t *testing.T) {
 		tel := telemetrytest.New(t)
 		rt := traced(t, tel, nil)
 		rt.serve(t)
-		rt.post(t, fixture(t, "message_plain"), "")
+		const id = "1794965057510" // message_plain's
+		if !rt.r.seen.claim(messageKey(testChannel, id)) {
+			t.Fatal("the key was claimed before")
+		}
 		if rec := rt.post(t, fixture(t, "message_plain"), ""); rec.Code != http.StatusOK {
 			t.Fatalf("the duplicate: status %d, want 200", rec.Code)
 		}
+		testutil.Eventually(t, "the duplicate's record is written", func() bool { return len(rt.convs.contexts()) == 1 })
 		bad := editFixture(t, "message_plain", func(m map[string]any) { m["id"] = "17949:65057510" })
 		if rec := rt.post(t, bad, ""); rec.Code != http.StatusBadRequest {
 			t.Fatalf("a message whose ID holds ':': status %d, want 400", rec.Code)
 		}
 		spans := tel.Exporter.GetSpans()
-		if len(spans) != 3 {
-			t.Fatalf("%d spans, want 3", len(spans))
+		if len(spans) != 2 {
+			t.Fatalf("%d spans, want 2", len(spans))
 		}
-		id := spanAttrs(spans[0])["agentkourier.teams.activity.id"].AsString()
-		checkRequestSpan(t, spans[1], requestDuplicate, http.StatusOK, "message", id)
-		checkRequestSpan(t, spans[2], requestMalformed, http.StatusBadRequest, "message", "17949:65057510")
+		checkRequestSpan(t, spans[0], requestDuplicate, http.StatusOK, "message", id)
+		checkRequestSpan(t, spans[1], requestMalformed, http.StatusBadRequest, "message", "17949:65057510")
+		if got := trace.SpanContextFromContext(rt.convs.contexts()[0]); !got.Equal(spans[0].SpanContext) {
+			t.Errorf("the duplicate's record was written under span %s; want its request's, %s", got.SpanID(), spans[0].SpanContext.SpanID())
+		}
 	})
 }
 
