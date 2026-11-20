@@ -186,8 +186,8 @@ done for it ([Limits](../reference/limits.md#run-the-broker) has each value and 
   check does not cover:
     - **Replays.** There is no replay window unless the connection sets `verify.timestamp`, a time in the signed body held to a window
       of at most 10 minutes of the broker's clock (the `token` scheme takes none). A signed body sent again is the same event, by the
-      SHA-256 of the body: one that started a turn starts no second one while the broker remembers it, in memory, and after a restart
-      or a change of leader the turn it queued is still in the store, so it is not queued again
+      SHA-256 of the body: a body whose start was decided (a turn started, or the start was refused) is a duplicate while the broker
+      remembers it, in memory, and after a restart or a change of leader a turn it queued is still in the store, so it is not queued again
       ([What a taken event does](../how-to/receive-webhooks.md#what-a-taken-event-does)). A body that no trigger matched, or that a
       limit stopped, is decided again each time it is sent.
     - **Headers.** Only the body is signed. A field read from a header (an event-type header, say) can be changed by whoever replays

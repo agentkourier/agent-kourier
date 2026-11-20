@@ -4,7 +4,7 @@ A Binding names its chat platform through its ChatConnection, whose `spec.platfo
 or `webhook`. This page lists, for each platform, the shape of the chat IDs a Binding names, the trigger types and outputs it takes,
 and the features of a Binding that the platform serves. The broker runs all three. It takes a `webhook` connection's deliveries on
 its chat listener (`AGENTKOURIER_CHAT_LISTEN`, the chart's `chatListener`) at `POST /chat/webhook/<namespace>/<name>`. A broker with
-no chat listener does not run one: as the broker's own connection it stops the start with a wiring error, and a team's connection is
+no chat listener does not run one: as the broker's own connection it stops the start with a wiring error, and a team connection (one the broker serves beside its own) is
 not started. The broker builds the platform of its own connection when it starts and when a replica takes the lead, so an edit to
 that connection's `spec.teams` or `spec.webhook` applies when Agent Kourier restarts; on the files route the chart rolls the pod when its ConfigMap
 changes, unless `config.existingConfigMap` is set or `config.rollOnChange` is `false`. Until then the leader logs, once for each

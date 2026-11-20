@@ -189,7 +189,7 @@ umask 077
 read -rs v; printf '%s' "$v" > ~/.config/webhooks/linear-webhook-secret; unset v     # paste the signing secret, then Return
 kubectl -n acme-webhooks create secret generic linear-webhook \
   --from-file=webhookSecret="$HOME/.config/webhooks/linear-webhook-secret"
-kubectl -n acme-webhooks wait --for=condition=Ready akbinding/linear-plans --timeout=120s
+kubectl -n acme-webhooks wait --for=condition=Ready akbinding/linear-plans --timeout=2m
 LEADER=$(kubectl -n agent-kourier get pods -l agentkourier.dev/role=leader -o name)   # the pod that takes the webhooks; empty: no leader yet
 kubectl -n agent-kourier logs "$LEADER" | grep '"webhook: taking requests"' | grep 'acme-webhooks/linear'
 ```
@@ -197,9 +197,11 @@ kubectl -n agent-kourier logs "$LEADER" | grep '"webhook: taking requests"' | gr
 `printf '%s'` writes the secret with no newline at the end ([why](../receive-webhooks.md#keep-the-secrets-out-of-sight)). If the
 secret was ever shown where someone else could see it, such as a screenshot, make a new one before you go on.
 
-`Ready` waits on the Secret and on the agent of step 4: it turns `True` once the connection's credentials can be read and a fresh
-fetch of the agent's card succeeds, with a card that advertises streaming. If the wait times out,
+`Ready` waits on the connection and on the agent of step 4: it turns `True` once the connection runs (`ChannelJoined`) and a fresh
+fetch of the agent's card succeeds, with a card that advertises streaming (`BackendReachable`). If the wait times out,
 `kubectl -n acme-webhooks get akbinding linear-plans` shows the condition that holds it back in the `Reason` column, such as
+`ChannelJoined:ChatCredentialsUnusable` (the Secret is missing, or a key of it), `ChannelJoined:ChatUnavailable` (the connection
+does not run for another reason, such as a Secret the broker is not granted; the leader's log says why),
 `BackendReachable:Unreachable` or `BackendReachable:StreamingUnsupported`.
 
 `webhook: taking requests`, with `"connection":"acme-webhooks/linear"`, says the connection runs on the leader: from then on its URL
@@ -252,9 +254,10 @@ turn that started. The agent's plan shows as a comment. Then:
 Read the counts on the leader's `/metrics`. Every series of the connection exists at 0, so leave those out:
 
 ```sh
-kubectl -n agent-kourier port-forward "$LEADER" 8080:8080 &
+kubectl -n agent-kourier port-forward "$LEADER" 8080:8080 & PF=$!; sleep 2
 curl -s localhost:8080/metrics | grep -E '^agentkourier_(webhook_requests_total|trigger_decisions_total)' \
   | grep 'acme-webhooks/linear' | grep -v ' 0$'
+kill $PF
 ```
 
 ```text

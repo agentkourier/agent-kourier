@@ -63,12 +63,13 @@ The chart refuses `networkPolicy.chatFrom` without the chat listener. If the bro
 [Let a team bring its own Slack app](team-slack-app.md#3-the-platform-team-admits-the-namespace) has the other ways, and how a team
 grants its own Secrets with a Role ([step 2](team-slack-app.md#2-the-team-makes-the-secret-the-grant-and-the-connection)). The chart
 README's [Chat listener](https://github.com/agentkourier/agent-kourier/blob/main/charts/agent-kourier/README.md#chat-listener) has
-what each value does. Then upgrade, make the namespace, and read the Ingress's address:
+what each value does. Make the namespace, then upgrade (`rbac.secretNames` makes a Role and a RoleBinding in it, so the upgrade fails
+while it does not exist), and read the Ingress's address:
 
 ```sh
+kubectl create namespace acme-webhooks
 helm upgrade agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version <version> \
   -n agent-kourier -f my-values.yaml
-kubectl create namespace acme-webhooks
 kubectl -n agent-kourier get ingress          # <fullname>-chat: its HOSTS and ADDRESS; point the host's DNS at the address
 ```
 
@@ -98,9 +99,9 @@ Binding names it, the Binding's `BackendReachable` condition is `True` (see [A f
 ## The agent
 
 **What it must be.** Any A2A server that Agent Kourier can call: its card advertises streaming and lists a JSON-RPC interface
-([Agent contract](../reference/agent-contract.md#discovery-and-transport)). A Binding's `Ready` waits on `BackendReachable`, which is
-`True` only once a fresh fetch of the card succeeds and the card is one the broker can use (`StreamingUnsupported` when it does not
-advertise streaming). Each recipe has an AgentBackend of the `a2a` dialect whose `url` is a placeholder, `REPLACE-ME`: the recipes ship
+([Agent contract](../reference/agent-contract.md#discovery-and-transport)). A Binding's `Ready` waits on `BackendReachable` and
+`ChannelJoined`. `BackendReachable` is `True` only once a fresh fetch of the card succeeds and the card is one the broker can use
+(`StreamingUnsupported` when it does not advertise streaming); `ChannelJoined` is `True` while the webhook connection runs. Each recipe has an AgentBackend of the `a2a` dialect whose `url` is a placeholder, `REPLACE-ME`: the recipes ship
 no agent. See [Connect a generic A2A agent](connect-a2a-agent.md), or [Connect a kagent agent](connect-kagent.md) for a kagent agent.
 
 **What it must do.**
@@ -271,7 +272,8 @@ sig=$(python3 -c 'import hashlib, hmac, sys; print(hmac.new(open(sys.argv[1], "r
   ~/.config/webhooks/tickets-webhook-secret ticket.json)
 ```
 
-**What you should see.** `HTTP/2 200` (or `HTTP/1.1 200`) with an empty body, and on the leader these INFO lines, in this order:
+**What you should see.** `HTTP/2 200` (or `HTTP/1.1 200`) with an empty body, and on the leader these INFO lines: lines 1-3 in this
+order, then 4 once the turn begins:
 
 1. `chat: webhook event matched a trigger`, with the `binding`, the `channel` (`ops`), the `thread` (`ticket-T-42`), the `delivery`
    (`test-1`) and the trigger's index.
@@ -368,11 +370,12 @@ order; the first that takes it starts the turn. The match is exact, letter case 
 channel of a connection belongs to one Binding at most: put all of a channel's triggers in one Binding. A channel that no Binding of
 the connection names starts nothing. The event's ID is the SHA-256 of its body, so the same body delivered again is the same event:
 
-- **A body that started a turn** starts no second one while the broker remembers it: it is counted on `agentkourier_intake_total`
-  with `disposition="duplicate"`. The broker remembers events in memory, for each connection, for at least `1024` later events it
-  remembers ([Limits](../reference/limits.md#start-investigations-triggers-rates-and-probes)), and forgets them at a restart, a
-  change of leader and a restart of a team connection (an edit of its ChatConnection, say). Once it has forgotten the body, a
-  delivery of it again is matched and decided again, and counted again on `agentkourier_trigger_decisions_total`, but the turn it
+- **A body whose start was decided** (a turn started, or the start was refused) is a duplicate while the broker remembers it: it
+  starts nothing, and is counted on `agentkourier_intake_total` with `disposition="duplicate"`. The broker remembers events in
+  memory, for each connection, for at least `1024` later events it remembers
+  ([Limits](../reference/limits.md#start-investigations-triggers-rates-and-probes)), and forgets them at a restart, a change of
+  leader and a restart of a team connection (an edit of its ChatConnection, say). Once it has forgotten the body, a delivery of it
+  again is matched and decided again, and counted again on `agentkourier_trigger_decisions_total`. If it started a turn, the turn it
   queued is still in the store, so no second turn starts: `agentkourier_intake_total{source="reply_queue",disposition="duplicate"}`
   counts it. That row lives as long as the session of its thread, which is deleted `90d` after its `threadTTL` has run out
   ([What the broker keeps](../reference/limits.md#what-the-broker-keeps-and-logs)).
@@ -398,7 +401,8 @@ the connection names starts nothing. The event's ID is the SHA-256 of its body, 
   unless it is delivered again later.
 - **An `id` field marked invalid** makes a trigger whose `match` or `exclude` names it miss, so it starts nothing through that
   trigger. A template that reads it refuses the start: no turn, counted on `agentkourier_trigger_refused_total` with
-  `reason="invalid"`, logged at WARN, and audited. A webhook connection posts no note of the refusal.
+  `reason="invalid"`, logged at WARN, and audited. A webhook connection posts no note of the refusal. The refusal is a decision, so
+  the same delivery sent again is a `duplicate` while the broker remembers it.
 
 What a service does with a `503` is its own. Their documentation, read on 2026-11-18 and not checked against the services, says:
 
@@ -530,6 +534,6 @@ Start from what the service's delivery log shows, or what `curl` printed. The co
 | `200` | `unmapped`, `bad_id` or `no_thread` | The thread's field is not an identifier, holds a `:`, or is missing: an event the connection's thread does not fit, such as a comment on a plain issue where the thread is a pull request's number. | Add a pointer to the thread's field that such events have, or leave them be. |
 | `200` | `self` | An actor pointer resolved to `identity`. For a person's event: `identity` is a person's, or one of `actor.from` names someone other than who caused the event. | Fix `identity` or `actor.from`. |
 | `200` | `ignored`, `no_actor` | No actor pointer resolved. | Add the pointer such events have, or `whenMissing: keep`. |
-| `200`, and no turn | `accepted` | `agentkourier_intake_total{connection="<namespace>/<name>"}` says what the intake did. `ignored`: no Binding of the connection has the event's channel as its `chat.channel`, exactly. `trigger_unmatched`: no trigger matched (`agentkourier_trigger_unmatched_total` of the Binding counts it too, and the DEBUG line names it). `duplicate`: a body that already started a turn. `agentkourier_trigger_limited_total` rising: a trigger's limits stopped it, and the WARN line names the delivery. `agentkourier_trigger_refused_total`: a refused prompt. | Fix the channel or the trigger, or wait for room in the limits, then send the delivery again from the service's log: a body that matched no trigger, or that a limit stopped, is decided again ([What a taken event does](#what-a-taken-event-does)). |
+| `200`, and no turn | `accepted` | `agentkourier_intake_total{connection="<namespace>/<name>"}` says what the intake did. `ignored`: no Binding of the connection has the event's channel as its `chat.channel`, exactly. `trigger_unmatched`: no trigger matched (`agentkourier_trigger_unmatched_total` of the Binding counts it too, and the DEBUG line names it). `duplicate`: a body whose start was already decided (a turn started, or the start was refused). `agentkourier_trigger_limited_total` rising: a trigger's limits stopped it, and the WARN line names the delivery. `agentkourier_trigger_refused_total`: a refused prompt. | Fix the channel or the trigger, or wait for room in the limits, then send the delivery again from the service's log: a body that matched no trigger, or that a limit stopped, is decided again ([What a taken event does](#what-a-taken-event-does)). |
 | A turn, and nothing on the service | `accepted` | The agent's tools or its account. Agent Kourier posts nothing on the service. | Check the agent's own logs. |
 | The Binding is refused, `UnsupportedOnPlatform` | | `chat.output` left at `live`, a trigger that is not `webhookEvent`, a `match` or `exclude` key that is not a field of the connection, a template that reads a `text` field, or `interactions.askUser`, `toolApprovals` or `feedback.enabled` set. `message` names the field. | Change the field as `message` says ([Troubleshoot](troubleshoot.md), [What each platform supports](../reference/platforms.md#triggers-and-output)). |

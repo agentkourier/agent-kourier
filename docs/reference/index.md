@@ -28,7 +28,7 @@ With custom resources a Binding also has a status, which [Binding status](bindin
 - [Helm values](helm-values.md): every value of the chart, with its default.
 - [Command line and environment](cli.md): the binary's environment variables, flags, subcommands and exit codes.
 - [Chat triggers](chat-triggers.md): what starts a turn, and what the `botMessage` trigger does. A webhook connection's
-  `webhookEvent` trigger is in [Start agents from webhooks](../how-to/receive-webhooks.md).
+  `webhookEvent` trigger is in [A webhook event](chat-triggers.md#a-webhook-event).
 - [What each platform supports](platforms.md): Slack, Microsoft Teams and the `webhook` platform: the shape of each chat ID a Binding
   names, the triggers and outputs each takes, and the features each serves.
 

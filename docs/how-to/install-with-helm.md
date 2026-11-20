@@ -3,8 +3,13 @@
 For a platform engineer with a Kubernetes cluster: at the end, Agent Kourier runs from the published Helm chart and
 answers a mention in a Slack thread.
 
-On Microsoft Teams, or for webhooks (both experimental, 0.6.0 or later), follow this guide for the chart, then
-[Configure Microsoft Teams](configure-teams.md) or [Start agents from webhooks](receive-webhooks.md) for the connection.
+On Microsoft Teams, or for webhooks (both experimental, 0.6.0 or later), this guide gives the chart, and
+[Configure Microsoft Teams](configure-teams.md) or [Start agents from webhooks](receive-webhooks.md) the connection. Take
+[Choose the route](#choose-the-route), [The release](#the-release), the CRDs and the two-step install of
+[Install on custom resources](#install-on-custom-resources), the Binding's token Secret in
+[Create the Secrets](#create-the-secrets), and [Install behind an egress proxy](#install-behind-an-egress-proxy) if your cluster
+needs one. Skip what is Slack's: the Slack app in [Before you start](#before-you-start), the Slack ChatConnection that `init`, the
+team's file and the starter file write, the Secret `slack`, and [Check it](#check-it), which mentions the bot in Slack.
 
 The checks below are the ones that catch the usual problems. You do
 not need an agent for the first install. Without one, Agent Kourier connects to Slack and tells the thread it cannot

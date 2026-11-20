@@ -133,7 +133,11 @@ For the other choices, add under `teams`:
   connection's own route, `https://<host>/chat/teams/<namespace>/<name>`, where `<namespace>` and `<name>` are the
   ChatConnection's. The API server checks the form of the path, and the broker checks that it names this connection.
 
-Then the chart's values. On custom resources:
+Then the chart's values. If the box's first way applies (Teams as a team connection beside Slack), keep your
+`config.chatConnection`; set `config.connectionNamespaces` (or its selector) to admit the Microsoft Teams connection's
+namespace, grant `teams` with `rbac.secretNames`, and take only `chatListener` and `networkPolicy.chatFrom` from this block.
+The chart grants only the Secret of `config.chatConnection`, so naming the Teams connection there would replace the broker's
+own Slack connection, and Slack would stop. Otherwise, on custom resources:
 
 ```yaml title="teams-values.yaml"
 config:
@@ -172,6 +176,12 @@ kubectl apply -f kourier/chatconnection.yaml
 helm upgrade --install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version <version> \
   -n agent-kourier -f my-values.yaml -f teams-values.yaml
 ```
+
+`my-values.yaml` is the rest of the release's values, as [Install with Helm](install-with-helm.md) writes them: the
+`rbac.secretNames` entry of the Binding's token Secret, and any replicas, storage or egress settings. With nothing else to
+set, leave it out. The recipe's values in
+[Apply it](https://github.com/agentkourier/agent-kourier/blob/main/examples/recipes/prompt-agent-teams/README.md#3-agent-kouriers-resources)
+are one self-contained file for a Teams-only broker.
 
 ??? note "On the ConfigMap route"
 
@@ -232,8 +242,9 @@ The bot reaches a team as a Teams app: a zip of `manifest.json` and the two icon
 - `authorization.permissions.resourceSpecific`: the resource-specific permission `ChannelMessage.Read.Group`, of type
   `Application`. With it, Teams sends the bot every person's post in the team's standard channels, not only mentions
   (measured), and Microsoft Graph lets the app read the channels' messages: the alerts that other apps post, a thread's
-  earlier replies, and its own posts that the outbox looks for after a restart. Without it, every read of Graph is
-  refused.
+  earlier replies, and its own posts that the outbox looks for after a restart. Without it, Graph refuses those reads with
+  403 (Microsoft's documentation; not measured), and the broker's error for the refusal says to add the permission and
+  install or update the app in the team.
 - `supportsChannelFeatures: "tier1"`: on the test tenant, a manifest 1.30 with a bot in the `team` scope failed the
   upload's validation without it (measured). In the Developer Portal it is under **App content**, **Channel support**.
   Only standard channels were tried.
@@ -267,7 +278,7 @@ from Graph, nor check that the bot is in it.
 **Check:** `agentkourier_teams_requests_total{outcome="accepted"}` (in `http` mode) or
 `agentkourier_teams_socket_envelopes_total{type="activity",outcome="accepted"}` (in `socket` mode) went up
 ([Metrics](../reference/metrics.md#operations-intake-delivery-and-triggers)). If neither moved, see
-[Nothing arrives](#nothing-arrives-in-http-mode).
+"Nothing arrives" in [Troubleshoot](#troubleshoot).
 
 ## 7. Copy the channel ID
 

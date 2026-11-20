@@ -105,9 +105,17 @@ kubectl -n acme-webhooks create secret generic jira-webhook \
   --from-file=webhookSecret="$HOME/.config/webhooks/jira-webhook-secret"
 ```
 
-The broker reads it once `jira-webhook` is in the chart's `rbac.secretNames` for `acme-webhooks`
-([Before you start](../receive-webhooks.md#before-you-start)). The service account's token is not in this Secret, and the broker never
-reads it: it belongs to the agent's tools (step 4).
+The broker reads it only if the release grants it. Check that the release admits the namespace and grants the Secret, since a
+missing grant shows only in step 5, as a connection that does not start:
+
+```sh
+helm -n agent-kourier get values agent-kourier -o json \
+  | jq '{namespaces: .config.connectionNamespaces, secrets: .rbac.secretNames["acme-webhooks"]}'
+```
+
+`namespaces` must hold `acme-webhooks` (unless you admit it another way, such as by a label) and `secrets` must hold `jira-webhook`
+([Before you start](../receive-webhooks.md#before-you-start)); the command takes the release to be called `agent-kourier`. The
+service account's token is not in this Secret, and the broker never reads it: it belongs to the agent's tools (step 4).
 
 ## 4. Run the agent and its tools
 
@@ -166,14 +174,17 @@ Copy the recipe's `kourier/` directory, edit it, then apply it and wait for the 
 
 ```sh
 kubectl apply -f kourier/
-kubectl -n acme-webhooks wait --for=condition=Ready akbinding/jira-plans --timeout=120s
+kubectl -n acme-webhooks wait --for=condition=Ready akbinding/jira-plans --timeout=2m
 LEADER=$(kubectl -n agent-kourier get pods -l agentkourier.dev/role=leader -o name)   # the pod that takes the webhooks; empty: no leader yet
 kubectl -n agent-kourier logs "$LEADER" | grep '"webhook: taking requests"' | grep 'acme-webhooks/jira'
 ```
 
-`Ready` waits on the agent of step 4: it turns `True` once a fresh fetch of the agent's card succeeds and the card advertises
-streaming. If the wait times out, `kubectl -n acme-webhooks get akbinding jira-plans` shows the condition that holds it back in the
-`Reason` column, such as `BackendReachable:Unreachable` or `BackendReachable:StreamingUnsupported`.
+`Ready` waits on the connection and on the agent of step 4: it turns `True` once the connection runs (`ChannelJoined`) and a fresh
+fetch of the agent's card succeeds, with a card that advertises streaming (`BackendReachable`). If the wait times out,
+`kubectl -n acme-webhooks get akbinding jira-plans` shows the condition that holds it back in the `Reason` column, such as
+`ChannelJoined:ChatCredentialsUnusable` (the Secret is missing, or a key of it), `ChannelJoined:ChatUnavailable` (the connection
+does not run for another reason, such as a Secret the broker is not granted; the leader's log says why),
+`BackendReachable:Unreachable` or `BackendReachable:StreamingUnsupported`.
 
 `webhook: taking requests`, with `"connection":"acme-webhooks/jira"`, says the connection runs on the leader: from then on its URL
 checks the signature of every request. It does not wait for the agent. Check the URL from outside with a request that has no
@@ -239,9 +250,10 @@ shows the same lines with `"trigger":1` and the same `"thread":"OPS-1"`, and the
 Read the counts on the leader's `/metrics`. Every series of the connection exists at 0, so leave those out:
 
 ```sh
-kubectl -n agent-kourier port-forward "$LEADER" 8080:8080 &
+kubectl -n agent-kourier port-forward "$LEADER" 8080:8080 & PF=$!; sleep 2
 curl -s localhost:8080/metrics | grep -E '^agentkourier_(webhook_requests_total|trigger_decisions_total)' \
   | grep 'acme-webhooks/jira' | grep -v ' 0$'
+kill $PF
 ```
 
 ```text

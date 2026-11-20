@@ -64,10 +64,8 @@ Kourier outage does not stop an alert from reaching the channel, because the ale
 receiver. For the same reason, an alert that a rate limit or
 daily cap stops is not posted about one by one; it is counted in one digest line.
 
-The `webhook` platform (experimental) does not change this. In principle a webhook connection could take Alertmanager's own
-webhook receiver: with the `token` scheme on the `Authorization` header and the prefix `Bearer `, it checks the credentials that
-a `webhook_config` sends with `http_config.authorization` (at least 32 bytes). No recipe or test covers that, and a webhook
-connection posts nothing, so the agent would have to post its findings itself.
+The `webhook` platform (experimental) does not change this: it takes other services' events, Alertmanager is not a supported
+source of it, and alerts enter only through `chat.triggers`.
 
 ## Why protocol first
 

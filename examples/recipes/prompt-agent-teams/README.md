@@ -133,7 +133,8 @@ unset TEAMS_CLIENT_SECRET
    `crds: {install: false}` to the values. The CRDs belong to the first release, and Helm refuses a second release that
    renders them ([Install with Helm](../../../docs/how-to/install-with-helm.md)). The chart names every object of a
    release after the release, so the two do not collide, and each broker serves its own ChatConnection alone, since
-   neither sets a namespace list or selector. The messaging endpoint stays the same: its path is the ChatConnection's.
+   neither sets a namespace list or selector. Give it its own `chatListener.ingress.host` if the first release has a
+   chat Ingress; the endpoint's path is the ChatConnection's.
 
 3. Set the bot's messaging endpoint to `https://chat.example.com/chat/teams/agent-kourier/teams`
    ([Point Teams at the broker](../../../docs/how-to/configure-teams.md#4-point-teams-at-the-broker)).

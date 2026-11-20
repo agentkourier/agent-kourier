@@ -41,7 +41,7 @@ Binding verification
     nothing else. See [Metrics](metrics.md#binding-verification) and [Binding status](binding-status.md).
 
 Bot Connector
-:   Microsoft's service through which a Teams bot posts, replies and edits. A teams connection calls it with a token that
+:   Microsoft's service through which a Teams bot posts, replies and edits. A Microsoft Teams connection calls it with a token that
     Microsoft Entra issues for the connection's client secret.
 
 Channel
@@ -73,7 +73,8 @@ Cooldown
 
 Delivery
 :   One request that a service sends to a webhook connection. Its delivery ID is the service's own ID of it, read from the
-    header that `spec.webhook.delivery.header` names, such as `X-GitHub-Delivery`; each answered delivery's log line shows it.
+    header that `spec.webhook.delivery.header` names, such as `X-GitHub-Delivery`; each verified delivery's INFO line,
+    `webhook: delivery answered`, shows it.
 
 Dialect
 :   The per-backend part of the A2A client: URL layout, card location, identity header and how a pause is read. Both
@@ -127,12 +128,12 @@ Message field
     small print and the plain-text summary of the message's structured part (Slack: its first legacy attachment).
 
 Microsoft Graph notifications and polling
-:   How a teams connection reads other apps' posts, such as an alert's card, which Teams does not send a bot: Graph's change
+:   How a Teams connection reads other apps' posts, such as an alert's card, which Teams does not send a bot: Graph's change
     notifications at `spec.teams.notificationURL` when it is set, or a poll of each bound channel every 10 seconds when it
     is not.
 
 Microsoft Teams connection
-:   A ChatConnection with `spec.platform: teams` (a teams connection): `spec.teams` names the bot's Microsoft Entra tenant and
+:   A ChatConnection with `spec.platform: teams` (a Teams connection, for short): `spec.teams` names the bot's Microsoft Entra tenant and
     application, its mode (`http` or `socket`) and an optional `notificationURL`, and its Secret holds `clientSecret`.
     Experimental.
 
@@ -160,7 +161,7 @@ Reply queue
 
 RSC permission
 :   A resource-specific consent permission, which a Teams app's manifest asks for and its install in a team grants for that team
-    alone. A teams connection reads channel messages through Microsoft Graph under `ChannelMessage.Read.Group`.
+    alone. A Teams connection reads channel messages through Microsoft Graph under `ChannelMessage.Read.Group`.
 
 Sender
 :   Who posted a message a `botMessage` trigger reads, named by `from.id` and `from.kind`. A message matches only when
