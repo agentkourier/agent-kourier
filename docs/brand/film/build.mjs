@@ -32,14 +32,29 @@ const FORMATS = { '16x9': [1920, 1080], '9x16': [1080, 1920], '1x1': [1080, 1080
 // Where footage sits in each format.
 // 9:16 stops at y 1680 so nothing sits under a phone app's own controls.
 const ZONES = { '16x9': [860, 60, 1000, 900], '9x16': [60, 480, 960, 1200], '1x1': [40, 240, 1000, 760] };
-// The recordings are 2880 x 1864 captures of a 1440-point screen; Slack's page starts 344 px down while the
-// extension's "debugging this browser" bar is showing, which it is in every stretch used here.
+// The recordings are 2880 x 1864 captures of a 1440-point screen (scale 2). In the Slack takes, Slack's page starts 344 px
+// down while the extension's "debugging this browser" bar is showing, which it is in every stretch used here; the Teams
+// and GitHub takes were made without the extension, so their framings are in screen points (oy 0).
 const SRC = { scale: 2, oy: 344 };
-// Framings in Slack page coordinates [x, y, w, h]. They stop short of the right and bottom edges, where the
-// extension draws an orange glow, and start right of the sidebar, which carries the workspace name.
-const FRAMINGS = { wide: [400, 40, 1036, 717], wideTight: [400, 150, 720, 607], landing: [404, 494, 640, 254], threadTop: [1030, 40, 404, 539], threadBottom: [1030, 217, 404, 539], threadLow: [1030, 452, 404, 278] };
+const SRC_OY = { 'teams-3': 0, 'pr-4': 0 };
+const oyOf = src => SRC_OY[src] ?? SRC.oy;
+// Framings [x, y, w, h]. The Slack ones are in Slack page coordinates; they stop short of the right and bottom edges, where
+// the extension draws an orange glow, and start right of the sidebar, which carries the workspace name. The Teams and
+// GitHub ones are in screen points and leave out the owner's names: teamsCard stops above the card's "<name> used a
+// Workflow template" footer, teamsThread starts below it once the pane has scrolled (44.6 s on), and the sidebar, with the
+// tenant's name, is outside both. GitHub's handle and avatar are blurred instead (BLUR).
+const FRAMINGS = {
+  wide: [400, 40, 1036, 717], wideTight: [400, 150, 720, 607], landing: [404, 494, 640, 254], threadTop: [1030, 40, 404, 539], threadBottom: [1030, 217, 404, 539], threadLow: [1030, 452, 404, 278],
+  teamsCard: [405, 228, 680, 456], teamsThread: [1034, 308, 394, 380], prPage: [100, 320, 890, 480], prReview: [172, 210, 800, 482],
+};
+// Rectangles blurred before the crop, per recording: [from, to (source seconds), x, y, w, h (screen points)]. pr-4: the
+// owner's handle in "wants to merge", their avatar and handle on the opening comment, the commit's avatar (all until the
+// page scrolls at 20.2 s), and GitHub's Copilot promotion at the top right edge.
+const BLUR = {
+  'pr-4': [[7.5, 20.5, 200, 374, 68, 24], [7.5, 20.5, 109, 474, 46, 46], [7.5, 20.5, 183, 486, 66, 22], [7.5, 20.5, 207, 697, 24, 24], [7.5, 20.5, 930, 330, 60, 36]],
+};
 
-const S1 = 'session-1', S4 = 'session-4-alert-retake';
+const S1 = 'session-1', S4 = 'session-4-alert-retake', T3 = 'teams-3', P4 = 'pr-4';
 // Where the Chrome extension's pointer rests in a shot, in page coordinates, so it can be painted out. It is only ever
 // painted out over blank chrome (the thread header, the empty end of the composer); shots where it covered text are
 // reframed or retimed instead, so no message pixel is altered.
@@ -68,15 +83,15 @@ const DEMO = [
       { wide: [S1, 26.6, 1.6, 1.6, 'wide', COMPOSER], tall: [S1, 26.6, 1.6, 1.6, 'wideTight', COMPOSER] }, [S1, 38.3, 1.7, 2.4, 'threadTop', HEADER]] },
   { rec: 'r4', line: 'r4', lead: 0.3, cap: 'It asks when it needs to.', sub: 'Answer in the thread and it carries on.',
     shots: [[S1, 147.5, 3.4, 3.4, 'threadTop', HEADER], [S1, 166.2, 13.8, 4.6, 'threadTop', HEADER]] },
+  // Experimental platforms: real Teams (an Alertmanager card posted through Workflows; the new card is in from 38.7 s, the
+  // reply's tool list fills in to 57 s and the feedback buttons come in) and a real GitHub pull request (the App's review
+  // requests changes and is on the page at 17 s, scrolled to at 20.2 s). A no-break space (\u00a0) keeps a product name on one line.
+  { rec: 'teams', line: 'teams', lead: 0.3, cap: 'Also in Microsoft\u00a0Teams.', sub: 'Experimental. The reply fills in as the agent works.',
+    shots: [[T3, 38.8, 2.4, 2.0, 'teamsCard'], [T3, 44.6, 13.4, 6.0, 'teamsThread']] },
+  { rec: 'pr', line: 'pr', lead: 0.3, cap: 'A pull request starts one too.', sub: 'The agent posts its review on GitHub. Experimental.',
+    shots: [[P4, 8.2, 10.8, 4.0, 'prPage'], [P4, 21.0, 8.5, 4.0, 'prReview']] },
   { mg: 'yaml', line: 'yaml', lead: 0.3, dur: 7.0 },
   { mg: 'close', line: 'close', lead: 0.3, dur: 22.5, query: { endAt: CLOSE_END } },
-];
-// Beats written but not yet recorded: each joins DEMO after r4 once its recording is in raw/, with shots and a framing
-// of its own (FRAMINGS are Slack's page). Until then stills renders each one's caption over an empty card of the framing
-// named here, so the copy can be checked. A no-break space (\u00a0) keeps a product name on one line.
-const PENDING = [
-  { rec: 'teams', line: 'teams', lead: 0.3, cap: 'Also in Microsoft\u00a0Teams.', sub: 'Experimental. The reply fills in as the agent works.', framing: 'threadTop' },
-  { rec: 'pr', line: 'pr', lead: 0.3, cap: 'A pull request starts one too.', sub: 'The agent posts its review on GitHub. Experimental.', framing: 'threadTop' },
 ];
 const TEASER = [
   { mg: 't-problem', line: 't-problem', lead: 0.3, dur: 4.8 },
@@ -164,13 +179,17 @@ async function renderOverlay(browser, ar, beat, shot, file, animate = false) {
 // overlay is a PNG, or a directory of frames from renderOverlay's animate, whose last frame stays on to the end.
 function cutShot(ar, shot, card, overlay, file) {
   const [src, tin, len, out, framing, pointer] = shot, [W, H] = FORMATS[ar];
-  const [fx, fy, fw, fh] = FRAMINGS[framing], k = SRC.scale;
+  const [fx, fy, fw, fh] = FRAMINGS[framing], k = SRC.scale, oy = oyOf(src);
   // The pointer is an arrow about 20 x 28 points whose tip is where it was aimed, with a soft glow around it. It is
   // covered with the same 38 x 46 point box of blank chrome taken 60 points to its right, in the same rows.
-  const bx = (pointer ? pointer[0] - 12 : 0) * k, by = SRC.oy + (pointer ? pointer[1] - 13 : 0) * k;
+  const bx = (pointer ? pointer[0] - 12 : 0) * k, by = oy + (pointer ? pointer[1] - 13 : 0) * k;
   const unpoint = pointer ? `split[m][p];[p]crop=${38 * k}:${46 * k}:${bx + 60 * k}:${by}[pp];[m][pp]overlay=${bx}:${by},` : '';
-  const crop = `${fw * k}:${fh * k}:${fx * k}:${SRC.oy + fy * k}`, [cx, cy, cw, ch] = card;
-  const filter = `[0:v]${unpoint}crop=${crop},setpts=(PTS-STARTPTS)*${(out / len).toFixed(6)},fps=${FPS},scale=${cw}:${ch}:flags=lanczos[fg];` +
+  // -ss before -i starts the input's clock at 0, so a blur's source seconds are taken relative to tin.
+  const blur = (BLUR[src] || []).filter(([t0, t1]) => t1 > tin && t0 < tin + len).map(([t0, t1, x, y, w, h], i) =>
+    `split[b${i}][c${i}];[c${i}]crop=${w * k}:${h * k}:${x * k}:${oy + y * k},boxblur=14:3:10:3[d${i}];` +
+    `[b${i}][d${i}]overlay=${x * k}:${oy + y * k}:enable='between(t,${(t0 - tin).toFixed(3)},${(t1 - tin).toFixed(3)})',`).join('');
+  const crop = `${fw * k}:${fh * k}:${fx * k}:${oy + fy * k}`, [cx, cy, cw, ch] = card;
+  const filter = `[0:v]${unpoint}${blur}crop=${crop},setpts=(PTS-STARTPTS)*${(out / len).toFixed(6)},fps=${FPS},scale=${cw}:${ch}:flags=lanczos[fg];` +
     `color=c=0x0A1530:s=${W}x${H}:r=${FPS}[bg];[bg][fg]overlay=${cx}:${cy}:eof_action=repeat[a];` +
     '[a][1:v]overlay=0:0:eof_action=repeat[v]';
   const seq = !overlay.endsWith('.png');
@@ -257,7 +276,6 @@ async function stills(browser, ars) {
       cutShot(ar, one, card, `${base}-overlay.png`, `${base}.mp4`);
       run(FFMPEG, ['-y', '-loglevel', 'error', '-nostdin', '-i', `${base}.mp4`, '-frames:v', '1', `${base}.png`]);
     }
-    for (const beat of PENDING) await renderOverlay(browser, ar, beat, [null, 0, 1, 1, beat.framing], join(dir, `${ar}-${beat.rec}-pending.png`));
     console.log(`stills for ${ar} in ${dir}`);
   }
 }

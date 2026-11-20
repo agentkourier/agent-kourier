@@ -1,22 +1,25 @@
 ---
 description: >-
-  The Agent Kourier demos: in 98 seconds, an alert and a question become agent sessions in Slack threads, the agent
-  asks for a decision, and a team adds one Binding; in 3 minutes, three agents in three channels hand a cross-team
+  The Agent Kourier demos: in 116 seconds, an alert and a question become agent sessions in Slack threads, the agent
+  asks for a decision, an alert runs in Microsoft Teams, a pull request gets a review on GitHub, and a team adds one
+  Binding; in 3 minutes, three agents in three channels hand a cross-team
   incident on until one person approves the rollback.
 ---
 
 # Demo
 
 An alert becomes an agent session in its Slack thread, a reply continues the same session, a mention starts a new one,
-and the agent asks for a decision and waits for the answer. Then a team adds its agent with one Binding.
+and the agent asks for a decision and waits for the answer. An alert card in Microsoft Teams starts a session there, and a
+pull request starts one through a webhook, and the agent reviews it on GitHub; both are experimental. Then a
+team adds its agent with one Binding.
 
 <figure class="ak-film">
-<video controls preload="none" playsinline poster="../assets/film/agent-kourier-demo-poster-16x9.jpg" aria-label="Agent Kourier demo, 98 seconds, narrated">
+<video controls preload="none" playsinline poster="../assets/film/agent-kourier-demo-poster-16x9.jpg" aria-label="Agent Kourier demo, 116 seconds, narrated">
 <source src="https://media.agentkourier.dev/agent-kourier-demo-16x9.e867a4b092d7.mp4" type="video/mp4">
 <track kind="captions" src="../assets/film/agent-kourier-demo.en.vtt" srclang="en" label="English" default>
-<a href="https://media.agentkourier.dev/agent-kourier-demo-16x9.e867a4b092d7.mp4">Download the demo (MP4, 98 seconds)</a>.
+<a href="https://media.agentkourier.dev/agent-kourier-demo-16x9.e867a4b092d7.mp4">Download the demo (MP4, 116 seconds)</a>.
 </video>
-<figcaption>The demo, 98 seconds, narrated with captions.</figcaption>
+<figcaption>The demo, 116 seconds, narrated with captions.</figcaption>
 </figure>
 
 The Slack shots are screen recordings of a demo environment with seeded faults and real agent output, sped up in
