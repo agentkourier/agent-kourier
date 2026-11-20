@@ -8,11 +8,15 @@ no chat listener does not run one: as the broker's own connection it stops the s
 not started. The broker builds the platform of its own connection when it starts and when a replica takes the lead, so an edit to
 that connection's `spec.teams` or `spec.webhook` applies when Agent Kourier restarts; on the files route the chart rolls the pod when its ConfigMap
 changes, unless `config.existingConfigMap` is set or `config.rollOnChange` is `false`. Until then the leader logs, once for each
-edit of the own connection's `spec.webhook` it reads that leaves the spec other than the one the connection runs on, a WARN with
-the connection in its `connection` attribute,
-`chat connection: its spec.webhook was edited, and the running connection still uses the spec.webhook it started with; a restart of the broker applies the edit`,
-and an INFO, `chat connection: its spec.webhook is the one the running connection started with again`, once the spec is back to
-the one it runs on. A team connection restarts by itself when its ChatConnection changes.
+edit of the own connection's `spec.webhook` or `spec.teams` it reads that leaves the spec other than the one the connection runs on,
+a WARN with the connection in its `connection` attribute, and an INFO once the spec is back to the one it runs on. For `spec.webhook`
+the WARN is
+`chat connection: its spec.webhook was edited, and the running connection still uses the spec.webhook it started with; a restart of the broker applies the edit`
+and the INFO `chat connection: its spec.webhook is the one the running connection started with again`;
+for `spec.teams` the WARN is
+`chat connection: its spec.teams was edited, and the running connection still uses the spec.teams it started with; a restart of the broker applies the edit`
+and the INFO `chat connection: its spec.teams is the one the running connection started with again`.
+A team connection restarts by itself when its ChatConnection changes.
 [Start agents from webhooks](../how-to/receive-webhooks.md) sets up a webhook connection, with a page for each
 service the recipes cover.
 

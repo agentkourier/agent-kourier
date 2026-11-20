@@ -26,7 +26,7 @@ const defaultSuperviseEvery = 5 * time.Second
 // ChatConnection or credentials changed (the fingerprint of TeamConnection), and stops the ones the Snapshot no longer serves. A connection whose
 // Secret cannot be read yet is started once it can, and never fails the broker. The own connection, if the broker has one (spec D53), is not its to start
 // or stop: its tokens apply at a restart (spec D50 (6)), and it is only counted first when two connections are of one Slack app. An edit of its
-// spec.webhook, which also applies at a restart, is a WARN (checkOwnWebhook).
+// spec.webhook or spec.teams, which also applies at a restart, is a WARN (checkOwnSpec).
 //
 // Its loop is one goroutine, and everything in the struct but the host is its own. A failure of a team connection stops that connection only: its
 // run ends, it leaves the table, and the table keeps why (a rejected credential, or a Secret that cannot be used), which the verification of its
@@ -76,9 +76,9 @@ type supervisor struct {
 	// lives is the span each connection that is served has been served in (connLife), so that retiring it reaches every runtime it has had.
 	lives map[string]*connLife
 	said  map[string]string // the last line said of each connection, so that a state is said once
-	// ownDrift is the own webhook connection's spec.webhook that the latest drift WARN named (checkOwnWebhook), a copy that shares nothing with
-	// the snapshot, and ownDrifted says that WARN holds: the snapshot's spec.webhook has not come back to the running one since.
-	ownDrift   *v1alpha1.WebhookSpec
+	// ownDrift is the own connection's spec.webhook or spec.teams (restartSpec.of) that the latest drift WARN named (checkOwnSpec), a copy that
+	// shares nothing with the snapshot, and ownDrifted says that WARN holds: the snapshot's spec has not come back to the running one since.
+	ownDrift   any
 	ownDrifted bool
 }
 
@@ -144,28 +144,68 @@ func (s *supervisor) run(ctx context.Context, initial []TeamConnection) {
 		case <-tick.C:
 		}
 		snap := s.snapshot()
-		s.checkOwnWebhook(ctx, snap)
+		s.checkOwnSpec(ctx, snap)
 		desired = teamConnections(ctx, snap, s.ownRef(), s.secrets)
 	}
 }
 
 // ownWebhookDrifted is the WARN of an own webhook connection whose spec.webhook in the config is not the one its platform runs on, and
-// ownWebhookMatches the INFO of one whose spec.webhook is back to it (checkOwnWebhook).
+// ownWebhookMatches the INFO of one whose spec.webhook is back to it; ownTeamsDrifted and ownTeamsMatches are the same of an own Microsoft
+// Teams connection's spec.teams (checkOwnSpec).
 const (
 	ownWebhookDrifted = "chat connection: its spec.webhook was edited, and the running connection still uses the spec.webhook it started with; a restart of the broker applies the edit"
 	ownWebhookMatches = "chat connection: its spec.webhook is the one the running connection started with again"
+	ownTeamsDrifted   = "chat connection: its spec.teams was edited, and the running connection still uses the spec.teams it started with; a restart of the broker applies the edit"
+	ownTeamsMatches   = "chat connection: its spec.teams is the one the running connection started with again"
 )
 
-// checkOwnWebhook compares the own connection's spec.webhook in snap with the one its platform was built with, when the own connection is a
-// webhook connection. The platform keeps that spec until the broker restarts or another replica takes the lead, while the Bindings are
-// resolved against snap at once, so a trigger on a field that an edit added matches nothing the platform extracts, and misses without a
-// word; a team connection restarts on such an edit instead (its fingerprint). A spec.webhook that differs is one WARN that names the
-// connection, said again only when it differs in another way, and one that is back to the running spec is one INFO, so that the last line
-// of the connection is not a WARN that no longer holds. Both routes reach here: on the files the chart rolls the pod on such an edit, unless
-// its ConfigMap is not the chart's or rolling is turned off. A snapshot without the own connection has nothing to compare (on the files a
-// reload that renames it is refused: keepStartedConnection). No Secret value is read or logged.
-func (s *supervisor) checkOwnWebhook(ctx context.Context, snap *config.Snapshot) {
-	if s.own == nil || s.own.Platform != v1alpha1.PlatformWebhook || snap == nil {
+// restartSpec is the part of the own connection's ChatConnection that its platform reads only when it is built, which checkOwnSpec compares
+// with the snapshot's: a webhook connection's spec.webhook, and a Microsoft Teams connection's spec.teams (its tenant, app, mode and
+// notificationURL).
+type restartSpec struct {
+	// running is the part the platform was built with, and of the same part of a ChatConnection's spec: a copy that shares nothing with it, of
+	// running's type, and nil of that type when the spec has none.
+	running any
+	of      func(spec *v1alpha1.ChatConnectionSpec) any
+	// drifted is the WARN of a spec that differs from running, and matches the INFO of one that is back to it.
+	drifted, matches string
+}
+
+// restartSpecOf is the restartSpec of the own connection own, and false for a platform with no such part.
+func restartSpecOf(own *Connection) (restartSpec, bool) {
+	switch own.Platform {
+	case v1alpha1.PlatformWebhook:
+		return restartSpec{running: own.Webhook, of: func(spec *v1alpha1.ChatConnectionSpec) any { return cloneWebhook(spec.Webhook) },
+			drifted: ownWebhookDrifted, matches: ownWebhookMatches}, true
+	case v1alpha1.PlatformTeams:
+		running := own.Teams
+		return restartSpec{running: &running, of: func(spec *v1alpha1.ChatConnectionSpec) any {
+			if spec.Teams == nil { // Validate refuses it on a Teams connection; another platform has none
+				return (*v1alpha1.TeamsConnectionSpec)(nil)
+			}
+			t := *spec.Teams
+			return &t
+		}, drifted: ownTeamsDrifted, matches: ownTeamsMatches}, true
+	}
+	return restartSpec{}, false
+}
+
+// checkOwnSpec compares the part of the own connection's ChatConnection in snap that its platform reads only when it is built (restartSpecOf:
+// spec.webhook or spec.teams) with the one the platform was built with. The platform keeps that part until the broker restarts or another
+// replica takes the lead, while the Bindings are resolved against snap at once: a trigger on a field that an edit of spec.webhook added
+// matches nothing the platform extracts, and a Teams connection switched to socket mode or given a notificationURL goes on taking its
+// activities and other apps' posts as it did, all without a word; a team connection restarts on such an edit instead (its fingerprint). A
+// part that differs is one WARN that names the connection, said again only when it differs in another way, and one that is back to the
+// running part is one INFO, so that the last line of the connection is not a WARN that no longer holds. Both routes reach here: on the files
+// the chart rolls the pod on such an edit, unless its ConfigMap is not the chart's or rolling is turned off. A snapshot without the own
+// connection has nothing to compare (on the files a reload that renames it is refused: keepStartedConnection). No Secret value is read or
+// logged.
+func (s *supervisor) checkOwnSpec(ctx context.Context, snap *config.Snapshot) {
+	if s.own == nil || snap == nil {
+		return
+	}
+	part, ok := restartSpecOf(s.own)
+	if !ok {
 		return
 	}
 	conns := snap.ChatConnections()
@@ -175,19 +215,19 @@ func (s *supervisor) checkOwnWebhook(ctx context.Context, snap *config.Snapshot)
 	if i < 0 {
 		return
 	}
-	name, now := v1alpha1.NamespacedName(s.own.Ref.Namespace, s.own.Ref.Name), conns[i].Spec.Webhook
-	if reflect.DeepEqual(now, s.own.Webhook) {
+	name, now := v1alpha1.NamespacedName(s.own.Ref.Namespace, s.own.Ref.Name), part.of(&conns[i].Spec)
+	if reflect.DeepEqual(now, part.running) {
 		if s.ownDrifted {
 			s.ownDrift, s.ownDrifted = nil, false
-			s.log.InfoContext(ctx, ownWebhookMatches, "connection", name)
+			s.log.InfoContext(ctx, part.matches, "connection", name)
 		}
 		return
 	}
 	if s.ownDrifted && reflect.DeepEqual(now, s.ownDrift) {
 		return
 	}
-	s.ownDrift, s.ownDrifted = cloneWebhook(now), true
-	s.log.WarnContext(ctx, ownWebhookDrifted, "connection", name)
+	s.ownDrift, s.ownDrifted = now, true
+	s.log.WarnContext(ctx, part.drifted, "connection", name)
 }
 
 // ownRef is the own connection's reference, or the zero value when the broker has none, which teamConnections reads as leaving none out.
