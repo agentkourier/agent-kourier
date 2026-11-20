@@ -18,6 +18,8 @@ import (
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/webhook"
+	"github.com/agentkourier/agent-kourier/internal/telemetry"
+	"github.com/agentkourier/agent-kourier/internal/telemetry/telemetrytest"
 	"github.com/agentkourier/agent-kourier/internal/testutil"
 )
 
@@ -224,12 +226,13 @@ type failingReader struct{}
 func (failingReader) Read([]byte) (int, error) { return 0, errors.New("the client went away") }
 
 // Each answer of the handler is counted exactly once, under its outcome and reason, on the Config's Recorder, and its duration observed
-// once under its outcome; only an accepted one sets the time of the last accepted request, to the Config's clock. That holds before
-// the first Run as well as during and after one. Every outcome and reason the platform has is driven here, so a new one without a
-// case fails.
-func TestEveryOutcomeAndReasonIsCountedOnce(t *testing.T) {
-	rec := &recorder{}
-	cfg := config(rec, nil)
+// once under its outcome; only an accepted one sets the time of the last accepted request, to the Config's clock. Each is one span of
+// the Config's Tracer too (checkTraced). That holds before the first Run as well as during and after one. Every outcome and reason the
+// platform has is driven here, so a new one without a case fails.
+func TestEveryOutcomeAndReasonIsCountedAndTracedOnce(t *testing.T) {
+	rec, tel := &recorder{}, telemetrytest.New(t)
+	traced := func(cfg webhook.Config) webhook.Config { cfg.Tracer = telemetry.Tracer(tel.Ctx); return cfg }
+	cfg := traced(config(rec, nil))
 	cfg.Verify.Timestamp = nil
 	p := newPlatform(t, cfg)
 	p.SetAckWait(time.Hour) // the wait ends none of these steps: timeout has a platform of its own, below
@@ -265,7 +268,7 @@ func TestEveryOutcomeAndReasonIsCountedOnce(t *testing.T) {
 		{"withheld none", http.StatusServiceUnavailable, signed(event), func() { sk.set(errors.New("the store is busy"), false) }},
 	}
 	// stale needs a timestamp: its own platform, on the same recorder.
-	staleCfg := config(rec, nil)
+	staleCfg := traced(config(rec, nil))
 	staleCfg.Verify.Timestamp = &webhook.Timestamp{From: "/ts", Unit: time.Second, Window: time.Minute}
 	stale := newPlatform(t, staleCfg)
 	covered := map[string]bool{}
@@ -273,41 +276,45 @@ func TestEveryOutcomeAndReasonIsCountedOnce(t *testing.T) {
 		if s.before != nil {
 			s.before()
 		}
-		before := rec.recorded()
+		before, spans := rec.recorded(), len(tel.Exporter.GetSpans())
 		if w := serve(t, p, s.req()); w.Code != s.code {
 			t.Errorf("%s: status %d, want %d", s.series, w.Code, s.code)
 		}
 		checkAnswered(t, s.series, before, rec.recorded())
+		checkTraced(t, tel, s.series, s.code, spans)
 		covered[s.series] = true
 	}
-	before := rec.recorded()
+	before, spans := rec.recorded(), len(tel.Exporter.GetSpans())
 	if w := serve(t, stale, request(`{"ts":1}`, true)); w.Code != http.StatusUnauthorized {
 		t.Errorf("unverified stale: status %d, want 401", w.Code)
 	}
 	checkAnswered(t, "unverified stale", before, rec.recorded())
+	checkTraced(t, tel, "unverified stale", http.StatusUnauthorized, spans)
 	covered["unverified stale"] = true
 	// cancelled: a platform whose wait does not end, and a Sink that holds the event until the sender goes away, which it makes
 	// happen, so that nothing but the cancel can end the take.
 	reqCtx, cancelReq := context.WithCancel(context.Background())
 	defer cancelReq()
-	held := newPlatform(t, config(rec, nil))
+	held := newPlatform(t, traced(config(rec, nil)))
 	held.SetAckWait(time.Hour)
 	running(t, held, &sink{block: true, hook: cancelReq})
-	before = rec.recorded()
+	before, spans = rec.recorded(), len(tel.Exporter.GetSpans())
 	if w := serve(t, held, request(event, true).WithContext(reqCtx)); w.Code != http.StatusServiceUnavailable {
 		t.Errorf("cancelled: status %d, want 503", w.Code)
 	}
 	checkAnswered(t, "cancelled none", before, rec.recorded())
+	checkTraced(t, tel, "cancelled none", http.StatusServiceUnavailable, spans)
 	covered["cancelled none"] = true
 	// timeout: a platform with a short wait and a Sink that holds the event, so that nothing but the wait can end the take.
-	slow := newPlatform(t, config(rec, nil))
+	slow := newPlatform(t, traced(config(rec, nil)))
 	slow.SetAckWait(20 * time.Millisecond)
 	running(t, slow, &sink{block: true})
-	before = rec.recorded()
+	before, spans = rec.recorded(), len(tel.Exporter.GetSpans())
 	if w := serve(t, slow, request(event, true)); w.Code != http.StatusServiceUnavailable {
 		t.Errorf("timeout: status %d, want 503", w.Code)
 	}
 	checkAnswered(t, "timeout none", before, rec.recorded())
+	checkTraced(t, tel, "timeout none", http.StatusServiceUnavailable, spans)
 	covered["timeout none"] = true
 	for _, s := range webhook.Series() {
 		if !covered[s] {
@@ -537,11 +544,13 @@ func TestTheHandlerLogsNoBodyAndNoSignature(t *testing.T) {
 	}
 }
 
-// A request that is not a POST, which the chat listener refuses before it reaches here, is answered 405 and not counted, observed or
-// taken as accepted.
+// A request that is not a POST, which the chat listener refuses before it reaches here, is answered 405 and not counted, observed,
+// taken as accepted or traced.
 func TestAMethodOtherThanPostIsRefusedAndNotCounted(t *testing.T) {
-	rec := &recorder{}
-	p := newPlatform(t, config(rec, nil))
+	rec, tel := &recorder{}, telemetrytest.New(t)
+	cfg := config(rec, nil)
+	cfg.Tracer = telemetry.Tracer(tel.Ctx)
+	p := newPlatform(t, cfg)
 	req := request(event, true)
 	req.Method = http.MethodGet
 	if w := serve(t, p, req); w.Code != http.StatusMethodNotAllowed || w.Header().Get("Allow") != http.MethodPost {
@@ -549,5 +558,8 @@ func TestAMethodOtherThanPostIsRefusedAndNotCounted(t *testing.T) {
 	}
 	if got := rec.recorded(); len(got.counts) != 0 || len(got.observed) != 0 || len(got.accepted) != 0 {
 		t.Errorf("recorded %+v, want nothing", got)
+	}
+	if spans := tel.Exporter.GetSpans(); len(spans) != 0 {
+		t.Errorf("%d spans for a %s, want none", len(spans), http.MethodGet)
 	}
 }

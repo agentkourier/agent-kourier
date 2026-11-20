@@ -20,9 +20,11 @@
 // Every answer but the 401, the 400 and the 503 is 200: some senders count any other as a failed delivery. A request that cannot be
 // read (400, malformed, unreadable) is refused before step 1. Each answer is counted once on the Config's Recorder, and every
 // outcome and reason it can count exists at zero from when a Run starts; the Recorder is also given each answer's duration, from when
-// the handler was called, and the time of each accepted one. Each verified request is logged once, at INFO; an
-// unverified one at DEBUG, and in a WARN that sums them for the connection at most once a minute, so that a scanner of a public
-// URL cannot flood the log.
+// the handler was called, and the time of each accepted one. Each verified request is logged once, at INFO, and is one span of the
+// Config's Tracer, from when the handler was called to the answer, which is the parent of what the Sink does with its event; its
+// lines are logged on the span's context, so that they carry its trace. An unverified request is logged at DEBUG, and in a WARN that
+// sums them for the connection at most once a minute, and has no span, as one whose body could not be read has none: so that a
+// scanner of a public URL can flood neither the log nor the traces.
 //
 // The platform has no replies, streams, steps, ephemeral messages, busy marks, thread reads, reactions, user groups or button
 // presses: each method says so in the way its contract allows.
@@ -41,6 +43,9 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode"
+
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/secret"
@@ -118,6 +123,11 @@ type Config struct {
 	// (agentkourier_webhook_ack_duration_seconds) and, for accepted, its time (agentkourier_webhook_last_accepted_timestamp_seconds),
 	// by Now. Nil, nothing is recorded.
 	Recorder Recorder
+	// Tracer starts the span of each verified request (agentkourier.webhook.request), a server span from when the handler is called
+	// to the answer: the parent of what the Sink does with the event, and the trace of the handler's log lines. It is the broker's
+	// (telemetry.Tracer), handed in because a request comes with no telemetry of its own, and one that comes before the first Run has
+	// no Run's context to read it from either. Nil, nothing is traced.
+	Tracer trace.Tracer
 	// Now is the clock of the body timestamps, the WARN summary and the time of the last accepted request; time.Now if nil.
 	Now func() time.Time
 	// OnConnection, if set, is told true when a Run starts to take requests and false when it stops: the connection is up while a
@@ -227,6 +237,7 @@ type Platform struct {
 	delivery string
 	valid    func(string) bool
 	rec      Recorder
+	tracer   trace.Tracer
 	now      func() time.Time
 	onConn   func(connected bool)
 	log      *slog.Logger
@@ -261,9 +272,13 @@ func New(cfg Config) (*Platform, error) {
 	}
 	p := &Platform{conn: cfg.Connection, identity: cfg.Identity, value: cfg.Channel.Value, none: cfg.Actor.None,
 		keep: cfg.Actor.KeepMissing, thread: -1, delivery: cfg.DeliveryHeader, valid: cfg.ValidChannel, rec: cfg.Recorder,
-		now: cfg.Now, onConn: cfg.OnConnection, log: cmp.Or(cfg.Logger, slog.Default()), ackWait: ackWait, order: make(chan struct{}, 1)}
+		tracer: cfg.Tracer, now: cfg.Now, onConn: cfg.OnConnection, log: cmp.Or(cfg.Logger, slog.Default()), ackWait: ackWait,
+		order: make(chan struct{}, 1)}
 	if p.rec == nil {
 		p.rec = noRecorder{}
+	}
+	if p.tracer == nil {
+		p.tracer = noop.NewTracerProvider().Tracer("")
 	}
 	if p.now == nil {
 		p.now = time.Now

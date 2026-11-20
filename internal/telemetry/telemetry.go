@@ -164,6 +164,16 @@ func Enabled(ctx context.Context) bool { return observer(ctx) != nil }
 
 func observer(ctx context.Context) *Observer { o, _ := ctx.Value(observerKey{}).(*Observer); return o }
 
+// Tracer returns the tracer of the broker's instruments in ctx, the one Start's spans come from, for a part that is handed it when it
+// is built and starts its spans itself (the webhook platform's request span); with no instruments in ctx, a tracer that records
+// nothing. A span it starts records no operation duration: only Start's do.
+func Tracer(ctx context.Context) trace.Tracer {
+	if o := observer(ctx); o != nil {
+		return o.tracer
+	}
+	return noop.NewTracerProvider().Tracer("agent-kourier")
+}
+
 // Operation is one finite span and its duration observation.
 type Operation struct {
 	span                   trace.Span
