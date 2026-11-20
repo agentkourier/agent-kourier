@@ -189,7 +189,7 @@ Kourier does not escape them. Arguments shown in monospace keep their braces and
 budget of a message: the pause is refused as one that cannot be shown. An ending's texts are cut until its card fits
 ([Limits](limits.md#what-a-thread-shows)).
 
-Teams sends a press to the broker in a request. On a test tenant on 2026-11-18 (web client, a channel thread), timed from the
+Teams sends a press to the broker in a request. On a test tenant (web client, a channel thread), timed from the
 press's arrival at the server to its answer, Teams showed the person who pressed an answer given at 12.5 seconds, and showed them an
 error, "Something went wrong. Please try again.", for one given at 13 seconds or later, although Teams' service held the request
 until about 14 seconds. Agent Kourier records the press and waits up to 6 seconds in the request for the worker that decides

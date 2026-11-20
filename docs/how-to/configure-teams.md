@@ -12,7 +12,7 @@ through Workflows, where a `botMessage` trigger starts an investigation.
     Teams' web client: `http` mode, `socket` mode, Graph's notifications, and Graph polling, including a resume of polling
     from a stored position. A full install of the broker has not yet been followed through this guide against Teams. The
     steps mark what was checked ("measured"), what comes from Microsoft's documentation, and what was not checked. Each
-    step in a Microsoft UI is as it was in 2026-11.
+    step in a Microsoft UI is as it was then, and Microsoft can change it.
 
 ## Choose how Teams reaches the broker
 
@@ -161,6 +161,10 @@ networkPolicy:
 - `chatListener.ingress.className`: the IngressClass; empty leaves it to the cluster's default class.
 - `chatListener.ingress.host`: the host the Ingress rule matches, the `<host>` of the route.
 - `chatListener.ingress.tls`: the Ingress's TLS, in Kubernetes' own form: the route must be HTTPS.
+
+Behind a Gateway instead of an Ingress controller, leave `chatListener.ingress` off and write an HTTPRoute of your own to the chat
+Service: [With a Gateway API HTTPRoute instead of the Ingress](receive-webhooks.md#with-a-gateway-api-httproute-instead-of-the-ingress)
+has one; the same route serves Teams' requests.
 - `networkPolicy.chatFrom`: who may reach the chat port, here the ingress controller's pods; required with
   `networkPolicy.enabled`.
 
@@ -221,8 +225,8 @@ In the Developer Portal, open the bot under **Bot management** and its **Configu
 
 - `http` mode: set the delivery method to the HTTPS endpoint, and the endpoint address to
   `https://<host>/chat/teams/<namespace>/<name>`, for example `https://chat.example.com/chat/teams/agent-kourier/teams`.
-- `socket` mode: set the delivery method to **Socket mode**. The page marked it "New, development only" on 2026-11-17,
-  and the switch took about a minute to take effect (measured). A region that refuses the bot's socket answers 403
+- `socket` mode: set the delivery method to **Socket mode**. The page marked it "New, development only", and the
+  switch took about a minute to take effect (measured). A region that refuses the bot's socket answers 403
   "Socket mode is not enabled for this bot.", which the broker logs and tries again every 5 minutes, give or take a fifth,
   while the other regions serve. On the test tenant `apac` answered that while `amer` and `emea` worked (measured).
 
@@ -250,7 +254,7 @@ The bot reaches a team as a Teams app: a zip of `manifest.json` and the two icon
   Only standard channels were tried.
 
 The manifest passes Microsoft's JSON schema for manifest version 1.30, the one its `$schema` names (checked with Python's
-`jsonschema`, draft 4, on 2026-11-18). That is not Teams' own validation, which also runs at upload. Zip the three files
+`jsonschema`, draft 4). That is not Teams' own validation, which also runs at upload. Zip the three files
 with nothing above them in the archive:
 
 ```sh

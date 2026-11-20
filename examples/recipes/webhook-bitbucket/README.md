@@ -48,7 +48,7 @@ written by whoever opened or commented on it.
 | What happens on Bitbucket | What follows |
 |---|---|
 | A pull request is created in the repository | The agent's review, as a comment on it. |
-| The pull request is updated | Another review, in the same session. In the run of 2026-11-17 Bitbucket sent `pullrequest:updated` for an edit of the title or description too, not only for a push, and each starts a review. |
+| The pull request is updated | Another review, in the same session. In the run Bitbucket sent `pullrequest:updated` for an edit of the title or description too, not only for a push, and each starts a review. |
 | A comment that mentions `@acme-agent` | The agent's reply on the pull request, in the same session. |
 | The agent comments | Bitbucket sends the `pullrequest:comment_created` event of it too, with the token's bot user as the actor. Agent Kourier answers it `200` and drops it as the agent's own (`outcome="self"`). |
 | A draft pull request | Nothing, by the draft field `/pullrequest/draft`, which follows Atlassian's documentation and was not part of the run. |
@@ -57,8 +57,8 @@ written by whoever opened or commented on it.
 
 - **A Bitbucket Cloud repository webhook** with a secret, for the triggers **Pull request: Created**, **Updated** and
   **Comment created**. The headers, the signature's form and the body's paths this recipe reads were seen in live
-  deliveries in the run of 2026-11-17, except the delivery header, `X-Request-UUID`, and the draft field,
-  `/pullrequest/draft`, which follow Atlassian's documentation, read 2026-11-18. If Bitbucket does not send the draft
+  deliveries in the run, except the delivery header, `X-Request-UUID`, and the draft field,
+  `/pullrequest/draft`, which follow Atlassian's documentation. If Bitbucket does not send the draft
   field, a draft pull request is reviewed too.
 - **An access token for the agent**, whose bot user's account ID is the `identity`.
 - **Your own A2A agent: the recipe ships none.** It needs an agent card that advertises streaming, and Bitbucket tools that use that token;

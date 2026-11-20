@@ -57,8 +57,8 @@ by whoever filed, edited or commented on it.
 ## Prerequisites
 
 - **A Linear webhook** with a signing secret, for the resource types **Issues** and **Comments**. The signature's
-  header and form, the timestamp and the body's paths this recipe reads were seen in live deliveries in the run of
-  2026-11-17, except the delivery header, `Linear-Delivery`, which follows Linear's documentation, read 2026-11-18.
+  header and form, the timestamp and the body's paths this recipe reads were seen in live deliveries in the run, except
+  the delivery header, `Linear-Delivery`, which follows Linear's documentation.
 - **A Linear account for the agent**: an OAuth application whose client-credentials token acts as the application's own
   user, or a personal API key, which acts as its user (that route was not part of the run). That user's ID is the
   `identity`.

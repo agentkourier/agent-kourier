@@ -59,7 +59,7 @@ by whoever opened or commented on it.
 
 - **A webhook on the repository**, with a secret and the content type `application/json`, subscribed to the events
   **Pull requests**, **Issue comments**, **Pull request reviews** and **Pull request review comments**. The headers and
-  the body's paths this recipe reads were seen in live deliveries of a GitHub App's webhook in the run of 2026-11-17,
+  the body's paths this recipe reads were seen in live deliveries of a GitHub App's webhook in the run,
   except the delivery header, `X-GitHub-Delivery`; that a repository's webhook sends the same follows GitHub's
   documentation, and was not run.
 - **A machine user** with the Read role on the repository, with a fine-grained personal access token, and a model

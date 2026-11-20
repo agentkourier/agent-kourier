@@ -1,7 +1,7 @@
 # Start agents from webhooks
 
 For a platform engineer who wants an agent to act on events from GitHub, Jira Cloud, Bitbucket Cloud, Linear or any other service
-that signs the JSON webhooks it sends. At the end, the service sends its webhooks to Agent Kourier; each event that a trigger matches
+that signs the JSON webhooks it sends in a way the connection checks ([Map another service](#map-another-service) says which). At the end, the service sends its webhooks to Agent Kourier; each event that a trigger matches
 starts a turn of your agent, in one session for each pull request or issue; and the agent answers on the service itself, with tools
 and an account of its own there. Agent Kourier posts nothing on the service.
 
@@ -73,6 +73,33 @@ helm upgrade agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --ver
 kubectl -n agent-kourier get ingress          # <fullname>-chat: its HOSTS and ADDRESS; point the host's DNS at the address
 ```
 
+#### With a Gateway API HTTPRoute instead of the Ingress
+
+The chart makes only an Ingress. Behind a Gateway, leave `chatListener.ingress` off and write an HTTPRoute of your own that sends the
+path prefix `/chat/` to the chat Service, `<fullname>-chat` on port 8081 (`chatListener.service.port`), and nothing else. The Service
+selects the leader's pod by its label, so the route needs nothing more to reach the leader. With the release `agent-kourier` and a
+Gateway `gw` in the namespace `gateway-system`:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: agent-kourier-chat
+  namespace: agent-kourier
+spec:
+  parentRefs:
+    - {name: gw, namespace: gateway-system}   # a listener of it with HTTPS on <host>, which admits routes from agent-kourier
+  hostnames: [hooks.example.com]
+  rules:
+    - matches: [{path: {type: PathPrefix, value: /chat/}}]
+      backendRefs: [{name: agent-kourier-chat, port: 8081}]
+```
+
+TLS is then the Gateway listener's, not the chart's. With `networkPolicy.enabled`, `chatFrom` admits the pods that carry the Gateway's
+traffic, which your Gateway API implementation runs and labels, in place of the Ingress controller's namespace. Check the route
+with `kubectl -n agent-kourier get httproute agent-kourier-chat -o yaml`: its parent's `Accepted` and `ResolvedRefs` conditions are
+`True`. The check below is the same.
+
 **Check.** A request to a connection that does not exist reaches the leader and gets its answer:
 
 ```sh
@@ -81,7 +108,7 @@ curl -si -X POST https://<host>/chat/webhook/x/y
 
 The answer is `503`, with the header `Retry-After: 5` and the body `the connection does not run on this replica`. Any other answer came from
 something in front of the broker: no replica leads yet, the leader's pod is not labelled yet, or the host, the TLS Secret or the
-Ingress is not right.
+Ingress (or your HTTPRoute) is not right.
 
 A webhook connection can instead be the broker's own (`config.chatConnection` and `config.chatConnectionSecret`), which is the only
 way on the ConfigMap route, where the broker runs exactly one ChatConnection. An edit of its `spec.webhook` then applies when the
@@ -139,12 +166,11 @@ recipe is an A2A agent from one YAML file: a model, a prompt and the MCP tools i
 The agent posts on the service with tools of its own: an MCP server, or any tool your agent framework runs. Each service page lists
 the operations its recipe's prompts ask for, so that you can choose tools or write them.
 
-As of 2026-11-17, no off-the-shelf MCP server fitted these setups when they were run (upstream projects' states on that date, not
-checked here):
+No off-the-shelf MCP server fitted these setups when they were run (upstream projects' states then, not checked here):
 
 - github-mcp-server v2.2.0 renewed a GitHub App's installation token in its stdio mode only; its HTTP mode took a bearer token with
   each request. The GitHub recipe's agent therefore runs it in its HTTP mode with a machine user's fine-grained personal access
-  token, not an App's (github-mcp-server's `docs/github-app-auth.md` at v2.2.0, read 2026-11-19; not verified here).
+  token, not an App's (github-mcp-server's `docs/github-app-auth.md` at v2.2.0; not verified here).
 - mcp-atlassian v0.24.6 reached the Atlassian API gateway URL, which an Atlassian service account's token needs, only through the
   workaround in its issue #968.
 - No Bitbucket MCP server took a repository access token over HTTP.
@@ -409,7 +435,7 @@ the connection names starts nothing. The event's ID is the SHA-256 of its body, 
   `reason="invalid"`, logged at WARN, and audited. A webhook connection posts no note of the refusal. The refusal is a decision, so
   the same delivery sent again is a `duplicate` while the broker remembers it.
 
-What a service does with a `503` is its own. Their documentation, read on 2026-11-18 and not checked against the services, says:
+What a service does with a `503` is its own. Their documentation, not checked against the services, says:
 
 | Service | After a `503` |
 |---|---|
@@ -419,6 +445,12 @@ What a service does with a `503` is its own. Their documentation, read on 2026-1
 | Linear | Up to three more tries, after 1 minute, 1 hour and 6 hours. |
 
 ## Map another service
+
+Any service can be mapped whose webhooks fit two rules. Each delivery is one JSON object. And the service proves that the delivery is
+its own in one header, in one of two ways: the HMAC-SHA256 of the raw body, in hex, after an optional fixed prefix such as `sha256=`
+(`scheme: hmac-sha256`); or a fixed secret of at least 32 bytes, after an optional fixed prefix such as `Bearer ` (`scheme: token`). A time that the connection
+checks is read from the body, not from a header. A service that signs anything but the body alone, such as a timestamp and the body
+together, or that sends its signature in base64, does not fit.
 
 Start from a delivery of the service, from its delivery log if it has one or its documentation's samples, and write the connection
 from it. For each thing the connection needs, find the pointer to it in the delivery. With the invented delivery of

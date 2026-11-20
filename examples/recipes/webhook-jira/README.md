@@ -53,8 +53,8 @@ filed or edited it.
 
 - **A Jira Cloud admin webhook** with a secret, for the events **Issue created**, **Issue updated** and **Comment
   created**, filtered by JQL to your project (`project = OPS`). The signature's header and form and the body's paths
-  this recipe reads were seen in live deliveries in the run of 2026-11-17, except the delivery header,
-  `X-Atlassian-Webhook-Identifier`, which follows Atlassian's documentation, read 2026-11-18.
+  this recipe reads were seen in live deliveries in the run, except the delivery header,
+  `X-Atlassian-Webhook-Identifier`, which follows Atlassian's documentation.
 - **A service account for the agent**, whose account ID is the `identity`.
 - **Your own A2A agent: the recipe ships none.** It needs an agent card that advertises streaming, and Jira tools that act as that account;
   the Binding is not `Ready` until the broker can fetch that card. The AgentBackend's `url` is a placeholder

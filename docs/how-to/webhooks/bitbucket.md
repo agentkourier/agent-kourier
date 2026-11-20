@@ -9,15 +9,16 @@ agent comments on Bitbucket with a repository access token.
     Needs Agent Kourier 0.6.0 or later: 0.5.x refuses `platform: webhook`. The `webhook` platform is new, and its fields may change
     in a later version. This setup was run end to end against Bitbucket Cloud on 2026-11-17, with this mapping, on a pre-0.6.0 build
     of the broker. What this page says Bitbucket sends was seen in that run's deliveries, and Atlassian can change it. Bitbucket's
-    behaviour and labels that the run did not see come from Atlassian's documentation, read on 2026-11-18, and say so where they
-    appear. Not run: the delivery header `X-Request-UUID`, the draft field `/pullrequest/draft`, step 2's check on a pull request
+    behaviour and labels that the run did not see come from Atlassian's documentation, and say so where they appear. The steps on
+    Bitbucket's side follow that documentation, which can change: if a menu or field has moved, Atlassian's documentation is the
+    reference. Not run: the delivery header `X-Request-UUID`, the draft field `/pullrequest/draft`, step 2's check on a pull request
     comment, and a mention picked from Bitbucket's mention list.
 
 ## What you end with
 
 - A pull request that is created or updated starts a review: a turn of the session `pr-<id>`, in which the agent reads the pull
   request and its diff and posts one comment with its review. The recipe skips a draft by `/pullrequest/draft`, a field that is from
-  Bitbucket's API reference (read 2026-11-18) and was *not run*: if Bitbucket does not send it, a draft is reviewed too.
+  Bitbucket's API reference and was *not run*: if Bitbucket does not send it, a draft is reviewed too.
 - A comment on that pull request that mentions the token's name, typed as `@acme-agent`, starts a reply: a turn of the same session,
   so the agent can see the review it posted.
 - The token's own comments, and its pushes, are dropped as the agent's own (`self`), so they start nothing.
@@ -36,11 +37,11 @@ agent comments on Bitbucket with a repository access token.
 
 ## 1. Create the repository access token
 
-The agent works with a repository access token. Atlassian's documentation (read 2026-11-18) says such a token belongs to the
+The agent works with a repository access token. Atlassian's documentation says such a token belongs to the
 repository, not to a person. In the run it acted as a bot user, an app user, whose name was the token's name.
 
 On the repository, open **…**, **Settings**, then, under **Security**, **Access tokens**, and choose **Create access token** (menu
-path from Atlassian's documentation, read 2026-11-18):
+path from Atlassian's documentation):
 
 | Field | Value |
 |---|---|
@@ -115,11 +116,11 @@ The recipe's prompts ask the agent to do these, with the token as `Authorization
 | Operation | For | Bitbucket's REST API 2.0 |
 |---|---|---|
 | Read a pull request: its title, description and source commit | Both triggers | `GET /repositories/{workspace}/{repo}/pullrequests/{id}` |
-| Read its diff | The review | `GET /repositories/{workspace}/{repo}/pullrequests/{id}/diff`, which Bitbucket's API reference (read 2026-11-18) says redirects: follow it |
+| Read its diff | The review | `GET /repositories/{workspace}/{repo}/pullrequests/{id}/diff`, which Bitbucket's API reference says redirects: follow it |
 | Post a comment on the pull request | Both triggers | `POST /repositories/{workspace}/{repo}/pullrequests/{id}/comments` |
 
-The token expires on the date set in step 1; the tools stop working then. As of 2026-11-17 no Bitbucket MCP server took a repository
-access token over HTTP (the projects' state on that date), so the run used a small MCP server of its own.
+The token expires on the date set in step 1; the tools stop working then. When this setup was run, no Bitbucket MCP server took a
+repository access token over HTTP (the projects' state then), so the run used a small MCP server of its own.
 
 ## 5. Apply the manifests
 
@@ -187,7 +188,7 @@ the leader yet: its Secret, or the namespace's admission. Anything else is the w
 ## 6. Turn on the webhook
 
 On the repository, open **…**, **Settings**, then, under **Workflow**, **Webhooks**, and choose **Add webhook** (menu path from
-Atlassian's documentation, read 2026-11-18):
+Atlassian's documentation):
 
 | Field | Value |
 |---|---|
@@ -282,11 +283,11 @@ cover, and a comment event carries the pull request's commit too. Without the ex
 request event's key would start a review; with it, the body must agree that it is not a comment. A trigger you add that matches
 pull request events needs the same exclude. The exclude covers comments alone: if the webhook also sends other pull request events,
 such as **Approved**, **Merged** or **Declined** (`pullrequest:approved`, `pullrequest:fulfilled`, `pullrequest:rejected`), their bodies
-carry the pull request's source commit and no comment (Atlassian's documentation, read 2026-11-18; not run), so one sent again under
+carry the pull request's source commit and no comment (Atlassian's documentation; not run), so one sent again under
 `pullrequest:updated` would start a review. Subscribe the webhook to the recipe's three events alone (step 6), or add a field that
 tells those events apart and exclude on it.
 
-**Only pull requests into one branch** (*not run*; Bitbucket's API schema, read 2026-11-18, has
+**Only pull requests into one branch** (*not run*; Bitbucket's API schema has
 `pullrequest.destination.branch.name`). Add a field, and match it:
 
 ```yaml
@@ -306,9 +307,9 @@ ChatConnection and Binding under other names, such as `bitbucket-gadgets`, with
 - a webhook on that repository (step 6) with the URL `https://<host>/chat/webhook/acme-webhooks/bitbucket-gadgets` and the new
   secret.
 
-A broker serves at most 16 ChatConnections ([Limits](../../reference/limits.md#run-the-broker)). Atlassian's documentation (read
-2026-11-18) says a workspace access token, one for every repository of a workspace, needs Bitbucket Cloud Premium, and that the web
-interface makes webhooks only on a repository. One connection for a whole workspace was not tried.
+A broker serves at most 16 ChatConnections ([Limits](../../reference/limits.md#run-the-broker)). Atlassian's documentation says
+a workspace access token, one for every repository of a workspace, needs Bitbucket Cloud Premium, and that the web interface makes
+webhooks only on a repository. One connection for a whole workspace was not tried.
 
 ## Troubleshooting
 
@@ -316,24 +317,24 @@ interface makes webhooks only on a repository. One connection for a whole worksp
 
 | What you see | Why, and what to do |
 |---|---|
-| Nothing at all | The webhook is inactive: open it, check **Active**, save. To see what Bitbucket sent, open **View requests** on the webhook and choose **Enable history**; Atlassian's documentation (read 2026-11-18) says only the deliveries after that are recorded. |
+| Nothing at all | The webhook is inactive: open it, check **Active**, save. To see what Bitbucket sent, open **View requests** on the webhook and choose **Enable history**; Atlassian's documentation says only the deliveries after that are recorded. |
 | `unverified`, `bad_signature`, on every delivery | The webhook's secret is not the Secret's `webhookSecret`. Set it on the webhook again from the file of step 3. |
 | A review on every edit of the description | `pullrequest:updated` ([above](#change-what-starts-a-turn)). |
 | A comment that mentions the agent starts nothing | The regex matches `@` and the token's name as typed. A mention picked from Bitbucket's list may be stored in another form (not verified): type the name, or match the account ID too ([above](#change-what-starts-a-turn)). |
 | `accepted`, and no review | The pull request is a draft, or `agentkourier_trigger_limited_total{binding="acme-webhooks/bitbucket-reviews"}` rose: with `maxConcurrent: 1`, a second pull request while a review runs is stopped, and the broker's response was `200`, so Bitbucket does not send it again, and the event is lost; the WARN line names its delivery. Raise `maxConcurrent`. |
-| A delivery failed | Atlassian's documentation (read 2026-11-18) says Bitbucket waits 10 seconds for a response, and tries a delivery that got a `5xx`, such as the broker's `503`, up to two more times. |
+| A delivery failed | Atlassian's documentation says Bitbucket waits 10 seconds for a response, and tries a delivery that got a `5xx`, such as the broker's `503`, up to two more times. |
 | A turn, and nothing on Bitbucket | The agent's tools: an expired token, or one without **Pull requests: Write**. |
 
 ## What Bitbucket sends
 
 - Bitbucket sends both `X-Hub-Signature` and `X-Hub-Signature-256`, each `sha256=<hex>` of the same HMAC. It names the event in the
   `X-Event-Key` header, read here as the field `event`: `pullrequest:created`, `pullrequest:updated`,
-  `pullrequest:comment_created`. (Seen in the 2026-11-17 run.)
+  `pullrequest:comment_created`. (Seen in the run.)
 - The actor is `/actor/account_id`. A comment's author is also `/comment/user/account_id`. (Seen in the run.)
 - `/pullrequest/source/commit/hash` is 12 characters, not 40. (Seen in the run.)
 - `pullrequest:updated` is sent on every edit of the title or the description, not only on a push, and does not say what changed.
   (Seen in the run.)
 - A mention of the bot user typed as `@<token-name>` stays that plain text in `/comment/content/raw`, which the trigger's regex
   matches. (Seen in the run.)
-- `/pullrequest/draft` says whether the pull request is a draft. (Bitbucket's API reference, read 2026-11-18; not part of the run.)
-- The delivery's ID is in `X-Request-UUID`. (Atlassian's documentation, read 2026-11-18; not part of the run.)
+- `/pullrequest/draft` says whether the pull request is a draft. (Bitbucket's API reference; not part of the run.)
+- The delivery's ID is in `X-Request-UUID`. (Atlassian's documentation; not part of the run.)
