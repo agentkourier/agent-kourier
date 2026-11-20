@@ -52,6 +52,16 @@
       "text": "When the agent needs a decision, it asks, and waits for your answer."
     },
     {
+      "id": "teams",
+      "shot": "Teams thread",
+      "text": "In Microsoft Teams, the agent works the alert step by step too. Teams support is experimental."
+    },
+    {
+      "id": "pr",
+      "shot": "GitHub pull request",
+      "text": "Webhooks start sessions too. A pull request opens, and the agent reviews it on GitHub with its own tools."
+    },
+    {
       "id": "yaml",
       "shot": "T1 Binding",
       "text": "A team applies a Binding next to its agent. The agent needs no chat code."
@@ -59,7 +69,7 @@
     {
       "id": "close",
       "shot": "Close",
-      "text": "Agent Kourier works with kagent, or any A2A agent that streams. It keeps a session per thread, streams the reply, and carries the agent's questions and your answers. Slack today; more chat platforms are planned. Agent Kourier. Write the agent, not the chat integration."
+      "text": "Agent Kourier works with kagent, or any A2A agent that streams. It keeps a session per thread, streams the reply, and carries the agent's questions and your answers. Slack is supported; Microsoft Teams and webhooks are experimental. Agent Kourier. Write the agent, not the chat integration."
     }
   ],
   "teaser": [
@@ -76,7 +86,7 @@
     {
       "id": "t-proof",
       "shot": "R1 to R3",
-      "text": "Alerts and questions become agent sessions in a Slack thread. More platforms are planned."
+      "text": "Alerts and questions become agent sessions in Slack, and in Microsoft Teams as an experiment."
     }
   ]
 }

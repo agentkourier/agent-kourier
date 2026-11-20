@@ -5,7 +5,7 @@ Status: built 2026-10-10 (`out/agent-kourier-demo-*.mp4`, `out/agent-kourier-tea
 ## Positioning
 
 - **Hook:** Write the agent, not the chat integration. (The README's headline since 2026-10-16. It replaced "Every thread, a live agent session.", which the owner dropped rather than keep as a second line.)
-- **Category:** A Kubernetes-native broker between team chat and streaming A2A agents. Slack is the supported platform today and more are planned; no other platform is named, because none is committed. (Replaced "the always-on chat gateway for A2A agents on Kubernetes", 2026-10-16.)
+- **Category:** A Kubernetes-native broker between team chat and streaming A2A agents. Slack is the supported platform; Microsoft Teams and webhooks (GitHub, Jira, Bitbucket, Linear) arrive in 0.6.0 as experiments, and the film calls them experimental wherever it names them. (Replaced "the always-on chat gateway for A2A agents on Kubernetes", 2026-10-16.)
 - **Positioning:** lead with what Agent Kourier saves an agent builder: the agent keeps its tools and task logic, Agent Kourier handles the chat side. Plain and factual; the owner finds slogan-style copy cheesy.
 - **Hero use case:** an alert opens a session. Second way in: someone asks.
 
@@ -15,23 +15,25 @@ Status: built 2026-10-10 (`out/agent-kourier-demo-*.mp4`, `out/agent-kourier-tea
 the footage captions) are the script. This table is a copy for reading; if it and those files differ, they win.
 
 Both cuts follow the same arc: the problem, the reveal, the product working, the close. Sources are named
-generally (alerts, chat) with what they mean today beside them (alerts posted by a bot, Slack today).
+generally (alerts, chat) with what they mean today beside them (alerts posted by a bot; Slack, Teams).
 
-### Demo cut, about 97 s (to be re-timed when voiced)
+### Demo cut, about 110 s (to be re-timed when voiced)
 
 | # | Beat | Narration | On screen |
 |---|---|---|---|
 | 1 | Problem, animated | You've put AI agents on Kubernetes. They can read logs, check rollouts, and find the cause. | **You've put AI agents on Kubernetes.** They can read logs, check rollouts and find the cause. Chips: logs, rollouts, events. |
 | 2 | Problem, animated | But they sit behind a prompt, away from where your team works. | **But they sit behind a prompt,** away from where your team works. |
-| 3 | Problem, animated | Alerts and questions land in team chat. Putting your agent there means building threads, streaming and questions yourself. | **Alerts and questions land in team chat.** Putting your agent there means building threads, streaming and questions yourself. Nodes: Alerts (posted by a bot), Chat (Slack today). |
+| 3 | Problem, animated | Alerts and questions land in team chat. Putting your agent there means building threads, streaming and questions yourself. | **Alerts and questions land in team chat.** Putting your agent there means building threads, streaming and questions yourself. Nodes: Alerts (posted by a bot), Chat (Slack, Teams). |
 | 4 | Reveal, animated | Introducing Agent Kourier: a Kubernetes-native broker between team chat and streaming A2A agents. | **Introducing Agent Kourier.** A Kubernetes-native broker between team chat and streaming A2A agents. |
-| 5 | Solution, animated | An alert, or a question, becomes an agent session in its own thread. | **An alert or a question becomes an agent session.** In its own thread. Slack today. |
+| 5 | Solution, animated | An alert, or a question, becomes an agent session in its own thread. | **An alert or a question becomes an agent session.** In its own thread. |
 | 6 | Real footage: alert | Your alerts arrive in the channel as they always have. Agent Kourier reads each one and hands it to your agent. The agent investigates under the alert, step by step. | **An alert opens a session.** Nobody typed a prompt. |
 | 7 | Real footage: reply | Reply in the thread, and the session continues with everything it already found. | **Reply in the thread.** Same session, full context. |
 | 8 | Real footage: mention | No alert? Mention Agent Kourier and ask. | **Or just ask.** A mention opens its own thread. |
 | 9 | Real footage: question | When the agent needs a decision, it asks, and waits for your answer. | **It asks when it needs to.** Answer in the thread and it carries on. |
-| 10 | Setup, animated | A team applies a Binding next to its agent. The agent needs no chat code. | **A Binding connects a channel to an agent.** The agent needs no chat code. The Binding the demo ran with, its channel ID replaced by a placeholder; under it: To start from alerts, add a trigger to the Binding. |
-| 11 | Close, animated | Agent Kourier works with kagent, or any A2A agent that streams. It keeps a session per thread, streams the reply, and carries the agent's questions and your answers. Slack today; more chat platforms are planned. Agent Kourier. Write the agent, not the chat integration. | Pills: kagent, or any A2A agent that streams · A session per thread, streamed replies, questions · Slack today, more chat platforms planned. End card: **Agent Kourier.** Write the agent, not the chat integration. A Kubernetes-native broker between team chat and streaming A2A agents. agentkourier.dev |
+| 10 | Real footage: Microsoft Teams (to record) | In Microsoft Teams, the agent works the alert step by step too. Teams support is experimental. | **Also in Microsoft Teams.** Experimental. The reply fills in as the agent works. A real Teams channel: the alert, then the agent's reply, which Agent Kourier edits as the steps come in (Teams has no streams). |
+| 11 | Real footage: pull request (to record) | Webhooks start sessions too. A pull request opens, and the agent reviews it on GitHub with its own tools. | **A pull request starts one too.** The agent posts its review on GitHub. Experimental. A real pull request and the review the agent posts as its GitHub App; Agent Kourier posts nothing on GitHub. |
+| 12 | Setup, animated | A team applies a Binding next to its agent. The agent needs no chat code. | **A Binding connects a channel to an agent.** The agent needs no chat code. The Binding the demo ran with, its channel ID replaced by a placeholder; under it: To start from alerts, add a trigger to the Binding. |
+| 13 | Close, animated | Agent Kourier works with kagent, or any A2A agent that streams. It keeps a session per thread, streams the reply, and carries the agent's questions and your answers. Slack is supported; Microsoft Teams and webhooks are experimental. Agent Kourier. Write the agent, not the chat integration. | Pills: kagent, or any A2A agent that streams · A session per thread, streamed replies, questions · Slack, plus Teams and webhooks (experimental). End card: **Agent Kourier.** Write the agent, not the chat integration. A Kubernetes-native broker between team chat and streaming A2A agents. agentkourier.dev |
 
 ### Teaser, 20 s
 
@@ -39,7 +41,7 @@ generally (alerts, chat) with what they mean today beside them (alerts posted by
 |---|---|---|---|
 | 1 | Problem, animated | Your agent is ready. The chat integration is another project. | **Your agent is ready.** The chat integration is another project. |
 | 2 | Reveal, animated | Introducing Agent Kourier: a Kubernetes-native broker between team chat and streaming A2A agents. | **Introducing Agent Kourier.** A Kubernetes-native broker between team chat and streaming A2A agents. |
-| 3 | Real footage | Alerts and questions become agent sessions in a Slack thread. More platforms are planned. | An alert opens a session. · Reply in the thread. · Or just ask. |
+| 3 | Real footage | Alerts and questions become agent sessions in Slack, and in Microsoft Teams as an experiment. | An alert opens a session. · Reply in the thread. · Or just ask. |
 | 4 | End card | | **Agent Kourier.** Write the agent, not the chat integration. agentkourier.dev |
 
 ### The close

@@ -68,6 +68,13 @@ const DEMO = [
   { mg: 'yaml', line: 'yaml', lead: 0.3, dur: 7.0 },
   { mg: 'close', line: 'close', lead: 0.3, dur: 20.2, query: { endAt: 13.2 } },
 ];
+// Beats written but not yet recorded: each joins DEMO after r4 once its recording is in raw/, with shots and a framing
+// of its own (FRAMINGS are Slack's page). Until then stills renders each one's caption over an empty card of the framing
+// named here, so the copy can be checked. A no-break space (\u00a0) keeps a product name on one line.
+const PENDING = [
+  { rec: 'teams', line: 'teams', lead: 0.3, cap: 'Also in Microsoft\u00a0Teams.', sub: 'Experimental. The reply fills in as the agent works.', framing: 'threadTop' },
+  { rec: 'pr', line: 'pr', lead: 0.3, cap: 'A pull request starts one too.', sub: 'The agent posts its review on GitHub. Experimental.', framing: 'threadTop' },
+];
 const TEASER = [
   { mg: 't-problem', line: 't-problem', lead: 0.3, dur: 4.8 },
   { mg: 't-reveal', line: 't-reveal', lead: 0.2, dur: 6.6 },
@@ -247,6 +254,7 @@ async function stills(browser, ars) {
       cutShot(ar, one, card, `${base}-overlay.png`, `${base}.mp4`);
       run(FFMPEG, ['-y', '-loglevel', 'error', '-nostdin', '-i', `${base}.mp4`, '-frames:v', '1', `${base}.png`]);
     }
+    for (const beat of PENDING) await renderOverlay(browser, ar, beat, [null, 0, 1, 1, beat.framing], join(dir, `${ar}-${beat.rec}-pending.png`));
     console.log(`stills for ${ar} in ${dir}`);
   }
 }
@@ -304,7 +312,7 @@ async function storyboard(browser) {
     h2{font-size:17px;margin:2px 0 8px} .span{font-family:"SF Mono",Menlo,monospace;font-size:12.5px;opacity:.65;margin-left:6px;font-weight:400}
     dl{margin:0;display:grid;grid-template-columns:96px 1fr;gap:5px 12px} dt{opacity:.6;font-size:12px;text-transform:uppercase;letter-spacing:.06em;padding-top:2px} dd{margin:0}
     </style><h1>Agent Kourier · storyboard (demo cut)</h1>
-    <p class="lead">Write the agent, not the chat integration. A Kubernetes-native broker between team chat and streaming A2A agents. Slack today; more chat platforms planned.</p>
+    <p class="lead">Write the agent, not the chat integration. A Kubernetes-native broker between team chat and streaming A2A agents. Slack is supported; Microsoft Teams and webhooks are experimental.</p>
     <p class="meta">${at.toFixed(1)} s · 30 fps · 16:9, 9:16, 1:1 · narration: ElevenLabs Eleven v4 "Eric" via OpenRouter, directed measured, lowered one semitone · footage: the kind sandbox, real Slack, real agent output, seeded faults</p>
     ${rows.map(r => `<section class="shot"><img src="${r.img}" alt=""><div><h2><span class="n">${r.n}</span>${esc(r.id)}<span class="span">${r.span}</span></h2><dl>
       ${r.said ? `<dt>Narration</dt><dd>${esc(r.said)}</dd>` : ''}${r.cap ? `<dt>On screen</dt><dd>${esc(r.cap)}</dd>` : ''}<dt>Source</dt><dd>${esc(r.source)}</dd></dl></div></section>`).join('')}</html>`;
