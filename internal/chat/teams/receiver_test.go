@@ -21,12 +21,14 @@ import (
 // flushPrefix begins the IDs of flush's posts, which got leaves out; no other post of the tests has an ID that begins so.
 const flushPrefix = "1799999"
 
-// recordingSink records what it is given, and counts every call by message ID. While block is open, Message waits on it for a message
-// of blockChannel, or of any channel when blockChannel is "", or until its context ends, and then returns after unwind and records
-// nothing. A message ID in failing is refused as many times as it says (failAlways: every time).
+// recordingSink records what it is given, with the context of each call that took a message, and counts every call by message ID.
+// While block is open, Message waits on it for a message of blockChannel, or of any channel when blockChannel is "", or until its
+// context ends, and then returns after unwind and records nothing. A message ID in failing is refused as many times as it says
+// (failAlways: every time).
 type recordingSink struct {
 	mu           sync.Mutex
 	messages     []chat.Inbound
+	ctxs         []context.Context // the context of each message in messages
 	calls        map[string]int
 	callTimes    map[string][]time.Time
 	failing      map[string]int
@@ -64,7 +66,7 @@ func (s *recordingSink) Message(ctx context.Context, m chat.Inbound) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.messages = append(s.messages, m)
+	s.messages, s.ctxs = append(s.messages, m), append(s.ctxs, ctx)
 	return nil
 }
 
@@ -141,16 +143,17 @@ func (h *invokeRecorder) count() int {
 	return len(h.invokes)
 }
 
-// recordingStore is a MemoryConversations that also keeps every record it was given.
+// recordingStore is a MemoryConversations that also keeps every record it was given, with the context it was given on.
 type recordingStore struct {
 	*MemoryConversations
 	mu   sync.Mutex
 	recs []Conversation
+	ctxs []context.Context // the context of each record in recs
 }
 
 func (s *recordingStore) Remember(ctx context.Context, conn string, c Conversation) error {
 	s.mu.Lock()
-	s.recs = append(s.recs, c)
+	s.recs, s.ctxs = append(s.recs, c), append(s.ctxs, ctx)
 	s.mu.Unlock()
 	return s.MemoryConversations.Remember(ctx, conn, c)
 }
@@ -161,8 +164,17 @@ func (s *recordingStore) given() []Conversation {
 	return append([]Conversation(nil), s.recs...)
 }
 
-// receiverTest is a Receiver of the test connection, with the fake Bot Framework's keys, and what it hands on.
+// contexts is the context of each record given, in order.
+func (s *recordingStore) contexts() []context.Context {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]context.Context(nil), s.ctxs...)
+}
+
+// receiverTest is a Receiver of the test connection, with the fake Bot Framework's keys, and what it hands on. Serve runs on base, or
+// on a background context when it is nil.
 type receiverTest struct {
+	base    context.Context
 	r       *Receiver
 	f       *fakeBotFramework
 	key     signingKey
@@ -172,17 +184,21 @@ type receiverTest struct {
 	flushes int
 }
 
-// newReceiverTest makes a Receiver; with serve, it also runs it with its sink until the test ends.
-func newReceiverTest(t *testing.T, serve bool, invokes InvokeHandler) *receiverTest {
+// newReceiverTest makes a Receiver, with each of opts applied to its config; with serve, it also runs it with its sink until the test ends.
+func newReceiverTest(t *testing.T, serve bool, invokes InvokeHandler, opts ...func(*ReceiverConfig)) *receiverTest {
 	t.Helper()
 	key := newSigningKey(t, "k", "msteams")
 	f := newFakeBotFramework(t, key)
 	clock := newFakeClock()
 	rt := &receiverTest{f: f, key: key, clock: clock, sink: &recordingSink{}, convs: &recordingStore{MemoryConversations: NewMemoryConversations()}}
-	r, err := NewReceiver(ReceiverConfig{
+	cfg := ReceiverConfig{
 		Connection: testConn, TenantID: testTenant, AppID: testAppID, MetadataURL: f.metadataURL(), HTTPClient: f.srv.Client(),
 		Conversations: rt.convs, Invokes: invokes, Logger: testutil.DiscardLogger(), Now: clock.now,
-	})
+	}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	r, err := NewReceiver(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +214,11 @@ func newReceiverTest(t *testing.T, serve bool, invokes InvokeHandler) *receiverT
 // test's end stops it too.
 func (rt *receiverTest) serve(t *testing.T) (stop func() error) {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
+	base := rt.base
+	if base == nil {
+		base = context.Background()
+	}
+	ctx, cancel := context.WithCancel(base)
 	done := make(chan error, 1)
 	go func() { done <- rt.r.Serve(ctx, rt.sink) }()
 	var once sync.Once
@@ -229,10 +249,16 @@ func (rt *receiverTest) serve(t *testing.T) (stop func() error) {
 // post sends body to the Receiver with a token signed with the test key, or with authz when it is not "".
 func (rt *receiverTest) post(t *testing.T, body []byte, authz string) *httptest.ResponseRecorder {
 	t.Helper()
+	return rt.postIn(t.Context(), t, body, authz)
+}
+
+// postIn is post, with ctx as the request's context.
+func (rt *receiverTest) postIn(ctx context.Context, t *testing.T, body []byte, authz string) *httptest.ResponseRecorder {
+	t.Helper()
 	if authz == "" {
 		authz = bearer(t, rt.key, claimsAt(rt.clock.now()))
 	}
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat/teams/"+testConn, bytes.NewReader(body))
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/chat/teams/"+testConn, bytes.NewReader(body))
 	req.Header.Set("Authorization", authz)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()

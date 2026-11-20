@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/secret"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
@@ -46,6 +48,9 @@ type Config struct {
 	Positions PollPositions
 	// Logger is slog.Default() if nil. The caller names the connection on it.
 	Logger *slog.Logger
+	// Tracer starts the span of each verified activity request over HTTPS (ReceiverConfig.Tracer). Nil, nothing is traced. Graph's
+	// notifications, the polls and the activities of Socket mode have no span of the connection's.
+	Tracer trace.Tracer
 	// Now is the clock of the tokens, the keys and the dedup; time.Now if nil.
 	Now func() time.Time
 	// OnConnection, if set, is told whether the connection takes activities: in http mode true when Run starts taking them and false
@@ -154,7 +159,7 @@ func New(cfg Config) (*Client, error) {
 		pressWait: pressWait, threadTimeout: threadTimeout, buttonKey: key, buttonsWait: waitFor, posted: newRecent(now),
 		groups: map[string]string{}}
 	recv, err := NewReceiver(ReceiverConfig{Connection: cfg.Connection, TenantID: cfg.TenantID, AppID: cfg.AppID,
-		MetadataURL: cfg.MetadataURL, HTTPClient: client, Conversations: convs, Logger: log, Now: now, Invokes: c})
+		MetadataURL: cfg.MetadataURL, HTTPClient: client, Conversations: convs, Logger: log, Tracer: cfg.Tracer, Now: now, Invokes: c})
 	if err != nil {
 		return nil, err
 	}

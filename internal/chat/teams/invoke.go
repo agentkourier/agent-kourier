@@ -30,10 +30,11 @@ type InvokeAnswer struct {
 	Body   []byte
 }
 
-// InvokeHandler answers invokes. The receiver calls it in the request, after the token, the tenant and the dedup, with the request's
-// context, whose deadline is the one the receiver asks the chat listener for (invokeTimeout), and the Sink of the live Serve, and writes
-// what it returns. It must answer before that deadline: what it waits for in the request is bounded inside it (a press waits up to
-// pressWait for its decision), and any other work comes after.
+// InvokeHandler answers invokes. The receiver calls it in the request, after the token, the tenant and the dedup, with a context that
+// ends with the request's, at its deadline (the one the receiver asks the chat listener for, invokeTimeout) or when its sender goes, and
+// carries the values of the live Serve's (the broker's instruments) and, over HTTPS, the request's span; it gives it the Sink of the live
+// Serve, and writes what it returns. It must answer before that deadline: what it waits for in the request is bounded inside it (a press
+// waits up to pressWait for its decision), and any other work comes after.
 type InvokeHandler interface {
 	Invoke(ctx context.Context, sink chat.Sink, inv Invoke) InvokeAnswer
 }

@@ -118,8 +118,10 @@ type builtPlatform struct {
 // restart or a takeover does not post through the global route until an activity comes, and a Teams connection with none is a wiring
 // error; no other platform reads it. positions keeps where a Microsoft Teams connection's poll of each channel stands: the leader gives
 // the broker's store (newTeamsPollPositions), so that a restart or a takeover resumes the polls; with nil a run polls each channel anew.
-// It refuses a connection that needs the chat listener on a broker that has none (needsChatListener). In a test image, testhooks.Teams
-// points every call of a Teams connection at the fake Teams service, and at nothing else; a production build has no such fake.
+// A Microsoft Teams connection traces each verified activity request with the broker's tracer in ctx (telemetry.Tracer), so that the
+// spans of the intake and of the turn it starts are in the request's trace. It refuses a connection that needs the chat listener on a
+// broker that has none (needsChatListener). In a test image, testhooks.Teams points every call of a Teams connection at the fake Teams
+// service, and at nothing else; a production build has no such fake.
 func (c RunConfig) newPlatform(ctx context.Context, conn Connection, log *slog.Logger, onConnection func(connected bool),
 	convs teams.ConversationStore, positions teams.PollPositions) (builtPlatform, error) {
 	name := v1alpha1.NamespacedName(conn.Ref.Namespace, conn.Ref.Name)
@@ -156,7 +158,7 @@ func (c RunConfig) newPlatform(ctx context.Context, conn Connection, log *slog.L
 			transport.TLSClientConfig, rt = fake.TLS, fake.Wrap(transport)
 		}
 		tc := teams.Config{Connection: name, TenantID: conn.Teams.TenantID, AppID: conn.Teams.AppID,
-			ClientSecret: conn.Credentials[v1alpha1.TeamsClientSecretKey], Logger: log, OnConnection: onConnection,
+			ClientSecret: conn.Credentials[v1alpha1.TeamsClientSecretKey], Logger: log, Tracer: telemetry.Tracer(ctx), OnConnection: onConnection,
 			HTTPClient: &http.Client{Transport: telemetry.Transport(rt, false), Timeout: teamsAPITimeout}, Conversations: convs,
 			Positions: positions, Socket: conn.Teams.Mode == v1alpha1.TeamsModeSocket, NotificationURL: conn.Teams.NotificationURL}
 		if faked {
