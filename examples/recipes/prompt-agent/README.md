@@ -34,6 +34,7 @@ how an agent meets the contract with no model at all, read the
 - `ask_user` pauses the run: the question is posted in the thread, and the person's reply resumes the same run with the
   answer as the tool's result. A question left unanswered past the Binding's `interactions.timeout` (30 minutes by
   default) is cancelled, and the next turn in the thread runs normally (`repair_messages` in `execute`).
+  `PROMPT_AGENT_ASK_USER` turns the tool off (see [What to change](#what-to-change)).
 - A cancel stops the run, during a tool call too, and keeps the messages the run had so far, so the next turn builds on
   them.
 - A turn that fails ends the task `failed` with `<error type>: <message>`, which Agent Kourier reads to pick a failure
@@ -271,6 +272,10 @@ Then mention the bot in the channel and ask a question your agent's tools can an
   `agent/manifests/configmap.yaml` start equal, and this repository's tests keep them so; in your own copy, the
   ConfigMap is the one that counts.
 - **The provider.** The `model:` line, the key's variable in the Deployment, and the egress if you close it.
+- **`ask_user`.** `PROMPT_AGENT_ASK_USER` in the Deployment: unset or `1` offers the model `ask_user`, as the example
+  does; `0` does not offer it, for a connection that serves no questions, such as a webhook's (the `webhook-github`
+  recipe's agent sets it), so no run pauses, and a call the model makes to it anyway is answered as an unknown tool.
+  Any other value (`true`, `false`, an empty value) stops the agent at start, naming the variable.
 - **The Binding.** The channel. `interactions.askUser: true` lets the agent's `ask_user` reach the thread: without it,
   Agent Kourier cancels the task when the agent asks and tells the thread so, so leave it on unless your
   `instructions` never ask. `chat.threadReplies: mention` makes only a reply that mentions the bot a turn, for threads
@@ -288,8 +293,10 @@ Then mention the bot in the channel and ask a question your agent's tools can an
   appends and `completed`, a second turn that sees the first, an MCP call that carries the expanded token with only the
   allowed tools offered, a disallowed call that never reaches the server, each refusal in
   [What the agent refuses](#what-the-agent-refuses-and-why), cancel during a slow MCP call, `ask_user` and its answer,
-  a question cancelled while paused, the heartbeat, a repeated `messageId`, the bearer check and the body cap. They
-  also check that the ConfigMap holds the example `agent.yaml`.
+  a question cancelled while paused, `PROMPT_AGENT_ASK_USER` (0 offers no `ask_user`; a value other than 0 or 1 stops
+  the start), the heartbeat, a repeated `messageId`, the bearer check and the body cap. They also check that the
+  ConfigMap holds the example `agent.yaml`. `test_webhook_github.py` tests the
+  [`webhook-github`](../webhook-github/README.md) recipe's agent, which runs on this image.
 - `make prompt-agent-lint` runs ruff and audits the pinned runtime packages with pip-audit (it needs the network).
 - `go test ./test/recipes` loads `kourier/` with Agent Kourier's loader and resolves its references.
 - The recipe has no `evals/`: its Binding starts only from a mention, which the trigger evals do not judge.

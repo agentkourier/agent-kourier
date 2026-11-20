@@ -1,8 +1,10 @@
-# The A2A server that hosts the agent, which has GitHub tools of its own. The url is a placeholder (REPLACE-ME): put your
-# agent's here. For the a2a dialect it is the exact JSON-RPC endpoint, used as written.
+# The A2A server that hosts the review agent: the Service that ../agent/manifests/ creates in the namespace github-agent.
+# On the a2a dialect the url is the exact JSON-RPC endpoint, used as written, and the agent card is served at that url
+# plus /.well-known/agent-card.json. The agent serves JSON-RPC at the root, so the url has no path. Replace it if you
+# put the agent somewhere else.
 apiVersion: agentkourier.dev/v1alpha1
 kind: AgentBackend
 metadata: {name: github-agent, namespace: acme-webhooks}
 spec:
   dialect: a2a
-  url: http://REPLACE-ME.agents.svc.cluster.local:8080
+  url: http://github-review-agent.github-agent.svc.cluster.local:8080

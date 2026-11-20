@@ -1,7 +1,8 @@
-# GitHub: a GitHub App's webhook (pull requests, issue comments, pull request reviews and review comments). The App's
-# webhook URL is https://<host>/chat/webhook/acme-webhooks/github. The Secret github-webhook, in namespace acme-webhooks,
-# holds the key webhookSecret, the App's webhook secret; you make it, and no secret belongs in this file.
-# Replace acme-review-agent with your App's slug: the agent posts as the App, so its own reviews and comments are dropped.
+# GitHub: a repository's webhook (pull requests, issue comments, pull request reviews and review comments). The
+# webhook's URL is https://<host>/chat/webhook/acme-webhooks/github. The Secret github-webhook, in namespace
+# acme-webhooks, holds the key webhookSecret, the webhook's secret; you make it, and no secret belongs in this file.
+# Replace acme-review-agent with the login of the machine user whose token the agent posts with, so that its own
+# reviews and comments are dropped.
 apiVersion: agentkourier.dev/v1alpha1
 kind: ChatConnection
 metadata: {name: github, namespace: acme-webhooks}
@@ -9,7 +10,7 @@ spec:
   platform: webhook
   credentialsSecretRef: {name: github-webhook}
   webhook:
-    identity: acme-review-agent[bot]          # the App's login: its slug, then [bot]
+    identity: acme-review-agent               # the machine user's login
     verify: {scheme: hmac-sha256, header: X-Hub-Signature-256, prefix: "sha256="}
     channel: {from: [/repository/full_name]}
     actor: {from: [/sender/login, /comment/user/login, /review/user/login]}

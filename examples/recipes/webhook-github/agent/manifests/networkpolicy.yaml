@@ -1,0 +1,45 @@
+# Only Agent Kourier's pods may reach the agent, on 8080: the pods labelled app.kubernetes.io/name=agent-kourier (the
+# chart labels the broker's pods so) in the namespace agent-kourier, where the chart is installed. If Agent Kourier runs
+# in another namespace, change the namespace name below. The policy takes effect only if the cluster's network plugin
+# enforces NetworkPolicy; without that, anything in the cluster can call the agent, and only its token check stands in
+# the way. Like the other files here, it names no namespace of its own: apply it with them
+# (kubectl apply -n github-agent -f manifests/).
+#
+# Egress is left open: the agent calls the model provider, and the sidecar calls GitHub's API. To close it, add Egress
+# to policyTypes and an egress list such as the commented one below: DNS, the model provider's addresses, and GitHub's
+# API, api.github.com on 443 (a NetworkPolicy cannot name a host: GitHub publishes its addresses at
+# https://api.github.com/meta, and they change). The agent reaches the sidecar inside the pod, on 127.0.0.1, which needs
+# no rule: a NetworkPolicy governs what enters and leaves the pod.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: github-review-agent
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: github-review-agent}
+  policyTypes: [Ingress] # [Ingress, Egress] with the egress list below
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: agent-kourier}
+          podSelector:
+            matchLabels: {app.kubernetes.io/name: agent-kourier}
+      ports:
+        - {protocol: TCP, port: 8080}
+  # egress:
+  #   - to: # DNS, from the cluster's DNS pods
+  #       - namespaceSelector:
+  #           matchLabels: {kubernetes.io/metadata.name: kube-system}
+  #         podSelector:
+  #           matchLabels: {k8s-app: kube-dns}
+  #     ports:
+  #       - {protocol: UDP, port: 53}
+  #       - {protocol: TCP, port: 53}
+  #   - to: # GitHub's API (api.github.com), for the sidecar: the "api" addresses of https://api.github.com/meta
+  #       - ipBlock: {cidr: 192.0.2.0/24} # a placeholder
+  #     ports:
+  #       - {protocol: TCP, port: 443}
+  #   - to: # the model provider: its addresses, which you look up; this one is a placeholder
+  #       - ipBlock: {cidr: 198.51.100.0/24}
+  #     ports:
+  #       - {protocol: TCP, port: 443}

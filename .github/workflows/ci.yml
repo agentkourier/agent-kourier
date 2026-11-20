@@ -21,7 +21,8 @@
 #     README.md, the pages under docs/ and the chart's README; those jobs read Markdown only as a file a package embeds;
 #   - docs-agent: also that Markdown except under docs/ (its corpus) and examples/recipes/docs-agent/;
 #   - echo-agent: also that Markdown except under examples/recipes/echo-agent/agent/, the one directory it reads;
-#   - prompt-agent: also that Markdown except under examples/recipes/prompt-agent/agent/, the one directory it reads.
+#   - prompt-agent: also that Markdown except under examples/recipes/prompt-agent/agent/ and
+#     examples/recipes/webhook-github/agent/, the directories it reads.
 # A Go package's tree is a directory of the merge commit with a .go file in it, and everything below: the script finds
 # them on each run, so a page a new package could embed stops being skipped with no list to edit. The script's header
 # gives each class's evidence. So a pull request that changes README.md and pages under docs/ skips crd-corpus,
@@ -717,8 +718,10 @@ jobs:
           key: ${{ steps.pip-cache.outputs.cache-primary-key }}
 
   # The prompt-agent recipe is Python too (examples/recipes/prompt-agent/agent), and is built and cached the same way as
-  # the echo agent. Its tests start a small MCP server as a subprocess, and call no model. Its name, prompt-agent, is a
-  # required check and in CI_REQUIRED_JOBS too.
+  # the echo agent. Its tests start a small MCP server as a subprocess, and call no model. They also run the webhook-github
+  # recipe's agent, the same image, against github-mcp-server, the pinned and checksummed binary that
+  # hack/ci/install-github-mcp-server.sh installs and names in GITHUB_MCP_SERVER_BIN: under CI those tests fail without
+  # it, where a local run skips them. Its name, prompt-agent, is a required check and in CI_REQUIRED_JOBS too.
   prompt-agent:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
@@ -758,6 +761,8 @@ jobs:
           restore-keys: |
             pip-prompt-agent-${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-
             pip-prompt-agent-${{ runner.os }}-
+      - if: ${{ steps.docs-only.outputs.skip != 'true' }}
+        run: hack/ci/install-github-mcp-server.sh
       - if: ${{ steps.docs-only.outputs.skip != 'true' }}
         run: make prompt-agent-test
       - if: ${{ steps.docs-only.outputs.skip != 'true' }}

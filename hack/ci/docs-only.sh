@@ -33,9 +33,10 @@
 #               ruff, pip-audit and the image build all run in that directory and read nothing above it; the job reads
 #               no Go, but every class that adds Markdown keeps the Go rule, which costs it nothing here.
 #   prompt-agent
-#               prompt-agent: also Markdown outside examples/recipes/prompt-agent/agent/ and every Go package's tree,
-#               as for echo-agent: its pytest, ruff, pip-audit and image build run in that directory and read nothing
-#               above it.
+#               prompt-agent: also Markdown outside examples/recipes/prompt-agent/agent/,
+#               examples/recipes/webhook-github/agent/ and every Go package's tree, as for echo-agent: its pytest, ruff,
+#               pip-audit and image build run in the first, and its pytest also reads the second (the webhook-github
+#               recipe's agent runs on the same image) and the YAML of both recipes' kourier/, no Markdown.
 # A Go package's tree is a directory of the merge commit that holds a .go file, and everything under it: //go:embed
 # reaches only the package's own directory and those below it, and testdata lives there too. It is computed from the
 # merge commit on each run, so a page that a new package could embed stops qualifying with no list to edit. An unknown
@@ -95,7 +96,7 @@ class_skips() {
       case "$1" in examples/recipes/echo-agent/agent/*) return 1 ;; esac
       ;;
     prompt-agent)
-      case "$1" in examples/recipes/prompt-agent/agent/*) return 1 ;; esac
+      case "$1" in examples/recipes/prompt-agent/agent/* | examples/recipes/webhook-github/agent/*) return 1 ;; esac
       ;;
   esac
   case "$1" in

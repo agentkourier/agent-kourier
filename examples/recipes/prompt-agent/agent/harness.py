@@ -100,25 +100,26 @@ def spec_file(directory: Path, url: str, model: str = "test", **mcp) -> str:
 
 
 @contextlib.asynccontextmanager
-async def asgi(spec_path, model, token_file=None, headers=None, anonymous=""):
+async def asgi(spec_path, model, token_file=None, headers=None, anonymous="", ask_user=None):
     """The app behind an in-process ASGI transport: yields a raw HTTP client.
 
     With no token_file the agent requires BEARER, from a file next to the spec, and the client sends it, as the
-    Deployment and the Binding do. A test of the bearer check passes its own file and headers.
+    Deployment and the Binding do. A test of the bearer check passes its own file and headers. ask_user is
+    PROMPT_AGENT_ASK_USER's value (None: unset).
     """
     if token_file is None:
         token_file = str(Path(spec_path).parent / "bearer")
         Path(token_file).write_text(BEARER + "\n")
         headers = {"Authorization": "Bearer " + BEARER, **(headers or {})}
-    transport = httpx.ASGITransport(app=agent.build_app(URL, spec_path, token_file, model, anonymous))
+    transport = httpx.ASGITransport(app=agent.build_app(URL, spec_path, token_file, model, anonymous, ask_user))
     async with httpx.AsyncClient(transport=transport, base_url=URL, headers=headers, timeout=60) as http:
         yield http
 
 
 @contextlib.asynccontextmanager
-async def serve(spec_path, model):
+async def serve(spec_path, model, ask_user=None):
     """Yields the SDK's A2A client over the app."""
-    async with asgi(spec_path, model) as http:
+    async with asgi(spec_path, model, ask_user=ask_user) as http:
         yield await ClientFactory(ClientConfig(httpx_client=http)).create_from_url(URL)
 
 

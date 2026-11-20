@@ -1,15 +1,34 @@
 # A pull request opened, reopened, pushed to or marked ready starts a review in the pull request's session; a comment on
-# it that mentions the App starts a reply in the same session. Agent Kourier posts nothing on GitHub (output: none): the
-# agent reads the pull request and posts its review with its own GitHub tools. Replace acme/widgets with your repository.
+# it that mentions the machine user starts a reply in the same session. Agent Kourier posts nothing on GitHub (output:
+# none): the agent reads the pull request and posts its review with its own GitHub tools, as the machine user. Replace
+# acme/widgets with your repository, and acme-review-agent in the comment trigger with the machine user's login.
+#
+# identity.tokenSecretRef names the Secret github-review-agent-bearer, key token (the default key), in this Binding's
+# namespace, acme-webhooks: Agent Kourier sends its value as Authorization: Bearer on every call to the agent, the
+# card's included. The agent checks it against its own copy, so the same value goes in two Secrets: this one, and
+# github-review-agent-bearer in namespace github-agent, which the agent mounts (../agent/manifests/deployment.yaml).
+# Make the value once, in a shell variable, and both Secrets from it, without printing it:
+#
+#   token="$(openssl rand -hex 32)"
+#   kubectl create secret generic github-review-agent-bearer -n acme-webhooks --from-literal=token="$token"
+#   kubectl create secret generic github-review-agent-bearer -n github-agent --from-literal=token="$token"
+#   unset token
+#
+# With the chart's custom resources, grant Agent Kourier this one: rbac.secretNames: {acme-webhooks:
+# [github-webhook, github-review-agent-bearer]}. When the two values differ the agent answers 401: the turn fails and
+# nothing is posted on GitHub, agentkourier_credential_rejections_total counts the rejection, and the Binding's
+# BackendReachable condition says CredentialsRejected once its check fetches the agent card and gets the 401.
 apiVersion: agentkourier.dev/v1alpha1
 kind: Binding
 metadata: {name: github-reviews, namespace: acme-webhooks}
 spec:
   agent:
     backendRef: {name: github-agent}
-    name: review-agent         # on the a2a dialect the backend URL alone selects the agent and these are labels
-    namespace: agents
-  identity: {userId: agent-kourier-github}
+    name: github-review-agent  # on the a2a dialect the backend URL alone selects the agent and these are labels
+    namespace: github-agent
+  identity:
+    userId: agent-kourier-github
+    tokenSecretRef: {name: github-review-agent-bearer}
   chat:
     connectionRef: {name: github}
     channel: acme/widgets      # the repository, as /repository/full_name names it

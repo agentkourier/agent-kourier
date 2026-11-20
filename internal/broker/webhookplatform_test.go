@@ -30,7 +30,7 @@ const fakeWebhookSecret = "fake-webhook-secret"
 // webhookSpec is a spec.webhook that the API and the platform take: GitHub's shape, with every optional part set.
 func webhookSpec() *v1alpha1.WebhookSpec {
 	return &v1alpha1.WebhookSpec{
-		Identity: "acme-review-agent[bot]",
+		Identity: "acme-review-agent",
 		Verify: v1alpha1.WebhookVerify{Scheme: v1alpha1.WebhookHMACSHA256, Header: "X-Hub-Signature-256", Prefix: "sha256=",
 			Timestamp: &v1alpha1.WebhookTimestamp{From: "/ts", Unit: v1alpha1.WebhookUnitMillis, Window: metav1.Duration{Duration: time.Minute}}},
 		Channel:  v1alpha1.WebhookChannel{From: []string{"/repository/full_name"}},
@@ -139,7 +139,7 @@ func TestWebhookConfigMapsTheAPIOntoThePlatform(t *testing.T) {
 	}
 	cfg.ValidChannel = nil
 	want := webhook.Config{
-		Connection: "ns/github", Identity: "acme-review-agent[bot]",
+		Connection: "ns/github", Identity: "acme-review-agent",
 		Verify: webhook.Verify{Scheme: webhook.SchemeHMACSHA256, Header: "X-Hub-Signature-256", Prefix: "sha256=",
 			Secret:    webhook.Credential{Secret: "ns/github-webhook", Key: v1alpha1.WebhookSecretKey, Value: secret.New(fakeWebhookSecret)},
 			Timestamp: &webhook.Timestamp{From: "/ts", Unit: time.Millisecond, Window: time.Minute}},
@@ -320,7 +320,7 @@ spec:
   platform: webhook
   credentialsSecretRef: {name: github-webhook}
   webhook:
-    identity: acme-review-agent[bot]
+    identity: acme-review-agent
     verify: {scheme: hmac-sha256, header: X-Hub-Signature-256, prefix: "sha256="}
     channel: {from: [/repository/full_name]}
     actor: {from: [/sender/login]}

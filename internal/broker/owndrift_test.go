@@ -255,8 +255,7 @@ func TestRunWarnsOfAnEditOfTheOwnWebhookConnectionOnTheFiles(t *testing.T) {
 	c.Logger = slog.New(slog.NewTextHandler(logs, nil))
 	c.superviseEvery, c.reloadPoll = 10*time.Millisecond, 20*time.Millisecond
 	c.ConfigDir = recipeConfigDir(t, rc, "http://agent.invalid")
-	c.Client = fake.NewClientset(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: whNamespace, Name: "github-webhook"},
-		Data: map[string][]byte{v1alpha1.WebhookSecretKey: []byte(whSigningSecret)}})
+	c.Client = rc.clientset()
 	r := start(t, c)
 	r.until("/readyz", http.StatusOK)
 	if drifted(logs.String(), rc.connection()) {

@@ -46,7 +46,7 @@ func (c *chat) last() (*http.Request, string) {
 
 // identities are the agent's accounts on each vendor, in these tests.
 var identities = map[string]string{
-	fakevendors.GitHub: "acme-review-agent[bot]", fakevendors.Bitbucket: "712020:bot", fakevendors.Jira: "712020:agent", fakevendors.Linear: "agent-id",
+	fakevendors.GitHub: "acme-review-agent", fakevendors.Bitbucket: "712020:bot", fakevendors.Jira: "712020:agent", fakevendors.Linear: "agent-id",
 }
 
 // vendors is a Vendors of the four vendors that sends to a chat listener answering status.

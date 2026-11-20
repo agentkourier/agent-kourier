@@ -149,7 +149,8 @@ done
 
 # Markdown off the docs-only list: each class skips what it does not read. Columns: tests, scan, crd-corpus,
 # docs-agent, echo-agent, prompt-agent. The tests read pages anywhere; the docs agent reads docs/ and its recipe's
-# directory; the echo and prompt agents' jobs read their agent directories; no class but tests skips a page in a Go
+# directory; the echo and prompt agents' jobs read their agent directories (the prompt agent's, the webhook-github
+# recipe's agent directory too); no class but tests skips a page in a Go
 # package's tree, at any depth below it.
 while IFS='|' read -r wants change; do
   merge_case "${change}"
@@ -166,6 +167,8 @@ rsssss|mkdir -p examples/recipes/echo-agent && echo x >examples/recipes/echo-age
 rsssss|mkdir -p examples/recipes/prompt-agent && echo x >examples/recipes/prompt-agent/README.md
 rsssrs|echo x >>examples/recipes/echo-agent/agent/README.md
 rssssr|echo x >>examples/recipes/prompt-agent/agent/README.md
+rssssr|mkdir -p examples/recipes/webhook-github/agent && echo x >examples/recipes/webhook-github/agent/README.md
+rsssss|mkdir -p examples/recipes/webhook-github && echo x >examples/recipes/webhook-github/README.md
 rssrss|echo x >>examples/recipes/docs-agent/README.md
 rsssss|mkdir -p .github && echo x >.github/pull_request_template.md
 rrrrrr|echo x >>internal/broker/README.md

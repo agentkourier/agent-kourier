@@ -22,6 +22,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
@@ -43,8 +44,12 @@ import (
 const (
 	whNamespace = "acme-webhooks"
 	whRecipes   = "../../examples/recipes"
-	// whBackendURL is the placeholder URL of each recipe's AgentBackend, which a test puts the stub agent's in place of.
-	whBackendURL = "http://REPLACE-ME.agents.svc.cluster.local:8080"
+	// whPlaceholderURL is the URL of the AgentBackend of each recipe that ships no agent, a placeholder; whGitHubAgentURL is the GitHub
+	// recipe's, the Service of the agent it ships. A test puts the stub agent's URL in place of either.
+	whPlaceholderURL = "http://REPLACE-ME.agents.svc.cluster.local:8080"
+	whGitHubAgentURL = "http://github-review-agent.github-agent.svc.cluster.local:8080"
+	// whGitHubBearer is the Secret of the token the GitHub recipe's Binding sends its agent (identity.tokenSecretRef, key token).
+	whGitHubBearer = "github-review-agent-bearer"
 	// whSigningSecret is the webhook secret of every recipe's Secret here: a fake value.
 	whSigningSecret = "fake-webhook-signing-secret"
 	whGate          = "webhook-held"
@@ -52,7 +57,7 @@ const (
 
 // The agents' identities, as the recipes' ChatConnections name them.
 const (
-	whGitHubAgent    = "acme-review-agent[bot]"
+	whGitHubAgent    = "acme-review-agent"
 	whBitbucketAgent = "712020:00000000-0000-0000-0000-000000000001"
 	whJiraAgent      = "712020:00000000-0000-0000-0000-000000000000"
 	whLinearAgent    = "00000000-0000-0000-0000-000000000002"
@@ -69,6 +74,26 @@ type whRecipe struct {
 func (rc whRecipe) connection() string { return whNamespace + "/" + rc.vendor }
 func (rc whRecipe) route() string      { return "/chat/webhook/" + whNamespace + "/" + rc.vendor }
 func (rc whRecipe) dir() string        { return filepath.Join(whRecipes, "webhook-"+rc.vendor, "kourier") }
+
+// backendURL is the URL of the recipe's AgentBackend, as its file names it.
+func (rc whRecipe) backendURL() string {
+	if rc.vendor == fakevendors.GitHub {
+		return whGitHubAgentURL
+	}
+	return whPlaceholderURL
+}
+
+// secrets are the Secrets the recipe's objects name, in namespace, with fake values: the connection's webhook secret and, for the GitHub
+// recipe, the token its Binding sends, an unsigned JWT the stub agent reads as the owner.
+func (rc whRecipe) secrets(namespace string) []*corev1.Secret {
+	out := []*corev1.Secret{{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: rc.vendor + "-webhook"},
+		Data: map[string][]byte{v1alpha1.WebhookSecretKey: []byte(whSigningSecret)}}}
+	if rc.vendor == fakevendors.GitHub {
+		out = append(out, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: whGitHubBearer},
+			Data: map[string][]byte{"token": []byte(jwt("github-review-agent@example.test"))}})
+	}
+	return out
+}
 
 // whStep is one delivery a vendor sends, and what follows it: a turn of the agent whose prompt holds prompt, and a post on the vendor's
 // API whose body holds post; or, with no post, nothing (the next step's turn number shows that no turn ran).
@@ -301,8 +326,7 @@ func startWebhookRecipe(t *testing.T, rc whRecipe, opts ...func(*RunConfig)) *wh
 		w.prompts = append(w.prompts, prompt)
 	})
 	c.ConfigDir = recipeConfigDir(t, rc, w.stub.AgentURL("agents", rc.vendor))
-	c.Client = fake.NewClientset(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: whNamespace, Name: rc.vendor + "-webhook"},
-		Data: map[string][]byte{v1alpha1.WebhookSecretKey: []byte(whSigningSecret)}})
+	c.Client = rc.clientset()
 	sink := &spySink{}
 	c.sink = sink
 	for _, o := range opts {
@@ -320,7 +344,16 @@ func startWebhookRecipe(t *testing.T, rc whRecipe, opts ...func(*RunConfig)) *wh
 	return w
 }
 
-// recipeConfigDir is a config directory with rc's recipe files, its AgentBackend's URL agentURL.
+// clientset is a fake clientset that holds the Secrets of rc's recipe in its namespace.
+func (rc whRecipe) clientset() *fake.Clientset {
+	var objs []runtime.Object
+	for _, s := range rc.secrets(whNamespace) {
+		objs = append(objs, s)
+	}
+	return fake.NewClientset(objs...)
+}
+
+// recipeConfigDir is a config directory with rc's recipe files, its AgentBackend's URL agentURL in place of the recipe's.
 func recipeConfigDir(t *testing.T, rc whRecipe, agentURL string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -330,10 +363,10 @@ func recipeConfigDir(t *testing.T, rc whRecipe, agentURL string) string {
 			t.Fatal(err)
 		}
 		if name == "agentbackend.yaml" {
-			if n := strings.Count(string(b), whBackendURL); n != 1 {
-				t.Fatalf("%s holds the placeholder URL %d times; want once", name, n)
+			if n := strings.Count(string(b), rc.backendURL()); n != 1 {
+				t.Fatalf("%s holds the URL %s %d times; want once", name, rc.backendURL(), n)
 			}
-			b = []byte(strings.Replace(string(b), whBackendURL, agentURL, 1))
+			b = []byte(strings.Replace(string(b), rc.backendURL(), agentURL, 1))
 		}
 		if err := os.WriteFile(filepath.Join(dir, name), b, 0o600); err != nil {
 			t.Fatal(err)
@@ -502,11 +535,12 @@ func TestATeamWebhookConnectionOnTheCustomResourcesStartsATurn(t *testing.T) {
 	api := httptest.NewServer(vendors)
 	t.Cleanup(api.Close)
 	stubagent.WebhookAgent(stub, "agents", "github", api.URL, nil)
-	if _, err := w.kube.CoreV1().Secrets(team).Create(t.Context(), &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: team, Name: "github-webhook"},
-		Data: map[string][]byte{v1alpha1.WebhookSecretKey: []byte(whSigningSecret)}}, metav1.CreateOptions{}); err != nil {
-		t.Fatal(err)
-	}
 	rc := whRecipe{vendor: fakevendors.GitHub}
+	for _, s := range rc.secrets(team) {
+		if _, err := w.kube.CoreV1().Secrets(team).Create(t.Context(), s, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for _, obj := range recipeObjects(t, rc.dir()) {
 		obj.SetNamespace(team)
 		obj.SetUID(types.UID("uid-" + team + "-" + obj.GetName()))

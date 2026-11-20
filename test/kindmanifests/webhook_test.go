@@ -24,7 +24,7 @@ import (
 
 // The fast tier's webhook connections (custom resources only; test/e2e's WH_ tests): the four recipes of examples/recipes/webhook-*, applied
 // by lib.sh's deploy_webhook as they are but for the agent token each Binding is given (webhook_binding), with hack/kind/fast/webhook/webhook.yaml's
-// AgentBackends in place of the recipes' placeholders. The objects resolve together on the stub agent's webhook agents; the fake vendors sign
+// AgentBackends in place of the recipes' (a placeholder URL, or the Service of the GitHub recipe's own agent, which the tier does not run). The objects resolve together on the stub agent's webhook agents; the fake vendors sign
 // with the secrets deploy_webhook puts in the connections' Secrets, as the agent's own accounts, at the routes test/e2e names; and the tier serves
 // them on custom resources only.
 
@@ -142,8 +142,8 @@ func fakeWebhookSecrets(t *testing.T) map[string]string {
 
 // TestTheWebhookTierServesTheRecipesOnTheStubAgent: each recipe's Binding is served, on its recipe's connection, named as test/e2e names them,
 // through the a2a dialect at the stub's webhook agent of its vendor (the stub's -webhook-vendor-api serves agents/<vendor>), with the agent token
-// deploy_webhook makes; webhook_binding adds that token and changes nothing else of the recipe; and webhook.yaml holds the four AgentBackends
-// alone, beside its Role and RoleBinding.
+// deploy_webhook makes; webhook_binding sets that token, in place of the one a recipe names for its own agent (the GitHub recipe's), and changes
+// nothing else of the recipe; and webhook.yaml holds the four AgentBackends alone, beside its Role and RoleBinding.
 func TestTheWebhookTierServesTheRecipesOnTheStubAgent(t *testing.T) {
 	served := webhookObjects(t)
 	token := libVar(t, `printf %s "${WEBHOOK_AGENT_TOKEN}"`)
@@ -165,8 +165,10 @@ func TestTheWebhookTierServesTheRecipesOnTheStubAgent(t *testing.T) {
 
 		original := recipeDoc(t, vendor, "binding.yaml")
 		got := webhookBinding(t, original)
-		identity, _ := got["spec"].(map[string]any)["identity"].(map[string]any)
-		delete(identity, "tokenSecretRef")
+		for _, doc := range []map[string]any{got, original} {
+			identity, _ := doc["spec"].(map[string]any)["identity"].(map[string]any)
+			delete(identity, "tokenSecretRef")
+		}
 		if !reflect.DeepEqual(got, original) {
 			t.Errorf("webhook_binding changed more of the %s recipe's Binding than its token:\n%v\nwant\n%v", vendor, got, original)
 		}
@@ -189,7 +191,7 @@ func TestTheWebhookTierServesTheRecipesOnTheStubAgent(t *testing.T) {
 			t.Errorf("test/e2e names the limits of a trigger %d of the %s recipe, which has %d triggers", len(triggers), vendor, len(triggers))
 		}
 
-		// The tier's AgentBackend is the recipe's but for its url, the recipe's placeholder.
+		// The tier's AgentBackend is the recipe's but for its url.
 		recipe := recipeDoc(t, vendor, "agentbackend.yaml")
 		name := recipe["metadata"].(map[string]any)["name"]
 		var tier map[string]any
