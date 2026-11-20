@@ -114,7 +114,7 @@ A commented first-install file for any A2A agent, to download and fill in, is th
 | `config.agentBackends` | `{}` |  |
 | `config.chatConnections` | `{}` |  |
 | `config.bindings` | `{}` |  |
-| `config.rollOnChange` | `true` | Roll the pod when the rendered ConfigMap changes. Agent Kourier reloads its files in place, and follows a Secret that a reload adds, in any namespace its ServiceAccount may list and watch it in; a Secret it may not read fails that reload, and the last good config stays. Has no effect with existingConfigMap, and none with source crds, which renders no ConfigMap. |
+| `config.rollOnChange` | `true` | Roll the pod when the rendered ConfigMap changes. Agent Kourier reloads its files in place, and follows a Secret that a reload adds, in any namespace its ServiceAccount may list and watch it in; a Secret it may not read fails that reload, and the last good config stays. Has no effect with existingConfigMap, and none with source crds, which renders no ConfigMap. Without the roll (rollOnChange false, or existingConfigMap), a reload that renames the ChatConnection or adds a second is refused, and the last good config stays until the pod restarts. |
 
 ## crds
 

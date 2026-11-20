@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/labels"
@@ -99,7 +100,8 @@ func (c *Config) Stop() {
 // Bootstrap loads the config once to learn which Secrets it refers to, starts a resolver that
 // follows those and opts.ExtraSecrets and waits for their caches (an error names the cause, so a
 // denied list fails at once with "forbidden", wrapping k8ssecrets.ErrAccessDenied), then starts
-// the Reloader over it, which follows the Secrets of each later config. The Reloader runs until
+// the Reloader over it, which follows the Secrets of each later config and refuses one whose
+// ChatConnection is not the one the broker started with (keepStartedConnection). The Reloader runs until
 // ctx ends. On failure nothing is left running. A config that does not load because the operator
 // must fix it (config.ErrInvalid) gives an error wrapping ErrWiring, since a restart would find it again.
 //
@@ -130,13 +132,41 @@ func Bootstrap(ctx context.Context, client kubernetes.Interface, opts BootstrapO
 	}
 	rl := config.NewReloader(config.ReloaderConfig{
 		Dir: opts.Dir, Secrets: secrets, PollInterval: opts.PollInterval, SecretsInterval: opts.SecretsInterval, SecretsWait: opts.SecretsWait,
-		Logger: log, OnError: opts.OnReloadError, OnReport: opts.OnReport,
+		Logger: log, OnError: opts.OnReloadError, OnReport: opts.OnReport, Accept: keepStartedConnection,
 	})
 	if err := rl.Start(ctx); err != nil {
 		secrets.Stop()
 		return nil, wiring(err)
 	}
 	return &Config{Reloader: rl, Secrets: secrets}, nil
+}
+
+// keepStartedConnection is the files route's rule for a reload (config.ReloaderConfig.Accept): the directory holds the ChatConnection that
+// current holds, by namespace and name, and no other. The broker serves the connection it started with, whose platform it built then, until
+// it restarts, and a directory that renamed it, added a second or took it away would have the Bindings resolved against a connection that
+// nothing serves (and the supervisor would start a second one as a team connection, which the files route has none of), so it is refused
+// as a bad file is: the last good config stays. An edit of the connection under its name is accepted, and applies at a restart. The first
+// load has no current, and is left to the start, which refuses a directory without exactly one (ChooseConnection).
+func keepStartedConnection(current, next *config.Snapshot) error {
+	if current == nil {
+		return nil
+	}
+	was, now := snapshotConnections(current), snapshotConnections(next)
+	if slices.Equal(was, now) {
+		return nil
+	}
+	return fmt.Errorf("the directory holds the ChatConnections [%s], and the files route serves the ChatConnection it started with, %s, until the broker restarts",
+		strings.Join(now, ", "), strings.Join(was, ", "))
+}
+
+// snapshotConnections are the "namespace/name" of the ChatConnections of snap, in its order (by namespace and name).
+func snapshotConnections(snap *config.Snapshot) []string {
+	conns := snap.ChatConnections()
+	names := make([]string, len(conns))
+	for i, c := range conns {
+		names[i] = v1alpha1.NamespacedName(c.Namespace, c.Name)
+	}
+	return names
 }
 
 // bootstrapCRDs is Bootstrap for the custom resources, which fail one object at a time. It starts the resolver (the pinned

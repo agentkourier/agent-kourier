@@ -277,7 +277,8 @@ func (t TeamConnection) fingerprint() string {
 // missing or invalid, or its Secret missing, is an error wrapping ErrWiring; one that cannot be read is an error), and the team
 // connections of the snapshot besides it. It never fails for a team connection: one whose Secret is not readable now (a takeover
 // before the Secret informer has synced it, say), or whose platform has no adapter, comes back with its Err set, and the supervisor
-// starts it when it can. With the files there are none.
+// starts it when it can. With the files there are none: the directory holds exactly one at the start, and a reload whose directory holds
+// another is refused (keepStartedConnection).
 func ChooseConnections(ctx context.Context, snap *config.Snapshot, own v1alpha1.ObjectRef, secrets identity.SecretReader) (Connections, error) {
 	ownConn, err := ChooseConnection(ctx, snap, own, secrets)
 	if err != nil {
