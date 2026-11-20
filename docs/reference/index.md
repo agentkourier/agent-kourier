@@ -13,7 +13,7 @@ for a proof of concept.
 |---|---|---|
 | [Binding](binding.md) | An agent, its service identity, and the channel connected to it | Application team |
 | [AgentBackend](agentbackend.md) | The agent endpoint, its dialect, and the namespaces allowed to use it | Platform team |
-| [ChatConnection](chatconnection.md) | The chat platform connection and its Secret | Platform team |
+| [ChatConnection](chatconnection.md) | The chat platform connection, or the webhook source, and its Secret | Platform team, or a team in a namespace the platform admits |
 
 With custom resources a Binding also has a status, which [Binding status](binding-status.md) describes: its conditions, their reasons and what
 `observedGeneration` says.
@@ -27,8 +27,10 @@ With custom resources a Binding also has a status, which [Binding status](bindin
 
 - [Helm values](helm-values.md): every value of the chart, with its default.
 - [Command line and environment](cli.md): the binary's environment variables, flags, subcommands and exit codes.
-- [Chat triggers](chat-triggers.md): what starts a turn, and what the `botMessage` trigger does.
-- [What each platform supports](platforms.md): the shape of each chat ID a Binding names, and the features each platform serves.
+- [Chat triggers](chat-triggers.md): what starts a turn, and what the `botMessage` trigger does. A webhook connection's
+  `webhookEvent` trigger is in [Start agents from webhooks](../how-to/receive-webhooks.md).
+- [What each platform supports](platforms.md): Slack, Microsoft Teams and the `webhook` platform: the shape of each chat ID a Binding
+  names, the triggers and outputs each takes, and the features each serves.
 
 ## Operation
 

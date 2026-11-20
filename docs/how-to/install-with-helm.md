@@ -3,6 +3,9 @@
 For a platform engineer with a Kubernetes cluster: at the end, Agent Kourier runs from the published Helm chart and
 answers a mention in a Slack thread.
 
+On Microsoft Teams, or for webhooks (both experimental, 0.6.0 or later), follow this guide for the chart, then
+[Configure Microsoft Teams](configure-teams.md) or [Start agents from webhooks](receive-webhooks.md) for the connection.
+
 The checks below are the ones that catch the usual problems. You do
 not need an agent for the first install. Without one, Agent Kourier connects to Slack and tells the thread it cannot
 reach the agent. That reply proves Slack in, Slack out, the volume and the policies, and leaves the agent as the only

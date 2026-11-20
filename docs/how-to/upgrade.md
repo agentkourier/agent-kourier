@@ -1024,7 +1024,7 @@ What changes for every install:
   them with the release when `crds.install` is true, or unset on `config.source: crds`. If you apply the CRDs yourself, apply
   `charts/agent-kourier/files/crds` again. Until then the API server refuses a webhook ChatConnection, and a broker on custom resources
   logs at WARN `the schema hash of a CRD is not the one this broker was built with` and sets `agentkourier_crd_schema_state{state="mismatch"}`
-  to 1 for the two CRDs.
+  to 1 for the two CRDs. The same apply takes the changes for Microsoft Teams ([below](#upgrade-to-the-release-that-takes-microsoft-teams-chatconnections)).
 - **`agentkourier_chat_listener_requests_total` has two new labels**, `platform` and `connection` ([Metrics](../reference/metrics.md)). A
   rule that sums the counter, or selects by `outcome` alone, reads as before. A rule or a recording rule that keeps every label gets more
   series: one for each platform and connection the leader serves, and `unknown`.
@@ -1046,7 +1046,8 @@ What changes for every install:
 
 A ChatConnection may now say `spec.platform: teams`, with a `spec.teams` block ([ChatConnection](../reference/chatconnection.md)), and
 the schema and the broker's load take Microsoft Teams' chat IDs beside Slack's. The broker runs a teams connection in `http` mode, on
-its chat listener, or in `socket` mode, with what [What each platform supports](../reference/platforms.md) says it does not do yet. What changes:
+its chat listener, or in `socket` mode; [What each platform supports](../reference/platforms.md) lists what it does not do yet. The platform
+is experimental. What changes:
 
 - **A teams ChatConnection runs in `http` or `socket` mode.** `spec.teams.tenantID` and `spec.teams.appID` are required, each a GUID in
   lowercase hex; `spec.teams.mode` is `http` or `socket`, and `http` when left out; `spec.teams.notificationURL` is optional, an `https`

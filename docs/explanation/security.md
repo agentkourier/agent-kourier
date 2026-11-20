@@ -149,7 +149,7 @@ What a team that may write a ChatConnection in an admitted namespace can do, and
 
 ## The chat port
 
-A ChatConnection in Slack HTTP mode, and a Microsoft Teams one, takes its platform's requests on the chat listener, a port that the internet reaches by design, through the
+A ChatConnection in Slack HTTP mode, a Microsoft Teams one, and every webhook connection takes its platform's requests on the chat listener, a port that the internet reaches by design, through the
 chart's Ingress or a load balancer of your own. It is a port of its own (`chatListener.port`), apart from the health and metrics port, so
 `/metrics` is never on it, and it is closed unless `chatListener.enabled` is set. Every request is bounded, and checked, before any work is
 done for it ([Limits](../reference/limits.md#run-the-broker) has each value and what happens past it):
@@ -178,6 +178,25 @@ done for it ([Limits](../reference/limits.md#run-the-broker) has each value and 
   `agentkourier_teams_requests_total` and `agentkourier_teams_tokens_refused_total`. The bot's own token, from Microsoft Entra, goes
   only to the service URL that the channel's activities named (or Microsoft's global route for Teams), over HTTPS, with no redirect
   followed.
+- **A webhook connection's signature before any parsing.** A webhook connection checks each request on its raw bytes before it
+  parses anything of it: the hex HMAC-SHA256 of the body under the Secret's `webhookSecret`, compared in constant time, or a fixed
+  token of at least 32 bytes, compared by its SHA-256 digest in constant time, after the connection's `verify.prefix`. A request that
+  fails is answered 401 and counted on `agentkourier_webhook_requests_total` (`unsigned`, `bad_signature`, `stale`), logged at DEBUG
+  without its body or signature, and summed into one WARN at most once a minute for each connection; it starts no span. What the
+  check does not cover:
+    - **Replays.** There is no replay window unless the connection sets `verify.timestamp`, a time in the signed body held to a window
+      of at most 10 minutes of the broker's clock (the `token` scheme takes none). A signed body sent again is the same event, by the
+      SHA-256 of the body: one that started a turn starts no second one while the broker remembers it, in memory, and after a restart
+      or a change of leader the turn it queued is still in the store, so it is not queued again
+      ([What a taken event does](../how-to/receive-webhooks.md#what-a-taken-event-does)). A body that no trigger matched, or that a
+      limit stopped, is decided again each time it is sent.
+    - **Headers.** Only the body is signed. A field read from a header (an event-type header, say) can be changed by whoever replays
+      a signed body, and so can the delivery ID; a Binding's triggers should also match a body field that tells the events apart. A
+      field or the delivery may not read the verify header, `Authorization`, `Proxy-Authorization` or `Cookie`.
+    - **What the body says.** A verified body is the service's, and what people wrote in it is theirs: the connection's `text`
+      fields reach the agent only in the block marked as untrusted data, and the trigger's template may read only `id` fields, held
+      to an identifier's shape. An event that the agent's own account caused (`spec.webhook.identity`) is dropped, so that the
+      agent's own post does not start another turn.
 - **Who may reach the port.** With `networkPolicy.enabled`, ingress to the chat port is only from `networkPolicy.chatFrom` (the chart
   refuses the policy and the listener without it), and to the metrics port only from `metricsFrom`. The chart's Ingress sends only the
   path prefix `/chat/`.
@@ -426,10 +445,11 @@ What a status tells a tenant, and what it does not. A Binding's `status` is read
 
 ## Hostile text
 
-Alert messages, other bots' messages, people's replies and agent output are all treated as untrusted.
+Alert messages, other bots' messages, people's replies, webhook events and agent output are all treated as untrusted.
 
-- **Toward the agent.** Alert messages, other bots' messages and the thread replies that ride along as context reach
-  the agent as data inside a tagged block that says it is never instructions. A person's own turn is sent as their text,
+- **Toward the agent.** Alert messages, other bots' messages, the thread replies that ride along as context and a
+  webhook event's actor and fields reach the agent as data inside a tagged block that says it is never instructions. A
+  webhook connection's `text` fields, what people wrote on the service, reach it only there. A person's own turn is sent as their text,
   with an attribution prefix. A trigger's prompt template may read only values that pass a strict shape check.
   Secrets are redacted from alert fields, thread context, tool arguments, audit rows and logs. A person's own message
   is stored and sent to the agent as written.

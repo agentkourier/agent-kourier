@@ -9,6 +9,11 @@ It holds the Agent Kourier side only: a ChatConnection of the `webhook` platform
 to. It ships no agent. Point the Binding at any A2A agent (A2A is the Agent2Agent protocol) that has Bitbucket tools
 ([Connect a generic A2A agent](../../../docs/how-to/connect-a2a-agent.md)).
 
+> **Experimental.** Needs Agent Kourier 0.6.0 or later: 0.5.x refuses `platform: webhook`. The `webhook` platform is
+> new, and its fields may change in a later version. The setup was run end to end against Bitbucket Cloud on 2026-11-17, on a
+> pre-0.6.0 build of the broker; [the Bitbucket Cloud page](../../../docs/how-to/webhooks/bitbucket.md) says what was seen in
+> that run and what comes from Atlassian's documentation.
+
 ## What it does
 
 The ChatConnection, `kourier/chatconnection.yaml`, takes each delivery at
@@ -28,8 +33,9 @@ The Binding, `kourier/binding.yaml`, has two `webhookEvent` triggers:
 1. A `pullrequest:created` or `pullrequest:updated` event that names a commit, of a pull request that is not a draft and
    with no comment in it, starts a review: "Bitbucket pull request #7 of acme/widgets needs a review at commit
    a1b2c3d4e5f6."
-2. A `pullrequest:comment_created` event whose comment mentions `@acme-agent` starts a reply in the pull request's
-   session.
+2. A `pullrequest:comment_created` event whose comment mentions `@acme-agent`, typed as a name, starts a reply in the pull
+   request's session. A mention picked from Bitbucket's mention list may be stored in another form, which the regex does
+   not match (not verified; the page's "Change what starts a turn" shows how to match it too).
 
 `chat.output` is `none`: the only output a webhook connection takes, since the platform sends nothing.
 
@@ -42,23 +48,27 @@ written by whoever opened or commented on it.
 | What happens on Bitbucket | What follows |
 |---|---|
 | A pull request is created in the repository | The agent's review, as a comment on it. |
-| The pull request is updated | Another review, in the same session. Atlassian's documentation has Bitbucket send `pullrequest:updated` for an edit of the title or description too, not only for a push, and each starts a review. |
+| The pull request is updated | Another review, in the same session. In the run of 2026-11-17 Bitbucket sent `pullrequest:updated` for an edit of the title or description too, not only for a push, and each starts a review. |
 | A comment that mentions `@acme-agent` | The agent's reply on the pull request, in the same session. |
 | The agent comments | Bitbucket sends the `pullrequest:comment_created` event of it too, with the token's bot user as the actor. Agent Kourier answers it `200` and drops it as the agent's own (`outcome="self"`). |
-| A draft pull request | Nothing. |
+| A draft pull request | Nothing, by the draft field `/pullrequest/draft`, which follows Atlassian's documentation and was not part of the run. |
 
 ## Prerequisites
 
 - **A Bitbucket Cloud repository webhook** with a secret, for the triggers **Pull request: Created**, **Updated** and
-  **Comment created**. The header names, the signature's form and the body's paths this recipe reads follow Atlassian's
-  webhook documentation, and this repository has not checked them against a live delivery.
+  **Comment created**. The headers, the signature's form and the body's paths this recipe reads were seen in live
+  deliveries in the run of 2026-11-17, except the delivery header, `X-Request-UUID`, and the draft field,
+  `/pullrequest/draft`, which follow Atlassian's documentation, read 2026-11-18. If Bitbucket does not send the draft
+  field, a draft pull request is reviewed too.
 - **An access token for the agent**, whose bot user's account ID is the `identity`.
-- **An A2A agent that has Bitbucket tools** using that token, and its URL. The AgentBackend's `url` is a placeholder
-  (`REPLACE-ME`).
+- **Your own A2A agent: the recipe ships none.** It needs an agent card that advertises streaming, and Bitbucket tools that use that token;
+  the Binding is not `Ready` until the broker can fetch that card. The AgentBackend's `url` is a placeholder
+  (`REPLACE-ME`) for its endpoint. Agent Kourier posts nothing on Bitbucket (`output: none`): the agent's reply text goes
+  nowhere, and only what its tools do reaches Bitbucket.
 - **The chat listener reachable over HTTPS** from Bitbucket: the chart's `chatListener.enabled: true`, and an Ingress
   (`chatListener.ingress`) or another way to reach the chat Service. A broker with no chat listener does not run a webhook
   connection: as its own connection it does not start, and as a team's connection it is not started.
-- **A chart release that has custom resources, and Kubernetes 1.33 or later**, as the other recipes need.
+- **Agent Kourier 0.6.0 or later** (0.5.x refuses `platform: webhook`), on custom resources, and Kubernetes 1.33 or later.
 
 ## Files
 
@@ -71,47 +81,10 @@ kourier/
 
 ## Apply it
 
-1. Replace the placeholders: the `identity` with the bot user's account ID, `acme/widgets` with your workspace and
-   repository in the Binding's `channel`, `acme-agent` in the comment trigger's regex with the name people mention the
-   agent by, and the AgentBackend's `url` with your agent's. On the `a2a` dialect the URL alone selects the agent, and the
-   Binding's `agent.name` and `agent.namespace` are labels.
-2. Make the namespace and the Secret. The secret is the one you give the webhook; keep it out of your shell's history by
-   reading it from a file:
-
-    ```sh
-    kubectl create namespace acme-webhooks
-    kubectl -n acme-webhooks create secret generic bitbucket-webhook --from-file=webhookSecret=./bitbucket-webhook-secret
-    ```
-
-    The file must hold the secret alone: a trailing newline or any other control character is refused, and the
-    connection is not built.
-3. Have the broker serve the namespace's connections and read the Secret. In your chart values, beside the chat
-   listener of the prerequisites:
-
-    ```yaml
-    config:
-      connectionNamespaces: [acme-webhooks]
-    rbac:
-      secretNames:
-        acme-webhooks: [bitbucket-webhook]
-    ```
-
-    The connection is then a team connection of the broker, served beside the broker's own connection if it has one. To
-    make it the broker's own connection instead, set `config.chatConnection: acme-webhooks/bitbucket` and
-    `config.chatConnectionSecret: bitbucket-webhook`. The broker builds the platform of its own connection when it starts
-    and when a replica takes the lead, so an edit to that connection's `spec.webhook` applies when Agent Kourier restarts. Until
-    then the leader logs, once for each edit of `spec.webhook` it reads that leaves the spec other than the one the connection
-    runs on, a WARN with the connection in its `connection` attribute:
-    `chat connection: its spec.webhook was edited, and the running connection still uses the spec.webhook it started with; a restart of the broker applies the edit`.
-    A team connection restarts by itself when its ChatConnection changes.
-4. Apply the resources:
-
-    ```sh
-    kubectl apply -f examples/recipes/webhook-bitbucket/kourier/
-    kubectl -n acme-webhooks get akbinding bitbucket-reviews
-    ```
-
-5. Set the webhook's URL to `https://<host>/chat/webhook/acme-webhooks/bitbucket`, and its secret to the Secret's value.
+Follow [Bitbucket Cloud](../../../docs/how-to/webhooks/bitbucket.md) from its step 1. It is the one place for the steps: it
+makes the account on Bitbucket Cloud and the Secret, has you run the agent, lists every value of these files to replace
+(step 5), applies them, turns on the webhook, and tests it. [Start agents from webhooks](../../../docs/how-to/receive-webhooks.md#before-you-start)
+has the chart values that every webhook recipe needs.
 
 ## What to change
 
@@ -137,7 +110,7 @@ kourier/
   day. A start that a limit stops is answered `200`, and no investigation begins. The broker logs it at WARN ("a webhook
   event was not investigated"), with its delivery ID: the event is lost unless it is delivered again. A later delivery of
   it is decided again.
-- The `commit` hash in a Bitbucket body is short (12 characters in the documentation's examples), not the full 40.
+- The `commit` hash in a Bitbucket body is short (12 characters in the run's deliveries), not the full 40.
 - A delivery that is not verified is answered `401`, and one that is not a JSON object `400`; both are counted on
   `agentkourier_webhook_requests_total` with the reason, and neither reaches a trigger. The other bounds of a delivery
   and of a webhook connection are in [Limits](../../../docs/reference/limits.md).

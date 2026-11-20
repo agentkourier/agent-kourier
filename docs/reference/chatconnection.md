@@ -86,7 +86,7 @@ WebhookTimestamp is a time in a webhook's body.
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `from` | string | Yes | None | From is the pointer to the time, a JSON number. At most 256 characters. |
+| `from` | string | Yes | None | From is the pointer to the time: an integer JSON number of seconds or milliseconds since the Unix epoch, as unit says. At most 256 characters. |
 | `unit` | string | Yes | None | Unit is ms or s. One of `ms`, `s`. |
 | `window` | duration | Yes | None | Window is how far from now the time may be, either way: above 0 and at most 10m. Pattern `^([-+]?0|[-+]?([0-9]*\.?[0-9]*(ns|us|µs|μs|ms|s|m|h))+)$`. At most 64 characters. |
 

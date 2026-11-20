@@ -30,6 +30,10 @@ Tutorials teach by doing. They make the choices for you and do not stop to expla
 
 ## Known gaps
 
+- The tutorials cover Slack alone. For Microsoft Teams or webhooks, both experimental and new in 0.6.0, follow
+  [Configure Microsoft Teams](../how-to/configure-teams.md) or [Start agents from webhooks](../how-to/receive-webhooks.md),
+  each with its recipes ([Start from a recipe](../how-to/recipes.md)).
+
 - [Your first alert investigation](first-alert-investigation.md) asks you to edit two files in the repository:
   `hack/kind/sandbox/webhook.sh`, for your alert channel's ID, and
   `hack/kind/sandbox/agent-kourier/alert-trial/alert-binding.yaml`, for your webhook's bot ID. The sandbox does not yet

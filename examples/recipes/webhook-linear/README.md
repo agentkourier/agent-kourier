@@ -9,6 +9,11 @@ It holds the Agent Kourier side only: a ChatConnection of the `webhook` platform
 to. It ships no agent. Point the Binding at any A2A agent (A2A is the Agent2Agent protocol) that has Linear tools
 ([Connect a generic A2A agent](../../../docs/how-to/connect-a2a-agent.md)).
 
+> **Experimental.** Needs Agent Kourier 0.6.0 or later: 0.5.x refuses `platform: webhook`. The `webhook` platform is
+> new, and its fields may change in a later version. The setup was run end to end against Linear on 2026-11-17, on a
+> pre-0.6.0 build of the broker; [the Linear page](../../../docs/how-to/webhooks/linear.md) says what was seen in
+> that run and what comes from Linear's documentation.
+
 ## What it does
 
 The ChatConnection, `kourier/chatconnection.yaml`, takes each delivery at
@@ -51,13 +56,16 @@ by whoever filed, edited or commented on it.
 
 ## Prerequisites
 
-- **A Linear webhook** with a signing secret, for the resource types **Issues** and **Comments**. The header names, the
-  signature's form, the timestamp and the body's paths this recipe reads follow Linear's webhook documentation, and this
-  repository has not checked them against a live delivery.
+- **A Linear webhook** with a signing secret, for the resource types **Issues** and **Comments**. The signature's
+  header and form, the timestamp and the body's paths this recipe reads were seen in live deliveries in the run of
+  2026-11-17, except the delivery header, `Linear-Delivery`, which follows Linear's documentation, read 2026-11-18.
 - **A Linear account for the agent**: an OAuth application whose client-credentials token acts as the application's own
-  user, or a personal API key, which acts as its user. That user's ID is the `identity`.
-- **An A2A agent that has Linear tools** using that account's token, and its URL. The AgentBackend's `url` is a placeholder
-  (`REPLACE-ME`).
+  user, or a personal API key, which acts as its user (that route was not part of the run). That user's ID is the
+  `identity`.
+- **Your own A2A agent: the recipe ships none.** It needs an agent card that advertises streaming, and Linear tools that use that account's token;
+  the Binding is not `Ready` until the broker can fetch that card. The AgentBackend's `url` is a placeholder
+  (`REPLACE-ME`) for its endpoint. Agent Kourier posts nothing on Linear (`output: none`): the agent's reply text goes
+  nowhere, and only what its tools do reaches Linear.
 - **The broker's clock within a minute of Linear's.** A delivery whose timestamp is further off either way is answered
   `401`, with the reason `stale`. Whether Linear gives a delivery that it sends again a new `webhookTimestamp` is
   not verified. If it does not, a delivery sent again more than a minute after the first is answered `401`
@@ -65,7 +73,7 @@ by whoever filed, edited or commented on it.
 - **The chat listener reachable over HTTPS** from Linear: the chart's `chatListener.enabled: true`, and an Ingress
   (`chatListener.ingress`) or another way to reach the chat Service. A broker with no chat listener does not run a webhook
   connection: as its own connection it does not start, and as a team's connection it is not started.
-- **A chart release that has custom resources, and Kubernetes 1.33 or later**, as the other recipes need.
+- **Agent Kourier 0.6.0 or later** (0.5.x refuses `platform: webhook`), on custom resources, and Kubernetes 1.33 or later.
 
 ## Files
 
@@ -78,48 +86,10 @@ kourier/
 
 ## Apply it
 
-1. Replace the placeholders: the `identity` with the user ID the agent acts as (the OAuth application's user, or an API key's), `ENG` with your team's key in the
-   Binding's `channel`, `acme-agent` in the comment trigger's regex with the name people mention the agent by, and the
-   AgentBackend's `url` with your agent's. On the `a2a` dialect the URL alone selects the agent, and the Binding's
-   `agent.name` and `agent.namespace` are labels.
-2. Make the namespace and the Secret. The secret is the signing secret that Linear shows for the webhook, so create the
-   webhook (step 5) first to have it; keep it out of your shell's history by reading it from a file:
-
-    ```sh
-    kubectl create namespace acme-webhooks
-    kubectl -n acme-webhooks create secret generic linear-webhook --from-file=webhookSecret=./linear-webhook-secret
-    ```
-
-    The file must hold the secret alone: a trailing newline or any other control character is refused, and the
-    connection is not built.
-3. Have the broker serve the namespace's connections and read the Secret. In your chart values, beside the chat
-   listener of the prerequisites:
-
-    ```yaml
-    config:
-      connectionNamespaces: [acme-webhooks]
-    rbac:
-      secretNames:
-        acme-webhooks: [linear-webhook]
-    ```
-
-    The connection is then a team connection of the broker, served beside the broker's own connection if it has one. To
-    make it the broker's own connection instead, set `config.chatConnection: acme-webhooks/linear` and
-    `config.chatConnectionSecret: linear-webhook`. The broker builds the platform of its own connection when it starts and
-    when a replica takes the lead, so an edit to that connection's `spec.webhook` applies when Agent Kourier restarts. Until then
-    the leader logs, once for each edit of `spec.webhook` it reads that leaves the spec other than the one the connection runs on,
-    a WARN with the connection in its `connection` attribute:
-    `chat connection: its spec.webhook was edited, and the running connection still uses the spec.webhook it started with; a restart of the broker applies the edit`.
-    A team connection restarts by itself when its ChatConnection changes.
-4. Apply the resources:
-
-    ```sh
-    kubectl apply -f examples/recipes/webhook-linear/kourier/
-    kubectl -n acme-webhooks get akbinding linear-plans
-    ```
-
-5. The webhook's URL is `https://<host>/chat/webhook/acme-webhooks/linear`. Until the broker runs the connection, the chat
-   listener answers its deliveries `503`, and takes none of them.
+Follow [Linear](../../../docs/how-to/webhooks/linear.md) from its step 1. It is the one place for the steps: it
+makes the account on Linear and the Secret, has you run the agent, lists every value of these files to replace
+(step 5), applies them, turns on the webhook, and tests it. [Start agents from webhooks](../../../docs/how-to/receive-webhooks.md#before-you-start)
+has the chart values that every webhook recipe needs.
 
 ## What to change
 

@@ -9,6 +9,11 @@ It holds the Agent Kourier side only: a ChatConnection of the `webhook` platform
 to. It ships no agent. Point the Binding at any A2A agent (A2A is the Agent2Agent protocol) that has GitHub tools and posts
 as the App ([Connect a generic A2A agent](../../../docs/how-to/connect-a2a-agent.md)).
 
+> **Experimental.** Needs Agent Kourier 0.6.0 or later: 0.5.x refuses `platform: webhook`. The `webhook` platform is
+> new, and its fields may change in a later version. The setup was run end to end against GitHub on 2026-11-17, on a
+> pre-0.6.0 build of the broker; [the GitHub page](../../../docs/how-to/webhooks/github.md) says what was seen in
+> that run and what comes from GitHub's documentation.
+
 ## What it does
 
 The ChatConnection, `kourier/chatconnection.yaml`, takes each delivery at
@@ -51,14 +56,16 @@ by whoever opened or commented on it.
 
 - **A GitHub App** installed on the repository, with a webhook secret, and subscribed to the events **Pull request**,
   **Issue comment**, **Pull request review** and **Pull request review comment**. Its slug is the `identity`, with `[bot]`
-  after it. The headers and fields this recipe reads follow GitHub's webhook documentation, and this repository has not
-  checked them against a live delivery.
-- **An A2A agent that has GitHub tools** acting as the App, and its URL. The AgentBackend's `url` is a placeholder
-  (`REPLACE-ME`).
+  after it. The headers and the body's paths this recipe reads were seen in live deliveries in the run of 2026-11-17,
+  except the delivery header, `X-GitHub-Delivery`, which follows GitHub's documentation, read 2026-11-18.
+- **Your own A2A agent: the recipe ships none.** It needs an agent card that advertises streaming, and GitHub tools that act as the App;
+  the Binding is not `Ready` until the broker can fetch that card. The AgentBackend's `url` is a placeholder
+  (`REPLACE-ME`) for its endpoint. Agent Kourier posts nothing on GitHub (`output: none`): the agent's reply text goes
+  nowhere, and only what its tools do reaches GitHub.
 - **The chat listener reachable over HTTPS** from GitHub: the chart's `chatListener.enabled: true`, and an Ingress
   (`chatListener.ingress`) or another way to reach the chat Service. A broker with no chat listener does not run a webhook
   connection: as its own connection it does not start, and as a team's connection it is not started.
-- **A chart release that has custom resources, and Kubernetes 1.33 or later**, as the other recipes need.
+- **Agent Kourier 0.6.0 or later** (0.5.x refuses `platform: webhook`), on custom resources, and Kubernetes 1.33 or later.
 
 ## Files
 
@@ -71,49 +78,10 @@ kourier/
 
 ## Apply it
 
-1. Replace the placeholders: `acme-review-agent` with your App's slug (in `identity`, and in the comment trigger's
-   regex), `acme/widgets` with your repository (`owner/name`) in the Binding's `channel`, and the AgentBackend's `url`
-   with your agent's. On the `a2a` dialect the URL alone selects the agent, and the Binding's `agent.name` and
-   `agent.namespace` are labels.
-2. Make the namespace and the Secret. The secret is the one you give the App's webhook; keep it out of your shell's
-   history by reading it from a file:
-
-    ```sh
-    kubectl create namespace acme-webhooks
-    kubectl -n acme-webhooks create secret generic github-webhook --from-file=webhookSecret=./github-webhook-secret
-    ```
-
-    The file must hold the secret alone: a trailing newline or any other control character is refused, and the
-    connection is not built.
-3. Have the broker serve the namespace's connections and read the Secret. In your chart values, beside the chat
-   listener of the prerequisites:
-
-    ```yaml
-    config:
-      connectionNamespaces: [acme-webhooks]
-    rbac:
-      secretNames:
-        acme-webhooks: [github-webhook]
-    ```
-
-    The connection is then a team connection of the broker, served beside the broker's own connection if it has one. To
-    make it the broker's own connection instead, set `config.chatConnection: acme-webhooks/github` and
-    `config.chatConnectionSecret: github-webhook`. The broker builds the platform of its own connection when it starts and
-    when a replica takes the lead, so an edit to that connection's `spec.webhook` applies when Agent Kourier restarts. Until then
-    the leader logs, once for each edit of `spec.webhook` it reads that leaves the spec other than the one the connection runs on,
-    a WARN with the connection in its `connection` attribute:
-    `chat connection: its spec.webhook was edited, and the running connection still uses the spec.webhook it started with; a restart of the broker applies the edit`.
-    A team connection restarts by itself when its ChatConnection changes.
-4. Apply the resources:
-
-    ```sh
-    kubectl apply -f examples/recipes/webhook-github/kourier/
-    kubectl -n acme-webhooks get akbinding github-reviews
-    ```
-
-5. Set the App's webhook URL to `https://<host>/chat/webhook/acme-webhooks/github`, its content type to
-   `application/json` (the connection parses the body as JSON, and answers any other body `400`), and its secret to the
-   Secret's value.
+Follow [GitHub](../../../docs/how-to/webhooks/github.md) from its step 1. It is the one place for the steps: it
+makes the account on GitHub and the Secret, has you run the agent, lists every value of these files to replace
+(step 5), applies them, turns on the webhook, and tests it. [Start agents from webhooks](../../../docs/how-to/receive-webhooks.md#before-you-start)
+has the chart values that every webhook recipe needs.
 
 ## What to change
 

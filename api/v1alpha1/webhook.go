@@ -174,7 +174,7 @@ type WebhookVerify struct {
 
 // WebhookTimestamp is a time in a webhook's body.
 type WebhookTimestamp struct {
-	// From is the pointer to the time, a JSON number.
+	// From is the pointer to the time: an integer JSON number of seconds or milliseconds since the Unix epoch, as unit says.
 	// +kubebuilder:validation:MaxLength=256
 	// +kubebuilder:validation:XValidation:rule="self.matches('^/(?:[^~]|~[01])*$')",message="must be a JSON Pointer that is not the root"
 	From string `json:"from"`

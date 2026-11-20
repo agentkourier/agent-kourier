@@ -2,7 +2,7 @@
   <img src="docs/brand/assets/github/readme-banner-2560x640.png" alt="Agent Kourier: write the agent, not the chat integration." width="100%">
 </h1>
 
-<p align="center">A Kubernetes-native broker between team chat and streaming A2A agents. Slack today, and Microsoft Teams in the release after 0.5.0; more platforms planned.</p>
+<p align="center">A Kubernetes-native broker between your streaming A2A agents and team chat (Slack, and Microsoft Teams as an experiment) or other services' webhooks (GitHub, Jira, Bitbucket, Linear; also an experiment).</p>
 
 Agent Kourier runs in your cluster between your team's chat and your agents. A `Binding`
 connects a channel to an agent that serves streaming A2A, and Agent Kourier handles the
@@ -10,12 +10,18 @@ chat side: a session per thread, streamed replies, questions to people, investig
 started by alerts, and recovery after a restart or failover. The agent needs no chat code.
 It keeps its tools and task logic.
 
-Slack is the supported platform in 0.5.0. Microsoft Teams (experimental) is merged and not in
-0.5.0, whose broker refuses `platform: teams`
-([Configure Microsoft Teams](docs/how-to/configure-teams.md)). Each platform is an adapter
-behind one chat interface and its conformance suite, and the resource API takes another
-platform without breaking a Slack `Binding`. Agents speak only A2A, so a new
-platform needs no change to them.
+Slack is the supported platform. Two more arrive in 0.6.0, both experimental, and a broker of 0.5.x
+refuses either:
+
+- **Microsoft Teams**, a second chat platform (`platform: teams`):
+  [Configure Microsoft Teams](docs/how-to/configure-teams.md).
+- **Webhooks** (`platform: webhook`): a signed webhook from GitHub, Jira Cloud, Bitbucket Cloud or Linear
+  starts a session of your agent, which answers on that service with its own tools:
+  [Start agents from webhooks](docs/how-to/receive-webhooks.md).
+
+Each chat platform is an adapter behind one chat interface and its conformance suite; the
+`webhook` platform sits behind the same interface and posts nothing. The resource API took both
+without breaking a Slack `Binding`. Agents speak only A2A, so a new platform needs no change to them.
 
 [Documentation](https://agentkourier.dev) · [Try it in a kind sandbox](docs/tutorials/first-agent-in-slack.md) ·
 [Install with Helm](docs/how-to/install-with-helm.md) · [Architecture](docs/explanation/architecture.md) ·
@@ -23,7 +29,8 @@ platform needs no change to them.
 
 > **Status: v0.5.0.** Install the published chart and image with
 > [Install with Helm](docs/how-to/install-with-helm.md). The `v1alpha1` resource format can change before 1.0. See
-> [Status](#status). Slack HTTP mode, new in 0.5.0, is experimental.
+> [Status](#status). Slack HTTP mode, new in 0.5.0, is experimental. Teams and webhooks arrive in 0.6.0, both
+> experimental.
 
 <p align="center">
   <img src="docs/assets/clip/team-app.gif" width="100%" alt="A terminal. The platform team creates the namespace agent-kourier and installs the agent-kourier chart with a values file of comments only, so the broker serves the ChatConnections of every namespace and starts with no Slack app of its own. The team then creates its Slack Secret in team-a from a file, a Role and RoleBinding that let the broker's ServiceAccount list and watch it, fills in the four lines marked yours in team-a.yaml (a ChatConnection, an AgentBackend and a Binding), applies it, and kubectl get akbinding shows the Binding become True OK. Then Slack: a mention of the team's bot, and the agent's answer in its thread.">
@@ -74,12 +81,13 @@ Without a broker, each of these is code in every agent that talks to chat:
 - **Restart recovery.** Agent Kourier stores sessions, queued replies and pending questions,
   and posts through a durable outbox, so a crash does not repeat a post
   ([one exception](docs/explanation/delivery.md#the-one-window)).
-- **Suspended agents.** Agent Kourier holds the Slack connection and the thread while an
+- **Suspended agents.** Agent Kourier holds the chat connection and the thread while an
   agent is suspended or scaled down, and calls the agent when the next turn arrives.
 - **Alert investigations.** A trigger reads the alerts a bot already posts to the channel
   and starts an investigation in each alert's thread, with a cooldown per alert, a rate
-  limit and a daily cap. Alertmanager sends Agent Kourier nothing: it posts to Slack as before,
-  so alerts reach people whether or not Agent Kourier is running.
+  limit and a daily cap. Alertmanager sends Agent Kourier nothing: it posts to Slack, or to
+  Teams through a Workflows webhook, as before, so alerts reach people whether or not
+  Agent Kourier is running ([why](docs/explanation/why-a-broker.md#why-outside-the-paging-path)).
 - **Reports in a channel.** A `personMessage` trigger starts a turn of the person on each message they post at the
   top level of the channel, without a mention, held to the trigger's limits; replies under it need a mention. See
   [A person's message](docs/reference/chat-triggers.md#a-persons-message).
@@ -87,10 +95,15 @@ Without a broker, each of these is code in every agent that talks to chat:
   that thread, with the thread so far as untrusted data, within fixed limits. It is on by default; a
   Binding turns it off with `chat.botMentions: none`. See
   [Let another agent start yours](docs/how-to/any-bot-trigger.md#let-another-agent-start-yours).
+- **Events from other services** (experimental, 0.6.0 or later). A webhook connection takes the
+  signed webhooks of GitHub, Jira Cloud, Bitbucket Cloud or Linear and starts a session of the agent
+  for each pull request or issue; a later event of the same one, such as a comment, continues it.
+  Agent Kourier posts nothing there: the agent replies on the service with its own tools. See
+  [Start agents from webhooks](docs/how-to/receive-webhooks.md).
 - **Feedback.** An investigation's final message has useful and not-useful buttons, and
   Prometheus counts the votes per agent and alert name.
 - **Backend choice.** kagent, an agent in Google AX, and any A2A 1.0 or 0.3 agent whose card
-  advertises streaming use the same `Binding`. Changing the runtime leaves the Slack
+  advertises streaming use the same `Binding`. Changing the runtime leaves the chat
   configuration as it is.
 
 ## For platform teams
@@ -105,12 +118,14 @@ a list or whose labels match a selector. A broker can even have no app of its ow
 only the teams' ([Let a team bring its own Slack app](docs/how-to/team-slack-app.md)).
 
 - **Chat credentials you choose.** When every Binding names the broker's own
-  `ChatConnection`, there is one set of chat credentials (on Slack, one app's tokens) to
+  `ChatConnection`, there is one set of chat credentials (on Slack, one app's tokens; on
+  Teams, one bot's client secret) to
   review and rotate, not one per agent. The ChatConnections of each namespace the broker
   admits are served too, and no others: at most 16 in all, the broker's own included, and
   no setting raises that.
-- **One audit log.** It records each agent call and approval decision with the Slack user,
-  when a person started it, and the service identity it ran as.
+- **One audit log.** It records each agent call and approval decision with the person's user ID
+  (Slack's, or the Microsoft Entra object ID on Teams), when a person started it, and the service
+  identity it ran as. A turn that a webhook event starts names no person.
 - **Standard operations.** A Helm chart, Prometheus metrics, optional OpenTelemetry traces,
   and two replicas on Postgres with leader election and fencing.
 
@@ -119,6 +134,11 @@ only the teams' ([Let a team bring its own Slack app](docs/how-to/team-slack-app
 <p align="center">
   <img src="docs/assets/diagrams/how-it-works.svg" width="100%" alt="Alertmanager posts an alert to a Slack channel and people reply in its thread. Agent Kourier receives the channel's events over Socket Mode or as signed HTTP requests, keeps a session per thread in SQLite or Postgres, sends each turn to an A2A agent (kagent, Google AX or any streaming A2A agent), and posts the streamed reply back in the same thread.">
 </p>
+
+The picture shows Slack. On Teams the broker takes the bot's activities on the chat listener or over
+a socket, reads other apps' posts, such as alerts, through Microsoft Graph, and posts through the Bot Connector. A
+webhook connection takes a service's signed events on the chat listener and posts nothing back: the agent answers
+on the service.
 
 Commit the agent's deployment and its `Binding` together, and let GitOps deploy both.
 The runtime's own manifests or operator deploy and run the agent. Agent Kourier supplies
@@ -132,7 +152,7 @@ Three resource types describe the wiring:
 | Resource | Configures | Typical owner |
 |---|---|---|
 | `AgentBackend` | The agent endpoint, protocol dialect, and namespaces allowed to use it | Platform team |
-| `ChatConnection` | The messaging connection and its Secret references | Platform team (the broker's own); a team in a namespace the platform admits (its own app) |
+| `ChatConnection` | The chat platform connection, or one service's webhooks, and its Secret reference | Platform team (the broker's own); a team in a namespace the platform admits (its own app) |
 | `Binding` | An agent, its service identity, and the channel connected to it | Application team |
 
 A team adds a binding to connect an agent to a channel. Multiple bindings can share
@@ -201,7 +221,7 @@ This example assumes the agent and authenticated backend endpoint already exist.
 Replace the endpoint, agent reference, and channel ID for your deployment. The
 `slack` Secret belongs in `agent-kourier` with `botToken` and `appToken`
 keys (`botToken` and `signingSecret` for a connection in Slack HTTP mode); `payments-agent-token` belongs in `payments` with a `token` key. Each binding
-uses a service identity for agent calls; individual Slack users do not supply the
+uses a service identity for agent calls; individual chat users do not supply the
 backend's authorization identity.
 
 This lets an alert start an investigation and several channel members continue it
@@ -225,16 +245,17 @@ other bots, and the [trigger reference](docs/reference/chat-triggers.md) has the
 | Chat platform | Slack over Socket Mode: mentions, thread replies, streamed output, questions | Implemented |
 | Chat platform | Slack over the Events API (HTTP mode): the same, with Slack's signed requests taken on the chat listener, behind a Service that selects the leader. Tested against the end-to-end tests' fake Slack, and tried once against Slack itself. Needs 0.5.0 or later: the 0.4.0 chart refuses `chatListener` and `networkPolicy.chatFrom`. See [Configure Slack](docs/how-to/configure-slack.md) | Experimental |
 | Chat platform | Slack direct messages | Planned |
-| Chat platform | Microsoft Teams, in `http` mode on the chat listener or in `socket` mode: mentions and posts in a team's channel, and replies and edits through the Bot Connector, a live reply as one message that is edited. Questions, tool approvals and the feedback buttons are Adaptive Cards that a member of the channel's team presses. Other apps' posts, such as alerts, are read through Microsoft Graph, by its notifications or by polling. No reactions or approver groups. Tested against fakes of Microsoft's services, and parts of it on a test tenant; not yet as a full install against Teams. Needs a release later than 0.5.0. See [Configure Microsoft Teams](docs/how-to/configure-teams.md) and [What each platform supports](docs/reference/platforms.md) | Experimental |
+| Chat platform | Microsoft Teams, in `http` mode on the chat listener or in `socket` mode: mentions and posts in a team's channel, and replies and edits through the Bot Connector, a live reply as one message that is edited. Questions, tool approvals and the feedback buttons are Adaptive Cards that a member of the channel's team presses. Other apps' posts, such as alerts, are read through Microsoft Graph, by its notifications or by polling. No reactions or approver groups. Tested against fakes of Microsoft's services, and parts of it on a test tenant; not yet as a full install against Teams ([open live checks](https://github.com/agentkourier/agent-kourier/issues/379)). Needs 0.6.0 or later; 0.5.x refuses `platform: teams`. See [Configure Microsoft Teams](docs/how-to/configure-teams.md) and [What each platform supports](docs/reference/platforms.md) | Experimental |
 | Chat platform | Other platforms, through the `chat.Platform` interface and its conformance suite | Planned |
 | Agent backend | kagent 1.0, `kagent-v1` dialect, with structured questions and optional Slack tool approvals. Tested against 1.0.0-alpha5. Needs a cluster that serves the pod-certificate APIs, which managed EKS through 1.36 cannot; see [Connect a kagent agent](docs/how-to/connect-kagent.md) | Implemented |
 | Agent backend | Any A2A agent, 1.0 or 0.3, whose card advertises streaming and a JSON-RPC interface, `a2a` dialect. Questions arrive as text, or as kagent's structured questions and tool approvals when the card lists its human-in-the-loop extension | Implemented |
 | Agent backend | kagent 0.9.x, `a2a` dialect over A2A 0.3. Tested against 0.9.4 on a real cluster. It has no task list, so a resend can run a turn twice, and the dialect shows its tool calls as step cards. See [Connect a kagent agent](docs/how-to/connect-kagent.md) | Implemented |
 | Agent backend | Google AX, through an ADK agent in an AX Task and the `a2a` dialect. See [examples/ax](examples/ax/README.md) | Experimental |
 | Alert source | Alertmanager, through the message it posts to Slack (`botMessage` trigger, written in full) | Implemented |
-| Alert source | Alertmanager on Microsoft Teams, through the card its `msteamsv2` receiver posts to a Workflows webhook, read through Microsoft Graph. See [Configure Microsoft Teams](docs/how-to/configure-teams.md#send-alertmanager-alerts-to-a-channel) | Experimental |
+| Alert source | Alertmanager on Microsoft Teams, through the card its `msteamsv2` receiver posts to a Workflows webhook, read through Microsoft Graph. Needs 0.6.0 or later. See [Configure Microsoft Teams](docs/how-to/configure-teams.md#send-alertmanager-alerts-to-a-channel) | Experimental |
 | Alert source | Any other bot that posts to the channel, with a `botMessage` trigger written in full; not exercised in the sandbox or the end-to-end tests | Implemented |
 | Chat platform | A person's message at the top level of the channel, with a `personMessage` trigger written in full; not exercised in the sandbox or the end-to-end tests | Implemented |
+| Event source | Signed JSON webhooks from GitHub, Jira Cloud, Bitbucket Cloud, Linear or any service that signs its webhooks (HMAC-SHA256 of the body, or a token in a header), taken on the chat listener by a webhook connection (`platform: webhook`). One session per pull request or issue, as the recipes set it up. The agent answers on the service with its own tools; Agent Kourier posts nothing there. Four recipes, which ship no agent yet. Needs 0.6.0 or later. See [Start agents from webhooks](docs/how-to/receive-webhooks.md) | Experimental |
 | Operations | High availability: two replicas on Postgres, one leader elected by a Kubernetes Lease, fencing, and a standby that takes over. See [High availability and failover](docs/explanation/high-availability.md) | Implemented |
 
 The common interface to an agent is streaming A2A over JSON-RPC, version 1.0 or 0.3, and Agent Kourier
@@ -252,20 +273,23 @@ replica with a SQLite store, or as two replicas on Postgres with a leader electi
 and fencing, installed with the [Helm chart](charts/agent-kourier/README.md). Agent Kourier writes
 an audit log, exports Prometheus metrics and can export OpenTelemetry traces. See
 [observability](docs/reference/logs-and-traces.md), and [stored data](docs/reference/stored-data.md) for what
-Agent Kourier keeps and for how long.
+Agent Kourier keeps and for how long. Teams and the `webhook` platform are not in 0.5.0: they arrive in
+0.6.0, both experimental ([release notes](docs/release-notes.md)).
 
 To try it first, follow [Your first agent in Slack](docs/tutorials/first-agent-in-slack.md), which runs
 Agent Kourier against a real Slack workspace and a kagent agent in kind. To run it on a
 cluster, follow [Install with Helm](docs/how-to/install-with-helm.md), and see
-[troubleshooting](docs/how-to/troubleshoot.md) when a first install does not answer.
+[troubleshooting](docs/how-to/troubleshoot.md) when a first install does not answer. On Teams, or for
+webhooks, install the chart the same way, then follow [Configure Microsoft Teams](docs/how-to/configure-teams.md) or
+[Start agents from webhooks](docs/how-to/receive-webhooks.md) for the connection.
 
 ### High availability
 
 On Postgres, Agent Kourier runs as two replicas, active/passive. With SQLite it is one
 replica, and the chart refuses more. The leader does all the work; the standby serves
-health and metrics, opens no Slack connection, and takes over about 15 s after the
+health and metrics, opens no chat connection, and takes over about 15 s after the
 leader's last renewal, with the same recovery as a restart. Every write to Postgres and
-to Slack is fenced, so a deposed leader's writes are refused.
+to the chat platform is fenced, so a deposed leader's writes are refused.
 [High availability and failover](docs/explanation/high-availability.md) explains how it
 works and what a failover can still repeat;
 [Run two replicas](docs/how-to/high-availability.md) sets it up and drills a failover.

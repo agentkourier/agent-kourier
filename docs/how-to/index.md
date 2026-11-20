@@ -8,7 +8,7 @@ The guides assume you know Kubernetes and Helm, and link to [explanation](../exp
 - [Install with Helm](install-with-helm.md): the chart, the Secrets and a first answer in a thread.
 - [Configure Slack](configure-slack.md): the Slack app, its tokens and the ChatConnection.
 - [Configure Microsoft Teams](configure-teams.md): the bot and its Teams app, its client secret, the ChatConnection, and
-  Alertmanager's alerts through Workflows (experimental).
+  Alertmanager's alerts through a Workflows webhook (experimental, 0.6.0 or later).
 - [Create the Binding identity](create-binding-identity.md): choose a user ID or issue and store a bearer token.
 - [Write a Binding](write-a-binding.md): your agent in your channel.
 - [Let a team bring its own Slack app](team-slack-app.md): the team's ChatConnection and Secret, and how the platform admits the namespace: by name, by label, or every namespace.
@@ -33,7 +33,8 @@ The guides assume you know Kubernetes and Helm, and link to [explanation](../exp
 ## Webhooks
 
 - [Start agents from webhooks](receive-webhooks.md): a signed webhook from another service starts a session of your agent,
-  with what each answer means and how to follow a delivery. One page for each service the recipes cover:
+  which answers on that service with its own tools, with what each HTTP answer to the service means and how to follow a
+  delivery (experimental, 0.6.0 or later). One page for each service the recipes cover:
   [GitHub](webhooks/github.md), [Jira Cloud](webhooks/jira.md), [Bitbucket Cloud](webhooks/bitbucket.md) and
   [Linear](webhooks/linear.md).
 
@@ -42,9 +43,9 @@ The guides assume you know Kubernetes and Helm, and link to [explanation](../exp
 - [Start from a recipe](recipes.md): a worked example with its Agent Kourier resources, its checks and, for some of
   them, its agent. Four recipes for Slack: `sre-triage`, Alertmanager alerts to a read-only kagent agent,
   `custom-bot-trigger`, a CI bot's failure posts to an agent of your own, `docs-agent`, answers from documentation, and
-  `prompt-agent`, an agent defined by a prompt. One for Microsoft Teams, `prompt-agent-teams`, that agent with
-  Alertmanager's alerts in a Teams channel. Four for webhooks, from GitHub, Jira Cloud, Bitbucket Cloud and Linear,
-  each walked through from [Start agents from webhooks](receive-webhooks.md).
+  `prompt-agent`, an agent defined by a prompt. One for Microsoft Teams (experimental), `prompt-agent-teams`, that agent
+  with Alertmanager's alerts in a Teams channel. Four for webhooks (experimental), from GitHub, Jira Cloud, Bitbucket Cloud
+  and Linear, which ship no agent yet, each walked through from [Start agents from webhooks](receive-webhooks.md).
 
 ## Security
 
@@ -56,6 +57,6 @@ The guides assume you know Kubernetes and Helm, and link to [explanation](../exp
 - [Run two replicas (high availability)](high-availability.md): Postgres, two replicas on separate nodes, a budget
   for drains, and a failover drill.
 - [Export metrics and traces](export-telemetry.md): Prometheus, OpenTelemetry and alerts worth having.
-- [Upgrade](upgrade.md): a new build, a rollback, the move across the rename, and the trigger changes (presets removed,
-  limits required, fields renamed).
+- [Upgrade](upgrade.md): a new build, a rollback, the move across the rename, the trigger changes (presets removed,
+  limits required, fields renamed), and the release that takes Microsoft Teams and webhooks.
 - [Troubleshoot an install](troubleshoot.md): from what you see to the cause and the fix.

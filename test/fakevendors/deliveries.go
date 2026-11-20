@@ -5,9 +5,10 @@ import (
 	"strconv"
 )
 
-// The deliveries of four vendors, as the webhook recipes (examples/recipes/webhook-*) read them. The shapes follow the vendors'
-// documentation (read 2026-11-17 and 2026-11-18, not checked against a live delivery): only the paths a recipe reads, and a few
-// beside them, with made-up values.
+// The deliveries of four vendors, as the webhook recipes (examples/recipes/webhook-*) read them: only the paths a recipe reads, and a
+// few beside them, with made-up values. The paths the recipes read were seen in the vendors' live deliveries in the run of
+// 2026-11-17 (docs/how-to/webhooks), except the delivery headers and Bitbucket's /pullrequest/draft, which follow the vendors'
+// documentation, read 2026-11-18.
 
 // The vendors.
 const (
