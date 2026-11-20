@@ -268,20 +268,33 @@ Notes for an agent author:
 
 ## Errors
 
+An error's message is never shown in the thread. For a `failed` task, the status message's text, up to 32 parts and
+4096 characters, and the metadata keys `code`, `error_code` and `kagent_error_code` are read only to pick a category:
+context limit, rate limit, authentication, timeout or permission.
+
+### HTTP errors
+
 | The agent answers | What Agent Kourier does |
 |---|---|
 | HTTP 401 at any request, or HTTP 403 at an A2A call | The credentials are rejected. A send or a followed task fails without a retry, an answer leaves the pause open, and `agentkourier_credential_rejections_total` counts them. A lookup before a resend is retried and not counted: the turn fails as unreachable after 15 minutes, or is retried with no limit if it is held |
 | HTTP 403 at the agent card fetch | The agent does not exist, or does not permit the identity. A send fails without a retry and is audited. An answer by a button leaves the pause open, and a followed task is not followed again. A lookup before a resend is retried: the turn fails as unreachable after 15 minutes, or is retried with no limit if it is held. A typed answer, and recovery with a reply queued behind the task, keep trying with nothing said in the thread. None of these is a rejected credential, so `agentkourier_credential_rejections_total` does not count them |
+| Another HTTP 4xx, other than 408 and 429, before any event | Not sent: retried, then failed after 15 minutes |
+| HTTP 5xx, or a dropped connection, before any event | Outcome unknown: looked up with `ListTasks` where it can be, then sent again |
+
+A `Retry-After` header is honoured on reconnects, up to a day.
+
+### JSON-RPC errors
+
+| The agent answers | What Agent Kourier does |
+|---|---|
 | JSON-RPC `-31403` | The identity is refused for this session: the turn fails |
 | JSON-RPC `-32004` to a send | Busy: the same message is sent again after a backoff, for as long as it takes, and the thread is told after 2 minutes. Do not use `-32004` for an operation the agent does not support, or a turn waits for ever |
 | JSON-RPC `-32603` to an answer | The answer is rejected: the paused task is cancelled and the thread told |
 | JSON-RPC `-32001` (task not found) while a task is followed | The session is gone: the thread is told and the next turn starts a new context |
-| Another HTTP 4xx, other than 408 and 429, before any event | Not sent: retried, then failed after 15 minutes |
-| HTTP 5xx, or a dropped connection, before any event | Outcome unknown: looked up with `ListTasks` where it can be, then sent again |
+
+### Answers that cannot be read in full
+
+| The agent answers | What Agent Kourier does |
+|---|---|
 | One event of a stream of more than 2 MiB, an answer to a call of more than 4 MiB, or more than 341 KiB of reply in one turn | Not read past the bound: the turn ends with the outcome `response_too_large`, and the task is cancelled if it was named. [Limits](limits.md#build-or-connect-an-agent-backend) has each bound and what it counts |
 | A `ListTasks` walk that cannot be read in full (a page of more than 4 MiB at the smallest page size it is asked for at, more than 200 pages, more than five minutes, or a page token that comes again) before it finds the turn | The turn is not sent again, since the agent may have it: it ends with the outcome `lookup_incomplete` |
-
-A `Retry-After` header is honoured on reconnects, up to a day. An error's message is never shown in the thread. For
-a `failed` task, the status message's text, up to 32 parts and 4096 characters, and the metadata keys `code`,
-`error_code` and `kagent_error_code` are read only to pick a category: context limit, rate limit, authentication,
-timeout or permission.

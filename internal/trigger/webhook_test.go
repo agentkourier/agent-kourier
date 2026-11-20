@@ -461,6 +461,39 @@ func TestAWebhookEventThatWasNotStartedIsTaken(t *testing.T) {
 	}
 }
 
+// An event that no trigger matched is not remembered, as a limited one is not: the sender does not send it again on its own, so a
+// redelivery, by hand once the Binding's triggers are fixed, is decided again, counted unmatched again while no trigger takes it, and
+// starts once one does. An event that started is remembered: its redelivery is a dedup, and starts nothing.
+func TestAnUnmatchedWebhookEventIsDecidedAgainWhenRedelivered(t *testing.T) {
+	h := newWebhook(t, webhookTrigger(func(t *v1alpha1.Trigger) { t.Match = map[v1alpha1.MessageField]string{"event": `^push$`} }))
+	deliver := func(delivery string) {
+		t.Helper()
+		if err := h.in.Message(h.ctx, prEvent("e1", delivery)); err != nil {
+			t.Fatalf("Message of delivery %s = %v; want it taken", delivery, err)
+		}
+	}
+	duplicates := func() float64 { return h.intakeCount(t, "duplicate") }
+	deliver("d1")
+	deliver("d2")
+	if n := h.counter(t, "agentkourier_trigger_unmatched_total", bindingName); n != 2 || len(h.got()) != 0 || duplicates() != 0 {
+		t.Fatalf("unmatched %v times, %d starts, %v duplicates; want each delivery tried and counted unmatched, and no start", n, len(h.got()), duplicates())
+	}
+
+	h.snap.Store(webhookSnapshot(t, []v1alpha1.Trigger{webhookTrigger(nil)})) // the trigger is fixed
+	deliver("d3")
+	if got := h.got(); len(got) != 1 || got[0].Message.At.ID != "e1" {
+		t.Fatalf("starts %+v; want the redelivery started once a trigger matches it", got)
+	}
+	deliver("d4")
+	if d := h.decisions(t); !maps.Equal(d, map[string]float64{"started": 1, "dedup": 1}) || len(h.got()) != 1 || duplicates() != 1 {
+		t.Errorf("decisions = %v after %d starts, %v duplicates; want the start, and its redelivery a dedup that starts nothing", d, len(h.got()), duplicates())
+	}
+	if n := h.counter(t, "agentkourier_trigger_unmatched_total", bindingName); n != 2 {
+		t.Errorf("unmatched = %v; want the two deliveries before the fix alone", n)
+	}
+	h.beQuiet(t)
+}
+
 // An event's start that failed is returned, so that the platform answers 503 and the sender sends it again; the error names the event
 // by its ID and no text the sender wrote.
 func TestAFailedWebhookStartIsReturnedWithNoTextOfTheEvent(t *testing.T) {

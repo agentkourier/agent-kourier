@@ -215,7 +215,11 @@ match: {event: '^pullrequest:created$', commit: '.'}
 **Keep `comment: '.'` in the review trigger's `exclude`.** The event key is in the `X-Event-Key` header, which the signature does not
 cover, and a comment event carries the pull request's commit too. Without the exclude, a signed comment body sent again under a pull
 request event's key would start a review; with it, the body must agree that it is not a comment. A trigger you add that matches
-pull request events needs the same exclude.
+pull request events needs the same exclude. The exclude covers comments alone: if the webhook also sends other pull request events,
+such as **Approved**, **Merged** or **Declined** (`pullrequest:approved`, `pullrequest:fulfilled`, `pullrequest:rejected`), their bodies
+carry the pull request's source commit and no comment (Atlassian's documentation; not run), so one sent again under
+`pullrequest:updated` would start a review. Subscribe the webhook to the recipe's three events alone (step 6), or add a field that
+tells those events apart and exclude on it.
 
 **Only pull requests into one branch** (*not run*; Bitbucket's API schema has `pullrequest.destination.branch.name`). Add a field,
 and match it:

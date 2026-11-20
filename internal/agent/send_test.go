@@ -223,7 +223,9 @@ func TestLostStream(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fa := newFakeAgent(t, func(_ rpc, w http.ResponseWriter) { tc.serve(w) }) // reconnects get the same
-			err := fa.agentWith(t, quick).Send(t.Context(), message("hi"), nil)
+			// Through the Pool, as production connects: the dialect's transport turns a status that is not 2xx into a
+			// dialect.HTTPStatusError. A bare a2a-go client (v2.9.0 on) reports one as an *a2a.Error, the agent's own answer.
+			err := newPool(t).Agent(targetFor(fa, "team/sre", token("t"))).Send(t.Context(), message("hi"), nil)
 			if !errors.Is(err, tc.want) || errors.Is(err, ErrNotSent) {
 				t.Errorf("err = %v, want %v", err, tc.want)
 			}

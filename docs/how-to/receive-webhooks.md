@@ -46,7 +46,8 @@ The connection's `spec.webhook` says how to read a delivery:
 Each value is read with a [JSON Pointer](https://www.rfc-editor.org/rfc/rfc6901) into the body, such as `/pull_request/number`, or
 a list of them, where the first that resolves wins. A string resolves to its text, a number to the number as written, and `true` and
 `false` to those words; `null`, an object or an array does not resolve. A field can also be read from a request header, which the
-signature does not cover.
+signature does not cover. So a trigger that matches a header field must also match or exclude a body field that tells its events
+apart: a signed body can be sent again under any header, and the broker remembers only a body whose start was made or refused.
 
 Agent Kourier posts nothing on the service. The Binding's `chat.output` must be `none`: the CRD's default is `live`, and the broker
 refuses `live` and `final` on a webhook connection (`UnsupportedOnPlatform`). Its triggers are all `type: webhookEvent`. The agent
@@ -103,11 +104,11 @@ body, so the same body delivered again is the same event:
 - **A body that started a turn** starts no second one when it comes again. The broker counts it on `agentkourier_intake_total` with
   `disposition="duplicate"` (or `source="reply_queue"`, `disposition="duplicate"` after a restart, when the session finds its turn
   already queued).
-- **A body that matched no trigger** is remembered too: when it comes again it is `duplicate` and starts nothing, even once a
-  trigger has been changed to match it. So after you fix a trigger, a delivery sent again from the service's log starts nothing
-  until the broker has forgotten the body: it remembers a connection's recent events in memory, and forgets them at a restart, at a
-  change of leader, at a restart of a team connection (an edit of its ChatConnection, say), or after enough later events
-  ([Limits](../reference/limits.md#start-investigations-triggers-rates-and-probes)). Test a fixed trigger with a new event.
+- **A body that matched no trigger** starts nothing and is not remembered. The broker counts it on `agentkourier_intake_total` with
+  `disposition="trigger_unmatched"` and on `agentkourier_trigger_unmatched_total` of the Binding, and logs it at DEBUG,
+  `chat: webhook event matched no trigger`. When it comes again it is tried against the triggers again, and counted again if it still
+  matches none. So after you fix a trigger, the same delivery sent again from the service's log is decided again, and starts the
+  turn unless the trigger's limits, the session of its thread or a refused prompt stop it, as below.
 - **An event of a channel that no Binding names** starts nothing and is not remembered: once a Binding names the channel, the same
   body delivered again is tried against its triggers.
 - **A start that a trigger's limits stopped** gets a `200` response all the same. No turn starts, no digest line is posted (the platform
@@ -160,8 +161,11 @@ What a service does with a `503` is its own. Their documentation, read on 2026-1
     ([step 2](team-slack-app.md#2-the-team-makes-the-secret-the-grant-and-the-connection)). A webhook connection can be the broker's
     own instead (`config.chatConnection` and `config.chatConnectionSecret`), which is the only way on the ConfigMap route: there the
     broker runs exactly one ChatConnection. The broker builds the platform of its own connection when it starts and when a replica
-    takes the lead, so an edit to its `spec.webhook` applies when Agent Kourier restarts; a team connection restarts by itself when
-    its ChatConnection changes.
+    takes the lead, so an edit to its `spec.webhook` applies when Agent Kourier restarts, and until then the leader logs, once for
+    each edit of `spec.webhook` it reads that leaves the spec other than the one the connection runs on, a WARN with the
+    connection in its `connection` attribute:
+    `chat connection: its spec.webhook was edited, and the running connection still uses the spec.webhook it started with; a restart of the broker applies the edit`;
+    a team connection restarts by itself when its ChatConnection changes.
 - **An agent with tools for the service**, and an account there for it to work as, with a credential that only the agent's tools
   hold. Agent Kourier never sees or passes that credential ([Tools for the agent](#tools-for-the-agent)). Any A2A agent works: each
   recipe has an AgentBackend of the `a2a` dialect whose `url` is a placeholder, `REPLACE-ME`, for your agent's
@@ -299,5 +303,5 @@ The counts below are on the leader's `/metrics` ([Export metrics and traces](exp
 | `unmapped`, `bad_id` or `no_thread` | The thread's field is not an identifier, holds a `:`, or is missing: an event the connection's thread does not fit, such as a comment on a plain issue where the thread is a pull request's number. |
 | `self` for a person's event | `identity` is a person's, or one of `actor.from` names someone other than who caused the event. |
 | `ignored`, `no_actor` | No actor pointer resolved. |
-| `accepted`, and no turn | `agentkourier_intake_total{connection="<namespace>/<name>"}` says what the intake did: `ignored` is a channel that no Binding of the connection names, `trigger_unmatched` an event that no trigger matched (`agentkourier_trigger_unmatched_total` of the Binding counts it too, and the DEBUG log names it), and `duplicate` a body the connection already took, whether it started a turn or matched no trigger, so a body sent again after a fix of its trigger is `duplicate` too, until the broker forgets it ([above](#what-a-taken-event-does)). A trigger's limits can stop it: `agentkourier_trigger_limited_total` rises, and the WARN line above names the delivery, which is lost unless it is delivered again. A refused prompt counts on `agentkourier_trigger_refused_total`. |
+| `accepted`, and no turn | `agentkourier_intake_total{connection="<namespace>/<name>"}` says what the intake did: `ignored` is a channel that no Binding of the connection names, `trigger_unmatched` an event that no trigger matched (`agentkourier_trigger_unmatched_total` of the Binding counts it too, and the DEBUG log names it), and `duplicate` a body that already started a turn, or whose start was refused. A body that matched no trigger is not remembered, so once its trigger is fixed, the same delivery sent again is decided again ([above](#what-a-taken-event-does)). A trigger's limits can stop it: `agentkourier_trigger_limited_total` rises, and the WARN line above names the delivery, which is lost unless it is delivered again. A refused prompt counts on `agentkourier_trigger_refused_total`. |
 | A turn, and nothing on the service | The agent's tools or its account: check the agent's own logs. Agent Kourier posts nothing on the service. |
