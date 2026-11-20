@@ -65,9 +65,9 @@ by whoever opened or commented on it.
 - **A machine user** with the Read role on the repository, with a fine-grained personal access token, and a model
   provider's key: the agent's [Prerequisites](agent/README.md#prerequisites). Not Write: with Write, an `APPROVE` the
   model is talked into counts toward a branch protection rule's required approvals; if it must have Write, require
-  review from Code Owners, with every file owned and the machine user not an owner (the same Prerequisites). The machine user's login is the
-  `identity`. Agent Kourier posts nothing on GitHub (`output: none`): the agent's reply text goes nowhere, and only what
-  its tools do reaches GitHub.
+  review from Code Owners, with every file owned and the machine user not an owner (the same Prerequisites). The
+  machine user's login is the `identity`. Agent Kourier posts nothing on GitHub (`output: none`): the agent's reply
+  text goes nowhere, and only what its tools do reaches GitHub.
 - **The chat listener reachable over HTTPS** from GitHub: the chart's `chatListener.enabled: true`, and an Ingress
   (`chatListener.ingress`) or another way to reach the chat Service. A broker with no chat listener does not run a webhook
   connection: as its own connection it does not start, and as a team's connection it is not started.

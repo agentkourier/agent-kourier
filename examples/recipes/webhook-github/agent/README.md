@@ -68,9 +68,10 @@ this agent's own.
   in the branch's rule, with a `CODEOWNERS` that owns every file and does not name the machine user: GitHub's
   [code owners page](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners)
   (read 2026-11-19) says a file with no owner can be approved by anyone with write access.
-- A **fine-grained personal access token** of the machine user, limited to that repository, with the repository permissions **Pull requests: read and write** (the pull request, its files, the
-  review, and the comments on it) and **Contents: read** (`get_file_contents`). GitHub's
-  [permissions list](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens)
+- A **fine-grained personal access token** of the machine user, limited to that repository, with the repository
+  permissions **Pull requests: read and write** (the pull request, its files, the review, and the comments on it) and
+  **Contents: read** (`get_file_contents`). GitHub's [permissions
+  list](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens)
   names those for the REST calls (read 2026-11-19); github-mcp-server posts the review with GraphQL's
   `addPullRequestReview`, and this repository has not checked any token against GitHub. The machine user's login is
   the recipe ChatConnection's `identity`, and the name its comment trigger matches.
