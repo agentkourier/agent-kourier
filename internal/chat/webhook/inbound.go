@@ -71,34 +71,36 @@ var requestSeries = []result{
 func (p *Platform) HTTPHandler() (http.Handler, bool) { return http.HandlerFunc(p.serve), true }
 
 // serve answers one request, through the steps of the package comment. Nothing of the body is parsed before it is verified. Each
-// request it answers is a span of its own (requestSpan), started when the handler is called and ended by answer; the handler logs on
-// its context, so that each line carries its trace. The span holds no value of the request but the event's ID (the body's SHA-256)
-// once the request is verified, and the delivery ID once it has passed the id check. A sender's trace headers are not read: a
-// request's span is a root. The Sink is called on a context of Run's, not the request's, since the broker's telemetry is in Run's,
-// with the request's span, and the context ends when the answer goes: an event is not taken after its sender was told to send it
-// again. What a request holds (its body, its signature) is never logged. A request that is not a POST, which the chat listener refuses
-// before it reaches here, is answered 405, and not counted or traced.
+// verified request is a span of its own (requestSpan), started once it is verified, timed from when the handler was called, and ended
+// by answer; the handler logs on its context, so that each line carries its trace. A request that is not verified, or whose body
+// could not be read, has no span, as it logs no INFO line: anyone who can reach the URL can send one, and must not be able to start
+// traces at will. The span holds no value of the request but the event's ID (the body's SHA-256) and the delivery ID once it has
+// passed the id check. A sender's trace headers are not read: a request's span is a root. The Sink is called on a context of Run's,
+// not the request's, since the broker's telemetry is in Run's, with the request's span, and the context ends when the answer goes: an
+// event is not taken after its sender was told to send it again. What a request holds (its body, its signature) is never logged. A
+// request that is not a POST, which the chat listener refuses before it reaches here, is answered 405, and not counted or traced.
 func (p *Platform) serve(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	start := time.Now()
-	ctx, span := p.tracer.Start(req.Context(), requestSpan, trace.WithSpanKind(trace.SpanKindServer), trace.WithTimestamp(start),
-		trace.WithAttributes(attribute.String("agentkourier.platform", Name), attribute.String("agentkourier.connection", p.conn)))
-	body, err := io.ReadAll(req.Body) // the chat listener has read it whole and capped it: this reads memory
+	ctx, start := req.Context(), time.Now()
+	untraced := trace.SpanFromContext(ctx) // the request's, which records nothing: what answer ends for a request with no span
+	body, err := io.ReadAll(req.Body)      // the chat listener has read it whole and capped it: this reads memory
 	if err != nil {
 		p.log.DebugContext(ctx, "webhook: a request was refused: its body could not be read", "connection", p.conn)
-		p.answer(w, span, start, result{outcomeMalformed, reasonUnreadable})
+		p.answer(w, untraced, start, result{outcomeMalformed, reasonUnreadable})
 		return
 	}
 	if reason := p.v.verify(req.Header, body, p.now()); reason != "" {
 		p.log.DebugContext(ctx, "webhook: a request was refused: it is not verified", "connection", p.conn, "reason", reason, "bytes", len(body))
 		p.unverifiedSummary(ctx, reason)
-		p.answer(w, span, start, result{outcomeUnverified, reason})
+		p.answer(w, untraced, start, result{outcomeUnverified, reason})
 		return
 	}
+	ctx, span := p.tracer.Start(ctx, requestSpan, trace.WithSpanKind(trace.SpanKindServer), trace.WithTimestamp(start),
+		trace.WithAttributes(attribute.String("agentkourier.platform", Name), attribute.String("agentkourier.connection", p.conn)))
 	sum := sha256.Sum256(body)
 	id, delivery := hex.EncodeToString(sum[:]), p.deliveryID(req.Header)
 	span.SetAttributes(attribute.String("agentkourier.webhook.event", id))
@@ -117,8 +119,8 @@ func (p *Platform) serve(w http.ResponseWriter, req *http.Request) {
 
 // answer records res and writes its answer: it counts res, observes the time since start (when the handler was called) under its
 // outcome, and, for accepted, gives the clock's time as the last accepted request's. It records before it writes, so that what the
-// sender sees has been recorded; the answer is a status line and a short body, which the handler's return sends. It ends the request's
-// span with the outcome, the reason and the status code; a 503 is an error there, as an operation's failure is (telemetry.Operation):
+// sender sees has been recorded; the answer is a status line and a short body, which the handler's return sends. It ends span, the
+// request's (one that records nothing for a request with no span of its own), with the outcome, the reason and the status code; a 503 is an error there, as an operation's failure is (telemetry.Operation):
 // the outcome is its error.type, and its status is an error unless the outcome is cancelled, since the sender went away.
 func (p *Platform) answer(w http.ResponseWriter, span trace.Span, start time.Time, res result) {
 	defer span.End()

@@ -263,10 +263,10 @@ index, and then `chat: trigger decided`, with the Binding, the trigger's index, 
 `thread`.
 
 With trace export on ([Export metrics and traces](export-telemetry.md)), a delivery is one trace, and these lines carry its `trace_id`:
-the delivery's line, the intake's two, and the turn's. Each request is a span, `agentkourier.webhook.request`, whose attribute
+the delivery's line, the intake's two, and the turn's. Each verified request is a span, `agentkourier.webhook.request`, whose attribute
 `agentkourier.webhook.delivery` is the delivery ID, so the trace backend finds a delivery by the ID in the service's delivery log; the
-intake's span is its child, and the turn's spans follow in the same trace after the response. A request that is not verified is a span
-too, with no delivery ID or event on it. [Logs and traces](../reference/logs-and-traces.md#webhook-requests) has every attribute.
+intake's span is its child, and the turn's spans follow in the same trace after the response. A request that is not verified has no span,
+and its lines no `trace_id`. [Logs and traces](../reference/logs-and-traces.md#webhook-requests) has every attribute.
 
 A request that is not verified, or whose body could not be read, is logged at DEBUG only, and never with its body or its signature.
 The first unverified request of a connection also logs a WARN, `webhook: requests were refused: they are not verified`, with a count

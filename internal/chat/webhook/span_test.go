@@ -29,19 +29,27 @@ func attrsOf(s tracetest.SpanStub) map[attribute.Key]attribute.Value {
 	return out
 }
 
-// checkTraced fails t unless the request answered code with series ("outcome reason") ended one span after the first before of tel's:
-// a root server span of the connection, with the outcome, the reason and the status code; on a 5xx, the outcome as error.type and as
-// an error status, but for cancelled (the sender went away), whose status is unset; the event's ID once the request was verified, and
-// no delivery ID, since none of the requests that come here has one.
+// checkTraced fails t unless the request answered code with series ("outcome reason") ended the spans it should after the first
+// before of tel's: none for a request that was not verified or whose body could not be read; else one, a root server span of the
+// connection, with the outcome, the reason and the status code; on a 5xx, the outcome as error.type and as an error status, but for
+// cancelled (the sender went away), whose status is unset; the event's ID, and no delivery ID, since none of the requests that come
+// here has one.
 func checkTraced(t *testing.T, tel *telemetrytest.Harness, series string, code, before int) {
 	t.Helper()
+	outcome, reason, _ := strings.Cut(series, " ")
+	verified := outcome != "unverified" && series != "malformed unreadable"
 	spans := tel.Exporter.GetSpans()[before:]
+	if !verified {
+		if len(spans) != 0 {
+			t.Errorf("%s: %d spans ended, want none for a request that is not verified", series, len(spans))
+		}
+		return
+	}
 	if len(spans) != 1 {
 		t.Errorf("%s: %d spans ended, want 1", series, len(spans))
 		return
 	}
 	s := spans[0]
-	outcome, reason, _ := strings.Cut(series, " ")
 	if s.Name != requestSpan || s.SpanKind != trace.SpanKindServer || s.Parent.IsValid() {
 		t.Errorf("%s: span %s of kind %s under %v; want a root %s of kind server", series, s.Name, s.SpanKind, s.Parent.SpanID(), requestSpan)
 	}
@@ -68,20 +76,18 @@ func checkTraced(t *testing.T, tel *telemetrytest.Harness, series string, code, 
 	if s.Status.Code != wantStatus || (wantStatus == codes.Error && s.Status.Description != outcome) {
 		t.Errorf("%s: status %s %q, want %s", series, s.Status.Code, s.Status.Description, wantStatus)
 	}
-	verified := outcome != "unverified" && series != "malformed unreadable"
-	if ev, ok := attrs["agentkourier.webhook.event"]; ok != verified || (ok && len(ev.AsString()) != 64) {
-		t.Errorf("%s: agentkourier.webhook.event = %q (set %v); want the body's SHA-256 if and only if the request was verified", series,
-			ev.AsString(), ok)
+	if ev := attrs["agentkourier.webhook.event"].AsString(); len(ev) != 64 {
+		t.Errorf("%s: agentkourier.webhook.event = %q, want the body's SHA-256", series, ev)
 	}
 	if _, ok := attrs["agentkourier.webhook.delivery"]; ok {
 		t.Errorf("%s: a delivery ID is on the span of a request that has none", series)
 	}
 }
 
-// A request's span is the parent of what the Sink does with its event: the Sink is called on a context of Run's (its values) that
-// carries the request's span, still open, so that the intake's span is its child. The request's log lines carry its trace: the INFO
-// line, and the DEBUG and WARN lines of an unverified one. The sender's delivery ID is on the span when it is an identifier, and the
-// event's ID always once the request is verified.
+// A verified request's span is the parent of what the Sink does with its event: the Sink is called on a context of Run's (its values)
+// that carries the request's span, still open, so that the intake's span is its child. The request's INFO line carries its trace. The
+// sender's delivery ID is on the span when it is an identifier, and the event's ID always. A request that is not verified starts no
+// trace, and its DEBUG and WARN lines carry none.
 func TestARequestSpanIsTheParentOfTheSinksWorkAndOfItsLogLines(t *testing.T) {
 	var buf syncBuffer
 	tel := telemetrytest.New(t)
@@ -136,9 +142,21 @@ func TestARequestSpanIsTheParentOfTheSinksWorkAndOfItsLogLines(t *testing.T) {
 	forged := request(event, false)
 	forged.Header.Set(sigHeader, "sha256=zq-forged-signature")
 	serve(t, p, forged)
-	unverified := tel.Exporter.GetSpans()[2]
+	if n := len(tel.Exporter.GetSpans()); n != 2 {
+		t.Errorf("%d spans after a request that is not verified, want the 2 before it", n)
+	}
 
 	lines := logLines(t, buf.String())
+	for _, msg := range []string{"webhook: a request was refused: it is not verified", "webhook: requests were refused: they are not verified"} {
+		got := linesOf(lines, msg)
+		if len(got) != 1 {
+			t.Errorf("%d lines say %q, want 1:\n%s", len(got), msg, buf.String())
+			continue
+		}
+		if id, ok := got[0]["trace_id"]; ok {
+			t.Errorf("the line %q of a request that is not verified has trace_id %v; want none", msg, id)
+		}
+	}
 	for _, c := range []struct {
 		msg  string
 		span tracetest.SpanStub
@@ -146,8 +164,6 @@ func TestARequestSpanIsTheParentOfTheSinksWorkAndOfItsLogLines(t *testing.T) {
 	}{
 		{"webhook: delivery answered", accepted, 0},
 		{"webhook: delivery answered", unmapped, 1},
-		{"webhook: a request was refused: it is not verified", unverified, 0},
-		{"webhook: requests were refused: they are not verified", unverified, 0},
 	} {
 		got := linesOf(lines, c.msg)
 		if len(got) <= c.n {

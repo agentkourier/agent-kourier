@@ -83,7 +83,7 @@ diagnostics reach stderr outside Agent Kourier's logger. Five things log, all as
 ## Trace boundaries
 
 A Slack envelope starts a local trace: in Socket Mode its span, `agentkourier.slack.envelope`, covers the durable
-intake and the ack attempt, and in HTTP mode the handoff to the intake. A request to a webhook connection starts a
+intake and the ack attempt, and in HTTP mode the handoff to the intake. A verified request to a webhook connection starts a
 local trace too (see "Webhook requests"). A queued reply restores its saved W3C ancestry when a session runner takes
 it up. A2A HTTP calls carry `traceparent` and `tracestate` to the verifying backend
 front door after the destination and credential checks. Slack receives no trace
@@ -133,8 +133,8 @@ actually calls the model.
 
 ### Webhook requests
 
-Each request a webhook connection answers is one span, `agentkourier.webhook.request`, of kind server, from when the
-connection's handler is called to its response. It is always a root: the sender's trace headers are not read. The
+Each verified request a webhook connection answers is one span, `agentkourier.webhook.request`, of kind server, from when
+the connection's handler is called to its response, the time to read and verify the body included. It is always a root: the sender's trace headers are not read. The
 intake's span (`agentkourier.intake`) is its child, and the turn that the event starts is in its trace: the turn's span is
 restored from the trace context the intake stored with the turn, and goes on after the request's span has ended with the
 response.
@@ -144,19 +144,21 @@ The span carries:
 - `agentkourier.platform` (`webhook`) and `agentkourier.connection` (the ChatConnection, `namespace/name`)
 - `agentkourier.outcome` and `agentkourier.webhook.reason`: the `outcome` and `reason` of `agentkourier_webhook_requests_total`
 - `http.response.status_code`
-- once the request is verified, `agentkourier.webhook.event`, the event's ID (the SHA-256 of the body), and
-  `agentkourier.webhook.delivery`, the delivery ID, when the connection's `delivery.header` holds an identifier of at most 128 bytes
+- `agentkourier.webhook.event`, the event's ID (the SHA-256 of the body)
+- `agentkourier.webhook.delivery`, the delivery ID, when the connection's `delivery.header` holds an identifier of at most 128 bytes
 
 A `503` (`not_running`, `withheld`, `timeout`, `cancelled`) sets `error.type` to the outcome and the span's status to
 error, but for `cancelled` (the sender hung up first), whose status is unset, as a cancelled operation's is. Nothing else
-of the request reaches the span: not its body, its signature, or any other header. A request that is not a `POST` has no
-span. Every other request has one, whether it is verified or not, so a sender that is not verified can start traces;
-`OTEL_TRACES_SAMPLER_ARG` samples them as it samples any root. The span records no `agentkourier_operation_duration_seconds`:
-`agentkourier_webhook_ack_duration_seconds` times the response.
+of the request reaches the span: not its body, its signature, or any other header. A request that is not verified
+(`unverified`) or whose body could not be read (`malformed`, `unreadable`) has no span, so that a client that can reach
+the URL but does not hold the secret cannot start traces; `agentkourier_webhook_requests_total` counts it. Nor has a
+request that is not a `POST`. A verified request that is `malformed` for its body (`schema`, `depth`, `duplicate_key`) has
+one. The span records no `agentkourier_operation_duration_seconds`: `agentkourier_webhook_ack_duration_seconds` times the
+response.
 
-The handler's log lines are written on the span's context, so each carries its `trace_id` and `span_id`:
-`webhook: delivery answered` (INFO), and the DEBUG line of a request that is not verified or could not be read. The
-WARN line that sums a connection's unverified requests carries the trace of the request that logged it.
+The line `webhook: delivery answered` (INFO) is written on the span's context, so it carries its `trace_id` and
+`span_id`. The DEBUG line of a request that is not verified or could not be read, and the WARN line that sums a
+connection's unverified requests, carry no trace.
 
 ## Logs
 
