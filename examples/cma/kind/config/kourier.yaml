@@ -1,0 +1,36 @@
+# Agent Kourier's config for the CMA test: one Slack app (Secret slack: botToken, appToken), the adapter on the
+# host as an a2a backend, and one Binding in the test channel. __SLACK_CHANNEL_ID__ is filled in when the ConfigMap
+# is made.
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: slack, namespace: agent-kourier}
+spec:
+  platform: slack
+  credentialsSecretRef: {name: slack}
+---
+# The adapter runs on the Docker host, which kind nodes reach as host.docker.internal.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: cma, namespace: agent-kourier}
+spec:
+  dialect: a2a
+  url: http://host.docker.internal:8090/a2a
+---
+# A mention of CMA Assist starts a thread and a CMA session; replies in the thread continue it. The agent's bash calls
+# wait on an Approve/Reject in the thread (any non-bot channel member may decide).
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: cma-chat, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {name: cma}
+    name: kourier-a2a-test # a label on the a2a dialect: the backend URL selects the agent
+    namespace: cma
+  identity: {userId: agent-kourier-cma}
+  chat:
+    connectionRef: {name: slack}
+    channel: __SLACK_CHANNEL_ID__
+    triggers:
+      - type: mention
+    output: live
+  interactions: {toolApprovals: true}
