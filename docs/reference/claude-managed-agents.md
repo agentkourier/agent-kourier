@@ -134,16 +134,17 @@ refuses `addons.cma.replicaCount` above 1 with SQLite, puts the file on a ReadWr
 the Recreate strategy, so the old pod has released the volume before the new one starts. The add-on refuses
 `LEASE_DURATION`, `LEASE_RENEW_DEADLINE` and `LEASE_RETRY_PERIOD` with SQLite.
 
-<!-- verify-after-A2 -->
 **Postgres** runs several replicas. Replicas that start together apply each migration once, under an advisory lock. The
 chart gives them a rolling update that starts a new pod before it takes an old one away, and at 2 replicas and more a
 PodDisruptionBudget with `maxUnavailable: 1`.
 
-<!-- verify-after-A2 -->
 The replicas elect a leader through a lease row in the add-on's database, not a Kubernetes Lease, so the add-on needs
 no RBAC. The leader serves A2A, and every write it makes checks the lease's epoch in the same transaction, so a leader
 that has lost the lease cannot write. A standby forwards each A2A request and the agent card to the leader's
-`ADVERTISE_URL`, streaming the answer through unbuffered; the caller check runs on the leader. A leader that cannot
+`ADVERTISE_URL`, streaming the answer through unbuffered; the caller check runs on the leader. The add-on answers 503 with `Retry-After` (the
+election's retry period, at least 1 second) on a leader that has not finished taking over, on a standby that knows of
+no leader or cannot reach it, and on a replica that is not serving when the request was already forwarded once: a
+request is forwarded once at most. A leader that cannot
 renew the lease for `LEASE_RENEW_DEADLINE` exits, and one that stops on SIGTERM releases the lease. A replica that
 takes over runs the same start-up work as a restart, so a turn that was running on the old leader fails, and a paused
 approval survives.
@@ -178,10 +179,9 @@ All on one port, 8090 in the chart, named `http` on the Service:
 | `/a2a` | A2A JSON-RPC, behind the caller check |
 | `/a2a/.well-known/agent-card.json` | The agent card |
 | `/healthz` | 200 once the add-on serves, which is only after its start-up work |
-| `/readyz` | 200 once the add-on serves <!-- verify-after-A2 --> |
-| `/metrics` | Prometheus metrics <!-- verify-after-A2 --> |
+| `/readyz` | 200 once the add-on serves |
+| `/metrics` | Prometheus metrics |
 
-<!-- verify-after-A2 -->
 On Postgres, `/readyz` answers 200 on a standby too, since a standby forwards to the leader, so every replica is behind
 the Service. The binary prints its version with `--version`.
 
@@ -214,18 +214,15 @@ Every duration is a Go duration, such as `90s` or `720h`, of zero or more unless
 | `POD_NAME` | The hostname | This replica's name as a lease holder. | The pod's name, with Postgres |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. Logs are JSON on standard error. | `addons.cma.logLevel` |
 
-<!-- verify-after-A2 -->
 The OpenTelemetry variables are the ones Agent Kourier reads (`OTEL_SERVICE_NAME`, `OTEL_TRACES_EXPORTER`,
 `OTEL_EXPORTER_OTLP_ENDPOINT` and the rest; see [Logs and traces](logs-and-traces.md)), with the service name
 `agent-kourier-cma` by default. The chart passes them through `addons.cma.extraEnv`.
 
 ## Telemetry
 
-<!-- verify-after-A2 -->
 Metrics are on `/metrics`, with the prefix `agentkourier_cma_`. With `serviceMonitor.enabled` the chart adds a
 ServiceMonitor of the add-on's own.
 
-<!-- verify-after-A2 -->
 | Metric | Type | What it counts |
 |---|---|---|
 | `agentkourier_cma_turns_total{outcome}` | Counter | Turns, by how they ended |
@@ -239,7 +236,6 @@ ServiceMonitor of the add-on's own.
 | `agentkourier_cma_leader_takeovers_total` | Counter | Times this replica became the leader |
 | `agentkourier_cma_forwarded_requests_total{outcome}` | Counter | Requests a standby forwarded to the leader |
 
-<!-- verify-after-A2 -->
 Each turn is a span, `agentkourier.cma.turn`, a child of the trace context Agent Kourier sends with the request, and
 each call to the Managed Agents API a span `agentkourier.cma.backend.<operation>` under it.
 

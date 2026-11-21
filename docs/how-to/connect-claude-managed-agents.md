@@ -86,7 +86,6 @@ rbac:
    `cma-token` in `identity.tokenSecretRef`, so grant it here. A Binding in `config.bindings` needs no entry: the chart
    grants the Secrets that `config.*` names.
 
-<!-- verify-after-A2 -->
 For more than one replica, keep the state in Postgres. The replicas elect a leader through the database, and a standby
 forwards what it receives to the leader:
 
