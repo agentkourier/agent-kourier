@@ -9,6 +9,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2asrv/taskstore"
 
 	"github.com/agentkourier/agent-kourier/addons/cma/store"
+	"github.com/agentkourier/agent-kourier/addons/cma/telemetry"
 )
 
 // reapInterval is how often Run looks for idle sessions and old tasks. A session can outlive IdleTTL, and a task
@@ -116,12 +117,15 @@ func (e *Executor) Restore(ctx context.Context) error {
 		if err := e.Store.ForgetContext(ctx, contextID, s.SessionID, now); err != nil {
 			return fmt.Errorf("forget context %s: %w", contextID, err)
 		}
+		e.Telemetry.SessionArchived(telemetry.ArchiveGone)
 		forgotten++
 	}
 	for _, id := range superseded {
 		if err := e.Backend.Archive(ctx, id); err != nil {
 			e.logger().Warn("archive a superseded session", "session", id, "error", err)
+			continue
 		}
+		e.Telemetry.SessionArchived(telemetry.ArchiveSuperseded)
 	}
 	e.logger().Info("restored sessions", "contexts", len(add), "adopted", adoptions, "forgotten", forgotten, "superseded", len(superseded))
 	return nil
@@ -148,6 +152,7 @@ func (e *Executor) Settle(ctx context.Context) error {
 			e.logger().Warn("fail an interrupted task", "task", task.ID, "error", err)
 			continue
 		}
+		e.Telemetry.TaskInterrupted()
 		failed++
 		contexts[task.ContextID] = true
 	}
@@ -217,6 +222,7 @@ func (e *Executor) reap(ctx context.Context) {
 			continue
 		}
 		log.Info("archived an idle session", "idle_ttl", e.IdleTTL)
+		e.Telemetry.SessionArchived(telemetry.ArchiveIdle)
 		// The tasks before now ran in the archived session and can never run again; a turn that started since runs in
 		// a new session and is kept. Should this fail, Restore forgets the context at the next start.
 		if err := e.Store.ForgetContext(ctx, d.contextID, d.session, now); err != nil {

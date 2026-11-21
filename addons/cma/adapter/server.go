@@ -9,6 +9,8 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
+
+	"github.com/agentkourier/agent-kourier/addons/cma/telemetry"
 )
 
 // NewRequestHandler is the A2A request handler over exec, with exec.Store as its task store; opts add to it (a call
@@ -17,15 +19,15 @@ import (
 // send arrived.
 func NewRequestHandler(exec *Executor, opts ...a2asrv.RequestHandlerOption) a2asrv.RequestHandler {
 	inner := a2asrv.NewHandler(exec, append([]a2asrv.RequestHandlerOption{a2asrv.WithTaskStore(exec.Store)}, opts...)...)
-	return &replayHandler{RequestHandler: inner, messages: exec.Store, log: exec.logger()}
+	return &replayHandler{RequestHandler: inner, messages: exec.Store, log: exec.logger(), tel: exec.Telemetry}
 }
 
-// Card is the adapter's agent card. url is the JSON-RPC endpoint clients reach it at.
-func Card(name, description, url string) *a2a.AgentCard {
+// Card is the adapter's agent card. url is the JSON-RPC endpoint clients reach it at; version is the adapter's.
+func Card(name, description, url, version string) *a2a.AgentCard {
 	return &a2a.AgentCard{
 		Name:                name,
 		Description:         description,
-		Version:             "0.1.0",
+		Version:             version,
 		SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface(url, a2a.TransportProtocolJSONRPC)},
 		DefaultInputModes:   []string{"text/plain"},
 		DefaultOutputModes:  []string{"text/plain"},
@@ -36,16 +38,15 @@ func Card(name, description, url string) *a2a.AgentCard {
 	}
 }
 
-// Mux serves the card at path + "/.well-known/agent-card.json" and rpc, the JSON-RPC handler behind any caller check,
-// at path, as Agent Kourier's a2a dialect expects of an exact endpoint. /healthz and /readyz answer 200 once it serves:
-// the adapter serves only after Restore and Settle.
+// CardPath is where Mux serves the card, under the JSON-RPC endpoint's path.
+const CardPath = "/.well-known/agent-card.json"
+
+// Mux serves the card at path + CardPath and rpc, the JSON-RPC handler behind any caller check, at path, as Agent
+// Kourier's a2a dialect expects of an exact endpoint.
 func Mux(path string, card *a2a.AgentCard, rpc http.Handler) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.Handle(path+"/.well-known/agent-card.json", a2asrv.NewStaticAgentCardHandler(card))
+	mux.Handle(path+CardPath, a2asrv.NewStaticAgentCardHandler(card))
 	mux.Handle(path, rpc)
-	ok := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
-	mux.HandleFunc("/healthz", ok)
-	mux.HandleFunc("/readyz", ok)
 	return mux
 }
 
@@ -59,6 +60,7 @@ type replayHandler struct {
 	a2asrv.RequestHandler
 	messages messageStore
 	log      *slog.Logger
+	tel      *telemetry.Telemetry
 	// mu is held from a message's lookup until its task is recorded, so that a resend that races the first send in
 	// this process finds the task. The store is for a resend after a restart.
 	mu sync.Mutex
@@ -79,6 +81,7 @@ func (h *replayHandler) SendStreamingMessage(ctx context.Context, req *a2a.SendM
 		}
 		if ok {
 			h.mu.Unlock()
+			h.tel.MessageReplay()
 			h.rejoin(ctx, id, yield)
 			return
 		}

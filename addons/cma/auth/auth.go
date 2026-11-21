@@ -129,6 +129,8 @@ type Check struct {
 	Tokens *Tokens
 	// Log receives each refusal, with its reason and never the presented value.
 	Log *slog.Logger
+	// Refused, if set, is told the reason of each refusal: missing or invalid.
+	Refused func(reason string)
 }
 
 // callerKey marks a request context that passed the check.
@@ -145,6 +147,9 @@ func (c *Check) Wrap(next http.Handler) http.Handler {
 		}
 		if reason != "" {
 			c.Log.Warn("refused an A2A request", "reason", reason, "header", c.Header, "remote", r.RemoteAddr)
+			if c.Refused != nil {
+				c.Refused(reason)
+			}
 			if bearer {
 				w.Header().Set("WWW-Authenticate", "Bearer")
 			}

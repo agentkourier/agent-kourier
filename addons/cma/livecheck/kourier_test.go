@@ -128,7 +128,7 @@ func serve(t *testing.T, b adapter.Backend) string {
 	srv := httptest.NewServer(nil)
 	t.Cleanup(srv.Close)
 	url := srv.URL + "/a2a"
-	srv.Config.Handler = adapter.Mux("/a2a", adapter.Card("test", "test", url), (&auth.Check{Header: "Authorization", Tokens: tokens, Log: log}).Wrap(rpc))
+	srv.Config.Handler = adapter.Mux("/a2a", adapter.Card("test", "test", url, "test"), (&auth.Check{Header: "Authorization", Tokens: tokens, Log: log}).Wrap(rpc))
 	return url
 }
 

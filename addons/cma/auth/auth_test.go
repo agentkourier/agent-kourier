@@ -176,10 +176,11 @@ func TestWatchReloadsUntilCancelled(t *testing.T) {
 	<-done
 }
 
-// serve runs one request through the check and reports the status, the challenge and whether the inner handler ran
-// as the authenticated caller.
-func serve(t *testing.T, header string, set map[string]string) (status int, challenge string, user *a2asrv.User) {
+// serve runs one request through the check and reports the status, the challenge, whether the inner handler ran
+// as the authenticated caller, and the reasons Refused was told.
+func serve(t *testing.T, header string, set map[string]string) (status int, challenge string, user *a2asrv.User, reason string) {
 	t.Helper()
+	var reasons []string
 	path := filepath.Join(t.TempDir(), "tokens")
 	writeFile(t, path, tokenA+"\n"+tokenB+"\n")
 	log, buf := newLog()
@@ -196,7 +197,7 @@ func serve(t *testing.T, header string, set map[string]string) (status int, chal
 		user = callCtx.User
 		w.WriteHeader(http.StatusOK)
 	})
-	h := (&Check{Header: header, Tokens: tokens, Log: log}).Wrap(inner)
+	h := (&Check{Header: header, Tokens: tokens, Log: log, Refused: func(r string) { reasons = append(reasons, r) }}).Wrap(inner)
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/a2a", strings.NewReader(`{}`))
 	for k, v := range set {
 		req.Header.Set(k, v)
@@ -209,7 +210,7 @@ func serve(t *testing.T, header string, set map[string]string) (status int, chal
 			t.Errorf("the log or the response shows the presented value %q", v)
 		}
 	}
-	return rec.Code, rec.Header().Get("WWW-Authenticate"), user
+	return rec.Code, rec.Header().Get("WWW-Authenticate"), user, strings.Join(reasons, ",")
 }
 
 func TestCheck(t *testing.T) {
@@ -219,24 +220,28 @@ func TestCheck(t *testing.T) {
 		set       map[string]string
 		status    int
 		challenge string
+		reason    string // what Refused was told
 	}{
-		{"bearer", "Authorization", map[string]string{"Authorization": "Bearer " + tokenA}, http.StatusOK, ""},
-		{"second token", "Authorization", map[string]string{"Authorization": "Bearer " + tokenB}, http.StatusOK, ""},
-		{"scheme in any case", "Authorization", map[string]string{"Authorization": "bEaReR " + tokenA}, http.StatusOK, ""},
-		{"missing", "Authorization", nil, http.StatusUnauthorized, "Bearer"},
-		{"wrong token", "Authorization", map[string]string{"Authorization": "Bearer fake-token-wrong"}, http.StatusUnauthorized, "Bearer"},
-		{"no scheme", "Authorization", map[string]string{"Authorization": tokenA}, http.StatusUnauthorized, "Bearer"},
-		{"basic", "Authorization", map[string]string{"Authorization": "Basic " + tokenA}, http.StatusUnauthorized, "Bearer"},
-		{"empty bearer", "Authorization", map[string]string{"Authorization": "Bearer "}, http.StatusUnauthorized, "Bearer"},
-		{"a prefix of a token", "Authorization", map[string]string{"Authorization": "Bearer fake-token"}, http.StatusUnauthorized, "Bearer"},
-		{"named header", "X-Kourier-Token", map[string]string{"X-Kourier-Token": tokenA}, http.StatusOK, ""},
-		{"named header carries the whole value", "X-Kourier-Token", map[string]string{"X-Kourier-Token": "Bearer " + tokenA}, http.StatusUnauthorized, ""},
-		{"named header ignores Authorization", "X-Kourier-Token", map[string]string{"Authorization": "Bearer " + tokenA}, http.StatusUnauthorized, ""},
+		{"bearer", "Authorization", map[string]string{"Authorization": "Bearer " + tokenA}, http.StatusOK, "", ""},
+		{"second token", "Authorization", map[string]string{"Authorization": "Bearer " + tokenB}, http.StatusOK, "", ""},
+		{"scheme in any case", "Authorization", map[string]string{"Authorization": "bEaReR " + tokenA}, http.StatusOK, "", ""},
+		{"missing", "Authorization", nil, http.StatusUnauthorized, "Bearer", "missing"},
+		{"wrong token", "Authorization", map[string]string{"Authorization": "Bearer fake-token-wrong"}, http.StatusUnauthorized, "Bearer", "invalid"},
+		{"no scheme", "Authorization", map[string]string{"Authorization": tokenA}, http.StatusUnauthorized, "Bearer", "invalid"},
+		{"basic", "Authorization", map[string]string{"Authorization": "Basic " + tokenA}, http.StatusUnauthorized, "Bearer", "invalid"},
+		{"empty bearer", "Authorization", map[string]string{"Authorization": "Bearer "}, http.StatusUnauthorized, "Bearer", "invalid"},
+		{"a prefix of a token", "Authorization", map[string]string{"Authorization": "Bearer fake-token"}, http.StatusUnauthorized, "Bearer", "invalid"},
+		{"named header", "X-Kourier-Token", map[string]string{"X-Kourier-Token": tokenA}, http.StatusOK, "", ""},
+		{"named header carries the whole value", "X-Kourier-Token", map[string]string{"X-Kourier-Token": "Bearer " + tokenA}, http.StatusUnauthorized, "", "invalid"},
+		{"named header ignores Authorization", "X-Kourier-Token", map[string]string{"Authorization": "Bearer " + tokenA}, http.StatusUnauthorized, "", "missing"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			status, challenge, user := serve(t, tc.header, tc.set)
+			status, challenge, user, reason := serve(t, tc.header, tc.set)
 			if status != tc.status {
 				t.Fatalf("status = %d, want %d", status, tc.status)
+			}
+			if reason != tc.reason {
+				t.Errorf("Refused was told %q, want %q", reason, tc.reason)
 			}
 			if challenge != tc.challenge {
 				t.Errorf("WWW-Authenticate = %q, want %q", challenge, tc.challenge)

@@ -9,12 +9,14 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 
 	"github.com/agentkourier/agent-kourier/addons/cma/store"
+	"github.com/agentkourier/agent-kourier/addons/cma/telemetry"
 )
 
 // HITLExtension is kagent's human-in-the-loop A2A extension. Agent Kourier's a2a dialect reads a pause marked with it
@@ -48,10 +50,14 @@ type Executor struct {
 	TaskRetention time.Duration
 	// Log receives what the adapter cannot tell the client. Nil is slog.Default().
 	Log *slog.Logger
+	// Telemetry counts the turns and the sessions let go of, and traces each turn. Nil records nothing. Wrap Backend in
+	// Observe to time and trace the calls to the API too.
+	Telemetry *telemetry.Telemetry
 
 	now      func() time.Time // nil is time.Now
 	mu       sync.Mutex
 	sessions map[string]*contextSession // by A2A context ID; Store's map, plus the turns running here
+	turns    map[a2a.TaskID]*outcome    // the turns running here, by task, for Cancel to mark
 }
 
 // contextSession is a context's session and its activity.
@@ -72,6 +78,10 @@ func (e *Executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 			yield(nil, err)
 			return
 		}
+		ctx, span := e.Telemetry.StartTurn(ctx, string(ec.TaskID), ec.ContextID)
+		o := e.startTurn(ec.TaskID)
+		defer func() { span.End(e.endTurn(ctx, ec.TaskID, o)) }()
+		yield = o.track(yield)
 		session, err := e.acquire(ctx, ec.ContextID)
 		if err != nil {
 			yield(nil, fmt.Errorf("start session: %w", err))
@@ -108,11 +118,91 @@ func (e *Executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 	}
 }
 
+// outcome follows what a running turn yields, to say how it ended. Its fields are the turn's goroutine's, but for
+// canceled, which Cancel sets.
+type outcome struct {
+	state    a2a.TaskState
+	timeout  bool // the turn failed waiting for a sandbox tool's result
+	errored  bool // the turn ended on an error
+	stopped  bool // the consumer stopped taking events
+	canceled atomic.Bool
+}
+
+// track returns yield, noting each status update and error it passes and whether the consumer stopped.
+func (o *outcome) track(yield func(a2a.Event, error) bool) func(a2a.Event, error) bool {
+	return func(ev a2a.Event, err error) bool {
+		if err != nil {
+			o.errored = true
+		}
+		if su, ok := ev.(*a2a.TaskStatusUpdateEvent); ok {
+			o.state = su.Status.State
+			o.timeout = su.Status.Message != nil && su.Status.Message.Metadata["code"] == "timeout"
+		}
+		if !yield(ev, err) {
+			o.stopped = true
+			return false
+		}
+		return true
+	}
+}
+
+// of is the turn's outcome once Execute returns. A cancel wins over whatever the session said after its interrupt; a
+// turn that ended on an error failed; one that stopped before it settled or paused was canceled.
+func (o *outcome) of(ctx context.Context) telemetry.TurnOutcome {
+	switch {
+	case o.canceled.Load(), o.state == a2a.TaskStateCanceled:
+		return telemetry.TurnCanceled
+	case o.state == a2a.TaskStateCompleted:
+		return telemetry.TurnCompleted
+	case o.state == a2a.TaskStateInputRequired:
+		return telemetry.TurnInputRequired
+	case o.state == a2a.TaskStateFailed && o.timeout:
+		return telemetry.TurnTimeout
+	case o.state == a2a.TaskStateFailed, o.errored:
+		return telemetry.TurnFailed
+	case o.stopped || ctx.Err() != nil:
+		return telemetry.TurnCanceled
+	}
+	return telemetry.TurnFailed
+}
+
+// startTurn registers a running turn of task, which Cancel can mark.
+func (e *Executor) startTurn(task a2a.TaskID) *outcome {
+	o := &outcome{}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.turns == nil {
+		e.turns = map[a2a.TaskID]*outcome{}
+	}
+	e.turns[task] = o
+	return o
+}
+
+// endTurn forgets a turn startTurn registered and returns how it ended.
+func (e *Executor) endTurn(ctx context.Context, task a2a.TaskID, o *outcome) telemetry.TurnOutcome {
+	e.mu.Lock()
+	if e.turns[task] == o {
+		delete(e.turns, task)
+	}
+	e.mu.Unlock()
+	return o.of(ctx)
+}
+
+// Contexts is how many contexts have a session in the executor's map, for the sessions gauge.
+func (e *Executor) Contexts() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return len(e.sessions)
+}
+
 // Cancel interrupts the context's session. The session stops at its next safe point.
 func (e *Executor) Cancel(ctx context.Context, ec *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
 	return func(yield func(a2a.Event, error) bool) {
 		e.mu.Lock()
 		cs, ok := e.sessions[ec.ContextID]
+		if o := e.turns[ec.TaskID]; o != nil {
+			o.canceled.Store(true)
+		}
 		e.mu.Unlock()
 		if ok {
 			if err := e.Backend.Send(ctx, cs.id, Outbound{Interrupt: true}); err != nil {
