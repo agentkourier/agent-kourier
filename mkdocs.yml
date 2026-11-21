@@ -154,6 +154,7 @@ nav:
       - Connect a kagent agent: how-to/connect-kagent.md
       - Connect a generic A2A agent: how-to/connect-a2a-agent.md
       - Connect an agent on Google AX: how-to/connect-ax.md
+      - Connect Claude Managed Agents: how-to/connect-claude-managed-agents.md
       - Let the agent ask questions: how-to/agent-questions.md
       - Rotate the Binding token: how-to/rotate-binding-token.md
       - Put a verifying front door before kagent: how-to/front-door.md
@@ -168,6 +169,7 @@ nav:
       - ChatConnection: reference/chatconnection.md
       - Binding status: reference/binding-status.md
       - Agent contract: reference/agent-contract.md
+      - Claude Managed Agents add-on: reference/claude-managed-agents.md
       - Helm values: reference/helm-values.md
       - Command line and environment: reference/cli.md
       - Chat triggers: reference/chat-triggers.md
@@ -182,6 +184,7 @@ nav:
       - Architecture: explanation/architecture.md
       - Why a broker: explanation/why-a-broker.md
       - Why A2A: explanation/why-a2a.md
+      - Add-ons: explanation/add-ons.md
       - Choose a config route: explanation/config-routes.md
       - Threads and sessions: explanation/threads-and-sessions.md
       - Delivery guarantees: explanation/delivery.md

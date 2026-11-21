@@ -297,3 +297,40 @@ The broker does not bound these, and the code confirms it. Where the number can 
 | Secrets that the objects of a namespace name, denied or not | Each name that a served object refers to has an informer of its own, and the first request of each (two, for a name that is denied) is not paced: the client's limiter of 50 a second spreads them, so a thousand denied names take about 40 s to be asked once, and a read of another tenant's Secret that makes its own request waits behind them (inferred from how the limiter queues, not measured). After that a denied name costs at most the paced tries above, about 20 requests a second in all however many there are, and a name that does not exist or is allowed costs one open watch. Put a `count/secrets` quota and the quotas on Bindings and AgentBackends in each tenant's namespace, which bound the names (see [the security model](../explanation/security.md)). |
 | The audit log and the votes | The audit log is kept for ever unless you set `auditRetention`. Nothing deletes a vote, and `auditRetention` does not reach them. |
 | The upper bound of `rateLimit.maxRuns`, `maxConcurrent` and `maxRunsPerDay` | Only a lower bound is checked. |
+
+## Add-ons
+
+An [add-on](../explanation/add-ons.md) is a module of its own, so its limits are its own: no setting of the broker
+changes them, and no limit above applies inside an add-on. The rows give the add-on's environment variable, and the
+chart value that sets it.
+
+<!-- verify-after-A2 -->
+The values in code spans are constants or defaults of the add-on's code, and the add-on's own tests compare them with
+this page.
+
+### Claude Managed Agents add-on
+
+The [Claude Managed Agents add-on](claude-managed-agents.md) bridges A2A to sessions of one agent.
+
+| Limit | Value | Past it | Setting |
+|---|---|---|---|
+| A tool result's text, as the thread's step card gets it | `4000`<!--addon-limit:cma.tool-result-runes--> characters | Cut, and marked with `…`. The rest never reaches Agent Kourier. | None |
+| A turn with no event from the session | A `working` update after each `60s`<!--addon-limit:cma.keepalive--> | The update keeps Agent Kourier's stream open, so the broker's own cut of a silent stream, at [5 minutes](#how-long-the-broker-waits-on-an-agent), does not reach a slow turn. | None |
+| A turn that waits on a tool the sandbox runs, with no event from the session | `10m`<!--addon-limit:cma.tool-result-timeout--> | The add-on interrupts the session and fails the task with `code: timeout`, and the thread shows Agent Kourier's timeout notice. A sandbox that cannot be scheduled ends this way, and so does a command that runs silently for longer. MCP tools and the model's own thinking are not timed. `0` waits for ever. | `TOOL_RESULT_TIMEOUT` (`addons.cma.toolResultTimeout`) |
+| A context with no turn running | `2160h`<!--addon-limit:cma.session-idle-ttl--> | Its session is archived, which cannot be undone, and the context's tasks from before are deleted with their message IDs. The context's next message starts a new session without the old history. `0` never archives. Set it to the Binding's `session.threadTTL`. | `SESSION_IDLE_TTL` (`addons.cma.sessionIdleTTL`) |
+| A settled task (completed, failed, canceled or rejected) and its message IDs | `720h`<!--addon-limit:cma.task-retention--> after its last update | Deleted. A resend of one of its messages after that starts a new turn. `0` keeps them. | `TASK_RETENTION` (`addons.cma.taskRetention`) |
+| How often the add-on looks for idle sessions and old tasks | Every `1m`<!--addon-limit:cma.reap-interval--> | A session can outlive `SESSION_IDLE_TTL`, and a task `TASK_RETENTION`, by up to that. | None |
+| How often the add-on reads its token file | Every `5s`<!--addon-limit:cma.token-reload--> | A token added or removed counts from the next read, which comes after the kubelet's own delay in updating a mounted Secret. A read that fails or finds no token keeps the last good tokens. At start, a file with no token stops the add-on. | None |
+| Callers | One: every accepted token is Agent Kourier | Tasks are not kept apart by token: any accepted token reaches every task. | None |
+| Replicas on SQLite | One | The chart refuses `addons.cma.replicaCount` above 1, and a second add-on on the same file stops at start. | `addons.cma.store.type` |
+| The leader's lease, on Postgres | Lasts `15s`<!--addon-limit:cma.lease-duration-->, renewed within `10s`<!--addon-limit:cma.lease-renew-deadline-->, tried every `2s`<!--addon-limit:cma.lease-retry-period--> | The add-on does not start unless the lease is longer than the renew deadline and the renew deadline longer than `1.2`<!--addon-limit:cma.lease-jitter--> times the retry period, all of them more than zero; with SQLite it refuses any of them. <!-- verify-after-A2 --> A leader that cannot renew within the deadline exits, and a standby takes over once the lease has run out. | `LEASE_DURATION`, `LEASE_RENEW_DEADLINE`, `LEASE_RETRY_PERIOD` (`addons.cma.leaderElection`) |
+| The start-up work: reading the store, checking each context's session against Claude Managed Agents, and failing the turns a restart cut off | The chart's startup probe: `30`<!--addon-limit:cma.startup-failures--> tries, `2s`<!--addon-limit:cma.startup-period--> apart | The kubelet restarts the container, which starts the work again. The add-on serves nothing until the work is done. | None |
+| The request headers of a call to the add-on | `10s`<!--addon-limit:cma.read-header-timeout--> | The connection is closed. | None |
+| Open requests when the add-on is stopped | `5s`<!--addon-limit:cma.shutdown-grace--> <!-- verify-after-A2 --> | The add-on stops waiting and exits. A turn that was still running fails at the next start, as the next row says. | None |
+| A turn running when the add-on stops | Not kept | The next start fails its task with "Interrupted by an adapter restart." and interrupts its session, and the thread shows Agent Kourier's failure notice. A task paused on an approval is kept. | None |
+| A page of `ListTasks` | `50`<!--addon-limit:cma.list-page-default--> tasks unless the request names a size, at most `100`<!--addon-limit:cma.list-page-max--> | A larger size is refused as an invalid request. Each task carries its last `100`<!--addon-limit:cma.list-history--> history messages unless the request names another length. | None |
+| What a message may carry | Text and data parts | A message with a file part, or with no text, is refused as invalid. Data parts reach the agent as JSON text. The agent's content blocks that are not text are not shown. | None |
+| How a tool approval is answered | The Approve and Deny buttons | A typed reply to a paused approval is refused as invalid, and the task stays paused. | None |
+| What a pause may wait on | Tool calls whose permission is `ask` | A pause on a custom tool, or on a call the turn did not see ask for approval, fails the turn. If one pause names both a call the sandbox runs and one that needs approval, and the session pauses on the first call again after the approval, the turn fails the same way. | None |
+| A `session.error` event | Logged | The turn goes on until the session idles or terminates; the thread is not told. | None |
+| Environments | Self-hosted | Cloud environments have not been tested, and are not supported for now. The add-on does not refuse one. | None |
