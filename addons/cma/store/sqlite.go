@@ -1,0 +1,100 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"embed"
+	"errors"
+	"fmt"
+	"io/fs"
+	"net/url"
+	"os"
+
+	_ "modernc.org/sqlite" // registers the "sqlite" driver: pure Go, so the adapter stays CGO-free
+)
+
+//go:embed migrations/sqlite/*.sql
+var sqliteMigrations embed.FS
+
+// ErrInUse is returned by OpenSQLite when another adapter has the file open. SQLite is one replica's store.
+var ErrInUse = errors.New("another adapter has the SQLite file open")
+
+// sqliteReadConns is the size of the read pool.
+const sqliteReadConns = 4
+
+// OpenSQLite opens (creating if needed) the SQLite store at path and applies its pending migrations. It holds an
+// exclusive lock on path + ".lock" until Close, so a second adapter on the same file fails with ErrInUse instead of
+// sharing it; the lock is the kernel's, so it goes with a process that dies. The file is in WAL mode, with a busy
+// timeout. Writes go through one connection, so writers queue in Go rather than contend for the file; reads use a
+// read-only pool beside it.
+func OpenSQLite(ctx context.Context, path string, opts Options) (*Store, error) {
+	lock, err := lockFile(path + ".lock")
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite store %q: %w", path, err)
+	}
+	c := &sqliteConn{lock: lock}
+	if c.write, err = sqlitePool(ctx, path, 1, "journal_mode(WAL)"); err != nil {
+		_ = lock.Close()
+		return nil, fmt.Errorf("open sqlite store %q (write pool): %w", path, err)
+	}
+	if c.read, err = sqlitePool(ctx, path, sqliteReadConns, "query_only(1)"); err != nil {
+		_ = c.write.Close()
+		_ = lock.Close()
+		return nil, fmt.Errorf("open sqlite store %q (read pool): %w", path, err)
+	}
+	s := newStore(c, opts)
+	sub, err := fs.Sub(sqliteMigrations, "migrations/sqlite")
+	if err == nil {
+		err = migrate(ctx, c, sub, s.log)
+	}
+	if err != nil {
+		_ = s.Close()
+		return nil, fmt.Errorf("open sqlite store %q: %w", path, err)
+	}
+	return s, nil
+}
+
+func sqlitePool(ctx context.Context, path string, conns int, pragma string) (*sql.DB, error) {
+	q := url.Values{"_pragma": {"busy_timeout(5000)", "foreign_keys(1)", pragma}}
+	u := url.URL{Scheme: "file", Path: path, RawQuery: q.Encode()}
+	db, err := sql.Open("sqlite", u.String())
+	if err != nil {
+		return nil, fmt.Errorf("open: %w", err)
+	}
+	db.SetMaxOpenConns(conns)
+	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("connect: %w", err)
+	}
+	return db, nil
+}
+
+// sqliteConn is the SQLite backend's connections and its lock.
+type sqliteConn struct {
+	write *sql.DB // one connection
+	read  *sql.DB
+	lock  *os.File
+}
+
+func (c *sqliteConn) reader() querier { return sqlQuerier{db: c.read} }
+
+// inTx runs fn in a transaction on the write connection. fn must use the querier it is given: the write pool's one
+// connection is the transaction's until it ends.
+func (c *sqliteConn) inTx(ctx context.Context, fn func(q querier) error) error {
+	tx, err := c.write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after Commit
+	if err := fn(sqlQuerier{db: tx}); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// lockMigrations does nothing: the file lock already keeps every other adapter out.
+func (c *sqliteConn) lockMigrations(context.Context, querier) error { return nil }
+
+func (c *sqliteConn) close() error {
+	return errors.Join(c.write.Close(), c.read.Close(), c.lock.Close())
+}
