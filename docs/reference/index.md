@@ -22,6 +22,8 @@ With custom resources a Binding also has a status, which [Binding status](bindin
 
 - [Agent contract](agent-contract.md): what an agent must do beyond speaking A2A: methods, message shape, replies,
   task states and errors.
+- [Claude Managed Agents add-on](claude-managed-agents.md): how the add-on maps A2A to sessions and turns, what a
+  restart keeps, its caller check, settings and telemetry.
 
 ## Configuration
 

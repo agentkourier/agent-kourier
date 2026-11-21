@@ -22,7 +22,8 @@ hide:
 <p class="ak-hero__pitch">Agent Kourier carries messages between your team's chat and your agents, one session per
 thread. A mention, a reply in the thread, or a message a trigger matches, such as an alert, goes to the agent; its
 streamed replies and its questions to people come back in the same thread, and the session survives a restart or
-failover. A Binding connects the channel to any agent that serves streaming A2A. Slack is supported today. New in 0.6.0, both experimental: Microsoft Teams as a
+failover. A Binding connects the channel to any agent that serves streaming A2A, and an add-on reaches one that does
+not: the first is for agents in Claude Managed Agents. Slack is supported today. New in 0.6.0, both experimental: Microsoft Teams as a
 second chat platform, and webhooks from services such as GitHub, Jira Cloud, Bitbucket Cloud or Linear that start a session of your agent,
 which answers on that service with its own tools.</p>
 
@@ -50,6 +51,7 @@ which answers on that service with its own tools.</p>
 <span class="ak-strip__name">A2A</span>
 <span class="ak-strip__name">kagent</span>
 <span class="ak-strip__name">Google AX</span>
+<span class="ak-strip__name">Claude Managed Agents <small>(add-on)</small></span>
 </div>
 </div>
 
@@ -66,7 +68,10 @@ alerts. Agent Kourier does that work once for every agent you bind. It keeps a s
 arrive while the agent works, streams the answer into one message, posts the agent's questions in the thread, recovers
 each conversation after a restart, and holds the thread while a suspended agent is not running. The agent keeps its
 tools and task logic. A webhook connection (experimental, new in 0.6.0) starts sessions from another service's signed
-events instead of chat messages, and posts nothing: the agent answers on that service with its own tools.
+events instead of chat messages, and posts nothing: the agent answers on that service with its own tools. An agent
+that does not serve A2A is reached through an [add-on](explanation/add-ons.md), an optional component released with
+Agent Kourier and run by its chart: the [Claude Managed Agents add-on](how-to/connect-claude-managed-agents.md)
+(experimental) puts each thread in a session of an agent there, with its tool approvals as buttons in the thread.
 
 The platform team runs Agent Kourier and owns the agent backends and the broker's own chat app. Each application team connects its
 own agent to its own channel with a namespaced Binding, committed next to the agent's manifests, and with custom resources a team
