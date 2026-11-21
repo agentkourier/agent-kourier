@@ -3,9 +3,10 @@
 site_name: Agent Kourier
 site_url: https://agentkourier.dev/
 site_description: >-
-  Write the agent, not the chat integration. Agent Kourier is a Kubernetes-native broker that carries chat messages
-  and the alerts posted there to streaming A2A agents, including one that is suspended until it is called, and posts
-  the answers in the thread, on Slack, and experimentally on Microsoft Teams.
+  Write the agent, not the chat integration. Agent Kourier is a Kubernetes-native broker that carries messages
+  between team chat and streaming A2A agents, one session per thread. A mention, a person's message or another app's
+  post, such as an alert, starts a session, and the agent's replies and questions come back in its thread. Slack is
+  supported; Microsoft Teams, and sessions started by webhooks, are experimental.
 repo_url: https://github.com/agentkourier/agent-kourier
 repo_name: agentkourier/agent-kourier
 edit_uri: edit/main/docs/

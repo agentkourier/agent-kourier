@@ -1,6 +1,6 @@
 # Agent Kourier
 
-Installs agent-kourier, the broker between chat and A2A agents: one Deployment of the
+Installs agent-kourier, the broker that carries messages between chat and A2A agents, and starts agent sessions from other services' webhooks: one Deployment of the
 production image, its state (a SQLite volume, or a Postgres database you run), its resources (custom resources, or a ConfigMap), and the read
 access to the Secrets they name.
 

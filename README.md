@@ -2,15 +2,17 @@
   <img src="docs/brand/assets/github/readme-banner-2560x640.png" alt="Agent Kourier: write the agent, not the chat integration." width="100%">
 </h1>
 
-<p align="center">A Kubernetes-native broker between your streaming A2A agents and team chat (Slack, and Microsoft Teams as an experiment) or other services' webhooks (GitHub, Jira, Bitbucket, Linear; also an experiment).</p>
+<p align="center">A Kubernetes-native broker that carries messages between your team's chat and your streaming A2A agents, one agent session per thread. Slack is supported; Microsoft Teams, and sessions started by webhooks from GitHub, Jira, Bitbucket or Linear, are experimental.</p>
 
 Agent Kourier runs in your cluster between your team's chat and your agents. A `Binding`
-connects a channel to an agent that serves streaming A2A, and Agent Kourier handles the
-chat side: a session per thread, streamed replies, questions to people, investigations
-started by alerts, and recovery after a restart or failover. The agent needs no chat code.
-It keeps its tools and task logic.
+connects a channel to an agent that serves streaming A2A, and Agent Kourier carries the
+messages both ways. A mention of it, a reply in its thread, or a message that one of the
+Binding's triggers matches, such as an alert another app posts, goes to the agent as a turn
+of that thread's session. The agent's streamed replies, and its questions to people, come
+back in the same thread, and each session is recovered after a restart or failover. The
+agent needs no chat code. It keeps its tools and task logic.
 
-Slack is the supported platform. Two more arrive in 0.6.0, both experimental, and a broker of 0.5.x
+Slack is the supported platform. Two more are new in 0.6.0, both experimental, and a broker of 0.5.x
 refuses either:
 
 - **Microsoft Teams**, a second chat platform (`platform: teams`):
@@ -29,7 +31,7 @@ without breaking a Slack `Binding`. Agents speak only A2A, so a new platform nee
 
 > **Status: v0.6.0.** Install the published chart and image with
 > [Install with Helm](docs/how-to/install-with-helm.md). The `v1alpha1` resource format can change before 1.0. See
-> [Status](#status). Slack HTTP mode, new in 0.5.0, is experimental. Teams and webhooks arrive in 0.6.0, both
+> [Status](#status). Slack HTTP mode, new in 0.5.0, is experimental. Teams and webhooks, new in 0.6.0, are both
 > experimental.
 
 <p align="center">
@@ -95,7 +97,7 @@ Without a broker, each of these is code in every agent that talks to chat:
   that thread, with the thread so far as untrusted data, within fixed limits. It is on by default; a
   Binding turns it off with `chat.botMentions: none`. See
   [Let another agent start yours](docs/how-to/any-bot-trigger.md#let-another-agent-start-yours).
-- **Events from other services** (experimental, 0.6.0 or later). A webhook connection takes the
+- **Webhooks from other services** (experimental, new in 0.6.0). A webhook connection takes the
   signed JSON webhooks of a service, such as GitHub, Jira Cloud, Bitbucket Cloud or Linear, and starts a session of the agent
   for each pull request or issue; a later event of the same one, such as a comment, continues it.
   Agent Kourier posts nothing there: the agent replies on the service with its own tools. See

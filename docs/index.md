@@ -1,8 +1,9 @@
 ---
 description: >-
-  Write the agent, not the chat integration. Agent Kourier connects streaming A2A agents to team chat and handles
-  threads, streamed replies, questions, alert investigations, restarts and failover. Slack today; Microsoft Teams,
-  and webhooks from GitHub, Jira, Bitbucket and Linear, in 0.6.0 or later as experiments.
+  Write the agent, not the chat integration. Agent Kourier carries messages between team chat and streaming A2A
+  agents, one session per thread: it streams replies, relays the agent's questions and people's answers, starts
+  sessions from alerts and other apps' posts, and recovers after a restart or failover. Slack is supported; Microsoft
+  Teams, and webhooks from GitHub, Jira, Bitbucket and Linear, are experimental.
 hide:
   - navigation
   - toc
@@ -18,9 +19,10 @@ hide:
 
 <p class="ak-hero__headline">Write the agent, not the chat integration.</p>
 
-<p class="ak-hero__pitch">A Binding connects a chat channel to an agent that serves streaming A2A. Agent Kourier
-handles the chat side: a session per thread, streamed replies, questions to people, investigations started by alerts,
-and recovery after a restart or failover. Slack is supported today. New in 0.6.0, both experimental: Microsoft Teams as a
+<p class="ak-hero__pitch">Agent Kourier carries messages between your team's chat and your agents, one session per
+thread. A mention, a reply in the thread, or a message a trigger matches, such as an alert, goes to the agent; its
+streamed replies and its questions to people come back in the same thread, and the session survives a restart or
+failover. A Binding connects the channel to any agent that serves streaming A2A. Slack is supported today. New in 0.6.0, both experimental: Microsoft Teams as a
 second chat platform, and webhooks from services such as GitHub, Jira Cloud, Bitbucket Cloud or Linear that start a session of your agent,
 which answers on that service with its own tools.</p>
 
@@ -37,7 +39,7 @@ which answers on that service with its own tools.</p>
 <span class="ak-strip__name">Microsoft Teams <small>(experimental)</small></span>
 </div>
 <div class="ak-strip__group">
-<p class="ak-strip__label">Events <small>(experimental)</small></p>
+<p class="ak-strip__label">Webhooks <small>(experimental)</small></p>
 <span class="ak-strip__name">GitHub</span>
 <span class="ak-strip__name">Jira</span>
 <span class="ak-strip__name">Bitbucket</span>
@@ -63,7 +65,7 @@ Without a broker, every agent that talks to chat needs its own code for threads,
 alerts. Agent Kourier does that work once for every agent you bind. It keeps a session per thread, queues replies that
 arrive while the agent works, streams the answer into one message, posts the agent's questions in the thread, recovers
 each conversation after a restart, and holds the thread while a suspended agent is not running. The agent keeps its
-tools and task logic. A webhook connection (experimental, 0.6.0 or later) starts sessions from another service's signed
+tools and task logic. A webhook connection (experimental, new in 0.6.0) starts sessions from another service's signed
 events instead of chat messages, and posts nothing: the agent answers on that service with its own tools.
 
 The platform team runs Agent Kourier and owns the agent backends and the broker's own chat app. Each application team connects its
