@@ -58,6 +58,9 @@ const (
 	releaseTimeout  = 3 * time.Second
 )
 
+// readHeaderTimeout bounds how long a caller may take to send a request's headers before the server closes the connection.
+const readHeaderTimeout = 10 * time.Second
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, os.Getenv))
 }
@@ -166,7 +169,7 @@ func serve(ctx context.Context, cfg config.Config, traces telemetry.Config, log 
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", cfg.ListenAddr, err)
 	}
-	srv := &http.Server{Handler: mux(router, status, tel), ReadHeaderTimeout: 10 * time.Second,
+	srv := &http.Server{Handler: mux(router, status, tel), ReadHeaderTimeout: readHeaderTimeout,
 		ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
