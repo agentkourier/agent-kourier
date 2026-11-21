@@ -1,5 +1,5 @@
 // Package chart_test checks the Agent Kourier Helm chart (charts/agent-kourier) by rendering it with `helm template`: golden files for
-// eight values files (crds is rendered as if the CRDs were served: crs_test.go says what the route of custom resources must render, and that the
+// ten values files (crds is rendered as if the CRDs were served: crs_test.go says what the route of custom resources must render, and that the
 // default is the ConfigMap route), the failures a values file must not get past, the properties that make the install safe, and what the
 // kind tiers' values (ci/fast, ax and sandbox) render, which hack/kind's scripts and the E2E tests rely on, so a chart that
 // drifts from what the tiers run fails `make test` and not an install.
@@ -154,7 +154,7 @@ func values(name string) string { return filepath.Join(chartDir, "ci", name+"-va
 func TestLint(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
-	for _, name := range []string{"minimal", "fast", "fast-postgres", "postgres", "ax", "sandbox", "full", "crds"} {
+	for _, name := range []string{"minimal", "fast", "fast-postgres", "postgres", "ax", "sandbox", "full", "crds", "cma", "cma-postgres"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			if out, err := helm(t.Context(), t, "lint", "--strict", chartDir, "-f", values(name)); err != nil {
@@ -178,6 +178,8 @@ var goldenCases = []struct {
 	{"sandbox", "agent-kourier-sandbox", "agent-kourier", nil},
 	{"full", "agent-kourier", "agent-kourier-system", nil},
 	{"crds", "agent-kourier", "agent-kourier", crdsServed},
+	{"cma", "agent-kourier", "agent-kourier", nil},
+	{"cma-postgres", "agent-kourier", "agent-kourier", nil},
 }
 
 func TestGolden(t *testing.T) {

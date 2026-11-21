@@ -1,0 +1,15 @@
+{{- if and (include "agentkourier.cma.enabled" .) (gt (int .Values.addons.cma.replicaCount) 1) }}
+# Two replicas and more (Postgres only): a node drain takes one at a time, so a replica is left to serve.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "agentkourier.cma.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentkourier.cma.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "agentkourier.cma.selectorLabels" . | nindent 6 }}
+{{- end }}

@@ -1,0 +1,692 @@
+---
+apiVersion: v1
+data:
+  agentbackend-cma.yaml: |
+    apiVersion: agentkourier.dev/v1alpha1
+    kind: AgentBackend
+    metadata:
+      name: cma
+      namespace: agent-kourier
+    spec:
+      dialect: a2a
+      headers:
+      - name: X-Cma-Token
+        valueSecretRef:
+          key: token
+          name: cma-token
+      url: http://agent-kourier-cma.agent-kourier.svc:8090/a2a
+  binding-cma-chat.yaml: |
+    apiVersion: agentkourier.dev/v1alpha1
+    kind: Binding
+    metadata:
+      name: cma-chat
+      namespace: agent-kourier
+    spec:
+      agent:
+        backendRef:
+          name: cma
+        name: claude
+        namespace: cma
+      chat:
+        channel: C0123456789
+        connectionRef:
+          name: slack-main
+        output: live
+        triggers:
+        - type: mention
+      identity:
+        userId: agent-kourier-cma
+      interactions:
+        toolApprovals: true
+  chatconnection-slack-main.yaml: |
+    apiVersion: agentkourier.dev/v1alpha1
+    kind: ChatConnection
+    metadata:
+      name: slack-main
+      namespace: agent-kourier
+    spec:
+      credentialsSecretRef:
+        name: slack-main
+      platform: slack
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.6.0
+  name: agent-kourier-config
+  namespace: agent-kourier
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.6.0
+  name: agent-kourier
+  namespace: agent-kourier
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: agent-kourier
+      app.kubernetes.io/name: agent-kourier
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      annotations:
+        checksum/config: 0950b7350d539b5ad04448bb5433c832d91407c7197f078ea80a220e5ead272f
+      labels:
+        app.kubernetes.io/instance: agent-kourier
+        app.kubernetes.io/name: agent-kourier
+    spec:
+      containers:
+      - env:
+        - name: AGENTKOURIER_CONFIG_DIR
+          value: /etc/agent-kourier
+        - name: AGENTKOURIER_STORE
+          value: sqlite
+        - name: AGENTKOURIER_DB_PATH
+          value: /data/agent-kourier.db
+        - name: AGENTKOURIER_LISTEN
+          value: :8080
+        - name: AGENTKOURIER_LOG_LEVEL
+          value: info
+        - name: AGENTKOURIER_KLOG_V
+          value: "0"
+        - name: GOMEMLIMIT
+          value: "214748364"
+        image: registry.example.test/agent-kourier:v0.1.0
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /healthz
+            port: http
+          periodSeconds: 10
+        name: agent-kourier
+        ports:
+        - containerPort: 8080
+          name: http
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: http
+          periodSeconds: 5
+        resources:
+          limits:
+            memory: 256Mi
+          requests:
+            cpu: 50m
+            memory: 64Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        startupProbe:
+          failureThreshold: 40
+          httpGet:
+            path: /healthz
+            port: http
+          periodSeconds: 2
+        volumeMounts:
+        - mountPath: /etc/agent-kourier
+          name: config
+          readOnly: true
+        - mountPath: /data
+          name: data
+        - mountPath: /tmp
+          name: tmp
+      securityContext:
+        fsGroup: 65532
+        runAsGroup: 65532
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: agent-kourier
+      terminationGracePeriodSeconds: 40
+      volumes:
+      - configMap:
+          name: agent-kourier-config
+        name: config
+      - name: data
+        persistentVolumeClaim:
+          claimName: agent-kourier-data
+      - emptyDir: {}
+        name: tmp
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/component: cma-addon
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier-cma
+    app.kubernetes.io/part-of: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.6.0
+  name: agent-kourier-cma
+  namespace: agent-kourier
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: agent-kourier
+      app.kubernetes.io/name: agent-kourier-cma
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  template:
+    metadata:
+      annotations:
+        example.test/scrape: "false"
+      labels:
+        app.kubernetes.io/component: cma-addon
+        app.kubernetes.io/instance: agent-kourier
+        app.kubernetes.io/name: agent-kourier-cma
+        example.test/team: platform
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - env:
+        - name: CMA_AGENT_ID
+          value: agent_0123456789
+        - name: CMA_ENVIRONMENT_ID
+          value: env_0123456789
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              key: apiKey
+              name: anthropic
+        - name: LISTEN_ADDR
+          value: :8090
+        - name: PUBLIC_URL
+          value: http://agent-kourier-cma.agent-kourier.svc:8090/a2a
+        - name: AUTH_TOKEN_FILE
+          value: /etc/agent-kourier-cma/auth/tokens
+        - name: AUTH_HEADER
+          value: X-Cma-Token
+        - name: STORE
+          value: postgres
+        - name: POSTGRES_DSN
+          valueFrom:
+            secretKeyRef:
+              key: dsn
+              name: cma-pg
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: ADVERTISE_URL
+          value: http://$(POD_IP):8090
+        - name: LEASE_DURATION
+          value: 20s
+        - name: LEASE_RENEW_DEADLINE
+          value: 12s
+        - name: LEASE_RETRY_PERIOD
+          value: 3s
+        - name: SESSION_IDLE_TTL
+          value: 720h
+        - name: TOOL_RESULT_TIMEOUT
+          value: "0"
+        - name: TASK_RETENTION
+          value: 168h
+        - name: LOG_LEVEL
+          value: debug
+        - name: GOMEMLIMIT
+          value: "214748364"
+        - name: OTEL_TRACES_EXPORTER
+          value: otlp
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: http://otel-collector.observability.svc.cluster.local:4318
+        image: registry.example.test/platform/agent-kourier-cma@sha256:89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /healthz
+            port: http
+          periodSeconds: 10
+        name: cma
+        ports:
+        - containerPort: 8090
+          name: http
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: http
+          periodSeconds: 5
+        resources:
+          limits:
+            memory: 256Mi
+          requests:
+            cpu: 50m
+            memory: 64Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        startupProbe:
+          failureThreshold: 30
+          httpGet:
+            path: /healthz
+            port: http
+          periodSeconds: 2
+        volumeMounts:
+        - mountPath: /etc/agent-kourier-cma/auth
+          name: auth
+          readOnly: true
+        - mountPath: /tmp
+          name: tmp
+      nodeSelector:
+        kubernetes.io/os: linux
+      securityContext:
+        fsGroup: 65532
+        runAsGroup: 65532
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: agent-kourier-cma
+      tolerations:
+      - effect: NoSchedule
+        key: dedicated
+        operator: Equal
+        value: platform
+      volumes:
+      - name: auth
+        secret:
+          defaultMode: 288
+          items:
+          - key: token
+            path: tokens
+          secretName: cma-token
+      - emptyDir: {}
+        name: tmp
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.6.0
+  name: agent-kourier
+  namespace: agent-kourier
+spec:
+  egress:
+  - ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+  - ports:
+    - port: 443
+      protocol: TCP
+    - port: 6443
+      protocol: TCP
+    to:
+    - ipBlock:
+        cidr: 10.0.0.1/32
+  - ports:
+    - port: 443
+      protocol: TCP
+    to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+        - 100.64.0.0/10
+        - 169.254.0.0/16
+  - ports:
+    - port: 8090
+      protocol: TCP
+    to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/instance: agent-kourier
+          app.kubernetes.io/name: agent-kourier-cma
+  - ports:
+    - port: 4318
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: observability
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: otel-collector
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: agent-kourier
+      app.kubernetes.io/name: agent-kourier
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/component: cma-addon
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier-cma
+    app.kubernetes.io/part-of: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.6.0
+  name: agent-kourier-cma
+  namespace: agent-kourier
+spec:
+  egress:
+  - ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+  - ports:
+    - port: 443
+      protocol: TCP
+    to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+        - 100.64.0.0/10
+        - 169.254.0.0/16
+  - ports:
+    - port: 8090
+      protocol: TCP
+    to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/instance: agent-kourier
+          app.kubernetes.io/name: agent-kourier-cma
+  - ports:
+    - port: 5432
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: db
+      podSelector:
+        matchLabels:
+          app: postgres
+  - ports:
+    - port: 4318
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: observability
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: otel-collector
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/instance: agent-kourier
+          app.kubernetes.io/name: agent-kourier
+    ports:
+    - port: 8090
+      protocol: TCP
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/instance: agent-kourier
+          app.kubernetes.io/name: agent-kourier-cma
+    ports:
+    - port: 8090
+      protocol: TCP
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: agent-kourier
+      app.kubernetes.io/name: agent-kourier-cma
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.6.0
+  name: agent-kourier-data
+  namespace: agent-kourier
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  labels:
+    app.kubernetes.io/component: cma-addon
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier-cma
+    app.kubernetes.io/part-of: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.6.0
+  name: agent-kourier-cma
+  namespace: agent-kourier
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: agent-kourier
+      app.kubernetes.io/name: agent-kourier-cma
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.6.0
+  name: agent-kourier-secrets
+  namespace: agent-kourier
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.6.0
+  name: agent-kourier-secrets
+  namespace: agent-kourier
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: agent-kourier-secrets
+subjects:
+- kind: ServiceAccount
+  name: agent-kourier
+  namespace: agent-kourier
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.6.0
+  name: agent-kourier
+  namespace: agent-kourier
+spec:
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http
+  selector:
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/name: agent-kourier
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/component: cma-addon
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier-cma
+    app.kubernetes.io/part-of: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.6.0
+  name: agent-kourier-cma
+  namespace: agent-kourier
+spec:
+  ports:
+  - name: http
+    port: 8090
+    targetPort: http
+  selector:
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/name: agent-kourier-cma
+  type: ClusterIP
+---
+apiVersion: v1
+automountServiceAccountToken: true
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.6.0
+  name: agent-kourier
+  namespace: agent-kourier
+---
+apiVersion: v1
+automountServiceAccountToken: false
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/component: cma-addon
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier-cma
+    app.kubernetes.io/part-of: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.6.0
+  name: agent-kourier-cma
+  namespace: agent-kourier
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  labels:
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.6.0
+    release: kube-prometheus-stack
+  name: agent-kourier
+  namespace: monitoring
+spec:
+  endpoints:
+  - interval: 30s
+    path: /metrics
+    port: http
+    scrapeTimeout: 10s
+  namespaceSelector:
+    matchNames:
+    - agent-kourier
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: agent-kourier
+      app.kubernetes.io/name: agent-kourier
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  labels:
+    app.kubernetes.io/component: cma-addon
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier-cma
+    app.kubernetes.io/part-of: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.6.0
+    release: kube-prometheus-stack
+  name: agent-kourier-cma
+  namespace: monitoring
+spec:
+  endpoints:
+  - interval: 30s
+    path: /metrics
+    port: http
+    scrapeTimeout: 10s
+  namespaceSelector:
+    matchNames:
+    - agent-kourier
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: agent-kourier
+      app.kubernetes.io/name: agent-kourier-cma

@@ -1,0 +1,83 @@
+{{- if and (include "agentkourier.cma.enabled" .) .Values.networkPolicy.enabled }}
+{{- $cma := .Values.addons.cma }}
+{{- $port := include "agentkourier.cma.port" . | int }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "agentkourier.cma.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentkourier.cma.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "agentkourier.cma.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # A2A from Agent Kourier's pods, which reach the add-on through its Service.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "agentkourier.selectorLabels" . | nindent 14 }}
+      ports:
+        - {port: {{ $port }}, protocol: TCP}
+    {{- with .Values.networkPolicy.metricsFrom }}
+    # The scrapers, to /metrics, which shares the port with A2A.
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - {port: {{ $port }}, protocol: TCP}
+    {{- end }}
+    {{- if not (include "agentkourier.cma.sqlite" .) }}
+    # The add-on's other replicas: a standby forwards A2A to the leader's pod address.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "agentkourier.cma.selectorLabels" . | nindent 14 }}
+      ports:
+        - {port: {{ $port }}, protocol: TCP}
+    {{- end }}
+  egress:
+    # DNS.
+    - to:
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.dns.namespaceSelector | nindent 12 }}
+          podSelector:
+            {{- toYaml .Values.networkPolicy.dns.podSelector | nindent 12 }}
+      ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}
+    {{- if $cma.networkPolicy.anthropic.cidrs }}
+    # The Anthropic API, over TLS.
+    - to:
+        {{- range $cma.networkPolicy.anthropic.cidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+            {{- with $cma.networkPolicy.anthropic.except }}
+            except:
+              {{- range . }}
+              - {{ . | quote }}
+              {{- end }}
+            {{- end }}
+        {{- end }}
+      ports:
+        - {port: 443, protocol: TCP}
+    {{- end }}
+    {{- if not (include "agentkourier.cma.sqlite" .) }}
+    # The leader, from a standby that forwards to it.
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "agentkourier.cma.selectorLabels" . | nindent 14 }}
+      ports:
+        - {port: {{ $port }}, protocol: TCP}
+    # The add-on's database, on its own rule.
+    - to:
+        {{- toYaml $cma.networkPolicy.postgres.to | nindent 8 }}
+      ports:
+        - {port: {{ int $cma.networkPolicy.postgres.port }}, protocol: TCP}
+    {{- end }}
+    {{- with $cma.networkPolicy.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

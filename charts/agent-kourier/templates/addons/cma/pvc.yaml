@@ -1,0 +1,26 @@
+{{- if include "agentkourier.cma.enabled" . }}
+{{- if and (include "agentkourier.cma.sqlite" .) (not .Values.addons.cma.persistence.existingClaim) }}
+{{- with .Values.addons.cma.persistence }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "agentkourier.cma.pvcName" $ }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "agentkourier.cma.labels" $ | nindent 4 }}
+  {{- if .retainOnUninstall }}
+  annotations:
+    helm.sh/resource-policy: keep
+  {{- end }}
+spec:
+  accessModes:
+    {{- toYaml .accessModes | nindent 4 }}
+  {{- with .storageClassName }}
+  storageClassName: {{ if eq . "-" }}""{{ else }}{{ . | quote }}{{ end }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .size | quote }}
+{{- end }}
+{{- end }}
+{{- end }}
