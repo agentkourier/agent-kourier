@@ -13,14 +13,15 @@
 #               README.md and pages under docs/ and elsewhere at run time (internal/store/storetest reads
 #               docs/reference/stored-data.md, cmd/agent-kourier's tests read pages under docs/how-to), which nothing but
 #               running them shows, so no Markdown is added for them.
-#   scan        govulncheck (all three modules), trivy (each image and platform) and CodeQL's analyze: also Markdown outside every
+#   scan        govulncheck (all four modules), trivy (each image and platform) and CodeQL's analyze: also Markdown outside every
 #               Go package's tree. govulncheck reads a module's Go packages (their files, and the files they embed).
 #               CodeQL's Go autobuild runs make (whose default goal is help), checks that go list ./... loads, and
 #               extracts the .go files, by GitHub's documentation of its build options and the Go extractor's
 #               codeql-extractor.yml, whose only file type is .go. The image is the binary of ./cmd/agent-kourier on the
 #               runtime image: .dockerignore drops docs/, the build stage reads only Go inputs, and its verify stage runs
 #               two tests of internal/testhooks that read the binaries. An agent's image (examples/recipes/<agent>/agent)
-#               copies only the files its .dockerignore lets in by name, none of them Markdown.
+#               copies only the files its .dockerignore lets in by name, none of them Markdown. The CMA add-on's image is
+#               the binary of addons/cma's ./cmd/adapter on the same runtime image, built from Go inputs only.
 #   crd-corpus  both crd-corpus jobs: also Markdown outside every Go package's tree. The job builds and runs
 #               test/crdcorpus, applies charts/agent-kourier/files/crds, and the corpus walk reads only .yaml and .yml
 #               files under its roots (test/crdcorpus/corpus.go). It then runs test/chart's
@@ -37,6 +38,9 @@
 #               examples/recipes/webhook-github/agent/ and every Go package's tree, as for echo-agent: its pytest, ruff,
 #               pip-audit and image build run in the first, and its pytest also reads the second (the webhook-github
 #               recipe's agent runs on the same image) and the YAML of both recipes' kourier/, no Markdown.
+#   cma         cma: also Markdown outside docs/, addons/cma/ and every Go package's tree. Its tests (the add-on's module
+#               and its livecheck module) may read the add-on's pages, under docs/, and its own README, as the root's
+#               tests read theirs; its lint reads Go only, and the Postgres it starts reads nothing of the tree.
 # A Go package's tree is a directory of the merge commit that holds a .go file, and everything under it: //go:embed
 # reaches only the package's own directory and those below it, and testdata lives there too. It is computed from the
 # merge commit on each run, so a page that a new package could embed stops qualifying with no list to edit. An unknown
@@ -98,6 +102,9 @@ class_skips() {
     prompt-agent)
       case "$1" in examples/recipes/prompt-agent/agent/* | examples/recipes/webhook-github/agent/*) return 1 ;; esac
       ;;
+    cma)
+      case "$1" in docs/* | addons/cma/*) return 1 ;; esac
+      ;;
   esac
   case "$1" in
     *.md) outside_go_trees "$1" ;;
@@ -148,7 +155,7 @@ run() {
 }
 
 case "${CLASS}" in
-  tests | scan | crd-corpus | docs-agent | echo-agent | prompt-agent) ;;
+  tests | scan | crd-corpus | docs-agent | echo-agent | prompt-agent | cma) ;;
   *) run "'${CLASS}' is not a class" ;;
 esac
 [ -n "${PR_HEAD_SHA:-}" ] || run "PR_HEAD_SHA is not set"

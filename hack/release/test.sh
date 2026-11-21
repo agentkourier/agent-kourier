@@ -104,6 +104,14 @@ echo "== a missing scan of an agent image fails closed"
 run_case agent-scan-missing 1 agent-scan-missing
 contains "agent-scan-missing: names the missing required job" "required job 'trivy (echo-agent-linux-arm64)' is missing" "${TMP}/agent-scan-missing.out"
 
+echo "== a missing CMA add-on job fails closed"
+run_case cma-missing 1 cma-missing
+contains "cma-missing: names the missing required job" "required job 'cma' is missing" "${TMP}/cma-missing.out"
+
+echo "== a missing scan of the CMA add-on's image fails closed"
+run_case cma-scan-missing 1 cma-scan-missing
+contains "cma-scan-missing: names the missing required job" "required job 'trivy (cma-linux-arm64)' is missing" "${TMP}/cma-scan-missing.out"
+
 echo "== a skipped required job fails closed"
 run_case skipped-required 1 skipped-required
 contains "skipped-required: names the skipped required job" "required job 'test-testhooks' is skipped" "${TMP}/skipped-required.out"
@@ -184,18 +192,21 @@ status=$?
 set -e
 check "version-repo: the chart's own version and the repository's versions.yaml pass" 0 "${status}"
 
-# run_release_build NAME [VAR=VALUE ...]: run release.sh for v1.2.3 with the fake docker, helm and scanner, the extra
-# variables set; its output, build log and scan log go to TMP/NAME.out, NAME.builds and NAME.scans, its files to TMP/NAME.
+# run_release_build NAME [VAR=VALUE ...]: run release.sh for v1.2.3 with the fake docker, helm and scanner and the
+# fixture chart (testdata/chart, CHART_DIR), the extra variables set; its output, build log, build arguments and scan
+# log go to TMP/NAME.out, NAME.builds, NAME.args and NAME.scans, its files to TMP/NAME.
 run_release_build() {
   local name=$1 status
   shift
   : >"${TMP}/${name}.builds"
+  : >"${TMP}/${name}.args"
   : >"${TMP}/${name}.state"
   : >"${TMP}/${name}.scans"
   set +e
-  env PATH="${FIXTURES}/fakebin:${PATH}" FAKE_ROOT="${ROOT}" FAKE_LOG="${TMP}/${name}.builds" FAKE_STATE="${TMP}/${name}.state" \
+  env PATH="${FIXTURES}/fakebin:${PATH}" FAKE_ROOT="${ROOT}" FAKE_LOG="${TMP}/${name}.builds" FAKE_ARGS_LOG="${TMP}/${name}.args" \
+    FAKE_STATE="${TMP}/${name}.state" \
     FAKE_SCAN_LOG="${TMP}/${name}.scans" SCAN_IMAGE_SCRIPT="${FIXTURES}/fake-scan-image.sh" SCAN_IMAGES=1 \
-    VERSION=v1.2.3 REGISTRY=ghcr.io/example/agent-kourier OUT="${TMP}/${name}" "$@" \
+    CHART_DIR="${FIXTURES}/chart" VERSION=v1.2.3 REGISTRY=ghcr.io/example/agent-kourier OUT="${TMP}/${name}" "$@" \
     "${HERE}/release.sh" >"${TMP}/${name}.out" 2>&1
   status=$?
   set -e
@@ -218,25 +229,68 @@ for want in \
   "build load linux/arm64 agent-kourier-release-check:prompt-agent-linux-arm64 examples/recipes/prompt-agent/agent" \
   "build load linux/amd64 agent-kourier-release-check:echo-agent-linux-amd64 examples/recipes/echo-agent/agent" \
   "build load linux/arm64 agent-kourier-release-check:echo-agent-linux-arm64 examples/recipes/echo-agent/agent" \
+  "build load linux/amd64 agent-kourier-release-check:cma-linux-amd64 addons/cma" \
+  "build load linux/arm64 agent-kourier-release-check:cma-linux-arm64 addons/cma" \
   "build output linux/amd64,linux/arm64 ghcr.io/example/agent-kourier:v1.2.3 ." \
   "build output linux/amd64,linux/arm64 ghcr.io/example/agent-kourier-prompt-agent:v1.2.3 examples/recipes/prompt-agent/agent" \
-  "build output linux/amd64,linux/arm64 ghcr.io/example/agent-kourier-echo-agent:v1.2.3 examples/recipes/echo-agent/agent"; do
+  "build output linux/amd64,linux/arm64 ghcr.io/example/agent-kourier-echo-agent:v1.2.3 examples/recipes/echo-agent/agent" \
+  "build output linux/amd64,linux/arm64 ghcr.io/example/agent-kourier-cma:v1.2.3 addons/cma"; do
   check "build: ${want}" 1 "$(grep -c -x -F -- "${want}" "${TMP}/build.builds")"
 done
-check "build: nine builds in all" 9 "$(wc -l <"${TMP}/build.builds" | tr -d ' ')"
+check "build: twelve builds in all" 12 "$(wc -l <"${TMP}/build.builds" | tr -d ' ')"
 last_check=$(grep -n '^build load ' "${TMP}/build.builds" | tail -n 1 | cut -d: -f1)
 first_kept=$(grep -n -v '^build load ' "${TMP}/build.builds" | head -n 1 | cut -d: -f1)
 check "build: every check precedes the first image kept" 1 "$([ "${last_check}" -lt "${first_kept}" ] && echo 1 || echo 0)"
-check "build: six platform images scanned" 6 "$(wc -l <"${TMP}/build.scans" | tr -d ' ')"
-for f in trivy-linux-arm64.sarif trivy-prompt-agent-linux-amd64.sarif trivy-echo-agent-linux-arm64.sarif; do
+check "build: eight platform images scanned" 8 "$(wc -l <"${TMP}/build.scans" | tr -d ' ')"
+for f in trivy-linux-arm64.sarif trivy-prompt-agent-linux-amd64.sarif trivy-echo-agent-linux-arm64.sarif \
+  trivy-cma-linux-amd64.sarif trivy-cma-linux-arm64.sarif; do
   check "build: wrote ${f}" 1 "$([ -s "${TMP}/build/${f}" ] && echo 1 || echo 0)"
 done
-for f in digest prompt-agent-digest echo-agent-digest; do
+for f in digest prompt-agent-digest echo-agent-digest cma-digest; do
   check "build: ${f} is a digest" 1 "$(grep -c -x -E 'sha256:[0-9a-f]{64}' "${TMP}/build/${f}")"
 done
-check "build: three distinct image digests" 3 "$(cat "${TMP}/build/digest" "${TMP}/build/prompt-agent-digest" "${TMP}/build/echo-agent-digest" | sort -u | wc -l | tr -d ' ')"
+check "build: four distinct image digests" 4 "$(cat "${TMP}/build/digest" "${TMP}/build/prompt-agent-digest" "${TMP}/build/echo-agent-digest" "${TMP}/build/cma-digest" | sort -u | wc -l | tr -d ' ')"
+# Each build's arguments, three builds of each image: an add-on is built on Agent Kourier's pinned bases (no version: its
+# Dockerfile takes none), an agent with no argument.
+GO_IMAGE_PIN=$(sed -n 's/^GO_IMAGE=//p' "${ROOT}/hack/kind/lib.sh")
+RUNTIME_IMAGE_PIN=$(sed -n 's/^RUNTIME_IMAGE=//p' "${ROOT}/hack/kind/lib.sh")
+for want in \
+  ". GO_IMAGE=${GO_IMAGE_PIN} RUNTIME_IMAGE=${RUNTIME_IMAGE_PIN} VERSION=v1.2.3" \
+  "addons/cma GO_IMAGE=${GO_IMAGE_PIN} RUNTIME_IMAGE=${RUNTIME_IMAGE_PIN}" \
+  "examples/recipes/echo-agent/agent" \
+  "examples/recipes/prompt-agent/agent"; do
+  check "build: the arguments of ${want%% *}" 3 "$(grep -c -x -F -- "${want}" "${TMP}/build.args")"
+done
 contains "build: the chart's default image is Agent Kourier's" "digest: $(cat "${TMP}/build/digest")" "${TMP}/build/agent-kourier-1.2.3.tgz.values"
 contains "build: the chart's default repository is Agent Kourier's" "repository: ghcr.io/example/agent-kourier" "${TMP}/build/agent-kourier-1.2.3.tgz.values"
+# The add-on's block, by its indentation, and nothing else: the look-alike image blocks of the fixture keep their values.
+values=${TMP}/build/agent-kourier-1.2.3.tgz.values
+check "build: addons.cma.image.repository is the add-on's pushed repository" 1 \
+  "$(grep -c -x -F "      repository: ghcr.io/example/agent-kourier-cma" "${values}")"
+check "build: addons.cma.image.digest is the add-on's digest" 1 \
+  "$(grep -c -x -F "      digest: $(cat "${TMP}/build/cma-digest")" "${values}")"
+check "build: the other image blocks keep their empty digests" 3 "$(grep -c -E '^ +digest: ""$' "${values}")"
+check "build: the other add-on keeps its repository" 1 "$(grep -c -x -F "      repository: ghcr.io/example/other" "${values}")"
+
+# release_chart_case NAME SED WANT: release.sh with the fixture chart edited by SED fails at the chart, with WANT in its
+# output.
+release_chart_case() {
+  local name=$1
+  rm -rf "${TMP}/${name}-chart"
+  cp -R "${FIXTURES}/chart" "${TMP}/${name}-chart"
+  sed -i.bak "$2" "${TMP}/${name}-chart/values.yaml"
+  rm -f "${TMP}/${name}-chart/values.yaml.bak"
+  if run_release_build "${name}" CHART_DIR="${TMP}/${name}-chart"; then
+    echo "FAIL: ${name}: release.sh succeeded" >&2
+    exit 1
+  fi
+  contains "${name}: says what the chart lacks" "$3" "${TMP}/${name}.out"
+}
+
+echo "== a chart whose add-on image block is not where the release stamps it is refused"
+release_chart_case chart-no-cma 's/^  cma:$/  cmax:/' "no longer has exactly one addons.cma.image.repository"
+release_chart_case chart-cma-digest-set 's/^      digest: ""$/      digest: sha256:0/' "no longer has exactly one addons.cma.image.repository"
+release_chart_case chart-no-image-digest 's/^  digest: ""$/  digest: sha256:0/' "no longer has exactly one empty image.repository"
 
 echo "== a finding in an agent image's last platform leaves no image built to keep"
 if run_release_build scan-fails FAKE_SCAN_FAIL=echo-agent-linux-arm64; then
