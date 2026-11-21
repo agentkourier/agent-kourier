@@ -40,7 +40,8 @@
       "matchDepNames": [
         "ghcr.io/agentkourier/agent-kourier",
         "ghcr.io/agentkourier/agent-kourier-prompt-agent",
-        "ghcr.io/agentkourier/agent-kourier-echo-agent"
+        "ghcr.io/agentkourier/agent-kourier-echo-agent",
+        "ghcr.io/agentkourier/agent-kourier-cma"
       ],
       "enabled": false
     },
@@ -52,7 +53,7 @@
       "enabled": false
     },
     {
-      "description": "The kind fast tier's Postgres stays on major 17: its manifest mounts the data directory where 17 keeps it, and 18 moved it. hack/postgres/test.sh moves majors on its own",
+      "description": "The kind fast tier's Postgres stays on major 17: its manifest mounts the data directory where 17 keeps it, and 18 moved it. hack/postgres/lib.sh moves majors on its own",
       "matchFileNames": [
         "hack/kind/fast/postgres.yaml"
       ],
