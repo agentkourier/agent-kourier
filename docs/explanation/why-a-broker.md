@@ -1,6 +1,6 @@
 # Why a broker
 
-This page explains why Agent Kourier is a separate, always-on broker between people, alerts and agents, rather than a
+This page explains why Agent Kourier is a separate, always-on broker that carries messages between people and agents, rather than a
 proxy in front of an agent or a feature of one agent platform.
 
 ## The gap
@@ -16,7 +16,7 @@ alerts reach the agent through A2A, and its answers return to the Slack thread.
 Agents that are asleep or scaled to zero cannot receive an alert or a Slack message, so something else has to take it in
 and hold it. Existing Slack bridges covered part of this, but none provided the combination we needed:
 
-1. An alert becomes a Slack thread that is also a live agent session.
+1. A thread in chat is a live agent session, whether a person's mention or an alert another app posts started it.
 2. People continue that session, and answer the agent's questions, in the thread.
 3. It works with any A2A agent, not one platform's roster.
 4. It is configured declaratively and runs independently of the agents.

@@ -1,6 +1,6 @@
 apiVersion: v2
 name: agent-kourier
-description: A Kubernetes-native broker between team chat and streaming A2A agents. Slack messages, and the alerts posted to Slack, become agent sessions in their threads (SQLite on a PVC, or Postgres, which can also run an active/passive pair)
+description: A Kubernetes-native broker that carries messages between team chat and streaming A2A agents, one agent session per thread. A mention, or a message a trigger matches such as an alert, starts a session on Slack or on Microsoft Teams (experimental); signed webhooks can start sessions too (experimental). State is SQLite on a PVC, or Postgres, which can also run an active/passive pair
 type: application
 # A release (hack/release/package-chart.sh) stamps version, appVersion, image.repository and image.digest and pushes the
 # chart to oci://ghcr.io/agentkourier/charts. In the source tree they are unstamped, so image.repository has no default.
@@ -18,6 +18,8 @@ keywords:
   - agent2agent
   - ai-agents
   - slack
+  - microsoft-teams
+  - webhooks
   - chatops
   - alertmanager
   - kagent
