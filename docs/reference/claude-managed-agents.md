@@ -153,7 +153,7 @@ approval survives.
 
 A request to `/a2a` must carry one of the tokens in `AUTH_TOKEN_FILE`, or the add-on answers 401 (with
 `WWW-Authenticate: Bearer` when the header is `Authorization`) and logs `refused an A2A request` with the reason
-`missing` or `invalid`, never the value it was given. The agent card, `/healthz` and `/readyz` need no token.
+`missing` or `invalid`, never the value it was given. The agent card, `/healthz`, `/readyz` and `/metrics` need no token.
 
 - **The header.** With `AUTH_HEADER` unset, the token comes as `Authorization: Bearer <token>` (the scheme in any case),
   which is what a Binding's `identity.tokenSecretRef` sends. With another header name, the header's whole value is the
