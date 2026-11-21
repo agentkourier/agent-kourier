@@ -26,7 +26,8 @@ spec:
     backendRef: {name: cma}
     name: kourier-a2a-test # a label on the a2a dialect: the backend URL selects the agent
     namespace: cma
-  identity: {userId: agent-kourier-cma}
+  # The adapter's caller check: the Secret holds one of the tokens in the adapter's AUTH_TOKEN_FILE.
+  identity: {tokenSecretRef: {name: cma-adapter-token}}
   chat:
     connectionRef: {name: slack}
     channel: C0123456789 # the test channel's ID

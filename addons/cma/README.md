@@ -19,7 +19,7 @@ flowchart LR
   end
   subgraph adapter[CMA A2A adapter]
     a2a["A2A JSON-RPC<br/>/a2a"] --> exec[Executor]
-    exec --> map[("context → session<br/>(in memory)")]
+    exec --> map[("tasks, message IDs,<br/>context → session<br/>(SQLite or Postgres)")]
   end
   subgraph anthropic[Anthropic API]
     sessions[Managed Agents sessions]
@@ -83,7 +83,8 @@ both as waits, not as questions for a person: a pause asks only about the calls 
 
 ## Settings
 
-The adapter is configured through environment variables.
+The adapter is configured through environment variables. A setting it cannot use stops it at start, with an error that
+names the variable; the error never shows the value of `POSTGRES_DSN` or `AUTH_HEADER`.
 
 | Variable | Default | What it does |
 |---|---|---|
@@ -94,19 +95,67 @@ The adapter is configured through environment variables.
 | `PUBLIC_URL` | `http://LISTEN_ADDR/a2a` | The endpoint the agent card names; set it to the URL Agent Kourier reaches. |
 | `SESSION_IDLE_TTL` | `2160h` | How long a context may go without a turn before its session is archived (checked once a minute, so up to a minute later). `0` never archives. |
 | `TOOL_RESULT_TIMEOUT` | `10m` | How long a turn waits, with no session event, for the result of a tool the sandbox runs. `0` waits for ever. |
+| `AUTH_TOKEN_FILE` | required | The accepted tokens, one per line. Lines that are blank or start with `#` are skipped, and trailing whitespace (a CR included) is stripped. Re-read every 5 seconds. |
+| `AUTH_HEADER` | `Authorization` | The header that carries the token. `Authorization` must be `Bearer <token>` (the scheme in any case); any other header carries the token as its whole value. |
+| `AUTH_DISABLED` | `false` | `true` turns the caller check off. Refused unless `LISTEN_ADDR` is a loopback address (`127.0.0.0/8`, `::1` or `localhost`), and refused with `AUTH_TOKEN_FILE` set. |
+| `STORE` | `sqlite` | Where tasks, message IDs and sessions are kept: `sqlite` or `postgres`. |
+| `SQLITE_PATH` | `cma-addon.db` | The SQLite file, with `STORE=sqlite`. |
+| `POSTGRES_DSN` | required with `postgres` | The Postgres connection string, as pgx reads it. Refused with `STORE=sqlite`. |
+| `TASK_RETENTION` | `720h` | How long a settled task (completed, failed, canceled or rejected) and its message IDs are kept after its last update; checked once a minute. `0` keeps them. |
+| `LEASE_DURATION` / `LEASE_RENEW_DEADLINE` / `LEASE_RETRY_PERIOD` | `15s` / `10s` / `2s` | Postgres only, refused with SQLite. Each must be more than zero, the lease longer than the renew deadline, and the renew deadline longer than 1.2 times the retry period. Read and checked; the leader election that will use them is not built yet. |
+| `ADVERTISE_URL` | required with `postgres` | An `http` or `https` URL where other replicas will reach this one. Read and checked, not used yet. |
+| `POD_NAME` | the hostname | This replica's name as a lease holder. Not used yet. |
+| `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. Logs are JSON on standard error. |
 
-The adapter serves JSON-RPC at `/a2a`, the agent card at `/a2a/.well-known/agent-card.json`, and `/healthz`. Both
-durations must be Go durations of zero or more, or the adapter does not start.
+The adapter serves JSON-RPC at `/a2a`, the agent card at `/a2a/.well-known/agent-card.json`, and `/healthz` and
+`/readyz`, which answer 200 once it serves; it serves only after its start-up work below. Every duration must be a Go
+duration of zero or more, or the adapter does not start.
+
+### Caller check
+
+A request to `/a2a` must carry one of the tokens in `AUTH_TOKEN_FILE`, or the adapter answers 401 (with
+`WWW-Authenticate: Bearer` when the header is `Authorization`) and logs the refusal with its reason, `missing` or
+`invalid`, never the value it was given. The card, `/healthz` and `/readyz` need no token. The adapter compares SHA-256
+digests of the tokens in constant time, against every token.
+
+Give the Binding the token through `identity.tokenSecretRef`, which Agent Kourier sends as `Authorization: Bearer`; with
+`AUTH_HEADER` set to another name, an AgentBackend `headers` entry carries it instead. The file may hold several tokens,
+so a new one can be added before the old one is removed. A mounted Secret changes by swapping a symlink, so the file is
+read again every 5 seconds rather than watched. If a re-read fails or finds no token, the adapter keeps the tokens it had
+and logs the failure, once until the failure changes.
+
+Every accepted token is the same caller, Agent Kourier. The store records it as each task's owner, but tasks are not
+kept apart by token: any accepted token reaches every task.
+
+### Store and restarts
+
+The store keeps the A2A tasks, the message IDs that started or joined each task, and each context's session, so a
+restart loses none of them. Migrations are applied at start. With SQLite the adapter holds an exclusive lock on
+`SQLITE_PATH` plus `.lock` while it runs, so a second adapter on the same file does not start; the file is in WAL mode.
+With Postgres, replicas that start together apply each migration once, under an advisory lock.
+
+At start, before it serves, the adapter:
+
+1. Loads each context's session from the store and checks it against the agent's unarchived sessions in the
+   environment (it does not start if either cannot be read). A stored session CMA still lists is kept, and CMA's other
+   sessions for that context are archived. A context the store lacks adopts the session CMA lists for it (the one
+   active last, if there are several; the others are archived). A stored session CMA no longer lists, being archived
+   or terminated, is forgotten with its context's tasks, and the context's next message starts a new session.
+2. Fails each task left `submitted` or `working` with the agent message "Interrupted by an adapter restart." and sends
+   its session an interrupt (a failed interrupt is logged). A task paused on an approval (`input-required`) is kept,
+   and an Approve or Deny pressed after the restart reaches the paused calls.
+
+A message whose ID the store has recorded joins that message's task instead of starting another turn, after a restart
+too: Agent Kourier resends a message with the same ID when it cannot tell whether the first send arrived.
 
 ### Session lifecycle
 
-A CMA session holds its sandbox until it is archived. At start the adapter lists the agent's unarchived sessions in the
-environment and maps each context back to its session from the `a2a_context_id` metadata, so a restart continues every
-thread in its own session. It does not start if that list fails. If two sessions name one context, it keeps the one
-active last and archives the others.
+A CMA session holds its sandbox until it is archived. The store keeps each context's session, and each session carries
+its context ID in its `a2a_context_id` metadata, from which the adapter can find it again (above).
 
-`SESSION_IDLE_TTL` archives a context's session once the context has had no turn for that long. Archiving cannot be
-undone: the context's next message starts a new session without the old history. Set it to the Binding's
+`SESSION_IDLE_TTL` archives a context's session once the context has had no turn for that long, and deletes the
+context's tasks from before the archive, with their message IDs: they belong to the archived session. Archiving cannot
+be undone: the context's next message starts a new session without the old history. Set it to the Binding's
 `session.threadTTL` (Agent Kourier's default is `2160h`); past that, Agent Kourier gives the thread a new context and the
 old session is never used again. A shorter value archives sessions a thread can still continue.
 
@@ -141,47 +190,52 @@ without a session event, so a slow turn is not cut off.
 
    ```sh
    cd addons/cma
-   CMA_AGENT_ID=agent_... CMA_ENVIRONMENT_ID=env_... \
+   printf '%s' "$(openssl rand -hex 32)" > cma-token
+   CMA_AGENT_ID=agent_... CMA_ENVIRONMENT_ID=env_... AUTH_TOKEN_FILE=cma-token \
    LISTEN_ADDR=0.0.0.0:8090 PUBLIC_URL=http://host.docker.internal:8090/a2a \
    go run ./cmd/adapter
    ```
 
-   `LISTEN_ADDR=0.0.0.0:8090` exposes an endpoint with no caller check to your network; see the limits below.
+   The token file has no trailing newline: Agent Kourier sends the Secret's value as it is, and refuses one with a
+   control character. The adapter keeps its state in `cma-addon.db` in the working directory.
 4. Build and load the image (`make image`, then `kind load docker-image agent-kourier:dev --name <cluster>`), create the `slack` Secret
-   (`botToken`, `appToken`) in the `agent-kourier` namespace, replace `C0123456789` in `kind/config/kourier.yaml` with the
+   (`botToken`, `appToken`) and the `cma-adapter-token` Secret
+   (`kubectl -n agent-kourier create secret generic cma-adapter-token --from-file=token=cma-token`) in the
+   `agent-kourier` namespace, replace `C0123456789` in `kind/config/kourier.yaml` with the
    channel's ID, create the `cma-kourier-config` ConfigMap from it (key `kourier.yaml`), and install the chart with
    `kind/values.yaml`.
 5. Mention the bot in the channel. Replies in the thread continue the same session.
 
 ## Test it
 
-Unit tests use a fake backend and spend nothing:
+Unit tests use a fake backend and spend nothing. The store's tests run on SQLite, and on Postgres too when
+`AGENTKOURIER_POSTGRES_DSN` names one (each test makes and drops a schema of its own):
 
 ```sh
 cd addons/cma && go test -race ./...
 ```
 
 `livecheck` is a separate module that drives a running adapter with Agent Kourier's own A2A client and `a2a` dialect, the
-code a Binding uses. Its offline test runs against a scripted backend; its live scenarios (`text`, `allowed`, `approve`,
+code a Binding uses. Its offline test runs against a scripted backend, behind the caller check; its live scenarios (`text`, `allowed`, `approve`,
 `continuity`, `deny`, `cancel`) need an agent with bash set to `always_ask` and spend model tokens. `ONLY=text,deny`
 runs a subset.
 
 ```sh
 cd addons/cma/livecheck
 go test -race ./...
-ADAPTER_URL=http://127.0.0.1:8090/a2a go run .
+ADAPTER_URL=http://127.0.0.1:8090/a2a ADAPTER_TOKEN="$(cat ../cma-token)" go run .
 ```
 
 No CI workflow builds or tests this example yet.
 
 ## Limits
 
-- **No caller check.** The adapter accepts any A2A request and runs it on your agent with your credentials. Bind it
-  where only Agent Kourier reaches it (the default is loopback).
-- **One instance.** The context-to-session map, the A2A tasks and the record of message IDs are in memory. Two adapters
-  would start two sessions for one thread.
-- **A restart forgets tasks.** The session map is rebuilt from CMA, but a task paused on an approval is not: an
-  Approve or Deny pressed after a restart cannot reach the paused call.
+- **One instance at a time.** With SQLite the file lock keeps a second adapter from starting on the same file. With
+  Postgres nothing stops a second adapter yet: two adapters on one database would both serve, and could start two
+  sessions for one thread. Run one.
+- **One caller.** Every accepted token is Agent Kourier; tasks are not kept apart by token.
+- **A restart fails the turns in flight.** A turn that was running when the adapter stopped is failed at the next
+  start, and its session interrupted; Agent Kourier shows the failure in the thread. A paused approval survives.
 - **Approvals need the buttons.** A plain-text reply cannot approve or deny a tool call; the adapter refuses it and the
   task stays paused.
 - **No custom tools.** A pause on a custom tool, or on any call the turn did not see ask for approval, fails the turn.
