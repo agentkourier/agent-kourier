@@ -1,6 +1,6 @@
 # Agent Kourier's config for the CMA test: one Slack app (Secret slack: botToken, appToken), the adapter on the
-# host as an a2a backend, and one Binding in the test channel. __SLACK_CHANNEL_ID__ is filled in when the ConfigMap
-# is made.
+# host as an a2a backend, and one Binding in the test channel. Replace the Binding's channel, C0123456789, with the
+# test channel's ID before making the ConfigMap.
 apiVersion: agentkourier.dev/v1alpha1
 kind: ChatConnection
 metadata: {name: slack, namespace: agent-kourier}
@@ -29,7 +29,7 @@ spec:
   identity: {userId: agent-kourier-cma}
   chat:
     connectionRef: {name: slack}
-    channel: __SLACK_CHANNEL_ID__
+    channel: C0123456789 # the test channel's ID
     triggers:
       - type: mention
     output: live
