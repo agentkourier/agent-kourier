@@ -287,7 +287,7 @@ spec:
         startupProbe:
           failureThreshold: 30
           httpGet:
-            path: /healthz
+            path: /readyz
             port: http
           periodSeconds: 2
         volumeMounts:

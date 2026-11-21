@@ -107,9 +107,11 @@ spec:
             {{- end }}
           ports:
             - {name: http, containerPort: {{ $port }}}
-          # /healthz says the process is alive; /readyz says it can serve, a standby included (it forwards to the leader), so every
-          # replica is in the Service. The startup probe gives the add-on time to reconcile its sessions with CMA before the others begin.
-          startupProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 2, failureThreshold: 30}
+          # /healthz says the process is alive: 200 once it listens. /readyz says it can serve: on a standby at once (it forwards to the
+          # leader), so every replica is in the Service, and on a leader once its start-up work (reconciling its sessions with CMA,
+          # failing the turns a restart cut off) is done. The startup probe asks /readyz, so it bounds that work, and the liveness and
+          # readiness probes begin only once it has passed.
+          startupProbe: {httpGet: {path: /readyz, port: http}, periodSeconds: 2, failureThreshold: 30}
           livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 10, failureThreshold: 3}
           readinessProbe: {httpGet: {path: /readyz, port: http}, periodSeconds: 5}
           resources:

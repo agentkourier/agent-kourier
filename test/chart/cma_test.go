@@ -170,9 +170,11 @@ func TestCMADeploymentIsSafe(t *testing.T) {
 	}) {
 		t.Errorf("objects %v; the add-on is granted nothing", kinds(objs))
 	}
-	if c.StartupProbe.HTTPGet.Path != "/healthz" || c.LivenessProbe.HTTPGet.Path != "/healthz" || c.ReadinessProbe.HTTPGet.Path != "/readyz" ||
+	// The startup probe asks /readyz, so it bounds the leader's start-up work; liveness asks /healthz, which a long takeover
+	// does not fail.
+	if c.StartupProbe.HTTPGet.Path != "/readyz" || c.LivenessProbe.HTTPGet.Path != "/healthz" || c.ReadinessProbe.HTTPGet.Path != "/readyz" ||
 		c.ReadinessProbe.HTTPGet.Port.String() != "http" {
-		t.Errorf("probes %s, %s, %s on %s; want /healthz, /healthz and /readyz on http", c.StartupProbe.HTTPGet.Path, c.LivenessProbe.HTTPGet.Path, c.ReadinessProbe.HTTPGet.Path, c.ReadinessProbe.HTTPGet.Port.String())
+		t.Errorf("probes %s, %s, %s on %s; want /readyz, /healthz and /readyz on http", c.StartupProbe.HTTPGet.Path, c.LivenessProbe.HTTPGet.Path, c.ReadinessProbe.HTTPGet.Path, c.ReadinessProbe.HTTPGet.Port.String())
 	}
 	if len(c.Ports) != 1 || c.Ports[0].Name != "http" || c.Ports[0].ContainerPort != 8090 || c.Ports[0].HostPort != 0 || pod.HostNetwork {
 		t.Errorf("ports %+v, hostNetwork %v; want http on 8090, never on the host", c.Ports, pod.HostNetwork)
