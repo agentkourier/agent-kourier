@@ -16,6 +16,8 @@ type fakeLease struct {
 	mu       sync.Mutex
 	other    *store.Lease
 	held     bool
+	tryErr   error // returned, once, by the next TryLead
+	tries    int
 	renewErr error
 	renewals int
 	released bool
@@ -24,6 +26,11 @@ type fakeLease struct {
 func (f *fakeLease) TryLead(_ context.Context, holder, address string, _ time.Duration) (store.Lease, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.tries++
+	if err := f.tryErr; err != nil {
+		f.tryErr = nil
+		return store.Lease{}, false, err
+	}
 	if f.other != nil && f.other.Live {
 		return *f.other, false, nil
 	}
@@ -185,5 +192,83 @@ func TestElectorReturnsTheTakeoversError(t *testing.T) {
 	err := <-run(t.Context(), newElector(&fakeLease{}, "a"), func(context.Context) error { return boom })
 	if !errors.Is(err, boom) {
 		t.Fatalf("Run = %v", err)
+	}
+}
+
+// A replica that takes the lease in its one attempt before it listens leads, and is not ready, from then on; Run then
+// runs the takeover without campaigning again, and counts one takeover.
+func TestTryLeadOnceLeadsBeforeRun(t *testing.T) {
+	lease := &fakeLease{}
+	e := newElector(lease, "a")
+	e.Telemetry = newTelemetry(t)
+	if !e.TryLeadOnce(t.Context()) {
+		t.Fatal("TryLeadOnce did not take a free lease")
+	}
+	if !e.Status.Leading() || e.Status.Ready() {
+		t.Fatalf("leading %v ready %v; want leading, not ready until the takeover is done", e.Status.Leading(), e.Status.Ready())
+	}
+	if got := lineValue(metrics(t, e), "agentkourier_cma_leader"); got != "1" {
+		t.Fatalf("leader gauge = %q before Run, want 1", got)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	led := make(chan struct{})
+	done := run(ctx, e, func(ctx context.Context) error {
+		close(led)
+		<-ctx.Done()
+		return nil
+	})
+	<-led
+	waitFor(t, "renewals", func() bool { lease.mu.Lock(); defer lease.mu.Unlock(); return lease.renewals >= 2 })
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	lease.mu.Lock()
+	tries := lease.tries
+	lease.mu.Unlock()
+	if tries != 1 {
+		t.Fatalf("lease attempts = %d, want the one before Run", tries)
+	}
+	if got := lineValue(metrics(t, e), "agentkourier_cma_leader_takeovers_total"); got != "1" {
+		t.Fatalf("takeovers = %q, want 1", got)
+	}
+}
+
+// A replica that does not take the lease before it listens, because another holds it or the store failed, is a
+// standby, ready at once, and Run campaigns as before.
+func TestTryLeadOnceLeavesAStandby(t *testing.T) {
+	for name, lease := range map[string]*fakeLease{
+		"another leads":    {other: &store.Lease{Holder: "b", Address: "http://b:8090", Epoch: 4, Live: true}},
+		"the store failed": {tryErr: errors.New("connection refused")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newElector(lease, "a")
+			e.Telemetry = newTelemetry(t)
+			if e.TryLeadOnce(t.Context()) {
+				t.Fatal("TryLeadOnce took the lease")
+			}
+			if e.Status.Leading() || !e.Status.Ready() {
+				t.Fatalf("leading %v ready %v; want a standby, ready", e.Status.Leading(), e.Status.Ready())
+			}
+			lease.mu.Lock()
+			lease.other = nil // the other leader is gone
+			lease.mu.Unlock()
+			ctx, cancel := context.WithCancel(t.Context())
+			led := make(chan struct{})
+			done := run(ctx, e, func(ctx context.Context) error {
+				close(led)
+				<-ctx.Done()
+				return nil
+			})
+			select {
+			case <-led:
+			case <-time.After(5 * time.Second):
+				t.Fatal("Run did not campaign and lead")
+			}
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+		})
 	}
 }

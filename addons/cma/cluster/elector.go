@@ -76,6 +76,8 @@ type Elector struct {
 
 	mu     sync.Mutex
 	leader cachedLease
+	// taken is when TryLeadOnce took the lease, before Run; zero when it did not.
+	taken time.Time
 }
 
 // cachedLease is the lease as a standby last read it.
@@ -89,16 +91,19 @@ type cachedLease struct {
 // returns ErrLeadershipLost when a renewal finds the lease taken, or no renewal has succeeded for RenewDeadline; the
 // error of lead, if lead fails; and nil when ctx ends. It never releases the lease: the caller does that (Release)
 // once it has stopped serving, so that a standby does not take over while this replica still writes.
+//
+// After TryLeadOnce has taken the lease, Run leads at once, without campaigning.
 func (e *Elector) Run(ctx context.Context, lead func(ctx context.Context) error) error {
-	e.Telemetry.SetLeader(false)
-	taken, err := e.campaign(ctx)
-	if err != nil || !taken {
-		return err
+	lastRenewal := e.taken
+	if lastRenewal.IsZero() {
+		e.Telemetry.SetLeader(false)
+		taken, err := e.campaign(ctx)
+		if err != nil || !taken {
+			return err
+		}
+		lastRenewal = time.Now() // no later than the database's now() of the take
+		e.lead()
 	}
-	lastRenewal := time.Now() // no later than the database's now() of the take
-	e.Status.Lead()
-	e.Telemetry.SetLeader(true)
-	e.Telemetry.Takeover()
 
 	leadCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -143,6 +148,34 @@ func (e *Elector) Run(ctx context.Context, lead func(ctx context.Context) error)
 			}
 		}
 	}
+}
+
+// TryLeadOnce makes one attempt to take the lease, and reports whether it did. Call it before the replica listens and
+// before Run: a replica that takes the lease then is the leader, and not ready, from its first request, so that the
+// startup probe bounds its takeover; one that does not is a standby, ready at once. A failure to reach the store is
+// logged, and Run's campaign tries again.
+func (e *Elector) TryLeadOnce(ctx context.Context) bool {
+	attempt := time.Now() // no later than the database's now() of the take, so the renew deadline is not overstated
+	lease, ok, err := e.Lease.TryLead(ctx, e.Holder, e.Address, e.LeaseDuration)
+	if err != nil {
+		e.Log.Warn("take the lease at start; will campaign", "error", err)
+		return false
+	}
+	e.remember(lease)
+	if !ok {
+		return false
+	}
+	e.Log.Info("took the lease: leading", "epoch", lease.Epoch, "lease_duration", e.LeaseDuration)
+	e.taken = attempt
+	e.lead()
+	return true
+}
+
+// lead marks this replica as the leader, once it holds the lease.
+func (e *Elector) lead() {
+	e.Status.Lead()
+	e.Telemetry.SetLeader(true)
+	e.Telemetry.Takeover()
 }
 
 // campaign tries to take the lease every RetryPeriod until it does (true) or ctx ends (false). Each attempt reads the

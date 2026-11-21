@@ -163,6 +163,9 @@ func serve(ctx context.Context, cfg config.Config, traces telemetry.Config, log 
 		elector = &cluster.Elector{Lease: st, Holder: cfg.PodName, Address: cfg.AdvertiseURL, LeaseDuration: cfg.Lease.Duration,
 			RenewDeadline: cfg.Lease.RenewDeadline, RetryPeriod: cfg.Lease.RetryPeriod, Status: status, Telemetry: tel, Log: log}
 		router.Leaders = elector
+		// One try at the lease before listening: a replica that takes it leads from its first answer, so /readyz cannot
+		// answer 200 before its takeover is done; one that does not is a standby, ready at once, and campaigns in Run.
+		elector.TryLeadOnce(ctx)
 	} else {
 		// The only replica leads before it listens, so /readyz cannot answer 200 before its takeover is done.
 		status.Lead()
@@ -171,6 +174,13 @@ func serve(ctx context.Context, cfg config.Config, traces telemetry.Config, log 
 
 	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.ListenAddr)
 	if err != nil {
+		if elector != nil {
+			release, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
+			defer cancel()
+			if err := elector.Release(release); err != nil {
+				log.Warn("hand the lease over; a standby takes it once it expires", "error", err)
+			}
+		}
 		return fmt.Errorf("listen on %s: %w", cfg.ListenAddr, err)
 	}
 	srv := &http.Server{Handler: mux(router, status, tel), ReadHeaderTimeout: readHeaderTimeout,

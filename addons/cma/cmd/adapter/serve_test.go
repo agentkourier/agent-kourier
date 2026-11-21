@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,8 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/addons/cma/config"
+	"github.com/agentkourier/agent-kourier/addons/cma/store"
+	"github.com/agentkourier/agent-kourier/addons/cma/store/pgtest"
 	"github.com/agentkourier/agent-kourier/addons/cma/telemetry"
 )
 
@@ -84,6 +87,21 @@ func (p prober) waitFor(t *testing.T, url string, want int) {
 // On SQLite, the one replica is alive as soon as it listens, and ready only once its start-up work (here, the listing of
 // the sessions in CMA) is done: the chart's startup probe asks /readyz, so it bounds that work.
 func TestSQLiteReplicaIsReadyOnlyAfterItsStartUpWork(t *testing.T) {
+	readyOnlyAfterStartUpWork(t, map[string]string{"SQLITE_PATH": filepath.Join(t.TempDir(), "cma.db")})
+}
+
+// On Postgres, a replica that takes the free lease at start is the leader from its first answer, and so is ready only
+// once its start-up work is done, as on SQLite.
+func TestPostgresReplicaThatLeadsAtStartIsReadyOnlyAfterItsStartUpWork(t *testing.T) {
+	readyOnlyAfterStartUpWork(t, map[string]string{"STORE": "postgres", "POSTGRES_DSN": pgtest.DSN(t),
+		"ADVERTISE_URL": "http://127.0.0.1:1", "POD_NAME": "cma-0"})
+}
+
+// readyOnlyAfterStartUpWork runs the adapter with the settings in more, against a CMA that holds the listing of the
+// sessions, and checks that it answers /healthz 200 and /readyz 503 from its first answer until the listing returns,
+// and /readyz 200 after.
+func readyOnlyAfterStartUpWork(t *testing.T, more map[string]string) {
+	t.Helper()
 	cma := &fakeCMA{released: make(chan struct{})}
 	api := httptest.NewServer(cma)
 	t.Cleanup(api.Close)
@@ -93,7 +111,8 @@ func TestSQLiteReplicaIsReadyOnlyAfterItsStartUpWork(t *testing.T) {
 
 	addr := freeAddr(t)
 	env := map[string]string{"CMA_AGENT_ID": "agent_test", "CMA_ENVIRONMENT_ID": "env_test", "AUTH_DISABLED": "true",
-		"LISTEN_ADDR": addr, "SQLITE_PATH": filepath.Join(t.TempDir(), "cma.db")}
+		"LISTEN_ADDR": addr}
+	maps.Copy(env, more)
 	cfg, err := config.Parse(func(k string) string { return env[k] })
 	if err != nil {
 		t.Fatal(err)
@@ -131,4 +150,38 @@ func TestSQLiteReplicaIsReadyOnlyAfterItsStartUpWork(t *testing.T) {
 	}
 	cma.release()
 	p.waitFor(t, base+"/readyz", http.StatusOK)
+}
+
+// A replica that took the lease before it listens, and then cannot listen, hands the lease over as it stops, so a
+// standby need not wait for it to expire.
+func TestPostgresReplicaThatCannotListenReleasesTheLease(t *testing.T) {
+	dsn := pgtest.DSN(t)
+	taken, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = taken.Close() })
+	t.Setenv("ANTHROPIC_API_KEY", "fake-api-key-for-tests")
+	env := map[string]string{"CMA_AGENT_ID": "agent_test", "CMA_ENVIRONMENT_ID": "env_test", "AUTH_DISABLED": "true",
+		"LISTEN_ADDR": taken.Addr().String(), "STORE": "postgres", "POSTGRES_DSN": dsn, "ADVERTISE_URL": "http://127.0.0.1:1",
+		"POD_NAME": "cma-0"}
+	cfg, err := config.Parse(func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := serve(t.Context(), cfg, telemetry.Config{}, slog.New(slog.DiscardHandler)); err == nil {
+		t.Fatal("serve listened on an address that was taken")
+	}
+	st, err := store.OpenPostgres(t.Context(), dsn, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	lease, err := st.CurrentLeader(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lease.Holder != "cma-0" || lease.Live {
+		t.Fatalf("lease = %+v; want cma-0's, released", lease)
+	}
 }
