@@ -84,7 +84,7 @@ REPOSITORY=${REGISTRY:-agent-kourier-release}
 NAME=${REPOSITORY}:${VERSION}
 
 # Passed to every build: the OCI labels; to Agent Kourier's, also the pinned bases and the version; to an add-on's, the
-# pinned bases (image_build). TAGS is never passed, so the binary is the production build, and no test-hooks label is
+# pinned bases and the version too (image_build). TAGS is never passed, so the binary is the production build, and no test-hooks label is
 # ever added here.
 LABELS=(
   org.opencontainers.image.source="${SOURCE_URL}"
@@ -157,7 +157,7 @@ image_check_ref() {
 }
 
 # image_build NAME: set IMAGE_CONTEXT to the build context of NAME, one of IMAGES, and IMAGE_BUILD to the build command
-# for it: BUILDX, and for an add-on the pinned bases its Dockerfile requires.
+# for it: BUILDX, and for an add-on the pinned bases its Dockerfile requires and the version it stamps into its binary.
 image_build() {
   local i
   IMAGE_CONTEXT=
@@ -167,7 +167,7 @@ image_build() {
   [ -n "${IMAGE_CONTEXT}" ] || die "$1 is not one of IMAGES"
   IMAGE_BUILD=("${BUILDX[@]}")
   case "${IMAGE_CONTEXT}" in
-    "${ROOT}"/addons/*) IMAGE_BUILD+=(--build-arg "GO_IMAGE=${GO_IMAGE}" --build-arg "RUNTIME_IMAGE=${RUNTIME_IMAGE}") ;;
+    "${ROOT}"/addons/*) IMAGE_BUILD+=(--build-arg "GO_IMAGE=${GO_IMAGE}" --build-arg "RUNTIME_IMAGE=${RUNTIME_IMAGE}" --build-arg "VERSION=${VERSION}") ;;
   esac
 }
 

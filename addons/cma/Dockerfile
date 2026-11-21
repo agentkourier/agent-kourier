@@ -13,13 +13,16 @@ ARG RUNTIME_IMAGE
 FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS build
 ARG TARGETOS
 ARG TARGETARCH
+# VERSION becomes main.version: what --version prints, the agent card's version and the spans' service.version.
+# hack/release/release.sh passes the release tag; a local build is dev.
+ARG VERSION=dev
 WORKDIR /src
 COPY . .
 # GOFLAGS is cleared so nothing in the environment can add build tags; GOENV=off goes with it, since cmd/go ignores an
 # empty GOFLAGS= and falls back to a `go env -w` file (the root Dockerfile says the same).
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     GOFLAGS= GOENV=off CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -o /out/agent-kourier-cma ./cmd/adapter
+    go build -trimpath -ldflags "-X main.version=${VERSION}" -o /out/agent-kourier-cma ./cmd/adapter
 
 FROM ${RUNTIME_IMAGE}
 COPY --from=build /out/agent-kourier-cma /agent-kourier-cma

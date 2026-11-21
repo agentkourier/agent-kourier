@@ -250,13 +250,13 @@ for f in digest prompt-agent-digest echo-agent-digest cma-digest; do
   check "build: ${f} is a digest" 1 "$(grep -c -x -E 'sha256:[0-9a-f]{64}' "${TMP}/build/${f}")"
 done
 check "build: four distinct image digests" 4 "$(cat "${TMP}/build/digest" "${TMP}/build/prompt-agent-digest" "${TMP}/build/echo-agent-digest" "${TMP}/build/cma-digest" | sort -u | wc -l | tr -d ' ')"
-# Each build's arguments, three builds of each image: an add-on is built on Agent Kourier's pinned bases (no version: its
-# Dockerfile takes none), an agent with no argument.
+# Each build's arguments, three builds of each image: an add-on is built on Agent Kourier's pinned bases with the version,
+# as Agent Kourier is, an agent with no argument.
 GO_IMAGE_PIN=$(sed -n 's/^GO_IMAGE=//p' "${ROOT}/hack/kind/lib.sh")
 RUNTIME_IMAGE_PIN=$(sed -n 's/^RUNTIME_IMAGE=//p' "${ROOT}/hack/kind/lib.sh")
 for want in \
   ". GO_IMAGE=${GO_IMAGE_PIN} RUNTIME_IMAGE=${RUNTIME_IMAGE_PIN} VERSION=v1.2.3" \
-  "addons/cma GO_IMAGE=${GO_IMAGE_PIN} RUNTIME_IMAGE=${RUNTIME_IMAGE_PIN}" \
+  "addons/cma GO_IMAGE=${GO_IMAGE_PIN} RUNTIME_IMAGE=${RUNTIME_IMAGE_PIN} VERSION=v1.2.3" \
   "examples/recipes/echo-agent/agent" \
   "examples/recipes/prompt-agent/agent"; do
   check "build: the arguments of ${want%% *}" 3 "$(grep -c -x -F -- "${want}" "${TMP}/build.args")"
