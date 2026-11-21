@@ -102,14 +102,22 @@ names the variable; the error never shows the value of `POSTGRES_DSN` or `AUTH_H
 | `SQLITE_PATH` | `cma-addon.db` | The SQLite file, with `STORE=sqlite`. |
 | `POSTGRES_DSN` | required with `postgres` | The Postgres connection string, as pgx reads it. Refused with `STORE=sqlite`. |
 | `TASK_RETENTION` | `720h` | How long a settled task (completed, failed, canceled or rejected) and its message IDs are kept after its last update; checked once a minute. `0` keeps them. |
-| `LEASE_DURATION` / `LEASE_RENEW_DEADLINE` / `LEASE_RETRY_PERIOD` | `15s` / `10s` / `2s` | Postgres only, refused with SQLite. Each must be more than zero, the lease longer than the renew deadline, and the renew deadline longer than 1.2 times the retry period. Read and checked; the leader election that will use them is not built yet. |
-| `ADVERTISE_URL` | required with `postgres` | An `http` or `https` URL where other replicas will reach this one. Read and checked, not used yet. |
-| `POD_NAME` | the hostname | This replica's name as a lease holder. Not used yet. |
+| `LEASE_DURATION` / `LEASE_RENEW_DEADLINE` / `LEASE_RETRY_PERIOD` | `15s` / `10s` / `2s` | The leader election (Postgres only, refused with SQLite; see [Replicas](#replicas)). Each must be more than zero, the lease longer than the renew deadline, and the renew deadline longer than 1.2 times the retry period. |
+| `ADVERTISE_URL` | required with `postgres` | An `http` or `https` URL where the other replicas reach this one; the store records it with the lease, and standbys forward to it. A bare IPv6 address is bracketed (`http://fd00::1:8090` is read as `http://[fd00::1]:8090`: the last group is the port when what comes before it is an address; bracket it to say otherwise). |
+| `POD_NAME` | the hostname | This replica's name as a lease holder. It must differ between replicas: a replica takes a lease held under its own name at once. |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. Logs are JSON on standard error. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | | Where traces go, over OTLP `http/protobuf`; with neither set, none are exported. The other `OTEL_*` variables Agent Kourier reads are read the same way and refused the same way: `OTEL_TRACES_EXPORTER` (`otlp` or `none`), `OTEL_EXPORTER_OTLP[_TRACES]_PROTOCOL`, `OTEL_EXPORTER_OTLP[_TRACES]_HEADERS`, `OTEL_TRACES_SAMPLER` (`parentbased_traceidratio`) and `OTEL_TRACES_SAMPLER_ARG` (default `1`). |
+| `OTEL_SERVICE_NAME` | `agent-kourier-cma` | The traces' `service.name`; `service.version` is the adapter's version. |
+| `AGENTKOURIER_ENVIRONMENT` | | The traces' `deployment.environment.name`, when set. |
+| `AGENTKOURIER_OTLP_ALLOW_INSECURE_HEADERS` | `false` | `true` lets export headers go to an `http` endpoint; without it, headers with an `http` endpoint stop the adapter at start. |
 
-The adapter serves JSON-RPC at `/a2a`, the agent card at `/a2a/.well-known/agent-card.json`, and `/healthz` and
-`/readyz`, which answer 200 once it serves; it serves only after its start-up work below. Every duration must be a Go
-duration of zero or more, or the adapter does not start.
+The adapter serves JSON-RPC at `/a2a`, the agent card at `/a2a/.well-known/agent-card.json`, Prometheus metrics at
+`/metrics`, `/healthz`, which answers 200 once it listens, and `/readyz`, which answers 200 on a standby and on the
+leader once its start-up work below is done (503 before). Every duration must be a Go duration of zero or more, or the
+adapter does not start. `--version` prints the version and exits; the card and the start-up log carry it too.
+
+The adapter exits 0 after a stop on SIGTERM or SIGINT, 2 when a flag, an argument or a setting is wrong, 1 when the
+store, CMA or the listener fails, and 5 when it loses the lease (see [Replicas](#replicas)).
 
 ### Caller check
 
@@ -147,6 +155,57 @@ At start, before it serves, the adapter:
 
 A message whose ID the store has recorded joins that message's task instead of starting another turn, after a restart
 too: Agent Kourier resends a message with the same ID when it cannot tell whether the first send arrived.
+
+### Replicas
+
+With SQLite the one adapter always leads. With Postgres, replicas share one database and elect a leader; only the
+leader runs turns, and the others are standbys.
+
+- **The lease.** The store holds one lease row: its holder (`POD_NAME`), the holder's `ADVERTISE_URL`, an epoch and an
+  expiry, all timed by the database's clock. Every `LEASE_RETRY_PERIOD` a replica tries to take the lease, and takes it
+  when it has expired or is held under its own name; each take raises the epoch by one. The leader renews it every
+  `LEASE_RETRY_PERIOD` for `LEASE_DURATION`.
+- **Losing it.** A leader that has not renewed for `LEASE_RENEW_DEADLINE` (a renewal fails, or finds the lease taken)
+  logs why and exits with code 5 at once, without a drain; it stops before its lease runs out. A standby takes the
+  lease once `LEASE_DURATION` has passed since the last renewal, at its next try: with the defaults, between 15 and 17
+  seconds after the leader stopped renewing.
+- **Fencing.** Every write to the store checks, in its own transaction, that the epoch is still the one this replica
+  took, and is refused if not; the replica that finds itself deposed exits with code 5. A standby writes nothing.
+  A takeover waits up to 4 seconds for the old leader's writes in flight to finish before it raises the epoch, and
+  tries again at its next try if they have not.
+- **Taking over.** A new leader runs the start-up work above (reconciliation, then failing the interrupted turns),
+  starts the reaper, and only then serves; until then `/readyz` and `/a2a` answer 503.
+- **Stopping.** On SIGTERM or SIGINT a replica stops taking requests, waits up to 5 seconds for those in flight, and
+  then, if it leads, releases the lease, so a standby takes over at its next try instead of when the lease expires.
+- **Forwarding.** A standby forwards `/a2a` and the card to the leader the lease names, as they come: a stream is not
+  buffered. The caller's headers go with it (the `AUTH_HEADER` token and `traceparent` included), `X-Forwarded-For`
+  gains the caller's address, and the standby adds `X-Agent-Kourier-Cma-Forwarded`. The leader checks the token; a
+  standby does not. A standby answers 503 with `Retry-After` (`LEASE_RETRY_PERIOD`, rounded up to whole seconds, at
+  least 1) when no live lease names another replica, when the leader cannot be reached within 5 seconds (it then reads
+  the lease again for the next request), and when a request already carries the forwarding header: a request is
+  forwarded once at most.
+
+### Telemetry
+
+`/metrics` serves, besides the Go runtime and process metrics:
+
+| Metric | Labels | What it counts |
+|---|---|---|
+| `agentkourier_cma_turns_total` | `outcome`: `completed`, `input_required`, `failed`, `canceled`, `timeout`, `interrupted` | Turns, by how they ended. `timeout` is a turn that waited `TOOL_RESULT_TIMEOUT`; `interrupted` is a turn the leader failed at start-up. |
+| `agentkourier_cma_operation_duration_seconds` | `operation`: `create_session`, `stream`, `send`, `list_sessions`, `archive`; `outcome`: `success`, `cancelled`, `timeout`, the HTTP status, or `error` | Calls to the Managed Agents API (for `stream`, opening it). |
+| `agentkourier_cma_auth_refused_total` | `reason`: `missing`, `invalid` | Requests the caller check answered 401. |
+| `agentkourier_cma_sessions_archived_total` | `reason`: `idle`, `superseded`, `gone` | Sessions let go of: archived after `SESSION_IDLE_TTL`, archived as a context's extra session, or forgotten because CMA no longer lists them. |
+| `agentkourier_cma_message_replays_total` | | Messages that joined the task their ID started. |
+| `agentkourier_cma_tasks_interrupted_total` | | Tasks the leader failed at start-up. |
+| `agentkourier_cma_sessions` | | Contexts with a session in this replica's memory (none on a standby). |
+| `agentkourier_cma_leader` | | 1 while this replica runs turns, 0 on a standby. |
+| `agentkourier_cma_leader_takeovers_total` | | Times this replica took the lease. |
+| `agentkourier_cma_forwarded_requests_total` | `outcome`: `forwarded`, `failed`, `cancelled`, `no_leader`, `loop` | Requests a standby forwarded, or answered 503 instead. |
+
+With an OTLP endpoint set, each turn is a span, `agentkourier.cma.turn`, a child of the span in the request's
+`traceparent` (Agent Kourier's), with the attributes `agentkourier.task.id`, `agentkourier.context.id` and
+`agentkourier.outcome`; each call to the API is a child span, `agentkourier.cma.backend.<operation>`. No span or log
+carries message text, tool input or a token.
 
 ### Session lifecycle
 
@@ -226,13 +285,19 @@ go test -race ./...
 ADAPTER_URL=http://127.0.0.1:8090/a2a ADAPTER_TOKEN="$(cat ../cma-token)" go run .
 ```
 
-No CI workflow builds or tests this example yet.
+CI's `cma` job runs `hack/postgres/run.sh make cma-test` and `make cma-lint`.
 
 ## Limits
 
-- **One instance at a time.** With SQLite the file lock keeps a second adapter from starting on the same file. With
-  Postgres nothing stops a second adapter yet: two adapters on one database would both serve, and could start two
-  sessions for one thread. Run one.
+- **One replica runs turns.** With SQLite the file lock keeps a second adapter from starting on the same file. With
+  Postgres more replicas give a quicker takeover, not more capacity: standbys forward to the leader.
+- **A takeover is not instant.** When the leader dies without releasing the lease, requests get 503 until a standby
+  takes over (with the defaults, up to 17 seconds) and finishes its start-up work. A leader that cannot reach the
+  database stops after `LEASE_RENEW_DEADLINE`.
+- **A takeover fails the turns in flight.** A turn the old leader was running, and the stream a standby forwarded for
+  it, end with that leader; the new leader fails the task as a restart does.
+- **Store calls have no deadline of their own.** On Postgres, a statement is cut at 30 seconds and a transaction left
+  idle at 10, unless `POSTGRES_DSN` sets `statement_timeout` or `idle_in_transaction_session_timeout`.
 - **One caller.** Every accepted token is Agent Kourier; tasks are not kept apart by token.
 - **A restart fails the turns in flight.** A turn that was running when the adapter stopped is failed at the next
   start, and its session interrupted; Agent Kourier shows the failure in the thread. A paused approval survives.
