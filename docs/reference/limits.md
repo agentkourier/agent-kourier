@@ -333,4 +333,4 @@ The [Claude Managed Agents add-on](claude-managed-agents.md) bridges A2A to sess
 | How a tool approval is answered | The Approve and Deny buttons | A typed reply to a paused approval is refused as invalid, and the task stays paused. | None |
 | What a pause may wait on | Tool calls whose permission is `ask` | A pause on a custom tool, or on a call the turn did not see ask for approval, fails the turn. If one pause names both a call the sandbox runs and one that needs approval, and the session pauses on the first call again after the approval, the turn fails the same way. | None |
 | A `session.error` event | Logged | The turn goes on until the session idles or terminates; the thread is not told. | None |
-| Environments | Self-hosted | Cloud environments have not been tested, and are not supported for now. The add-on does not refuse one. | None |
+| Environments | Self-hosted | Cloud environments have not been tested and are not supported. The add-on does not refuse one. | None |

@@ -26,7 +26,7 @@ thread, so a command in your cluster runs only after a person approves it.
 - **An agent in Claude Managed Agents**, and its ID. Give each tool that a person should approve first the
   `always_ask` permission policy.
 - **A self-hosted environment whose worker runs in your cluster**, and its ID. Cloud environments have not been tested
-  with the add-on, and are not supported for now. The add-on does not refuse one.
+  with the add-on and are not supported. The add-on does not refuse one.
 - **An Anthropic API key** for the organization that holds the agent.
 - **Agent Kourier installed with the Helm chart** ([Install with Helm](install-with-helm.md)), from a release whose
   [release notes](../release-notes.md) list the add-on. The 0.6.0 chart has no `addons` block, and its values schema
