@@ -350,6 +350,98 @@ kubectl -n <ns> create job --from=cronjob/<fullname>-token-refresh first-token
 | `tokenRefresh.resources.requests` | `{cpu: 10m, memory: 16Mi}` |  |
 | `tokenRefresh.resources.limits` | `{memory: 64Mi}` |  |
 
+## addons
+
+Add-ons: services the chart can run beside Agent Kourier, each off until you enable it. An add-on is released with Agent Kourier, under the same version, and runs as a Deployment of its own named &lt;fullname&gt;-&lt;add-on&gt;. Its objects carry app.kubernetes.io/name=agent-kourier-&lt;add-on&gt;, never app.kubernetes.io/name=agent-kourier, so nothing that selects Agent Kourier's pods or Services (its Deployment, Service, ServiceMonitor, NetworkPolicy and PodDisruptionBudget, or a NetworkPolicy elsewhere that trusts that label) selects an add-on's.
+
+addons.cma is the Claude Managed Agents (CMA) add-on: an A2A server in front of one CMA agent, so that a Binding drives that agent with the a2a dialect. It renders &lt;fullname&gt;-cma: a Deployment, a ServiceAccount whose token is not mounted (the add-on does not call the Kubernetes API), a ClusterIP Service on port 8090, named http, and with addons.cma.store.type sqlite a PersistentVolumeClaim. The add-on serves A2A at /a2a, its agent card, /healthz, /readyz and /metrics on that one port. Agent Kourier reaches it through an AgentBackend with dialect a2a and the url http://&lt;fullname&gt;-cma.&lt;namespace&gt;.svc:8090/a2a, which is also the endpoint the agent card names (PUBLIC_URL); a Binding names that AgentBackend in agent.backendRef (on the a2a dialect, agent.name and agent.namespace are labels: the URL selects the agent). With networkPolicy.enabled the add-on gets a NetworkPolicy of its own (addons.cma.networkPolicy), and with serviceMonitor.enabled a ServiceMonitor of its own, which scrapes /metrics on port http with serviceMonitor's namespace, labels, interval and timeout. For example, with the release agent-kourier in the namespace agent-kourier:
+
+```yaml
+config:
+  agentBackends:
+    cma:
+      spec: {dialect: a2a, url: "http://agent-kourier-cma.agent-kourier.svc:8090/a2a"}
+  bindings:
+    cma-chat:
+      spec:
+        agent: {backendRef: {name: cma}, namespace: cma, name: claude}
+        identity: {userId: agent-kourier-cma, tokenSecretRef: {name: cma-token}}
+        chat: {connectionRef: {name: slack-main}, channel: C0123456789, output: live, triggers: [{type: mention}]}
+        interactions: {toolApprovals: true}
+addons:
+  cma:
+    enabled: true
+    agentId: agent_0123
+    environmentId: env_0123
+    anthropicApiKeySecret: {name: anthropic, key: apiKey}
+    auth: {tokenSecret: {name: cma-token}}
+```
+
+| Key | Default | Description |
+|---|---|---|
+| `addons.cma` |  | The Claude Managed Agents add-on, off by default. |
+| `addons.cma.enabled` | `false` |  |
+| `addons.cma.image` |  | The add-on's image. Its pod uses imagePullSecrets above, as Agent Kourier's does. |
+| `addons.cma.image.repository` | `ghcr.io/agentkourier/agent-kourier-cma` |  |
+| `addons.cma.image.tag` | `""` | A tag, which defaults to the chart's appVersion, as image.tag does: a released chart's appVersion is its release tag, and the add-on's image is published under the same tag. Ignored when digest is set. |
+| `addons.cma.image.digest` | `""` | Pin production to a digest (sha256:...), which wins over tag. |
+| `addons.cma.image.pullPolicy` | `IfNotPresent` |  |
+| `addons.cma.replicaCount` | `1` | 1, or 2 and more with addons.cma.store.type postgres (the render refuses more than 1 with sqlite: the add-on's SQLite file is on a ReadWriteOnce volume and may be open in one pod). With Postgres the replicas elect a leader (addons.cma.leaderElection), every replica is Ready and behind the Service, and the Deployment rolls one new pod in before it takes an old one away; at 2 and more the chart adds a PodDisruptionBudget, &lt;fullname&gt;-cma, with maxUnavailable 1, so that a node drain does not take every replica at once. 0 stops the add-on, and its volume or database stays. |
+| `addons.cma.agentId` | `""` | Required. The ID of the CMA agent the add-on serves (CMA_AGENT_ID). |
+| `addons.cma.environmentId` | `""` | Required. The ID of the CMA environment its sessions run in (CMA_ENVIRONMENT_ID). |
+| `addons.cma.anthropicApiKeySecret` |  | Required. The Secret, in the release namespace, and its key, that hold the Anthropic API key. The chart passes it into the container's environment (ANTHROPIC_API_KEY, with valueFrom.secretKeyRef), which Kubernetes reads when the container starts: after a change to the Secret, restart the add-on (kubectl rollout restart deployment/&lt;fullname&gt;-cma). |
+| `addons.cma.anthropicApiKeySecret.name` | `""` |  |
+| `addons.cma.anthropicApiKeySecret.key` | `""` |  |
+| `addons.cma.sessionIdleTTL` | `""` | How long a thread's context may go without a turn before the add-on archives its CMA session (SESSION_IDLE_TTL), a Go duration. Empty is the add-on's default, 2160h, which is Agent Kourier's default session.threadTTL: set it to the Binding's. "0" never archives. |
+| `addons.cma.toolResultTimeout` | `""` | How long a turn waits, with no session event, for the result of a tool that the sandbox runs (TOOL_RESULT_TIMEOUT), a Go duration. Empty is the add-on's default, 10m; "0" waits for ever. |
+| `addons.cma.taskRetention` | `""` | How long the add-on keeps a settled task, and its message IDs, before it deletes them (TASK_RETENTION), a Go duration. Empty is the add-on's default, 720h; "0" keeps them. |
+| `addons.cma.logLevel` | `info` | debug, info, warn or error (LOG_LEVEL) |
+| `addons.cma.auth` |  | Who may call the add-on. The chart has it listen on every interface of the pod (LISTEN_ADDR :8090), where the add-on refuses to start without a caller check, so the chart offers no way to turn the check off: a request without an accepted token is refused. The chart mounts tokenSecret's key as a file (AUTH_TOKEN_FILE) that holds the accepted tokens, one per line (blank lines, and lines that begin with #, are ignored). The add-on re-reads the file when it changes, and the kubelet updates a mounted Secret in place (after its own sync delay), so a change of the tokens needs no restart. Agent Kourier sends the token in one of two ways, which header below picks. With header empty, a Binding's identity.tokenSecretRef names a Secret with the token, which Agent Kourier sends as Authorization: Bearer &lt;token&gt;. With header set, the AgentBackend has an entry of headers with that name and a valueSecretRef that names a Secret with the token, which Agent Kourier sends as the header's whole value. The broker and the add-on may read one Secret and key while it holds a single token. To rotate without a refused turn, give the add-on a Secret of its own: add the new token to it on a line of its own, change the broker's Secret to the new token, then remove the old line. With config.source crds and a Binding or AgentBackend that config.\* does not render, grant the broker's Secret to Agent Kourier (rbac.secretNames, or the team's own Role). |
+| `addons.cma.auth.tokenSecret` |  | Required: the Secret, in the release namespace, and its key. The key defaults to token, the key that identity.tokenSecretRef and valueSecretRef read when they name none. |
+| `addons.cma.auth.tokenSecret.name` | `""` |  |
+| `addons.cma.auth.tokenSecret.key` | `token` |  |
+| `addons.cma.auth.header` | `""` | The header that carries the token (AUTH_HEADER). Empty is the add-on's default, Authorization, whose value is Bearer &lt;token&gt;; any other name carries the token as its whole value. A name reserved for the Binding's identity (Authorization, Proxy-Authorization, Cookie, X-User-Id, X-Agent-Name, X-Share-Token, X-Kagent-Insecure-Runtime-Identity) cannot be an AgentBackend header. |
+| `addons.cma.store` |  | Where the add-on keeps its tasks, the message IDs it has seen and which CMA session serves each context. This is the add-on's own setting, apart from Agent Kourier's store.type. |
+| `addons.cma.store.type` | `sqlite` | sqlite or postgres (STORE) |
+| `addons.cma.store.postgres.dsnSecret` |  | The Secret, in the release namespace, and its key, that hold the DSN: required with addons.cma.store.type postgres, and refused with sqlite. The chart passes it into the container's environment (POSTGRES_DSN, with valueFrom.secretKeyRef). The DSN, password included, never goes in a values file (the render refuses a postgres:// URL with a password anywhere in them). Give the add-on a database of its own, apart from Agent Kourier's. |
+| `addons.cma.store.postgres.dsnSecret.name` | `""` |  |
+| `addons.cma.store.postgres.dsnSecret.key` | `""` |  |
+| `addons.cma.leaderElection` |  | Leader election, with addons.cma.store.type postgres only (with sqlite none of this is allowed). The replicas hold a lease in the database, not a Kubernetes Lease, so the add-on needs no RBAC. The leader serves A2A; a standby forwards each request it receives to the leader's pod address (ADVERTISE_URL, http://&lt;pod IP&gt;:8090, which the chart sets from the downward API, with POD_NAME, the lease holder's name). Empty is the add-on's default; each is a Go duration. |
+| `addons.cma.leaderElection.leaseDuration` | `""` | 15s (LEASE_DURATION) |
+| `addons.cma.leaderElection.renewDeadline` | `""` | 10s (LEASE_RENEW_DEADLINE) |
+| `addons.cma.leaderElection.retryPeriod` | `""` | 2s (LEASE_RETRY_PERIOD) |
+| `addons.cma.persistence` |  | The add-on's SQLite volume (addons.cma.store.type sqlite; with postgres none of this is used or rendered). The database is /data/cma.db (SQLITE_PATH) on the claim &lt;fullname&gt;-cma-data, which is ReadWriteOnce, and the Deployment's strategy is Recreate, so the old pod has released the volume before the new one starts. |
+| `addons.cma.persistence.existingClaim` | `""` | Use a claim you manage instead of creating one. |
+| `addons.cma.persistence.size` | `1Gi` |  |
+| `addons.cma.persistence.storageClassName` | `""` | Empty is the cluster's default class; "-" is an explicitly empty one. |
+| `addons.cma.persistence.accessModes` | `[ReadWriteOnce]` |  |
+| `addons.cma.persistence.retainOnUninstall` | `true` | Keep the claim (helm.sh/resource-policy: keep) when the release is uninstalled. Delete it by hand when you mean to. |
+| `addons.cma.networkPolicy` |  | With networkPolicy.enabled, the add-on's NetworkPolicy. Ingress is port 8090 from Agent Kourier's pods, from networkPolicy.metricsFrom (the metrics share the port with A2A, where a request without a token is refused) and, with Postgres, from the add-on's other replicas, which forward to the leader. Egress is DNS (networkPolicy.dns), the Anthropic API, with Postgres the add-on's other replicas on 8090 and its database, and what addons.cma.networkPolicy.extraEgress adds. Agent Kourier's own policy then also allows egress to the add-on's pods on 8090. |
+| `addons.cma.networkPolicy.anthropic` |  | The Anthropic API, on 443. A NetworkPolicy cannot name a host, so this is port 443 to anywhere outside the private ranges, as networkPolicy.slack is for Agent Kourier. Put an egress proxy's address in extraEgress and narrow this to [] to close it. |
+| `addons.cma.networkPolicy.anthropic.cidrs` | `["0.0.0.0/0"]` |  |
+| `addons.cma.networkPolicy.anthropic.except` | `["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16"]` |  |
+| `addons.cma.networkPolicy.postgres` |  | The add-on's database (addons.cma.store.type postgres), as NetworkPolicyPeers: required when the policy is enabled with Postgres, as networkPolicy.postgres.to is for Agent Kourier's. Egress is on port. |
+| `addons.cma.networkPolicy.postgres.to` | `[]` |  |
+| `addons.cma.networkPolicy.postgres.port` | `5432` |  |
+| `addons.cma.networkPolicy.extraEgress` | `[]` | More egress rules, in Kubernetes' own form: an OTLP collector, an egress proxy. |
+| `addons.cma.extraEnv` | `[]` | Extra container environment, in Kubernetes' own form. This is where the OpenTelemetry settings go (OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_TRACES_EXPORTER, OTEL_SERVICE_NAME, whose default is agent-kourier-cma, ...); take a header or other credential from a Secret with valueFrom.secretKeyRef, never as a value. |
+| `addons.cma.resources` |  | As resources does for Agent Kourier, a memory limit that is a plain quantity sets GOMEMLIMIT to 80% of it, unless extraEnv sets GOMEMLIMIT. |
+| `addons.cma.resources.requests` | `{cpu: 50m, memory: 64Mi}` |  |
+| `addons.cma.resources.limits` | `{memory: 256Mi}` |  |
+| `addons.cma.podAnnotations` | `{}` |  |
+| `addons.cma.podLabels` | `{}` | Added to the pod. app.kubernetes.io/name, /instance and /component cannot be changed. |
+| `addons.cma.nodeSelector` | `{}` |  |
+| `addons.cma.tolerations` | `[]` |  |
+| `addons.cma.affinity` | `{}` |  |
+| `addons.cma.podSecurityContext.runAsNonRoot` | `true` |  |
+| `addons.cma.podSecurityContext.runAsUser` | `65532` |  |
+| `addons.cma.podSecurityContext.runAsGroup` | `65532` |  |
+| `addons.cma.podSecurityContext.fsGroup` | `65532` |  |
+| `addons.cma.podSecurityContext.seccompProfile` | `{type: RuntimeDefault}` |  |
+| `addons.cma.securityContext.allowPrivilegeEscalation` | `false` |  |
+| `addons.cma.securityContext.readOnlyRootFilesystem` | `true` |  |
+| `addons.cma.securityContext.capabilities` | `{drop: [ALL]}` |  |
+
 ---
 
 Generated by `hack/docs/refgen` from `charts/agent-kourier/values.yaml`. Do not edit this page; change the source and run `make docs-ref`.

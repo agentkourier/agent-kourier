@@ -128,6 +128,7 @@ tier's, with the token-refresh CronJob).
 | NetworkPolicy | `networkPolicy.enabled` | see below |
 | PodDisruptionBudget | `podDisruptionBudget.enabled` | off; `minAvailable: 1` keeps a drain from taking both replicas at `replicaCount: 2`; the render refuses a budget that keeps every pod (`minAvailable` >= replicas, 100%, `maxUnavailable: 0`), since it would block every node drain |
 | CronJob, ServiceAccount, Role, RoleBinding `<fullname>-token-refresh` | `tokenRefresh.enabled` | keeps a Binding's Dex ID token fresh |
+| Deployment, Service, ServiceAccount `<fullname>-cma` | `addons.cma.enabled` | the Claude Managed Agents add-on, an A2A server in front of one CMA agent; its pods are labelled `app.kubernetes.io/name: agent-kourier-cma`, which none of the broker's selectors match; the Service is ClusterIP on port 8090; the ServiceAccount mounts no token and is granted nothing. With `addons.cma.store.type: sqlite` (strategy Recreate) also the PersistentVolumeClaim `<fullname>-cma-data`, kept on `helm uninstall`; with `postgres` (strategy RollingUpdate) and two replicas or more, a PodDisruptionBudget with `maxUnavailable: 1`; with `networkPolicy.enabled` a NetworkPolicy, and with `serviceMonitor.enabled` a ServiceMonitor, of its own |
 
 `<fullname>` is the release name, or `<release>-agent-kourier` when the name does not contain "agent-kourier" (`fullnameOverride` sets it).
 
@@ -151,6 +152,10 @@ NetworkPolicy in another namespace for instance, needs the real name, or you set
 - `logLevel`, `syncTimeout`, `auditRetention` (empty keeps the audit log for ever; a duration of at least 24h purges older entries), `extraEnv` (OpenTelemetry settings go here), `resources`, `persistence.*` (SQLite's volume).
 - `service`, `serviceMonitor`, `networkPolicy`, `podDisruptionBudget`, `tokenRefresh`: off until you switch them on.
 - `chatListener.*` and `networkPolicy.chatFrom`: the chat listener, its Service and an optional Ingress; off until you switch it on (see Chat listener).
+- `addons.cma.*`: the Claude Managed Agents add-on, off until you switch it on. It needs `agentId`, `environmentId`, `anthropicApiKeySecret`
+  and `auth.tokenSecret` (the tokens it accepts; the chart offers no way to turn that check off), and has a store of its own
+  (`addons.cma.store.type`, SQLite at one replica or Postgres at one or more). Agent Kourier reaches it through an AgentBackend with
+  dialect `a2a` and the url `http://<fullname>-cma.<namespace>.svc:8090/a2a`.
 
 With the files route a config change rolls the pod (a `checksum/config` annotation). Agent Kourier also reloads its files in place, and follows a Secret
 that a reload adds, in any namespace its ServiceAccount may list and watch it in. A Secret it may not read fails that reload: the last
@@ -592,7 +597,7 @@ was the largest of them at 188 MiB.
 
 ## Tests
 
-`go test ./test/chart` renders the chart with `helm template` and checks it: golden files for eight of the `ci/` values files (`fast-postgres-ha` is an overlay, checked layered on `fast-postgres`), the
+`go test ./test/chart` renders the chart with `helm template` and checks it: golden files for ten of the `ci/` values files (`fast-postgres-ha` is an overlay, checked layered on `fast-postgres`), the
 refusals (replicas above 1 with SQLite, Postgres without its Secret, a monitor without a Service, a NetworkPolicy without the API server, and the rest), the security
 properties above, and what the kind tiers' values render (the object names, labels, image and volume that `hack/kind`'s scripts and the E2E tests rely
 on), and the fast and AX tiers' config, which is loaded through Agent Kourier's own loader. It needs `helm` on PATH and skips without it, so that `make test` runs on a machine with only Go;

@@ -1,0 +1,56 @@
+# The Claude Managed Agents add-on beside the minimal install, on SQLite at one replica: an AgentBackend that names the add-on's Service,
+# a Binding whose identity token the add-on accepts (Authorization: Bearer), and the NetworkPolicies of both, so that the broker's egress
+# to the add-on and the add-on's ingress from the broker are rendered.
+image:
+  repository: registry.example.test/agent-kourier
+  tag: v0.1.0
+
+config:
+  # The ConfigMap route, named: config.source defaults to crds. crds.install is left unset, which is false with files: no CRD.
+  source: files
+  chatConnections:
+    slack-main:
+      spec:
+        platform: slack
+        credentialsSecretRef: {name: slack-main}
+  agentBackends:
+    cma:
+      spec:
+        dialect: a2a
+        url: http://agent-kourier-cma.agent-kourier.svc:8090/a2a
+  bindings:
+    cma-chat:
+      spec:
+        agent:
+          backendRef: {name: cma}
+          namespace: cma
+          name: claude
+        identity:
+          userId: agent-kourier-cma
+          tokenSecretRef: {name: cma-token}
+        chat:
+          connectionRef: {name: slack-main}
+          channel: C0123456789
+          output: live
+          triggers:
+            - type: mention
+        interactions: {toolApprovals: true}
+
+networkPolicy:
+  enabled: true
+  kubeApiServer:
+    cidrs: ["10.0.0.1/32"]
+  metricsFrom:
+    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: monitoring}}
+      podSelector: {matchLabels: {app.kubernetes.io/name: prometheus}}
+
+addons:
+  cma:
+    enabled: true
+    image:
+      tag: v0.1.0
+    agentId: agent_0123456789
+    environmentId: env_0123456789
+    anthropicApiKeySecret: {name: anthropic, key: apiKey}
+    auth:
+      tokenSecret: {name: cma-token}

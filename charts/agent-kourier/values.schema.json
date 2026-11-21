@@ -232,9 +232,118 @@
         },
         "resources": {"type": "object"}
       }
+    },
+    "addons": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cma": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "the Claude Managed Agents add-on, an A2A server in front of one CMA agent; off by default",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "image": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "repository": {"type": "string"},
+                "tag": {"type": "string"},
+                "digest": {"type": "string", "pattern": "^(sha256:[a-f0-9]{64})?$"},
+                "pullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]}
+              }
+            },
+            "replicaCount": {"type": "integer", "minimum": 0, "description": "0 stops the add-on, 1, or 2 or more with store.type postgres: the replicas elect a leader and the standbys forward to it; SQLite is one replica"},
+            "agentId": {"type": "string"},
+            "environmentId": {"type": "string"},
+            "anthropicApiKeySecret": {"$ref": "#/definitions/secretKey"},
+            "sessionIdleTTL": {"$ref": "#/definitions/durationOrZero"},
+            "toolResultTimeout": {"$ref": "#/definitions/durationOrZero"},
+            "taskRetention": {"$ref": "#/definitions/durationOrZero"},
+            "logLevel": {"enum": ["debug", "info", "warn", "error"]},
+            "auth": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "the tokens the add-on accepts; the chart offers no way to turn the caller check off",
+              "properties": {
+                "tokenSecret": {"$ref": "#/definitions/secretKey"},
+                "header": {"type": "string", "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]*$", "maxLength": 256, "description": "the header that carries the token; empty is Authorization, with Bearer <token>"}
+              }
+            },
+            "store": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "type": {"enum": ["sqlite", "postgres"]},
+                "postgres": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {"dsnSecret": {"$ref": "#/definitions/secretKey"}}
+                }
+              }
+            },
+            "leaderElection": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "leaseDuration": {"type": "string", "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))*$"},
+                "renewDeadline": {"type": "string", "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))*$"},
+                "retryPeriod": {"type": "string", "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))*$"}
+              }
+            },
+            "persistence": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "existingClaim": {"type": "string"},
+                "size": {"type": "string"},
+                "storageClassName": {"type": "string"},
+                "accessModes": {"type": "array", "items": {"type": "string"}},
+                "retainOnUninstall": {"type": "boolean"}
+              }
+            },
+            "networkPolicy": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "anthropic": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {"cidrs": {"type": "array", "items": {"type": "string"}}, "except": {"type": "array", "items": {"type": "string"}}}
+                },
+                "postgres": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {"to": {"type": "array"}, "port": {"type": "integer", "minimum": 1, "maximum": 65535}}
+                },
+                "extraEgress": {"type": "array"}
+              }
+            },
+            "extraEnv": {"type": "array"},
+            "resources": {"type": "object"},
+            "podAnnotations": {"type": "object"},
+            "podLabels": {"type": "object"},
+            "nodeSelector": {"type": "object"},
+            "tolerations": {"type": "array"},
+            "affinity": {"type": "object"},
+            "podSecurityContext": {"type": "object"},
+            "securityContext": {"type": "object"}
+          }
+        }
+      }
     }
   },
   "definitions": {
+    "secretKey": {
+      "description": "a Secret in the release namespace, by name, and one of its keys",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string", "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?)?$", "maxLength": 253},
+        "key": {"type": "string", "pattern": "^[-._a-zA-Z0-9]*$", "maxLength": 253}
+      }
+    },
+    "durationOrZero": {"type": "string", "pattern": "^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)?$", "description": "empty for the add-on's default, 0, or a Go duration"},
     "labelKey": {"type": "string", "maxLength": 317, "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$", "description": "a label key: an optional DNS subdomain prefix and a slash, then a name of at most 63 characters"},
     "labelValue": {"type": "string", "pattern": "^([A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?)?$", "description": "a label value: at most 63 characters, empty allowed"},
     "labelSelectorRequirement": {
