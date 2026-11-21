@@ -157,7 +157,10 @@ A request to `/a2a` must carry one of the tokens in `AUTH_TOKEN_FILE`, or the ad
 
 - **The header.** With `AUTH_HEADER` unset, the token comes as `Authorization: Bearer <token>` (the scheme in any case),
   which is what a Binding's `identity.tokenSecretRef` sends. With another header name, the header's whole value is the
-  token, which an AgentBackend `headers` entry with a `valueSecretRef` sends.
+  token, which an AgentBackend `headers` entry with a `valueSecretRef` sends. The add-on does not start, and the chart's
+  values schema refuses `addons.cma.auth.header`, when the name is one of the other headers Agent Kourier reserves for
+  the Binding's identity, in any case: `Proxy-Authorization`, `Cookie`, `X-User-Id`, `X-Agent-Name`, `X-Share-Token`
+  or `X-Kagent-Insecure-Runtime-Identity`. An AgentBackend may not set them, so none of them would ever carry the token.
 - **The file.** One token per line. Lines that are blank or start with `#` are skipped, and trailing whitespace (a CR
   included) is stripped. The add-on does not start with a file it cannot read or that holds no token. It reads the file
   again every 5 seconds, because a mounted Secret changes by swapping a symlink; a read that fails or finds no token
@@ -202,7 +205,7 @@ Every duration is a Go duration, such as `90s` or `720h`, of zero or more unless
 | `TOOL_RESULT_TIMEOUT` | `10m`<!--addon-limit:cma.tool-result-timeout--> | How long a turn waits, with no session event, on a tool the sandbox runs. `0` waits for ever. | `addons.cma.toolResultTimeout` |
 | `TASK_RETENTION` | `720h`<!--addon-limit:cma.task-retention--> | How long a settled task and its message IDs are kept after its last update. `0` keeps them. | `addons.cma.taskRetention` |
 | `AUTH_TOKEN_FILE` | Required, unless `AUTH_DISABLED` | The file of accepted tokens. | Always `/etc/agent-kourier-cma/auth/tokens`, the key of `addons.cma.auth.tokenSecret` |
-| `AUTH_HEADER` | `Authorization` | The header that carries the token. Must be a header name. | `addons.cma.auth.header` |
+| `AUTH_HEADER` | `Authorization` | The header that carries the token. Must be a header name, and not one of the reserved names in [Caller check](#caller-check). | `addons.cma.auth.header` |
 | `AUTH_DISABLED` | `false` | `true` turns the caller check off, on a loopback `LISTEN_ADDR` only. | Never set |
 | `STORE` | `sqlite` | `sqlite` or `postgres`. | `addons.cma.store.type` |
 | `SQLITE_PATH` | `cma-addon.db` | The SQLite file, with `STORE=sqlite`. | Always `/data/cma.db`, on the claim `<fullname>-cma-data` |

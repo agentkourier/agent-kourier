@@ -69,6 +69,14 @@ func TestEverySetting(t *testing.T) {
 	}
 }
 
+// Authorization, the default, may be named, in any case.
+func TestAuthHeaderAuthorization(t *testing.T) {
+	c, err := Parse(env(map[string]string{"AUTH_HEADER": "authorization"}))
+	if err != nil || c.AuthHeader != "Authorization" {
+		t.Fatalf("Parse = %q, %v; want Authorization", c.AuthHeader, err)
+	}
+}
+
 func TestAuthDisabledOnLoopback(t *testing.T) {
 	for _, addr := range []string{"127.0.0.1:8090", "127.9.9.9:1", "[::1]:8090", "localhost:8090"} {
 		t.Run(addr, func(t *testing.T) {
@@ -105,6 +113,12 @@ func TestRefused(t *testing.T) {
 		{"auth disabled on a pod address", map[string]string{"AUTH_DISABLED": "true", "AUTH_TOKEN_FILE": "", "LISTEN_ADDR": "10.0.0.7:8090"}, "AUTH_DISABLED"},
 		{"auth disabled with a token file", map[string]string{"AUTH_DISABLED": "true"}, "AUTH_TOKEN_FILE"},
 		{"auth header not a token", map[string]string{"AUTH_HEADER": "X Token"}, "AUTH_HEADER"},
+		{"auth header proxy-authorization", map[string]string{"AUTH_HEADER": "Proxy-Authorization"}, "AUTH_HEADER"},
+		{"auth header cookie", map[string]string{"AUTH_HEADER": "cookie"}, "AUTH_HEADER"},
+		{"auth header x-user-id", map[string]string{"AUTH_HEADER": "x-user-id"}, "AUTH_HEADER"},
+		{"auth header x-agent-name", map[string]string{"AUTH_HEADER": "X-AGENT-NAME"}, "AUTH_HEADER"},
+		{"auth header x-share-token", map[string]string{"AUTH_HEADER": "X-Share-Token"}, "AUTH_HEADER"},
+		{"auth header kagent runtime identity", map[string]string{"AUTH_HEADER": "x-kagent-insecure-runtime-identity"}, "AUTH_HEADER"},
 		{"unknown store", map[string]string{"STORE": "mysql"}, "STORE"},
 		{"empty sqlite path", map[string]string{"SQLITE_PATH": "   "}, "SQLITE_PATH"},
 		{"postgres without dsn", map[string]string{"STORE": "postgres", "ADVERTISE_URL": "http://10.0.0.7:8090"}, "POSTGRES_DSN"},

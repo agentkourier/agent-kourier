@@ -168,11 +168,27 @@ func (c *Config) parseAuth(getenv func(string) string, listenHost string) error 
 	if header == "" {
 		header = "Authorization"
 	}
-	if !headerName(header) {
+	switch {
+	case !headerName(header):
 		errs = append(errs, errors.New("AUTH_HEADER is not a header name (its value is not shown)"))
+	case reservedHeader(header):
+		errs = append(errs, errors.New("AUTH_HEADER names a header that Agent Kourier never fills with a secret "+
+			"(Proxy-Authorization, Cookie, X-User-Id, X-Agent-Name, X-Share-Token, X-Kagent-Insecure-Runtime-Identity): "+
+			"leave it unset for Authorization, or name another header"))
 	}
 	c.AuthHeader = http.CanonicalHeaderKey(header)
 	return errors.Join(errs...)
+}
+
+// reservedHeader reports whether name is a header Agent Kourier reserves (IsReservedHeader in its api/v1alpha1) other
+// than Authorization: an AgentBackend may not set one, so no valueSecretRef ever sends a token in it, and X-User-Id
+// carries the Binding's userId, which is not a secret.
+func reservedHeader(name string) bool {
+	switch http.CanonicalHeaderKey(name) {
+	case "Proxy-Authorization", "Cookie", "X-User-Id", "X-Agent-Name", "X-Share-Token", "X-Kagent-Insecure-Runtime-Identity":
+		return true
+	}
+	return false
 }
 
 // parseStore reads the store and the leader election's settings.
