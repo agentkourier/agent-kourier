@@ -1,5 +1,6 @@
-# Agent Kourier in the cma kind cluster for the CMA adapter test: the production image (make image, kind load), the
-# ConfigMap route with config/kourier.yaml, Secrets in the release's namespace.
+# Agent Kourier and the CMA add-on in a kind cluster for the end-to-end test: the production images (make image and
+# make cma-image, then kind load), the ConfigMap route with config/kourier.yaml, Secrets in the release's namespace.
+# Replace agent_REPLACE and env_REPLACE with your agent's and self-hosted environment's IDs.
 image:
   repository: agent-kourier
   tag: dev
@@ -14,3 +15,19 @@ rbac:
 persistence:
   storageClassName: standard
   retainOnUninstall: false
+addons:
+  cma:
+    enabled: true
+    image:
+      repository: agent-kourier-cma
+      tag: dev
+      pullPolicy: Never
+    agentId: agent_REPLACE
+    environmentId: env_REPLACE
+    anthropicApiKeySecret: {name: cma-anthropic, key: apiKey}
+    auth:
+      tokenSecret: {name: cma-adapter-token, key: token}
+    logLevel: debug
+    persistence:
+      storageClassName: standard
+      retainOnUninstall: false
