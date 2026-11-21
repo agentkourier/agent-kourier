@@ -71,6 +71,9 @@ spec:
           by: key
           cooldown: 1h
           closeWhen: {state: RESOLVED}
+        limits:
+          rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}
+          maxRunsPerDay: 20
         promptTemplate: |
           An alert is {{ .State }} in channel {{ .Channel }}: {{ .Fields.alertname }}.
           Investigate it. First run `uname -a; date -u` with bash to record where you are investigating from, then

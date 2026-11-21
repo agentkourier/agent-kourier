@@ -220,6 +220,10 @@ The OpenTelemetry variables are the ones Agent Kourier reads (`OTEL_SERVICE_NAME
 
 ## Telemetry
 
+The add-on logs JSON lines on standard error at `LOG_LEVEL`, with durations written as text (`10m0s`) and an error's
+text cut to 300 bytes ([Limits](limits.md#claude-managed-agents-add-on)). It never logs a token it was sent, a message's
+text or a tool's input.
+
 Metrics are on `/metrics`, with the prefix `agentkourier_cma_`. With `serviceMonitor.enabled` the chart adds a
 ServiceMonitor of the add-on's own.
 

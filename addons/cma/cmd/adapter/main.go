@@ -86,7 +86,7 @@ func run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 	if err == nil {
 		var traces telemetry.Config
 		if traces, err = telemetry.LoadConfig(getenv); err == nil {
-			log := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: cfg.LogLevel}))
+			log := slog.New(telemetry.NewLogHandler(stderr, cfg.LogLevel))
 			slog.SetDefault(log)
 			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
@@ -97,7 +97,7 @@ func run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 			return exitOK
 		}
 	}
-	slog.New(slog.NewJSONHandler(stderr, nil)).Error("configuration", "error", err)
+	slog.New(telemetry.NewLogHandler(stderr, slog.LevelInfo)).Error("configuration", "error", err)
 	return exitUsage
 }
 
