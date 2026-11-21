@@ -25,15 +25,16 @@ func (c *clock) advance(d time.Duration) {
 	c.t = c.t.Add(d)
 }
 
-func newClockedExec(fake *fakeBackend, ttl time.Duration) (*Executor, *clock, a2asrv.RequestHandler) {
+func newClockedExec(t *testing.T, fake *fakeBackend, ttl time.Duration) (*Executor, *clock, a2asrv.RequestHandler) {
+	t.Helper()
 	c := &clock{t: time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)}
-	exec := &Executor{Backend: fake, IdleTTL: ttl, now: c.now}
+	exec := &Executor{Backend: fake, Store: newStore(t, c.now), IdleTTL: ttl, now: c.now}
 	return exec, c, NewRequestHandler(exec)
 }
 
 func TestIdleSessionIsArchivedAfterTTL(t *testing.T) {
 	fake := newFake(script(say("ok"), idle(stopEndTurn)))
-	exec, clk, h := newClockedExec(fake, time.Hour)
+	exec, clk, h := newClockedExec(t, fake, time.Hour)
 	first, _ := turn(t, h, userText("", "one"))
 
 	clk.advance(time.Hour)
@@ -56,7 +57,7 @@ func TestIdleSessionIsArchivedAfterTTL(t *testing.T) {
 
 func TestActivityRestartsTheIdleClock(t *testing.T) {
 	fake := newFake(script(say("ok"), idle(stopEndTurn)))
-	exec, clk, h := newClockedExec(fake, time.Hour)
+	exec, clk, h := newClockedExec(t, fake, time.Hour)
 	first, _ := turn(t, h, userText("", "one"))
 	clk.advance(50 * time.Minute)
 	turn(t, h, userText(first.ContextID, "two"))
@@ -69,7 +70,7 @@ func TestActivityRestartsTheIdleClock(t *testing.T) {
 
 func TestZeroTTLNeverArchives(t *testing.T) {
 	fake := newFake(script(say("ok"), idle(stopEndTurn)))
-	exec, clk, h := newClockedExec(fake, 0)
+	exec, clk, h := newClockedExec(t, fake, 0)
 	turn(t, h, userText("", "one"))
 	clk.advance(10000 * time.Hour)
 	exec.reap(context.Background())
@@ -81,7 +82,7 @@ func TestZeroTTLNeverArchives(t *testing.T) {
 func TestRunningTurnIsNotArchived(t *testing.T) {
 	// The agent starts and then says nothing: the turn stays open until the test ends it.
 	fake := newFake(script(say("thinking")))
-	exec, clk, h := newClockedExec(fake, time.Hour)
+	exec, clk, h := newClockedExec(t, fake, time.Hour)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	working := make(chan struct{})
@@ -129,7 +130,7 @@ func TestRunningTurnIsNotArchived(t *testing.T) {
 
 func TestFailedArchiveIsRetried(t *testing.T) {
 	fake := newFake(script(say("ok"), idle(stopEndTurn)))
-	exec, clk, h := newClockedExec(fake, time.Hour)
+	exec, clk, h := newClockedExec(t, fake, time.Hour)
 	turn(t, h, userText("", "one"))
 	clk.advance(2 * time.Hour)
 	fake.archiveErr = errors.New("503")
@@ -145,7 +146,7 @@ func TestFailedArchiveIsRetried(t *testing.T) {
 
 func TestRestoreMapsContextsToSessions(t *testing.T) {
 	fake := newFake(script(say("ok"), idle(stopEndTurn)))
-	exec, clk, h := newClockedExec(fake, time.Hour)
+	exec, clk, h := newClockedExec(t, fake, time.Hour)
 	now := clk.now()
 	fake.seed("sesn_old", "ctx-1", now.Add(-10*time.Minute))
 	fake.seed("sesn_new", "ctx-1", now.Add(-5*time.Minute)) // a second session for the same context: the newer one wins
@@ -171,7 +172,7 @@ func TestRestoreMapsContextsToSessions(t *testing.T) {
 
 func TestRestoredSessionAgesFromItsLastActivity(t *testing.T) {
 	fake := newFake(nil)
-	exec, clk, _ := newClockedExec(fake, time.Hour)
+	exec, clk, _ := newClockedExec(t, fake, time.Hour)
 	fake.seed("sesn_stale", "ctx-1", clk.now().Add(-2*time.Hour))
 	fake.seed("sesn_fresh", "ctx-2", clk.now().Add(-10*time.Minute))
 	fake.seed("sesn_unknown", "ctx-3", time.Time{}) // no activity time: counted from the restore, not from year 1

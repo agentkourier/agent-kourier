@@ -13,7 +13,7 @@ import (
 
 func newHandler(t *testing.T, fake *fakeBackend, keepalive time.Duration) a2asrv.RequestHandler {
 	t.Helper()
-	return NewRequestHandler(&Executor{Backend: fake, Keepalive: keepalive})
+	return NewRequestHandler(&Executor{Backend: fake, Store: newStore(t, nil), Keepalive: keepalive})
 }
 
 // turn sends msg and returns the task it settled in and the events the stream carried.
@@ -378,8 +378,7 @@ func TestDuplicateMessageIDJoinsTheTask(t *testing.T) {
 }
 
 func TestCancelInterrupts(t *testing.T) {
-	var fake *fakeBackend
-	fake = newFake(func(session string, out Outbound) []Event {
+	fake := newFake(func(_ string, out Outbound) []Event {
 		switch {
 		case out.Message != nil:
 			return []Event{{Type: evUserMessage, ProcessedAt: processed()}, running(), say("working on it")}

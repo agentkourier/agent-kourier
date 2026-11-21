@@ -11,8 +11,9 @@ import (
 
 const permissionAllow = "allow"
 
-func newStallHandler(fake *fakeBackend, timeout time.Duration) a2asrv.RequestHandler {
-	return NewRequestHandler(&Executor{Backend: fake, Keepalive: time.Hour, ToolResultTimeout: timeout})
+func newStallHandler(t *testing.T, fake *fakeBackend, timeout time.Duration) a2asrv.RequestHandler {
+	t.Helper()
+	return NewRequestHandler(&Executor{Backend: fake, Store: newStore(t, nil), Keepalive: time.Hour, ToolResultTimeout: timeout})
 }
 
 func statusText(task *a2a.Task) string {
@@ -40,7 +41,7 @@ func interrupted(fake *fakeBackend) bool {
 // A sandbox that never starts: the allowed tool call gets no result.
 func TestToolCallWithNoResultFailsTheTurn(t *testing.T) {
 	fake := newFake(script(toolUse("sevt_read", "read", map[string]any{"file_path": "/etc/hostname"}, permissionAllow)))
-	task, _ := turn(t, newStallHandler(fake, 100*time.Millisecond), userText("", "read it"))
+	task, _ := turn(t, newStallHandler(t, fake, 100*time.Millisecond), userText("", "read it"))
 
 	if task.Status.State != a2a.TaskStateFailed {
 		t.Fatalf("state = %s, want failed", task.Status.State)
@@ -65,7 +66,7 @@ func TestApprovedToolCallWithNoResultFailsTheTurn(t *testing.T) {
 		}
 		return approvalScript(session, out)
 	})
-	h := newStallHandler(fake, 100*time.Millisecond)
+	h := newStallHandler(t, fake, 100*time.Millisecond)
 	paused, _ := turn(t, h, userText("", "clean up"))
 	if paused.Status.State != a2a.TaskStateInputRequired {
 		t.Fatalf("state = %s, want input-required", paused.Status.State)
@@ -92,7 +93,7 @@ func TestDeniedToolCallIsNotWaitedOn(t *testing.T) {
 		}
 		return approvalScript(session, out)
 	}
-	h := newStallHandler(fake, 100*time.Millisecond)
+	h := newStallHandler(t, fake, 100*time.Millisecond)
 	paused, _ := turn(t, h, userText("", "clean up"))
 	done, _ := turn(t, h, approvalReply(paused, false, "no"))
 	if done.Status.State != a2a.TaskStateCompleted {
@@ -103,14 +104,14 @@ func TestDeniedToolCallIsNotWaitedOn(t *testing.T) {
 // The model can be silent for longer than the timeout; only a wait on the sandbox counts.
 func TestSilentModelIsNotAStall(t *testing.T) {
 	fake := newFake(nil)
-	fake.respond = func(session string, out Outbound) []Event {
+	fake.respond = func(session string, _ Outbound) []Event {
 		go func() {
 			time.Sleep(300 * time.Millisecond)
 			fake.publish(session, say("Thought hard."), idle(stopEndTurn))
 		}()
 		return []Event{{Type: evUserMessage, ProcessedAt: processed()}, running()}
 	}
-	task, _ := turn(t, newStallHandler(fake, 100*time.Millisecond), userText("", "think"))
+	task, _ := turn(t, newStallHandler(t, fake, 100*time.Millisecond), userText("", "think"))
 	if task.Status.State != a2a.TaskStateCompleted {
 		t.Fatalf("state = %s (%q), want completed", task.Status.State, statusText(task))
 	}
@@ -119,7 +120,7 @@ func TestSilentModelIsNotAStall(t *testing.T) {
 // A tool result ends the wait: the model's silence after it is not a stall.
 func TestToolResultEndsTheWait(t *testing.T) {
 	fake := newFake(nil)
-	fake.respond = func(session string, out Outbound) []Event {
+	fake.respond = func(session string, _ Outbound) []Event {
 		go func() {
 			time.Sleep(50 * time.Millisecond)
 			fake.publish(session, Event{Type: evUserToolResult, ToolUseID: "sevt_read", Content: []ContentBlock{{Type: "text", Text: "host"}}})
@@ -128,7 +129,7 @@ func TestToolResultEndsTheWait(t *testing.T) {
 		}()
 		return []Event{{Type: evUserMessage, ProcessedAt: processed()}, running(), toolUse("sevt_read", "read", nil, permissionAllow)}
 	}
-	task, _ := turn(t, newStallHandler(fake, 100*time.Millisecond), userText("", "read it"))
+	task, _ := turn(t, newStallHandler(t, fake, 100*time.Millisecond), userText("", "read it"))
 	if task.Status.State != a2a.TaskStateCompleted {
 		t.Fatalf("state = %s (%q), want completed", task.Status.State, statusText(task))
 	}
@@ -136,14 +137,14 @@ func TestToolResultEndsTheWait(t *testing.T) {
 
 func TestZeroToolResultTimeoutWaits(t *testing.T) {
 	fake := newFake(nil)
-	fake.respond = func(session string, out Outbound) []Event {
+	fake.respond = func(session string, _ Outbound) []Event {
 		go func() {
 			time.Sleep(200 * time.Millisecond)
 			fake.publish(session, Event{Type: evUserToolResult, ToolUseID: "sevt_read"}, running(), say("ok"), idle(stopEndTurn))
 		}()
 		return []Event{{Type: evUserMessage, ProcessedAt: processed()}, running(), toolUse("sevt_read", "read", nil, permissionAllow)}
 	}
-	task, _ := turn(t, newStallHandler(fake, 0), userText("", "read it"))
+	task, _ := turn(t, newStallHandler(t, fake, 0), userText("", "read it"))
 	if task.Status.State != a2a.TaskStateCompleted {
 		t.Fatalf("state = %s, want completed", task.Status.State)
 	}
@@ -152,7 +153,7 @@ func TestZeroToolResultTimeoutWaits(t *testing.T) {
 // An MCP tool does not run in the sandbox, so waiting on it is not a sandbox stall.
 func TestMCPToolIsNotASandboxWait(t *testing.T) {
 	fake := newFake(nil)
-	fake.respond = func(session string, out Outbound) []Event {
+	fake.respond = func(session string, _ Outbound) []Event {
 		go func() {
 			time.Sleep(300 * time.Millisecond)
 			fake.publish(session, Event{Type: evAgentMCPResult, MCPToolUseID: "sevt_mcp"}, say("ok"), idle(stopEndTurn))
@@ -160,7 +161,7 @@ func TestMCPToolIsNotASandboxWait(t *testing.T) {
 		return []Event{{Type: evUserMessage, ProcessedAt: processed()}, running(),
 			{ID: "sevt_mcp", Type: evAgentMCPToolUse, Name: "search", EvaluatedPermission: permissionAllow}}
 	}
-	task, _ := turn(t, newStallHandler(fake, 100*time.Millisecond), userText("", "search"))
+	task, _ := turn(t, newStallHandler(t, fake, 100*time.Millisecond), userText("", "search"))
 	if task.Status.State != a2a.TaskStateCompleted {
 		t.Fatalf("state = %s (%q), want completed", task.Status.State, statusText(task))
 	}
@@ -170,7 +171,7 @@ func TestMCPToolIsNotASandboxWait(t *testing.T) {
 // call, until the worker posts its result. That is a wait, not a question for a person.
 func TestAllowedSandboxToolWaitsForTheWorker(t *testing.T) {
 	fake := newFake(nil)
-	fake.respond = func(session string, out Outbound) []Event {
+	fake.respond = func(session string, _ Outbound) []Event {
 		go func() {
 			time.Sleep(50 * time.Millisecond)
 			fake.publish(session, Event{Type: evUserToolResult, ToolUseID: "sevt_read", Content: []ContentBlock{{Type: "text", Text: "sesn-x"}}},
@@ -180,7 +181,7 @@ func TestAllowedSandboxToolWaitsForTheWorker(t *testing.T) {
 			toolUse("sevt_read", "read", map[string]any{"file_path": "/etc/hostname"}, permissionAllow),
 			idle(stopRequiresAction, "sevt_read")}
 	}
-	task, _ := turn(t, newStallHandler(fake, time.Second), userText("", "read it"))
+	task, _ := turn(t, newStallHandler(t, fake, time.Second), userText("", "read it"))
 	if task.Status.State != a2a.TaskStateCompleted {
 		t.Fatalf("state = %s (%q), want completed", task.Status.State, statusText(task))
 	}
@@ -196,7 +197,7 @@ func TestPauseAsksOnlyAboutCallsNeedingApproval(t *testing.T) {
 		toolUse("sevt_ask", "bash", map[string]any{"command": "date"}, permissionAsk),
 		idle(stopRequiresAction, "sevt_read", "sevt_ask"),
 	))
-	task, _ := turn(t, newStallHandler(fake, time.Second), userText("", "both"))
+	task, _ := turn(t, newStallHandler(t, fake, time.Second), userText("", "both"))
 	if task.Status.State != a2a.TaskStateInputRequired {
 		t.Fatalf("state = %s (%q), want input-required", task.Status.State, statusText(task))
 	}

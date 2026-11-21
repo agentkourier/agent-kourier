@@ -13,6 +13,8 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
+
+	"github.com/agentkourier/agent-kourier/addons/cma/store"
 )
 
 // HITLExtension is kagent's human-in-the-loop A2A extension. Agent Kourier's a2a dialect reads a pause marked with it
@@ -25,10 +27,13 @@ const HITLExtension = "https://kagent.dev/extensions/hitl/v1"
 const DefaultKeepalive = 60 * time.Second
 
 // Executor runs A2A tasks as turns of Managed Agents sessions. One A2A context is one session, created on the
-// context's first message with the context ID in its metadata. The context-to-session map is in memory; Restore
-// rebuilds it from that metadata when the adapter starts, and Run archives the sessions of contexts idle past IdleTTL.
+// context's first message with the context ID in its metadata. The context-to-session map is kept in Store, with a copy
+// in memory; Restore loads it when the adapter starts and reconciles it with CMA, Settle fails the turns a restart cut
+// off, and Run archives the sessions of contexts idle past IdleTTL and deletes settled tasks past TaskRetention.
 type Executor struct {
 	Backend Backend
+	// Store keeps the tasks, the message IDs and each context's session across a restart. Required.
+	Store Store
 	// Keepalive is the silence after which a working update is sent. Zero is DefaultKeepalive.
 	Keepalive time.Duration
 	// IdleTTL is how long a context may go without a turn before Run archives its session; the context's next
@@ -39,12 +44,14 @@ type Executor struct {
 	// session and fails the turn: a sandbox that cannot start sends nothing at all. A tool that runs silently for
 	// longer is cut off the same way. Zero waits for ever.
 	ToolResultTimeout time.Duration
+	// TaskRetention is how long Run keeps a settled task, and its message IDs, after its last update. Zero keeps them.
+	TaskRetention time.Duration
 	// Log receives what the adapter cannot tell the client. Nil is slog.Default().
 	Log *slog.Logger
 
 	now      func() time.Time // nil is time.Now
 	mu       sync.Mutex
-	sessions map[string]*contextSession // by A2A context ID
+	sessions map[string]*contextSession // by A2A context ID; Store's map, plus the turns running here
 }
 
 // contextSession is a context's session and its activity.
@@ -70,7 +77,7 @@ func (e *Executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 			yield(nil, fmt.Errorf("start session: %w", err))
 			return
 		}
-		defer e.release(ec.ContextID, session)
+		defer e.release(ctx, ec.ContextID, session)
 		// Open the stream before sending: it delivers only what happens after it opens.
 		stream, err := e.Backend.Stream(ctx, session)
 		if err != nil {
@@ -131,34 +138,54 @@ func (e *Executor) keepalive() time.Duration {
 	return DefaultKeepalive
 }
 
-// acquire returns the context's session, creating it on first use, and counts a turn on it until release.
+// acquire returns the context's session, creating and storing it on first use, and counts a turn on it until
+// release. A session it fails to store is still used: Restore finds it again by its metadata after a restart.
 func (e *Executor) acquire(ctx context.Context, contextID string) (string, error) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	cs, ok := e.sessions[contextID]
 	if !ok {
 		id, err := e.Backend.CreateSession(ctx, "A2A context "+contextID, map[string]string{contextMetadataKey: contextID})
 		if err != nil {
+			e.mu.Unlock()
 			return "", err
 		}
 		if e.sessions == nil {
 			e.sessions = map[string]*contextSession{}
 		}
-		cs = &contextSession{id: id}
+		cs = &contextSession{id: id, lastActive: e.clock()}
 		e.sessions[contextID] = cs
+		// Stored under the lock, so that no other turn of the context can run before the store knows its session.
+		if err := e.Store.PutSession(ctx, store.Session{ContextID: contextID, SessionID: id, LastActive: cs.lastActive}); err != nil {
+			e.logger().Warn("store a new session", "context", contextID, "session", id, "error", err)
+		}
 	}
 	cs.turns++
 	cs.lastActive = e.clock()
-	return cs.id, nil
+	id, at := cs.id, cs.lastActive
+	e.mu.Unlock()
+	e.touch(ctx, contextID, id, at)
+	return id, nil
 }
 
 // release ends a turn that acquire counted.
-func (e *Executor) release(contextID, session string) {
+func (e *Executor) release(ctx context.Context, contextID, session string) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	if cs, ok := e.sessions[contextID]; ok && cs.id == session {
-		cs.turns--
-		cs.lastActive = e.clock()
+	cs, ok := e.sessions[contextID]
+	if !ok || cs.id != session {
+		e.mu.Unlock()
+		return
+	}
+	cs.turns--
+	cs.lastActive = e.clock()
+	at := cs.lastActive
+	e.mu.Unlock()
+	e.touch(context.WithoutCancel(ctx), contextID, session, at)
+}
+
+// touch stores a session's last activity, which the idle clock counts from after a restart.
+func (e *Executor) touch(ctx context.Context, contextID, session string, at time.Time) {
+	if err := e.Store.TouchSession(ctx, contextID, session, at); err != nil {
+		e.logger().Warn("store a session's activity", "context", contextID, "session", session, "error", err)
 	}
 }
 

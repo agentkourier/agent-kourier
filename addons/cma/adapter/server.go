@@ -3,20 +3,21 @@ package adapter
 import (
 	"context"
 	"iter"
+	"log/slog"
 	"net/http"
 	"sync"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
-	"github.com/a2aproject/a2a-go/v2/a2asrv/taskstore"
 )
 
-// NewRequestHandler is the A2A request handler over exec, with an in-memory task store. A message whose ID the
-// handler has seen joins that message's task instead of starting another turn: Agent Kourier resends a message with
-// the same ID when it cannot tell whether the first send arrived.
-func NewRequestHandler(exec *Executor) a2asrv.RequestHandler {
-	inner := a2asrv.NewHandler(exec, a2asrv.WithTaskStore(taskstore.NewInMemory(nil)))
-	return &replayHandler{RequestHandler: inner, byMessage: map[string]a2a.TaskID{}}
+// NewRequestHandler is the A2A request handler over exec, with exec.Store as its task store; opts add to it (a call
+// interceptor, say). A message whose ID the store has recorded joins that message's task instead of starting another
+// turn, after a restart too: Agent Kourier resends a message with the same ID when it cannot tell whether the first
+// send arrived.
+func NewRequestHandler(exec *Executor, opts ...a2asrv.RequestHandlerOption) a2asrv.RequestHandler {
+	inner := a2asrv.NewHandler(exec, append([]a2asrv.RequestHandlerOption{a2asrv.WithTaskStore(exec.Store)}, opts...)...)
+	return &replayHandler{RequestHandler: inner, messages: exec.Store, log: exec.logger()}
 }
 
 // Card is the adapter's agent card. url is the JSON-RPC endpoint clients reach it at.
@@ -35,20 +36,32 @@ func Card(name, description, url string) *a2a.AgentCard {
 	}
 }
 
-// Mux serves the card at path + "/.well-known/agent-card.json" and JSON-RPC at path, as Agent Kourier's a2a dialect
-// expects of an exact endpoint.
-func Mux(path string, card *a2a.AgentCard, handler a2asrv.RequestHandler) *http.ServeMux {
+// Mux serves the card at path + "/.well-known/agent-card.json" and rpc, the JSON-RPC handler behind any caller check,
+// at path, as Agent Kourier's a2a dialect expects of an exact endpoint. /healthz and /readyz answer 200 once it serves:
+// the adapter serves only after Restore and Settle.
+func Mux(path string, card *a2a.AgentCard, rpc http.Handler) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle(path+"/.well-known/agent-card.json", a2asrv.NewStaticAgentCardHandler(card))
-	mux.Handle(path, a2asrv.NewJSONRPCHandler(handler))
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	mux.Handle(path, rpc)
+	ok := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
+	mux.HandleFunc("/healthz", ok)
+	mux.HandleFunc("/readyz", ok)
 	return mux
+}
+
+// messageStore records which task each message ID started or joined.
+type messageStore interface {
+	MessageTask(ctx context.Context, messageID string) (a2a.TaskID, bool, error)
+	RecordMessage(ctx context.Context, messageID string, taskID a2a.TaskID) error
 }
 
 type replayHandler struct {
 	a2asrv.RequestHandler
-	mu        sync.Mutex
-	byMessage map[string]a2a.TaskID
+	messages messageStore
+	log      *slog.Logger
+	// mu is held from a message's lookup until its task is recorded, so that a resend that races the first send in
+	// this process finds the task. The store is for a resend after a restart.
+	mu sync.Mutex
 }
 
 func (h *replayHandler) SendStreamingMessage(ctx context.Context, req *a2a.SendMessageRequest) iter.Seq2[a2a.Event, error] {
@@ -58,7 +71,13 @@ func (h *replayHandler) SendStreamingMessage(ctx context.Context, req *a2a.SendM
 			return
 		}
 		h.mu.Lock()
-		if id, ok := h.byMessage[req.Message.ID]; ok {
+		id, ok, err := h.messages.MessageTask(ctx, req.Message.ID)
+		if err != nil {
+			h.mu.Unlock()
+			yield(nil, err)
+			return
+		}
+		if ok {
 			h.mu.Unlock()
 			h.rejoin(ctx, id, yield)
 			return
@@ -82,7 +101,9 @@ func (h *replayHandler) SendStreamingMessage(ctx context.Context, req *a2a.SendM
 		for ev, err := range h.RequestHandler.SendStreamingMessage(ctx, req) {
 			if locked && err == nil && ev != nil {
 				if id := ev.TaskInfo().TaskID; id != "" {
-					h.byMessage[req.Message.ID] = id
+					if err := h.messages.RecordMessage(context.WithoutCancel(ctx), req.Message.ID, id); err != nil {
+						h.log.Warn("record a message ID; a resend of the message will start another turn", "message", req.Message.ID, "task", id, "error", err)
+					}
 					h.mu.Unlock()
 					locked = false
 				}

@@ -4,15 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2asrv"
 
 	"github.com/agentkourier/agent-kourier/addons/cma/adapter"
+	"github.com/agentkourier/agent-kourier/addons/cma/auth"
+	"github.com/agentkourier/agent-kourier/addons/cma/store"
 )
 
 // scripted is an adapter.Backend whose agent asks to run bash, then reports the outcome of the decision.
@@ -95,15 +101,50 @@ func (c *chanStream) Current() adapter.Event { return c.cur }
 func (c *chanStream) Err() error             { return nil }
 func (c *chanStream) Close() error           { return nil }
 
-func serve(t *testing.T, b adapter.Backend) *checker {
+// testToken is the adapter's one accepted token in these tests: an obviously fake value.
+const testToken = "fake-livecheck-token"
+
+// serve runs the adapter over b, as main wires it: a SQLite store and the caller check, with testToken accepted.
+// It returns the adapter's JSON-RPC URL.
+func serve(t *testing.T, b adapter.Backend) string {
 	t.Helper()
-	exec := &adapter.Executor{Backend: b}
-	var url string
+	dir := t.TempDir()
+	st, err := store.OpenSQLite(context.Background(), filepath.Join(dir, "cma.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	tokenFile := filepath.Join(dir, "tokens")
+	if err := os.WriteFile(tokenFile, []byte(testToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(slog.DiscardHandler)
+	tokens, err := auth.LoadTokens(tokenFile, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec := &adapter.Executor{Backend: b, Store: st}
+	rpc := a2asrv.NewJSONRPCHandler(adapter.NewRequestHandler(exec, a2asrv.WithCallInterceptors(auth.Interceptor{})))
 	srv := httptest.NewServer(nil)
 	t.Cleanup(srv.Close)
-	url = srv.URL + "/a2a"
-	srv.Config.Handler = adapter.Mux("/a2a", adapter.Card("test", "test", url), adapter.NewRequestHandler(exec))
-	return newChecker(url)
+	url := srv.URL + "/a2a"
+	srv.Config.Handler = adapter.Mux("/a2a", adapter.Card("test", "test", url), (&auth.Check{Header: "Authorization", Tokens: tokens, Log: log}).Wrap(rpc))
+	return url
+}
+
+// The caller check takes the token as Agent Kourier's a2a dialect sends a Binding's, and refuses the dialect without it.
+func TestKourierClientPassesTheCallerCheck(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	url := serve(t, &scripted{})
+	for name, c := range map[string]*checker{"no token": newChecker(url, ""), "wrong token": newChecker(url, "fake-wrong-token")} {
+		if err := c.text(ctx); err == nil {
+			t.Errorf("%s: the adapter ran the turn", name)
+		}
+	}
+	if err := newChecker(url, testToken).text(ctx); err != nil {
+		t.Fatalf("with the token: %v", err)
+	}
 }
 
 // TestKourierClientDrivesAdapter runs Kourier's agent client and a2a dialect over HTTP against the adapter: a text
@@ -112,7 +153,7 @@ func TestKourierClientDrivesAdapter(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	b := &scripted{}
-	c := serve(t, b)
+	c := newChecker(serve(t, b), testToken)
 
 	if err := c.text(ctx); err != nil {
 		t.Fatalf("text: %v", err)

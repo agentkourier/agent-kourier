@@ -1,7 +1,10 @@
 // Command livecheck drives a running CMA A2A adapter with Agent Kourier's own A2A client and a2a dialect, the code a
 // Binding uses, and checks a text turn, a tool approval allowed and denied, context continuity, and a cancel.
 //
-//	ADAPTER_URL=http://127.0.0.1:8090/a2a go run .
+//	ADAPTER_URL=http://127.0.0.1:8090/a2a ADAPTER_TOKEN=... go run .
+//
+// ADAPTER_TOKEN is one of the adapter's accepted tokens, sent as Authorization: Bearer, as a Binding's token is.
+// Unset, the checker sends X-User-Id instead, which only an adapter with AUTH_DISABLED=true accepts.
 //
 // The agent behind the adapter must have bash set to always_ask. Each scenario spends model tokens.
 package main
@@ -20,6 +23,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/generic"
+	"github.com/agentkourier/agent-kourier/internal/secret"
 )
 
 func main() {
@@ -28,7 +32,7 @@ func main() {
 		url = "http://127.0.0.1:8090/a2a"
 	}
 	only := os.Getenv("ONLY")
-	c := newChecker(url)
+	c := newChecker(url, os.Getenv("ADAPTER_TOKEN"))
 	failed := 0
 	for _, s := range []struct {
 		name string
@@ -68,12 +72,18 @@ type checker struct {
 	hostname  string
 }
 
-func newChecker(url string) *checker {
+// newChecker drives the adapter at url with Agent Kourier's a2a dialect. A token is sent as a Binding's token is;
+// with none, the dialect sends X-User-Id.
+func newChecker(url, token string) *checker {
 	d := generic.New(30 * time.Second)
 	backend := &v1alpha1.AgentBackend{Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectA2A, URL: url}}
 	ref := v1alpha1.AgentRef{Name: "cma"}
+	creds := dialect.Credentials{UserID: "livecheck"}
+	if token != "" {
+		creds = dialect.Credentials{Token: secret.New(token)}
+	}
 	source := func(ctx context.Context) (agent.Conn, error) {
-		return d.Connect(ctx, backend, ref, dialect.Credentials{UserID: "livecheck"})
+		return d.Connect(ctx, backend, ref, creds)
 	}
 	return &checker{d: d, agent: agent.New(source, agent.Config{ParseInteraction: d.ParseInteraction})}
 }
@@ -183,7 +193,7 @@ func (c *checker) pause(ctx context.Context, contextID, text string) (*result, *
 	}
 	in, err := c.d.ParseInteraction(*r.final.Task)
 	if err != nil {
-		return r, nil, fmt.Errorf("Kourier cannot read the pause: %w", err)
+		return r, nil, fmt.Errorf("agent Kourier cannot read the pause: %w", err)
 	}
 	if in == nil || in.Kind != dialect.ToolApproval || len(in.Tools) == 0 {
 		return r, nil, fmt.Errorf("pause is not a tool approval: %+v", in)
@@ -201,7 +211,7 @@ func (c *checker) decide(ctx context.Context, in *dialect.Interaction, approved 
 	}
 	msg, err := c.d.BuildResponse(*in, ans)
 	if err != nil {
-		return nil, fmt.Errorf("Kourier cannot build the answer: %w", err)
+		return nil, fmt.Errorf("agent Kourier cannot build the answer: %w", err)
 	}
 	return c.send(ctx, &msg, true)
 }

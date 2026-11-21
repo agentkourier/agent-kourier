@@ -4,9 +4,30 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sync"
+	"testing"
 	"time"
+
+	"github.com/agentkourier/agent-kourier/addons/cma/store"
 )
+
+// newStore is a SQLite store in the test's directory, stamped by now (nil is time.Now), closed when the test ends.
+func newStore(t *testing.T, now func() time.Time) *store.Store {
+	t.Helper()
+	return openStore(t, filepath.Join(t.TempDir(), "cma.db"), now)
+}
+
+// openStore opens the SQLite store at path; the test closes it when it ends, or before to reopen the file.
+func openStore(t *testing.T, path string, now func() time.Time) *store.Store {
+	t.Helper()
+	s, err := store.OpenSQLite(context.Background(), path, store.Options{Now: now})
+	if err != nil {
+		t.Fatalf("OpenSQLite: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
 
 // fakeBackend is a Managed Agents session service in memory. A stream receives only the events published after it
 // opened, as the real one does. respond scripts the agent: it returns the events that follow an outbound event.
@@ -16,6 +37,7 @@ type fakeBackend struct {
 	records    map[string]*fakeSession
 	archived   []string
 	archiveErr error // returned, once, by the next Archive
+	sendErr    error // returned by every Send, which then sends nothing
 	sent       []sentEvent
 	streams    map[string][]*fakeStream
 	respond    func(session string, out Outbound) []Event
@@ -94,7 +116,7 @@ func (f *fakeBackend) Stream(ctx context.Context, session string) (EventStream, 
 	go func() {
 		select {
 		case <-ctx.Done():
-			s.Close()
+			_ = s.Close()
 		case <-s.done:
 		}
 	}()
@@ -103,6 +125,10 @@ func (f *fakeBackend) Stream(ctx context.Context, session string) (EventStream, 
 
 func (f *fakeBackend) Send(_ context.Context, session string, events ...Outbound) error {
 	f.mu.Lock()
+	if f.sendErr != nil {
+		f.mu.Unlock()
+		return f.sendErr
+	}
 	var follow []Event
 	for _, ev := range events {
 		f.sent = append(f.sent, sentEvent{session: session, out: ev})
