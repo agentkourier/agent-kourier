@@ -415,3 +415,49 @@ func TestCancelInterrupts(t *testing.T) {
 		t.Fatal("no user.interrupt sent")
 	}
 }
+
+// The session's idle after an interrupt can reach the turn before the cancel's own update is stored. The turn then
+// ends canceled, not completed, so the cancel succeeds whichever lands first.
+func TestCancelSucceedsWhenTheInterruptsIdleArrivesFirst(t *testing.T) {
+	fake := newFake(func(_ string, out Outbound) []Event {
+		if out.Message != nil {
+			return []Event{{Type: evUserMessage, ProcessedAt: processed()}, running(), say("working on it")}
+		}
+		return nil
+	})
+	h := newHandler(t, fake, 0)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var id a2a.TaskID
+	// The interrupt's idle is published, and the turn's last update stored, before the interrupt's Send returns, so
+	// before Cancel yields its canceled update.
+	fake.beforeSend = func(session string, events []Outbound) {
+		if len(events) != 1 || !events[0].Interrupt {
+			return
+		}
+		fake.publish(session, idle(stopEndTurn))
+		for {
+			task, err := h.GetTask(ctx, &a2a.GetTaskRequest{ID: id})
+			if err == nil && task.Status.State.Terminal() || ctx.Err() != nil {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	for ev, err := range h.SendStreamingMessage(ctx, &a2a.SendMessageRequest{Message: userText("", "long job")}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := ev.(*a2a.TaskArtifactUpdateEvent); ok {
+			id = ev.TaskInfo().TaskID
+			break
+		}
+	}
+	task, err := h.CancelTask(ctx, &a2a.CancelTaskRequest{ID: id})
+	if err != nil {
+		t.Fatalf("CancelTask: %v", err)
+	}
+	if task.Status.State != a2a.TaskStateCanceled {
+		t.Fatalf("state = %s, want canceled", task.Status.State)
+	}
+}

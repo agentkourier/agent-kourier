@@ -150,6 +150,20 @@ func (h *replayHandler) SendStreamingMessage(ctx context.Context, req *a2a.SendM
 	}
 }
 
+// CancelTask cancels the task, and succeeds when the task has ended canceled although the cancel itself failed. That
+// happens when the session's idle after the interrupt reaches the turn first: the turn ends canceled (Executor), and
+// the request handler, which hands the cancel to the running turn, then finds that turn gone.
+func (h *replayHandler) CancelTask(ctx context.Context, req *a2a.CancelTaskRequest) (*a2a.Task, error) {
+	task, err := h.RequestHandler.CancelTask(ctx, req)
+	if err == nil || req == nil {
+		return task, err
+	}
+	if settled, getErr := h.GetTask(ctx, &a2a.GetTaskRequest{ID: req.ID}); getErr == nil && settled.Status.State == a2a.TaskStateCanceled {
+		return settled, nil
+	}
+	return task, err
+}
+
 // checkAnswer reports why msg cannot answer the task it names, when that task waits on tool approvals.
 func (h *replayHandler) checkAnswer(ctx context.Context, msg *a2a.Message) error {
 	task, err := h.GetTask(ctx, &a2a.GetTaskRequest{ID: msg.TaskID})

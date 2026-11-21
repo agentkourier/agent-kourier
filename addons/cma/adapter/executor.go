@@ -109,7 +109,7 @@ func (e *Executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 			return
 		}
 		t := &turnState{ec: ec, session: session, names: known, asks: map[string]Event{}, running: map[string]bool{},
-			log: e.logger().With("session", session, "task", ec.TaskID)}
+			canceled: &o.canceled, log: e.logger().With("session", session, "task", ec.TaskID)}
 		for _, o := range out {
 			if c := o.Confirmation; c != nil && c.Allow {
 				t.running[c.ToolUseID] = true
@@ -386,7 +386,9 @@ type turnState struct {
 	names   map[string]string // tool-use event ID -> tool name
 	asks    map[string]Event  // tool uses waiting on a person, by event ID
 	running map[string]bool   // tool uses the session runs, waiting on their result, by event ID
-	log     *slog.Logger
+	// canceled is set by Cancel before it interrupts the session; nil reads as not canceled.
+	canceled *atomic.Bool
+	log      *slog.Logger
 }
 
 // follow translates the stream's events until the turn settles, sending a working update after each silence of
@@ -502,6 +504,11 @@ func (t *turnState) translate(ev Event) ([]a2a.Event, bool) {
 	case evStatusIdle:
 		if !t.started || ev.StopReason == nil {
 			return nil, false
+		}
+		// After a cancel, the session idles because of its interrupt: the turn ends canceled, whichever of this update
+		// and the cancel's own reaches the task first, so the cancel never loses to a completion it caused.
+		if t.canceled != nil && t.canceled.Load() {
+			return []a2a.Event{a2a.NewStatusUpdateEvent(t.ec, a2a.TaskStateCanceled, nil)}, true
 		}
 		switch ev.StopReason.Type {
 		case stopEndTurn:
