@@ -160,3 +160,25 @@ func TestErrorsNeverShowTheDSN(t *testing.T) {
 		})
 	}
 }
+
+// The chart sets ADVERTISE_URL to http://$(POD_IP):8090, which leaves an IPv6 address unbracketed: Parse brackets it.
+func TestAdvertiseURLBracketsIPv6(t *testing.T) {
+	for in, want := range map[string]string{
+		"http://fd00::7:8090":      "http://[fd00::7]:8090",
+		"http://::1:8090/":         "http://[::1]:8090/",
+		"http://fd00::7":           "http://[fd00::7]",
+		"http://[fd00::7]:8090":    "http://[fd00::7]:8090",
+		"http://10.0.0.7:8090":     "http://10.0.0.7:8090",
+		"https://cma-0.cma:8090":   "https://cma-0.cma:8090",
+		"http://2001:db8::1:65535": "http://[2001:db8::1]:65535",
+	} {
+		c, err := Parse(env(map[string]string{"STORE": "postgres", "POSTGRES_DSN": "postgres://db/cma", "ADVERTISE_URL": in}))
+		if err != nil {
+			t.Errorf("%s: %v", in, err)
+			continue
+		}
+		if c.AdvertiseURL != want {
+			t.Errorf("ADVERTISE_URL %s = %s, want %s", in, c.AdvertiseURL, want)
+		}
+	}
+}

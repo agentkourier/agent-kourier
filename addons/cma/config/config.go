@@ -201,6 +201,7 @@ func (c *Config) parseStore(getenv func(string) string) error {
 		if c.PostgresDSN == "" {
 			errs = append(errs, errors.New("POSTGRES_DSN is required with STORE=postgres"))
 		}
+		c.AdvertiseURL = bracketIPv6(c.AdvertiseURL)
 		if c.AdvertiseURL == "" {
 			errs = append(errs, errors.New("ADVERTISE_URL is required with STORE=postgres"))
 		} else if err := httpURL(c.AdvertiseURL); err != nil {
@@ -270,6 +271,35 @@ func httpURL(v string) error {
 		return errors.New("is not an http or https URL with a host")
 	}
 	return nil
+}
+
+// bracketIPv6 puts the brackets a URL needs around an IPv6 address that has none, as http://$(POD_IP):8090 leaves one
+// when the pod's IP is IPv6. An unbracketed host whose last colon is followed by a port and preceded by an IPv6 address
+// is read as that address and port; one that is an IPv6 address whole, as the address alone. Anything else is returned
+// as it came, for httpURL to judge.
+func bracketIPv6(v string) string {
+	scheme, rest, ok := strings.Cut(v, "://")
+	if !ok {
+		return v
+	}
+	host, tail := rest, ""
+	if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+		host, tail = rest[:i], rest[i:]
+	}
+	if strings.HasPrefix(host, "[") || strings.Count(host, ":") < 2 {
+		return v
+	}
+	if i := strings.LastIndex(host, ":"); i > 0 {
+		if addr, err := netip.ParseAddr(host[:i]); err == nil && addr.Is6() {
+			if port, err := strconv.ParseUint(host[i+1:], 10, 16); err == nil && port > 0 {
+				return scheme + "://" + net.JoinHostPort(host[:i], host[i+1:]) + tail
+			}
+		}
+	}
+	if addr, err := netip.ParseAddr(host); err == nil && addr.Is6() {
+		return scheme + "://[" + host + "]" + tail
+	}
+	return v
 }
 
 // loopback reports whether host, of a host:port, is a loopback address or localhost. An empty host listens on every
