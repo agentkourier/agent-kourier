@@ -57,6 +57,7 @@ type Executor struct {
 	now      func() time.Time // nil is time.Now
 	mu       sync.Mutex
 	sessions map[string]*contextSession // by A2A context ID; Store's map, plus the turns running here
+	creating map[string]chan struct{}   // by A2A context ID: a session being created, closed once that is over
 	turns    map[a2a.TaskID]*outcome    // the turns running here, by task, for Cancel to mark
 }
 
@@ -230,30 +231,66 @@ func (e *Executor) keepalive() time.Duration {
 
 // acquire returns the context's session, creating and storing it on first use, and counts a turn on it until
 // release. A session it fails to store is still used: Restore finds it again by its metadata after a restart.
+//
+// The creation runs outside e.mu, so a slow CreateSession holds back no other context. Another turn of the same
+// context waits for it, and finds the session in the map and the store; if the creation failed, the turn tries one
+// of its own.
 func (e *Executor) acquire(ctx context.Context, contextID string) (string, error) {
-	e.mu.Lock()
-	cs, ok := e.sessions[contextID]
-	if !ok {
-		id, err := e.Backend.CreateSession(ctx, "A2A context "+contextID, map[string]string{contextMetadataKey: contextID})
-		if err != nil {
+	for {
+		e.mu.Lock()
+		if cs, ok := e.sessions[contextID]; ok {
+			cs.turns++
+			cs.lastActive = e.clock()
+			id, at := cs.id, cs.lastActive
 			e.mu.Unlock()
-			return "", err
+			e.touch(ctx, contextID, id, at)
+			return id, nil
 		}
-		if e.sessions == nil {
-			e.sessions = map[string]*contextSession{}
+		if pending, ok := e.creating[contextID]; ok {
+			e.mu.Unlock()
+			select {
+			case <-pending:
+				continue
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
 		}
-		cs = &contextSession{id: id, lastActive: e.clock()}
-		e.sessions[contextID] = cs
-		// Stored under the lock, so that no other turn of the context can run before the store knows its session.
-		if err := e.Store.PutSession(ctx, store.Session{ContextID: contextID, SessionID: id, LastActive: cs.lastActive}); err != nil {
-			e.logger().Warn("store a new session", "context", contextID, "session", id, "error", err)
+		done := make(chan struct{})
+		if e.creating == nil {
+			e.creating = map[string]chan struct{}{}
+		}
+		e.creating[contextID] = done
+		e.mu.Unlock()
+		return e.create(ctx, contextID, done)
+	}
+}
+
+// create makes the context's session, stores it, and puts it in the map with one turn counted. done, the context's
+// entry in e.creating, is closed once the map has the session or the creation has failed.
+func (e *Executor) create(ctx context.Context, contextID string, done chan struct{}) (string, error) {
+	defer close(done)
+	finish := func(cs *contextSession) {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		delete(e.creating, contextID)
+		if cs != nil {
+			if e.sessions == nil {
+				e.sessions = map[string]*contextSession{}
+			}
+			e.sessions[contextID] = cs
 		}
 	}
-	cs.turns++
-	cs.lastActive = e.clock()
-	id, at := cs.id, cs.lastActive
-	e.mu.Unlock()
-	e.touch(ctx, contextID, id, at)
+	id, err := e.Backend.CreateSession(ctx, "A2A context "+contextID, map[string]string{contextMetadataKey: contextID})
+	if err != nil {
+		finish(nil)
+		return "", err
+	}
+	cs := &contextSession{id: id, lastActive: e.clock(), turns: 1}
+	// Stored before the map has it, so that no other turn of the context can run before the store knows its session.
+	if err := e.Store.PutSession(ctx, store.Session{ContextID: contextID, SessionID: id, LastActive: cs.lastActive}); err != nil {
+		e.logger().Warn("store a new session", "context", contextID, "session", id, "error", err)
+	}
+	finish(cs)
 	return id, nil
 }
 

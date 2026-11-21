@@ -61,9 +61,43 @@ type replayHandler struct {
 	messages messageStore
 	log      *slog.Logger
 	tel      *telemetry.Telemetry
-	// mu is held from a message's lookup until its task is recorded, so that a resend that races the first send in
-	// this process finds the task. The store is for a resend after a restart.
-	mu sync.Mutex
+	// sending holds, by message ID, a send from its lookup until its task is recorded, so that a resend that races the
+	// first send in this process waits for the task and finds it. Sends of other message IDs never wait on it. The
+	// store is for a resend after a restart.
+	mu      sync.Mutex
+	sending map[string]chan struct{}
+}
+
+// claim waits until no other send of the message ID is between its lookup and its task's record, then makes this
+// send that one. The returned func ends the claim; it may be called more than once.
+func (h *replayHandler) claim(ctx context.Context, messageID string) (func(), error) {
+	for {
+		h.mu.Lock()
+		pending, ok := h.sending[messageID]
+		if !ok {
+			done := make(chan struct{})
+			if h.sending == nil {
+				h.sending = map[string]chan struct{}{}
+			}
+			h.sending[messageID] = done
+			h.mu.Unlock()
+			var once sync.Once
+			return func() {
+				once.Do(func() {
+					h.mu.Lock()
+					delete(h.sending, messageID)
+					h.mu.Unlock()
+					close(done)
+				})
+			}, nil
+		}
+		h.mu.Unlock()
+		select {
+		case <-pending:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 }
 
 func (h *replayHandler) SendStreamingMessage(ctx context.Context, req *a2a.SendMessageRequest) iter.Seq2[a2a.Event, error] {
@@ -72,15 +106,19 @@ func (h *replayHandler) SendStreamingMessage(ctx context.Context, req *a2a.SendM
 			yield(nil, a2a.ErrInvalidParams)
 			return
 		}
-		h.mu.Lock()
+		unclaim, err := h.claim(ctx, req.Message.ID)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		defer unclaim()
 		id, ok, err := h.messages.MessageTask(ctx, req.Message.ID)
 		if err != nil {
-			h.mu.Unlock()
 			yield(nil, err)
 			return
 		}
 		if ok {
-			h.mu.Unlock()
+			unclaim()
 			h.tel.MessageReplay()
 			h.rejoin(ctx, id, yield)
 			return
@@ -89,26 +127,20 @@ func (h *replayHandler) SendStreamingMessage(ctx context.Context, req *a2a.SendM
 		// executor error fails the task, and the session would wait on the calls for good.
 		if req.Message.TaskID != "" {
 			if err := h.checkAnswer(ctx, req.Message); err != nil {
-				h.mu.Unlock()
 				yield(nil, err)
 				return
 			}
 		}
-		// Hold the lock until the turn has a task, so a resend that races the first send finds it.
-		locked := true
-		defer func() {
-			if locked {
-				h.mu.Unlock()
-			}
-		}()
+		// Keep the claim until the turn has a task, so a resend that races the first send finds it.
+		recorded := false
 		for ev, err := range h.RequestHandler.SendStreamingMessage(ctx, req) {
-			if locked && err == nil && ev != nil {
+			if !recorded && err == nil && ev != nil {
 				if id := ev.TaskInfo().TaskID; id != "" {
 					if err := h.messages.RecordMessage(context.WithoutCancel(ctx), req.Message.ID, id); err != nil {
 						h.log.Warn("record a message ID; a resend of the message will start another turn", "message", req.Message.ID, "task", id, "error", err)
 					}
-					h.mu.Unlock()
-					locked = false
+					unclaim()
+					recorded = true
 				}
 			}
 			if !yield(ev, err) {

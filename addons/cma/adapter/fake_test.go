@@ -37,11 +37,16 @@ type fakeBackend struct {
 	records    map[string]*fakeSession
 	archived   []string
 	archiveErr error // returned, once, by the next Archive
+	createErr  error // returned, once, by the next CreateSession
 	sendErr    error // returned by every Send, which then sends nothing
 	sent       []sentEvent
 	streams    map[string][]*fakeStream
 	respond    func(session string, out Outbound) []Event
 	seq        int
+	// beforeCreate and beforeSend, when set, run before the call does anything, outside the fake's lock: a test blocks
+	// in them to hold a call open.
+	beforeCreate func(contextID string)
+	beforeSend   func(session string, events []Outbound)
 }
 
 // fakeSession is what the fake keeps of a session for Sessions and Archive.
@@ -61,8 +66,15 @@ func newFake(respond func(session string, out Outbound) []Event) *fakeBackend {
 }
 
 func (f *fakeBackend) CreateSession(_ context.Context, _ string, metadata map[string]string) (string, error) {
+	if f.beforeCreate != nil {
+		f.beforeCreate(metadata[contextMetadataKey])
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.createErr; err != nil {
+		f.createErr = nil
+		return "", err
+	}
 	id := fmt.Sprintf("sesn_%d", len(f.sessions)+1)
 	f.sessions = append(f.sessions, id)
 	f.records[id] = &fakeSession{contextID: metadata[contextMetadataKey]}
@@ -124,6 +136,9 @@ func (f *fakeBackend) Stream(ctx context.Context, session string) (EventStream, 
 }
 
 func (f *fakeBackend) Send(_ context.Context, session string, events ...Outbound) error {
+	if f.beforeSend != nil {
+		f.beforeSend(session, events)
+	}
 	f.mu.Lock()
 	if f.sendErr != nil {
 		f.mu.Unlock()
