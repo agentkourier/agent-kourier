@@ -34,7 +34,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go/v2"
 
-	"github.com/agentkourier/agent-kourier/examples/cma/adapter"
+	"github.com/agentkourier/agent-kourier/addons/cma/adapter"
 )
 
 func main() {

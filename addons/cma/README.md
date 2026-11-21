@@ -140,7 +140,7 @@ without a session event, so a slow turn is not cut off.
 3. Run the adapter on the host. Kind nodes reach the host as `host.docker.internal`:
 
    ```sh
-   cd examples/cma
+   cd addons/cma
    CMA_AGENT_ID=agent_... CMA_ENVIRONMENT_ID=env_... \
    LISTEN_ADDR=0.0.0.0:8090 PUBLIC_URL=http://host.docker.internal:8090/a2a \
    go run ./cmd/adapter
@@ -158,7 +158,7 @@ without a session event, so a slow turn is not cut off.
 Unit tests use a fake backend and spend nothing:
 
 ```sh
-cd examples/cma && go test -race ./...
+cd addons/cma && go test -race ./...
 ```
 
 `livecheck` is a separate module that drives a running adapter with Agent Kourier's own A2A client and `a2a` dialect, the
@@ -167,7 +167,7 @@ code a Binding uses. Its offline test runs against a scripted backend; its live 
 runs a subset.
 
 ```sh
-cd examples/cma/livecheck
+cd addons/cma/livecheck
 go test -race ./...
 ADAPTER_URL=http://127.0.0.1:8090/a2a go run .
 ```

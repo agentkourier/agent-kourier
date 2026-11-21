@@ -1,4 +1,4 @@
-module github.com/agentkourier/agent-kourier/examples/cma
+module github.com/agentkourier/agent-kourier/addons/cma
 
 go 1.27.4
 

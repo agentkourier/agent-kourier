@@ -1,11 +1,11 @@
-module github.com/agentkourier/agent-kourier/examples/cma/livecheck
+module github.com/agentkourier/agent-kourier/addons/cma/livecheck
 
 go 1.27.4
 
 require (
 	github.com/a2aproject/a2a-go/v2 v2.9.0
 	github.com/agentkourier/agent-kourier v0.0.0
-	github.com/agentkourier/agent-kourier/examples/cma v0.0.0
+	github.com/agentkourier/agent-kourier/addons/cma v0.0.0
 )
 
 require (
@@ -69,4 +69,4 @@ require (
 
 replace github.com/agentkourier/agent-kourier => ../../..
 
-replace github.com/agentkourier/agent-kourier/examples/cma => ..
+replace github.com/agentkourier/agent-kourier/addons/cma => ..

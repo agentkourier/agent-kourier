@@ -12,7 +12,7 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
-	"github.com/agentkourier/agent-kourier/examples/cma/adapter"
+	"github.com/agentkourier/agent-kourier/addons/cma/adapter"
 )
 
 // scripted is an adapter.Backend whose agent asks to run bash, then reports the outcome of the decision.
