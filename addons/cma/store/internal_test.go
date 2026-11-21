@@ -2,11 +2,8 @@ package store
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"io/fs"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,7 +13,8 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv/taskstore"
-	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/agentkourier/agent-kourier/addons/cma/store/pgtest"
 )
 
 func openSQLite(t *testing.T, path string) *Store {
@@ -187,43 +185,6 @@ func testEveryWriteIsFenced(t *testing.T, s *Store) {
 	}
 }
 
-// PostgresDSNEnv names the Postgres the Postgres tests run on, as the broker's do (hack/postgres/test.sh sets it).
-// Unset, they skip.
-const PostgresDSNEnv = "AGENTKOURIER_POSTGRES_DSN"
-
-// PostgresTestDSN returns the DSN of a fresh schema, dropped when the test ends, or skips the test when
-// PostgresDSNEnv is unset.
-func PostgresTestDSN(t *testing.T) string {
-	t.Helper()
-	dsn := os.Getenv(PostgresDSNEnv)
-	if dsn == "" {
-		t.Skipf("%s is unset; hack/postgres/test.sh runs a throwaway Postgres", PostgresDSNEnv)
-	}
-	b := make([]byte, 6)
-	_, _ = rand.Read(b)
-	schema := "cma_test_" + hex.EncodeToString(b)
-	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	if _, err := pool.Exec(ctx, `CREATE SCHEMA `+schema); err != nil {
-		pool.Close()
-		t.Fatalf("create schema: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DROP SCHEMA `+schema+` CASCADE`)
-		pool.Close()
-	})
-	if u, err := url.Parse(dsn); err == nil && (u.Scheme == "postgres" || u.Scheme == "postgresql") {
-		q := u.Query()
-		q.Set("search_path", schema)
-		u.RawQuery = q.Encode()
-		return u.String()
-	}
-	return strings.TrimSpace(dsn) + " search_path=" + schema
-}
-
 func openPostgres(t *testing.T, dsn string) *Store {
 	t.Helper()
 	s, err := OpenPostgres(context.Background(), dsn, Options{})
@@ -235,12 +196,14 @@ func openPostgres(t *testing.T, dsn string) *Store {
 }
 
 func TestPostgresWritesAreFenced(t *testing.T) {
-	testEveryWriteIsFenced(t, openPostgres(t, PostgresTestDSN(t)))
+	s := openPostgres(t, pgtest.DSN(t))
+	mustLead(t, s, "a", time.Hour)
+	testEveryWriteIsFenced(t, s)
 }
 
 // Replicas that start together on an empty database each apply the migrations once between them.
 func TestPostgresReplicasMigrateTogether(t *testing.T) {
-	dsn := PostgresTestDSN(t)
+	dsn := pgtest.DSN(t)
 	const replicas = 4
 	errs := make(chan error, replicas)
 	stores := make(chan *Store, replicas)
