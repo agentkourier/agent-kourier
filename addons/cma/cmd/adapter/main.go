@@ -163,6 +163,10 @@ func serve(ctx context.Context, cfg config.Config, traces telemetry.Config, log 
 		elector = &cluster.Elector{Lease: st, Holder: cfg.PodName, Address: cfg.AdvertiseURL, LeaseDuration: cfg.Lease.Duration,
 			RenewDeadline: cfg.Lease.RenewDeadline, RetryPeriod: cfg.Lease.RetryPeriod, Status: status, Telemetry: tel, Log: log}
 		router.Leaders = elector
+	} else {
+		// The only replica leads before it listens, so /readyz cannot answer 200 before its takeover is done.
+		status.Lead()
+		tel.SetLeader(true)
 	}
 
 	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.ListenAddr)
@@ -200,8 +204,6 @@ func serve(ctx context.Context, cfg config.Config, traces telemetry.Config, log 
 	led := make(chan error, 1)
 	go func() {
 		if elector == nil {
-			status.Lead()
-			tel.SetLeader(true)
 			led <- takeOver(electionCtx)
 			return
 		}
