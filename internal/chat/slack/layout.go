@@ -489,8 +489,8 @@ func mentionLine(m chat.Mention) map[string]any {
 }
 
 // renderEnding is e as a Slack message: how it ended, who by and when, what was asked, and for an answered
-// prompt a line for each question and its answer, or, for a prompt of tools, each tool with its arguments and
-// what was decided of it (toolEndingBlocks). No input or button is left. The only mrkdwn in it is the
+// prompt a line for each question and its answer, or, for a prompt of tools, a line for each tool with a summary of
+// its arguments and what was decided of it (toolEndingBlocks). No input or button is left. The only mrkdwn in it is the
 // status line, which is built from a verified user ID, a time and a fixed word.
 func renderEnding(e chat.Ending) (Content, error) {
 	verb := map[chat.Outcome]string{chat.Answered: "Answered", chat.TimedOut: "Timed out", chat.Cancelled: "Cancelled"}[e.Outcome]

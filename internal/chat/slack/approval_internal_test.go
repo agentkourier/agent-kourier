@@ -1,31 +1,11 @@
 package slack
 
 import (
-	"fmt"
 	"reflect"
 	"testing"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
 )
-
-func TestSharesAreWhatEachNeedsOrAnEqualPartOfWhatIsLeft(t *testing.T) {
-	for _, tc := range []struct {
-		needs  []int
-		budget int
-		want   []int
-	}{
-		{[]int{10, 20}, 100, []int{10, 20}},
-		{[]int{100, 100}, 100, []int{50, 50}},
-		{[]int{10, 100, 100}, 100, []int{10, 45, 45}},
-		{[]int{100, 10, 100}, 100, []int{45, 10, 45}},
-		{[]int{0, 0, 90}, 60, []int{0, 0, 60}},
-		{nil, 100, []int{}},
-	} {
-		if got := shares(tc.needs, tc.budget); fmt.Sprint(got) != fmt.Sprint(tc.want) {
-			t.Errorf("shares(%v, %d) = %v, want %v", tc.needs, tc.budget, got, tc.want)
-		}
-	}
-}
 
 // The values of the Approve and Deny options are the indices the neutral model reads as a verdict.
 func TestTheOptionsOfAToolAreValuedAsTheNeutralModelReadsThem(t *testing.T) {

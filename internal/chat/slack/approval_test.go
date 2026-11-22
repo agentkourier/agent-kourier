@@ -615,14 +615,20 @@ func TestPostAndFitsAgreeOnAPromptOfTools(t *testing.T) {
 	}
 }
 
-// The ending of a prompt of tools keeps what was asked in the thread: each tool, its arguments, and what was decided
-// of it, with who decided and when as for any ending, and no control.
-func TestTheEndingOfAnApprovalShowsEachToolItsArgumentsAndItsVerdict(t *testing.T) {
+// The ending of a prompt of tools keeps what was asked in the thread, compactly: one line for each tool, its name (numbered,
+// as in the prompt, if there are several), a summary of its arguments and what was decided of it, with who decided and when
+// as for any ending, and no control and no block of arguments.
+func TestTheEndingOfAnApprovalShowsEachToolOnOneLine(t *testing.T) {
 	w := newWorld(t)
 	at := time.Date(2026, 10, 11, 15, 4, 0, 0, time.UTC)
-	p := approvalOf(chat.Tool{Name: "kubectl_delete", Args: `{"name":"web"}`}, chat.Tool{Name: "ping"}, chat.Tool{Args: "<!channel>"})
+	p := approvalOf(
+		chat.Tool{Name: "bash", Args: "{\n  \"command\": \"kubectl get pods -n shop -o wide\"\n}"},
+		chat.Tool{Name: "ping"},
+		chat.Tool{Args: "<!channel>"},
+		chat.Tool{Name: "psql", Args: `{"password":"[redacted]","user":"ops"}`},
+	)
 	p.Subagent, p.Hint = "sre", "Clean up?"
-	verdicts := []chat.ToolVerdict{chat.ToolApproved, chat.ToolDenied, chat.ToolApproved}
+	verdicts := []chat.ToolVerdict{chat.ToolApproved, chat.ToolDenied, chat.ToolApproved, chat.ToolDenied}
 
 	blocks := w.post(t, chat.End(chat.Ending{Outcome: chat.Answered, By: "U0123456789", At: at, Prompt: p, Verdicts: verdicts}))
 	m, _ := w.last(t)
@@ -631,94 +637,77 @@ func TestTheEndingOfAnApprovalShowsEachToolItsArgumentsAndItsVerdict(t *testing.
 	if m.Text != "Answered" || !strings.HasPrefix(status, "*Answered* by <@U0123456789> <!date^") {
 		t.Errorf("text %q, status %q; want it answered by the verified user, with the date", m.Text, status)
 	}
-	if got := strings.Join(types(blocks), ","); got != "section,context,context,section,rich_text,section,rich_text,section,rich_text" {
-		t.Fatalf("blocks = %s, want the status, the sub-agent and the hint, then a name and its arguments for each tool", got)
+	if got := strings.Join(types(blocks), ","); got != "section,context,context,section,section,section,section" {
+		t.Fatalf("blocks = %s, want the status, the sub-agent and the hint, then a line for each tool", got)
 	}
-	for i, want := range []struct{ name, verdict, args string }{
-		{"1. kubectl_delete", "Approved", `{"name":"web"}`}, {"2. ping", "Denied", ""}, {"Tool 3", "Approved", "<!channel>"},
+	for i, want := range []string{
+		`1. bash(command="kubectl get pods -n shop -o wide") — Approved`,
+		`2. ping() — Denied`,
+		`Tool 3(<!channel>) — Approved`,
+		`4. psql(password="[redacted]", user="ops") — Denied`,
 	} {
-		name, args := blocks[3+2*i], blocks[4+2*i]
-		fields := asList(name["fields"])
-		if textOf(name) != want.name || len(fields) != 1 || fields[0].(map[string]any)["text"] != want.verdict {
-			t.Errorf("tool %d: name %q, fields %v; want %q with %q in its fields", i, textOf(name), fields, want.name, want.verdict)
-		}
-		if _, got, none := richParts(t, args); got != want.args || none != (want.args == "") {
-			t.Errorf("tool %d: arguments %q (none: %t), want %q", i, got, none, want.args)
+		b := blocks[3+i]
+		if got := unescaped.Replace(textOf(b)); got != want || b["fields"] != nil {
+			t.Errorf("tool %d: %q with fields %v, want %q alone", i, got, b["fields"], want)
 		}
 	}
 	for _, b := range blocks {
-		if b["type"] == "actions" || b["type"] == "input" {
-			t.Errorf("block %v is left in the ending: no control remains", b["type"])
+		if b["type"] == "actions" || b["type"] == "input" || b["type"] == "rich_text" {
+			t.Errorf("block %v is left in the ending: no control and no block of arguments remains", b["type"])
 		}
 	}
 }
 
 func TestTheEndingOfAnApprovalThatNobodyDecidedShowsTheToolsAndNoVerdict(t *testing.T) {
 	w := newWorld(t)
-	p := approvalOf(chat.Tool{Name: "a", Args: "{}"}, chat.Tool{Name: "b", Args: "{}"})
+	p := approvalOf(chat.Tool{Name: "a", Args: "{}"}, chat.Tool{Name: "b", Args: `{"n":1}`})
 	for _, o := range []chat.Outcome{chat.TimedOut, chat.Cancelled} {
 		blocks := w.post(t, chat.End(chat.Ending{Outcome: o, Prompt: p}))
-		if got := strings.Join(types(blocks), ","); got != "section,section,rich_text,section,rich_text" {
-			t.Errorf("%s: blocks = %s", o, got)
+		if got := strings.Join(types(blocks), ","); got != "section,section,section" {
+			t.Fatalf("%s: blocks = %s", o, got)
 		}
-		for _, b := range blocks[1:] {
-			if b["fields"] != nil {
-				t.Errorf("%s: %v shows a verdict nobody gave", o, b)
-			}
+		if a, b := textOf(blocks[1]), textOf(blocks[2]); a != "1. a()" || b != "2. b(n=1)" {
+			t.Errorf("%s: lines %q and %q, want each tool with no verdict", o, a, b)
 		}
 	}
 }
 
-// An ending is never refused for size. A name and arguments over the limits of their places are cut and marked,
-// and the arguments of all the tools together are kept to what a message shows.
+// An ending is never refused for size. A name and arguments over the bounds of a line are cut and marked, so that each tool's
+// line is short whatever the agent sent, and twenty such tools fit.
 func TestTheEndingOfAnApprovalIsCutAndNeverRefused(t *testing.T) {
 	w := newWorld(t)
-	limit := w.p.Capabilities().Limit(chat.WhereToolArgs)
-	nameLimit := w.p.Capabilities().Limit(chat.WhereToolName)
-	huge := chat.Tool{Name: strings.Repeat("n", 5000), Args: strings.Repeat("a", 50000)}
+	lineLimit := w.p.Capabilities().Limit(chat.WhereToolArg)
+	huge := chat.Tool{Name: strings.Repeat("n", 5000), Args: `{"command":"` + strings.Repeat("echo a; ", 6000) + `"}`}
 	blocks := w.post(t, chat.End(chat.Ending{Outcome: chat.Answered, Prompt: approvalOf(huge, huge), Verdicts: []chat.ToolVerdict{chat.ToolApproved, chat.ToolDenied}}))
-	name, args := textOf(blocks[1]), argsOf(t, blocks[2])
-	if !strings.HasSuffix(name, chat.Truncated) || chat.Units(name) > nameLimit {
-		t.Errorf("the name is %d units %.40q, want it cut to %d and marked", chat.Units(name), name, nameLimit)
-	}
-	if !strings.HasSuffix(args, chat.Truncated) || chat.Units(args) > limit {
-		t.Errorf("the arguments are %d units, want them cut to %d and marked", chat.Units(args), limit)
+	for i, verdict := range []string{"Approved", "Denied"} {
+		line := textOf(blocks[1+i])
+		if strings.Count(line, chat.Truncated) != 2 || !strings.HasPrefix(line, fmt.Sprintf("%d. nnn", i+1)) || !strings.Contains(line, `(command="echo a; echo`) ||
+			!strings.HasSuffix(line, chat.Truncated+") — "+verdict) || chat.Units(line) > lineLimit {
+			t.Errorf("tool %d: %d units %q, want its name and its arguments each cut and marked and the verdict kept, at most %d units", i, chat.Units(line), line, lineLimit)
+		}
 	}
 
-	// 20 tools, each with all the arguments a tool may have: more than a message holds, so each is cut to its share.
+	// "<", ">" and "&" count as their escapes, and the verdict's words are kept out of the arguments' room: the line of a tool
+	// whose arguments are all escapes is no longer than the cap of a line either.
+	escapes := chat.Tool{Name: strings.Repeat("n", 5000), Args: `{"q":"` + strings.Repeat("&<>", 2000) + `"}`}
+	blocks = w.post(t, chat.End(chat.Ending{Outcome: chat.Answered, Prompt: approvalOf(escapes), Verdicts: []chat.ToolVerdict{chat.ToolApproved}}))
+	if line := textOf(blocks[1]); chat.Units(line) > lineLimit || !strings.HasSuffix(line, chat.Truncated+") — Approved") {
+		t.Errorf("%d units %q, want the arguments cut and marked before the verdict, at most %d units", chat.Units(line), line, lineLimit)
+	}
+
 	big := make([]chat.Tool, 20)
 	verdicts := make([]chat.ToolVerdict, 20)
 	for i := range big {
-		big[i] = chat.Tool{Name: fmt.Sprintf("t%d", i), Args: strings.Repeat("x", limit)}
+		big[i] = chat.Tool{Name: fmt.Sprintf("t%d", i), Args: strings.Repeat("x", w.p.Capabilities().Limit(chat.WhereToolArgs))}
 		verdicts[i] = chat.ToolDenied
 	}
 	blocks = w.post(t, chat.End(chat.Ending{Outcome: chat.Answered, Prompt: approvalOf(big...), Verdicts: verdicts}))
-	total := 0
-	for _, b := range blocks {
-		if b["type"] == "rich_text" {
-			shown := argsOf(t, b)
-			total += chat.Units(shown)
-			if !strings.Contains(shown, chat.Truncated) {
-				t.Errorf("an argument of %d units is shown whole beside 19 others in %d", limit, observedApprovalTotal)
-			}
-		}
+	if len(blocks) != 21 {
+		t.Fatalf("%d blocks, want the status and a line for each of 20 tools", len(blocks))
 	}
-	if total > observedApprovalTotal || len(blocks) != 41 {
-		t.Errorf("%d units of arguments in %d blocks, want at most %d in 41", total, len(blocks), observedApprovalTotal)
-	}
-}
-
-// A prompt that fits is shown whole in its ending, the large tool as much as the small one.
-func TestTheEndingOfAnApprovalThatFitsShowsAllOfIt(t *testing.T) {
-	w := newWorld(t)
-	p := approvalOf(chat.Tool{Name: "big", Args: strings.Repeat("x", 1700)}, chat.Tool{Name: "big2", Args: strings.Repeat("y", 1700)}, chat.Tool{Name: "small", Args: "{}"})
-	if err := w.p.Fits(p); err != nil {
-		t.Fatal(err)
-	}
-	blocks := w.post(t, chat.End(chat.Ending{Outcome: chat.Answered, Prompt: p, Verdicts: []chat.ToolVerdict{chat.ToolApproved, chat.ToolApproved, chat.ToolDenied}}))
-	for _, b := range blocks {
-		if b["type"] == "rich_text" && strings.Contains(argsOf(t, b), chat.Truncated) {
-			t.Errorf("an ending of a prompt that fit cuts %.60q", argsOf(t, b))
+	for _, b := range blocks[1:] {
+		if line := textOf(b); !strings.Contains(line, chat.Truncated) || !strings.HasSuffix(line, ") — Denied") {
+			t.Errorf("%.40q: want the arguments cut and marked, and the verdict kept", line)
 		}
 	}
 }
@@ -778,9 +767,9 @@ func TestEachButtonOfAnApprovalIsDecodedToItsAction(t *testing.T) {
 	}
 }
 
-// A prompt of 24 tools fits in 50 blocks. Its ending has the status block too, and so room for one line of the two (the
-// sub-agent's and the hint) and not both: what has no room is left out, and every tool is kept, with its arguments.
-func TestTheEndingOfTwentyFourToolsLeavesOutTheLinesItHasNoRoomFor(t *testing.T) {
+// A prompt of 24 tools fits in 50 blocks. Its ending is a block for each tool, under the status, the sub-agent's line and the
+// hint: every tool is kept, and so are both lines.
+func TestTheEndingOfTwentyFourToolsKeepsEveryToolAndBothLines(t *testing.T) {
 	w := newWorld(t)
 	p := approvalOf(manyTools(24)...)
 	p.Subagent, p.Hint = "sre", "Clean up?"
@@ -792,16 +781,11 @@ func TestTheEndingOfTwentyFourToolsLeavesOutTheLinesItHasNoRoomFor(t *testing.T)
 		verdicts[i] = chat.ToolApproved
 	}
 	blocks := w.post(t, chat.End(chat.Ending{Outcome: chat.Answered, Prompt: p, Verdicts: verdicts}))
-	if len(blocks) != 50 || textOfContext(blocks[1]) != "Raised by sub-agent sre" || blocks[2]["type"] != "section" {
-		t.Fatalf("%d blocks, the second %v and the third %v; want 50: the status, the sub-agent's line and 24 tools, and no hint", len(blocks), blocks[1]["type"], blocks[2]["type"])
+	if len(blocks) != 27 || textOfContext(blocks[1]) != "Raised by sub-agent sre" || textOfContext(blocks[2]) != "Clean up?" {
+		t.Fatalf("%d blocks, the second %v and the third %v; want 27: the status, both lines and 24 tools", len(blocks), blocks[1]["type"], blocks[2]["type"])
 	}
-	if got := argsOf(t, blocks[len(blocks)-1]); got != `{"n":23}` {
-		t.Errorf("the last tool's arguments are %q: the ending cut what was decided", got)
-	}
-	p.Tools = p.Tools[:23]
-	blocks = w.post(t, chat.End(chat.Ending{Outcome: chat.Answered, Prompt: p, Verdicts: verdicts[:23]}))
-	if len(blocks) != 49 || textOfContext(blocks[1]) != "Raised by sub-agent sre" || textOfContext(blocks[2]) != "Clean up?" {
-		t.Errorf("%d blocks; want 49 with both lines for 23 tools", len(blocks))
+	if got := textOf(blocks[len(blocks)-1]); got != "24. tool_23(n=23) — Approved" {
+		t.Errorf("the last tool's line is %q: the ending cut what was decided", got)
 	}
 }
 
