@@ -165,15 +165,15 @@ func TestMetricsAreRegisteredAndCount(t *testing.T) {
 	tel.Forward(ForwardNoLeader)
 
 	for name, want := range map[string]float64{
-		`agentkourier_ax_turns_total{outcome="input_required"}`:         1,
-		`agentkourier_ax_turns_total{outcome="interrupted"}`:            3,
-		`agentkourier_ax_auth_refused_total{reason="unavailable"}`:      1,
-		`agentkourier_ax_sessions_deleted_total{reason="idle"}`:         2,
-		`agentkourier_ax_message_replays_total`:                         1,
-		`agentkourier_ax_tasks_interrupted_total`:                       3,
-		`agentkourier_ax_leader`:                                        1,
-		`agentkourier_ax_leader_takeovers_total`:                        1,
-		`agentkourier_ax_forwarded_requests_total{outcome="no_leader"}`: 1,
+		`agentkourier_ax_turns_total{outcome="input_required"}`:                                       1,
+		`agentkourier_ax_turns_total{outcome="interrupted"}`:                                          3,
+		`agentkourier_ax_auth_refused_total{reason="unavailable"}`:                                    1,
+		`agentkourier_ax_sessions_deleted_total{reason="idle"}`:                                       2,
+		`agentkourier_ax_message_replays_total`:                                                       1,
+		`agentkourier_ax_tasks_interrupted_total`:                                                     3,
+		`agentkourier_ax_leader`:                                                                      1,
+		`agentkourier_ax_leader_takeovers_total`:                                                      1,
+		`agentkourier_ax_forwarded_requests_total{outcome="no_leader"}`:                               1,
 		`agentkourier_ax_operation_duration_seconds_count{operation="converse_stream",outcome="429"}`: 1,
 	} {
 		if got := gauge(t, tel, name); got != want {
