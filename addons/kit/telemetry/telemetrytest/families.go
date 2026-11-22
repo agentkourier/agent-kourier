@@ -67,14 +67,14 @@ func Families(t testing.TB, reg *prometheus.Registry, prefix, golden string) {
 		t.Errorf("%s is registered but the test does not make it count, so its type and labels are unchecked", name)
 	}
 	if os.Getenv(UpdateEnv) != "" {
-		if err := os.MkdirAll(filepath.Dir(golden), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(golden), 0o750); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(golden, []byte(b.String()), 0o644); err != nil {
+		if err := os.WriteFile(golden, []byte(b.String()), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	want, err := os.ReadFile(golden)
+	want, err := os.ReadFile(golden) //nolint:gosec // the test's own golden file
 	if err != nil {
 		t.Fatal(err)
 	}
