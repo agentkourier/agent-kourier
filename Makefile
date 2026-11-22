@@ -63,10 +63,11 @@ lint-workflows: ## Lint .github/workflows with zizmor after proving its policy f
 
 security: security-govulncheck security-gitleaks ## Run source vulnerability and secret scans (the image scan needs IMAGE_REF)
 
-security-govulncheck: ## Run govulncheck against the root, AX and docs-agent modules
+security-govulncheck: ## Run govulncheck against the root, AX, docs-agent and CMA add-on modules
 	hack/security/govulncheck.sh .
 	hack/security/govulncheck.sh examples/ax
 	hack/security/govulncheck.sh examples/recipes/docs-agent/agent
+	hack/security/govulncheck.sh addons/cma
 
 security-gitleaks: ## Scan repository history for leaked credentials (GITLEAKS_BIN may select a pinned binary)
 	hack/security/scan-secrets.sh .
@@ -103,7 +104,7 @@ image-testhooks: ## Build the test image, agent-kourier-e2e/agent-kourier-testho
 image-check: image image-testhooks ## Prove the production image's binary lacks the test hooks, and the test image's has them
 	go test -tags image -count=1 -run TestImageHasNeitherHook ./internal/testhooks
 
-release-image: ## Build the multi-arch release images (Agent Kourier, the prompt and echo agents) and the chart to bin/release (VERSION=vX.Y.Z); PUSH=1 REGISTRY=<repo> CHART_REGISTRY=oci://<repo> also pushes; see RELEASING.md
+release-image: ## Build the multi-arch release images (Agent Kourier, the prompt and echo agents, the CMA add-on) and the chart to bin/release (VERSION=vX.Y.Z); PUSH=1 REGISTRY=<repo> CHART_REGISTRY=oci://<repo> also pushes; see RELEASING.md
 	VERSION="$(VERSION)" REGISTRY="$(REGISTRY)" CHART_REGISTRY="$(CHART_REGISTRY)" PUSH="$(PUSH)" hack/release/release.sh
 
 e2e-fast-up: ## Bring up the fast E2E tier (kind, Alertmanager, fake Slack, stub agent, sink); E2E_STORE=postgres runs Agent Kourier on Postgres, with E2E_REPLICAS=2 on two replicas (S16, failover); E2E_CONFIG_SOURCE=crds reads the config from custom resources, not the ConfigMap, and with E2E_TWO_APPS=1 serves a team's Slack app beside the platform's (make e2e-two-apps runs the MC_ tests), or with E2E_TEAMS=1 a team's Microsoft Teams connections on a fake Teams service (make e2e-teams runs the TEAMS_ tests)
@@ -180,6 +181,23 @@ docs-agent-smoke: ## Ask the docs agent fixed questions over A2A on loopback, wi
 
 docs-agent-smoke-live: ## Owner-run: the same questions with the real model named in the sandbox credentials file (SANDBOX_ENV overrides its path); incurs model usage
 	bash examples/recipes/docs-agent/agent/smoke-live.sh
+
+# The CMA add-on (addons/cma) is a separate Go module, released with Agent Kourier. Its livecheck directory is a module
+# of its own, which imports the root module through a replace; only its offline test runs here. -count=1: the Postgres
+# tests reach a database that go test's result cache knows nothing of, so a reused result would say nothing about it.
+# They read AGENTKOURIER_POSTGRES_DSN and skip when it is unset; hack/postgres/run.sh starts a throwaway Postgres and
+# sets it for one command.
+.PHONY: cma-test cma-lint cma-image
+cma-test: ## Test the CMA add-on's module with the race detector, every test on every run, and its livecheck module's offline test; its Postgres tests run with AGENTKOURIER_POSTGRES_DSN set (hack/postgres/run.sh make cma-test)
+	cd addons/cma && go test -race -count=1 -timeout 20m ./...
+	cd addons/cma && go vet ./...
+	cd addons/cma/livecheck && go test -count=1 ./...
+
+cma-lint: ## Lint the CMA add-on's module with the repository's golangci-lint and config
+	cd addons/cma && "$$(go tool -C ../.. -n golangci-lint)" run --config ../../.golangci.yml ./...
+
+cma-image: ## Build the CMA add-on's image, agent-kourier-cma:dev, on Agent Kourier's pinned bases (hack/kind/lib.sh; Docker)
+	bash -c '. hack/kind/lib.sh && docker build --build-arg "GO_IMAGE=$${GO_IMAGE}" --build-arg "RUNTIME_IMAGE=$${RUNTIME_IMAGE}" -t agent-kourier-cma:dev addons/cma'
 
 # The echo-agent recipe (examples/recipes/echo-agent/agent) is Python, not Go: a virtualenv under bin/ with the
 # versions and hashes pinned in requirements-dev.txt, on CPython 3.14 (requirements.txt is compiled for it).

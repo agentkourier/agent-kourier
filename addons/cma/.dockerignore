@@ -1,0 +1,16 @@
+# What the image build does not need. The context is addons/cma, and the build reads only the module's Go packages.
+# livecheck is a module of its own that imports the root module, so the image must not need it; kind holds the
+# example's kind values.
+livecheck
+kind
+*.md
+**/*.test
+# At any depth: a pattern without **/ matches only at the root of the context.
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/kubeconfig*
+# A local run's SQLite store (SQLITE_PATH defaults to a file in the working directory) and its journal files.
+**/*.db
+**/*.db-*

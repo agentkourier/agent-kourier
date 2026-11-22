@@ -1,0 +1,81 @@
+# Agent Kourier's config for the CMA add-on test: one Slack app (Secret slack: botToken, appToken), the add-on that the
+# chart runs beside Agent Kourier as an a2a backend, and two Bindings. Replace C0123456789 with the chat channel's ID,
+# C0ALERTS000 with the alert channel's ID and B0ALERTS00 with the bot ID of the app that posts the alerts there (the
+# message's bot_id) before making the ConfigMap.
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: slack, namespace: agent-kourier}
+spec:
+  platform: slack
+  credentialsSecretRef: {name: slack}
+---
+# The add-on's Service, which the chart names <release>-cma.
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: cma, namespace: agent-kourier}
+spec:
+  dialect: a2a
+  url: http://agent-kourier-cma.agent-kourier.svc:8090/a2a
+---
+# A mention of the bot starts a thread and a CMA session; replies in the thread continue it. The agent's bash calls
+# wait on an Approve/Deny in the thread (any non-bot channel member may decide).
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: cma-chat, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {name: cma}
+    name: kourier-a2a-test # a label on the a2a dialect: the backend URL selects the agent
+    namespace: cma
+  # The add-on's caller check: the Secret is the one addons.cma.auth.tokenSecret names, sent as Authorization: Bearer.
+  identity: {tokenSecretRef: {name: cma-adapter-token}}
+  chat:
+    connectionRef: {name: slack}
+    channel: C0123456789 # the chat channel's ID
+    triggers:
+      - type: mention
+    output: live
+  interactions: {toolApprovals: true}
+---
+# An Alertmanager alert posted to the alert channel starts an investigation in its thread, one thread per alert, and
+# the agent's bash calls wait on Approve/Deny there. A reply in the thread continues the session.
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: cma-alerts, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {name: cma}
+    name: kourier-a2a-test
+    namespace: cma
+  identity: {tokenSecretRef: {name: cma-adapter-token}}
+  chat:
+    connectionRef: {name: slack}
+    channel: C0ALERTS000 # the alert channel's ID
+    output: live
+    triggers:
+      - type: botMessage
+        from: {id: B0ALERTS00} # the bot ID of the app that posts the alerts
+        match:
+          title: '^(?:\[[^\]]{1,32}\] )?(?:FIRING \(\d+\)|RESOLVED) - '
+        extract:
+          state:
+            field: title
+            regex: '^(?:\[[^\]]{1,32}\] )?(?P<state>FIRING|RESOLVED)'
+          key:
+            field: fallback
+            regex: '^\[[A-Z]+(?::\d+)?\] (?P<key>[^(|]*[^(|\s])'
+          alertname:
+            field: title
+            regex: '^(?:\[[^\]]{1,32}\] )?(?:FIRING \(\d+\)|RESOLVED) - (?P<alertname>.+)$'
+        thread:
+          by: key
+          cooldown: 1h
+          closeWhen: {state: RESOLVED}
+        limits:
+          rateLimit: {maxRuns: 5, per: 10m, maxConcurrent: 2}
+          maxRunsPerDay: 20
+        promptTemplate: |
+          An alert is {{ .State }} in channel {{ .Channel }}: {{ .Fields.alertname }}.
+          Investigate it. First run `uname -a; date -u` with bash to record where you are investigating from, then
+          report the likely causes of this alert and the next steps a person should take, in under 120 words.
+  interactions: {toolApprovals: true}

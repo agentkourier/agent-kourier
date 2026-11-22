@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Select the latest stable release and the latest prerelease image references
 # from SEC-2's GitHub Release metadata: Agent Kourier's image, which every
-# release must name, and the recipes' agent images a release names beside it.
+# release must name, and the recipes' agent images and the add-ons' images a release
+# names beside it.
 # Only immutable image digests are emitted; moving tags are deliberately ignored.
 #
 # Usage: select-release-images.sh RELEASES_JSON OUTFILE
@@ -57,9 +58,10 @@ for kind in stable prerelease; do
       continue
     fi
   fi
-  # Agent Kourier's image, and the recipes' agent images that releases publish beside it (hack/release/release.sh),
-  # read only from the whole lines release.yml's publish job writes under "Verified artifacts". A digest anywhere
-  # else in the body, such as in a pull request's title among the generated notes, is not selected.
+  # Agent Kourier's image, and the recipes' agent images and the add-ons' images that releases publish beside it
+  # (hack/release/release.sh), read only from the whole lines release.yml's publish job writes under "Verified
+  # artifacts". A digest anywhere else in the body, such as in a pull request's title among the generated notes, is not
+  # selected.
   refs=$(jq -r --arg tag "${tag}" '
     .[]
     | select((.draft // false) == false and .tag_name == $tag)
@@ -68,7 +70,8 @@ for kind in stable prerelease; do
     | rtrimstr("\r")
     | (capture("^- Image: `(?<ref>ghcr\\.io/agentkourier/agent-kourier@sha256:[0-9a-f]{64})`$"),
        capture("^- Prompt agent image: `(?<ref>ghcr\\.io/agentkourier/agent-kourier-prompt-agent@sha256:[0-9a-f]{64})`$"),
-       capture("^- Echo agent image: `(?<ref>ghcr\\.io/agentkourier/agent-kourier-echo-agent@sha256:[0-9a-f]{64})`$"))
+       capture("^- Echo agent image: `(?<ref>ghcr\\.io/agentkourier/agent-kourier-echo-agent@sha256:[0-9a-f]{64})`$"),
+       capture("^- CMA add-on image: `(?<ref>ghcr\\.io/agentkourier/agent-kourier-cma@sha256:[0-9a-f]{64})`$"))
     | .ref
   ' "${RELEASES_JSON}") || die "could not parse image metadata for release ${tag}"
   grep -F 'ghcr.io/agentkourier/agent-kourier@sha256:' <<<"${refs}" >/dev/null ||

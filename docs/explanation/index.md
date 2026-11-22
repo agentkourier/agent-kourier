@@ -23,6 +23,12 @@ built that way, and what it deliberately does not do.
 
     Why one protocol to every agent, what A2A gives the broker, and what it does not.
 
+-   **[Add-ons](add-ons.md)**
+
+    ---
+
+    Optional components released with Agent Kourier, such as the bridge to Claude Managed Agents, and the add-ons there are.
+
 -   **[Choose a config route](config-routes.md)**
 
     ---

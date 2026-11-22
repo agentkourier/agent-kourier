@@ -2,8 +2,8 @@
 # why skipping is safe): on a pull request that changes only paths on the docs-only list or Markdown outside every Go
 # package's tree (README.md and the pages under docs/, say), they start and report success under their own names but
 # skip every step after their docs-only step. govulncheck reads a module's Go packages and the files they embed,
-# Agent Kourier's image holds only the binary built from Go, and an agent's image only the files its .dockerignore
-# lets in, none of them Markdown, so neither has new code to scan. gitleaks scans the whole tree and
+# Agent Kourier's image and an add-on's hold only the binary built from Go, and an agent's image only the files its
+# .dockerignore lets in, none of them Markdown, so neither has new code to scan. gitleaks scans the whole tree and
 # its history, so it always runs in full. On any other event the docs-only step does not run, and the jobs run as they
 # did before it.
 name: security
@@ -54,6 +54,9 @@ jobs:
           - module: docs-agent
             directory: examples/recipes/docs-agent/agent
             go-sum: examples/recipes/docs-agent/agent/go.sum
+          - module: cma
+            directory: addons/cma
+            go-sum: addons/cma/go.sum
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -150,9 +153,9 @@ jobs:
           path: ${{ runner.temp }}/gitleaks.sarif
           if-no-files-found: warn
 
-  # Agent Kourier's production image and the recipes' agent images that a release publishes (hack/release/release.sh),
-  # each platform scanned with the release's policy, so a finding fails here before it fails a release. The ruleset
-  # requires every leg, the agents' included, and so does SECURITY_REQUIRED_JOBS in hack/release/check-ci.sh (RELEASING.md):
+  # Agent Kourier's production image, the recipes' agent images and the add-ons' images that a release publishes
+  # (hack/release/release.sh), each platform scanned with the release's policy, so a finding fails here before it fails
+  # a release. The ruleset requires every leg, the agents' and the add-ons' included, and so does SECURITY_REQUIRED_JOBS in hack/release/check-ci.sh (RELEASING.md):
   # a renamed or added leg is a change to both.
   image:
     name: trivy (${{ matrix.name }})
@@ -181,6 +184,12 @@ jobs:
           - name: echo-agent-linux-arm64
             platform: linux/arm64
             agent: echo-agent
+          - name: cma-linux-amd64
+            platform: linux/amd64
+            addon: cma
+          - name: cma-linux-arm64
+            platform: linux/arm64
+            addon: cma
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -216,7 +225,7 @@ jobs:
           path=$(hack/security/install-trivy.sh "${RUNNER_TEMP}/security-tools")
           echo "path=${path}" >>"${GITHUB_OUTPUT}"
       - name: Build the production image
-        if: ${{ steps.docs-only.outputs.skip != 'true' && matrix.agent == '' }}
+        if: ${{ steps.docs-only.outputs.skip != 'true' && matrix.agent == '' && matrix.addon == '' }}
         env:
           PLATFORM: ${{ matrix.platform }}
           IMAGE_REF: agent-kourier-security:${{ matrix.name }}
@@ -237,6 +246,22 @@ jobs:
           IMAGE_REF: agent-kourier-security:${{ matrix.name }}
           AGENT: ${{ matrix.agent }}
         run: docker buildx build --platform "${PLATFORM}" --load --tag "${IMAGE_REF}" "examples/recipes/${AGENT}/agent"
+      # An add-on's Dockerfile (addons/<addon>) cross-compiles on Agent Kourier's pinned bases, as its own does.
+      - name: Build the add-on image
+        if: ${{ steps.docs-only.outputs.skip != 'true' && matrix.addon != '' }}
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          IMAGE_REF: agent-kourier-security:${{ matrix.name }}
+          ADDON: ${{ matrix.addon }}
+        run: |
+          source hack/kind/lib.sh
+          docker buildx build \
+            --platform "${PLATFORM}" \
+            --build-arg "GO_IMAGE=${GO_IMAGE}" \
+            --build-arg "RUNTIME_IMAGE=${RUNTIME_IMAGE}" \
+            --load \
+            --tag "${IMAGE_REF}" \
+            "addons/${ADDON}"
       - name: Scan the image
         if: ${{ steps.docs-only.outputs.skip != 'true' }}
         env:
@@ -320,7 +345,7 @@ jobs:
           path: ${{ runner.temp }}/trivy-*.sarif
           if-no-files-found: warn
 
-  # On a push to main, once govulncheck has saved: deletes every entry of its three caches but the newest, as ci.yml's
+  # On a push to main, once govulncheck has saved: deletes every entry of its four caches but the newest, as ci.yml's
   # cache-prune does for its caches (the comment in ci.yml's lint job says why).
   cache-prune:
     needs: [govulncheck]
@@ -336,6 +361,6 @@ jobs:
           persist-credentials: false
       - run: >-
           hack/ci/actions-cache.sh prune "go-govulncheck-root-${RUNNER_OS}-" "go-govulncheck-ax-${RUNNER_OS}-"
-          "go-govulncheck-docs-agent-${RUNNER_OS}-"
+          "go-govulncheck-docs-agent-${RUNNER_OS}-" "go-govulncheck-cma-${RUNNER_OS}-"
         env:
           GH_TOKEN: ${{ github.token }}

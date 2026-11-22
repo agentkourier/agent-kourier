@@ -69,6 +69,15 @@ spec:
       ports:
         - {port: {{ int .Values.networkPolicy.postgres.port }}, protocol: TCP}
     {{- end }}
+    {{- if include "agentkourier.cma.enabled" . }}
+    # The CMA add-on's pods (addons.cma), which Agent Kourier reaches through the add-on's Service.
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "agentkourier.cma.selectorLabels" . | nindent 14 }}
+      ports:
+        - {port: {{ include "agentkourier.cma.port" . | int }}, protocol: TCP}
+    {{- end }}
     {{- with .Values.networkPolicy.extraEgress }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
