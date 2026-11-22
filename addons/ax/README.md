@@ -39,7 +39,9 @@ Go and Debian bases; the runner is compiled from the pinned AX module.
 ## Deploy
 
 1. Build and push the image to a registry your Substrate workers can pull. Substitute
-   its immutable digest, model settings and OIDC settings in `task.yaml`. Use the
+   its immutable digest, model settings, OIDC settings and the gateway's A2A URL
+   (`PUBLIC_URL`, which the card names; the agent refuses to start with a URL that has
+   no host) in `task.yaml`. Use the
    same `MODEL_NAME` and `MODEL_REGION` as your kagent sandbox. The sample is a Haiku
    inference profile; your account must have access in that region.
 2. Provision the `agent-kourier-ax` atespace and AX control plane following the pinned

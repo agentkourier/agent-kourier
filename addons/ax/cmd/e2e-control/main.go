@@ -80,7 +80,9 @@ func run() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	target, _ := url.Parse("http://atenet-router.ate-system.svc.cluster.local")
-	// What NewSingleHostReverseProxy's Director did, plus the actor header: the incoming Host kept, X-Forwarded-For set.
+	// To the router, with the incoming Host kept and the actor header set. Rewrite drops the incoming Forwarded and
+	// X-Forwarded-* headers; SetXForwarded then sets X-Forwarded-For to the client's IP alone, and X-Forwarded-Host
+	// and X-Forwarded-Proto from the incoming request.
 	proxy := &httputil.ReverseProxy{Rewrite: func(pr *httputil.ProxyRequest) {
 		pr.SetURL(target)
 		pr.Out.Host = pr.In.Host
@@ -172,7 +174,7 @@ func provision(ctx context.Context, client ax.AXClient, control ate.ControlClien
 			existing = nil
 		}
 		if existing == nil {
-			task := &ax.Task{ApiVersion: "ax.io/v1alpha1", Kind: "Task", Metadata: &ax.ObjectMeta{Name: name, Atespace: space, CreationTimestamp: timestamppb.Now()}, Spec: &ax.TaskSpec{Image: os.Getenv("AX_FIXTURE_IMAGE"), Command: []string{"/usr/local/bin/ax-e2e-agent"}, Env: []*ax.EnvVar{{Name: "AX_SCENARIO", Value: name}, {Name: "OIDC_ISSUER", Value: "http://dex.dex.svc.cluster.local:5556/dex"}, {Name: "OIDC_AUDIENCE", Value: "agent-kourier-binding"}, {Name: "OIDC_SUBJECT", Value: os.Getenv("OIDC_SUBJECT")}, {Name: "LISTEN_ADDR", Value: ":80"}, {Name: "RUNNER_URL", Value: "http://127.0.0.1:8081"}, {Name: "SQLITE_PATH", Value: "/workspace/agent-kourier-state/agent.db"}}}}
+			task := &ax.Task{ApiVersion: "ax.io/v1alpha1", Kind: "Task", Metadata: &ax.ObjectMeta{Name: name, Atespace: space, CreationTimestamp: timestamppb.Now()}, Spec: &ax.TaskSpec{Image: os.Getenv("AX_FIXTURE_IMAGE"), Command: []string{"/usr/local/bin/ax-e2e-agent"}, Env: []*ax.EnvVar{{Name: "AX_SCENARIO", Value: name}, {Name: "OIDC_ISSUER", Value: "http://dex.dex.svc.cluster.local:5556/dex"}, {Name: "OIDC_AUDIENCE", Value: "agent-kourier-binding"}, {Name: "OIDC_SUBJECT", Value: os.Getenv("OIDC_SUBJECT")}, {Name: "LISTEN_ADDR", Value: ":80"}, {Name: "PUBLIC_URL", Value: "http://atenet-router.ate-system.svc.cluster.local/a2a"}, {Name: "RUNNER_URL", Value: "http://127.0.0.1:8081"}, {Name: "SQLITE_PATH", Value: "/workspace/agent-kourier-state/agent.db"}}}}
 			if task.Spec.Image == "" || os.Getenv("OIDC_SUBJECT") == "" {
 				return errors.New("AX_FIXTURE_IMAGE and OIDC_SUBJECT required")
 			}

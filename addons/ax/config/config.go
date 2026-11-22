@@ -137,7 +137,11 @@ func Parse(getenv func(string) string) (Config, error) {
 	}
 	c.PublicURL = get("PUBLIC_URL", "http://"+c.ListenAddr+"/a2a")
 	if err := httpURL(c.PublicURL); err != nil {
-		fail(fmt.Errorf("PUBLIC_URL %q %w", c.PublicURL, err))
+		if getenv("PUBLIC_URL") == "" {
+			fail(fmt.Errorf("PUBLIC_URL is unset and the one made from LISTEN_ADDR, %q, %w: set PUBLIC_URL to the URL callers reach the A2A endpoint at", c.PublicURL, err))
+		} else {
+			fail(fmt.Errorf("PUBLIC_URL %q %w", c.PublicURL, err))
+		}
 	}
 	if c.RunnerURL != "" {
 		if err := originURL(c.RunnerURL); err != nil {
@@ -344,7 +348,7 @@ func duration(v string, positive bool) (time.Duration, error) {
 // httpURL reports why v is not an absolute http or https URL with a host.
 func httpURL(v string) error {
 	u, err := url.Parse(v)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
 		return errors.New("is not an http or https URL with a host")
 	}
 	return nil
