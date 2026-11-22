@@ -69,11 +69,14 @@ answers before the Binding's `interactions.timeout`, Agent Kourier ends the paus
 ## Restarts
 
 The store keeps the A2A tasks, the message ID that started or joined each task, when each context was last active, and
-the ADK sessions with their events, so a restart loses none of them. At start, before it listens, the add-on:
+the ADK sessions with their events, so a restart loses none of them. At start the add-on:
 
-1. Opens the store and applies its migrations and ADK's. On SQLite it also imports the tasks of a file in the layout of
-   the agent before it was an add-on ([Store](#store)).
-2. Fails each task left `submitted` or `working` with the agent message "Interrupted by an agent restart.".
+1. Opens the store and applies its migrations and ADK's, before it listens. On SQLite it also imports the tasks of a
+   file in the layout of the agent before it was an add-on ([Store](#store)).
+2. Leads: at once on SQLite, and on Postgres once it holds the lease ([Replicas](#replicas)).
+3. As the leader, fails each task left `submitted` or `working` with the agent message "Interrupted by an agent
+   restart.", starts the upkeep, and only then serves A2A requests. Until then `/readyz` answers 503, and an A2A request
+   is answered 503 with `Retry-After`.
 
 | Survives a restart | Is interrupted |
 |---|---|
@@ -136,11 +139,13 @@ no RBAC. The leader serves A2A, and every write it makes checks the lease's epoc
 forwards each A2A request and the agent card to the leader's `ADVERTISE_URL`, streaming the answer through unbuffered; the
 caller check runs on the leader. The add-on answers 503 with `Retry-After` (the election's retry period, at least 1
 second) on a leader that has not finished taking over, on a standby that knows of no leader or cannot reach it, and on a
-replica that is not serving when the request was already forwarded once: a request is forwarded once at most. A leader
-that cannot renew the lease for `LEASE_RENEW_DEADLINE` exits, and one that stops on SIGTERM releases the lease. A replica
-fails the turns a restart cut off only once it holds the lease, so two replicas never fail each other's turns, and a
-replica that takes over runs the same start-up work as a restart: a turn that was running on the old leader fails, and a
-paused question survives.
+replica that is not serving when the request was already forwarded once: a request is forwarded once at most. A standby
+gives up on connecting to the leader after 5 seconds. A leader that cannot renew the lease for `LEASE_RENEW_DEADLINE`, or
+whose renewal or write finds that another replica has taken it, exits at once with code 5, without a drain, and
+Kubernetes restarts it. One that stops on SIGTERM drains its requests, then hands the lease over, for at most 3 seconds;
+past that, a standby takes over once the lease has run out. A replica fails the turns a restart cut off only once it
+holds the lease, so two replicas never fail each other's turns, and a replica that takes over runs the same start-up
+work as a restart: a turn that was running on the old leader fails, and a paused question survives.
 
 ## Caller check
 
@@ -188,7 +193,7 @@ All on one port: 8090 in the chart, named `http` on the Service, and 80 in the r
 | `/a2a` | A2A JSON-RPC, behind the caller check |
 | `/a2a/.well-known/agent-card.json` | The agent card, behind the caller check |
 | `/healthz` | 200 once the add-on listens: the process is alive. The chart's liveness probe asks it. |
-| `/readyz` | With `RUNNER_URL` unset, 200 once the add-on serves, which on a leader is only after its start-up work, until it starts to stop. The chart's startup and readiness probes ask it. With `RUNNER_URL` set, the AX task runner's, proxied to it. |
+| `/readyz` | With `RUNNER_URL` unset: 200 on a standby, and on a leader once its takeover is done (the turns a restart cut off failed, the upkeep started), until it starts to stop; 503 otherwise. The chart's startup and readiness probes ask it. With `RUNNER_URL` set, the AX task runner's, proxied to it. |
 | `/metadata/` | With `RUNNER_URL` set only: the AX task runner's metadata server, proxied to it |
 | `/metrics` | Prometheus metrics |
 
@@ -232,28 +237,30 @@ The OpenTelemetry variables are the ones Agent Kourier reads (`OTEL_SERVICE_NAME
 `OTEL_EXPORTER_OTLP_ENDPOINT` and the rest; see [Logs and traces](logs-and-traces.md)), with the service name
 `agent-kourier-ax` by default. The chart passes them, and the AWS SDK's other variables, through `addons.ax.extraEnv`.
 
-In the route inside Google AX, `addons/ax/task.yaml` sets `LISTEN_ADDR=:80`, `RUNNER_URL=http://127.0.0.1:8081`,
+In the route inside Google AX, `addons/ax/task.yaml` sets `LISTEN_ADDR=:80`, `PUBLIC_URL` to the gateway's A2A URL,
+`RUNNER_URL=http://127.0.0.1:8081`,
 `SQLITE_PATH=/workspace/agent-kourier-state/agent.db`, the three `OIDC_*` variables, and a placeholder
 `AWS_BEARER_TOKEN_BEDROCK` that the egress gateway replaces with the real key.
 
 ## Telemetry
 
-The add-on logs JSON lines on standard error at `LOG_LEVEL`. It never logs a token it was sent.
+The add-on logs JSON lines on standard error at `LOG_LEVEL`, with durations written as text (`10m0s`) and an error's
+text cut to 300 bytes ([Limits](limits.md#ax-add-on)). It never logs a token it was sent.
 
 Metrics are on `/metrics`, with the prefix `agentkourier_ax_`. With `serviceMonitor.enabled` the chart adds a
 ServiceMonitor of the add-on's own.
 
 | Metric | Type | What it counts |
 |---|---|---|
-| `agentkourier_ax_turns_total{outcome}` | Counter | Turns, by how they ended |
-| `agentkourier_ax_operation_duration_seconds{operation,outcome}` | Histogram | Calls to Bedrock |
+| `agentkourier_ax_turns_total{outcome}` | Counter | Turns, by how they ended: `completed`, `input_required` (paused on a question), `failed`, `canceled`, or `interrupted` (failed by the leader after a restart or a takeover) |
+| `agentkourier_ax_operation_duration_seconds{operation,outcome}` | Histogram | Calls to Bedrock, `converse` or `converse_stream` (timed while the stream opens), by `success`, `cancelled`, `timeout`, the HTTP status Bedrock answered, or `error` |
 | `agentkourier_ax_auth_refused_total{reason}` | Counter | Requests the caller check refused, by `missing`, `invalid` or `unavailable` |
 | `agentkourier_ax_message_replays_total` | Counter | Resent messages that joined their first send's task |
 | `agentkourier_ax_tasks_interrupted_total` | Counter | Tasks a restart or takeover failed |
-| `agentkourier_ax_sessions_deleted_total{reason}` | Counter | ADK sessions deleted |
-| `agentkourier_ax_leader` | Gauge | 1 on the leader, 0 elsewhere |
+| `agentkourier_ax_sessions_deleted_total{reason}` | Counter | ADK sessions deleted with their contexts' tasks, by `idle` (`SESSION_IDLE_TTL`) |
+| `agentkourier_ax_leader` | Gauge | 1 on the leader (on SQLite, the only replica), 0 on a standby |
 | `agentkourier_ax_leader_takeovers_total` | Counter | Times this replica became the leader |
-| `agentkourier_ax_forwarded_requests_total{outcome}` | Counter | Requests a standby forwarded to the leader |
+| `agentkourier_ax_forwarded_requests_total{outcome}` | Counter | Requests a standby forwarded to the leader, or could not: `forwarded`, `failed`, `cancelled`, `no_leader` or `loop` (a request another standby forwarded) |
 
 Each turn is a span, `agentkourier.ax.turn`, a child of the trace context Agent Kourier sends with the request, and
 each call to Bedrock a span `agentkourier.ax.model.<operation>` under it.

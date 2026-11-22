@@ -161,8 +161,9 @@ kubectl -n agent-kourier rollout status deployment/agent-kourier-ax
 kubectl -n agent-kourier logs deployment/agent-kourier-ax | grep 'agent listening'
 ```
 
-The add-on listens only after its start-up work: it opens and migrates its store, and fails the turns a restart cut off.
-A setting it cannot use stops it at start, with an error that names the variable.
+The add-on opens and migrates its store before it listens, then fails the turns a restart cut off and starts its upkeep;
+until that is done, `/readyz` answers 503 and so do A2A requests. A setting it cannot use stops it at start, with an
+error that names the variable.
 
 ## 3. Declare the backend and the Binding
 
@@ -348,7 +349,8 @@ alone gives the agent neither its Bedrock key nor a CA it trusts.
 
 ### 4. Apply the Task
 
-Substitute the image, the model, and the OIDC settings in `task.yaml`, then:
+Substitute the image, the model, the OIDC settings and `PUBLIC_URL` in `task.yaml`. `PUBLIC_URL` is the gateway's A2A
+URL, which the AgentBackend names (step 6) and the agent card names too. Then:
 
 ```sh
 ax apply -f task.yaml
