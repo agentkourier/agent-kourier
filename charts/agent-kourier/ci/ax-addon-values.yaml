@@ -1,0 +1,65 @@
+# The AX add-on (addons.ax) beside the minimal install, on SQLite at one replica, with AWS credentials from an IAM role: the
+# ServiceAccount's IRSA annotation, and the egress that a cluster which associates the role by EKS Pod Identity instead needs. Also an
+# AgentBackend that names the add-on's Service, a Binding whose identity token the add-on accepts (Authorization: Bearer), and the
+# NetworkPolicies of both, so that the broker's egress to the add-on and the add-on's ingress from the broker are rendered. Not
+# ax-values.yaml, which is Agent Kourier in the AX kind tier.
+image:
+  repository: registry.example.test/agent-kourier
+  tag: v0.1.0
+
+config:
+  # The ConfigMap route, named: config.source defaults to crds. crds.install is left unset, which is false with files: no CRD.
+  source: files
+  chatConnections:
+    slack-main:
+      spec:
+        platform: slack
+        credentialsSecretRef: {name: slack-main}
+  agentBackends:
+    ax:
+      spec:
+        dialect: a2a
+        url: http://agent-kourier-ax.agent-kourier.svc:8090/a2a
+  bindings:
+    ax-chat:
+      spec:
+        agent:
+          backendRef: {name: ax}
+          namespace: ax
+          name: assistant
+        identity:
+          userId: agent-kourier-ax
+          tokenSecretRef: {name: ax-token}
+        chat:
+          connectionRef: {name: slack-main}
+          channel: C0123456789
+          output: live
+          triggers:
+            - type: mention
+
+networkPolicy:
+  enabled: true
+  kubeApiServer:
+    cidrs: ["10.0.0.1/32"]
+  metricsFrom:
+    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: monitoring}}
+      podSelector: {matchLabels: {app.kubernetes.io/name: prometheus}}
+
+addons:
+  ax:
+    enabled: true
+    image:
+      tag: v0.1.0
+    model:
+      region: us-east-1
+      name: us.anthropic.claude-haiku-4-5-20251001-v1:0
+    serviceAccount:
+      annotations:
+        eks.amazonaws.com/role-arn: arn:aws:iam::111122223333:role/agent-kourier-ax
+    auth:
+      tokenSecret: {name: ax-token}
+    networkPolicy:
+      # The EKS Pod Identity Agent, on a link-local address, which the Bedrock rule leaves out.
+      extraEgress:
+        - to: [{ipBlock: {cidr: 169.254.170.23/32}}]
+          ports: [{port: 80, protocol: TCP}]
