@@ -59,8 +59,9 @@ type Subject struct {
 	//
 	// A tool that does not fit is refused and never cut: a prompt with a tool whose cleaned name or arguments are longer
 	// than Caps.Limit of their place (WhereToolName, WhereToolArgs) gets chat.ErrTooLarge from Fits, Post and Update, and
-	// shows nothing of it. The ending of a prompt of tools is cut and marked like any other text, since an ending
-	// cannot be refused without stranding the prompt with its controls.
+	// shows nothing of it. The ending of a prompt of tools shows each tool's name and the summary of its arguments
+	// (chat.Tool.Summary) on one line, cut and marked like any other text, since an ending cannot be refused without
+	// stranding the prompt with its controls.
 	ToolApprovals bool
 	// TooLargeTools, if set and ToolApprovals is, is a prompt of tools too large for the platform: Fits must refuse it
 	// with chat.ErrTooLarge.
@@ -902,15 +903,16 @@ func toolEnding(name, args string) call {
 }
 
 // toolPlacements are the places of a tool approval: a tool's name and its arguments, in the prompt and in its ending.
-// The ending shows each tool's arguments as well as its name, so the places are not optional: the thread keeps a record of
-// what was approved or denied. Text too long for the prompt's places is refused and not cut (oversize); in the ending's
-// it is cut and marked.
+// The ending shows each tool's name and the summary of its arguments on one line (chat.Tool.Summary, a place of one line
+// like a status line's summary), so the places are not optional: the thread keeps a record of what was approved or denied.
+// Text too long for the prompt's places is refused and not cut (oversize); in the ending's it is cut and marked. The text is
+// never a JSON object (the canary is before or after it), so the summary is the text on one line.
 func toolPlacements() []placement {
 	return []placement{
 		{chat.WhereToolName, "approval tool name", func(s string) call { return call{out: chat.Ask(toolPrompt(s, "{}"))} }, false, false},
 		{chat.WhereToolArgs, "approval tool arguments", func(s string) call { return call{out: chat.Ask(toolPrompt("tool", s))} }, false, false},
 		{chat.WhereToolName, "ending approval tool name", func(s string) call { return toolEnding(s, "{}") }, false, false},
-		{chat.WhereToolArgs, "ending approval tool arguments", func(s string) call { return toolEnding("tool", s) }, false, false},
+		{chat.WhereToolArg, "ending approval tool arguments", func(s string) call { return toolEnding("tool", s) }, false, false},
 	}
 }
 

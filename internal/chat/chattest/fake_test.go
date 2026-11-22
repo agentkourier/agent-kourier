@@ -580,23 +580,33 @@ func TestThreadBetweenReadsWhatWasPostedAndSaidInTheThread(t *testing.T) {
 	}
 }
 
+// The prompt of an approval holds each tool's name and its arguments whole; its ending, each tool's name and the summary of its
+// arguments, on one line (chat.Tool.Summary).
 func TestFieldsListsTheNameAndArgumentsOfEachToolOfAnApproval(t *testing.T) {
-	approval := chat.Prompt{ID: "ix", Hint: "h", Subagent: "s", Tools: []chat.Tool{{Name: "kubectl", Args: "get\npods"}, {Name: "ping"}}}
-	for name, o := range map[string]chat.Outgoing{
-		"prompt": chat.Ask(approval),
-		"ending": chat.End(chat.Ending{Outcome: chat.Answered, By: "U1", Prompt: approval, Verdicts: []chat.ToolVerdict{chat.ToolApproved, chat.ToolDenied}}),
+	approval := chat.Prompt{ID: "ix", Hint: "h", Subagent: "s", Tools: []chat.Tool{{Name: "kubectl", Args: `{"verb":"get",` + "\n" + `"what":"pods"}`}, {Name: "ping"}}}
+	for name, tc := range map[string]struct {
+		o     chat.Outgoing
+		where chat.Where
+		args  []string
+	}{
+		"prompt": {chat.Ask(approval), chat.WhereToolArgs, []string{`{"verb":"get",` + "\n" + `"what":"pods"}`, ""}},
+		"ending": {chat.End(chat.Ending{Outcome: chat.Answered, By: "U1", Prompt: approval, Verdicts: []chat.ToolVerdict{chat.ToolApproved, chat.ToolDenied}}),
+			chat.WhereToolArg, []string{`verb="get", what="pods"`, ""}},
 	} {
 		var names, args []string
-		for _, f := range Fields(o) {
+		for _, f := range Fields(tc.o) {
 			switch f.Where {
 			case chat.WhereToolName:
 				names = append(names, f.Text)
-			case chat.WhereToolArgs:
+			case chat.WhereToolArgs, chat.WhereToolArg:
+				if f.Where != tc.where {
+					t.Errorf("%s: arguments %q at %v, want them at %v", name, f.Text, f.Where, tc.where)
+				}
 				args = append(args, f.Text)
 			}
 		}
-		if !slices.Equal(names, []string{"kubectl", "ping"}) || !slices.Equal(args, []string{"get\npods", ""}) {
-			t.Errorf("%s: tool names %q, arguments %q; want both tools in order", name, names, args)
+		if !slices.Equal(names, []string{"kubectl", "ping"}) || !slices.Equal(args, tc.args) {
+			t.Errorf("%s: tool names %q, arguments %q; want both tools in order, with %q", name, names, args, tc.args)
 		}
 	}
 }

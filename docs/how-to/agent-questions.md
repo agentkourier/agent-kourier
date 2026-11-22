@@ -94,7 +94,11 @@ the button again is a new press. A new press by the person who already decided d
 recorded, while the broker keeps it, is sent again, and the task takes it only while it is still paused on that same
 approval. A task that has gone on, to its end or to a later question or approval, gets nothing, and nobody is told.
 Agent Kourier audits the decision before sending it under the Binding's service identity, then replaces the
-prompt with an ending that shows each tool's Approved or Denied verdict and removes the controls. The audit records the
+prompt with an ending that shows who decided and removes the controls. The ending shows each tool on one line, in the
+form of a tool's status line: its name, a summary of its redacted arguments cut short and marked (only the prompt shows
+the arguments whole), and its verdict, such as `bash(command="kubectl get pods -n shop") — Approved`, numbered when there are
+several ([Limits](../reference/limits.md#what-a-thread-shows)). A timed-out or cancelled ending shows the same lines
+without a verdict. The audit records the
 Binding, Slack user, time, counts and cleaned tool names; it never records arguments or rejection text. A denial uses the
 dialect's fixed reason.
 

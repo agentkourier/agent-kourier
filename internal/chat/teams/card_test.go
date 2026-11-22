@@ -235,15 +235,22 @@ func TestAnEndingIsACardWithNoControls(t *testing.T) {
 		t.Errorf("the activity has text %q and %d entities", answered.Text, len(answered.Entities))
 	}
 
-	tools := chat.Prompt{ID: "ix-2", Tools: []chat.Tool{{Name: "scale", Args: "n=3"}, {Name: "drain"}}}
+	tools := chat.Prompt{ID: "ix-2", Tools: []chat.Tool{
+		{Name: "bash", Args: "{\n  \"command\": \"kubectl get pods -n shop -o wide\"\n}"},
+		{Name: "drain"},
+		{Args: "n=3\nforce"},
+		{Name: "psql", Args: `{"password":"[redacted]","user":"ops"}`},
+	}}
 	for name, tc := range map[string]struct {
 		e    chat.Ending
 		want []string
 	}{
-		"tools decided": {chat.Ending{Outcome: chat.Answered, By: "U0FORGED", Prompt: tools, Verdicts: []chat.ToolVerdict{chat.ToolApproved, chat.ToolDenied}},
-			[]string{"text:someone answered.", "text:*1. scale", "text:Approved", "text:`n=3", "text:*2. drain", "text:Denied", "text:~(no arguments)"}},
+		"tools decided": {chat.Ending{Outcome: chat.Answered, By: "U0FORGED", Prompt: tools, Verdicts: []chat.ToolVerdict{chat.ToolApproved, chat.ToolDenied, chat.ToolApproved, chat.ToolDenied}},
+			[]string{"text:someone answered.", `text:1. bash(command="kubectl get pods -n shop -o wide") — Approved`, "text:2. drain() — Denied",
+				"text:Tool 3(n=3 force) — Approved", `text:4. psql(password="[redacted]", user="ops") — Denied`}},
 		"timed out": {chat.Ending{Outcome: chat.TimedOut, Prompt: tools},
-			[]string{"text:Nobody answered in time.", "text:*1. scale", "text:`n=3", "text:*2. drain", "text:~(no arguments)"}},
+			[]string{"text:Nobody answered in time.", `text:1. bash(command="kubectl get pods -n shop -o wide")`, "text:2. drain()",
+				"text:Tool 3(n=3 force)", `text:4. psql(password="[redacted]", user="ops")`}},
 		"cancelled by someone": {chat.Ending{Outcome: chat.Cancelled, By: testUser, Prompt: chat.Prompt{ID: "ix-3", Questions: []chat.Question{{Text: "Why?"}}}},
 			[]string{"block:<at>someone</at> cancelled the question.", "text:*Why?"}},
 		"cancelled": {chat.Ending{Outcome: chat.Cancelled, Prompt: chat.Prompt{ID: "ix-3", Questions: []chat.Question{{Text: "Why?"}}}},
@@ -254,6 +261,27 @@ func TestAnEndingIsACardWithNoControls(t *testing.T) {
 		if _, ok := c["actions"]; ok {
 			t.Errorf("%s: the ending has actions", name)
 		}
+	}
+}
+
+// An ending shows a tool on one line however long its name and arguments are: the summary of the arguments is cut at
+// chat.MaxToolSummary and the name to what the cap of the line leaves, each cut marked, and the verdict is kept.
+func TestAnEndingCutsALongToolLine(t *testing.T) {
+	t.Parallel()
+	long := chat.Tool{Name: strings.Repeat("n", 5000), Args: `{"command":"` + strings.Repeat("echo a; ", 6000) + `"}`}
+	e := chat.Ending{Outcome: chat.Answered, Prompt: chat.Prompt{ID: "ix-1", Tools: []chat.Tool{long}}, Verdicts: []chat.ToolVerdict{chat.ToolApproved}}
+	lines := outline(t, cardOf(t, mustRender(t, chat.End(e))))
+	line := strings.TrimPrefix(lines[len(lines)-1], "text:")
+	if limit := capabilities().Limit(chat.WhereToolName); chat.Units(line) != limit {
+		t.Errorf("the line is %d units, want the name cut so that it is %d", chat.Units(line), limit)
+	}
+	_, rest, cut := strings.Cut(line, chat.Truncated+"(") // the mark holds a "(" of its own
+	if !cut || !strings.HasPrefix(line, "nnn") {
+		t.Errorf("the line starts %.20q, want the name cut and marked", line)
+	}
+	summary := strings.TrimSuffix(rest, ") — Approved")
+	if summary == rest || !strings.HasPrefix(summary, `command="echo a; echo`) || !strings.HasSuffix(summary, chat.Truncated) || chat.Units(summary) != chat.MaxToolSummary {
+		t.Errorf("the rest of the line is %q; want the summary cut to %d and marked, then the verdict", rest, chat.MaxToolSummary)
 	}
 }
 

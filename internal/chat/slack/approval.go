@@ -5,7 +5,6 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -191,44 +190,22 @@ func renderToolPrompt(p chat.Prompt) (Content, error) {
 	return out, nil
 }
 
-// toolEndingBlocks are the tools of an ended prompt: for each a section of its name (numbered, as in the prompt, if
-// there are several) that holds what was decided of it in a field if something was, and its arguments. An ending is never refused for size, so what is long is cut and marked: a name
-// at the limit of its place, the arguments at theirs, and, when the arguments together are more than a message shows,
-// each to its share, which is what it needs or an equal part of what is left.
+// toolEndingBlocks are the tools of an ended prompt, a section of one line for each, as a status line shows a call: its name
+// (numbered, as in the prompt, if there are several), the summary of its arguments (chat.Tool.Summary) in parentheses, and
+// what was decided of it if something was, as in "2. kubectl(ns="prod") — Denied". The arguments whole are the prompt's,
+// which the person read before deciding; the ending is the thread's short record of what was decided. An ending is never
+// refused for size, so what is long is cut and marked: the name and the summary each at the bound of a status line's, the
+// summary less the verdict's words, so that the line is no longer than a status line.
 func toolEndingBlocks(e chat.Ending) []map[string]any {
 	tools := e.Prompt.Tools
-	nameLimit, argsLimit := caps.Limit(chat.WhereToolName), caps.Limit(chat.WhereToolArgs)
-	cleaned := make([]string, len(tools))
-	needs := make([]int, len(tools))
+	blocks := make([]map[string]any, len(tools))
 	for i, t := range tools {
-		cleaned[i] = chat.Clean(t.Args, false)
-		needs[i] = min(chat.Units(cleaned[i]), argsLimit)
-	}
-	room := shares(needs, maxApprovalTotal)
-	var blocks []map[string]any
-	for i, t := range tools {
-		name := section(text(chat.Truncate(shownName(t.Name, i, len(tools)), nameLimit), maxSection, true))
+		verdict := ""
 		if i < len(e.Verdicts) {
-			verdict := map[chat.ToolVerdict]string{chat.ToolApproved: "Approved", chat.ToolDenied: "Denied"}[e.Verdicts[i]]
-			name["fields"] = []map[string]any{plainObject(verdict)}
+			verdict = " — " + map[chat.ToolVerdict]string{chat.ToolApproved: "Approved", chat.ToolDenied: "Denied"}[e.Verdicts[i]]
 		}
-		blocks = append(blocks, name, argsBlock(chat.Truncate(cleaned[i], room[i])))
+		name, summary := text(shownName(t.Name, i, len(tools)), maxToolName, true), text(t.Summary(), maxToolArgs-chat.Units(verdict), true)
+		blocks[i] = section(name + "(" + summary + ")" + verdict)
 	}
 	return blocks
-}
-
-// shares divides budget among the needs: each gets what it needs, or an equal part of what is left once the smaller
-// needs are met. The shares add up to at most budget.
-func shares(needs []int, budget int) []int {
-	order := make([]int, len(needs))
-	for i := range order {
-		order[i] = i
-	}
-	slices.SortStableFunc(order, func(a, b int) int { return cmp.Compare(needs[a], needs[b]) })
-	out := make([]int, len(needs))
-	for n, i := range order {
-		out[i] = min(needs[i], budget/(len(order)-n))
-		budget -= out[i]
-	}
-	return out
 }

@@ -3,9 +3,11 @@ package chat_test
 import (
 	"encoding"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
+	"github.com/agentkourier/agent-kourier/internal/redact"
 )
 
 func TestAPromptHoldsQuestionsOrToolsNeverBothNorNeither(t *testing.T) {
@@ -126,6 +128,37 @@ func TestAToolAnswerIsAFixedPairOfValues(t *testing.T) {
 		got, ok := tc.a.ToolVerdict()
 		if got != tc.want || ok != tc.ok {
 			t.Errorf("%s: ToolVerdict = %q, %t; want %q, %t", name, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+// The ending of a prompt of tools shows each tool's arguments on one line, as a status line shows a call's: a JSON object as
+// "key=value, ..." in the order of its keys, any other text as it is, a secret that only the line shows redacted, and a long
+// summary cut and marked.
+func TestAToolsSummaryIsItsArgumentsOnOneLine(t *testing.T) {
+	long := `{"command":"` + strings.Repeat("x", 300) + `"}`
+	for name, tc := range map[string]struct{ args, want string }{
+		"none":                    {"", ""},
+		"blank":                   {" \n ", ""},
+		"an empty object":         {"{}", ""},
+		"one argument":            {"{\n  \"command\": \"kubectl get pods -n shop -o wide\"\n}", `command="kubectl get pods -n shop -o wide"`},
+		"keys in order":           {`{"ns":"prod","count":3,"force":true,"labels":{"app":"web"},"tags":["a","b"],"none":null}`, `count=3, force=true, labels={"app":"web"}, none=null, ns="prod", tags=["a","b"]`},
+		"a number as written":     {`{"n":1.50,"big":12345678901234567890}`, `big=12345678901234567890, n=1.50`},
+		"markup kept as text":     {`{"q":"<!channel> & <b>"}`, `q="<!channel> & <b>"`},
+		"a line break in a value": {`{"script":"set -e\nmake"}`, `script="set -e\nmake"`},
+		"text that is no object":  {"n=3\nforce", "n=3 force"},
+		"a JSON array":            {`["a"]`, `["a"]`},
+		"an object and more":      {`{"a":1} x`, `{"a":1} x`},
+		"a redacted value":        {`{"password":"` + redact.Redacted + `","user":"ops"}`, `password="` + redact.Redacted + `", user="ops"`},
+		"long":                    {long, `command="` + strings.Repeat("x", chat.MaxToolSummary-len(`command="`)-chat.Units(chat.Truncated)) + chat.Truncated},
+		"a long word":             {`{"blob":"` + strings.Repeat("中", 5000) + `"}`, `blob="` + strings.Repeat("中", chat.MaxToolSummary-len(`blob="`)-chat.Units(chat.Truncated)) + chat.Truncated},
+	} {
+		got := chat.Tool{Name: "t", Args: tc.args}.Summary()
+		if got != tc.want {
+			t.Errorf("%s: Summary() = %q, want %q", name, got, tc.want)
+		}
+		if strings.ContainsAny(got, "\n\r") || chat.Units(got) > chat.MaxToolSummary {
+			t.Errorf("%s: %q is not one line of at most %d units", name, got, chat.MaxToolSummary)
 		}
 	}
 }

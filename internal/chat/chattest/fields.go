@@ -20,7 +20,13 @@ func Fields(o chat.Outgoing) []Field {
 	case o.Prompt != nil:
 		out = append(out, promptFields(*o.Prompt)...)
 	case o.Ending != nil:
-		out = append(out, promptFields(o.Ending.Prompt)...)
+		ended := o.Ending.Prompt
+		ended.Tools = nil // an ending shows a tool's name and the summary of its arguments, on one line
+		out = append(out, promptFields(ended)...)
+		for _, t := range o.Ending.Prompt.Tools {
+			add(t.Name, chat.WhereToolName)
+			add(t.Summary(), chat.WhereToolArg)
+		}
 		add(o.Ending.By, chat.WhereUser)
 		for _, a := range o.Ending.Answers {
 			for _, s := range a {
