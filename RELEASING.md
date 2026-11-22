@@ -137,13 +137,13 @@ line's newest and perhaps as latest.
 `.github/workflows/release.yml` runs `hack/release/release.sh`, the script behind `make release-image`:
 
 - First checks the exact tagged commit through the Actions API. `ci.yml` must contain successful `lint`, `test`,
-  `test-testhooks`, `docs-agent`, `crd-corpus (1.37)`, `crd-corpus (1.33)`, `echo-agent`, `prompt-agent`, `cma` and `ax` jobs. `security.yml` must contain successful `govulncheck (root)`,
-  `govulncheck (ax)`, `govulncheck (docs-agent)`, `govulncheck (cma)`, `gitleaks`, `trivy (linux-amd64)` and `trivy (linux-arm64)` jobs, the four scans of the agents'
+  `test-testhooks`, `docs-agent`, `crd-corpus (1.37)`, `crd-corpus (1.33)`, `echo-agent`, `prompt-agent`, `kit`, `cma` and `ax` jobs. `security.yml` must contain successful `govulncheck (root)`,
+  `govulncheck (ax)`, `govulncheck (docs-agent)`, `govulncheck (cma)`, `govulncheck (kit)`, `gitleaks`, `trivy (linux-amd64)` and `trivy (linux-arm64)` jobs, the four scans of the agents'
   images: `trivy (prompt-agent-linux-amd64)`, `trivy (prompt-agent-linux-arm64)`, `trivy (echo-agent-linux-amd64)` and
   `trivy (echo-agent-linux-arm64)`, the two of the CMA add-on's: `trivy (cma-linux-amd64)` and `trivy (cma-linux-arm64)`, and
   the two of the AX add-on's: `trivy (ax-linux-amd64)` and `trivy (ax-linux-arm64)`.
   `codeql.yml` must contain a successful `analyze (go)` job. These are the status checks the `main` ruleset
-  requires. `codeql.yml` skips `analyze` while the repository is private, and a skipped run blocks the release.
+  requires, `kit` and `govulncheck (kit)` once the owner adds them to it. `codeql.yml` skips `analyze` while the repository is private, and a skipped run blocks the release.
   The scheduled released-image rescan is the only permitted skipped job. A pending run fails closed with a message
   to wait; the gate never reruns or changes a workflow run.
 - Refuses a final tag `vX.Y.Z` unless `charts/agent-kourier/Chart.yaml` at the tagged commit says `version: X.Y.Z`
@@ -155,8 +155,9 @@ line's newest and perhaps as latest.
 - Builds each platform with the Dockerfile, which cross-compiles Go on the runner (no emulation) and sets
   `main.version` from the tag. Then builds each platform of each agent image from its own Dockerfile, which runs `apk`
   and `pip` in the target platform: the arm64 build runs under QEMU, from the binfmt image the workflow pins by digest.
-  Then builds each platform of each add-on's image from `addons/cma/Dockerfile` and `addons/ax/Dockerfile`, on the same
-  pinned Go and runtime images as Agent Kourier's, which cross-compile too.
+  Then builds each platform of each add-on's image from `addons/cma/Dockerfile` and `addons/ax/Dockerfile`, with
+  `addons/` as the context for the shared kit each requires, on the same pinned Go and runtime images as Agent
+  Kourier's, which cross-compile too.
 - Refuses to release a platform whose binary carries a test hook. The Dockerfile's `verify` stage runs
   `internal/testhooks` (the traces `make image-check` looks for, with a testhooks build of the same
   platform as the control) and checks the binary is an ELF of that architecture with the tag as its
@@ -272,8 +273,8 @@ are applied now:
      their own pull request. Squash is the only allowed merge method.
    - Require signed commits. A squash merge in GitHub is signed by GitHub, so every commit merged this way passes.
    - Require these status checks, with the branch up to date before merging (strict): `lint`, `test`,
-     `test-testhooks`, `docs-agent`, `crd-corpus (1.37)`, `crd-corpus (1.33)`, `echo-agent`, `prompt-agent`, `cma` and `ax` from `ci`; `govulncheck (root)`, `govulncheck (ax)`,
-     `govulncheck (docs-agent)`, `govulncheck (cma)`, `gitleaks`, `trivy (linux-amd64)`, `trivy (linux-arm64)`, `trivy (prompt-agent-linux-amd64)`,
+     `test-testhooks`, `docs-agent`, `crd-corpus (1.37)`, `crd-corpus (1.33)`, `echo-agent`, `prompt-agent`, `kit`, `cma` and `ax` from `ci`; `govulncheck (root)`, `govulncheck (ax)`,
+     `govulncheck (docs-agent)`, `govulncheck (cma)`, `govulncheck (kit)`, `gitleaks`, `trivy (linux-amd64)`, `trivy (linux-arm64)`, `trivy (prompt-agent-linux-amd64)`,
      `trivy (prompt-agent-linux-arm64)`, `trivy (echo-agent-linux-amd64)`, `trivy (echo-agent-linux-arm64)`, `trivy (cma-linux-amd64)`,
      `trivy (cma-linux-arm64)`, `trivy (ax-linux-amd64)` and `trivy (ax-linux-arm64)` from `security`; and
      `analyze (go)` from `codeql`. The scheduled released-image rescan is intentionally not a required check.
@@ -324,7 +325,8 @@ it one, the owner adds `test-postgres` from `ci` to the `main` ruleset, and the 
 `hack/release/check-ci.sh` and to the lists above. The `cma` job runs `make cma-test` through `hack/postgres/run.sh`,
 which starts the same throwaway Postgres container (`hack/postgres/lib.sh`) and sets `AGENTKOURIER_POSTGRES_DSN` for
 it, so the CMA add-on's Postgres store tests run there, and `make cma-lint`; the `ax` job runs `make ax-test` the same
-way, for the AX add-on's, and `make ax-lint`. The `crd-corpus` job (`make crd-corpus`, `hack/kind/crd-corpus.sh`) brings up
+way, for the AX add-on's, and `make ax-lint`. Both test targets also run the shared kit's packages under the add-on's
+module graph; the `kit` job runs `make kit-test` and `make kit-lint` on the kit's own. The `crd-corpus` job (`make crd-corpus`, `hack/kind/crd-corpus.sh`) brings up
 a kind cluster with only the three CRDs from `charts/agent-kourier/files/crds`, with no image and no Agent Kourier, and has
 `test/crdcorpus` send every entry of its corpus to it as a server-side dry-run create. It fails when the schema refuses
 an object the broker's own validation accepts, or when an entry's `schema:` flag no longer says what the schema does with
@@ -390,7 +392,7 @@ sets `GODEBUG=gocachetest=1`, so the log says for each package whether it reused
 no result was saved for its test binary (`input list not found`: the binary changed) or one was, for other inputs
 (`test output not found`: a file or variable its tests read changed). `go test` keys results on `GODEBUG` too: removing
 it from the legs makes pull requests run every package until a push to `main` saves results without it. `test-postgres`,
-`crd-corpus`, `docs-agent`, `cma` and `ax` run `go test` with `-count=1`, which reuses nothing, and do not run `hack/ci/testmtimes`.
+`crd-corpus`, `docs-agent`, `kit`, `cma` and `ax` run `go test` with `-count=1`, which reuses nothing, and do not run `hack/ci/testmtimes`.
 `docs-agent`'s must (`make docs-agent-test`): its smoke test reads `docs/`, outside its module, where `go test` checks
 nothing, so a reused result would pass a pull request that changes only the docs. `hack/ci/testshards`' test holds the
 legs to these steps and every other job to none of them. The limits of the reuse, none of which a setting changes:
@@ -420,7 +422,7 @@ scanner or CodeQL reads, but for two tests of the docs checks that `make docs-ch
 
 - `tests` (the `test-shard` and `test-testhooks-shard` legs, `test-scripts`, `test-postgres`): nothing more. Tests read
   `README.md` and pages under `docs/` and elsewhere when they run, which only running them shows.
-- `scan` (the four `govulncheck` jobs, the `trivy` jobs, `analyze`) and `crd-corpus` (both jobs): any Markdown
+- `scan` (the five `govulncheck` jobs, the `trivy` jobs, `analyze`) and `crd-corpus` (both jobs): any Markdown
   (`*.md`, in lower case) outside every Go package's tree, such as `README.md`, the pages under `docs/` and the chart's
   README. govulncheck reads Go packages and the files they embed; Agent Kourier's image and each add-on's hold only
   the binary, and an agent's image only the files its `.dockerignore` lets in, none of them Markdown; CodeQL's Go autobuild
@@ -428,15 +430,17 @@ scanner or CodeQL reads, but for two tests of the docs checks that `make docs-ch
 - `docs-agent`: the same Markdown except under `docs/`, its corpus, and `examples/recipes/docs-agent/`.
 - `echo-agent`: the same Markdown except under `examples/recipes/echo-agent/agent/`, the one directory it reads.
 - `prompt-agent`: the same Markdown except under `examples/recipes/prompt-agent/agent/`, the one directory it reads.
-- `cma`: the same Markdown except under `docs/` (the add-on's pages) and `addons/cma/`.
-- `ax`: the same Markdown except under `docs/` (the add-on's pages) and `addons/ax/`.
+- `kit`: the same Markdown except under `docs/` (the pages its limits guard reads) and `addons/kit/`.
+- `cma`: the same Markdown except under `docs/` (the add-on's pages), `addons/cma/` and `addons/kit/` (it tests the kit
+  too).
+- `ax`: the same Markdown except under `docs/` (the add-on's pages), `addons/ax/` and `addons/kit/`.
 
 A Go package's tree is a directory of the merge commit with a `.go` file in it, and everything below it; the script
 finds them on each run, so no class skips a page under a new package's directory, which the package could embed, with
 no list to edit. The rule is wider than what Go embeds: a page in such a tree runs the jobs whether or not anything
 embeds it. So a pull request that changes `README.md` and pages under `docs/` skips both `crd-corpus` jobs,
 `echo-agent`, `prompt-agent`, the `govulncheck` and `trivy` jobs and `analyze`; one that changes only `README.md` also skips
-`docs-agent`, `cma` and `ax`; one that changes only the docs-only list skips every gated job, and `test` and `test-testhooks` pass as
+`docs-agent`, `kit`, `cma` and `ax`; one that changes only the docs-only list skips every gated job, and `test` and `test-testhooks` pass as
 their legs did. A pull request that skips `govulncheck` or `trivy` does not see a vulnerability published since its
 base was scanned; `main`'s push runs do, and so does the nightly `security` run's `govulncheck`. `lint`, with its zizmor
 audit, and `gitleaks` always run in full. A symlink or submodule anywhere in the changes runs every step of every gated job: the

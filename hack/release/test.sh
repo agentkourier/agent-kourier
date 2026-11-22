@@ -104,6 +104,14 @@ echo "== a missing scan of an agent image fails closed"
 run_case agent-scan-missing 1 agent-scan-missing
 contains "agent-scan-missing: names the missing required job" "required job 'trivy (echo-agent-linux-arm64)' is missing" "${TMP}/agent-scan-missing.out"
 
+echo "== a missing job of the add-ons' kit fails closed"
+run_case kit-missing 1 kit-missing
+contains "kit-missing: names the missing required job" "required job 'kit' is missing" "${TMP}/kit-missing.out"
+
+echo "== a missing govulncheck of the add-ons' kit fails closed"
+run_case kit-scan-missing 1 kit-scan-missing
+contains "kit-scan-missing: names the missing required job" "required job 'govulncheck (kit)' is missing" "${TMP}/kit-scan-missing.out"
+
 echo "== a missing CMA add-on job fails closed"
 run_case cma-missing 1 cma-missing
 contains "cma-missing: names the missing required job" "required job 'cma' is missing" "${TMP}/cma-missing.out"

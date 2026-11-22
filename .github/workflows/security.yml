@@ -57,6 +57,9 @@ jobs:
           - module: cma
             directory: addons/cma
             go-sum: addons/cma/go.sum
+          - module: kit
+            directory: addons/kit
+            go-sum: addons/kit/go.sum
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -353,7 +356,7 @@ jobs:
           path: ${{ runner.temp }}/trivy-*.sarif
           if-no-files-found: warn
 
-  # On a push to main, once govulncheck has saved: deletes every entry of its four caches but the newest, as ci.yml's
+  # On a push to main, once govulncheck has saved: deletes every entry of its five caches but the newest, as ci.yml's
   # cache-prune does for its caches (the comment in ci.yml's lint job says why).
   cache-prune:
     needs: [govulncheck]
@@ -369,6 +372,6 @@ jobs:
           persist-credentials: false
       - run: >-
           hack/ci/actions-cache.sh prune "go-govulncheck-root-${RUNNER_OS}-" "go-govulncheck-ax-${RUNNER_OS}-"
-          "go-govulncheck-docs-agent-${RUNNER_OS}-" "go-govulncheck-cma-${RUNNER_OS}-"
+          "go-govulncheck-docs-agent-${RUNNER_OS}-" "go-govulncheck-cma-${RUNNER_OS}-" "go-govulncheck-kit-${RUNNER_OS}-"
         env:
           GH_TOKEN: ${{ github.token }}
