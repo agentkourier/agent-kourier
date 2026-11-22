@@ -317,8 +317,9 @@ func TestPostgresLeaderThatLosesTheLeaseExits(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = intruder.Close() })
-	// Take it as if a's lease had run out: the row's holder is a's, so expire it first, as the database's clock would.
-	if _, err := pgExec(t, dsn, `UPDATE leadership SET expires_at = now()`); err != nil {
+	// Name the intruder as the holder, keeping a's epoch, so that its TryLead retakes the lease as a restarted process of
+	// the holder's pod would, however often a renews it meanwhile.
+	if _, err := pgExec(t, dsn, `UPDATE leadership SET holder = 'intruder'`); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok, err := intruder.TryLead(t.Context(), "intruder", "http://127.0.0.1:1", time.Hour); err != nil || !ok {
