@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/url"
 	"os"
@@ -192,6 +193,12 @@ func testEveryWriteIsFenced(t *testing.T, s *Store) {
 		if err := q.queryRow(fenceCtx, `SELECT COUNT(*) FROM a2a_tasks WHERE id = ?`, "t1").Scan(&one); err != nil || one != 1 {
 			t.Errorf("the fence's read: %d, %v", one, err)
 		}
+		// And writes a marker through it, which the refusal must roll back with the write: a fence that ran on another
+		// connection (a reader, or a write of its own) would fail to write it or leave it behind.
+		if _, err := q.exec(fenceCtx, `INSERT INTO contexts (owner, context_id, last_active) VALUES (?, ?, ?)`,
+			"fence-marker", fmt.Sprintf("marker-%d", calls), int64(calls)); err != nil {
+			t.Errorf("the fence's marker: %v", err)
+		}
 		return errFenced
 	}
 	defer func() { s.fence = nil }()
@@ -232,6 +239,10 @@ func testEveryWriteIsFenced(t *testing.T, s *Store) {
 		}
 	}
 	s.fence = nil
+	var markers int
+	if err := s.conn.reader().queryRow(ctx, `SELECT COUNT(*) FROM contexts WHERE owner = ?`, "fence-marker").Scan(&markers); err != nil || markers != 0 {
+		t.Fatalf("the fence's markers outlived the refused writes: %d, %v; the fence ran outside their transactions", markers, err)
+	}
 	got, err := s.Get(ctx, "t1")
 	if err != nil || got.Version != 1 || got.Task.Status.State != a2a.TaskStateWorking {
 		t.Fatalf("a fenced write changed the store: %+v, %v", got, err)
