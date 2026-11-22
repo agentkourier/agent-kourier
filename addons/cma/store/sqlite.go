@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"net/url"
 	"os"
+	"time"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" driver: pure Go, so the adapter stays CGO-free
 )
@@ -21,6 +22,9 @@ var ErrInUse = errors.New("another adapter has the SQLite file open")
 
 // sqliteReadConns is the size of the read pool.
 const sqliteReadConns = 4
+
+// sqliteBusyTimeout is how long a connection waits for a lock on the file before its statement fails with SQLITE_BUSY.
+const sqliteBusyTimeout = 5 * time.Second
 
 // OpenSQLite opens (creating if needed) the SQLite store at path and applies its pending migrations. It holds an
 // exclusive lock on path + ".lock" until Close, so a second adapter on the same file fails with ErrInUse instead of
@@ -55,7 +59,8 @@ func OpenSQLite(ctx context.Context, path string, opts Options) (*Store, error) 
 }
 
 func sqlitePool(ctx context.Context, path string, conns int, pragma string) (*sql.DB, error) {
-	q := url.Values{"_pragma": {"busy_timeout(5000)", "foreign_keys(1)", pragma}}
+	busy := fmt.Sprintf("busy_timeout(%d)", sqliteBusyTimeout.Milliseconds())
+	q := url.Values{"_pragma": {busy, "foreign_keys(1)", pragma}}
 	u := url.URL{Scheme: "file", Path: path, RawQuery: q.Encode()}
 	db, err := sql.Open("sqlite", u.String())
 	if err != nil {
