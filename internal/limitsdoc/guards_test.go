@@ -41,7 +41,7 @@ func guardCalls(t *testing.T, top string) (guarded map[string]string, problems [
 			}
 			if path != top {
 				if _, err := os.Stat(filepath.Join(path, "go.mod")); err == nil {
-					return filepath.SkipDir // another module (examples/ax): its tests are not this repository's guards
+					return filepath.SkipDir // another module (an add-on or a recipe agent): its tests are not this repository's guards
 				}
 			}
 			return nil

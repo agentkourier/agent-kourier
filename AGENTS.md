@@ -48,7 +48,8 @@ internal/limitsdoc      test support that holds docs/reference/limits.md to the 
 internal/testhooks      test-only hooks, compiled in under the testhooks build tag
 internal/testutil       helpers only tests import: Eventually (poll until a condition holds), DiscardLogger; standard library only (a migrated SQLite store for a test: internal/store/sqlite/sqlitetest)
 charts/agent-kourier    Helm chart
-examples/ax             reference A2A agent for Google AX (separate module)
+addons/cma              add-on: A2A server in front of a Claude Managed Agents agent (separate module, released with the broker)
+addons/ax               add-on: ADK agent on Bedrock, run by the chart or inside Google AX (separate module)
 docs/                   the documentation site (mkdocs; docs/brand is the brand kit and is not published)
 test/{fakeslack,stubagent,e2e,fixtures,kindmanifests,chart,...}
 test/crdcorpus          valid and invalid objects that the CRD schemas and the broker's Validate must treat alike (`make crd-corpus` sends them to a real API server)
@@ -92,7 +93,7 @@ golangci-lint runs as `go tool golangci-lint`, never a global install.
   `E2E_CONFIG_SOURCE=crds`): what each client does with an unknown field, what `kubectl get` shows, a
   Binding stored before a tightening of the schema, and `kubectl wait`. `make e2e-crs-migration` (`hack/kind/crs-migration.sh`) moves a release between the ConfigMap
   and the custom resources and back with Helm while a session is in flight, on a fresh Postgres tier with two replicas, and puts the tier back on the ConfigMap route after (the CRDs stay under the release, so a second run needs a fresh tier).
-- AX fixtures use the separate `examples/ax` module and unmodified pinned AX/Substrate APIs; see
+- AX fixtures use the separate `addons/ax` module and unmodified pinned AX/Substrate APIs; see
   `hack/kind/ax/README.md` for shared scenarios and capability differences. `make ax-smoke` exercises Bedrock/Haiku.
 - `make image` builds `agent-kourier:dev`, the production image, from the `Dockerfile` (pinned Go and distroless
   images, in `hack/kind/lib.sh`); `make image-testhooks` builds `agent-kourier-e2e/agent-kourier-testhooks:dev`, the

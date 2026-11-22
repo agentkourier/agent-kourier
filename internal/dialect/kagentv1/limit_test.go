@@ -327,7 +327,7 @@ func TestTooLargeErrorNamesOnlyTheBound(t *testing.T) {
 	}
 }
 
-// An A2A 1.0 server of a2a-go, the one the AX agent is built on (examples/ax), streams through the bound: its framing (an
+// An A2A 1.0 server of a2a-go, the one the AX agent is built on (addons/ax), streams through the bound: its framing (an
 // id line before each event's data line, and the content type with a parameter) is what the bound reads, and an answer
 // of well over the bound of an event, in chunks of a normal size, arrives whole.
 func TestA2AGoServerStreamsThroughTheBound(t *testing.T) {

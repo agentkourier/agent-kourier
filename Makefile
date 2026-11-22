@@ -65,7 +65,7 @@ security: security-govulncheck security-gitleaks ## Run source vulnerability and
 
 security-govulncheck: ## Run govulncheck against the root, AX, docs-agent and CMA add-on modules
 	hack/security/govulncheck.sh .
-	hack/security/govulncheck.sh examples/ax
+	hack/security/govulncheck.sh addons/ax
 	hack/security/govulncheck.sh examples/recipes/docs-agent/agent
 	hack/security/govulncheck.sh addons/cma
 
@@ -154,14 +154,14 @@ sandbox-alert: ## Fire (STATE=firing, the default) or resolve (STATE=resolved) a
 
 .PHONY: ax-test ax-image ax-smoke
 ax-test: ## Test the separate AX/ADK/Bedrock reference module with the race detector
-	cd examples/ax && go test -race -timeout 20m ./...
-	cd examples/ax && go vet ./...
+	cd addons/ax && go test -race -timeout 20m ./...
+	cd addons/ax && go vet ./...
 
 ax-image: ## Build the AX reference agent and runner image
-	docker build -t agent-kourier-ax:dev examples/ax
+	docker build -t agent-kourier-ax:dev addons/ax
 
 ax-smoke: ## Run the real Bedrock A2A smoke using the existing sandbox credentials file
-	bash examples/ax/smoke.sh
+	bash addons/ax/smoke.sh
 
 .PHONY: docs-agent-test docs-agent-lint docs-agent-image docs-agent-smoke docs-agent-smoke-live
 # -count=1: the smoke test reads docs/, outside the module, which go test's result cache never checks, so a reused result

@@ -262,7 +262,7 @@ other bots, and the [trigger reference](docs/reference/chat-triggers.md) has the
 | Agent backend | kagent 1.0, `kagent-v1` dialect, with structured questions and optional Slack tool approvals. Tested against 1.0.0-alpha5. Needs a cluster that serves the pod-certificate APIs, which managed EKS through 1.36 cannot; see [Connect a kagent agent](docs/how-to/connect-kagent.md) | Implemented |
 | Agent backend | Any A2A agent, 1.0 or 0.3, whose card advertises streaming and a JSON-RPC interface, `a2a` dialect. Questions arrive as text, or as kagent's structured questions and tool approvals when the card lists its human-in-the-loop extension | Implemented |
 | Agent backend | kagent 0.9.x, `a2a` dialect over A2A 0.3. Tested against 0.9.4 on a real cluster. It has no task list, so a resend can run a turn twice, and the dialect shows its tool calls as step cards. See [Connect a kagent agent](docs/how-to/connect-kagent.md) | Implemented |
-| Agent backend | Google AX, through an ADK agent in an AX Task and the `a2a` dialect. See [examples/ax](examples/ax/README.md) | Experimental |
+| Agent backend | Google AX, through an ADK agent in an AX Task and the `a2a` dialect. See [addons/ax](addons/ax/README.md) | Experimental |
 | Agent backend | Claude Managed Agents, through the add-on the chart runs beside Agent Kourier (`addons.cma`) and the `a2a` dialect: a session per thread, tool calls as step cards, and `always_ask` tool calls as Approve and Deny. Tested against a self-hosted environment with a Haiku agent; cloud environments are untested. See [Connect Claude Managed Agents](docs/how-to/connect-claude-managed-agents.md) | Experimental |
 | Alert source | Alertmanager, through the message it posts to Slack (`botMessage` trigger, written in full) | Implemented |
 | Alert source | Alertmanager on Microsoft Teams, through the card its `msteamsv2` receiver posts to a Workflows webhook, read through Microsoft Graph. Needs 0.6.0 or later. See [Configure Microsoft Teams](docs/how-to/configure-teams.md#send-alertmanager-alerts-to-a-channel) | Experimental |
@@ -313,7 +313,7 @@ Agent Kourier speaks A2A to an agent you run inside an AX Task, through AX's rou
 the generic `a2a` dialect; it does not call AX's own API or manage the Task.
 [Connect an agent on Google AX](docs/how-to/connect-ax.md) lists what that needs (your
 own A2A agent, token verification, a TLS gateway) and what a thread can do there, and the
-[AX example](examples/ax/README.md) is a reference agent with deployment steps and an
+[AX example](addons/ax/README.md) is a reference agent with deployment steps and an
 acceptance procedure. Support is experimental.
 
 ## Development

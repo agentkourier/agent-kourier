@@ -8,5 +8,5 @@ export MODEL_REGION MODEL_NAME
 export AWS_BEARER_TOKEN_BEDROCK="${MODEL_API_KEY}"
 export AWS_EC2_METADATA_DISABLED=true
 unset MODEL_API_KEY SLACK_BOT_TOKEN SLACK_APP_TOKEN
-cd examples/ax
+cd addons/ax
 go run ./cmd/smoke

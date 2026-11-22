@@ -1,4 +1,4 @@
-module github.com/agentkourier/agent-kourier/examples/ax
+module github.com/agentkourier/agent-kourier/addons/ax
 
 go 1.27.4
 

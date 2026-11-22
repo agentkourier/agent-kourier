@@ -274,7 +274,7 @@ in-thread text answers are tested in the AX kind tier. Structured tool approvals
 need kagent's human-in-the-loop extension, which the reference agent does not serve, so a pause with a part that is not text cancels the task with a notice. The generic dialect shows tool steps for an agent
 that marks its tool parts as Google ADK or kagent does. AX's own
 lifecycle (task, template, egress policy) stays with the operator. See the
-[AX reference agent](https://github.com/agentkourier/agent-kourier/blob/main/examples/ax/README.md) and the
+[AX reference agent](https://github.com/agentkourier/agent-kourier/blob/main/addons/ax/README.md) and the
 [AX kind tier](https://github.com/agentkourier/agent-kourier/blob/main/hack/kind/ax/README.md).
 
 ## Source map

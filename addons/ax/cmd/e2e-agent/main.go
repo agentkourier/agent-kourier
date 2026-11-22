@@ -13,8 +13,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/agentkourier/agent-kourier/examples/ax/agent"
-	"github.com/agentkourier/agent-kourier/examples/ax/e2emodel"
+	"github.com/agentkourier/agent-kourier/addons/ax/agent"
+	"github.com/agentkourier/agent-kourier/addons/ax/e2emodel"
 )
 
 func main() {

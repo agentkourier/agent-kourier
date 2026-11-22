@@ -8,7 +8,7 @@ Agent Kourier does not call AX's own API, and it creates, pauses and resumes no 
 ## Before you start
 
 - **Your own A2A agent, running as an AX Task.** AX ships no A2A agent.
-  [`examples/ax`](https://github.com/agentkourier/agent-kourier/tree/main/examples/ax) is the reference: an ADK agent on
+  [`addons/ax`](https://github.com/agentkourier/agent-kourier/tree/main/addons/ax) is the reference: an ADK agent on
   Bedrock Haiku.
 - **The agent verifies Agent Kourier's token.** Agent Kourier sends the Binding's service token as a bearer token. In
   the AX path no front door checks it, so the agent must (the reference checks issuer, audience and subject), or an
@@ -53,7 +53,7 @@ spec:
 
 ## Check it before a real channel
 
-The [AX example guide](https://github.com/agentkourier/agent-kourier/blob/main/examples/ax/README.md) has the
+The [AX example guide](https://github.com/agentkourier/agent-kourier/blob/main/addons/ax/README.md) has the
 deployment steps (the gateway, egress and credential injection, the template overlay) and an acceptance procedure.
 Run it before you bind a real channel: a real AX deployment's pause and resume is covered by that procedure, not yet
 by a production deployment.

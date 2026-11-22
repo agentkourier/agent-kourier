@@ -13,8 +13,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/agentkourier/agent-kourier/examples/ax/agent"
-	"github.com/agentkourier/agent-kourier/examples/ax/bedrock"
+	"github.com/agentkourier/agent-kourier/addons/ax/agent"
+	"github.com/agentkourier/agent-kourier/addons/ax/bedrock"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 )
