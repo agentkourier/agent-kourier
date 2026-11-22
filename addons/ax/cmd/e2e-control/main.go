@@ -64,13 +64,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	control := ate.NewControlClient(conn)
 	axconn, err := grpc.NewClient("ax-server.ax-system.svc.cluster.local:8080", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return err
 	}
-	defer axconn.Close()
+	defer func() { _ = axconn.Close() }()
 	client := ax.NewAXClient(axconn)
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
@@ -78,11 +78,16 @@ func run() error {
 		return err
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	target, _ := url.Parse("http://atenet-router.ate-system.svc.cluster.local")
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	original := proxy.Director
-	proxy.Director = func(r *http.Request) { original(r); r.Header.Set("ate-target-actor", space+"/gated") }
+	// What NewSingleHostReverseProxy's Director did, with Rewrite: the target's scheme, host and path, the incoming
+	// Host kept, X-Forwarded-For set; and the one actor the release goes to.
+	proxy := &httputil.ReverseProxy{Rewrite: func(pr *httputil.ProxyRequest) {
+		pr.SetURL(target)
+		pr.Out.Host = pr.In.Host
+		pr.SetXForwarded()
+		pr.Out.Header.Set("ate-target-actor", space+"/gated")
+	}}
 	mux.Handle("POST /_control/release/", proxy)
 	mux.HandleFunc("/_control/task/", func(w http.ResponseWriter, r *http.Request) {
 		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/_control/task/"), "/")
