@@ -66,7 +66,7 @@ const (
 	WhereContext                 // Context.Text
 	WhereNote                    // Note.Text
 	WhereToolName                // ToolLine.Name, and Tool.Name
-	WhereToolArg                 // ToolLine.Summary
+	WhereToolArg                 // ToolLine.Summary, and Tool.Summary in an Ending
 	WhereButton                  // Button.Label
 	WhereHint                    // Prompt.Hint
 	WhereSubagent                // Prompt.Subagent
@@ -77,7 +77,7 @@ const (
 	WhereStepTitle               // Step.Title
 	WhereStepDetail              // Step.Detail
 	WhereUser                    // Ending.By, a user ID Agent Kourier verified, shown as a mention only if it is one
-	WhereToolArgs                // Tool.Args, the arguments of a tool awaiting approval: text of several lines
+	WhereToolArgs                // Tool.Args in a Prompt, the arguments of a tool awaiting approval: text of several lines
 	wherePast                    // one past the last, for loops
 )
 

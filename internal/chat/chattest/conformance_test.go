@@ -788,7 +788,7 @@ func TestToolApprovalsAreCheckedOnlyForASubjectThatShowsThem(t *testing.T) {
 	got := where(placements("", true))
 	want := map[string]chat.Where{
 		"approval tool name": chat.WhereToolName, "approval tool arguments": chat.WhereToolArgs,
-		"ending approval tool name": chat.WhereToolName, "ending approval tool arguments": chat.WhereToolArgs,
+		"ending approval tool name": chat.WhereToolName, "ending approval tool arguments": chat.WhereToolArg,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("places of tool approvals %v, want %v", got, want)

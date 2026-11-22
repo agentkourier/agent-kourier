@@ -302,7 +302,9 @@ func (b *cardBuilder) who(by, words, alone string) {
 }
 
 // ending is the card that replaces a prompt once it has ended: how it ended and who decided, what was asked, and for each question
-// its answer, or for each tool what was decided of it and its arguments. It has no controls, and its fallbackText is the outcome.
+// its answer, or for each tool one line, as a status line shows a call: its name (numbered if there are several), the summary of its
+// arguments (chat.Tool.Summary) in parentheses and what was decided of it, as in "2. kubectl(ns="prod") — Denied". The arguments
+// whole are the prompt's, which the person read before deciding. It has no controls, and its fallbackText is the outcome.
 func (b *cardBuilder) ending(e chat.Ending) map[string]any {
 	verb := "Answered"
 	switch e.Outcome {
@@ -320,12 +322,8 @@ func (b *cardBuilder) ending(e chat.Ending) map[string]any {
 		b.text(subtleText, b.literal(chat.WhereHint, p.Hint))
 	}
 	b.subagent(p.Subagent)
-	for i, t := range p.Tools {
-		b.text(boldText, chat.Truncate(shownName(t.Name, i, len(p.Tools)), b.limit(chat.WhereToolName)))
-		if i < len(e.Verdicts) {
-			b.text(plainText, map[chat.ToolVerdict]string{chat.ToolApproved: "Approved", chat.ToolDenied: "Denied"}[e.Verdicts[i]])
-		}
-		b.args(chat.Truncate(chat.Clean(t.Args, false), b.limit(chat.WhereToolArgs)))
+	for i := range p.Tools {
+		b.text(plainText, b.endedTool(e, i))
 	}
 	for i, q := range p.Questions {
 		b.question(i, q)
@@ -338,6 +336,18 @@ func (b *cardBuilder) ending(e chat.Ending) map[string]any {
 		}
 	}
 	return b.card(verb+".", nil)
+}
+
+// endedTool is the line of tool i of the ended prompt e (ending), within the cap of a line that holds a tool's name and its
+// arguments: the summary cut to half of it at most, the verdict whole, and the name to what is left, each cut marked.
+func (b *cardBuilder) endedTool(e chat.Ending, i int) string {
+	tools := e.Prompt.Tools
+	limit := min(b.limit(chat.WhereToolName), b.limit(chat.WhereToolArg))
+	rest := "(" + chat.Truncate(tools[i].Summary(), limit/2) + ")"
+	if i < len(e.Verdicts) {
+		rest += " — " + map[chat.ToolVerdict]string{chat.ToolApproved: "Approved", chat.ToolDenied: "Denied"}[e.Verdicts[i]]
+	}
+	return chat.Truncate(shownName(tools[i].Name, i, len(tools)), limit-chat.Units(rest)) + rest
 }
 
 // buttonsCard is the card of a message's buttons, in order: a card of actions alone, posted under the message's text. Each is named by

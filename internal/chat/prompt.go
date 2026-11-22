@@ -1,7 +1,13 @@
 package chat
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
+	"maps"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -41,7 +47,7 @@ type Question struct {
 // is the caller's: Args arrives already redacted and serialised. An adapter shows both cleaned and whole: a
 // prompt with a tool that does not fit its place's limit is ErrTooLarge (Platform.Fits) and is never shown
 // cut, because a person cannot approve what they cannot read. The ending of a prompt, which cannot be
-// refused, is cut and marked like any other text.
+// refused, shows each tool on one line, its arguments as their Summary, and is cut and marked like any other text.
 type Tool struct {
 	// Name is the tool's name. It may be empty, or clean to nothing; the adapter then shows a placeholder, so
 	// that the tool can still be told apart and decided.
@@ -49,6 +55,50 @@ type Tool struct {
 	// Args are the tool's arguments as text, in the caller's own serialisation, or "" if it has none. They
 	// may run to several lines.
 	Args string `json:"args,omitempty"`
+}
+
+// MaxToolSummary is the most UTF-16 units of a tool's arguments that the ending of a prompt of tools shows (Tool.Summary): a
+// line, as long as the summary of a call in a status line.
+const MaxToolSummary = 160
+
+// Summary is the tool's arguments on one line, as the ending of its prompt shows them, and as a status line shows a call's: a
+// JSON object, which is what Agent Kourier makes of a tool call's arguments, as "key=value, ..." in the order of the keys, each
+// value compact JSON as written; any other text as it is. It is cleaned onto one line and cut to MaxToolSummary units, the
+// cut marked with Truncated, and is "" for a tool with no arguments. It shows nothing of the arguments that Args does not, so it
+// holds no secret that Args, which arrives redacted, does not, and it is not redacted again. It is literal: the adapter makes it
+// inert.
+func (t Tool) Summary() string {
+	s := t.Args
+	if pairs, ok := objectPairs(t.Args); ok {
+		s = pairs
+	}
+	return Truncate(Clean(s, true), MaxToolSummary)
+}
+
+// objectPairs is the JSON object s as "key=value, ...", sorted by key, each value compact JSON with "<", ">" and "&" as they
+// are and a number as it was written; ok is false if s is not one JSON object and nothing more.
+func objectPairs(s string) (pairs string, ok bool) {
+	dec := json.NewDecoder(strings.NewReader(s))
+	dec.UseNumber()
+	var obj map[string]any
+	if dec.Decode(&obj) != nil || obj == nil {
+		return "", false
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return "", false
+	}
+	keys := slices.Sorted(maps.Keys(obj))
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		var b bytes.Buffer
+		enc := json.NewEncoder(&b)
+		enc.SetEscapeHTML(false)
+		if enc.Encode(obj[k]) != nil {
+			return "", false
+		}
+		parts[i] = k + "=" + strings.TrimSuffix(b.String(), "\n")
+	}
+	return strings.Join(parts, ", "), true
 }
 
 // Validate says whether the prompt can be asked: it has an ID, and either questions or tools, not both.

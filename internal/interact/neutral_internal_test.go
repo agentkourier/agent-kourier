@@ -199,6 +199,21 @@ func TestEndingOfAnApprovalNeedsNoVerdictsWhenItWasNotAnswered(t *testing.T) {
 	}
 }
 
+// The ending shows each tool's arguments on one line (chat.Tool.Summary), made from the stored request: the secrets are out of
+// it as they are out of the prompt.
+func TestTheSummaryAnEndingShowsHoldsNoSecret(t *testing.T) {
+	end, err := endingOf(chat.TimedOut, "", askBy, storable(secretPause()), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{`count=3, env=[{"name":"DB_PASSWORD","value":"` + redactedWord + `"}], password="` + redactedWord + `"`, "", "", `path="/x"`}
+	for i, tool := range end.Prompt.Tools {
+		if got := tool.Summary(); got != want[i] || strings.Contains(got, plantedInArgs) {
+			t.Errorf("tool %d: summary %q, want %q", i, got, want[i])
+		}
+	}
+}
+
 // A hint and a sub-agent's name are context and not what runs, so the prompt may show them cut (the redaction bounds
 // each to 4 KiB). What the ending shows of them is what the prompt showed, once cut and not cut again: the ending is
 // built from the stored request, which is the cut text.

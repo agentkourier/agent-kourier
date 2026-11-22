@@ -43,8 +43,8 @@ const NoOutput = "(no output)"
 const MaxNoticeDetail = 200
 
 const (
-	maxToolName = 64  // units of a tool name in a status line
-	maxToolArgs = 160 // units of the argument summary in a status line
+	maxToolName = 64                  // units of a tool name in a status line
+	maxToolArgs = chat.MaxToolSummary // units of the argument summary in a status line, as an approval's ending shows them
 )
 
 // Body returns the text of a turn: each artifact's latest text, in the order the artifacts first appeared, one
