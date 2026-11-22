@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/addons/cma/store"
-	"github.com/agentkourier/agent-kourier/addons/cma/telemetry"
+	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
 // ExitLeadershipLost is the exit code of a replica that led and no longer does: its lease could not be renewed within

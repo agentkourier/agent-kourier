@@ -14,7 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agentkourier/agent-kourier/addons/cma/telemetry"
+	"github.com/agentkourier/agent-kourier/addons/cma/adapter"
+	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
 func discard() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -40,7 +41,7 @@ func standby(t *testing.T, leaders Leaders, tel *telemetry.Telemetry) *httptest.
 
 func newTelemetry(t *testing.T) *telemetry.Telemetry {
 	t.Helper()
-	tel, err := telemetry.New(nil)
+	tel, err := telemetry.New(adapter.TelemetrySpec(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

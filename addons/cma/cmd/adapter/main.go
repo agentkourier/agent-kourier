@@ -36,7 +36,7 @@ import (
 	"github.com/agentkourier/agent-kourier/addons/cma/cluster"
 	"github.com/agentkourier/agent-kourier/addons/cma/config"
 	"github.com/agentkourier/agent-kourier/addons/cma/store"
-	"github.com/agentkourier/agent-kourier/addons/cma/telemetry"
+	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
 // version is set at build time: -ldflags "-X main.version=<value>".
@@ -86,7 +86,7 @@ func run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 	cfg, err := config.Parse(getenv)
 	if err == nil {
 		var traces telemetry.Config
-		if traces, err = telemetry.LoadConfig(getenv); err == nil {
+		if traces, err = telemetry.LoadConfig(adapter.TelemetrySpec().Name, getenv); err == nil {
 			log := slog.New(telemetry.NewLogHandler(stderr, cfg.LogLevel))
 			slog.SetDefault(log)
 			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -122,7 +122,7 @@ func serve(ctx context.Context, cfg config.Config, traces telemetry.Config, log 
 		defer cancel()
 		_ = shutdownTraces(flush)
 	}()
-	tel, err := telemetry.New(provider)
+	tel, err := telemetry.New(adapter.TelemetrySpec(), provider)
 	if err != nil {
 		return fmt.Errorf("metrics: %w", err)
 	}
@@ -149,7 +149,7 @@ func serve(ctx context.Context, cfg config.Config, traces telemetry.Config, log 
 		Log:               log,
 		Telemetry:         tel,
 	}
-	if err := tel.ObserveSessions(exec.Contexts); err != nil {
+	if exec.Metrics, err = adapter.NewMetrics(tel, exec.Contexts); err != nil {
 		return fmt.Errorf("metrics: %w", err)
 	}
 
@@ -162,7 +162,7 @@ func serve(ctx context.Context, cfg config.Config, traces telemetry.Config, log 
 	if tokens != nil {
 		background.Go(func() { tokens.Watch(backgroundCtx, auth.ReloadInterval) })
 		rpc = (&auth.Check{Header: cfg.AuthHeader, Tokens: tokens, Log: log,
-			Refused: func(reason string) { tel.AuthRefused(telemetry.AuthReason(reason)) }}).Wrap(rpc)
+			Refused: tel.AuthRefused}).Wrap(rpc)
 	} else {
 		log.Warn("the caller check is off (AUTH_DISABLED=true): anything that reaches the loopback address can run the agent", "addr", cfg.ListenAddr)
 	}
