@@ -1,0 +1,25 @@
+{{- if and (include "agentkourier.ax.enabled" .) .Values.serviceMonitor.enabled }}
+# The add-on's /metrics, with the settings of Agent Kourier's ServiceMonitor. It selects the add-on's Service alone: Agent Kourier's
+# ServiceMonitor selects app.kubernetes.io/name=agent-kourier, which the add-on's Service does not carry.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "agentkourier.ax.fullname" . }}
+  namespace: {{ default .Release.Namespace .Values.serviceMonitor.namespace }}
+  labels:
+    {{- include "agentkourier.ax.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  namespaceSelector:
+    matchNames: [{{ .Release.Namespace }}]
+  selector:
+    matchLabels:
+      {{- include "agentkourier.ax.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.serviceMonitor.scrapeTimeout }}
+{{- end }}
