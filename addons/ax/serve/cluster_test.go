@@ -111,7 +111,7 @@ func startReplica(t *testing.T, addr string, more map[string]string) *replica {
 		r.done <- Run(ctx, cfg, echo{}, Options{Version: "9.9.9-test", Log: slog.New(slog.DiscardHandler),
 			Exit: func(code int) { r.exits <- code }})
 	}()
-	t.Cleanup(func() { r.stop(t) })
+	t.Cleanup(func() { _ = r.stop(t) })
 	waitFor(t, addr+" to listen", func() bool { c, _ := probe(http.MethodGet, r.base+"/healthz", ""); return c == http.StatusOK })
 	return r
 }

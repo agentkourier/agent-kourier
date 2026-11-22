@@ -117,7 +117,10 @@ func TestTurnsAndReplaysAreCounted(t *testing.T) {
 func TestAFailedTurnIsCounted(t *testing.T) {
 	tel := newTelemetry(t, nil)
 	a := startObserved(t, failing{}, tel)
-	for range a.client.SendStreamingMessage(t.Context(), &a2a.SendMessageRequest{Message: message("m1", "hello")}) {
+	for _, err := range a.client.SendStreamingMessage(t.Context(), &a2a.SendMessageRequest{Message: message("m1", "hello")}) {
+		if err != nil {
+			break // the failed turn's error
+		}
 	}
 	wantSeries(t, tel, map[string]string{`agentkourier_ax_turns_total{outcome="failed"}`: "1"})
 	if got := series(t, tel, `agentkourier_ax_turns_total{outcome="completed"}`); got != "" {
