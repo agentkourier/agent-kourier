@@ -152,6 +152,27 @@ func (h *replayHandler) SendStreamingMessage(ctx context.Context, req *a2a.SendM
 		}
 	}
 }
+// SubscribeToTask follows a task of the call's caller. a2a-go finds a running execution by task ID alone, with no
+// owner check, and streams it even when the store does not return the task to the caller, so the task is loaded for
+// the caller first: another caller's task is not found.
+func (h *replayHandler) SubscribeToTask(ctx context.Context, req *a2a.SubscribeToTaskRequest) iter.Seq2[a2a.Event, error] {
+	return func(yield func(a2a.Event, error) bool) {
+		if req == nil {
+			yield(nil, a2a.ErrInvalidParams)
+			return
+		}
+		if _, err := h.store.Get(ctx, req.ID); err != nil {
+			yield(nil, err)
+			return
+		}
+		for event, err := range h.RequestHandler.SubscribeToTask(ctx, req) {
+			if !yield(event, err) {
+				return
+			}
+		}
+	}
+}
+
 func (h *replayHandler) SendMessage(ctx context.Context, req *a2a.SendMessageRequest) (a2a.SendMessageResult, error) {
 	var result a2a.SendMessageResult
 	for event, err := range h.SendStreamingMessage(ctx, req) {

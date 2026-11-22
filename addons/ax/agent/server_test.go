@@ -211,6 +211,73 @@ func TestChatReplayOwnerIsolationAndReopen(t *testing.T) {
 	}
 }
 
+// Another caller cannot follow, or cancel, a turn that is running: a2a-go finds a running execution by task ID alone,
+// so the agent checks that the task is the caller's first.
+func TestAnotherCallerCannotFollowARunningTurn(t *testing.T) {
+	m := &fakeModel{hold: make(chan struct{}), entered: make(chan struct{}, 1)}
+	a := start(t, t.TempDir(), m)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	ids := make(chan a2a.TaskID, 1)
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		for event, err := range a.client.SendStreamingMessage(ctx, &a2a.SendMessageRequest{Message: message("held", "hello")}) {
+			if err != nil {
+				return
+			}
+			if task, ok := event.(*a2a.Task); ok {
+				select {
+				case ids <- task.ID:
+				default:
+				}
+			}
+		}
+	}()
+	var id a2a.TaskID
+	select {
+	case id = <-ids:
+	case <-ctx.Done():
+		t.Fatal("no initial task")
+	}
+	select {
+	case <-m.entered:
+	case <-ctx.Done():
+		t.Fatal("model did not start")
+	}
+	intruder := connect(t, a.http, "intruder")
+	// A subscription that is let in waits for the held turn's events; a refusal comes at once.
+	subCtx, subCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer subCancel()
+	events := 0
+	var refusal error
+	for event, err := range intruder.SubscribeToTask(subCtx, &a2a.SubscribeToTaskRequest{ID: id}) {
+		if err != nil {
+			refusal = err
+			break
+		}
+		if event != nil {
+			events++
+		}
+	}
+	if refusal == nil || subCtx.Err() != nil || events != 0 {
+		t.Fatalf("another caller's subscription: %d events, ended by %v (waited out: %v); want refused at once with none",
+			events, refusal, subCtx.Err() != nil)
+	}
+	if _, err := intruder.CancelTask(ctx, &a2a.CancelTaskRequest{ID: id}); err == nil {
+		t.Fatal("another caller canceled the turn")
+	}
+	close(m.hold)
+	select {
+	case <-finished:
+	case <-ctx.Done():
+		t.Fatal("the held turn did not finish")
+	}
+	if got, err := a.client.GetTask(ctx, &a2a.GetTaskRequest{ID: id}); err != nil || got.Status.State != a2a.TaskStateCompleted {
+		t.Fatalf("the owner's turn: %+v, %v", got, err)
+	}
+}
+
 func TestTextQuestionSurvivesReopenAndAnswersSameTask(t *testing.T) {
 	dir := t.TempDir()
 	m := &fakeModel{}
