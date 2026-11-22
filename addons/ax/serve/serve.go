@@ -16,6 +16,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -88,10 +89,18 @@ func Run(ctx context.Context, cfg config.Config, m model.LLM, opts Options) erro
 	httpSrv := &http.Server{Handler: mux, ReadHeaderTimeout: readHeaderTimeout, ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
 	served := make(chan error, 1)
 	go func() { served <- httpSrv.Serve(ln) }()
+	// The token watch and the upkeep stop, and are waited for, before the deferred Close of the store.
+	background, stopBackground := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	defer func() {
+		stopBackground()
+		wg.Wait()
+	}()
 	if watch != nil {
-		go watch(ctx)
+		wg.Go(func() { watch(background) })
 	}
-	go (&agent.Upkeep{Store: st, TaskRetention: cfg.TaskRetention, SessionIdleTTL: cfg.SessionIdleTTL, Log: log}).Run(ctx)
+	upkeep := &agent.Upkeep{Store: st, TaskRetention: cfg.TaskRetention, SessionIdleTTL: cfg.SessionIdleTTL, Log: log}
+	wg.Go(func() { upkeep.Run(background) })
 	ready.Store(true)
 	if opts.Listening != nil {
 		opts.Listening(ln.Addr())
