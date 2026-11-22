@@ -65,6 +65,7 @@ func Run(t *testing.T, h Harness) {
 		{"SettleInterrupted", testSettleInterrupted},
 		{"DeleteSettledBefore", testDeleteSettledBefore},
 		{"DeleteIdleContexts", testDeleteIdleContexts},
+		{"TouchContext", testTouchContext},
 		{"ADKSessions", testADKSessions},
 		{"Reopen", testReopen},
 	} {
@@ -217,9 +218,10 @@ func testRefusesWithoutACaller(t *testing.T, h Harness) {
 			_, err := s.Update(ctx, &taskstore.UpdateRequest{Task: task("t1", "c1", a2a.TaskStateWorking, nil), PrevVersion: 1})
 			return err
 		}(),
-		"Get":         func() error { _, err := s.Get(ctx, "t1"); return err }(),
-		"List":        func() error { _, err := s.List(ctx, &a2a.ListTasksRequest{}); return err }(),
-		"MessageTask": func() error { _, err := s.MessageTask(ctx, "msg-t1"); return err }(),
+		"Get":          func() error { _, err := s.Get(ctx, "t1"); return err }(),
+		"List":         func() error { _, err := s.List(ctx, &a2a.ListTasksRequest{}); return err }(),
+		"MessageTask":  func() error { _, err := s.MessageTask(ctx, "msg-t1"); return err }(),
+		"TouchContext": s.TouchContext(ctx, "c1"),
 	} {
 		if !errors.Is(err, a2a.ErrUnauthenticated) {
 			t.Errorf("%s: %v, want ErrUnauthenticated", name, err)
@@ -573,6 +575,43 @@ func testDeleteIdleContexts(t *testing.T, h Harness) {
 	mustCreate(t, s, task("idle-again", "idle", a2a.TaskStateCompleted, nil))
 	if n, err := s.DeleteIdleContexts(ctx, clk.Now().Add(-90*time.Minute)); err != nil || n != 0 {
 		t.Fatalf("a second DeleteIdleContexts = %d, %v; want 0", n, err)
+	}
+}
+
+// A message to a context marks it active before its turn writes anything, so the idle sweep keeps the context the
+// message is for; a context only the touch knows is swept once it is idle in turn.
+func testTouchContext(t *testing.T, h Harness) {
+	s, clk := open(t, h)
+	ctx := context.Background()
+	mustCreate(t, s, task("old-done", "touched", a2a.TaskStateCompleted, nil))
+	adkSession(t, s, "agent-kourier", "touched")
+	other := AsCaller("someone-else")
+	if _, err := s.Create(other, task("other-done", "touched", a2a.TaskStateCompleted, nil)); err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(2 * time.Hour)
+	if err := s.TouchContext(kourier, "touched"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.TouchContext(kourier, "new"); err != nil {
+		t.Fatal(err)
+	}
+	// Only the caller's context of that ID is touched: the other caller's is idle and goes.
+	if n, err := s.DeleteIdleContexts(ctx, clk.Now().Add(-time.Hour)); err != nil || n != 1 {
+		t.Fatalf("DeleteIdleContexts = %d, %v; want the other caller's context alone", n, err)
+	}
+	if _, err := s.Get(kourier, "old-done"); err != nil {
+		t.Errorf("the touched context's task: %v, want kept", err)
+	}
+	if !hasSession(t, s, "agent-kourier", "touched") {
+		t.Error("the touched context's session is gone")
+	}
+	if _, err := s.Get(other, "other-done"); !errors.Is(err, a2a.ErrTaskNotFound) {
+		t.Errorf("the other caller's idle task: %v, want deleted", err)
+	}
+	clk.Advance(2 * time.Hour)
+	if n, err := s.DeleteIdleContexts(ctx, clk.Now().Add(-time.Hour)); err != nil || n != 2 {
+		t.Fatalf("DeleteIdleContexts once both are idle = %d, %v; want 2", n, err)
 	}
 }
 

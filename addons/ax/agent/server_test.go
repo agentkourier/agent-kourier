@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
+	"github.com/a2aproject/a2a-go/v2/a2asrv/taskstore"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 
@@ -275,6 +277,78 @@ func TestAnotherCallerCannotFollowARunningTurn(t *testing.T) {
 	}
 	if got, err := a.client.GetTask(ctx, &a2a.GetTaskRequest{ID: id}); err != nil || got.Status.State != a2a.TaskStateCompleted {
 		t.Fatalf("the owner's turn: %+v, %v", got, err)
+	}
+}
+
+// recordingStore records the order of the store's writes.
+type recordingStore struct {
+	*store.Store
+	mu  sync.Mutex
+	ops []string
+}
+
+func (r *recordingStore) record(op string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ops = append(r.ops, op)
+}
+
+func (r *recordingStore) take() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ops := r.ops
+	r.ops = nil
+	return ops
+}
+
+func (r *recordingStore) TouchContext(ctx context.Context, contextID string) error {
+	r.record("touch " + contextID)
+	return r.Store.TouchContext(ctx, contextID)
+}
+
+func (r *recordingStore) Create(ctx context.Context, task *a2a.Task) (taskstore.TaskVersion, error) {
+	r.record("create")
+	return r.Store.Create(ctx, task)
+}
+
+func (r *recordingStore) Update(ctx context.Context, req *taskstore.UpdateRequest) (taskstore.TaskVersion, error) {
+	r.record("update")
+	return r.Store.Update(ctx, req)
+}
+
+// A message for a context the agent knows marks the context active before the turn writes anything, so that the idle
+// sweep, which deletes a context only while it is still idle, keeps it. The context is the message's, or its task's.
+func TestAMessageTouchesItsContextFirst(t *testing.T) {
+	st, err := store.OpenSQLite(t.Context(), filepath.Join(t.TempDir(), "ax.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	rec := &recordingStore{Store: st}
+	s, err := New(Config{Model: &fakeModel{}, Store: rec, Check: &auth.Check{Verifier: bearerIsCaller{}, Bearer: true, Log: discard()},
+		PublicURL: "http://ax.agents.svc:8090/a2a", Version: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(s.Handler)
+	t.Cleanup(srv.Close)
+	c := connect(t, srv, "binding")
+
+	first := send(t, c, message("q1", "ask a question"))
+	if ops := rec.take(); len(ops) == 0 || ops[0] != "create" {
+		t.Fatalf("a message with no context: %v, want no touch before its task is created", ops)
+	}
+	answer := message("a1", "checkout")
+	answer.TaskID = first.ID
+	send(t, c, answer)
+	if ops := rec.take(); len(ops) < 2 || ops[0] != "touch "+first.ContextID {
+		t.Fatalf("an answer naming its task alone: %v, want its task's context touched first", ops)
+	}
+	next := message("m2", "hello")
+	next.ContextID = first.ContextID
+	send(t, c, next)
+	if ops := rec.take(); len(ops) < 2 || ops[0] != "touch "+first.ContextID {
+		t.Fatalf("a message naming its context: %v, want the context touched first", ops)
 	}
 }
 

@@ -215,6 +215,7 @@ func testEveryWriteIsFenced(t *testing.T, s *Store) {
 		"SettleInterrupted":   func() error { _, err := s.SettleInterrupted(ctx); return err },
 		"DeleteSettledBefore": func() error { _, err := s.DeleteSettledBefore(ctx, future); return err },
 		"DeleteIdleContexts":  func() error { _, err := s.DeleteIdleContexts(ctx, future); return err },
+		"TouchContext":        func() error { return s.TouchContext(ctx, "c1") },
 		"ADK Create": func() error {
 			_, err := s.Sessions().Create(ctx, &session.CreateRequest{AppName: AppName, UserID: "agent-kourier", SessionID: "c2"})
 			return err

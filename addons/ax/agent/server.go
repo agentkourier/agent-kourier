@@ -34,6 +34,8 @@ type Store interface {
 	// MessageTask returns the call's caller's task that a message ID started or joined, or nil when it is not
 	// recorded.
 	MessageTask(ctx context.Context, messageID string) (*a2a.Task, error)
+	// TouchContext records now as the last activity of the call's caller's context.
+	TouchContext(ctx context.Context, contextID string) error
 	// Sessions is ADK's session service.
 	Sessions() session.Service
 }
@@ -94,7 +96,8 @@ func New(cfg Config) (*Server, error) {
 	return &Server{Handler: mux}, nil
 }
 
-// replayHandler serializes acceptance, not execution, so duplicate message IDs join the original task.
+// replayHandler serializes acceptance, not execution, so duplicate message IDs join the original task. It also marks
+// a message's context active before the message is accepted (touch).
 type replayHandler struct {
 	a2asrv.RequestHandler
 	store Store
@@ -103,6 +106,14 @@ type replayHandler struct {
 
 func (h *replayHandler) SendStreamingMessage(ctx context.Context, req *a2a.SendMessageRequest) iter.Seq2[a2a.Event, error] {
 	return func(yield func(a2a.Event, error) bool) {
+		if req == nil || req.Message == nil || req.Message.ID == "" {
+			yield(nil, a2a.ErrInvalidParams)
+			return
+		}
+		if err := h.touch(ctx, req.Message); err != nil {
+			yield(nil, err)
+			return
+		}
 		h.mu.Lock()
 		locked := true
 		defer func() {
@@ -110,10 +121,6 @@ func (h *replayHandler) SendStreamingMessage(ctx context.Context, req *a2a.SendM
 				h.mu.Unlock()
 			}
 		}()
-		if req == nil || req.Message == nil || req.Message.ID == "" {
-			yield(nil, a2a.ErrInvalidParams)
-			return
-		}
 		old, err := h.store.MessageTask(ctx, req.Message.ID)
 		if err != nil {
 			yield(nil, err)
@@ -152,6 +159,31 @@ func (h *replayHandler) SendStreamingMessage(ctx context.Context, req *a2a.SendM
 		}
 	}
 }
+
+// touch marks the context a message is for active, in a transaction that commits before the message reaches the
+// turn: the message's context, or else its task's; a message for neither starts a new context, which has nothing to
+// keep. DeleteIdleContexts deletes a context only if it is still idle when its delete runs, in its own transaction, so
+// a sweep whose delete comes after the touch keeps the context. One window remains: a sweep whose delete came first.
+// The touch waits for it to commit and records the context anew, and the turn finds the session gone and starts a new
+// one (a message naming a deleted task gets task not found), as it would have had it come a moment later.
+func (h *replayHandler) touch(ctx context.Context, msg *a2a.Message) error {
+	contextID := msg.ContextID
+	if contextID == "" && msg.TaskID != "" {
+		task, err := h.store.Get(ctx, msg.TaskID)
+		switch {
+		case errors.Is(err, a2a.ErrTaskNotFound):
+			return nil // the handler refuses the message
+		case err != nil:
+			return err
+		}
+		contextID = task.Task.ContextID
+	}
+	if contextID == "" {
+		return nil
+	}
+	return h.store.TouchContext(ctx, contextID)
+}
+
 // SubscribeToTask follows a task of the call's caller. a2a-go finds a running execution by task ID alone, with no
 // owner check, and streams it even when the store does not return the task to the caller, so the task is loaded for
 // the caller first: another caller's task is not found.

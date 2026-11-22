@@ -230,9 +230,28 @@ func recordActivity(ctx context.Context, q querier, user string, task *a2a.Task,
 	if task.ContextID == "" {
 		return nil
 	}
+	return touch(ctx, q, user, task.ContextID, now)
+}
+
+// touch records now as the owner's context's last activity.
+func touch(ctx context.Context, q querier, user, contextID string, now int64) error {
 	_, err := q.exec(ctx, `INSERT INTO contexts (owner, context_id, last_active) VALUES (?, ?, ?)
-		ON CONFLICT (owner, context_id) DO UPDATE SET last_active = excluded.last_active`, user, task.ContextID, now)
+		ON CONFLICT (owner, context_id) DO UPDATE SET last_active = excluded.last_active`, user, contextID, now)
 	return err
+}
+
+// TouchContext records now as the last activity of the call's caller's context, in a transaction of its own. The
+// agent calls it when a message for the context arrives, before the turn reads the context's session, so that
+// DeleteIdleContexts, which deletes a context only if it is still idle in its own transaction, keeps it.
+func (s *Store) TouchContext(ctx context.Context, contextID string) error {
+	user, err := owner(ctx)
+	if err != nil {
+		return err
+	}
+	if err := s.write(ctx, func(q querier) error { return touch(ctx, q, user, contextID, nanos(s.now())) }); err != nil {
+		return fmt.Errorf("touch context %s: %w", contextID, err)
+	}
+	return nil
 }
 
 // Get implements taskstore.Store: a task of the call's caller.
