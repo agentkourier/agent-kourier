@@ -136,8 +136,9 @@ func mustWrite(t *testing.T, path, content string) {
 
 // The values below are the chart's, not a Go package's: the pages state them, and they are read from the chart's files.
 
-// TestChartLimits holds the add-on's startup probe in the chart to the pages: how many times the kubelet tries it, and
-// how far apart, which bound a leader's takeover (the settlement of the turns a restart cut off).
+// TestChartLimits holds the add-on's startup probe in the chart to the pages, written as `30 tries, 2s apart`: how many
+// times the kubelet tries it, and how far apart (in whole seconds), which bound a leader's takeover (the settlement of
+// the turns a restart cut off).
 func TestChartLimits(t *testing.T) {
 	top, err := repoRoot()
 	if err != nil {
@@ -164,6 +165,5 @@ func TestChartLimits(t *testing.T) {
 		return n
 	}
 	failures, period := field("failureThreshold"), field("periodSeconds")
-	Count(t, "ax.startup-failures", failures)
-	Duration(t, "ax.startup-period", time.Duration(period)*time.Second)
+	Text(t, "ax.startup-probe", fmt.Sprintf("%d tries, %s apart", failures, strconv.Itoa(period)+"s"))
 }
