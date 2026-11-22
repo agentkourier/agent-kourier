@@ -192,10 +192,11 @@ func renderToolPrompt(p chat.Prompt) (Content, error) {
 
 // toolEndingBlocks are the tools of an ended prompt, a section of one line for each, as a status line shows a call: its name
 // (numbered, as in the prompt, if there are several), the summary of its arguments (chat.Tool.Summary) in parentheses, and
-// what was decided of it if something was, as in "2. kubectl(ns="prod") — Denied". The arguments whole are the prompt's,
-// which the person read before deciding; the ending is the thread's short record of what was decided. An ending is never
-// refused for size, so what is long is cut and marked: the name and the summary each at the bound of a status line's, the
-// summary less the verdict's words, so that the line is no longer than a status line.
+// what was decided of it if something was, as in "2. kubectl(ns="prod") — Denied". A tool whose call the thread shows on its
+// card already (chat.Tool.OnCard) has no arguments on its line, as in "2. kubectl — Denied". The arguments whole are the
+// prompt's, which the person read before deciding; the ending is the thread's short record of what was decided. An ending is
+// never refused for size, so what is long is cut and marked: the name and the summary each at the bound of a status line's,
+// the summary less the verdict's words, so that the line is no longer than a status line.
 func toolEndingBlocks(e chat.Ending) []map[string]any {
 	tools := e.Prompt.Tools
 	blocks := make([]map[string]any, len(tools))
@@ -204,8 +205,12 @@ func toolEndingBlocks(e chat.Ending) []map[string]any {
 		if i < len(e.Verdicts) {
 			verdict = " — " + map[chat.ToolVerdict]string{chat.ToolApproved: "Approved", chat.ToolDenied: "Denied"}[e.Verdicts[i]]
 		}
-		name, summary := text(shownName(t.Name, i, len(tools)), maxToolName, true), text(t.Summary(), maxToolArgs-chat.Units(verdict), true)
-		blocks[i] = section(name + "(" + summary + ")" + verdict)
+		name := text(shownName(t.Name, i, len(tools)), maxToolName, true)
+		if t.OnCard {
+			blocks[i] = section(name + verdict)
+			continue
+		}
+		blocks[i] = section(name + "(" + text(t.Summary(), maxToolArgs-chat.Units(verdict), true) + ")" + verdict)
 	}
 	return blocks
 }

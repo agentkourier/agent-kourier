@@ -264,6 +264,32 @@ func TestAnEndingIsACardWithNoControls(t *testing.T) {
 	}
 }
 
+// A tool whose call the thread shows already, with the summary of its arguments, on the call's card in the reply the agent paused
+// in (chat.Tool.OnCard) is named in the ending with its verdict and no arguments. A tool with no card keeps them, and so does
+// every tool of a prompt stored before the flag, whose tools are all unmarked.
+func TestAnEndingLeavesOutTheArgumentsThatACardShows(t *testing.T) {
+	t.Parallel()
+	carded := chat.Tool{Name: "bash", Args: "{\n  \"command\": \"kubectl get pods -n shop\"\n}", OnCard: true}
+	plain := chat.Tool{Name: "psql", Args: `{"user":"ops"}`}
+	unmarked := carded
+	unmarked.OnCard = false
+	for name, tc := range map[string]struct {
+		e    chat.Ending
+		want []string
+	}{
+		"one tool shown": {chat.Ending{Outcome: chat.Answered, Prompt: chat.Prompt{ID: "ix-1", Tools: []chat.Tool{carded}}, Verdicts: []chat.ToolVerdict{chat.ToolApproved}},
+			[]string{"text:Answered.", "text:bash — Approved"}},
+		"shown and not": {chat.Ending{Outcome: chat.Answered, Prompt: chat.Prompt{ID: "ix-1", Tools: []chat.Tool{carded, plain}}, Verdicts: []chat.ToolVerdict{chat.ToolApproved, chat.ToolDenied}},
+			[]string{"text:Answered.", "text:1. bash — Approved", `text:2. psql(user="ops") — Denied`}},
+		"timed out": {chat.Ending{Outcome: chat.TimedOut, Prompt: chat.Prompt{ID: "ix-1", Tools: []chat.Tool{carded, plain}}},
+			[]string{"text:Nobody answered in time.", "text:1. bash", `text:2. psql(user="ops")`}},
+		"stored before the flag": {chat.Ending{Outcome: chat.Answered, Prompt: chat.Prompt{ID: "ix-1", Tools: []chat.Tool{unmarked}}, Verdicts: []chat.ToolVerdict{chat.ToolApproved}},
+			[]string{"text:Answered.", `text:bash(command="kubectl get pods -n shop") — Approved`}},
+	} {
+		sameLines(t, name, outline(t, cardOf(t, mustRender(t, chat.End(tc.e)))), tc.want)
+	}
+}
+
 // An ending shows a tool on one line however long its name and arguments are: the summary of the arguments is cut at
 // chat.MaxToolSummary and the name to what the cap of the line leaves, each cut marked, and the verdict is kept.
 func TestAnEndingCutsALongToolLine(t *testing.T) {
