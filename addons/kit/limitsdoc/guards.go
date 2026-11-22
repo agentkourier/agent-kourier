@@ -9,7 +9,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
-	"slices"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,20 +18,24 @@ import (
 // guardNames are the functions of this package that hold a limit to the code.
 var guardNames = map[string]bool{"Count": true, "Bytes": true, "Duration": true, "Text": true}
 
-// guardCalls returns, for each limit ID that a test of the add-on module at top holds to the code, a file that does, and the problems
-// of the calls it read: an ID that is not a string literal, a value that is a literal, which would be a copy of the page in the
-// test and not what the code has, a value that is a constant declared in a test file, which is a copy as well, and a call that
-// no test run reaches: one under `if false`, or in a function that is neither a Test function nor called by name from a test file
-// of its package (a function that only dead code calls is not seen). A test file with a build constraint, or for another
-// platform, is not read: its tests do not run in every test run, so they hold nothing. In another package a call is
-// limitsdoc.Count(t, "id", value); in this one it is Count(t, "id", value), and the IDs that begin with "selftest." are this
-// package's own and may be given literals.
-func guardCalls(t *testing.T, top string) (guarded map[string]string, problems []string) {
-	t.Helper()
+// ownDir is the directory of this package below the root of its module, the kit: in it, and in no other package, a guard
+// is called by its bare name.
+const ownDir = "limitsdoc"
+
+// guardCalls returns, for each limit ID that a test of the module at top holds to the code, a file that does, and the
+// problems of the calls it read: an ID that is not a string literal, a value that is a literal, which would be a copy of
+// the page in the test and not what the code has, a value that is a constant declared in a test file, which is a copy as
+// well, and a call that no test run reaches: one under `if false`, or in a function that is neither a Test function nor
+// called by name from a test file of its package (a function that only dead code calls is not seen). A test file with a
+// build constraint, or for another platform, is not read: its tests do not run in every test run, so they hold nothing.
+// In another package a call is limitsdoc.Count(t, "id", value); in this one (ownDir of the kit's module) it is
+// Count(t, "id", value), and the IDs that begin with "selftest." are this package's own and may be given literals. The
+// error is one of walking or parsing the module's files.
+func guardCalls(top string) (guarded map[string]string, problems []string, err error) {
 	guarded = map[string]string{}
 	var files []testFile
 	fset := token.NewFileSet()
-	err := filepath.WalkDir(top, func(path string, d os.DirEntry, err error) error {
+	err = filepath.WalkDir(top, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -71,7 +75,7 @@ func guardCalls(t *testing.T, top string) (guarded map[string]string, problems [
 		return nil
 	})
 	if err != nil {
-		t.Fatal(err)
+		return nil, nil, err
 	}
 	// What each package's test files declare and call, which a guard is judged against.
 	testConsts, called := map[string]map[string]bool{}, map[string]map[string]bool{}
@@ -103,7 +107,7 @@ func guardCalls(t *testing.T, top string) (guarded map[string]string, problems [
 	}
 	for _, f := range files {
 		dir := filepath.Dir(f.path)
-		own := dir == filepath.Join(top, "internal", "limitsdoc")
+		own := dir == filepath.Join(top, ownDir)
 		for _, decl := range f.file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok || fn.Body == nil {
@@ -171,7 +175,7 @@ func guardCalls(t *testing.T, top string) (guarded map[string]string, problems [
 			visit(fn.Body, true)
 		}
 	}
-	return guarded, problems
+	return guarded, problems, nil
 }
 
 // testFile is a test file that guardCalls reads.
@@ -249,26 +253,44 @@ func onlyLiterals(e ast.Expr) bool {
 	return false
 }
 
-// TestEveryMarkerHasAGuard fails for a marker of this add-on on a reference page (an ID that begins with IDPrefix) that
-// no test of the add-on's module holds to the code, for a marker of this add-on on another reference page that the
-// limits page does not have, for a guard of a limit that the limits page does not have, for a guard whose value is a
-// literal, and for an add-on marker that is not a code span with a value before it, which the guards could not read.
-func TestEveryMarkerHasAGuard(t *testing.T) {
+// prefixRE is what a prefix of limit IDs must be: an add-on's name, or the kit's, and a dot.
+var prefixRE = regexp.MustCompile(`^[a-z][a-z0-9-]*\.$`)
+
+// EveryMarkerHasAGuard fails t for a marker on a reference page whose ID begins with prefix ("cma.", "ax.", "kit.") that
+// no test of the module holds to the code, for a marker of the prefix on another reference page that the limits page
+// does not have, for a guard of a limit that the limits page does not have, for a guard whose value is a literal, and for
+// an add-on marker on any reference page that is not a code span with a value before it, which the guards could not
+// read. The module is the one the test runs in: the nearest directory above the working directory with a go.mod, whose
+// test files it reads (guardCalls). Each module calls it from a test of its own, with its own prefix, since only its own
+// test files can hold its limits.
+func EveryMarkerHasAGuard(t testing.TB, prefix string) {
+	t.Helper()
+	if !prefixRE.MatchString(prefix) || prefix == "selftest." {
+		t.Fatalf("the prefix of limit IDs %q is not an add-on's name followed by a dot, such as \"cma.\"", prefix)
+		return
+	}
 	top, err := repoRoot()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("find the repository root: %v", err)
+		return
 	}
 	all, err := pages(top)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("read the reference pages: %v", err)
+		return
 	}
 	module, err := moduleRoot()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("find the module root: %v", err)
+		return
 	}
-	guarded, problems := guardCalls(t, module)
+	guarded, problems, err := guardCalls(module)
+	if err != nil {
+		t.Fatalf("read the test files of %s: %v", module, err)
+		return
+	}
 	for _, p := range problems {
-		t.Error(p)
+		t.Errorf("%s", p)
 	}
 	onLimits := map[string]bool{}
 	for _, m := range parse(PagePath, all[0].text) {
@@ -280,7 +302,7 @@ func TestEveryMarkerHasAGuard(t *testing.T) {
 			t.Errorf("%s:%d has an add-on marker that the guards cannot read: write <!--addon-limit:id--> right after the `value` it guards, with an ID of letters, digits, '.', '_' and '-'", pg.path, line)
 		}
 		for _, m := range parse(pg.path, pg.text) {
-			if !strings.HasPrefix(m.ID, IDPrefix) || seen[m.Page+" "+m.ID] {
+			if !strings.HasPrefix(m.ID, prefix) || seen[m.Page+" "+m.ID] {
 				continue
 			}
 			seen[m.Page+" "+m.ID] = true
@@ -299,7 +321,8 @@ func TestEveryMarkerHasAGuard(t *testing.T) {
 	}
 }
 
-// moduleRoot returns the add-on module's root: the nearest directory above the working directory with a go.mod.
+// moduleRoot returns the root of the module the test runs in: the nearest directory above the working directory with a
+// go.mod.
 func moduleRoot() (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {
@@ -314,65 +337,5 @@ func moduleRoot() (string, error) {
 			return "", fmt.Errorf("no go.mod above %s", dir)
 		}
 		dir = parent
-	}
-}
-
-// TestGuardCallsReadsTheSyntax holds guardCalls to what it promises, on files of its own: a literal value and an ID that is not a
-// literal are problems, a call in a comment is no call, and a file with a build constraint or for another platform is not read.
-func TestGuardCallsReadsTheSyntax(t *testing.T) {
-	top := t.TempDir()
-	mustWrite(t, filepath.Join(top, "go.mod"), "module x\n")
-	pkg := filepath.Join(top, "p")
-	mustWrite(t, filepath.Join(pkg, "a_test.go"), "package p\n\nfunc TestF(t *testing.T) {\n\t// limitsdoc.Count(t, \"incomment\", maxTriggers)\n\tlimitsdoc.Count(t, \"good\", maxTriggers)\n\tlimitsdoc.Count(t, \"copied\", 50)\n\tlimitsdoc.Count(t, id, maxTriggers)\n}\n")
-	mustWrite(t, filepath.Join(pkg, "typed_test.go"), "package p\n\nfunc TestK(t *testing.T) {\n\tlimitsdoc.Count(t, \"paren\", (50))\n\tlimitsdoc.Duration(t, \"units\", 90*24*time.Hour)\n\tlimitsdoc.Count(t, \"conv\", int(24*time.Hour))\n\tlimitsdoc.Count(t, \"sum\", 40+10)\n\tlimitsdoc.Duration(t, \"dur\", time.Duration(5)*time.Second)\n\tlimitsdoc.Count(t, \"named\", maxTriggers+1)\n\tlimitsdoc.Count(t, \"field\", cfg.Limit)\n\tlimitsdoc.Count(t, \"call\", len(f()))\n\tlimitsdoc.Count(t, \"convnamed\", int(maxTriggers))\n}\n")
-	mustWrite(t, filepath.Join(pkg, "reach_test.go"), "package p\n\nconst copiedLimit = 50\n\nfunc TestReach(t *testing.T) {\n\tconst local = 7\n\tlimitsdoc.Count(t, \"testconst\", copiedLimit)\n\tlimitsdoc.Count(t, \"localconst\", local+1)\n\tlimitsdoc.Count(t, \"prodconst\", maxTriggers)\n\tif false {\n\t\tlimitsdoc.Count(t, \"underfalse\", maxTriggers)\n\t}\n\tif true {\n\t\tlimitsdoc.Count(t, \"undertrue\", maxTriggers)\n\t} else if false {\n\t\tlimitsdoc.Count(t, \"elsefalse\", maxTriggers)\n\t}\n\tif false {\n\t} else {\n\t\tlimitsdoc.Count(t, \"elselive\", maxTriggers)\n\t}\n\tcalledHelper(t)\n}\n\nfunc calledHelper(t *testing.T) { limitsdoc.Count(t, \"calledhelper\", maxTriggers) }\n\nfunc uncalledHelper(t *testing.T) { limitsdoc.Count(t, \"uncalled\", maxTriggers) }\n")
-	mustWrite(t, filepath.Join(pkg, "testdata", "x_test.go"), "package p\n\nfunc d() { limitsdoc.Count(t, \"intestdata\", maxTriggers) }\n")
-	mustWrite(t, filepath.Join(top, "nested", "go.mod"), "module nested\n")
-	mustWrite(t, filepath.Join(top, "nested", "n_test.go"), "package n\n\nfunc n() { limitsdoc.Count(t, \"innested\", maxTriggers) }\n")
-	mustWrite(t, filepath.Join(pkg, "tagged_test.go"), "//go:build testhooks\n\npackage p\n\nfunc g() { limitsdoc.Count(t, \"tagged\", maxTriggers) }\n")
-	mustWrite(t, filepath.Join(pkg, "other_plan9_test.go"), "package p\n\nfunc h() { limitsdoc.Count(t, \"plan9\", maxTriggers) }\n")
-	guarded, problems := guardCalls(t, top)
-	for _, id := range []string{"incomment", "tagged", "plan9", "intestdata", "innested"} {
-		if _, ok := guarded[id]; ok {
-			t.Errorf("%q is guarded, but its call is in a comment, behind a build constraint or in a file for another platform", id)
-		}
-	}
-	if _, ok := guarded["good"]; !ok {
-		t.Error("a plain call was not read")
-	}
-	joined := strings.Join(problems, "\n")
-	for _, id := range []string{"copied", "paren", "units", "conv", "sum", "dur"} {
-		if !strings.Contains(joined, `"`+id+`" is given a literal`) {
-			t.Errorf("the value of %q is written out and was not refused: %q", id, problems)
-		}
-	}
-	for _, id := range []string{"named", "field", "call", "convnamed", "good"} {
-		if strings.Contains(joined, `"`+id+`" is given a literal`) {
-			t.Errorf("the value of %q is the code's own and was refused: %q", id, problems)
-		}
-	}
-	for id, want := range map[string]string{
-		"testconst":  "is given a constant that a test file declares",
-		"localconst": "is given a constant that a test file declares",
-		"underfalse": "is under `if false`",
-		"elsefalse":  "is under `if false`",
-		"uncalled":   "which is not a test and which no test file of its package calls",
-	} {
-		if !slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, strconv.Quote(id)) && strings.Contains(p, want) }) {
-			t.Errorf("%q was not refused with %q: %q", id, want, problems)
-		}
-	}
-	for _, id := range []string{"prodconst", "undertrue", "elselive", "calledhelper"} {
-		if _, ok := guarded[id]; !ok || strings.Contains(joined, strconv.Quote(id)) {
-			t.Errorf("%q is the code's own, in a test that runs: guarded = %v, and problems %q", id, ok, problems)
-		}
-	}
-	for _, id := range []string{"underfalse", "elsefalse", "uncalled"} {
-		if _, ok := guarded[id]; ok {
-			t.Errorf("%q is guarded, but no test run reaches its call", id)
-		}
-	}
-	if !strings.Contains(joined, "must be a string literal") || len(problems) != 12 {
-		t.Errorf("problems = %q, want six values written out, one ID that is not a literal, two constants of test files, two guards under `if false`, and one in a function that nothing calls", problems)
 	}
 }

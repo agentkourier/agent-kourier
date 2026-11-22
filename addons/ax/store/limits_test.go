@@ -3,7 +3,7 @@ package store
 import (
 	"testing"
 
-	"github.com/agentkourier/agent-kourier/addons/ax/internal/limitsdoc"
+	"github.com/agentkourier/agent-kourier/addons/kit/limitsdoc"
 )
 
 // TestLimitsPage holds the store's limits to the documentation: the server-side timeouts each Postgres connection starts

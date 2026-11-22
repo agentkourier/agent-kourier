@@ -3,7 +3,7 @@ package serve
 import (
 	"testing"
 
-	"github.com/agentkourier/agent-kourier/addons/ax/internal/limitsdoc"
+	"github.com/agentkourier/agent-kourier/addons/kit/limitsdoc"
 )
 
 // TestLimitsPage holds the server's timeouts to the documentation: the wait for a request's headers, for the requests in

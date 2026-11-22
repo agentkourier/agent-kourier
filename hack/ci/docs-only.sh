@@ -13,7 +13,7 @@
 #               README.md and pages under docs/ and elsewhere at run time (internal/store/storetest reads
 #               docs/reference/stored-data.md, cmd/agent-kourier's tests read pages under docs/how-to), which nothing but
 #               running them shows, so no Markdown is added for them.
-#   scan        govulncheck (all four modules), trivy (each image and platform) and CodeQL's analyze: also Markdown outside every
+#   scan        govulncheck (all five modules), trivy (each image and platform) and CodeQL's analyze: also Markdown outside every
 #               Go package's tree. govulncheck reads a module's Go packages (their files, and the files they embed).
 #               CodeQL's Go autobuild runs make (whose default goal is help), checks that go list ./... loads, and
 #               extracts the .go files, by GitHub's documentation of its build options and the Go extractor's
@@ -39,12 +39,17 @@
 #               examples/recipes/webhook-github/agent/ and every Go package's tree, as for echo-agent: its pytest, ruff,
 #               pip-audit and image build run in the first, and its pytest also reads the second (the webhook-github
 #               recipe's agent runs on the same image) and the YAML of both recipes' kourier/, no Markdown.
-#   cma         cma: also Markdown outside docs/, addons/cma/ and every Go package's tree. Its tests (the add-on's module
-#               and its livecheck module) may read the add-on's pages, under docs/, and its own README, as the root's
-#               tests read theirs; its lint reads Go only, and the Postgres it starts reads nothing of the tree.
-#   ax          ax: also Markdown outside docs/, addons/ax/ and every Go package's tree, as for cma: its tests (the add-on's
-#               module) may read the add-on's pages, under docs/, and its own README; its lint reads Go only, and the
-#               Postgres it starts reads nothing of the tree.
+#   kit         kit: also Markdown outside docs/, addons/kit/ and every Go package's tree. Its tests (the add-ons' shared
+#               kit, a module of its own) read the pages under docs/reference and may read its own Markdown; its lint
+#               reads Go only.
+#   cma         cma: also Markdown outside docs/, addons/cma/, addons/kit/ and every Go package's tree. Its tests (the
+#               add-on's module, the kit's packages under the add-on's module graph, and its livecheck module) may read
+#               the add-on's pages, under docs/, its own README and what the kit's tests read, as the root's tests read
+#               theirs; its lint reads Go only, and the Postgres it starts reads nothing of the tree.
+#   ax          ax: also Markdown outside docs/, addons/ax/, addons/kit/ and every Go package's tree, as for cma: its tests
+#               (the add-on's module and the kit's packages under its module graph) may read the add-on's pages, under
+#               docs/, its own README and what the kit's tests read; its lint reads Go only, and the Postgres it starts
+#               reads nothing of the tree.
 # A Go package's tree is a directory of the merge commit that holds a .go file, and everything under it: //go:embed
 # reaches only the package's own directory and those below it, and testdata lives there too. It is computed from the
 # merge commit on each run, so a page that a new package could embed stops qualifying with no list to edit. An unknown
@@ -106,11 +111,14 @@ class_skips() {
     prompt-agent)
       case "$1" in examples/recipes/prompt-agent/agent/* | examples/recipes/webhook-github/agent/*) return 1 ;; esac
       ;;
+    kit)
+      case "$1" in docs/* | addons/kit/*) return 1 ;; esac
+      ;;
     cma)
-      case "$1" in docs/* | addons/cma/*) return 1 ;; esac
+      case "$1" in docs/* | addons/cma/* | addons/kit/*) return 1 ;; esac
       ;;
     ax)
-      case "$1" in docs/* | addons/ax/*) return 1 ;; esac
+      case "$1" in docs/* | addons/ax/* | addons/kit/*) return 1 ;; esac
       ;;
   esac
   case "$1" in
@@ -162,7 +170,7 @@ run() {
 }
 
 case "${CLASS}" in
-  tests | scan | crd-corpus | docs-agent | echo-agent | prompt-agent | cma | ax) ;;
+  tests | scan | crd-corpus | docs-agent | echo-agent | prompt-agent | kit | cma | ax) ;;
   *) run "'${CLASS}' is not a class" ;;
 esac
 [ -n "${PR_HEAD_SHA:-}" ] || run "PR_HEAD_SHA is not set"

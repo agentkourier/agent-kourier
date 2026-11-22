@@ -3,7 +3,7 @@ package telemetry
 import (
 	"testing"
 
-	"github.com/agentkourier/agent-kourier/addons/ax/internal/limitsdoc"
+	"github.com/agentkourier/agent-kourier/addons/kit/limitsdoc"
 )
 
 // TestLimitsPage holds the cap on an error's text in a log line to the documentation.

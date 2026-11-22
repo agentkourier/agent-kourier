@@ -1,9 +1,12 @@
 # Test-only binary and the unmodified, go.mod-pinned AX control plane/CLI.
+# The build context is addons/ (`docker build -f addons/ax/Dockerfile.e2e addons`): the module requires the shared kit
+# (addons/kit) through `replace ../kit`, and Dockerfile.e2e.dockerignore, beside this file, lets in only those two.
 FROM golang:1.27.4@sha256:205c7636d74e0ffbe3d007162df7d74f859f5a8c8322dfb9f907977686c126cf AS build
-WORKDIR /src
-COPY go.mod go.sum ./
+WORKDIR /src/ax
+COPY kit/go.mod /src/kit/
+COPY ax/go.mod ax/go.sum ./
 RUN go mod download
-COPY . .
+COPY . /src/
 RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 GOMAXPROCS=2 go build -p 2 -trimpath -o /out/ax-task-runner ./cmd/ax-task-runner
 RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 GOMAXPROCS=2 go build -p 2 -trimpath -o /out/ax-e2e-agent ./cmd/e2e-agent
 RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 GOMAXPROCS=2 go build -p 2 -trimpath -o /out/e2e-control ./cmd/e2e-control
