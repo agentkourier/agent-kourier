@@ -8,13 +8,17 @@
 # kind values.
 cma/livecheck
 cma/kind
+**/bin
 **/*.md
 **/*.test
+**/.git
 **/.env
 **/.env.*
+**/*.env
 **/*.pem
 **/*.key
 **/kubeconfig*
-# A local run's SQLite store (SQLITE_PATH defaults to a file in the working directory) and its journal files.
+# A local run's SQLite store (SQLITE_PATH defaults to a file in the working directory), its journal files and its lock.
 **/*.db
 **/*.db-*
+**/*.db.lock

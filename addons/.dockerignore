@@ -1,0 +1,17 @@
+# A build of an add-on reads the ignore file beside its Dockerfile (<Dockerfile>.dockerignore), which lets in only the
+# kit and that add-on. This file covers a builder that does not read those files: it keeps secrets, local stores,
+# binaries and the modules the images do not build out of the context.
+**/bin
+**/.git
+**/.env
+**/.env.*
+**/*.env
+**/*.pem
+**/*.key
+**/kubeconfig*
+**/*.db
+**/*.db-*
+**/*.db.lock
+**/*.test
+*/kind
+cma/livecheck

@@ -6,7 +6,7 @@
 !ax
 # kind holds the end-to-end test's values and Agent Kourier config, not the image's.
 ax/kind
-ax/bin
+**/bin
 **/*.md
 **/*.test
 **/.git
@@ -16,6 +16,7 @@ ax/bin
 **/*.pem
 **/*.key
 **/kubeconfig*
-# A local run's SQLite store and its journal files.
+# A local run's SQLite store (SQLITE_PATH defaults to a file in the working directory), its journal files and its lock.
 **/*.db
 **/*.db-*
+**/*.db.lock
