@@ -18,9 +18,9 @@
 # The other images are IMAGES, each a build context and a Dockerfile: a recipe's agent, examples/recipes/<agent>/agent,
 # is the Dockerfile of its directory and needs no build argument; an add-on, addons/<name>, a Go module of its own that
 # requires the shared kit (addons/kit), is built from the context addons/ with addons/<name>/Dockerfile, on Agent
-# Kourier's pinned bases (GO_IMAGE and RUNTIME_IMAGE from hack/kind/lib.sh). After the images it packages charts/agent-kourier with the version
-# stamped, Agent Kourier's digest as the default image and each add-on's as addons.<name>'s (package-chart.sh), and
-# with PUSH=1 pushes the chart. The digests are written to OUT/digest (Agent Kourier), OUT/<name>-digest and OUT/chart-digest.
+# Kourier's pinned bases (GO_IMAGE and RUNTIME_IMAGE from hack/kind/lib.sh). After the images it packages
+# charts/agent-kourier with the version stamped, Agent Kourier's digest as the default image and each add-on's as
+# addons.<name>'s (package-chart.sh), and with PUSH=1 pushes the chart. The digests are written to OUT/digest (Agent Kourier), OUT/<name>-digest and OUT/chart-digest.
 #
 # The test hooks never ship. The Dockerfile's verify stage fails the build of any platform whose binary has
 # a hook (internal/testhooks, the same traces `make image-check` looks for) or the wrong version or
@@ -163,7 +163,7 @@ image_check_ref() {
 # for it: BUILDX with its Dockerfile, and for an add-on the pinned bases its Dockerfile requires and the version it
 # stamps into its binary.
 image_build() {
-  local i entry= dockerfile
+  local i entry='' dockerfile
   for i in "${IMAGES[@]}"; do
     [ "${i%%=*}" != "$1" ] || entry=${i#*=}
   done
