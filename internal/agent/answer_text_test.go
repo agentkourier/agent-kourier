@@ -36,6 +36,23 @@ func TestAnAnswerDoesNotRepeatThePausedTurnsText(t *testing.T) {
 			events: []a2a.Event{chunk("answer", "Cause: a misspelt key.", false), final("Corrected.")},
 			want:   []string{"Cause: a misspelt key.", "Corrected."},
 		},
+		// A live chunk is the answer's own, even one that says what the paused turn said.
+		"a live chunk says it again": {
+			events: []a2a.Event{chunk("before", said, false), final(said)},
+			want:   []string{said, "Cause: a misspelt key."},
+		},
+		// A snapshot that lags a live change, and still holds the paused turn's text, does not put that text back.
+		"a lagging snapshot after a live change": {
+			events: []a2a.Event{chunk("before", "Corrected.", false), final(said)},
+			want:   []string{"Corrected.", "Cause: a misspelt key."},
+		},
+		// The answer's message then has no text of its own, and the session says the agent finished without output.
+		"the answer adds no text": {
+			events: []a2a.Event{taskOf(a2a.TaskStateCompleted, nil,
+				artifactOf("before", a2a.NewTextPart(said)), artifactOf("call", callPart(kagv1, "c1")),
+				artifactOf("result", resultPart(kagv1, "c1", okResp)))},
+			want: nil,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got := texts(runAnswer(paused, tc.events)); !reflect.DeepEqual(got, tc.want) {
