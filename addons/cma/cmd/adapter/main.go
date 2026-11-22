@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -90,7 +91,7 @@ func run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 			slog.SetDefault(log)
 			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
-			if err := serve(ctx, cfg, traces, log); err != nil {
+			if err := serve(ctx, cfg, traces, log, serveOptions{}); err != nil {
 				log.Error("adapter stopped", "error", err)
 				return exitFailure
 			}
@@ -101,8 +102,14 @@ func run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 	return exitUsage
 }
 
+// serveOptions are what a test may add to serve.
+type serveOptions struct {
+	// routes, if set, adds routes to the server's mux before it serves.
+	routes func(*http.ServeMux)
+}
+
 // serve runs the adapter until ctx ends or a dependency fails.
-func serve(ctx context.Context, cfg config.Config, traces telemetry.Config, log *slog.Logger) error {
+func serve(ctx context.Context, cfg config.Config, traces telemetry.Config, log *slog.Logger, opts serveOptions) error {
 	if traces.Endpoint != "" {
 		telemetry.InstallDiagnostics(log)
 	}
@@ -147,8 +154,13 @@ func serve(ctx context.Context, cfg config.Config, traces telemetry.Config, log 
 	}
 
 	rpc := a2asrv.NewJSONRPCHandler(adapter.NewRequestHandler(exec, a2asrv.WithCallInterceptors(auth.Interceptor{})))
+	// The background work ends when serve returns, whether or not ctx has ended, and before the store closes.
+	var background sync.WaitGroup
+	defer background.Wait()
+	backgroundCtx, stopBackground := context.WithCancel(ctx)
+	defer stopBackground()
 	if tokens != nil {
-		go tokens.Watch(ctx, auth.ReloadInterval)
+		background.Go(func() { tokens.Watch(backgroundCtx, auth.ReloadInterval) })
 		rpc = (&auth.Check{Header: cfg.AuthHeader, Tokens: tokens, Log: log,
 			Refused: func(reason string) { tel.AuthRefused(telemetry.AuthReason(reason)) }}).Wrap(rpc)
 	} else {
@@ -183,7 +195,12 @@ func serve(ctx context.Context, cfg config.Config, traces telemetry.Config, log 
 		}
 		return fmt.Errorf("listen on %s: %w", cfg.ListenAddr, err)
 	}
-	srv := &http.Server{Handler: mux(router, status, tel), ReadHeaderTimeout: readHeaderTimeout,
+	var stopping atomic.Bool
+	handler := mux(router, func() bool { return !stopping.Load() && status.Ready() }, tel)
+	if opts.routes != nil {
+		opts.routes(handler)
+	}
+	srv := &http.Server{Handler: handler, ReadHeaderTimeout: readHeaderTimeout,
 		ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
@@ -192,21 +209,7 @@ func serve(ctx context.Context, cfg config.Config, traces telemetry.Config, log 
 		"auth_disabled", cfg.AuthDisabled, "session_idle_ttl", cfg.SessionIdleTTL, "tool_result_timeout", cfg.ToolResultTimeout,
 		"task_retention", cfg.TaskRetention, "pod", cfg.PodName, "traces", traces.Endpoint != "")
 
-	// takeOver is the leader's work: reconcile, fail the interrupted turns, start the upkeep, then serve. It returns
-	// when ctx ends, or with the error that stopped the takeover.
-	takeOver := func(ctx context.Context) error {
-		if err := exec.Restore(ctx); err != nil {
-			return err
-		}
-		if err := exec.Settle(ctx); err != nil {
-			return err
-		}
-		go exec.Run(ctx)
-		status.Serve()
-		log.Info("serving A2A requests as the leader")
-		<-ctx.Done()
-		return nil
-	}
+	lead := func(ctx context.Context) error { return takeOver(ctx, exec, status, log) }
 	// The election outlives ctx until the server has stopped, so that the lease is renewed while requests drain and a
 	// standby does not take over while this replica still writes.
 	electionCtx, stopElection := context.WithCancel(context.WithoutCancel(ctx))
@@ -214,10 +217,10 @@ func serve(ctx context.Context, cfg config.Config, traces telemetry.Config, log 
 	led := make(chan error, 1)
 	go func() {
 		if elector == nil {
-			led <- takeOver(electionCtx)
+			led <- lead(electionCtx)
 			return
 		}
-		led <- elector.Run(electionCtx, takeOver)
+		led <- elector.Run(electionCtx, lead)
 	}()
 
 	var failure error
@@ -233,6 +236,7 @@ func serve(ctx context.Context, cfg config.Config, traces telemetry.Config, log 
 		}
 		failure = err
 	}
+	stopping.Store(true)
 	drain, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(drain); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -240,7 +244,8 @@ func serve(ctx context.Context, cfg config.Config, traces telemetry.Config, log 
 	}
 	stopElection()
 	if !ledDone {
-		// The election's context has ended, so Run, or the takeover, returns at once; a takeover it cut short says so.
+		// The election's context has ended, so Run, or the takeover, returns once the leader's work (the upkeep) has
+		// stopped, before the lease is released and the store closed; a takeover it cut short says so.
 		if err := <-led; err != nil {
 			log.Info("stopped before the takeover was done", "error", err)
 		}
@@ -255,18 +260,47 @@ func serve(ctx context.Context, cfg config.Config, traces telemetry.Config, log 
 	return failure
 }
 
-// mux serves the A2A endpoint and the card through the router, and this replica's own health and metrics.
-func mux(router http.Handler, status *cluster.Status, tel *telemetry.Telemetry) *http.ServeMux {
+// leaderWork is the executor's side of a takeover.
+type leaderWork interface {
+	// Restore reconciles the store with CMA.
+	Restore(ctx context.Context) error
+	// Settle fails the turns a restart or a takeover cut off.
+	Settle(ctx context.Context) error
+	// Run is the store's upkeep, until ctx ends.
+	Run(ctx context.Context)
+}
+
+// takeOver is the leader's work: reconcile, fail the interrupted turns, start the upkeep, then serve. It returns when
+// ctx ends, once the upkeep has stopped, or with the error that stopped the takeover.
+func takeOver(ctx context.Context, work leaderWork, status *cluster.Status, log *slog.Logger) error {
+	if err := work.Restore(ctx); err != nil {
+		return err
+	}
+	if err := work.Settle(ctx); err != nil {
+		return err
+	}
+	var upkeep sync.WaitGroup
+	upkeep.Go(func() { work.Run(ctx) })
+	status.Serve()
+	log.Info("serving A2A requests as the leader")
+	<-ctx.Done()
+	upkeep.Wait()
+	return nil
+}
+
+// mux serves the A2A endpoint and the card through the router, and this replica's own health and metrics. /readyz
+// answers 200 while ready says so, and 503 otherwise.
+func mux(router http.Handler, ready func() bool, tel *telemetry.Telemetry) *http.ServeMux {
 	m := http.NewServeMux()
 	m.Handle(a2aPath, router)
 	m.Handle(a2aPath+adapter.CardPath, router)
 	// Alive once it listens: it stays cheap, and a takeover that takes long does not fail it.
 	m.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	// Ready on a standby, which forwards, and on a leader once its takeover is done. The store is open and migrated
-	// before the listener starts.
+	// Ready on a standby, which forwards, and on a leader once its takeover is done, until the replica starts to stop.
+	// The store is open and migrated before the listener starts.
 	m.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		if !status.Ready() {
-			http.Error(w, "taking over as the leader", http.StatusServiceUnavailable)
+		if !ready() {
+			http.Error(w, "not ready", http.StatusServiceUnavailable)
 			return
 		}
 		w.WriteHeader(http.StatusOK)

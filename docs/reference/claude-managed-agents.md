@@ -145,8 +145,10 @@ that has lost the lease cannot write. A standby forwards each A2A request and th
 election's retry period, at least 1 second) on a leader that has not finished taking over, on a standby that knows of
 no leader or cannot reach it, and on a replica that is not serving when the request was already forwarded once: a
 request is forwarded once at most. A leader that cannot
-renew the lease for `LEASE_RENEW_DEADLINE` exits, and one that stops on SIGTERM releases the lease. A replica that
-takes over runs the same start-up work as a restart, so a turn that was running on the old leader fails, and a paused
+renew the lease for `LEASE_RENEW_DEADLINE`, or whose renewal or write finds that another replica has taken it, exits at
+once with code 5, without a drain, and Kubernetes restarts it. One that stops on SIGTERM drains its requests, then hands
+the lease over, for at most 3 seconds; past that, a standby takes over once the lease has run out. A replica that takes
+over runs the same start-up work as a restart, so a turn that was running on the old leader fails, and a paused
 approval survives.
 
 ## Caller check
@@ -182,7 +184,7 @@ All on one port, 8090 in the chart, named `http` on the Service:
 | `/a2a` | A2A JSON-RPC, behind the caller check |
 | `/a2a/.well-known/agent-card.json` | The agent card |
 | `/healthz` | 200 once the add-on listens: the process is alive. The chart's liveness probe asks it. |
-| `/readyz` | 200 once the add-on serves, which on a leader is only after its start-up work. The chart's startup and readiness probes ask it. |
+| `/readyz` | 200 once the add-on serves, which on a leader is only after its start-up work, until it starts to stop; 503 before then, and once it stops a request that was already read gets 503 while a new one is refused (the listener has closed). The chart's startup and readiness probes ask it. |
 | `/metrics` | Prometheus metrics |
 
 On Postgres, `/readyz` answers 200 on a standby too, since a standby forwards to the leader, so every replica is behind
