@@ -22,6 +22,7 @@ func TestOfNormalizesEachForm(t *testing.T) {
 		{"genai schema, upper-case types", &genai.FunctionDeclaration{Name: "ask_user", Parameters: &genai.Schema{Type: genai.TypeObject,
 			Properties: map[string]*genai.Schema{"question": {Type: genai.TypeString}}, Required: []string{"question"}}}, want},
 		{"no parameters", &genai.FunctionDeclaration{Name: "ping"}, `{"properties":{},"type":"object"}`},
+		{"a schema that encodes as null", &genai.FunctionDeclaration{Name: "ping", ParametersJsonSchema: (*jsonschema.Schema)(nil)}, `{"properties":{},"type":"object"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := Of(tc.f)

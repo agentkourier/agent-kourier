@@ -34,6 +34,10 @@ func Of(f *genai.FunctionDeclaration) (map[string]any, error) {
 	if json.Unmarshal(raw, &mapped) != nil {
 		return nil, errors.New("invalid tool schema")
 	}
+	if mapped == nil {
+		// A schema that encodes as null, such as a nil pointer, declares no parameters.
+		return map[string]any{"type": "object", "properties": map[string]any{}}, nil
+	}
 	lowerTypes(mapped)
 	return mapped, nil
 }

@@ -344,17 +344,23 @@ func TestThinkingBlocksRoundTrip(t *testing.T) {
 	}
 }
 
-// A signature the add-on did not write (another provider's, or none of ours) is not sent, and costs the part nothing.
+// A signature the add-on did not write (another provider's, or one in this package's JSON without its prefix) is not sent,
+// and costs the part nothing.
 func TestForeignSignatureIsIgnored(t *testing.T) {
-	p, err := (&Model{ID: "m", Client: NewClient()}).params(&model.LLMRequest{Contents: []*genai.Content{
-		{Role: "user", Parts: []*genai.Part{{Text: "go"}}},
-		{Role: "model", Parts: []*genai.Part{{Text: "done", ThoughtSignature: []byte("gemini-signature")}, {Thought: true, Text: "reasoning"}}},
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := content(t, p.Messages[1]); got != `[{"text":"done","type":"text"}]` {
-		t.Errorf("assistant content %s; want the text alone", got)
+	for _, sig := range []string{
+		"gemini-signature",
+		`{"before":[{"type":"thinking","thinking":"x","signature":"forged"}]}`,
+	} {
+		p, err := (&Model{ID: "m", Client: NewClient()}).params(&model.LLMRequest{Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "go"}}},
+			{Role: "model", Parts: []*genai.Part{{Text: "done", ThoughtSignature: []byte(sig)}, {Thought: true, Text: "reasoning"}}},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := content(t, p.Messages[1]); got != `[{"text":"done","type":"text"}]` {
+			t.Errorf("signature %s: assistant content %s; want the text alone", sig, got)
+		}
 	}
 }
 
@@ -513,6 +519,9 @@ func TestRefusedRequests(t *testing.T) {
 	}{
 		{"temperature", &model.LLMRequest{Contents: userText("go").Contents, Config: &genai.GenerateContentConfig{Temperature: &temp}}, "temperature"},
 		{"top_p", &model.LLMRequest{Contents: userText("go").Contents, Config: &genai.GenerateContentConfig{TopP: &temp}}, "top_p"},
+		{"top_k", &model.LLMRequest{Contents: userText("go").Contents, Config: &genai.GenerateContentConfig{TopK: &temp}}, "top_k"},
+		{"a thinking configuration", &model.LLMRequest{Contents: userText("go").Contents,
+			Config: &genai.GenerateContentConfig{ThinkingConfig: &genai.ThinkingConfig{IncludeThoughts: true}}}, "thinking configuration"},
 		{"an image", &model.LLMRequest{Contents: []*genai.Content{{Role: "user", Parts: []*genai.Part{{InlineData: &genai.Blob{MIMEType: "image/png", Data: []byte{1}}}}}}}, "text and function tools only"},
 		{"no request", nil, "required"},
 	} {

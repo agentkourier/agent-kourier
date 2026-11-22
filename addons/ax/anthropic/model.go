@@ -29,7 +29,8 @@ import (
 const DefaultMaxTokens = 8192
 
 // MaxRetries is how many times the SDK sends a request again after a connection error or a status it may retry (408,
-// 409, 429 and 5xx), before the call fails. An error event in a stream that has opened is not retried.
+// 409, 429 and 5xx, unless the API's x-should-retry header says otherwise), before the call fails. An error event in a
+// stream that has opened is not retried.
 const MaxRetries = 2
 
 // Client is the SDK's Messages service, as far as the model uses it, so that Observe and a test can stand in for it.
@@ -303,6 +304,9 @@ func (m *Model) params(req *model.LLMRequest) (sdk.MessageNewParams, error) {
 		return sdk.MessageNewParams{}, errors.New("anthropic model sends no top_p")
 	case c.TopK != nil:
 		return sdk.MessageNewParams{}, errors.New("anthropic model sends no top_k")
+	case c.ThinkingConfig != nil:
+		// The add-on asks for no thinking; a reply's thinking blocks, if it carries any, still go back unchanged.
+		return sdk.MessageNewParams{}, errors.New("anthropic model sends no thinking configuration")
 	}
 	if c.SystemInstruction != nil {
 		for _, part := range c.SystemInstruction.Parts {

@@ -5,6 +5,7 @@ go 1.27.4
 require (
 	github.com/a2aproject/a2a-go/v2 v2.6.0
 	github.com/agent-substrate/substrate v0.0.0-20260918201817-944abe3278b8
+	github.com/anthropics/anthropic-sdk-go/v2 v2.13.0
 	github.com/aws/aws-sdk-go-v2 v1.47.1
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.20
 	github.com/aws/aws-sdk-go-v2/config v1.33.6
@@ -37,7 +38,6 @@ require (
 	cloud.google.com/go/auth v0.23.2 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	github.com/agent-substrate/env v0.0.11-0.20260912052224-4468a200b170 // indirect
-	github.com/anthropics/anthropic-sdk-go/v2 v2.13.0 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.6 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.20.1 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.4 // indirect
