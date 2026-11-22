@@ -184,7 +184,7 @@ All on one port, 8090 in the chart, named `http` on the Service:
 | `/a2a` | A2A JSON-RPC, behind the caller check |
 | `/a2a/.well-known/agent-card.json` | The agent card |
 | `/healthz` | 200 once the add-on listens: the process is alive. The chart's liveness probe asks it. |
-| `/readyz` | 200 once the add-on serves, which on a leader is only after its start-up work, until it starts to stop; 503 otherwise. The chart's startup and readiness probes ask it. |
+| `/readyz` | 200 once the add-on serves, which on a leader is only after its start-up work, until it starts to stop; 503 before then, and once it stops a request that was already read gets 503 while a new one is refused (the listener has closed). The chart's startup and readiness probes ask it. |
 | `/metrics` | Prometheus metrics |
 
 On Postgres, `/readyz` answers 200 on a standby too, since a standby forwards to the leader, so every replica is behind

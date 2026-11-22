@@ -252,7 +252,11 @@ func TestReadyzAnswers503OnceTheShutdownStarts(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		answer <- string(body)
 	}()
-	<-asked
+	select {
+	case <-asked:
+	case got := <-answer:
+		t.Fatalf("the request ended before its handler ran: %s", got)
+	}
 	cancel()
 	// The listener closes once the shutdown has started.
 	deadline := time.Now().Add(5 * time.Second)
