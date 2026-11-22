@@ -95,6 +95,17 @@ func TestEverySetting(t *testing.T) {
 	}
 }
 
+// The Anthropic API: the model's name alone, with no region. The key is the SDK's to read, not the settings'.
+func TestAnthropicProvider(t *testing.T) {
+	c, err := Parse(env(map[string]string{"MODEL_PROVIDER": "Anthropic", "MODEL_REGION": "", "MODEL_NAME": "claude-haiku-4-5"}))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if c.ModelProvider != ProviderAnthropic || c.ModelName != "claude-haiku-4-5" || c.ModelRegion != "" {
+		t.Fatalf("provider %q, name %q, region %q", c.ModelProvider, c.ModelName, c.ModelRegion)
+	}
+}
+
 // The AX route: OIDC, the runner beside the agent, port 80 and the workspace's database file.
 func TestAXRoute(t *testing.T) {
 	c, err := Parse(env(oidc(map[string]string{
@@ -149,6 +160,9 @@ func TestRefused(t *testing.T) {
 		{"no region", map[string]string{"MODEL_REGION": ""}, "MODEL_REGION"},
 		{"no model", map[string]string{"MODEL_NAME": ""}, "MODEL_NAME"},
 		{"provider", map[string]string{"MODEL_PROVIDER": "openai"}, "MODEL_PROVIDER"},
+		{"provider names the ones there are", map[string]string{"MODEL_PROVIDER": "openai"}, "anthropic"},
+		{"anthropic with a region", map[string]string{"MODEL_PROVIDER": "anthropic"}, "MODEL_REGION"},
+		{"anthropic without a model", map[string]string{"MODEL_PROVIDER": "anthropic", "MODEL_REGION": "", "MODEL_NAME": ""}, "MODEL_NAME"},
 		{"state dir", map[string]string{"STATE_DIR": "/workspace/agent-kourier-state"}, "SQLITE_PATH"},
 		{"listen not host:port", map[string]string{"LISTEN_ADDR": "8090"}, "LISTEN_ADDR"},
 		{"public url relative", map[string]string{"PUBLIC_URL": "/a2a"}, "PUBLIC_URL"},

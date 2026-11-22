@@ -9,7 +9,7 @@ import (
 )
 
 // MaxLogErrorBytes caps the text of an error attribute in a log line, as Agent Kourier caps its own: an error from
-// Bedrock or the database can carry a response body, and a model's error can carry the model's own words.
+// the model's provider or the database can carry a response body, and a model's error can carry the model's own words.
 const MaxLogErrorBytes = 300
 
 // cutMark ends a text that MaxLogErrorBytes cut.

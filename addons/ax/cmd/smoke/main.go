@@ -1,4 +1,6 @@
-// Command smoke exercises the reference A2A server with a real Bedrock model on loopback.
+// Command smoke exercises the reference A2A server with a real model on loopback: Bedrock's (MODEL_PROVIDER bedrock or
+// unset, MODEL_REGION, MODEL_NAME, AWS credentials) or the Anthropic API's (MODEL_PROVIDER anthropic, MODEL_NAME,
+// ANTHROPIC_API_KEY).
 package main
 
 import (
@@ -17,6 +19,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/agentkourier/agent-kourier/addons/ax/agent"
+	"github.com/agentkourier/agent-kourier/addons/ax/anthropic"
 	"github.com/agentkourier/agent-kourier/addons/ax/auth"
 	"github.com/agentkourier/agent-kourier/addons/ax/bedrock"
 	"github.com/agentkourier/agent-kourier/addons/ax/store"
@@ -27,7 +30,7 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "Bedrock A2A smoke failed:", err)
+		fmt.Fprintln(os.Stderr, "A2A smoke failed:", err)
 		os.Exit(1)
 	}
 }
@@ -35,12 +38,9 @@ func main() {
 func run() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if os.Getenv("MODEL_REGION") == "" || os.Getenv("MODEL_NAME") == "" {
-		return errors.New("MODEL_REGION and MODEL_NAME are required")
-	}
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(os.Getenv("MODEL_REGION")))
+	llm, err := smokeModel(ctx)
 	if err != nil {
-		return errors.New("AWS configuration failed")
+		return err
 	}
 	dir, err := os.MkdirTemp("", "ax-smoke-")
 	if err != nil {
@@ -53,7 +53,7 @@ func run() error {
 	}
 	defer func() { _ = st.Close() }()
 	check := &auth.Check{Verifier: smokeCaller{}, Bearer: true, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	s, err := agent.New(agent.Config{Model: observedModel{&bedrock.Model{ID: os.Getenv("MODEL_NAME"), Client: bedrockruntime.NewFromConfig(cfg)}},
+	s, err := agent.New(agent.Config{Model: printingModel{llm},
 		Store: st, Check: check, PublicURL: "http://127.0.0.1/a2a", Version: "smoke"})
 	if err != nil {
 		return errors.New("agent startup failed")
@@ -99,8 +99,30 @@ func run() error {
 	if err != nil || replay.ID != task.ID || replay.Status.State != a2a.TaskStateCompleted {
 		return errors.New("replay failed")
 	}
-	fmt.Println("PASS: Bedrock streamed a text question, accepted its answer on the same A2A task, and replayed the completed task.")
+	fmt.Println("PASS: the model streamed a text question, accepted its answer on the same A2A task, and replayed the completed task.")
 	return nil
+}
+
+// smokeModel is the model the environment names.
+func smokeModel(ctx context.Context) (model.LLM, error) {
+	name := os.Getenv("MODEL_NAME")
+	if name == "" {
+		return nil, errors.New("MODEL_NAME is required")
+	}
+	switch os.Getenv("MODEL_PROVIDER") {
+	case "anthropic":
+		return &anthropic.Model{ID: name, Client: anthropic.NewClient()}, nil
+	case "", "bedrock":
+		if os.Getenv("MODEL_REGION") == "" {
+			return nil, errors.New("MODEL_REGION is required with Bedrock")
+		}
+		cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(os.Getenv("MODEL_REGION")))
+		if err != nil {
+			return nil, errors.New("AWS configuration failed")
+		}
+		return &bedrock.Model{ID: name, Client: bedrockruntime.NewFromConfig(cfg)}, nil
+	}
+	return nil, errors.New("MODEL_PROVIDER is not bedrock or anthropic")
 }
 
 // smokeCaller accepts the smoke's own fixed bearer token.
@@ -121,12 +143,12 @@ func (t transport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return t.base.RoundTrip(r)
 }
 
-// Only the adapter's sanitized errors are printed, never AWS response messages.
-type observedModel struct{ *bedrock.Model }
+// Only the adapter's sanitized errors are printed, never the provider's response messages.
+type printingModel struct{ model.LLM }
 
-func (m observedModel) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
+func (m printingModel) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
-		for response, err := range m.Model.GenerateContent(ctx, req, stream) {
+		for response, err := range m.LLM.GenerateContent(ctx, req, stream) {
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
 			}

@@ -337,7 +337,7 @@ The [Claude Managed Agents add-on](claude-managed-agents.md) bridges A2A to sess
 
 ### AX add-on
 
-The [AX add-on](ax.md) is an ADK agent on Amazon Bedrock that serves A2A.
+The [AX add-on](ax.md) is an ADK agent on Amazon Bedrock or the Anthropic API that serves A2A.
 
 | Limit | Value | Past it | Setting |
 |---|---|---|---|
@@ -363,4 +363,6 @@ The [AX add-on](ax.md) is an ADK agent on Amazon Bedrock that serves A2A.
 | What the agent can do | Answer, and ask with its one tool, `ask_user` | It has no tool that reaches another system, and asks for no tool approval: its agent card lists no human-in-the-loop extension. | None |
 | A pause | One `ask_user` question | A pause with two `ask_user` calls fails the turn. | None |
 | An answer to a question | Text | The answer is the text of the next message on the paused task. A message with a part that is not text, or with no text, fails the task. | None |
-| The model | Amazon Bedrock | The add-on does not start with another `MODEL_PROVIDER`. | `MODEL_PROVIDER` (`addons.ax.model.provider`) |
+| The model | Amazon Bedrock or the Anthropic API | The add-on does not start with another `MODEL_PROVIDER`. | `MODEL_PROVIDER` (`addons.ax.model.provider`) |
+| A reply on the Anthropic API | `8192`<!--addon-limit:ax.anthropic-max-tokens--> tokens, its thinking included | The reply stops there. Cut in its text, the turn completes with what was written; cut in an `ask_user` call, or with nothing written, the turn fails. Bedrock's replies take the model's own limit. | None |
+| A request to the Anthropic API that fails with a connection error or status 408, 409, 429 or 5xx | Sent again up to `2`<!--addon-limit:ax.anthropic-retries--> times | The Anthropic SDK waits as the API's `retry-after` header says, or backs off, before each; after the last, the turn fails. An error event in a stream that has opened is not retried. | None |
