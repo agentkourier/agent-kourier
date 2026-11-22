@@ -248,6 +248,11 @@ func TestPostgresTakeoverWaitsForAWriteInFlight(t *testing.T) {
 	ctx := context.Background()
 	mustLead(t, a, "a", 500*time.Millisecond)
 	inside, finish := make(chan struct{}), make(chan struct{})
+	// The write ends before the stores close (cleanups run last first), so a failure below cannot leave it, and the
+	// test, waiting.
+	var finishOnce sync.Once
+	end := func() { finishOnce.Do(func() { close(finish) }) }
+	t.Cleanup(end)
 	wrote := make(chan error, 1)
 	go func() {
 		wrote <- a.write(ctx, func(q querier) error {
@@ -257,7 +262,11 @@ func TestPostgresTakeoverWaitsForAWriteInFlight(t *testing.T) {
 			return err
 		})
 	}()
-	<-inside
+	select {
+	case <-inside:
+	case err := <-wrote:
+		t.Fatalf("the write ended before it ran: %v", err)
+	}
 	time.Sleep(600 * time.Millisecond) // the lease has expired; the write still holds its check
 	took := make(chan error, 1)
 	go func() {
@@ -272,7 +281,7 @@ func TestPostgresTakeoverWaitsForAWriteInFlight(t *testing.T) {
 		t.Fatalf("the takeover finished while a write that passed the check was open: %v", err)
 	case <-time.After(300 * time.Millisecond):
 	}
-	close(finish)
+	end()
 	if err := <-wrote; err != nil {
 		t.Fatalf("the write in flight: %v", err)
 	}

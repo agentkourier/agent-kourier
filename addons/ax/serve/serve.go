@@ -65,7 +65,8 @@ type Options struct {
 	// done.
 	Listening func(net.Addr)
 	// Exit ends the process with cluster.ExitLeadershipLost when this replica stops leading while it runs. Nil is
-	// os.Exit. If it returns, Run stops as on a failure and returns cluster.ErrLeadershipLost.
+	// os.Exit. If it returns (a test's), Run goes on until the election finds the lease lost, then stops as on a
+	// failure and returns cluster.ErrLeadershipLost.
 	Exit func(code int)
 }
 

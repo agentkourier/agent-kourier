@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -294,7 +295,7 @@ func TestPostgresStandbyForwardsAndTakesOver(t *testing.T) {
 	}
 	stopped := time.Now()
 	waitFor(t, "b to take over", func() bool { return metric(b.base, "agentkourier_ax_leader") == "1" && b.ready() })
-	if since := time.Since(stopped); since > 1500*time.Millisecond {
+	if since := time.Since(stopped); since > 750*time.Millisecond { // half the lease: a take at expiry would be later
 		t.Errorf("b took over %s after a stopped: a released lease is taken on the next try, not when it expires", since)
 	}
 	turn(t, b.client(t), "on the new leader")
@@ -306,25 +307,84 @@ func TestPostgresStandbyForwardsAndTakesOver(t *testing.T) {
 	}
 }
 
+// A leader serves only once it has failed the turns a restart cut off: while its settlement waits (here, on a lock an
+// outside transaction holds on the tasks), /readyz answers 503 and an A2A request 503 with Retry-After; once the
+// settlement is done, the cut-off task has failed and a new turn completes.
+func TestPostgresLeaderSettlesBeforeItServes(t *testing.T) {
+	dsn := pgtest.DSN(t)
+	seed, err := store.OpenPostgres(t.Context(), dsn, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = seed.Close() })
+	if _, ok, err := seed.TryLead(t.Context(), "seed", "http://127.0.0.1:1", time.Hour); err != nil || !ok {
+		t.Fatalf("TryLead: %v, %v", ok, err)
+	}
+	cutOff(t, seed, "t1")
+	if err := seed.Release(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	rollback := pgHold(t, dsn, `LOCK TABLE a2a_tasks IN EXCLUSIVE MODE`)
+
+	addr := freeAddr(t)
+	a := startReplica(t, addr, postgresEnv(dsn, "ax-a", addr))
+	waitFor(t, "the settlement to wait on the lock", func() bool { return lockWaiters(t, dsn) > 0 })
+	if c, _ := probe(http.MethodGet, a.base+"/readyz", ""); c != http.StatusServiceUnavailable {
+		t.Fatalf("/readyz while the leader settles = %d, want 503", c)
+	}
+	if c, retry := post(t, a.base+"/a2a"); c != http.StatusServiceUnavailable || retry == "" {
+		t.Fatalf("an A2A request while the leader settles = %d, Retry-After %q; want 503 with Retry-After", c, retry)
+	}
+	if got := metric(a.base, "agentkourier_ax_leader"); got != "1" {
+		t.Fatalf("leader = %q: the replica took the lease before it listened", got)
+	}
+
+	rollback()
+	waitFor(t, "a to be ready", a.ready)
+	if got, err := a.client(t).GetTask(t.Context(), &a2a.GetTaskRequest{ID: "t1"}); err != nil || got.Status.State != a2a.TaskStateFailed {
+		t.Fatalf("the cut-off task = %+v, %v; want failed", got, err)
+	}
+	turn(t, a.client(t), "after the settlement")
+	if got := metric(a.base, "agentkourier_ax_tasks_interrupted_total"); got != "1" {
+		t.Errorf("tasks interrupted = %q, want 1", got)
+	}
+}
+
+// A leader whose write finds that another replica has taken the lease stops at once with ExitLeadershipLost, without
+// waiting for its next renewal to find the same.
+func TestPostgresLeaderWhoseWriteIsDeposedExits(t *testing.T) {
+	dsn := pgtest.DSN(t)
+	addr := freeAddr(t)
+	env := postgresEnv(dsn, "ax-a", addr)
+	maps.Copy(env, map[string]string{"LEASE_DURATION": "15s", "LEASE_RENEW_DEADLINE": "10s", "LEASE_RETRY_PERIOD": "5s"})
+	started := time.Now()
+	a := startReplica(t, addr, env)
+	waitFor(t, "a to be ready", a.ready)
+	depose(t, dsn)
+	go func() {
+		// The turn's first write is refused as deposed; what the client gets back does not matter here.
+		_, _ = a.client(t).SendMessage(context.Background(), &a2a.SendMessageRequest{Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("after the takeover"))})
+	}()
+	select {
+	case code := <-a.exits:
+		if code != cluster.ExitLeadershipLost {
+			t.Fatalf("exit code %d, want %d", code, cluster.ExitLeadershipLost)
+		}
+		if since := time.Since(started); since >= 5*time.Second {
+			t.Fatalf("exited %s after the start, at or after the first renewal: the write did not stop it", since)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("the leader whose write was deposed did not exit before its next renewal")
+	}
+}
+
 // A leader whose lease another replica takes stops at once with ExitLeadershipLost, without a drain.
 func TestPostgresLeaderThatLosesTheLeaseExits(t *testing.T) {
 	dsn := pgtest.DSN(t)
 	addr := freeAddr(t)
 	a := startReplica(t, addr, postgresEnv(dsn, "ax-a", addr))
 	waitFor(t, "a to be ready", a.ready)
-	intruder, err := store.OpenPostgres(t.Context(), dsn, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = intruder.Close() })
-	// Name the intruder as the holder, keeping a's epoch, so that its TryLead retakes the lease as a restarted process of
-	// the holder's pod would, however often a renews it meanwhile.
-	if _, err := pgExec(t, dsn, `UPDATE leadership SET holder = 'intruder'`); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok, err := intruder.TryLead(t.Context(), "intruder", "http://127.0.0.1:1", time.Hour); err != nil || !ok {
-		t.Fatalf("TryLead: %v, %v", ok, err)
-	}
+	depose(t, dsn)
 	select {
 	case code := <-a.exits:
 		if code != cluster.ExitLeadershipLost {
@@ -379,6 +439,83 @@ func TestPostgresReplicaThatCannotListenReleasesTheLease(t *testing.T) {
 	if lease.Holder != "ax-0" || lease.Live || exits.Load() != 0 {
 		t.Fatalf("lease = %+v, exits %d; want ax-0's, released, and no exit", lease, exits.Load())
 	}
+}
+
+// depose has another store take the live lease. It names the intruder as the holder first, keeping the leader's epoch,
+// so that its TryLead retakes the lease as a restarted process of the holder's pod would, however often the leader
+// renews it meanwhile; the take moves the epoch on.
+func depose(t *testing.T, dsn string) {
+	t.Helper()
+	intruder, err := store.OpenPostgres(t.Context(), dsn, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = intruder.Close() })
+	if _, err := pgExec(t, dsn, `UPDATE leadership SET holder = 'intruder'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := intruder.TryLead(t.Context(), "intruder", "http://127.0.0.1:1", time.Hour); err != nil || !ok {
+		t.Fatalf("TryLead: %v, %v", ok, err)
+	}
+}
+
+// post sends an empty A2A request with the token and returns its status and Retry-After.
+func post(t *testing.T, url string) (int, string) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, url, strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := prober.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode, resp.Header.Get("Retry-After")
+}
+
+// pgHold runs sql in a transaction of its own on dsn and keeps it open until the returned rollback runs (or the test
+// ends).
+func pgHold(t *testing.T, dsn, sql string) (rollback func()) {
+	t.Helper()
+	conn, err := pgx.Connect(t.Context(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := conn.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(t.Context(), sql); err != nil {
+		t.Fatal(err)
+	}
+	var once sync.Once
+	rollback = func() {
+		once.Do(func() {
+			_ = tx.Rollback(context.Background())
+			_ = conn.Close(context.Background())
+		})
+	}
+	t.Cleanup(rollback)
+	return rollback
+}
+
+// lockWaiters is how many other sessions on dsn's database wait for a lock.
+func lockWaiters(t *testing.T, dsn string) int {
+	t.Helper()
+	conn, err := pgx.Connect(t.Context(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(context.Background()) }()
+	var n int
+	if err := conn.QueryRow(t.Context(), `SELECT count(*) FROM pg_stat_activity
+		WHERE datname = current_database() AND wait_event_type = 'Lock' AND pid <> pg_backend_pid()`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 // pgExec runs one statement on dsn, outside any store.
