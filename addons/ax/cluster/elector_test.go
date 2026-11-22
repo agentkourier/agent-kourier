@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -183,6 +184,45 @@ func TestElectorStopsAtTheRenewDeadline(t *testing.T) {
 	}
 	if elapsed < e.RenewDeadline || elapsed > e.LeaseDuration {
 		t.Fatalf("stopped after %s; want between the renew deadline (%s) and the lease (%s)", elapsed, e.RenewDeadline, e.LeaseDuration)
+	}
+}
+
+// Run returns only once the leader's work has stopped, whichever way it ends, so that the caller's release of the lease
+// and close of the store do not run under the work (the upkeep) still writing.
+func TestElectorWaitsForTheLeadersWork(t *testing.T) {
+	for name, tc := range map[string]struct {
+		renewErr error
+		cancel   bool
+		want     error
+	}{
+		"ctx ends":           {cancel: true},
+		"deposed":            {renewErr: store.ErrDeposed, want: ErrLeadershipLost},
+		"renew deadline met": {renewErr: errors.New("connection refused"), want: ErrLeadershipLost},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newElector(&fakeLease{renewErr: tc.renewErr}, "a")
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var stopped atomic.Bool
+			led := make(chan struct{})
+			done := run(ctx, e, func(ctx context.Context) error {
+				close(led)
+				<-ctx.Done()
+				time.Sleep(100 * time.Millisecond) // a write that ends a little after its context does
+				stopped.Store(true)
+				return nil
+			})
+			<-led
+			if tc.cancel {
+				cancel()
+			}
+			if err := <-done; !errors.Is(err, tc.want) {
+				t.Fatalf("Run = %v, want %v", err, tc.want)
+			}
+			if !stopped.Load() {
+				t.Fatal("Run returned while the leader's work still ran")
+			}
+		})
 	}
 }
 

@@ -216,7 +216,8 @@ func Run(ctx context.Context, cfg config.Config, m model.LLM, opts Options) erro
 	}
 	stopElection()
 	if !ledDone {
-		// The election's context has ended, so Run, or the takeover, returns at once; a takeover it cut short says so.
+		// The election's context has ended, so Run, or the takeover, returns once the leader's work (the upkeep) has
+		// stopped, before the lease is released and the store closed; a takeover it cut short says so.
 		if err := <-led; err != nil {
 			log.Info("stopped before the takeover was done", "error", err)
 		}
