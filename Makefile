@@ -63,7 +63,7 @@ lint-workflows: ## Lint .github/workflows with zizmor after proving its policy f
 
 security: security-govulncheck security-gitleaks ## Run source vulnerability and secret scans (the image scan needs IMAGE_REF)
 
-security-govulncheck: ## Run govulncheck against the root, AX, docs-agent and CMA add-on modules
+security-govulncheck: ## Run govulncheck against the root, AX add-on, docs-agent and CMA add-on modules
 	hack/security/govulncheck.sh .
 	hack/security/govulncheck.sh addons/ax
 	hack/security/govulncheck.sh examples/recipes/docs-agent/agent
@@ -104,7 +104,7 @@ image-testhooks: ## Build the test image, agent-kourier-e2e/agent-kourier-testho
 image-check: image image-testhooks ## Prove the production image's binary lacks the test hooks, and the test image's has them
 	go test -tags image -count=1 -run TestImageHasNeitherHook ./internal/testhooks
 
-release-image: ## Build the multi-arch release images (Agent Kourier, the prompt and echo agents, the CMA add-on) and the chart to bin/release (VERSION=vX.Y.Z); PUSH=1 REGISTRY=<repo> CHART_REGISTRY=oci://<repo> also pushes; see RELEASING.md
+release-image: ## Build the multi-arch release images (Agent Kourier, the prompt and echo agents, the CMA and AX add-ons) and the chart to bin/release (VERSION=vX.Y.Z); PUSH=1 REGISTRY=<repo> CHART_REGISTRY=oci://<repo> also pushes; see RELEASING.md
 	VERSION="$(VERSION)" REGISTRY="$(REGISTRY)" CHART_REGISTRY="$(CHART_REGISTRY)" PUSH="$(PUSH)" hack/release/release.sh
 
 e2e-fast-up: ## Bring up the fast E2E tier (kind, Alertmanager, fake Slack, stub agent, sink); E2E_STORE=postgres runs Agent Kourier on Postgres, with E2E_REPLICAS=2 on two replicas (S16, failover); E2E_CONFIG_SOURCE=crds reads the config from custom resources, not the ConfigMap, and with E2E_TWO_APPS=1 serves a team's Slack app beside the platform's (make e2e-two-apps runs the MC_ tests), or with E2E_TEAMS=1 a team's Microsoft Teams connections on a fake Teams service (make e2e-teams runs the TEAMS_ tests)
@@ -152,13 +152,23 @@ sandbox-heal: ## Restart the full tier's kindnet if NetworkPolicy is not applied
 sandbox-alert: ## Fire (STATE=firing, the default) or resolve (STATE=resolved) a seeded fault's alert, e.g. ALERT=KubePodCrashLooping: it posts to the real alert channel as [kind]
 	hack/kind/sandbox/alert.sh "$(ALERT)" "$(STATE)"
 
-.PHONY: ax-test ax-image ax-smoke
-ax-test: ## Test the separate AX/ADK/Bedrock reference module with the race detector
-	cd addons/ax && go test -race -timeout 20m ./...
+# The AX add-on (addons/ax) is a separate Go module, released with Agent Kourier. -count=1: the Postgres tests reach a
+# database that go test's result cache knows nothing of, so a reused result would say nothing about it. They read
+# AGENTKOURIER_POSTGRES_DSN and skip when it is unset; hack/postgres/run.sh starts a throwaway Postgres and sets it for
+# one command.
+.PHONY: ax-test ax-lint ax-image ax-runner-image ax-smoke
+ax-test: ## Test the AX add-on's module with the race detector, every test on every run; its Postgres tests run with AGENTKOURIER_POSTGRES_DSN set (hack/postgres/run.sh make ax-test)
+	cd addons/ax && go test -race -count=1 -timeout 20m ./...
 	cd addons/ax && go vet ./...
 
-ax-image: ## Build the AX reference agent and runner image
-	docker build -t agent-kourier-ax:dev addons/ax
+ax-lint: ## Lint the AX add-on's module with the repository's golangci-lint and config
+	cd addons/ax && "$$(go tool -C ../.. -n golangci-lint)" run --config ../../.golangci.yml ./...
+
+ax-image: ## Build the AX add-on's image, agent-kourier-ax:dev, on Agent Kourier's pinned bases (hack/kind/lib.sh; Docker)
+	bash -c '. hack/kind/lib.sh && docker build --build-arg "GO_IMAGE=$${GO_IMAGE}" --build-arg "RUNTIME_IMAGE=$${RUNTIME_IMAGE}" -t agent-kourier-ax:dev addons/ax'
+
+ax-runner-image: ## Build the image of the route inside Google AX, agent-kourier-ax-runner:dev: AX's task runner, git and the agent on Debian (addons/ax/Dockerfile.ax; Docker)
+	docker build -f addons/ax/Dockerfile.ax -t agent-kourier-ax-runner:dev addons/ax
 
 ax-smoke: ## Run the real Bedrock A2A smoke using the existing sandbox credentials file
 	bash addons/ax/smoke.sh

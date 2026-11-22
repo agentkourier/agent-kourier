@@ -19,7 +19,7 @@ From the repository root:
 
 ```sh
 make ax-test
-make ax-image
+make ax-runner-image
 make ax-smoke
 ```
 

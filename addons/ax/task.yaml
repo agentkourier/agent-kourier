@@ -8,7 +8,7 @@ apiVersion: ax.io/v1alpha1
 kind: Task
 metadata: {name: assistant, atespace: agent-kourier-ax}
 spec:
-  image: YOUR_REGISTRY/agent-kourier-ax:dev
+  image: YOUR_REGISTRY/agent-kourier-ax-runner:dev
   command: [/usr/local/bin/agent-kourier-ax-agent]
   debug: false
   workspaces: [{name: agent-kourier-state}]
