@@ -687,6 +687,14 @@ func TestTheEndingOfAnApprovalIsCutAndNeverRefused(t *testing.T) {
 		}
 	}
 
+	// "<", ">" and "&" count as their escapes, and the verdict's words are kept out of the arguments' room: the line of a tool
+	// whose arguments are all escapes is no longer than the cap of a line either.
+	escapes := chat.Tool{Name: strings.Repeat("n", 5000), Args: `{"q":"` + strings.Repeat("&<>", 2000) + `"}`}
+	blocks = w.post(t, chat.End(chat.Ending{Outcome: chat.Answered, Prompt: approvalOf(escapes), Verdicts: []chat.ToolVerdict{chat.ToolApproved}}))
+	if line := textOf(blocks[1]); chat.Units(line) > lineLimit || !strings.HasSuffix(line, chat.Truncated+") — Approved") {
+		t.Errorf("%d units %q, want the arguments cut and marked before the verdict, at most %d units", chat.Units(line), line, lineLimit)
+	}
+
 	big := make([]chat.Tool, 20)
 	verdicts := make([]chat.ToolVerdict, 20)
 	for i := range big {

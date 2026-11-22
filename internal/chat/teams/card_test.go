@@ -285,6 +285,20 @@ func TestAnEndingCutsALongToolLine(t *testing.T) {
 	}
 }
 
+// An ending cut to fit its message gives a tool's arguments half of what each text is cut to, so that the name keeps the rest.
+func TestACutEndingHalvesAToolsArguments(t *testing.T) {
+	t.Parallel()
+	long := chat.Tool{Name: strings.Repeat("n", 5000), Args: `{"command":"` + strings.Repeat("echo a; ", 6000) + `"}`}
+	e := chat.Ending{Outcome: chat.Answered, Prompt: chat.Prompt{ID: "ix-1", Tools: []chat.Tool{long}}, Verdicts: []chat.ToolVerdict{chat.ToolApproved}}
+	b := cardBuilder{caps: capabilities(), cut: minEndingUnits}
+	line := b.endedTool(e, 0)
+	_, rest, _ := strings.Cut(line, chat.Truncated+"(") // the mark holds a "(" of its own
+	summary := strings.TrimSuffix(rest, ") — Approved")
+	if chat.Units(line) != minEndingUnits || !strings.HasSuffix(summary, chat.Truncated) || chat.Units(summary) != minEndingUnits/2 {
+		t.Errorf("%d units %q, want %d with the arguments cut to %d and marked", chat.Units(line), line, minEndingUnits, minEndingUnits/2)
+	}
+}
+
 // An ending cannot be refused, so the longest one fits the budget: twenty tools, each of the longest name and arguments of the
 // characters that cost the most bytes, and twenty questions of the longest text with the longest answers, are cut to fit, and the
 // cut is marked.
