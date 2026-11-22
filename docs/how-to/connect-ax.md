@@ -1,7 +1,7 @@
 # Connect the AX add-on
 
-For a platform team that wants an agent on Amazon Bedrock behind a Binding: at the end, the chart runs the AX add-on, an
-ADK agent on Bedrock, and a Binding sends its threads to it. Each thread is one ADK session, and a question the agent
+For a platform team that wants an agent on Amazon Bedrock or the Anthropic API behind a Binding: at the end, the chart
+runs the AX add-on, an ADK agent on either, and a Binding sends its threads to it. Each thread is one ADK session, and a question the agent
 asks with its `ask_user` tool waits for a reply in the thread. The add-on is experimental.
 
 The chart is the first route, and this page starts with it. The second route runs the same agent inside Google AX, as a
@@ -12,8 +12,8 @@ add-on maps A2A to ADK, every setting, and what a restart keeps.
 
 ## What the agent is
 
-The add-on is an agent built with Google's Agent Development Kit (ADK), with Bedrock's Converse API as its model and one
-tool, `ask_user`. It answers chat messages and investigates the alert text it is given, from what the thread's messages
+The add-on is an agent built with Google's Agent Development Kit (ADK), with a model on Bedrock's Converse API or the
+Anthropic Messages API and one tool, `ask_user`. It answers chat messages and investigates the alert text it is given, from what the thread's messages
 carry: it has no tool that reaches another system, so it reads nothing and changes nothing outside the thread. When
 something is missing, it asks in the thread, and a person's reply is its answer.
 
@@ -22,12 +22,13 @@ ADK session and its tasks, so a question survives a restart of the add-on, and a
 
 ## Before you start
 
-- **Access to a Bedrock model in a region**, such as a Claude Haiku inference profile, for the AWS account the add-on
-  calls Bedrock as.
-- **AWS credentials for that account**, one of:
-    - a Bedrock API key, which the chart passes from a Secret;
-    - an IAM role for the add-on's ServiceAccount (IRSA), or an EKS Pod Identity association. Neither route has been
-      tested on EKS yet.
+- **A model**, on one of two providers:
+    - **Amazon Bedrock**: access to a Bedrock model in a region, such as a Claude Haiku inference profile, for the AWS
+      account the add-on calls Bedrock as, and AWS credentials for that account: a Bedrock API key, which the chart
+      passes from a Secret, or an IAM role for the add-on's ServiceAccount (IRSA) or an EKS Pod Identity association.
+      Neither IAM route has been tested on EKS yet.
+    - **The Anthropic API**: an Anthropic API key, which the chart passes from a Secret
+      ([Or run it on the Anthropic API](#or-run-it-on-the-anthropic-api)).
 - **Agent Kourier installed with the Helm chart** ([Install with Helm](install-with-helm.md)), from a release whose
   [release notes](../release-notes.md) list the add-on. The 0.6.0 chart has no `addons` block, and its values schema
   refuses one.
@@ -39,7 +40,8 @@ The commands below use the release `agent-kourier` in the namespace `agent-kouri
 ## 1. Create the Secrets
 
 The add-on needs a token that Agent Kourier presents to it, and with an API key, the key. Both go in Secrets in the
-release's namespace:
+release's namespace (on the Anthropic API, the second Secret holds the Anthropic key instead,
+[below](#or-run-it-on-the-anthropic-api)):
 
 ```sh
 kubectl -n agent-kourier create secret generic ax-token \
@@ -90,10 +92,42 @@ rbac:
    `ax-token` in `identity.tokenSecretRef`, so grant it here. A Binding in `config.bindings` needs no entry: the chart
    grants the Secrets that `config.*` names.
 
+### Or run it on the Anthropic API
+
+Set the provider to `anthropic`, name an Anthropic model, and give the chart the Secret of an Anthropic API key in place
+of the region and the Bedrock key:
+
+```sh
+kubectl -n agent-kourier create secret generic anthropic \
+  --from-literal=apiKey="${ANTHROPIC_API_KEY}"
+```
+
+```yaml
+addons:
+  ax:
+    enabled: true
+    model:
+      provider: anthropic
+      name: claude-haiku-4-5 # (1)!
+    anthropicApiKeySecret: {name: anthropic, key: apiKey} # (2)!
+    auth:
+      tokenSecret: {name: ax-token}
+    sessionIdleTTL: 2160h
+```
+
+1. An Anthropic model ID or alias.
+2. The chart passes the key into the container's environment as `ANTHROPIC_API_KEY`, which the container reads when it
+   starts: after a change to the Secret, restart the add-on. The render refuses `model.region` and
+   `bedrock.apiKeySecret` with `anthropic`, and `anthropicApiKeySecret` with `bedrock`.
+
+The Anthropic Go SDK reads its other `ANTHROPIC_*` variables too; `ANTHROPIC_BASE_URL`, through
+`addons.ax.extraEnv`, sends the calls to another address, such as a gateway's. [The model](../reference/ax.md#the-model)
+says how the add-on uses the API.
+
 ### Or take credentials from an IAM role
 
-Leave `bedrock.apiKeySecret` empty, and the AWS SDK's default chain finds the credentials. For IRSA, annotate the
-add-on's ServiceAccount, `<fullname>-ax`, with a role that may call Bedrock:
+On Bedrock, leave `bedrock.apiKeySecret` empty, and the AWS SDK's default chain finds the credentials. For IRSA,
+annotate the add-on's ServiceAccount, `<fullname>-ax`, with a role that may call Bedrock:
 
 ```yaml
 addons:
@@ -128,8 +162,9 @@ replaces the pod with the Recreate strategy.
 
 With `networkPolicy.enabled`, the add-on gets a NetworkPolicy of its own. Its ingress is port 8090 from Agent Kourier's
 pods, from `networkPolicy.metricsFrom` and, on Postgres, from the add-on's other replicas. Its egress is DNS, port 443
-to anywhere outside the private and link-local ranges (`addons.ax.networkPolicy.bedrock`, which covers Bedrock, and AWS
-STS for IRSA), the add-on's other replicas and its database on Postgres, and `addons.ax.networkPolicy.extraEgress`.
+to anywhere outside the private and link-local ranges (`addons.ax.networkPolicy.model`, which covers Bedrock and AWS STS
+for IRSA, or the Anthropic API), the add-on's other replicas and its database on Postgres, and
+`addons.ax.networkPolicy.extraEgress`.
 Postgres needs `addons.ax.networkPolicy.postgres.to`.
 
 The rule to 443 leaves out `169.254.0.0/16`. Per AWS's documentation, the EKS Pod Identity agent listens on
@@ -146,8 +181,8 @@ addons:
 ```
 
 The policy leaves the instance metadata service out as well, so the default chain cannot fall back to the node's role
-through it. To send Bedrock through an egress proxy or a VPC endpoint, put its address in `extraEgress` and set
-`addons.ax.networkPolicy.bedrock.cidrs` to `[]`. [Helm values](../reference/helm-values.md#addons) has every value of
+through it. To send the model's calls through an egress proxy or a VPC endpoint, put its address in `extraEgress` and
+set `addons.ax.networkPolicy.model.cidrs` to `[]`. [Helm values](../reference/helm-values.md#addons) has every value of
 the block.
 
 ### Upgrade the release
@@ -275,8 +310,10 @@ kubectl -n agent-kourier logs deployment/agent-kourier-ax
 
 `refused an A2A request` in the add-on's log, with the reason `missing` or `invalid`, means Agent Kourier sent no
 token, or one the add-on does not hold: check that the Binding's Secret and the add-on's hold the same value, with no
-trailing newline in the Binding's. A turn that fails can be Bedrock refusing the credentials or the model: check the
-model's access in the region and, with a NetworkPolicy, the egress above.
+trailing newline in the Binding's. A turn that fails can be the provider refusing the credentials or the model: on
+Bedrock, check the model's access in the region; on the Anthropic API, the key and the model's ID; and, with a
+NetworkPolicy, the egress above. The add-on's `agentkourier_ax_operation_duration_seconds` metric counts each call by
+the HTTP status the provider answered, such as `401` for a key it refused.
 
 ## Rotate the token
 
@@ -309,6 +346,7 @@ What differs from the chart:
 | Image | `ghcr.io/agentkourier/agent-kourier-ax`, released | `addons/ax/Dockerfile.ax`, which you build: the agent, AX's task runner and git on Debian |
 | Listens on | `:8090` | `:80`, with the task runner on `127.0.0.1:8081` (`RUNNER_URL`), to which the agent proxies `/readyz` and `/metadata/` |
 | Caller check | The token file | OIDC: an ID token for Agent Kourier's service identity |
+| Model | Bedrock or the Anthropic API | Bedrock |
 | Bedrock key | A Secret, or an IAM role | Injected by Substrate's egress gateway: the Task holds only a placeholder |
 | Store | SQLite on a volume, or Postgres | SQLite on the Task's durable workspace, `/workspace/agent-kourier-state/agent.db` |
 

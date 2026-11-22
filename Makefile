@@ -170,7 +170,7 @@ ax-image: ## Build the AX add-on's image, agent-kourier-ax:dev, on Agent Kourier
 ax-runner-image: ## Build the image of the route inside Google AX, agent-kourier-ax-runner:dev: AX's task runner, git and the agent on Debian (addons/ax/Dockerfile.ax; Docker)
 	docker build -f addons/ax/Dockerfile.ax -t agent-kourier-ax-runner:dev addons/ax
 
-ax-smoke: ## Run the real Bedrock A2A smoke using the existing sandbox credentials file
+ax-smoke: ## Run the real A2A smoke on Bedrock or the Anthropic API (the sandbox file's MODEL_PROVIDER), using the existing sandbox credentials file
 	bash addons/ax/smoke.sh
 
 .PHONY: docs-agent-test docs-agent-lint docs-agent-image docs-agent-smoke docs-agent-smoke-live
