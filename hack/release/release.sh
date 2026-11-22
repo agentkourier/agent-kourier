@@ -15,9 +15,10 @@
 #   SCAN_IMAGES  1 to scan local platform images too; PUSH=1 always scans before it pushes
 #   SCAN_IMAGE_SCRIPT  scanner path, default hack/security/scan-image.sh
 #
-# The other images are IMAGES, each the Dockerfile of its context: a recipe's agent, examples/recipes/<agent>/agent,
-# needs no build argument; an add-on, addons/<name>, a Go module of its own, is built on Agent Kourier's pinned bases
-# (GO_IMAGE and RUNTIME_IMAGE from hack/kind/lib.sh). After the images it packages charts/agent-kourier with the version
+# The other images are IMAGES, each a build context and a Dockerfile: a recipe's agent, examples/recipes/<agent>/agent,
+# is the Dockerfile of its directory and needs no build argument; an add-on, addons/<name>, a Go module of its own that
+# requires the shared kit (addons/kit), is built from the context addons/ with addons/<name>/Dockerfile, on Agent
+# Kourier's pinned bases (GO_IMAGE and RUNTIME_IMAGE from hack/kind/lib.sh). After the images it packages charts/agent-kourier with the version
 # stamped, Agent Kourier's digest as the default image and each add-on's as addons.<name>'s (package-chart.sh), and
 # with PUSH=1 pushes the chart. The digests are written to OUT/digest (Agent Kourier), OUT/<name>-digest and OUT/chart-digest.
 #
@@ -43,13 +44,14 @@ OUT=${OUT:-${ROOT}/bin/release}
 SCAN_IMAGES=${SCAN_IMAGES:-}
 SCAN_IMAGE_SCRIPT=${SCAN_IMAGE_SCRIPT:-${ROOT}/hack/security/scan-image.sh}
 SOURCE_URL=https://github.com/agentkourier/agent-kourier
-# The images a release publishes beside Agent Kourier's, as NAME=CONTEXT (relative to the repository): the recipes'
-# agents and the add-ons. Each goes to REGISTRY-NAME.
+# The images a release publishes beside Agent Kourier's, as NAME=CONTEXT:DOCKERFILE (both relative to the repository):
+# the recipes' agents and the add-ons. Each goes to REGISTRY-NAME. An add-on's context is addons/, which holds the kit it
+# requires through `replace ../kit`; the Dockerfile.dockerignore beside its Dockerfile keeps the other add-ons out.
 IMAGES=(
-  prompt-agent=examples/recipes/prompt-agent/agent
-  echo-agent=examples/recipes/echo-agent/agent
-  cma=addons/cma
-  ax=addons/ax
+  prompt-agent=examples/recipes/prompt-agent/agent:examples/recipes/prompt-agent/agent/Dockerfile
+  echo-agent=examples/recipes/echo-agent/agent:examples/recipes/echo-agent/agent/Dockerfile
+  cma=addons:addons/cma/Dockerfile
+  ax=addons:addons/ax/Dockerfile
 )
 IMAGE_NAMES=()
 for i in "${IMAGES[@]}"; do IMAGE_NAMES+=("${i%%=*}"); done
@@ -158,17 +160,19 @@ image_check_ref() {
 }
 
 # image_build NAME: set IMAGE_CONTEXT to the build context of NAME, one of IMAGES, and IMAGE_BUILD to the build command
-# for it: BUILDX, and for an add-on the pinned bases its Dockerfile requires and the version it stamps into its binary.
+# for it: BUILDX with its Dockerfile, and for an add-on the pinned bases its Dockerfile requires and the version it
+# stamps into its binary.
 image_build() {
-  local i
-  IMAGE_CONTEXT=
+  local i entry= dockerfile
   for i in "${IMAGES[@]}"; do
-    [ "${i%%=*}" != "$1" ] || IMAGE_CONTEXT=${ROOT}/${i#*=}
+    [ "${i%%=*}" != "$1" ] || entry=${i#*=}
   done
-  [ -n "${IMAGE_CONTEXT}" ] || die "$1 is not one of IMAGES"
-  IMAGE_BUILD=("${BUILDX[@]}")
-  case "${IMAGE_CONTEXT}" in
-    "${ROOT}"/addons/*) IMAGE_BUILD+=(--build-arg "GO_IMAGE=${GO_IMAGE}" --build-arg "RUNTIME_IMAGE=${RUNTIME_IMAGE}" --build-arg "VERSION=${VERSION}") ;;
+  [ -n "${entry}" ] || die "$1 is not one of IMAGES"
+  IMAGE_CONTEXT=${ROOT}/${entry%%:*}
+  dockerfile=${entry#*:}
+  IMAGE_BUILD=("${BUILDX[@]}" -f "${ROOT}/${dockerfile}")
+  case "${dockerfile}" in
+    addons/*) IMAGE_BUILD+=(--build-arg "GO_IMAGE=${GO_IMAGE}" --build-arg "RUNTIME_IMAGE=${RUNTIME_IMAGE}" --build-arg "VERSION=${VERSION}") ;;
   esac
 }
 

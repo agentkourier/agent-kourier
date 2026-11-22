@@ -252,7 +252,8 @@ jobs:
           IMAGE_REF: agent-kourier-security:${{ matrix.name }}
           AGENT: ${{ matrix.agent }}
         run: docker buildx build --platform "${PLATFORM}" --load --tag "${IMAGE_REF}" "examples/recipes/${AGENT}/agent"
-      # An add-on's Dockerfile (addons/<addon>) cross-compiles on Agent Kourier's pinned bases, as its own does.
+      # An add-on's Dockerfile (addons/<addon>) cross-compiles on Agent Kourier's pinned bases, as its own does. Its
+      # context is addons/, which holds the kit the add-on requires through `replace ../kit`.
       - name: Build the add-on image
         if: ${{ steps.docs-only.outputs.skip != 'true' && matrix.addon != '' }}
         env:
@@ -267,7 +268,8 @@ jobs:
             --build-arg "RUNTIME_IMAGE=${RUNTIME_IMAGE}" \
             --load \
             --tag "${IMAGE_REF}" \
-            "addons/${ADDON}"
+            -f "addons/${ADDON}/Dockerfile" \
+            addons
       - name: Scan the image
         if: ${{ steps.docs-only.outputs.skip != 'true' }}
         env:

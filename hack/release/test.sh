@@ -230,22 +230,25 @@ else
   echo "FAIL: build: release.sh failed" >&2
   exit 1
 fi
+# Each line is the build's context and Dockerfile: an add-on is built from addons/, which holds the kit it requires.
+PROMPT=examples/recipes/prompt-agent/agent
+ECHO=examples/recipes/echo-agent/agent
 for want in \
-  "build load linux/amd64 agent-kourier-release-check:linux-amd64 ." \
-  "build load linux/arm64 agent-kourier-release-check:linux-arm64 ." \
-  "build load linux/amd64 agent-kourier-release-check:prompt-agent-linux-amd64 examples/recipes/prompt-agent/agent" \
-  "build load linux/arm64 agent-kourier-release-check:prompt-agent-linux-arm64 examples/recipes/prompt-agent/agent" \
-  "build load linux/amd64 agent-kourier-release-check:echo-agent-linux-amd64 examples/recipes/echo-agent/agent" \
-  "build load linux/arm64 agent-kourier-release-check:echo-agent-linux-arm64 examples/recipes/echo-agent/agent" \
-  "build load linux/amd64 agent-kourier-release-check:cma-linux-amd64 addons/cma" \
-  "build load linux/arm64 agent-kourier-release-check:cma-linux-arm64 addons/cma" \
-  "build load linux/amd64 agent-kourier-release-check:ax-linux-amd64 addons/ax" \
-  "build load linux/arm64 agent-kourier-release-check:ax-linux-arm64 addons/ax" \
-  "build output linux/amd64,linux/arm64 ghcr.io/example/agent-kourier:v1.2.3 ." \
-  "build output linux/amd64,linux/arm64 ghcr.io/example/agent-kourier-prompt-agent:v1.2.3 examples/recipes/prompt-agent/agent" \
-  "build output linux/amd64,linux/arm64 ghcr.io/example/agent-kourier-echo-agent:v1.2.3 examples/recipes/echo-agent/agent" \
-  "build output linux/amd64,linux/arm64 ghcr.io/example/agent-kourier-cma:v1.2.3 addons/cma" \
-  "build output linux/amd64,linux/arm64 ghcr.io/example/agent-kourier-ax:v1.2.3 addons/ax"; do
+  "build load linux/amd64 agent-kourier-release-check:linux-amd64 . Dockerfile" \
+  "build load linux/arm64 agent-kourier-release-check:linux-arm64 . Dockerfile" \
+  "build load linux/amd64 agent-kourier-release-check:prompt-agent-linux-amd64 ${PROMPT} ${PROMPT}/Dockerfile" \
+  "build load linux/arm64 agent-kourier-release-check:prompt-agent-linux-arm64 ${PROMPT} ${PROMPT}/Dockerfile" \
+  "build load linux/amd64 agent-kourier-release-check:echo-agent-linux-amd64 ${ECHO} ${ECHO}/Dockerfile" \
+  "build load linux/arm64 agent-kourier-release-check:echo-agent-linux-arm64 ${ECHO} ${ECHO}/Dockerfile" \
+  "build load linux/amd64 agent-kourier-release-check:cma-linux-amd64 addons addons/cma/Dockerfile" \
+  "build load linux/arm64 agent-kourier-release-check:cma-linux-arm64 addons addons/cma/Dockerfile" \
+  "build load linux/amd64 agent-kourier-release-check:ax-linux-amd64 addons addons/ax/Dockerfile" \
+  "build load linux/arm64 agent-kourier-release-check:ax-linux-arm64 addons addons/ax/Dockerfile" \
+  "build output linux/amd64,linux/arm64 ghcr.io/example/agent-kourier:v1.2.3 . Dockerfile" \
+  "build output linux/amd64,linux/arm64 ghcr.io/example/agent-kourier-prompt-agent:v1.2.3 ${PROMPT} ${PROMPT}/Dockerfile" \
+  "build output linux/amd64,linux/arm64 ghcr.io/example/agent-kourier-echo-agent:v1.2.3 ${ECHO} ${ECHO}/Dockerfile" \
+  "build output linux/amd64,linux/arm64 ghcr.io/example/agent-kourier-cma:v1.2.3 addons addons/cma/Dockerfile" \
+  "build output linux/amd64,linux/arm64 ghcr.io/example/agent-kourier-ax:v1.2.3 addons addons/ax/Dockerfile"; do
   check "build: ${want}" 1 "$(grep -c -x -F -- "${want}" "${TMP}/build.builds")"
 done
 check "build: fifteen builds in all" 15 "$(wc -l <"${TMP}/build.builds" | tr -d ' ')"
@@ -261,16 +264,16 @@ for f in digest prompt-agent-digest echo-agent-digest cma-digest ax-digest; do
   check "build: ${f} is a digest" 1 "$(grep -c -x -E 'sha256:[0-9a-f]{64}' "${TMP}/build/${f}")"
 done
 check "build: five distinct image digests" 5 "$(cat "${TMP}/build/digest" "${TMP}/build/prompt-agent-digest" "${TMP}/build/echo-agent-digest" "${TMP}/build/cma-digest" "${TMP}/build/ax-digest" | sort -u | wc -l | tr -d ' ')"
-# Each build's arguments, three builds of each image: an add-on is built on Agent Kourier's pinned bases with the version,
-# as Agent Kourier is, an agent with no argument.
+# Each build's arguments, by its Dockerfile, three builds of each image: an add-on is built on Agent Kourier's pinned
+# bases with the version, as Agent Kourier is, an agent with no argument.
 GO_IMAGE_PIN=$(sed -n 's/^GO_IMAGE=//p' "${ROOT}/hack/kind/lib.sh")
 RUNTIME_IMAGE_PIN=$(sed -n 's/^RUNTIME_IMAGE=//p' "${ROOT}/hack/kind/lib.sh")
 for want in \
-  ". GO_IMAGE=${GO_IMAGE_PIN} RUNTIME_IMAGE=${RUNTIME_IMAGE_PIN} VERSION=v1.2.3" \
-  "addons/cma GO_IMAGE=${GO_IMAGE_PIN} RUNTIME_IMAGE=${RUNTIME_IMAGE_PIN} VERSION=v1.2.3" \
-  "addons/ax GO_IMAGE=${GO_IMAGE_PIN} RUNTIME_IMAGE=${RUNTIME_IMAGE_PIN} VERSION=v1.2.3" \
-  "examples/recipes/echo-agent/agent" \
-  "examples/recipes/prompt-agent/agent"; do
+  "Dockerfile GO_IMAGE=${GO_IMAGE_PIN} RUNTIME_IMAGE=${RUNTIME_IMAGE_PIN} VERSION=v1.2.3" \
+  "addons/cma/Dockerfile GO_IMAGE=${GO_IMAGE_PIN} RUNTIME_IMAGE=${RUNTIME_IMAGE_PIN} VERSION=v1.2.3" \
+  "addons/ax/Dockerfile GO_IMAGE=${GO_IMAGE_PIN} RUNTIME_IMAGE=${RUNTIME_IMAGE_PIN} VERSION=v1.2.3" \
+  "${ECHO}/Dockerfile" \
+  "${PROMPT}/Dockerfile"; do
   check "build: the arguments of ${want%% *}" 3 "$(grep -c -x -F -- "${want}" "${TMP}/build.args")"
 done
 contains "build: the chart's default image is Agent Kourier's" "digest: $(cat "${TMP}/build/digest")" "${TMP}/build/agent-kourier-1.2.3.tgz.values"

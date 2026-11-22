@@ -1,0 +1,20 @@
+# BuildKit reads this file, beside the Dockerfile of the same name, in place of the context's own .dockerignore. The
+# context is addons/, every add-on and the kit they share; this build reads the kit's module and the CMA add-on's, and
+# nothing else enters the context.
+*
+!kit
+!cma
+# livecheck is a module of its own that imports the root module, so the image must not need it; kind holds the example's
+# kind values.
+cma/livecheck
+cma/kind
+**/*.md
+**/*.test
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/kubeconfig*
+# A local run's SQLite store (SQLITE_PATH defaults to a file in the working directory) and its journal files.
+**/*.db
+**/*.db-*
