@@ -2,7 +2,7 @@
 # pinned AX module, at the fixed path AX starts, the agent beside it, and git and CA roots for AX's workspace
 # preparation, on Debian. `make ax-runner-image` builds it as agent-kourier-ax-runner:dev; the operator pushes it where
 # their Substrate workers pull from. No release builds it: the released image, which the chart runs, is Dockerfile's.
-FROM golang:1.27.4@sha256:08bcb99a38f85a265f9a93d1d3323e2440eec333380f3ea26ee0dec9264bb41c AS build
+FROM golang:1.27.4@sha256:205c7636d74e0ffbe3d007162df7d74f859f5a8c8322dfb9f907977686c126cf AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -11,7 +11,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 GOMAXPROCS=2 g
 RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 GOMAXPROCS=2 go build -p 2 -trimpath -o /out/agent-kourier-ax-agent ./cmd/agent
 
 # Public runtime with Git and CA roots for AX workspace preparation.
-FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/ax-task-runner /usr/local/bin/ax-task-runner
