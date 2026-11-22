@@ -1,0 +1,34 @@
+# Agent Kourier and the AX add-on in a kind cluster for the end-to-end test: the production images (make image and
+# make ax-image, then kind load), the ConfigMap route with config/kourier.yaml, Secrets in the release's namespace:
+# slack (botToken, appToken), ax-anthropic (apiKey) and ax-adapter-token (token).
+image:
+  repository: agent-kourier
+  tag: dev
+  pullPolicy: Never
+crds:
+  install: false
+config:
+  source: files
+  existingConfigMap: ax-kourier-config
+rbac:
+  secretNamespaces: [agent-kourier]
+persistence:
+  storageClassName: standard
+  retainOnUninstall: false
+addons:
+  ax:
+    enabled: true
+    image:
+      repository: agent-kourier-ax
+      tag: dev
+      pullPolicy: Never
+    model:
+      provider: anthropic
+      name: claude-haiku-4-5
+    anthropicApiKeySecret: {name: ax-anthropic, key: apiKey}
+    auth:
+      tokenSecret: {name: ax-adapter-token, key: token}
+    logLevel: debug
+    persistence:
+      storageClassName: standard
+      retainOnUninstall: false

@@ -14,3 +14,5 @@ bin
 # A local run's SQLite store and its journal files.
 **/*.db
 **/*.db-*
+# kind holds the end-to-end test's values and Agent Kourier config, not the image's.
+kind
