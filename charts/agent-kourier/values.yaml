@@ -485,7 +485,8 @@ tokenRefresh:
 # on that one port. Agent Kourier reaches it through an AgentBackend with dialect a2a and the url
 # http://<fullname>-ax.<namespace>.svc:8090/a2a, which is also the endpoint the agent card names (PUBLIC_URL). With networkPolicy.enabled
 # the add-on gets a NetworkPolicy of its own (addons.ax.networkPolicy), and with serviceMonitor.enabled a ServiceMonitor of its own, as
-# addons.cma does. For example, with the release agent-kourier in the namespace agent-kourier and an IAM role for IRSA:
+# addons.cma does. For example, with the release agent-kourier in the namespace agent-kourier and an IAM role for IRSA (a route not yet
+# tested on EKS):
 #   config:
 #     agentBackends:
 #       ax:
@@ -668,11 +669,11 @@ addons:
       # Required. The Bedrock model ID or inference profile (MODEL_NAME), for example us.anthropic.claude-haiku-4-5-20251001-v1:0. The
       # account must have access to it in that region.
       name: ""
-    # Where the add-on's AWS credentials come from. With apiKeySecret empty, the AWS SDK's default chain finds them: give the
-    # ServiceAccount an IAM role through serviceAccount.annotations (IRSA) or an EKS Pod Identity association. With apiKeySecret set, the
-    # chart passes the Bedrock API key into the container's environment (AWS_BEARER_TOKEN_BEDROCK, with valueFrom.secretKeyRef), which
-    # Kubernetes reads when the container starts: after a change to the Secret, restart the add-on
-    # (kubectl rollout restart deployment/<fullname>-ax).
+    # How the add-on authenticates to Bedrock. With apiKeySecret set, the chart passes a Bedrock API key, a bearer token, into the
+    # container's environment (AWS_BEARER_TOKEN_BEDROCK, with valueFrom.secretKeyRef), which Kubernetes reads when the container starts:
+    # after a change to the Secret, restart the add-on (kubectl rollout restart deployment/<fullname>-ax). With apiKeySecret empty, the AWS
+    # SDK's default chain finds AWS credentials: give the ServiceAccount an IAM role through serviceAccount.annotations (IRSA) or an EKS Pod
+    # Identity association. Neither route has been tested on EKS yet.
     bedrock:
       # The Secret, in the release namespace, and its key: both or neither (the render refuses one alone).
       apiKeySecret:
@@ -680,7 +681,7 @@ addons:
         key: ""
     # The add-on's own ServiceAccount, <fullname>-ax, which the chart grants nothing.
     serviceAccount:
-      # Added to it: for IRSA, eks.amazonaws.com/role-arn with the ARN of a role that may call Bedrock.
+      # Added to it: for IRSA (not yet tested on EKS), eks.amazonaws.com/role-arn with the ARN of a role that may call Bedrock.
       annotations: {}
     # How long a thread's context may go without a turn before the add-on deletes its ADK session and the context's tasks
     # (SESSION_IDLE_TTL), a Go duration. Empty is the add-on's default, 2160h, which is Agent Kourier's default session.threadTTL: set it to
@@ -755,8 +756,9 @@ addons:
     networkPolicy:
       # Amazon Bedrock, and AWS STS for IRSA, on 443. A NetworkPolicy cannot name a host, so this is port 443 to anywhere outside the
       # private and link-local ranges, as networkPolicy.slack is for Agent Kourier. Put an egress proxy's or a VPC endpoint's address in
-      # extraEgress and narrow this to [] to close it. EKS Pod Identity's agent and the instance metadata service are on link-local
-      # addresses, outside this rule: with Pod Identity add the agent's address and port to extraEgress.
+      # extraEgress and narrow this to [] to close it. Per AWS's EKS Pod Identity and EC2 instance metadata documentation, the Pod
+      # Identity agent and the instance metadata service listen on link-local addresses, which this rule leaves out: with Pod Identity
+      # add the agent's address and port to extraEgress.
       bedrock:
         cidrs: ["0.0.0.0/0"]
         except: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16"]

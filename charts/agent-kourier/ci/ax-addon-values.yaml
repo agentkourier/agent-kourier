@@ -59,7 +59,7 @@ addons:
     auth:
       tokenSecret: {name: ax-token}
     networkPolicy:
-      # The EKS Pod Identity Agent, on a link-local address, which the Bedrock rule leaves out.
+      # The EKS Pod Identity Agent, on a link-local address per AWS's EKS Pod Identity documentation, which the Bedrock rule leaves out.
       extraEgress:
         - to: [{ipBlock: {cidr: 169.254.170.23/32}}]
           ports: [{port: 80, protocol: TCP}]
