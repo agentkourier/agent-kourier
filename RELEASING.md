@@ -4,9 +4,11 @@ A release is a pushed tag `vX.Y.Z` (or `vX.Y.Z-rc.1`). It publishes the image `g
 (linux/amd64 and linux/arm64) and the Helm chart `oci://ghcr.io/agentkourier/charts/agent-kourier`, whose default image
 is that image by digest. It also publishes the images of two recipes' agents, `ghcr.io/agentkourier/agent-kourier-prompt-agent`
 and `ghcr.io/agentkourier/agent-kourier-echo-agent` (linux/amd64 and linux/arm64), built from
-`examples/recipes/<agent>/agent/Dockerfile`, and the image of the CMA add-on, `ghcr.io/agentkourier/agent-kourier-cma`
-(linux/amd64 and linux/arm64), built from `addons/cma/Dockerfile` on Agent Kourier's pinned bases. The add-on is
-versioned with Agent Kourier: each release tags its image with the same `vX.Y.Z`. Nothing is released by hand.
+`examples/recipes/<agent>/agent/Dockerfile`, and the images of the two add-ons, `ghcr.io/agentkourier/agent-kourier-cma`
+(the CMA add-on) and `ghcr.io/agentkourier/agent-kourier-ax` (the AX add-on) (linux/amd64 and linux/arm64), built from
+`addons/<name>/Dockerfile` on Agent Kourier's pinned bases. The add-ons are versioned with Agent Kourier: each release
+tags their images with the same `vX.Y.Z`. The AX add-on's image for the route inside Google AX (`addons/ax/Dockerfile.ax`,
+`make ax-runner-image`) is not released. Nothing is released by hand.
 
 ## Cut a release
 
@@ -135,10 +137,11 @@ line's newest and perhaps as latest.
 `.github/workflows/release.yml` runs `hack/release/release.sh`, the script behind `make release-image`:
 
 - First checks the exact tagged commit through the Actions API. `ci.yml` must contain successful `lint`, `test`,
-  `test-testhooks`, `docs-agent`, `crd-corpus (1.37)`, `crd-corpus (1.33)`, `echo-agent`, `prompt-agent` and `cma` jobs. `security.yml` must contain successful `govulncheck (root)`,
+  `test-testhooks`, `docs-agent`, `crd-corpus (1.37)`, `crd-corpus (1.33)`, `echo-agent`, `prompt-agent`, `cma` and `ax` jobs. `security.yml` must contain successful `govulncheck (root)`,
   `govulncheck (ax)`, `govulncheck (docs-agent)`, `govulncheck (cma)`, `gitleaks`, `trivy (linux-amd64)` and `trivy (linux-arm64)` jobs, the four scans of the agents'
   images: `trivy (prompt-agent-linux-amd64)`, `trivy (prompt-agent-linux-arm64)`, `trivy (echo-agent-linux-amd64)` and
-  `trivy (echo-agent-linux-arm64)`, and the two of the CMA add-on's: `trivy (cma-linux-amd64)` and `trivy (cma-linux-arm64)`.
+  `trivy (echo-agent-linux-arm64)`, the two of the CMA add-on's: `trivy (cma-linux-amd64)` and `trivy (cma-linux-arm64)`, and
+  the two of the AX add-on's: `trivy (ax-linux-amd64)` and `trivy (ax-linux-arm64)`.
   `codeql.yml` must contain a successful `analyze (go)` job. These are the status checks the `main` ruleset
   requires. `codeql.yml` skips `analyze` while the repository is private, and a skipped run blocks the release.
   The scheduled released-image rescan is the only permitted skipped job. A pending run fails closed with a message
@@ -152,20 +155,20 @@ line's newest and perhaps as latest.
 - Builds each platform with the Dockerfile, which cross-compiles Go on the runner (no emulation) and sets
   `main.version` from the tag. Then builds each platform of each agent image from its own Dockerfile, which runs `apk`
   and `pip` in the target platform: the arm64 build runs under QEMU, from the binfmt image the workflow pins by digest.
-  Then builds each platform of the CMA add-on's image from `addons/cma/Dockerfile`, on the same pinned Go and runtime
-  images as Agent Kourier's, which cross-compiles too.
+  Then builds each platform of each add-on's image from `addons/cma/Dockerfile` and `addons/ax/Dockerfile`, on the same
+  pinned Go and runtime images as Agent Kourier's, which cross-compile too.
 - Refuses to release a platform whose binary carries a test hook. The Dockerfile's `verify` stage runs
   `internal/testhooks` (the traces `make image-check` looks for, with a testhooks build of the same
   platform as the control) and checks the binary is an ELF of that architecture with the tag as its
   version; the image is not assembled if it fails. The script then checks each platform's image has no
   `dev.agent-kourier.testhooks` label, runs as 65532:65532, and is that platform. It checks each agent image's
-  platforms and the CMA add-on's the same way.
+  platforms and each add-on's the same way.
 - Builds, checks and scans every platform of every image before the first push, so an agent or add-on image that fails
   leaves nothing pushed.
 - Pushes one multi-platform image tagged `vX.Y.Z` with the workflow's `GITHUB_TOKEN` (`packages: write`),
   with an SBOM and a max-mode provenance attestation attached, and the OCI labels source, revision, version
-  and created (the commit's time). Pushes each agent image and the CMA add-on's the same way, tagged `vX.Y.Z`, to Agent
-  Kourier's repository with `-<agent>` or `-cma` appended, then refuses it unless each platform's layers are those of the image it checked and scanned
+  and created (the commit's time). Pushes each agent image and each add-on's the same way, tagged `vX.Y.Z`, to Agent
+  Kourier's repository with `-<agent>`, `-cma` or `-ax` appended, then refuses it unless each platform's layers are those of the image it checked and scanned
   (`hack/release/check-pushed.sh`): an agent's Dockerfile resolves Wolfi's packages when it runs, so a push that missed
   the checks' cache would have resolved them again.
 - The Buildx action is pinned by commit, while its BuildKit image and Docker's SBOM generator follow the action's
@@ -175,7 +178,8 @@ line's newest and perhaps as latest.
   SARIF reports remain in the release output.
 - Packages `charts/agent-kourier` (`hack/release/package-chart.sh`) with version `X.Y.Z`, appVersion `vX.Y.Z`, and
   `image.repository` and `image.digest` stamped with Agent Kourier's pushed image, `addons.cma.image.repository` and
-  `addons.cma.image.digest` with the CMA add-on's, so a released chart pulls both by digest, reads the package back to check them,
+  `addons.cma.image.digest` with the CMA add-on's, and `addons.ax.image.repository` and `addons.ax.image.digest` with the
+  AX add-on's, so a released chart pulls all three by digest, reads the package back to check them,
   and pushes it to `oci://ghcr.io/agentkourier/charts`.
 - In a second job that runs no repository code (the only one with `id-token: write`), signs the image digests
   and the chart digest with cosign v3.1.4 keyless (GitHub's OIDC identity; no key, no secret).
@@ -236,10 +240,10 @@ signed by the same identity, and its default image is the image:
       --certificate-identity "$IDENTITY"
     helm show values oci://$CHART --version X.Y.Z | grep -A8 '^image:'   # repository and digest stamped
 
-The agents' images and the CMA add-on's are signed by the same identity and carry the same attestations and labels.
+The agents' images and the add-ons' are signed by the same identity and carry the same attestations and labels.
 Verify each as the image above, with `IMAGE=ghcr.io/agentkourier/agent-kourier-prompt-agent`,
-`IMAGE=ghcr.io/agentkourier/agent-kourier-echo-agent` or `IMAGE=ghcr.io/agentkourier/agent-kourier-cma` and its digest
-from the GitHub Release.
+`IMAGE=ghcr.io/agentkourier/agent-kourier-echo-agent`, `IMAGE=ghcr.io/agentkourier/agent-kourier-cma` or
+`IMAGE=ghcr.io/agentkourier/agent-kourier-ax` and its digest from the GitHub Release.
 
 Each release's GitHub Release body names the verified image and chart digests.
 
@@ -268,10 +272,10 @@ are applied now:
      their own pull request. Squash is the only allowed merge method.
    - Require signed commits. A squash merge in GitHub is signed by GitHub, so every commit merged this way passes.
    - Require these status checks, with the branch up to date before merging (strict): `lint`, `test`,
-     `test-testhooks`, `docs-agent`, `crd-corpus (1.37)`, `crd-corpus (1.33)`, `echo-agent`, `prompt-agent` and `cma` from `ci`; `govulncheck (root)`, `govulncheck (ax)`,
+     `test-testhooks`, `docs-agent`, `crd-corpus (1.37)`, `crd-corpus (1.33)`, `echo-agent`, `prompt-agent`, `cma` and `ax` from `ci`; `govulncheck (root)`, `govulncheck (ax)`,
      `govulncheck (docs-agent)`, `govulncheck (cma)`, `gitleaks`, `trivy (linux-amd64)`, `trivy (linux-arm64)`, `trivy (prompt-agent-linux-amd64)`,
-     `trivy (prompt-agent-linux-arm64)`, `trivy (echo-agent-linux-amd64)`, `trivy (echo-agent-linux-arm64)`, `trivy (cma-linux-amd64)` and
-     `trivy (cma-linux-arm64)` from `security`; and
+     `trivy (prompt-agent-linux-arm64)`, `trivy (echo-agent-linux-amd64)`, `trivy (echo-agent-linux-arm64)`, `trivy (cma-linux-amd64)`,
+     `trivy (cma-linux-arm64)`, `trivy (ax-linux-amd64)` and `trivy (ax-linux-arm64)` from `security`; and
      `analyze (go)` from `codeql`. The scheduled released-image rescan is intentionally not a required check.
    - Block force pushes and restrict deletions.
    - Bypass: repository admins, for pull requests only. An admin can merge a pull request whose requirements are
@@ -283,7 +287,7 @@ are applied now:
    Optionally add a `release` environment with required reviewers and move the `build` job into it, which
    puts a human approval between a tag and a push.
 4. Once, after the release that first publishes a package: Packages, `agent-kourier`, `charts/agent-kourier`,
-   `agent-kourier-prompt-agent`, `agent-kourier-echo-agent` and `agent-kourier-cma`, link them to this repository and set visibility
+   `agent-kourier-prompt-agent`, `agent-kourier-echo-agent`, `agent-kourier-cma` and `agent-kourier-ax`, link them to this repository and set visibility
    (public if the cluster pulls without a pull secret).
 
 The release workflow refuses a tag that is not on `main`, so what ships has passed the `main` ruleset. Cut a
@@ -319,7 +323,8 @@ in the race passes' legs, which have no database. It is not a required check. To
 it one, the owner adds `test-postgres` from `ci` to the `main` ruleset, and the same change adds it to `CI_REQUIRED_JOBS` in
 `hack/release/check-ci.sh` and to the lists above. The `cma` job runs `make cma-test` through `hack/postgres/run.sh`,
 which starts the same throwaway Postgres container (`hack/postgres/lib.sh`) and sets `AGENTKOURIER_POSTGRES_DSN` for
-it, so the CMA add-on's Postgres store tests run there, and `make cma-lint`. The `crd-corpus` job (`make crd-corpus`, `hack/kind/crd-corpus.sh`) brings up
+it, so the CMA add-on's Postgres store tests run there, and `make cma-lint`; the `ax` job runs `make ax-test` the same
+way, for the AX add-on's, and `make ax-lint`. The `crd-corpus` job (`make crd-corpus`, `hack/kind/crd-corpus.sh`) brings up
 a kind cluster with only the three CRDs from `charts/agent-kourier/files/crds`, with no image and no Agent Kourier, and has
 `test/crdcorpus` send every entry of its corpus to it as a server-side dry-run create. It fails when the schema refuses
 an object the broker's own validation accepts, or when an entry's `schema:` flag no longer says what the schema does with
@@ -385,7 +390,7 @@ sets `GODEBUG=gocachetest=1`, so the log says for each package whether it reused
 no result was saved for its test binary (`input list not found`: the binary changed) or one was, for other inputs
 (`test output not found`: a file or variable its tests read changed). `go test` keys results on `GODEBUG` too: removing
 it from the legs makes pull requests run every package until a push to `main` saves results without it. `test-postgres`,
-`crd-corpus`, `docs-agent` and `cma` run `go test` with `-count=1`, which reuses nothing, and do not run `hack/ci/testmtimes`.
+`crd-corpus`, `docs-agent`, `cma` and `ax` run `go test` with `-count=1`, which reuses nothing, and do not run `hack/ci/testmtimes`.
 `docs-agent`'s must (`make docs-agent-test`): its smoke test reads `docs/`, outside its module, where `go test` checks
 nothing, so a reused result would pass a pull request that changes only the docs. `hack/ci/testshards`' test holds the
 legs to these steps and every other job to none of them. The limits of the reuse, none of which a setting changes:
@@ -417,20 +422,21 @@ scanner or CodeQL reads, but for two tests of the docs checks that `make docs-ch
   `README.md` and pages under `docs/` and elsewhere when they run, which only running them shows.
 - `scan` (the four `govulncheck` jobs, the `trivy` jobs, `analyze`) and `crd-corpus` (both jobs): any Markdown
   (`*.md`, in lower case) outside every Go package's tree, such as `README.md`, the pages under `docs/` and the chart's
-  README. govulncheck reads Go packages and the files they embed; Agent Kourier's image and the CMA add-on's hold only
+  README. govulncheck reads Go packages and the files they embed; Agent Kourier's image and each add-on's hold only
   the binary, and an agent's image only the files its `.dockerignore` lets in, none of them Markdown; CodeQL's Go autobuild
   extracts `.go` files; `crd-corpus` builds and runs `test/crdcorpus` and reads only YAML from its corpus.
 - `docs-agent`: the same Markdown except under `docs/`, its corpus, and `examples/recipes/docs-agent/`.
 - `echo-agent`: the same Markdown except under `examples/recipes/echo-agent/agent/`, the one directory it reads.
 - `prompt-agent`: the same Markdown except under `examples/recipes/prompt-agent/agent/`, the one directory it reads.
 - `cma`: the same Markdown except under `docs/` (the add-on's pages) and `addons/cma/`.
+- `ax`: the same Markdown except under `docs/` (the add-on's pages) and `addons/ax/`.
 
 A Go package's tree is a directory of the merge commit with a `.go` file in it, and everything below it; the script
 finds them on each run, so no class skips a page under a new package's directory, which the package could embed, with
 no list to edit. The rule is wider than what Go embeds: a page in such a tree runs the jobs whether or not anything
 embeds it. So a pull request that changes `README.md` and pages under `docs/` skips both `crd-corpus` jobs,
 `echo-agent`, `prompt-agent`, the `govulncheck` and `trivy` jobs and `analyze`; one that changes only `README.md` also skips
-`docs-agent` and `cma`; one that changes only the docs-only list skips every gated job, and `test` and `test-testhooks` pass as
+`docs-agent`, `cma` and `ax`; one that changes only the docs-only list skips every gated job, and `test` and `test-testhooks` pass as
 their legs did. A pull request that skips `govulncheck` or `trivy` does not see a vulnerability published since its
 base was scanned; `main`'s push runs do, and so does the nightly `security` run's `govulncheck`. `lint`, with its zizmor
 audit, and `gitleaks` always run in full. A symlink or submodule anywhere in the changes runs every step of every gated job: the

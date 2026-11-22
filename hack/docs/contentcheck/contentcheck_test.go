@@ -332,7 +332,7 @@ func TestPublicFiles(t *testing.T) {
 		"examples/recipes/sre/evals/triggers.yaml":  "WP-1\n",
 		"examples/recipes/sre/notes.md":             "WP-1\n",
 		"examples/recipes/sre/agent/main.go":        "package x // WP-1\n",
-		"examples/ax/README.md":                     "WP-1\n",
+		"addons/ax/README.md":                       "WP-1\n",
 		// The generated CRDs are public; other files under the chart's files/ are not.
 		"charts/agent-kourier/files/crds/agentkourier.dev_bindings.yaml": "x: 1\n",
 		"charts/agent-kourier/files/other.txt":                           "WP-1\n",

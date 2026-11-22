@@ -57,7 +57,7 @@ refresh_dex_token
 subject=$("${K[@]}" -n agent-kourier get secret agent-kourier-agent-token -o json | jq -r '.data.token|@base64d|split(".")[1]|@base64d|fromjson|.sub')
 
 echo '==> AX image: pinned, unmodified control plane and ADK scenario agent'
-docker build -f "${ROOT}/examples/ax/Dockerfile.e2e" -t "${AX_IMAGE}" "${ROOT}/examples/ax"
+docker build -f "${ROOT}/addons/ax/Dockerfile.e2e" -t "${AX_IMAGE}" "${ROOT}/addons/ax"
 kind load docker-image "${AX_IMAGE}" --name "${CLUSTER}"
 docker tag "${AX_IMAGE}" "localhost:${REGISTRY_PORT}/agent-kourier-ax:dev"
 docker push "localhost:${REGISTRY_PORT}/agent-kourier-ax:dev" >/dev/null

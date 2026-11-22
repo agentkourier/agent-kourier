@@ -412,7 +412,7 @@ lifecycle API. It is a supported backend through the `a2a` dialect:
    `atenet-router` with a static `ate-target-actor` header from
    `AgentBackend.spec.headers`. The card is served at the URL plus
    `/.well-known/agent-card.json`. ax removed its own A2A agent (issue #128), so the
-   agent is ours to build and maintain; `examples/ax` is a reference (ADK on Bedrock
+   agent is ours to build and maintain; `addons/ax` is a reference (ADK on Bedrock
    Haiku). Agent Kourier sends the Binding's bearer token and the agent verifies it; the
    reference checks issuer, audience and service subject. The AX tier (12.1) covers S1
    to S5, S12 and the question deadline: streaming, context across restarts and actor

@@ -49,8 +49,8 @@ jobs:
             directory: .
             go-sum: go.sum
           - module: ax
-            directory: examples/ax
-            go-sum: examples/ax/go.sum
+            directory: addons/ax
+            go-sum: addons/ax/go.sum
           - module: docs-agent
             directory: examples/recipes/docs-agent/agent
             go-sum: examples/recipes/docs-agent/agent/go.sum
@@ -190,6 +190,12 @@ jobs:
           - name: cma-linux-arm64
             platform: linux/arm64
             addon: cma
+          - name: ax-linux-amd64
+            platform: linux/amd64
+            addon: ax
+          - name: ax-linux-arm64
+            platform: linux/arm64
+            addon: ax
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

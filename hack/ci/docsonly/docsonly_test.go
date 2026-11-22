@@ -25,6 +25,7 @@ const workflowsDir = "../../../.github/workflows"
 // have passed.
 var gated = map[string]map[string]string{
 	"ci.yml": {
+		"ax":                   "ax",
 		"cma":                  "cma",
 		"crd-corpus":           "crd-corpus",
 		"docs-agent":           "docs-agent",
@@ -358,6 +359,7 @@ func TestCheckHoldsEachJobToItsClass(t *testing.T) {
 		{"test-postgres given crd-corpus's class", "ci.yml", "test-postgres", "DOCS_ONLY_CLASS: tests\n", "DOCS_ONLY_CLASS: crd-corpus\n", "job test-postgres: its class (DOCS_ONLY_CLASS) is crd-corpus, not tests"},
 		{"docs-agent given echo-agent's class", "ci.yml", "docs-agent", "DOCS_ONLY_CLASS: docs-agent\n", "DOCS_ONLY_CLASS: echo-agent\n", "job docs-agent: its class (DOCS_ONLY_CLASS) is echo-agent, not docs-agent"},
 		{"cma given the docs agent's class", "ci.yml", "cma", "DOCS_ONLY_CLASS: cma\n", "DOCS_ONLY_CLASS: docs-agent\n", "job cma: its class (DOCS_ONLY_CLASS) is docs-agent, not cma"},
+		{"ax given the CMA add-on's class", "ci.yml", "ax", "DOCS_ONLY_CLASS: ax\n", "DOCS_ONLY_CLASS: cma\n", "job ax: its class (DOCS_ONLY_CLASS) is cma, not ax"},
 		{"govulncheck given the docs agent's class", "security.yml", "govulncheck", "DOCS_ONLY_CLASS: scan\n", "DOCS_ONLY_CLASS: docs-agent\n", "job govulncheck: its class (DOCS_ONLY_CLASS) is docs-agent, not scan"},
 		{"no class", "ci.yml", "crd-corpus", "          DOCS_ONLY_CLASS: crd-corpus\n", "", "job crd-corpus: its class (DOCS_ONLY_CLASS) is <nil>, not crd-corpus"},
 		{"the class from an expression", "codeql.yml", "analyze", "DOCS_ONLY_CLASS: scan\n", "DOCS_ONLY_CLASS: ${{ matrix.class }}\n", "job analyze: its class (DOCS_ONLY_CLASS) is ${{ matrix.class }}, not scan"},

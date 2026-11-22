@@ -1,0 +1,2 @@
+# The lock the SQLite store holds beside its file (the root ignores the database files themselves).
+*.db.lock

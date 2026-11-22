@@ -14,7 +14,7 @@ Agent Kourier is installed by its Helm chart (`charts/agent-kourier`, `ci/ax-val
 `hack/kind/ax/agent-kourier/config` in a ConfigMap that `up-ax.sh` makes, and a database file of its own, `agent-kourier-ax.db`). Re-running
 `make e2e-ax-up` on a cluster brought up before the chart replaces its hand-made Deployment and keeps its volume.
 
-The tier runs the unmodified AX revision pinned in `examples/ax/go.mod`, Redis,
+The tier runs the unmodified AX revision pinned in `addons/ax/go.mod`, Redis,
 Substrate, Dex, and the same persistent ADK/A2A server as the Bedrock reference.
 A separate test binary supplies deterministic model responses. The production
 Bedrock image contains neither that model nor the test control endpoints.
@@ -47,7 +47,7 @@ ownership label checked by the scripts. The fixture image is pushed there becaus
 Substrate's image cache cannot use kind's containerd side-loaded actor images.
 
 For actual model calls, `make ax-smoke` uses Bedrock/Haiku and the sandbox
-credentials file; see [the reference instructions](../../../examples/ax/README.md).
+credentials file; see [the reference instructions](../../../addons/ax/README.md).
 The deterministic tier does not spend model tokens.
 
 Verified on macOS/arm64: the AX E2E Job passed in 130 seconds, including actor DATA

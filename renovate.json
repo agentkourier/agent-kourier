@@ -41,7 +41,8 @@
         "ghcr.io/agentkourier/agent-kourier",
         "ghcr.io/agentkourier/agent-kourier-prompt-agent",
         "ghcr.io/agentkourier/agent-kourier-echo-agent",
-        "ghcr.io/agentkourier/agent-kourier-cma"
+        "ghcr.io/agentkourier/agent-kourier-cma",
+        "ghcr.io/agentkourier/agent-kourier-ax"
       ],
       "enabled": false
     },

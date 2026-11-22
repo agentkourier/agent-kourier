@@ -1,0 +1,83 @@
+{{- if and (include "agentkourier.ax.enabled" .) .Values.networkPolicy.enabled }}
+{{- $ax := .Values.addons.ax }}
+{{- $port := include "agentkourier.ax.port" . | int }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "agentkourier.ax.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentkourier.ax.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "agentkourier.ax.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # A2A from Agent Kourier's pods, which reach the add-on through its Service.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "agentkourier.selectorLabels" . | nindent 14 }}
+      ports:
+        - {port: {{ $port }}, protocol: TCP}
+    {{- with .Values.networkPolicy.metricsFrom }}
+    # The scrapers, to /metrics, which shares the port with A2A.
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - {port: {{ $port }}, protocol: TCP}
+    {{- end }}
+    {{- if not (include "agentkourier.ax.sqlite" .) }}
+    # The add-on's other replicas: a standby forwards A2A to the leader's pod address.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "agentkourier.ax.selectorLabels" . | nindent 14 }}
+      ports:
+        - {port: {{ $port }}, protocol: TCP}
+    {{- end }}
+  egress:
+    # DNS.
+    - to:
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.dns.namespaceSelector | nindent 12 }}
+          podSelector:
+            {{- toYaml .Values.networkPolicy.dns.podSelector | nindent 12 }}
+      ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}
+    {{- if $ax.networkPolicy.model.cidrs }}
+    # The model's provider over TLS: Amazon Bedrock (and, with IRSA, AWS STS), or the Anthropic API.
+    - to:
+        {{- range $ax.networkPolicy.model.cidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+            {{- with $ax.networkPolicy.model.except }}
+            except:
+              {{- range . }}
+              - {{ . | quote }}
+              {{- end }}
+            {{- end }}
+        {{- end }}
+      ports:
+        - {port: 443, protocol: TCP}
+    {{- end }}
+    {{- if not (include "agentkourier.ax.sqlite" .) }}
+    # The leader, from a standby that forwards to it.
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "agentkourier.ax.selectorLabels" . | nindent 14 }}
+      ports:
+        - {port: {{ $port }}, protocol: TCP}
+    # The add-on's database, on its own rule.
+    - to:
+        {{- toYaml $ax.networkPolicy.postgres.to | nindent 8 }}
+      ports:
+        - {port: {{ int $ax.networkPolicy.postgres.port }}, protocol: TCP}
+    {{- end }}
+    {{- with $ax.networkPolicy.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

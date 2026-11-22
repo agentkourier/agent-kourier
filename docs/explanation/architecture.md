@@ -60,7 +60,8 @@ flowchart TB
 ## The Google AX path
 
 The broker is the same; only the dialect and what sits in front of the agent differ. AX has no message model of its
-own, so the agent is an A2A server you build and run as an AX Task, and it verifies the Binding's token itself.
+own, so the agent is an A2A server run as an AX Task, such as the [AX add-on](../reference/ax.md), and it verifies the
+Binding's token itself.
 
 ```mermaid
 flowchart TB
@@ -266,15 +267,15 @@ broker's end-to-end suite verifies this with fake Slack and pinned kagent 1.0.0-
 Google AX is supported experimentally. AX speaks A2A, so it uses the `a2a` dialect with
 no ax-specific code. The `AgentBackend` points at ax's `atenet-router` and selects
 the actor with a static `ate-target-actor` header from `spec.headers`; the agent is
-an A2A server running as an AX Task, which you build and run (AX does not ship one). No
-front door sits in this path, so the agent must verify the Binding's bearer ID token
-itself, as the reference agent does (issuer, audience and subject), or an
+an A2A server running as an AX Task, which you run (AX does not ship one; the AX add-on is
+one). No front door sits in this path, so the agent must verify the Binding's bearer ID token
+itself, as the AX add-on does (issuer, audience and subject), or an
 OIDC-verifying proxy must sit in front of a TLS gateway to the router. Chat, queued replies, restart recovery, actor suspend and resume, and
 in-thread text answers are tested in the AX kind tier. Structured tool approvals
-need kagent's human-in-the-loop extension, which the reference agent does not serve, so a pause with a part that is not text cancels the task with a notice. The generic dialect shows tool steps for an agent
+need kagent's human-in-the-loop extension, which the AX add-on does not serve, so a pause with a part that is not text cancels the task with a notice. The generic dialect shows tool steps for an agent
 that marks its tool parts as Google ADK or kagent does. AX's own
 lifecycle (task, template, egress policy) stays with the operator. See the
-[AX reference agent](https://github.com/agentkourier/agent-kourier/blob/main/examples/ax/README.md) and the
+[AX add-on](../reference/ax.md), [Connect the AX add-on](../how-to/connect-ax.md#run-it-inside-google-ax) and the
 [AX kind tier](https://github.com/agentkourier/agent-kourier/blob/main/hack/kind/ax/README.md).
 
 ## Source map

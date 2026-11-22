@@ -19,7 +19,8 @@ The guides assume you know Kubernetes and Helm, and link to [explanation](../exp
 
 - [Connect a kagent agent](connect-kagent.md): kagent 1.0 or 0.9.x.
 - [Connect a generic A2A agent](connect-a2a-agent.md): any agent that streams A2A over JSON-RPC.
-- [Connect an agent on Google AX](connect-ax.md): an A2A agent running in an AX Task.
+- [Connect the AX add-on](connect-ax.md): an ADK agent on Amazon Bedrock or the Anthropic API that the chart runs beside
+  Agent Kourier, or on Bedrock in a Google AX Task (experimental).
 - [Connect Claude Managed Agents](connect-claude-managed-agents.md): an agent in Claude Managed Agents, through the
   add-on the chart runs beside Agent Kourier (experimental).
 - [Let the agent ask questions](agent-questions.md): answers from the thread.

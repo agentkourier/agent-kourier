@@ -1,0 +1,17 @@
+{{- if include "agentkourier.ax.enabled" . }}
+# The add-on's one port, on every Ready replica: a standby forwards A2A to the leader. Agent Kourier's AgentBackend names
+# http://<this Service>.<namespace>.svc:8090/a2a. Never published.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentkourier.ax.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentkourier.ax.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "agentkourier.ax.selectorLabels" . | nindent 4 }}
+  ports:
+    - {name: http, port: {{ include "agentkourier.ax.port" . | int }}, targetPort: http}
+{{- end }}
