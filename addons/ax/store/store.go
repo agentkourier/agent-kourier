@@ -404,7 +404,8 @@ func marks(n int) string { return strings.TrimSuffix(strings.Repeat("?, ", n), "
 
 // SettleInterrupted fails every task a restart left submitted or working, with the agent message InterruptedMessage,
 // and returns how many it failed. A task paused on a question (input-required) survives, and its answer resumes it.
-// Call it before serving: no turn may be running.
+// It fails every such task in the store, whichever process ran it, so call it only when no turn is running anywhere on
+// the database: before serving, and on Postgres only where no other replica serves turns from it.
 func (s *Store) SettleInterrupted(ctx context.Context) (int, error) {
 	n := 0
 	err := s.write(ctx, func(q querier) error {
