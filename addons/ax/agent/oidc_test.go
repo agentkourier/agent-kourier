@@ -16,7 +16,7 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
-	"github.com/agentkourier/agent-kourier/addons/ax/auth"
+	"github.com/agentkourier/agent-kourier/addons/kit/auth"
 )
 
 // The AX route's caller check, end to end: while the issuer is down, the card and the endpoint answer a retryable 503

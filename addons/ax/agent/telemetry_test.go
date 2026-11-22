@@ -18,9 +18,9 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/adk/v2/model"
 
-	"github.com/agentkourier/agent-kourier/addons/ax/auth"
 	"github.com/agentkourier/agent-kourier/addons/ax/store"
 	"github.com/agentkourier/agent-kourier/addons/ax/telemetry"
+	"github.com/agentkourier/agent-kourier/addons/kit/auth"
 )
 
 // startObserved is start with tel, and the handler behind telemetry.Extract, as the agent serves it.

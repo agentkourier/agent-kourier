@@ -20,7 +20,7 @@ import (
 	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/agentkourier/agent-kourier/addons/ax/auth"
+	"github.com/agentkourier/agent-kourier/addons/kit/auth"
 )
 
 func discard() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -204,8 +204,8 @@ func TestMetricsAreRegisteredAndCount(t *testing.T) {
 
 // The labels are the auth package's reasons: a refusal the check reports is counted under its own name.
 func TestAuthReasonsAreTheChecks(t *testing.T) {
-	for want, got := range map[string]AuthReason{auth.ReasonMissing: AuthMissing, auth.ReasonInvalid: AuthInvalid, auth.ReasonUnavailable: AuthUnavailable} {
-		if string(got) != want {
+	for want, got := range map[auth.Reason]AuthReason{auth.ReasonMissing: AuthMissing, auth.ReasonInvalid: AuthInvalid, auth.ReasonUnavailable: AuthUnavailable} {
+		if string(got) != string(want) {
 			t.Errorf("the label %q is not package auth's reason %q", got, want)
 		}
 	}

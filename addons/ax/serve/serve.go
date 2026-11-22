@@ -31,11 +31,11 @@ import (
 	"google.golang.org/adk/v2/model"
 
 	"github.com/agentkourier/agent-kourier/addons/ax/agent"
-	"github.com/agentkourier/agent-kourier/addons/ax/auth"
 	"github.com/agentkourier/agent-kourier/addons/ax/cluster"
 	"github.com/agentkourier/agent-kourier/addons/ax/config"
 	"github.com/agentkourier/agent-kourier/addons/ax/store"
 	"github.com/agentkourier/agent-kourier/addons/ax/telemetry"
+	"github.com/agentkourier/agent-kourier/addons/kit/auth"
 )
 
 // ShutdownTimeout bounds the wait for the requests in flight at a graceful stop (and the command's flush of its spans
@@ -273,7 +273,7 @@ func Mux(a2a http.Handler, runnerURL string, ready func() bool) (*http.ServeMux,
 // callerCheck builds the check cfg names, which counts each refusal in tel, and for the token file the watch that keeps
 // its tokens current.
 func callerCheck(cfg config.Config, log *slog.Logger, tel *telemetry.Telemetry) (*auth.Check, func(context.Context), error) {
-	refused := func(reason string) { tel.AuthRefused(telemetry.AuthReason(reason)) }
+	refused := func(reason auth.Reason) { tel.AuthRefused(telemetry.AuthReason(reason)) }
 	switch {
 	case cfg.AuthDisabled:
 		log.Warn("the caller check is off (AUTH_DISABLED=true): anything that reaches the loopback address can run the agent", "addr", cfg.ListenAddr)

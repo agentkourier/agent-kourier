@@ -17,8 +17,8 @@ import (
 
 	"github.com/agentkourier/agent-kourier/addons/ax/agent"
 	"github.com/agentkourier/agent-kourier/addons/ax/anthropic"
-	"github.com/agentkourier/agent-kourier/addons/ax/auth"
 	"github.com/agentkourier/agent-kourier/addons/ax/store"
+	"github.com/agentkourier/agent-kourier/addons/kit/auth"
 )
 
 // fixedCaller accepts every request as one caller.
