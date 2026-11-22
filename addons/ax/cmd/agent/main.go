@@ -102,11 +102,11 @@ func start(ctx context.Context, cfg config.Config, traces telemetry.Config, log 
 	if err != nil {
 		return fmt.Errorf("metrics: %w", err)
 	}
-	model, err := newModel(ctx, cfg, tel)
+	llm, err := newModel(ctx, cfg, tel)
 	if err != nil {
 		return err
 	}
-	return serve.Run(ctx, cfg, model, serve.Options{Version: version, Log: log, Telemetry: tel})
+	return serve.Run(ctx, cfg, llm, serve.Options{Version: version, Log: log, Telemetry: tel})
 }
 
 // newModel is the model of cfg's provider, its calls observed by tel.
