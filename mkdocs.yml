@@ -153,7 +153,7 @@ nav:
       - Start from a recipe: how-to/recipes.md
       - Connect a kagent agent: how-to/connect-kagent.md
       - Connect a generic A2A agent: how-to/connect-a2a-agent.md
-      - Connect an agent on Google AX: how-to/connect-ax.md
+      - Connect the AX add-on: how-to/connect-ax.md
       - Connect Claude Managed Agents: how-to/connect-claude-managed-agents.md
       - Let the agent ask questions: how-to/agent-questions.md
       - Rotate the Binding token: how-to/rotate-binding-token.md
@@ -170,6 +170,7 @@ nav:
       - Binding status: reference/binding-status.md
       - Agent contract: reference/agent-contract.md
       - Claude Managed Agents add-on: reference/claude-managed-agents.md
+      - AX add-on: reference/ax.md
       - Helm values: reference/helm-values.md
       - Command line and environment: reference/cli.md
       - Chat triggers: reference/chat-triggers.md
