@@ -3,7 +3,7 @@ package adapter
 import (
 	"testing"
 
-	"github.com/agentkourier/agent-kourier/addons/cma/internal/limitsdoc"
+	"github.com/agentkourier/agent-kourier/addons/kit/limitsdoc"
 )
 
 // TestLimitsPage holds the adapter's limits to docs/reference/limits.md: the cut of a tool result, the keepalive that an

@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/agentkourier/agent-kourier/addons/cma/internal/limitsdoc"
+	"github.com/agentkourier/agent-kourier/addons/kit/limitsdoc"
 )
 
 // TestLimitsPage holds the defaults that Parse fills in to docs/reference/limits.md. It parses the Postgres store, whose

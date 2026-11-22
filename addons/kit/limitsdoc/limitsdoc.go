@@ -1,14 +1,17 @@
-// Package limitsdoc ties the add-on's limits in the documentation to the add-on's code. A value on docs/reference/limits.md
-// that is a constant of the add-on (or a default that its code fills in) is written as a code span followed at once by a
-// marker, `5s`<!--addon-limit:ax.token-reload-->, and the add-on's reference page may write the same value with the same
-// marker. A test in the package that holds the constant calls Count, Bytes, Duration or Text with the marker's ID and the
-// constant, and fails when the limits page has no such marker, or when any reference page says something else, at each
-// place it writes that ID. So a constant cannot change without the pages, and TestEveryMarkerHasAGuard fails for a marker
-// of this add-on that no test of its module calls.
+// Package limitsdoc ties the limits that the add-ons' documentation states to the add-ons' code. A value on
+// docs/reference/limits.md that is a constant of an add-on (or a default that its code fills in) is written as a code
+// span followed at once by a marker, `5s`<!--addon-limit:ax.token-reload-->, and the add-on's reference page may write
+// the same value with the same marker. A test in the package that holds the constant calls Count, Bytes, Duration or
+// Text with the marker's ID and the constant, and fails when the limits page has no such marker, or when any reference
+// page says something else, at each place it writes that ID. So a constant cannot change without the pages.
 //
-// It is the add-on module's copy of the CMA add-on's (addons/cma/internal/limitsdoc), which reads the limits page alone,
-// with the same value formats; this one reads every page of docs/reference, so that the AX reference page's table of
-// settings is held too. The broker's guard reads <!--limit:id--> markers and leaves these alone.
+// The ID of a limit begins with its owner's name and a dot: cma., ax., or kit. for the kit's own. Each module runs
+// EveryMarkerHasAGuard from a test of its own with its prefix, which fails for a marker of that prefix that no test of the
+// module calls.
+//
+// It began as a copy of the broker's internal/limitsdoc, which no other module can import, with the same value formats;
+// this one reads every page of docs/reference, not the limits page alone. The broker's guard reads <!--limit:id-->
+// markers and leaves these alone.
 //
 // The pages are read from the repository, found from the test's working directory, so these functions are for tests.
 package limitsdoc
@@ -27,9 +30,6 @@ import (
 
 // PagePath is the limits page, relative to the repository root: every limit of the add-on is on it.
 const PagePath = "docs/reference/limits.md"
-
-// IDPrefix begins the ID of each limit of this add-on. A marker with another prefix is another add-on's.
-const IDPrefix = "ax."
 
 // markerRE finds a marker and the code span before it, which holds the value.
 var markerRE = regexp.MustCompile("`([^`\n]+)`<!--addon-limit:([A-Za-z0-9._-]+)-->")
@@ -73,7 +73,7 @@ func malformed(page string) []int {
 }
 
 // repoRoot returns the repository root: the nearest directory above the working directory that holds the limits page.
-// The add-on's go.mod is below it.
+// The module's go.mod is below it.
 func repoRoot() (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {

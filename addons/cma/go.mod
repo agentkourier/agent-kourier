@@ -4,6 +4,7 @@ go 1.27.4
 
 require (
 	github.com/a2aproject/a2a-go/v2 v2.6.0
+	github.com/agentkourier/agent-kourier/addons/kit v0.0.0-00010101000000-000000000000
 	github.com/anthropics/anthropic-sdk-go/v2 v2.13.0
 	github.com/go-logr/logr v1.4.4
 	github.com/jackc/pgx/v5 v5.13.0
@@ -61,3 +62,5 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )
+
+replace github.com/agentkourier/agent-kourier/addons/kit => ../kit

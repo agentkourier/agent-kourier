@@ -3,7 +3,7 @@ package anthropic
 import (
 	"testing"
 
-	"github.com/agentkourier/agent-kourier/addons/ax/internal/limitsdoc"
+	"github.com/agentkourier/agent-kourier/addons/kit/limitsdoc"
 )
 
 // TestLimitsPage holds the token limit of a reply and the SDK's retries to the documentation.

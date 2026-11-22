@@ -3,7 +3,7 @@ package agent
 import (
 	"testing"
 
-	"github.com/agentkourier/agent-kourier/addons/ax/internal/limitsdoc"
+	"github.com/agentkourier/agent-kourier/addons/kit/limitsdoc"
 )
 
 // TestLimitsPage holds how often the upkeep sweeps the store to the documentation.

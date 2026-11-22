@@ -3,7 +3,7 @@ package auth
 import (
 	"testing"
 
-	"github.com/agentkourier/agent-kourier/addons/cma/internal/limitsdoc"
+	"github.com/agentkourier/agent-kourier/addons/kit/limitsdoc"
 )
 
 // TestLimitsPage holds how often the token file is read to docs/reference/limits.md.

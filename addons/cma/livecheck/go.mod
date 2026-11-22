@@ -82,3 +82,5 @@ require (
 replace github.com/agentkourier/agent-kourier => ../../..
 
 replace github.com/agentkourier/agent-kourier/addons/cma => ..
+
+replace github.com/agentkourier/agent-kourier/addons/kit => ../../kit

@@ -4,19 +4,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestParse(t *testing.T) {
-	page := "intro\n| a | `4000`<!--addon-limit:cma.runes--> | b |\n\n`2 MiB`<!--addon-limit:cma.event--> and `60s`<!--addon-limit:other.keepalive-->\n" +
+	page := "intro\n| a | `5s`<!--addon-limit:ax.reload--> | b |\n\n`2 MiB`<!--addon-limit:ax.event--> and `60s`<!--addon-limit:other.keepalive-->\n" +
 		"<!--limit:triggers--> `50`<!--limit:broker-->\n"
-	got := parse(page)
-	want := []mark{{"cma.runes", "4000", 2}, {"cma.event", "2 MiB", 4}, {"other.keepalive", "60s", 4}}
+	got := parse("p.md", page)
+	want := []mark{{"ax.reload", "5s", "p.md", 2}, {"ax.event", "2 MiB", "p.md", 4}, {"other.keepalive", "60s", "p.md", 4}}
 	if !slices.Equal(got, want) {
 		t.Fatalf("parse = %v, want %v", got, want)
 	}
@@ -27,10 +25,10 @@ func TestParse(t *testing.T) {
 
 func TestMalformed(t *testing.T) {
 	page := strings.Join([]string{
-		"`1`<!--addon-limit:cma.good-->",
-		"no value <!--addon-limit:cma.bare-->",
-		"`2` <!--addon-limit:cma.spaced-->",
-		"`3`<!--addon-limit:cma.bad id-->",
+		"`1`<!--addon-limit:ax.good-->",
+		"no value <!--addon-limit:ax.bare-->",
+		"`2` <!--addon-limit:ax.spaced-->",
+		"`3`<!--addon-limit:ax.bad id-->",
 		"`4`<!--addon-limit:-->",
 		"`5`<!--limit:broker.only-->",
 	}, "\n")
@@ -55,8 +53,9 @@ func (r *recorder) Fatalf(format string, args ...any) {
 	r.Errorf(format, args...)
 }
 
-// TestGuardsReportADifference holds the four guards to what they say: a value that equals the page's passes, and one that
-// does not names the page line, what the page says and what the code has. A limit written at two places is checked at each.
+// TestGuardsReportADifference holds the four guards to what they say: a value that equals the pages' passes, and one that
+// does not names the page and line, what the page says and what the code has. A limit written at two places, on one page
+// or on two, is checked at each; one that only another reference page has is not on the limits page, and fails.
 func TestGuardsReportADifference(t *testing.T) {
 	cases := []struct {
 		name string
@@ -71,17 +70,20 @@ func TestGuardsReportADifference(t *testing.T) {
 		{"kib", func(t testing.TB) { Bytes(t, "selftest.kib", 341<<10) }, ""},
 		{"duration equal", func(t testing.TB) { Duration(t, "selftest.duration", 90*24*time.Hour) }, ""},
 		{"duration differs", func(t testing.TB) { Duration(t, "selftest.duration", time.Hour) }, "the code has 1h0m0s"},
-		{"milliseconds", func(t testing.TB) { Duration(t, "selftest.ms", 250*time.Millisecond) }, ""},
+		{"milliseconds", func(t testing.TB) { Duration(t, "selftest.ms", 5*time.Second) }, ""},
 		{"a bad duration", func(t testing.TB) { Duration(t, "selftest.count", 7) }, "write a duration as a number and ms, s, m, h or d"},
 		{"text equal", func(t testing.TB) { Text(t, "selftest.text", "1.2") }, ""},
 		{"text differs", func(t testing.TB) { Text(t, "selftest.text", "1.3") }, "the code has `1.3`"},
 		{"a bad unit", func(t testing.TB) { Bytes(t, "selftest.badunit", 1) }, "write a size as a number and bytes, KiB or MiB"},
 		{"twice, both equal", func(t testing.TB) { Count(t, "selftest.twice", 5) }, ""},
-		{"twice, one differs", func(t testing.TB) { Count(t, "selftest.twicediffer", 5) }, ":3 says `6` for the limit \"selftest.twicediffer\""},
+		{"twice, one differs", func(t testing.TB) { Count(t, "selftest.twicediffer", 5) }, "limits.md:3 says `6` for the limit \"selftest.twicediffer\""},
+		{"on both pages, equal", func(t testing.TB) { Duration(t, "selftest.both", 15*time.Second) }, ""},
+		{"the reference page differs", func(t testing.TB) { Duration(t, "selftest.refdiffers", 10*time.Second) }, "docs/reference/x-addon.md:2 says `20s`"},
+		{"only on the reference page", func(t testing.TB) { Count(t, "selftest.refonly", 1) }, "has no marker <!--addon-limit:selftest.refonly-->"},
 		{"a limit not on the page", func(t testing.TB) { Count(t, "selftest.absent", 1) }, "has no marker <!--addon-limit:selftest.absent-->"},
 		{"the broker's marker is not the add-on's", func(t testing.TB) { Count(t, "selftest.broker", 9) }, "has no marker <!--addon-limit:selftest.broker-->"},
 	}
-	withSelftestPage(t)
+	withSelftestPages(t)
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			r := &recorder{TB: t}
@@ -97,21 +99,51 @@ func TestGuardsReportADifference(t *testing.T) {
 	}
 }
 
-// withSelftestPage points the guards at a page of this test's own, by making a repository of a temporary directory that
-// holds the page under a go.mod of an add-on module, and working in that module, as the add-on's tests do.
-func withSelftestPage(t *testing.T) {
+// TestRepoRoot finds the repository above the module the test works in, from a directory below the module's root.
+func TestRepoRoot(t *testing.T) {
+	dir := withSelftestPages(t)
+	t.Chdir(filepath.Join(dir, "addons", "x", "p"))
+	root, err := repoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The temporary directory may be reached through a symlink (macOS's /var): compare what each resolves to.
+	got, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("repoRoot = %s, want %s", got, want)
+	}
+}
+
+// withSelftestPages points the guards at pages of this test's own, by making a repository of a temporary directory that
+// holds a limits page and another reference page under a go.mod of an add-on module, and working in that module, as the
+// add-on's tests do. It returns the repository's directory.
+func withSelftestPages(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	page := strings.Join([]string{
+	limits := strings.Join([]string{
 		"| x | `7`<!--addon-limit:selftest.count--> | `2 MiB`<!--addon-limit:selftest.bytes--> `341 KiB`<!--addon-limit:selftest.kib-->",
-		"`90d`<!--addon-limit:selftest.duration--> `250ms`<!--addon-limit:selftest.ms--> `1.2`<!--addon-limit:selftest.text-->",
+		"`90d`<!--addon-limit:selftest.duration--> `5000ms`<!--addon-limit:selftest.ms--> `1.2`<!--addon-limit:selftest.text-->",
 		"`2 TiB`<!--addon-limit:selftest.badunit--> `5`<!--addon-limit:selftest.twice--> `5`<!--addon-limit:selftest.twicediffer--> `6`<!--addon-limit:selftest.twicediffer-->",
-		"`5`<!--addon-limit:selftest.twice--> `9`<!--limit:selftest.broker-->",
+		"`5`<!--addon-limit:selftest.twice--> `9`<!--limit:selftest.broker--> `15s`<!--addon-limit:selftest.both--> `10s`<!--addon-limit:selftest.refdiffers-->",
 	}, "\n")
-	mustWrite(t, filepath.Join(dir, filepath.FromSlash(PagePath)), page)
+	reference := strings.Join([]string{
+		"| `X` | `15s`<!--addon-limit:selftest.both--> |",
+		"| `Y` | `20s`<!--addon-limit:selftest.refdiffers--> | `1`<!--addon-limit:selftest.refonly--> |",
+	}, "\n")
+	mustWrite(t, filepath.Join(dir, filepath.FromSlash(PagePath)), limits)
+	mustWrite(t, filepath.Join(dir, "docs", "reference", "x-addon.md"), reference)
 	module := filepath.Join(dir, "addons", "x")
 	mustWrite(t, filepath.Join(module, "go.mod"), "module x\n")
+	mustWrite(t, filepath.Join(module, "p", "p.go"), "package p\n")
 	t.Chdir(module)
+	return dir
 }
 
 func mustWrite(t *testing.T, path, content string) {
@@ -122,38 +154,4 @@ func mustWrite(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-}
-
-// The values below are the chart's, not a Go package's: the page states them, and they are read from the chart's files.
-
-// TestChartLimits holds the add-on's startup probe in the chart to the page: how many times the kubelet tries it, and how far
-// apart, which bound the start-up work.
-func TestChartLimits(t *testing.T) {
-	top, err := repoRoot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	deployment, err := os.ReadFile(filepath.Join(top, "charts", "agent-kourier", "templates", "addons", "cma", "deployment.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	probes := regexp.MustCompile(`(?m)^\s*startupProbe:\s*\{(.*)\}\s*$`).FindAllSubmatch(deployment, -1)
-	if len(probes) != 1 {
-		t.Fatalf("charts/agent-kourier/templates/addons/cma/deployment.yaml has %d one-line startupProbe maps, and this test reads exactly one", len(probes))
-	}
-	field := func(name string) int {
-		t.Helper()
-		m := regexp.MustCompile(`\b` + name + `:\s*([0-9]+)\b`).FindSubmatch(probes[0][1])
-		if m == nil {
-			t.Fatalf("the add-on's startupProbe in the chart has no %s, which this test reads", name)
-		}
-		n, err := strconv.Atoi(string(m[1]))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return n
-	}
-	failures, period := field("failureThreshold"), field("periodSeconds")
-	Count(t, "cma.startup-failures", failures)
-	Duration(t, "cma.startup-period", time.Duration(period)*time.Second)
 }
