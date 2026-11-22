@@ -22,7 +22,9 @@ import (
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 
-	"github.com/agentkourier/agent-kourier/addons/ax/store/pgtest"
+	kitstore "github.com/agentkourier/agent-kourier/addons/kit/store"
+	"github.com/agentkourier/agent-kourier/addons/kit/store/pgtest"
+	"github.com/agentkourier/agent-kourier/addons/kit/store/sqlitetest"
 )
 
 func openSQLite(t *testing.T, path string) *Store {
@@ -41,16 +43,9 @@ func asCaller(name string) context.Context {
 	return ctx
 }
 
-func TestSQLiteIsOneAgentsFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "ax.db")
-	first := openSQLite(t, path)
-	if _, err := OpenSQLite(context.Background(), path, Options{}); !errors.Is(err, ErrInUse) {
-		t.Fatalf("a second open: %v, want ErrInUse", err)
-	}
-	if err := first.Close(); err != nil {
-		t.Fatal(err)
-	}
-	openSQLite(t, path) // the lock went with the first store
+// The kit's SQLite store, under the agent's driver and in its words.
+func TestKitSQLite(t *testing.T) {
+	sqlitetest.Run(t, noun)
 }
 
 // SQLITE_PATH may name a file in a directory that does not exist yet, as the AX workspace's agent-kourier-state.
@@ -62,34 +57,6 @@ func TestSQLiteCreatesItsDirectory(t *testing.T) {
 	}
 }
 
-func TestSQLiteRunsInWALModeWithFullSync(t *testing.T) {
-	s := openSQLite(t, filepath.Join(t.TempDir(), "ax.db"))
-	ctx := context.Background()
-	var mode string
-	if err := s.conn.reader().queryRow(ctx, `PRAGMA journal_mode`).Scan(&mode); err != nil {
-		t.Fatal(err)
-	}
-	if mode != "wal" {
-		t.Fatalf("journal_mode = %q, want wal", mode)
-	}
-	err := s.conn.inTx(ctx, func(q querier) error {
-		var sync, timeout int
-		if err := q.queryRow(ctx, `PRAGMA synchronous`).Scan(&sync); err != nil {
-			return err
-		}
-		if err := q.queryRow(ctx, `PRAGMA busy_timeout`).Scan(&timeout); err != nil {
-			return err
-		}
-		if sync != 2 || int64(timeout) != sqliteBusyTimeout.Milliseconds() {
-			t.Errorf("write connection: synchronous = %d, busy_timeout = %d; want 2 (FULL) and %d", sync, timeout, sqliteBusyTimeout.Milliseconds())
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestMigrationsApplyOnce(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ax.db")
 	s := openSQLite(t, path)
@@ -98,10 +65,10 @@ func TestMigrationsApplyOnce(t *testing.T) {
 	}
 	s = openSQLite(t, path)
 	var n int
-	if err := s.conn.reader().queryRow(context.Background(), `SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil {
+	if err := s.Reader().QueryRow(context.Background(), `SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	ms, err := listMigrations(mustSub(t, "migrations/sqlite"))
+	ms, err := migrationNames(mustSub(t, "migrations/sqlite"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,11 +79,11 @@ func TestMigrationsApplyOnce(t *testing.T) {
 
 // The two backends' migrations are one list: the same files, translated.
 func TestMigrationsInStep(t *testing.T) {
-	sq, err := listMigrations(mustSub(t, "migrations/sqlite"))
+	sq, err := migrationNames(mustSub(t, "migrations/sqlite"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	pg, err := listMigrations(mustSub(t, "migrations/postgres"))
+	pg, err := migrationNames(mustSub(t, "migrations/postgres"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,6 +110,19 @@ func TestMigrationsInStep(t *testing.T) {
 			}
 		}
 	}
+}
+
+// migrationNames lists the migration files of fsys, in order: the kit applies them by the number their names begin with.
+func migrationNames(fsys fs.FS) ([]string, error) {
+	entries, err := fs.ReadDir(fsys, ".")
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names, nil
 }
 
 func mustSub(t *testing.T, dir string) fs.FS {
@@ -186,24 +166,24 @@ func testEveryWriteIsFenced(t *testing.T, s *Store) {
 	}
 	var mu sync.Mutex
 	calls := 0
-	s.fence = func(fenceCtx context.Context, q querier) error {
+	s.SetFence(func(fenceCtx context.Context, q kitstore.Querier) error {
 		mu.Lock()
 		defer mu.Unlock()
 		calls++
 		// The fence reads in the write's transaction, as an epoch check does.
 		var one int
-		if err := q.queryRow(fenceCtx, `SELECT COUNT(*) FROM a2a_tasks WHERE id = ?`, "t1").Scan(&one); err != nil || one != 1 {
+		if err := q.QueryRow(fenceCtx, `SELECT COUNT(*) FROM a2a_tasks WHERE id = ?`, "t1").Scan(&one); err != nil || one != 1 {
 			t.Errorf("the fence's read: %d, %v", one, err)
 		}
 		// And writes a marker through it, which the refusal must roll back with the write: a fence that ran on another
 		// connection (a reader, or a write of its own) would fail to write it or leave it behind.
-		if _, err := q.exec(fenceCtx, `INSERT INTO contexts (owner, context_id, last_active) VALUES (?, ?, ?)`,
+		if _, err := q.Exec(fenceCtx, `INSERT INTO contexts (owner, context_id, last_active) VALUES (?, ?, ?)`,
 			"fence-marker", fmt.Sprintf("marker-%d", calls), int64(calls)); err != nil {
 			t.Errorf("the fence's marker: %v", err)
 		}
 		return errFenced
-	}
-	defer func() { s.fence = nil }()
+	})
+	defer s.SetFence(nil)
 	future := time.Now().Add(time.Hour)
 	writes := map[string]func() error{
 		"Create": func() error {
@@ -241,9 +221,9 @@ func testEveryWriteIsFenced(t *testing.T, s *Store) {
 			t.Errorf("%s did not run the fence", name)
 		}
 	}
-	s.fence = nil
+	s.SetFence(nil)
 	var markers int
-	if err := s.conn.reader().queryRow(ctx, `SELECT COUNT(*) FROM contexts WHERE owner = ?`, "fence-marker").Scan(&markers); err != nil || markers != 0 {
+	if err := s.Reader().QueryRow(ctx, `SELECT COUNT(*) FROM contexts WHERE owner = ?`, "fence-marker").Scan(&markers); err != nil || markers != 0 {
 		t.Fatalf("the fence's markers outlived the refused writes: %d, %v; the fence ran outside their transactions", markers, err)
 	}
 	got, err := s.Get(ctx, "t1")
@@ -319,7 +299,7 @@ func TestSQLiteImportsTheOldLayout(t *testing.T) {
 		t.Fatalf("DeleteIdleContexts = %d, %v; want both imported contexts, idle from the import on", n, err)
 	}
 	var legacy int
-	if err := s.conn.reader().queryRow(context.Background(), `SELECT COUNT(*) FROM sqlite_master WHERE name LIKE 'legacy_%'`).Scan(&legacy); err != nil || legacy != 0 {
+	if err := s.Reader().QueryRow(context.Background(), `SELECT COUNT(*) FROM sqlite_master WHERE name LIKE 'legacy_%'`).Scan(&legacy); err != nil || legacy != 0 {
 		t.Fatalf("legacy tables left: %d, %v", legacy, err)
 	}
 	if err := s.Close(); err != nil {
@@ -363,10 +343,10 @@ func TestPostgresReplicasMigrateTogether(t *testing.T) {
 	s := openPostgres(t, dsn)
 	mustLead(t, s, "a", time.Hour)
 	var n int
-	if err := s.conn.reader().queryRow(context.Background(), `SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil {
+	if err := s.Reader().QueryRow(context.Background(), `SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	ms, err := listMigrations(mustSub(t, "migrations/postgres"))
+	ms, err := migrationNames(mustSub(t, "migrations/postgres"))
 	if err != nil {
 		t.Fatal(err)
 	}

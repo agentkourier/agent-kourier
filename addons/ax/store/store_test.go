@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/addons/ax/store"
-	"github.com/agentkourier/agent-kourier/addons/ax/store/pgtest"
 	"github.com/agentkourier/agent-kourier/addons/ax/store/storetest"
+	"github.com/agentkourier/agent-kourier/addons/kit/store/pgtest"
 )
 
 func TestSQLiteConformance(t *testing.T) {
