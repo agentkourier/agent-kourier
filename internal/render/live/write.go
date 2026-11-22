@@ -76,7 +76,7 @@ func (u *Run) update(ctx context.Context, ref chat.Ref, v view) error {
 	}
 	if err != nil && carried && u.cannotShow(err) {
 		u.cfg.Logger.WarnContext(ctx, "live: the platform refused the message with its steps; it is sent again without them", "channel", u.turn.Channel, "err", err)
-		u.stepsOff = true
+		u.stepsGone()
 		err = u.platform.Update(ctx, ref, chat.Say(v.posted()))
 	}
 	switch {

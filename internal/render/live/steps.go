@@ -262,3 +262,43 @@ func (u *Run) stepIndex(callID string) int {
 	}
 	return slices.IndexFunc(u.steps, func(s stepRec) bool { return s.call.CallID == callID })
 }
+
+// stepsGone turns the turn's steps off for good (stepsOff), and says so to Cards: the message shows no card from now on. It is
+// the goroutine's.
+func (u *Run) stepsGone() {
+	u.stepsOff = true
+	u.mu.Lock()
+	u.cardless = true
+	u.mu.Unlock()
+}
+
+// Cards is, once the turn has paused for a tool approval, the summary of the arguments that the turn's message shows on the card of
+// each call the pause waits on (render.AwaitingApproval), by the call's ID: the card's detail, as render.Step makes it from the
+// call. A call the message shows no card of is not in it: one of a turn that shows no steps (output final, the activity mode, a
+// platform without them), one whose card a listed message has dropped or that a stream shows no more of (maxSteps), and every call
+// of a turn whose cards the platform turned off or whose stream was given up for a post. It is nil before such a pause, and for one
+// that waits on no call of the turn's own: a question, and a sub-agent's approval (FinalEvent.AwaitingApproval). It reads the run's
+// own record of its cards, under the lock, so the tap may ask it on the stream's goroutine as soon as the handler has taken the
+// pause, before the run has written it: a card it names is one the run's next writes show, as the pause leaves it.
+func (u *Run) Cards() map[string]string {
+	u.mu.Lock()
+	if !u.paused || len(u.awaiting) == 0 || u.cardless { // a turn that shows no steps has no step record (beginStep)
+		u.mu.Unlock()
+		return nil
+	}
+	var calls []agent.ToolCallEvent
+	for _, r := range u.steps {
+		if r.kind == callStep && r.call.CallID != "" && slices.Contains(u.awaiting, r.call.CallID) {
+			calls = append(calls, r.call)
+		}
+	}
+	u.mu.Unlock()
+	if len(calls) == 0 {
+		return nil
+	}
+	cards := make(map[string]string, len(calls))
+	for _, c := range calls {
+		cards[c.CallID] = render.AwaitingApproval("", c).Detail
+	}
+	return cards
+}

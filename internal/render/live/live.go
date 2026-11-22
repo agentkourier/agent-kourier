@@ -284,6 +284,10 @@ type Run struct {
 	// awaiting is the call IDs of the tool calls that the pause asks a person to approve (FinalEvent.AwaitingApproval):
 	// their steps end as waiting, not as how the call went so far.
 	awaiting []string
+	// cardless says the message shows none of the turn's cards from now on, though the turn is eligible for them: the platform
+	// turned the steps off (stepsOff), or the stream was given up for a post, which carries none (postInstead). The goroutine
+	// sets it, under mu, for Cards, which is called on another goroutine and cannot read stepsOff.
+	cardless bool
 
 	// Below: only a run that is timed keeps these.
 	started  time.Time       // when the run started
