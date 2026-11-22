@@ -25,6 +25,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/addons/ax/auth"
 	"github.com/agentkourier/agent-kourier/addons/ax/store"
+	"github.com/agentkourier/agent-kourier/addons/ax/telemetry"
 )
 
 // Store is what the agent keeps across a restart: the A2A tasks (by caller), the message IDs that started or joined
@@ -54,6 +55,9 @@ type Config struct {
 	PublicURL string
 	// Version is the agent's, which the card names.
 	Version string
+	// Telemetry counts and traces the turns and counts the messages that joined their recorded task. Nil records
+	// nothing.
+	Telemetry *telemetry.Telemetry
 }
 
 // Server is the agent's A2A surface.
@@ -86,9 +90,9 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("the agent: %w", err)
 	}
-	executor := &TextExecutor{Inner: adka2a.NewExecutor(adka2a.ExecutorConfig{RunnerConfig: runner.Config{AppName: store.AppName, Agent: root, SessionService: cfg.Store.Sessions()}, RunConfig: adkagent.RunConfig{StreamingMode: adkagent.StreamingModeSSE}, OutputMode: adka2a.OutputArtifactPerEvent})}
+	executor := &TextExecutor{Inner: adka2a.NewExecutor(adka2a.ExecutorConfig{RunnerConfig: runner.Config{AppName: store.AppName, Agent: root, SessionService: cfg.Store.Sessions()}, RunConfig: adkagent.RunConfig{StreamingMode: adkagent.StreamingModeSSE}, OutputMode: adka2a.OutputArtifactPerEvent}), Telemetry: cfg.Telemetry}
 	base := a2asrv.NewHandler(executor, a2asrv.WithTaskStore(cfg.Store))
-	handler := &a2asrv.InterceptedHandler{Handler: &replayHandler{RequestHandler: base, store: cfg.Store}, Interceptors: []a2asrv.CallInterceptor{auth.Interceptor{}}}
+	handler := &a2asrv.InterceptedHandler{Handler: &replayHandler{RequestHandler: base, store: cfg.Store, tel: cfg.Telemetry}, Interceptors: []a2asrv.CallInterceptor{auth.Interceptor{}}}
 	card := &a2a.AgentCard{Name: "ax-adk-bedrock", Description: "An ADK agent on Amazon Bedrock, served over A2A", Version: cfg.Version, SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface(cfg.PublicURL, a2a.TransportProtocolJSONRPC)}, DefaultInputModes: []string{"text/plain"}, DefaultOutputModes: []string{"text/plain"}, Capabilities: a2a.AgentCapabilities{Streaming: true}}
 	mux := http.NewServeMux()
 	mux.Handle(A2APath+CardPath, cfg.Check.Wrap(a2asrv.NewStaticAgentCardHandler(card)))
@@ -101,6 +105,7 @@ func New(cfg Config) (*Server, error) {
 type replayHandler struct {
 	a2asrv.RequestHandler
 	store Store
+	tel   *telemetry.Telemetry
 	mu    sync.Mutex
 }
 
@@ -129,6 +134,7 @@ func (h *replayHandler) SendStreamingMessage(ctx context.Context, req *a2a.SendM
 		if old != nil {
 			h.mu.Unlock()
 			locked = false
+			h.tel.MessageReplay()
 			if req.Message.ContextID != "" && req.Message.ContextID != old.ContextID {
 				yield(nil, a2a.ErrInvalidParams)
 				return

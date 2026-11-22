@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"time"
+
+	"github.com/agentkourier/agent-kourier/addons/ax/telemetry"
 )
 
 // UpkeepInterval is how often Upkeep.Run sweeps. A context can outlive SessionIdleTTL, and a task TaskRetention, by
@@ -32,6 +34,8 @@ type Upkeep struct {
 	Log *slog.Logger
 	// Now is the clock. Nil is time.Now.
 	Now func() time.Time
+	// Telemetry counts the sessions deleted. Nil records nothing.
+	Telemetry *telemetry.Telemetry
 }
 
 // Run sweeps every UpkeepInterval until ctx ends. It returns at once when both TaskRetention and SessionIdleTTL are
@@ -61,6 +65,7 @@ func (u *Upkeep) Sweep(ctx context.Context) {
 	}
 	if u.SessionIdleTTL > 0 {
 		n, err := u.Store.DeleteIdleContexts(ctx, now().Add(-u.SessionIdleTTL))
+		u.Telemetry.SessionsDeleted(telemetry.DeleteIdle, n)
 		switch {
 		case err != nil:
 			u.Log.Warn("delete idle contexts; will retry", "error", err, "deleted", n)
