@@ -2,8 +2,8 @@
 {{- include "agentkourier.ax.validate" . }}
 {{- $ax := .Values.addons.ax }}
 {{- $port := include "agentkourier.ax.port" . | int }}
-# The AX add-on: an ADK agent on Amazon Bedrock that serves A2A, which Agent Kourier reaches through the Service of the same name. It runs
-# standalone (RUNNER_URL unset): the AX route's runner is not in this pod.
+# The AX add-on: an ADK agent on Amazon Bedrock or the Anthropic API that serves A2A, which Agent Kourier reaches through the Service of the
+# same name. It runs standalone (RUNNER_URL unset): the AX route's runner is not in this pod.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -55,14 +55,23 @@ spec:
           # The add-on takes no arguments: it is configured by this environment.
           env:
             - {name: MODEL_PROVIDER, value: {{ $ax.model.provider | quote }}}
+            {{- $anthropic := eq $ax.model.provider "anthropic" }}
+            {{- if not $anthropic }}
             - {name: MODEL_REGION, value: {{ $ax.model.region | quote }}}
+            {{- end }}
             - {name: MODEL_NAME, value: {{ $ax.model.name | quote }}}
+            {{- if $anthropic }}
+            {{- /* The Anthropic SDK reads the key from this variable. */}}
+            - name: ANTHROPIC_API_KEY
+              valueFrom: {secretKeyRef: {name: {{ $ax.anthropicApiKeySecret.name | quote }}, key: {{ $ax.anthropicApiKeySecret.key | quote }}}}
+            {{- else }}
             {{- /* Without a Bedrock API key the AWS SDK's default chain finds the credentials: IRSA or EKS Pod Identity, through the
                    ServiceAccount. */}}
             {{- with $ax.bedrock.apiKeySecret }}
             {{- if .name }}
             - name: AWS_BEARER_TOKEN_BEDROCK
               valueFrom: {secretKeyRef: {name: {{ .name | quote }}, key: {{ .key | quote }}}}
+            {{- end }}
             {{- end }}
             {{- end }}
             - {name: LISTEN_ADDR, value: {{ printf ":%d" $port | quote }}}

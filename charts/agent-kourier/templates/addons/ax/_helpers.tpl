@@ -1,5 +1,5 @@
 {{/*
-The AX add-on (addons.ax), an ADK agent on Amazon Bedrock that serves A2A. Its objects are named <fullname>-ax and labelled
+The AX add-on (addons.ax), an ADK agent on Amazon Bedrock or the Anthropic API that serves A2A. Its objects are named <fullname>-ax and labelled
 app.kubernetes.io/name=agent-kourier-ax: never agent-kourier, which Agent Kourier's own selectors (Deployment, Services, ServiceMonitor,
 NetworkPolicy, PodDisruptionBudget) and NetworkPolicies elsewhere match, so neither side selects the other's pods or Services.
 */}}
@@ -62,14 +62,29 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{/* Checks that no values file can get past, for an enabled add-on. Included by its Deployment. */}}
 {{- define "agentkourier.ax.validate" -}}
 {{- $ax := .Values.addons.ax -}}
-{{- if not $ax.model.region -}}
-{{- fail "addons.ax.enabled needs addons.ax.model.region: the AWS region the add-on calls Amazon Bedrock in (MODEL_REGION)" -}}
-{{- end -}}
 {{- if not $ax.model.name -}}
-{{- fail "addons.ax.enabled needs addons.ax.model.name: the Bedrock model ID or inference profile the agent runs on (MODEL_NAME)" -}}
+{{- fail "addons.ax.enabled needs addons.ax.model.name: the model the agent runs on (MODEL_NAME), a Bedrock model ID or inference profile with bedrock, an Anthropic model ID with anthropic" -}}
+{{- end -}}
+{{- if eq $ax.model.provider "anthropic" -}}
+{{- if $ax.model.region -}}
+{{- fail "addons.ax.model.region is for addons.ax.model.provider bedrock: the Anthropic API has no region, and the add-on refuses MODEL_REGION with anthropic" -}}
+{{- end -}}
+{{- if or $ax.bedrock.apiKeySecret.name $ax.bedrock.apiKeySecret.key -}}
+{{- fail "addons.ax.bedrock.apiKeySecret is for addons.ax.model.provider bedrock: with anthropic the key is addons.ax.anthropicApiKeySecret" -}}
+{{- end -}}
+{{- if not (and $ax.anthropicApiKeySecret.name $ax.anthropicApiKeySecret.key) -}}
+{{- fail "addons.ax.model.provider anthropic needs addons.ax.anthropicApiKeySecret.name and addons.ax.anthropicApiKeySecret.key: the Secret, in the release namespace, that holds the Anthropic API key" -}}
+{{- end -}}
+{{- else -}}
+{{- if not $ax.model.region -}}
+{{- fail "addons.ax.model.provider bedrock needs addons.ax.model.region: the AWS region the add-on calls Amazon Bedrock in (MODEL_REGION)" -}}
+{{- end -}}
+{{- if or $ax.anthropicApiKeySecret.name $ax.anthropicApiKeySecret.key -}}
+{{- fail "addons.ax.anthropicApiKeySecret is for addons.ax.model.provider anthropic: with bedrock the key, if any, is addons.ax.bedrock.apiKeySecret" -}}
 {{- end -}}
 {{- if ne (empty $ax.bedrock.apiKeySecret.name) (empty $ax.bedrock.apiKeySecret.key) -}}
 {{- fail "addons.ax.bedrock.apiKeySecret needs both name and key: the Secret, in the release namespace, and its key, that hold the Bedrock API key. Leave both empty to take AWS credentials from the SDK's default chain (addons.ax.serviceAccount.annotations for IRSA, or EKS Pod Identity)" -}}
+{{- end -}}
 {{- end -}}
 {{- if not (and $ax.auth.tokenSecret.name $ax.auth.tokenSecret.key) -}}
 {{- fail "addons.ax.enabled needs addons.ax.auth.tokenSecret.name and addons.ax.auth.tokenSecret.key: the Secret, in the release namespace, of the tokens the add-on accepts. The add-on listens on every interface of its pod, where it refuses to start without a caller check, and the chart has no setting that turns the check off" -}}
@@ -82,7 +97,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- fail "addons.ax.persistence.existingClaim is for addons.ax.store.type sqlite: with postgres no volume is mounted" -}}
 {{- end -}}
 {{- if and $.Values.networkPolicy.enabled (not $ax.networkPolicy.postgres.to) -}}
-{{- fail "networkPolicy.enabled with addons.ax.store.type postgres needs addons.ax.networkPolicy.postgres.to: the NetworkPolicyPeers (ipBlock, or namespaceSelector and podSelector) of the add-on's database. Without it the add-on cannot reach Postgres, and the Bedrock rule excludes private ranges" -}}
+{{- fail "networkPolicy.enabled with addons.ax.store.type postgres needs addons.ax.networkPolicy.postgres.to: the NetworkPolicyPeers (ipBlock, or namespaceSelector and podSelector) of the add-on's database. Without it the add-on cannot reach Postgres, and the rule for the model's provider excludes private ranges" -}}
 {{- end -}}
 {{- else -}}
 {{- if gt (int $ax.replicaCount) 1 -}}

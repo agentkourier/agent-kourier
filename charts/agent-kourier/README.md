@@ -129,7 +129,7 @@ tier's, with the token-refresh CronJob).
 | PodDisruptionBudget | `podDisruptionBudget.enabled` | off; `minAvailable: 1` keeps a drain from taking both replicas at `replicaCount: 2`; the render refuses a budget that keeps every pod (`minAvailable` >= replicas, 100%, `maxUnavailable: 0`), since it would block every node drain |
 | CronJob, ServiceAccount, Role, RoleBinding `<fullname>-token-refresh` | `tokenRefresh.enabled` | keeps a Binding's Dex ID token fresh |
 | Deployment, Service, ServiceAccount `<fullname>-cma` | `addons.cma.enabled` | the Claude Managed Agents add-on, an A2A server in front of one CMA agent; its pods are labelled `app.kubernetes.io/name: agent-kourier-cma`, which none of the broker's selectors match; the Service is ClusterIP on port 8090; the ServiceAccount mounts no token and is granted nothing. With `addons.cma.store.type: sqlite` (strategy Recreate) also the PersistentVolumeClaim `<fullname>-cma-data`, kept on `helm uninstall`; with `postgres` (strategy RollingUpdate) and two replicas or more, a PodDisruptionBudget with `maxUnavailable: 1`; with `networkPolicy.enabled` a NetworkPolicy, and with `serviceMonitor.enabled` a ServiceMonitor, of its own |
-| Deployment, Service, ServiceAccount `<fullname>-ax` | `addons.ax.enabled` | the AX add-on, an ADK agent on Amazon Bedrock that serves A2A; its pods are labelled `app.kubernetes.io/name: agent-kourier-ax`, which none of the broker's selectors match; the Service is ClusterIP on port 8090; the ServiceAccount mounts no token, is granted nothing, and carries `addons.ax.serviceAccount.annotations` (an IAM role for IRSA, a route not yet tested on EKS). With `addons.ax.store.type: sqlite` (strategy Recreate) also the PersistentVolumeClaim `<fullname>-ax-data`, kept on `helm uninstall`; with `postgres` (strategy RollingUpdate) and two replicas or more, a PodDisruptionBudget with `maxUnavailable: 1`; with `networkPolicy.enabled` a NetworkPolicy, and with `serviceMonitor.enabled` a ServiceMonitor, of its own |
+| Deployment, Service, ServiceAccount `<fullname>-ax` | `addons.ax.enabled` | the AX add-on, an ADK agent on Amazon Bedrock or the Anthropic API that serves A2A; its pods are labelled `app.kubernetes.io/name: agent-kourier-ax`, which none of the broker's selectors match; the Service is ClusterIP on port 8090; the ServiceAccount mounts no token, is granted nothing, and carries `addons.ax.serviceAccount.annotations` (an IAM role for IRSA, a route not yet tested on EKS). With `addons.ax.store.type: sqlite` (strategy Recreate) also the PersistentVolumeClaim `<fullname>-ax-data`, kept on `helm uninstall`; with `postgres` (strategy RollingUpdate) and two replicas or more, a PodDisruptionBudget with `maxUnavailable: 1`; with `networkPolicy.enabled` a NetworkPolicy, and with `serviceMonitor.enabled` a ServiceMonitor, of its own |
 
 `<fullname>` is the release name, or `<release>-agent-kourier` when the name does not contain "agent-kourier" (`fullnameOverride` sets it).
 
@@ -157,11 +157,12 @@ NetworkPolicy in another namespace for instance, needs the real name, or you set
   and `auth.tokenSecret` (the tokens it accepts; the chart offers no way to turn that check off), and has a store of its own
   (`addons.cma.store.type`, SQLite at one replica or Postgres at one or more). Agent Kourier reaches it through an AgentBackend with
   dialect `a2a` and the url `http://<fullname>-cma.<namespace>.svc:8090/a2a`.
-- `addons.ax.*`: the AX add-on, off until you switch it on. It needs `model.region`, `model.name` and `auth.tokenSecret` (the tokens it
-  accepts; the chart offers no way to turn that check off). It takes a Bedrock API key from `bedrock.apiKeySecret` or, with that empty, AWS
-  credentials from the SDK's default chain (an IAM role through `serviceAccount.annotations` for IRSA, or EKS Pod Identity; neither route
-  has been tested on EKS yet). It has a store of its
-  own (`addons.ax.store.type`, SQLite at one replica or Postgres at one or more). Agent Kourier reaches it through an AgentBackend with
+- `addons.ax.*`: the AX add-on, off until you switch it on. It needs `model.name` and `auth.tokenSecret` (the tokens it accepts; the chart
+  offers no way to turn that check off), and runs on the provider `model.provider` names. With `bedrock`, the default, it needs
+  `model.region`, and takes a Bedrock API key from `bedrock.apiKeySecret` or, with that empty, AWS credentials from the SDK's default chain
+  (an IAM role through `serviceAccount.annotations` for IRSA, or EKS Pod Identity; neither route has been tested on EKS yet). With
+  `anthropic` it needs `anthropicApiKeySecret`, the Secret of an Anthropic API key, and the render refuses `model.region` and
+  `bedrock.apiKeySecret`. It has a store of its own (`addons.ax.store.type`, SQLite at one replica or Postgres at one or more). Agent Kourier reaches it through an AgentBackend with
   dialect `a2a` and the url `http://<fullname>-ax.<namespace>.svc:8090/a2a`.
 
 With the files route a config change rolls the pod (a `checksum/config` annotation). Agent Kourier also reloads its files in place, and follows a Secret

@@ -154,7 +154,7 @@ func values(name string) string { return filepath.Join(chartDir, "ci", name+"-va
 func TestLint(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
-	for _, name := range []string{"minimal", "fast", "fast-postgres", "postgres", "ax", "sandbox", "full", "crds", "cma", "cma-postgres", "ax-addon", "ax-addon-postgres"} {
+	for _, name := range []string{"minimal", "fast", "fast-postgres", "postgres", "ax", "sandbox", "full", "crds", "cma", "cma-postgres", "ax-addon", "ax-addon-postgres", "ax-addon-anthropic"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			if out, err := helm(t.Context(), t, "lint", "--strict", chartDir, "-f", values(name)); err != nil {
@@ -182,6 +182,7 @@ var goldenCases = []struct {
 	{"cma-postgres", "agent-kourier", "agent-kourier", nil},
 	{"ax-addon", "agent-kourier", "agent-kourier", nil},
 	{"ax-addon-postgres", "agent-kourier", "agent-kourier", nil},
+	{"ax-addon-anthropic", "agent-kourier", "agent-kourier", nil},
 }
 
 func TestGolden(t *testing.T) {
