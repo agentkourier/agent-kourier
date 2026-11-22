@@ -41,6 +41,7 @@ const entryBytes = 128
 type assembler struct {
 	emit      Handler
 	text      map[a2a.ArtifactID]string
+	shown     map[a2a.ArtifactID]string        // the text of each artifact of the task an answer is about, as the paused turn showed it (seed)
 	placed    map[toolPlace]bool               // the places of the status messages whose tool part was looked at
 	sent      map[artifactPart]int             // how many tool parts of each saying each artifact has delivered
 	said      map[[sha256.Size]byte]toolSource // what each tool part delivered or held said, and where it was found
@@ -219,13 +220,12 @@ func (a *assembler) setState(s a2a.TaskState) {
 
 // artifact applies one artifact, or one chunk of it: its text parts per the append rule,
 // and its tool parts once each. A task snapshot that is a strict prefix of the text held is
-// older than it (kagent never shortens an artifact's text within a turn), so it is skipped.
+// older than it (kagent never shortens an artifact's text within a turn), so it is skipped. So is a
+// snapshot that repeats, unchanged, the text the paused turn of an answer showed (seed): it is that turn's.
 func (a *assembler) artifact(art *a2a.Artifact, appendMode, snapshot bool) {
 	if art == nil {
 		return
 	}
-	var text strings.Builder
-	hasText := false
 	seen := map[[sha256.Size]byte]int{} // how many parts of each saying this chunk has held so far
 	for i, p := range art.Parts {
 		if p == nil { // null on the wire: it says nothing
@@ -233,18 +233,18 @@ func (a *assembler) artifact(art *a2a.Artifact, appendMode, snapshot bool) {
 		}
 		if tp, ok := decodeTool(p); ok {
 			a.artifactTool(art.ID, i, tp, appendMode, seen)
-		} else if t, isText := p.Content.(a2a.Text); isText {
-			text.WriteString(string(t))
-			hasText = true
 		}
 	}
+	t, hasText := artifactText(art)
 	if !hasText {
 		return
 	}
 	old, had := a.text[art.ID]
-	t := text.String()
 	if appendMode {
 		t = old + t
+	}
+	if shown, paused := a.shown[art.ID]; snapshot && !had && paused && t == shown {
+		return
 	}
 	stale := snapshot && strings.HasPrefix(old, t)
 	if t != old && !stale {
@@ -258,6 +258,26 @@ func (a *assembler) artifact(art *a2a.Artifact, appendMode, snapshot bool) {
 		a.text[art.ID] = t
 		a.emit(TextEvent{ArtifactID: art.ID, Text: t})
 	}
+}
+
+// artifactText is the text of an artifact or a chunk of it: its text parts in order, joined with nothing between them, and
+// whether it has any. Tool parts are not text, and a null part says nothing.
+func artifactText(art *a2a.Artifact) (string, bool) {
+	var text strings.Builder
+	hasText := false
+	for _, p := range art.Parts {
+		if p == nil {
+			continue
+		}
+		if _, ok := decodeTool(p); ok {
+			continue
+		}
+		if t, isText := p.Content.(a2a.Text); isText {
+			text.WriteString(string(t))
+			hasText = true
+		}
+	}
+	return text.String(), hasText
 }
 
 // artifactTool delivers a tool part of an artifact chunk if the artifact has not delivered it. A chunk that adds to the
@@ -568,7 +588,9 @@ func (a *assembler) tool(place toolPlace, art a2a.ArtifactID, tp toolPart) {
 
 // seed takes the task an answer is about, as the agent holds it before the answer, and counts every tool part in it as
 // delivered: the task goes on, so its final snapshot holds the paused turn's calls and results again, and an answer
-// shows its own steps. The task is kept for fetchCall when the answer is a tool approval, whose approved call is a step of
+// shows its own steps. It notes the text of each of the task's artifacts too, which the paused turn showed: a snapshot
+// that repeats one unchanged is not delivered, where this send would see it first and show it after its own text. A
+// live chunk of such an artifact is the answer's and is delivered as any is. The task is kept for fetchCall when the answer is a tool approval, whose approved call is a step of
 // the answer. A question's call (kagent's ask_user) is not: the paused turn showed it as it asked, and the answer streams
 // only its result, which then waits for a call that does not come and is delivered when the send ends.
 //
@@ -579,6 +601,17 @@ func (a *assembler) tool(place toolPlace, art a2a.ArtifactID, tp toolPart) {
 func (a *assembler) seed(t *a2a.Task, approval bool) {
 	if approval {
 		a.paused = t
+	}
+	for _, art := range t.Artifacts {
+		if art == nil {
+			continue
+		}
+		if text, ok := artifactText(art); ok {
+			if a.shown == nil {
+				a.shown = map[a2a.ArtifactID]string{}
+			}
+			a.shown[art.ID] = text
+		}
 	}
 	eachToolPart(t, func(place toolPlace, art a2a.ArtifactID, tp toolPart) {
 		if place.source == inArtifact {
