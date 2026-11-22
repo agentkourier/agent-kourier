@@ -8,8 +8,8 @@
 // With SQLite it is the only replica and leads at once. With Postgres its replicas elect a leader through the store
 // (package cluster). The leader restores each A2A context's session from the store and reconciles it with the agent's
 // unarchived sessions in CMA, fails the tasks a restart or a takeover cut off, starts the store's upkeep, and only then
-// serves A2A requests; a standby forwards them to it. A2A requests must carry one of the tokens in AUTH_TOKEN_FILE;
-// the card, /healthz, /readyz and /metrics are open.
+// serves A2A requests; a standby forwards them to it. A2A requests and the card must carry one of the tokens in
+// AUTH_TOKEN_FILE; /healthz, /readyz and /metrics are open.
 package main
 
 import (
@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -32,11 +33,11 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/v2"
 
 	"github.com/agentkourier/agent-kourier/addons/cma/adapter"
-	"github.com/agentkourier/agent-kourier/addons/cma/auth"
 	"github.com/agentkourier/agent-kourier/addons/cma/cluster"
 	"github.com/agentkourier/agent-kourier/addons/cma/config"
 	"github.com/agentkourier/agent-kourier/addons/cma/store"
 	"github.com/agentkourier/agent-kourier/addons/cma/telemetry"
+	"github.com/agentkourier/agent-kourier/addons/kit/auth"
 )
 
 // version is set at build time: -ldflags "-X main.version=<value>".
@@ -159,16 +160,18 @@ func serve(ctx context.Context, cfg config.Config, traces telemetry.Config, log 
 	defer background.Wait()
 	backgroundCtx, stopBackground := context.WithCancel(ctx)
 	defer stopBackground()
+	refused := func(reason auth.Reason) { tel.AuthRefused(telemetry.AuthReason(reason)) }
+	check := &auth.Check{Verifier: auth.Open{}, Log: log, Refused: refused}
 	if tokens != nil {
 		background.Go(func() { tokens.Watch(backgroundCtx, auth.ReloadInterval) })
-		rpc = (&auth.Check{Header: cfg.AuthHeader, Tokens: tokens, Log: log,
-			Refused: func(reason string) { tel.AuthRefused(telemetry.AuthReason(reason)) }}).Wrap(rpc)
+		check = &auth.Check{Verifier: auth.TokenVerifier{Header: cfg.AuthHeader, Tokens: tokens},
+			Bearer: strings.EqualFold(cfg.AuthHeader, "Authorization"), Header: cfg.AuthHeader, Log: log, Refused: refused}
 	} else {
 		log.Warn("the caller check is off (AUTH_DISABLED=true): anything that reaches the loopback address can run the agent", "addr", cfg.ListenAddr)
 	}
 	card := adapter.Card("claude-managed-agent", "A Claude Managed Agents agent served over A2A", cfg.PublicURL, version)
 	status := &cluster.Status{}
-	router := &cluster.Router{Local: telemetry.Extract(adapter.Mux(a2aPath, card, rpc)), Status: status,
+	router := &cluster.Router{Local: telemetry.Extract(adapter.Mux(a2aPath, card, rpc, check)), Status: status,
 		RetryAfter: cfg.Lease.RetryPeriod, Telemetry: tel, Log: log}
 	var elector *cluster.Elector
 	if cfg.Store == config.StorePostgres {

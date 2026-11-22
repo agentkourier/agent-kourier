@@ -153,9 +153,10 @@ approval survives.
 
 ## Caller check
 
-A request to `/a2a` must carry one of the tokens in `AUTH_TOKEN_FILE`, or the add-on answers 401 (with
-`WWW-Authenticate: Bearer` when the header is `Authorization`) and logs `refused an A2A request` with the reason
-`missing` or `invalid`, never the value it was given. The agent card, `/healthz`, `/readyz` and `/metrics` need no token.
+A request to `/a2a` or to the agent card must carry one of the tokens in `AUTH_TOKEN_FILE`, or the add-on answers 401
+(with `WWW-Authenticate: Bearer` when the header is `Authorization`) and logs `refused an A2A request` with the reason
+`missing` or `invalid`, never the value it was given. Agent Kourier sends the token when it fetches the card, as with
+every request to the endpoint. `/healthz`, `/readyz` and `/metrics` need no token.
 
 - **The header.** With `AUTH_HEADER` unset, the token comes as `Authorization: Bearer <token>` (the scheme in any case),
   which is what a Binding's `identity.tokenSecretRef` sends. With another header name, the header's whole value is the
@@ -182,7 +183,7 @@ All on one port, 8090 in the chart, named `http` on the Service:
 | Path | What it serves |
 |---|---|
 | `/a2a` | A2A JSON-RPC, behind the caller check |
-| `/a2a/.well-known/agent-card.json` | The agent card |
+| `/a2a/.well-known/agent-card.json` | The agent card, behind the caller check |
 | `/healthz` | 200 once the add-on listens: the process is alive. The chart's liveness probe asks it. |
 | `/readyz` | 200 once the add-on serves, which on a leader is only after its start-up work, until it starts to stop; 503 before then, and once it stops a request that was already read gets 503 while a new one is refused (the listener has closed). The chart's startup and readiness probes ask it. |
 | `/metrics` | Prometheus metrics |
