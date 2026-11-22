@@ -1,5 +1,6 @@
-# A fixture of charts/agent-kourier/values.yaml for hack/release/test.sh (CHART_DIR): the two image blocks that
-# package-chart.sh stamps, shaped as the chart has them, and look-alike keys elsewhere that it must leave alone.
+# A fixture of charts/agent-kourier/values.yaml for hack/release/test.sh (CHART_DIR): the three image blocks that
+# package-chart.sh stamps, shaped as the chart has them, and look-alike keys elsewhere that it must leave alone. The AX
+# add-on's block comes before the CMA add-on's, so the read back does not lean on their order.
 replicaCount: 1
 
 image:
@@ -20,6 +21,18 @@ addons:
     image:
       repository: ghcr.io/example/other
       digest: ""
+  ax:
+    enabled: false
+    # The add-on's image.
+    image:
+      repository: ghcr.io/agentkourier/agent-kourier-ax
+      # A tag, which defaults to the chart's appVersion. Ignored when digest is set.
+      tag: ""
+      # Pin production to a digest (sha256:...), which wins over tag.
+      digest: ""
+      pullPolicy: IfNotPresent
+    store:
+      type: sqlite
   cma:
     enabled: false
     # The add-on's image.

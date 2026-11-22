@@ -21,7 +21,8 @@
 #               runtime image: .dockerignore drops docs/, the build stage reads only Go inputs, and its verify stage runs
 #               two tests of internal/testhooks that read the binaries. An agent's image (examples/recipes/<agent>/agent)
 #               copies only the files its .dockerignore lets in by name, none of them Markdown. The CMA add-on's image is
-#               the binary of addons/cma's ./cmd/adapter on the same runtime image, built from Go inputs only.
+#               the binary of addons/cma's ./cmd/adapter on the same runtime image, built from Go inputs only, and the AX
+#               add-on's the binary of addons/ax's ./cmd/agent, the same way.
 #   crd-corpus  both crd-corpus jobs: also Markdown outside every Go package's tree. The job builds and runs
 #               test/crdcorpus, applies charts/agent-kourier/files/crds, and the corpus walk reads only .yaml and .yml
 #               files under its roots (test/crdcorpus/corpus.go). It then runs test/chart's
@@ -41,6 +42,9 @@
 #   cma         cma: also Markdown outside docs/, addons/cma/ and every Go package's tree. Its tests (the add-on's module
 #               and its livecheck module) may read the add-on's pages, under docs/, and its own README, as the root's
 #               tests read theirs; its lint reads Go only, and the Postgres it starts reads nothing of the tree.
+#   ax          ax: also Markdown outside docs/, addons/ax/ and every Go package's tree, as for cma: its tests (the add-on's
+#               module) may read the add-on's pages, under docs/, and its own README; its lint reads Go only, and the
+#               Postgres it starts reads nothing of the tree.
 # A Go package's tree is a directory of the merge commit that holds a .go file, and everything under it: //go:embed
 # reaches only the package's own directory and those below it, and testdata lives there too. It is computed from the
 # merge commit on each run, so a page that a new package could embed stops qualifying with no list to edit. An unknown
@@ -105,6 +109,9 @@ class_skips() {
     cma)
       case "$1" in docs/* | addons/cma/*) return 1 ;; esac
       ;;
+    ax)
+      case "$1" in docs/* | addons/ax/*) return 1 ;; esac
+      ;;
   esac
   case "$1" in
     *.md) outside_go_trees "$1" ;;
@@ -155,7 +162,7 @@ run() {
 }
 
 case "${CLASS}" in
-  tests | scan | crd-corpus | docs-agent | echo-agent | prompt-agent | cma) ;;
+  tests | scan | crd-corpus | docs-agent | echo-agent | prompt-agent | cma | ax) ;;
   *) run "'${CLASS}' is not a class" ;;
 esac
 [ -n "${PR_HEAD_SHA:-}" ] || run "PR_HEAD_SHA is not set"

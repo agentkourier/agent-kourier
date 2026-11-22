@@ -71,7 +71,8 @@ for kind in stable prerelease; do
     | (capture("^- Image: `(?<ref>ghcr\\.io/agentkourier/agent-kourier@sha256:[0-9a-f]{64})`$"),
        capture("^- Prompt agent image: `(?<ref>ghcr\\.io/agentkourier/agent-kourier-prompt-agent@sha256:[0-9a-f]{64})`$"),
        capture("^- Echo agent image: `(?<ref>ghcr\\.io/agentkourier/agent-kourier-echo-agent@sha256:[0-9a-f]{64})`$"),
-       capture("^- CMA add-on image: `(?<ref>ghcr\\.io/agentkourier/agent-kourier-cma@sha256:[0-9a-f]{64})`$"))
+       capture("^- CMA add-on image: `(?<ref>ghcr\\.io/agentkourier/agent-kourier-cma@sha256:[0-9a-f]{64})`$"),
+       capture("^- AX add-on image: `(?<ref>ghcr\\.io/agentkourier/agent-kourier-ax@sha256:[0-9a-f]{64})`$"))
     | .ref
   ' "${RELEASES_JSON}") || die "could not parse image metadata for release ${tag}"
   grep -F 'ghcr.io/agentkourier/agent-kourier@sha256:' <<<"${refs}" >/dev/null ||

@@ -112,6 +112,14 @@ echo "== a missing scan of the CMA add-on's image fails closed"
 run_case cma-scan-missing 1 cma-scan-missing
 contains "cma-scan-missing: names the missing required job" "required job 'trivy (cma-linux-arm64)' is missing" "${TMP}/cma-scan-missing.out"
 
+echo "== a missing AX add-on job fails closed"
+run_case ax-missing 1 ax-missing
+contains "ax-missing: names the missing required job" "required job 'ax' is missing" "${TMP}/ax-missing.out"
+
+echo "== a missing scan of the AX add-on's image fails closed"
+run_case ax-scan-missing 1 ax-scan-missing
+contains "ax-scan-missing: names the missing required job" "required job 'trivy (ax-linux-arm64)' is missing" "${TMP}/ax-scan-missing.out"
+
 echo "== a skipped required job fails closed"
 run_case skipped-required 1 skipped-required
 contains "skipped-required: names the skipped required job" "required job 'test-testhooks' is skipped" "${TMP}/skipped-required.out"
@@ -231,25 +239,28 @@ for want in \
   "build load linux/arm64 agent-kourier-release-check:echo-agent-linux-arm64 examples/recipes/echo-agent/agent" \
   "build load linux/amd64 agent-kourier-release-check:cma-linux-amd64 addons/cma" \
   "build load linux/arm64 agent-kourier-release-check:cma-linux-arm64 addons/cma" \
+  "build load linux/amd64 agent-kourier-release-check:ax-linux-amd64 addons/ax" \
+  "build load linux/arm64 agent-kourier-release-check:ax-linux-arm64 addons/ax" \
   "build output linux/amd64,linux/arm64 ghcr.io/example/agent-kourier:v1.2.3 ." \
   "build output linux/amd64,linux/arm64 ghcr.io/example/agent-kourier-prompt-agent:v1.2.3 examples/recipes/prompt-agent/agent" \
   "build output linux/amd64,linux/arm64 ghcr.io/example/agent-kourier-echo-agent:v1.2.3 examples/recipes/echo-agent/agent" \
-  "build output linux/amd64,linux/arm64 ghcr.io/example/agent-kourier-cma:v1.2.3 addons/cma"; do
+  "build output linux/amd64,linux/arm64 ghcr.io/example/agent-kourier-cma:v1.2.3 addons/cma" \
+  "build output linux/amd64,linux/arm64 ghcr.io/example/agent-kourier-ax:v1.2.3 addons/ax"; do
   check "build: ${want}" 1 "$(grep -c -x -F -- "${want}" "${TMP}/build.builds")"
 done
-check "build: twelve builds in all" 12 "$(wc -l <"${TMP}/build.builds" | tr -d ' ')"
+check "build: fifteen builds in all" 15 "$(wc -l <"${TMP}/build.builds" | tr -d ' ')"
 last_check=$(grep -n '^build load ' "${TMP}/build.builds" | tail -n 1 | cut -d: -f1)
 first_kept=$(grep -n -v '^build load ' "${TMP}/build.builds" | head -n 1 | cut -d: -f1)
 check "build: every check precedes the first image kept" 1 "$([ "${last_check}" -lt "${first_kept}" ] && echo 1 || echo 0)"
-check "build: eight platform images scanned" 8 "$(wc -l <"${TMP}/build.scans" | tr -d ' ')"
+check "build: ten platform images scanned" 10 "$(wc -l <"${TMP}/build.scans" | tr -d ' ')"
 for f in trivy-linux-arm64.sarif trivy-prompt-agent-linux-amd64.sarif trivy-echo-agent-linux-arm64.sarif \
-  trivy-cma-linux-amd64.sarif trivy-cma-linux-arm64.sarif; do
+  trivy-cma-linux-amd64.sarif trivy-cma-linux-arm64.sarif trivy-ax-linux-amd64.sarif trivy-ax-linux-arm64.sarif; do
   check "build: wrote ${f}" 1 "$([ -s "${TMP}/build/${f}" ] && echo 1 || echo 0)"
 done
-for f in digest prompt-agent-digest echo-agent-digest cma-digest; do
+for f in digest prompt-agent-digest echo-agent-digest cma-digest ax-digest; do
   check "build: ${f} is a digest" 1 "$(grep -c -x -E 'sha256:[0-9a-f]{64}' "${TMP}/build/${f}")"
 done
-check "build: four distinct image digests" 4 "$(cat "${TMP}/build/digest" "${TMP}/build/prompt-agent-digest" "${TMP}/build/echo-agent-digest" "${TMP}/build/cma-digest" | sort -u | wc -l | tr -d ' ')"
+check "build: five distinct image digests" 5 "$(cat "${TMP}/build/digest" "${TMP}/build/prompt-agent-digest" "${TMP}/build/echo-agent-digest" "${TMP}/build/cma-digest" "${TMP}/build/ax-digest" | sort -u | wc -l | tr -d ' ')"
 # Each build's arguments, three builds of each image: an add-on is built on Agent Kourier's pinned bases with the version,
 # as Agent Kourier is, an agent with no argument.
 GO_IMAGE_PIN=$(sed -n 's/^GO_IMAGE=//p' "${ROOT}/hack/kind/lib.sh")
@@ -257,18 +268,23 @@ RUNTIME_IMAGE_PIN=$(sed -n 's/^RUNTIME_IMAGE=//p' "${ROOT}/hack/kind/lib.sh")
 for want in \
   ". GO_IMAGE=${GO_IMAGE_PIN} RUNTIME_IMAGE=${RUNTIME_IMAGE_PIN} VERSION=v1.2.3" \
   "addons/cma GO_IMAGE=${GO_IMAGE_PIN} RUNTIME_IMAGE=${RUNTIME_IMAGE_PIN} VERSION=v1.2.3" \
+  "addons/ax GO_IMAGE=${GO_IMAGE_PIN} RUNTIME_IMAGE=${RUNTIME_IMAGE_PIN} VERSION=v1.2.3" \
   "examples/recipes/echo-agent/agent" \
   "examples/recipes/prompt-agent/agent"; do
   check "build: the arguments of ${want%% *}" 3 "$(grep -c -x -F -- "${want}" "${TMP}/build.args")"
 done
 contains "build: the chart's default image is Agent Kourier's" "digest: $(cat "${TMP}/build/digest")" "${TMP}/build/agent-kourier-1.2.3.tgz.values"
 contains "build: the chart's default repository is Agent Kourier's" "repository: ghcr.io/example/agent-kourier" "${TMP}/build/agent-kourier-1.2.3.tgz.values"
-# The add-on's block, by its indentation, and nothing else: the look-alike image blocks of the fixture keep their values.
+# Each add-on's block, by its indentation, and nothing else: the look-alike image blocks of the fixture keep their values.
 values=${TMP}/build/agent-kourier-1.2.3.tgz.values
 check "build: addons.cma.image.repository is the add-on's pushed repository" 1 \
   "$(grep -c -x -F "      repository: ghcr.io/example/agent-kourier-cma" "${values}")"
 check "build: addons.cma.image.digest is the add-on's digest" 1 \
   "$(grep -c -x -F "      digest: $(cat "${TMP}/build/cma-digest")" "${values}")"
+check "build: addons.ax.image.repository is the add-on's pushed repository" 1 \
+  "$(grep -c -x -F "      repository: ghcr.io/example/agent-kourier-ax" "${values}")"
+check "build: addons.ax.image.digest is the add-on's digest" 1 \
+  "$(grep -c -x -F "      digest: $(cat "${TMP}/build/ax-digest")" "${values}")"
 check "build: the other image blocks keep their empty digests" 3 "$(grep -c -E '^ +digest: ""$' "${values}")"
 check "build: the other add-on keeps its repository" 1 "$(grep -c -x -F "      repository: ghcr.io/example/other" "${values}")"
 
@@ -290,6 +306,8 @@ release_chart_case() {
 echo "== a chart whose add-on image block is not where the release stamps it is refused"
 release_chart_case chart-no-cma 's/^  cma:$/  cmax:/' "no longer has exactly one addons.cma.image.repository"
 release_chart_case chart-cma-digest-set 's/^      digest: ""$/      digest: sha256:0/' "no longer has exactly one addons.cma.image.repository"
+release_chart_case chart-no-ax 's/^  ax:$/  axe:/' "no longer has exactly one addons.ax.image.repository"
+release_chart_case chart-ax-digest-set '/^  ax:$/,/^  cma:$/s/^      digest: ""$/      digest: sha256:0/' "no longer has exactly one addons.ax.image.repository"
 release_chart_case chart-no-image-digest 's/^  digest: ""$/  digest: sha256:0/' "no longer has exactly one empty image.repository"
 
 echo "== a finding in an agent image's last platform leaves no image built to keep"
