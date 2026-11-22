@@ -183,13 +183,13 @@ func testEveryWriteIsFenced(t *testing.T, s *Store) {
 	}
 	var mu sync.Mutex
 	calls := 0
-	s.fence = func(_ context.Context, q querier) error {
+	s.fence = func(fenceCtx context.Context, q querier) error {
 		mu.Lock()
 		defer mu.Unlock()
 		calls++
 		// The fence reads in the write's transaction, as an epoch check does.
 		var one int
-		if err := q.queryRow(context.Background(), `SELECT COUNT(*) FROM a2a_tasks WHERE id = ?`, "t1").Scan(&one); err != nil || one != 1 {
+		if err := q.queryRow(fenceCtx, `SELECT COUNT(*) FROM a2a_tasks WHERE id = ?`, "t1").Scan(&one); err != nil || one != 1 {
 			t.Errorf("the fence's read: %d, %v", one, err)
 		}
 		return errFenced

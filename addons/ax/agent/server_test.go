@@ -2,9 +2,13 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"iter"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -13,9 +17,11 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
-	"github.com/a2aproject/a2a-go/v2/a2asrv/taskstore"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
+
+	"github.com/agentkourier/agent-kourier/addons/ax/auth"
+	"github.com/agentkourier/agent-kourier/addons/ax/store"
 )
 
 type fakeModel struct {
@@ -68,17 +74,58 @@ func (t authTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	cloned.Header.Set("Authorization", "Bearer "+t.user)
 	return t.base.RoundTrip(cloned)
 }
-func start(t *testing.T, dir string, m *fakeModel) (*Server, *httptest.Server, *a2aclient.Client) {
+
+// bearerIsCaller is a caller check that runs a request as the caller its bearer token names, so that a test can be two
+// callers.
+type bearerIsCaller struct{}
+
+func (bearerIsCaller) Verify(r *http.Request) (string, error) {
+	scheme, token, ok := strings.Cut(r.Header.Get("Authorization"), " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") || token == "" {
+		return "", auth.ErrMissing
+	}
+	return token, nil
+}
+
+func discard() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+// agentAt is the agent on the SQLite store in dir, started as the command starts it: the store opened, the turns a
+// restart cut off settled, then served. stop ends it as a process exit would, and the next agentAt is its restart.
+type agentAt struct {
+	store  *store.Store
+	http   *httptest.Server
+	client *a2aclient.Client
+}
+
+func start(t *testing.T, dir string, m model.LLM) *agentAt {
 	t.Helper()
-	s, err := New(t.Context(), Config{StateDir: dir, Model: m, Authenticate: func(_ context.Context, header string) (string, error) { return VerifyBearer(header) }})
+	return startWith(t, dir, m, &auth.Check{Verifier: bearerIsCaller{}, Bearer: true, Log: discard()})
+}
+
+func startWith(t *testing.T, dir string, m model.LLM, check *auth.Check) *agentAt {
+	t.Helper()
+	st, err := store.OpenSQLite(t.Context(), filepath.Join(dir, "ax.db"), store.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(s.Handler)
-	client := connect(t, httpServer, "binding")
-	t.Cleanup(func() { httpServer.Close(); _ = s.Close() })
-	return s, httpServer, client
+	if _, err := st.SettleInterrupted(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(Config{Model: m, Store: st, Check: check, PublicURL: "http://ax.agents.svc:8090/a2a", Version: "1.2.3-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &agentAt{store: st, http: httptest.NewServer(s.Handler)}
+	a.client = connect(t, a.http, "binding")
+	t.Cleanup(a.stop)
+	return a
 }
+
+func (a *agentAt) stop() {
+	a.http.Close()
+	_ = a.store.Close()
+}
+
 func connect(t *testing.T, s *httptest.Server, user string) *a2aclient.Client {
 	t.Helper()
 	card := &a2a.AgentCard{Name: "test", Version: "1", Capabilities: a2a.AgentCapabilities{Streaming: true}, SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface(s.URL+"/a2a", a2a.TransportProtocolJSONRPC)}}
@@ -131,7 +178,8 @@ func taskText(task *a2a.Task) string {
 func TestChatReplayOwnerIsolationAndReopen(t *testing.T) {
 	dir := t.TempDir()
 	m := &fakeModel{}
-	s, httpServer, c := start(t, dir, m)
+	a := start(t, dir, m)
+	c := a.client
 	task := send(t, c, message("m1", "hello"))
 	if task.Status.State != a2a.TaskStateCompleted || taskText(task) != "Hello world" {
 		t.Fatalf("task: %+v", task)
@@ -146,13 +194,12 @@ func TestChatReplayOwnerIsolationAndReopen(t *testing.T) {
 	if err != nil || len(page.Tasks) != 1 || page.Tasks[0].History[0].ID != "m1" {
 		t.Fatalf("recovery lookup: %+v %v", page, err)
 	}
-	other := connect(t, httpServer, "other-binding")
+	other := connect(t, a.http, "other-binding")
 	if _, err := other.GetTask(t.Context(), &a2a.GetTaskRequest{ID: task.ID}); err == nil {
 		t.Fatal("another owner read task")
 	}
-	httpServer.Close()
-	_ = s.Close()
-	_, _, c2 := start(t, dir, m)
+	a.stop()
+	c2 := start(t, dir, m).client
 	replay = send(t, c2, again)
 	if replay.ID != task.ID || m.calls.Load() != 1 {
 		t.Fatal("reopen lost message dedup")
@@ -167,14 +214,13 @@ func TestChatReplayOwnerIsolationAndReopen(t *testing.T) {
 func TestTextQuestionSurvivesReopenAndAnswersSameTask(t *testing.T) {
 	dir := t.TempDir()
 	m := &fakeModel{}
-	s, httpServer, c := start(t, dir, m)
-	task := send(t, c, message("q1", "ask a question"))
+	a := start(t, dir, m)
+	task := send(t, a.client, message("q1", "ask a question"))
 	if task.Status.State != a2a.TaskStateInputRequired || task.Status.Message.Parts[0].Text() != "Which service?" {
 		t.Fatalf("missing text question: %+v", task)
 	}
-	httpServer.Close()
-	_ = s.Close()
-	_, _, c2 := start(t, dir, m)
+	a.stop()
+	c2 := start(t, dir, m).client
 	answer := message("answer1", "checkout")
 	answer.TaskID = task.ID
 	answer.ContextID = task.ContextID
@@ -189,30 +235,55 @@ func TestTextQuestionSurvivesReopenAndAnswersSameTask(t *testing.T) {
 	}
 }
 
-func TestStoreSettlesInterruptedWorkAndRejectsStaleVersion(t *testing.T) {
-	s, _, _ := start(t, t.TempDir(), &fakeModel{})
-	ctx, cc := a2asrv.NewCallContext(t.Context(), nil)
-	cc.User = a2asrv.NewAuthenticatedUser("binding", nil)
-	task := &a2a.Task{ID: "interrupted", ContextID: "context", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}, History: []*a2a.Message{message("accepted", "hello")}}
-	version, err := s.Store.Create(ctx, task)
+// A turn the process ended in the middle of is failed when the agent starts again, with the interrupted message, and
+// a resend of its message gets that failed task rather than a new turn.
+func TestRestartFailsATurnItCutOff(t *testing.T) {
+	dir := t.TempDir()
+	m := &fakeModel{}
+	a := start(t, dir, m)
+	cut := &a2a.Task{ID: "cut-off", ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}, History: []*a2a.Message{message("m-cut", "hello")}}
+	if _, err := a.store.Create(callerContext("binding"), cut); err != nil {
+		t.Fatal(err)
+	}
+	a.stop()
+	c := start(t, dir, m).client
+	got, err := c.GetTask(t.Context(), &a2a.GetTaskRequest{ID: cut.ID})
+	if err != nil || got.Status.State != a2a.TaskStateFailed || got.Status.Message == nil || got.Status.Message.Parts[0].Text() != store.InterruptedMessage {
+		t.Fatalf("the cut-off turn after a restart: %+v, %v", got, err)
+	}
+	resent := message("m-cut", "hello")
+	resent.ContextID = "c1"
+	if replay := send(t, c, resent); replay.ID != cut.ID || m.calls.Load() != 0 {
+		t.Fatalf("the resent message ran again: %+v, %d model calls", replay, m.calls.Load())
+	}
+}
+
+// The card names the endpoint and the version the agent was given.
+func TestCardNamesThePublicURLAndVersion(t *testing.T) {
+	a := start(t, t.TempDir(), &fakeModel{})
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, a.http.URL+A2APath+CardPath, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Store.Update(ctx, &taskstore.UpdateRequest{Task: task, PrevVersion: version + 1}); err == nil {
-		t.Fatal("stale update accepted")
-	}
-	if err := s.Store.Init(ctx); err != nil {
+	req.Header.Set("Authorization", "Bearer binding")
+	resp, err := a.http.Client().Do(req)
+	if err != nil {
 		t.Fatal(err)
 	}
-	stored, err := s.Store.Get(ctx, task.ID)
-	if err != nil || stored.Task.Status.State != a2a.TaskStateFailed {
-		t.Fatalf("interrupted task not settled: %+v %v", stored, err)
+	defer func() { _ = resp.Body.Close() }()
+	var card a2a.AgentCard
+	if err := json.NewDecoder(resp.Body).Decode(&card); err != nil {
+		t.Fatal(err)
+	}
+	if card.Version != "1.2.3-test" || len(card.SupportedInterfaces) != 1 || card.SupportedInterfaces[0].URL != "http://ax.agents.svc:8090/a2a" {
+		t.Fatalf("card = %+v", card)
 	}
 }
 
 func TestCancelActiveTaskAndRejectUnauthenticatedCard(t *testing.T) {
 	m := &fakeModel{hold: make(chan struct{}), entered: make(chan struct{}, 1)}
-	_, httpServer, c := start(t, t.TempDir(), m)
+	a := start(t, t.TempDir(), m)
+	httpServer, c := a.http, a.client
 	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, httpServer.URL+"/a2a/.well-known/agent-card.json", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -231,7 +302,10 @@ func TestCancelActiveTaskAndRejectUnauthenticatedCard(t *testing.T) {
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
-		for event := range c.SendStreamingMessage(ctx, &a2a.SendMessageRequest{Message: message("cancel-me", "hello")}) {
+		for event, err := range c.SendStreamingMessage(ctx, &a2a.SendMessageRequest{Message: message("cancel-me", "hello")}) {
+			if err != nil {
+				return // the cancel ends the stream
+			}
 			if task, ok := event.(*a2a.Task); ok {
 				select {
 				case ids <- task.ID:
@@ -260,4 +334,10 @@ func TestCancelActiveTaskAndRejectUnauthenticatedCard(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("canceled stream did not end")
 	}
+}
+
+func callerContext(name string) context.Context {
+	ctx, cc := a2asrv.NewCallContext(context.Background(), nil)
+	cc.User = a2asrv.NewAuthenticatedUser(name, nil)
+	return ctx
 }

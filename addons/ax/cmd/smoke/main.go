@@ -5,16 +5,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"iter"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/agentkourier/agent-kourier/addons/ax/agent"
+	"github.com/agentkourier/agent-kourier/addons/ax/auth"
 	"github.com/agentkourier/agent-kourier/addons/ax/bedrock"
+	"github.com/agentkourier/agent-kourier/addons/ax/store"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"google.golang.org/adk/v2/model"
@@ -42,16 +47,17 @@ func run() error {
 		return errors.New("state directory unavailable")
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
-	s, err := agent.New(ctx, agent.Config{StateDir: dir, Model: observedModel{&bedrock.Model{ID: os.Getenv("MODEL_NAME"), Client: bedrockruntime.NewFromConfig(cfg)}}, Authenticate: func(_ context.Context, header string) (string, error) {
-		if header != "Bearer local-smoke" {
-			return "", a2a.ErrUnauthenticated
-		}
-		return "smoke", nil
-	}})
+	st, err := store.OpenSQLite(ctx, filepath.Join(dir, "agent.db"), store.Options{})
+	if err != nil {
+		return errors.New("store startup failed")
+	}
+	defer func() { _ = st.Close() }()
+	check := &auth.Check{Verifier: smokeCaller{}, Bearer: true, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s, err := agent.New(agent.Config{Model: observedModel{&bedrock.Model{ID: os.Getenv("MODEL_NAME"), Client: bedrockruntime.NewFromConfig(cfg)}},
+		Store: st, Check: check, PublicURL: "http://127.0.0.1/a2a", Version: "smoke"})
 	if err != nil {
 		return errors.New("agent startup failed")
 	}
-	defer func() { _ = s.Close() }()
 	h := httptest.NewServer(s.Handler)
 	defer h.Close()
 	card := &a2a.AgentCard{Name: "smoke", Version: "1", Capabilities: a2a.AgentCapabilities{Streaming: true}, SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface(h.URL+"/a2a", a2a.TransportProtocolJSONRPC)}}
@@ -95,6 +101,16 @@ func run() error {
 	}
 	fmt.Println("PASS: Bedrock streamed a text question, accepted its answer on the same A2A task, and replayed the completed task.")
 	return nil
+}
+
+// smokeCaller accepts the smoke's own fixed bearer token.
+type smokeCaller struct{}
+
+func (smokeCaller) Verify(r *http.Request) (string, error) {
+	if r.Header.Get("Authorization") != "Bearer local-smoke" {
+		return "", auth.ErrInvalid
+	}
+	return "smoke", nil
 }
 
 type transport struct{ base http.RoundTripper }

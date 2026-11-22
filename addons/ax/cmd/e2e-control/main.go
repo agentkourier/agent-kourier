@@ -64,13 +64,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	control := ate.NewControlClient(conn)
 	axconn, err := grpc.NewClient("ax-server.ax-system.svc.cluster.local:8080", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return err
 	}
-	defer axconn.Close()
+	defer func() { _ = axconn.Close() }()
 	client := ax.NewAXClient(axconn)
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
@@ -78,11 +78,15 @@ func run() error {
 		return err
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	target, _ := url.Parse("http://atenet-router.ate-system.svc.cluster.local")
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	original := proxy.Director
-	proxy.Director = func(r *http.Request) { original(r); r.Header.Set("ate-target-actor", space+"/gated") }
+	// What NewSingleHostReverseProxy's Director did, plus the actor header: the incoming Host kept, X-Forwarded-For set.
+	proxy := &httputil.ReverseProxy{Rewrite: func(pr *httputil.ProxyRequest) {
+		pr.SetURL(target)
+		pr.Out.Host = pr.In.Host
+		pr.SetXForwarded()
+		pr.Out.Header.Set("ate-target-actor", space+"/gated")
+	}}
 	mux.Handle("POST /_control/release/", proxy)
 	mux.HandleFunc("/_control/task/", func(w http.ResponseWriter, r *http.Request) {
 		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/_control/task/"), "/")
@@ -168,7 +172,7 @@ func provision(ctx context.Context, client ax.AXClient, control ate.ControlClien
 			existing = nil
 		}
 		if existing == nil {
-			task := &ax.Task{ApiVersion: "ax.io/v1alpha1", Kind: "Task", Metadata: &ax.ObjectMeta{Name: name, Atespace: space, CreationTimestamp: timestamppb.Now()}, Spec: &ax.TaskSpec{Image: os.Getenv("AX_FIXTURE_IMAGE"), Command: []string{"/usr/local/bin/ax-e2e-agent"}, Env: []*ax.EnvVar{{Name: "AX_SCENARIO", Value: name}, {Name: "OIDC_ISSUER", Value: "http://dex.dex.svc.cluster.local:5556/dex"}, {Name: "OIDC_AUDIENCE", Value: "agent-kourier-binding"}, {Name: "OIDC_SUBJECT", Value: os.Getenv("OIDC_SUBJECT")}}}}
+			task := &ax.Task{ApiVersion: "ax.io/v1alpha1", Kind: "Task", Metadata: &ax.ObjectMeta{Name: name, Atespace: space, CreationTimestamp: timestamppb.Now()}, Spec: &ax.TaskSpec{Image: os.Getenv("AX_FIXTURE_IMAGE"), Command: []string{"/usr/local/bin/ax-e2e-agent"}, Env: []*ax.EnvVar{{Name: "AX_SCENARIO", Value: name}, {Name: "OIDC_ISSUER", Value: "http://dex.dex.svc.cluster.local:5556/dex"}, {Name: "OIDC_AUDIENCE", Value: "agent-kourier-binding"}, {Name: "OIDC_SUBJECT", Value: os.Getenv("OIDC_SUBJECT")}, {Name: "LISTEN_ADDR", Value: ":80"}, {Name: "RUNNER_URL", Value: "http://127.0.0.1:8081"}, {Name: "SQLITE_PATH", Value: "/workspace/agent-kourier-state/agent.db"}}}}
 			if task.Spec.Image == "" || os.Getenv("OIDC_SUBJECT") == "" {
 				return errors.New("AX_FIXTURE_IMAGE and OIDC_SUBJECT required")
 			}

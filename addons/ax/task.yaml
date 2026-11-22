@@ -19,7 +19,9 @@ spec:
     # Placeholder only: the egress gateway replaces Authorization with the real key.
     - {name: AWS_BEARER_TOKEN_BEDROCK, value: substrate-injected}
     - {name: AWS_EC2_METADATA_DISABLED, value: "true"}
-    - {name: STATE_DIR, value: /workspace/agent-kourier-state}
+    - {name: LISTEN_ADDR, value: ":80"}
+    - {name: RUNNER_URL, value: http://127.0.0.1:8081}
+    - {name: SQLITE_PATH, value: /workspace/agent-kourier-state/agent.db}
     - {name: OIDC_ISSUER, value: https://YOUR_ISSUER}
     - {name: OIDC_AUDIENCE, value: agent-kourier-binding}
     - {name: OIDC_SUBJECT, value: YOUR_AGENTKOURIER_SERVICE_SUBJECT}
