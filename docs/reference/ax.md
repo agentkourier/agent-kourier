@@ -81,10 +81,14 @@ answers before the Binding's `interactions.timeout`, Agent Kourier ends the paus
 On the Anthropic API every call streams, and a reply has at most `8192` tokens, its thinking included
 ([Limits](limits.md#ax-add-on)). A reply cut there in its text completes the turn with what was written; one cut in an
 `ask_user` call, or with nothing written, fails the turn, as does a refusal with nothing written. The SDK sends a
-request again, twice at most, after a connection error or a status of 408, 409, 429 or 5xx; after that the turn fails,
-with an error that names the HTTP status and the API's error type but not the API's message. If the model thinks, the add-on
-keeps its thinking blocks in the ADK session and sends them back unchanged with the rest of the turn, which the API
-needs when the turn goes on after a tool call; a question that waits across a restart keeps them too.
+request again, twice at most, after a connection error or a status of 408, 409, 429 or 5xx, unless the API's
+`x-should-retry` header says otherwise; after that the turn fails, with an error that names the HTTP status and the
+API's error type but not the API's message. The SDK waits 10 minutes at most for each request's response headers (its
+own default); a stream that stalls after it opens waits until the turn ends.
+
+The add-on does not ask the model to think. If a reply carries thinking blocks anyway, the add-on keeps them in the ADK
+session and sends them back unchanged with the rest of the turn, which the API needs when the turn goes on after a tool
+call; a question that waits across a restart keeps them too.
 
 ## Restarts
 
