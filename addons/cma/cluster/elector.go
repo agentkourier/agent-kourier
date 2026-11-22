@@ -87,10 +87,10 @@ type cachedLease struct {
 }
 
 // Run campaigns until this replica takes the lease or ctx ends, trying every RetryPeriod. Once it leads, it runs lead in
-// a goroutine of its own, with a context that ends when Run returns, and renews the lease every RetryPeriod. It
-// returns ErrLeadershipLost when a renewal finds the lease taken, or no renewal has succeeded for RenewDeadline; the
-// error of lead, if lead fails; and nil when ctx ends. It never releases the lease: the caller does that (Release)
-// once it has stopped serving, so that a standby does not take over while this replica still writes.
+// a goroutine of its own, with a context that ends when Run is done, and renews the lease every RetryPeriod; Run returns
+// only once lead has. It returns ErrLeadershipLost when a renewal finds the lease taken, or no renewal has succeeded for
+// RenewDeadline; the error of lead, if lead fails; and nil when ctx ends. It never releases the lease: the caller does
+// that (Release) once it has stopped serving, so that a standby does not take over while this replica still writes.
 //
 // After TryLeadOnce has taken the lease, Run leads at once, without campaigning.
 func (e *Elector) Run(ctx context.Context, lead func(ctx context.Context) error) error {
@@ -105,10 +105,19 @@ func (e *Elector) Run(ctx context.Context, lead func(ctx context.Context) error)
 		e.lead()
 	}
 
+	// lead's work stops before Run returns, whichever way it ends: the caller releases the lease and closes the store
+	// next, and the work (the upkeep) must not write under either.
 	leadCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	leadDone := make(chan error, 1)
-	go func() { leadDone <- lead(leadCtx) }()
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		leadDone <- lead(leadCtx)
+	}()
+	defer func() {
+		cancel()
+		<-stopped
+	}()
 
 	tick := time.NewTicker(e.RetryPeriod)
 	defer tick.Stop()
