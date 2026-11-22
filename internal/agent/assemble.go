@@ -33,7 +33,7 @@ const entryBytes = 128
 // by which it tells a repeat (placed, sent, said, called, live) grow with what the agent sends, and a stream's length is
 // bounded by nothing but its context, so each is charged to one budget, limit bytes (keep). One event or response is
 // bounded by the transport (dialect.MaxEventBytes, dialect.MaxResponseBytes), and so are the task kept as the final one
-// and the paused task of an answer. The entries that seed notes of that paused task, in placed and sent, are the exception: they
+// and the paused task of an answer. The entries that seed notes of that paused task, in placed, sent and shown, are the exception: they
 // are not charged, since the turn that paused made them and they are bounded by the response that held the task, which is
 // by the transport, not by what this turn's agent sends. When the budget is spent, over is set to an error that wraps
 // dialect.ErrResponseTooLarge and the assembler goes silent: it keeps and emits nothing more, and the caller ends the
@@ -59,6 +59,8 @@ type assembler struct {
 	opening   bool   // the stream was resubscribed and has yet to say anything new: an update like the last is a repeat
 	replies   bool   // a task-less agent Message may be the reply: set for a Send, never for an Answer or a follow
 	unshown   bool   // an agent Message came before any task where it cannot be the reply: on an Answer
+	// shown is the hash of the text of each artifact of the task an answer is about, as the paused turn showed it (seed).
+	shown map[a2a.ArtifactID][sha256.Size]byte
 	// interaction reads the pause of the task that ends the send (Config.ParseInteraction); nil reads none.
 	interaction func(a2a.Task) (*dialect.Interaction, error)
 	limit       int   // the budget of what the assembler holds: Config.MaxReplyBytes
@@ -219,13 +221,12 @@ func (a *assembler) setState(s a2a.TaskState) {
 
 // artifact applies one artifact, or one chunk of it: its text parts per the append rule,
 // and its tool parts once each. A task snapshot that is a strict prefix of the text held is
-// older than it (kagent never shortens an artifact's text within a turn), so it is skipped.
+// older than it (kagent never shortens an artifact's text within a turn), so it is skipped. So is a
+// snapshot that repeats, unchanged, the text the paused turn of an answer showed (seed): it is that turn's.
 func (a *assembler) artifact(art *a2a.Artifact, appendMode, snapshot bool) {
 	if art == nil {
 		return
 	}
-	var text strings.Builder
-	hasText := false
 	seen := map[[sha256.Size]byte]int{} // how many parts of each saying this chunk has held so far
 	for i, p := range art.Parts {
 		if p == nil { // null on the wire: it says nothing
@@ -233,18 +234,18 @@ func (a *assembler) artifact(art *a2a.Artifact, appendMode, snapshot bool) {
 		}
 		if tp, ok := decodeTool(p); ok {
 			a.artifactTool(art.ID, i, tp, appendMode, seen)
-		} else if t, isText := p.Content.(a2a.Text); isText {
-			text.WriteString(string(t))
-			hasText = true
 		}
 	}
+	t, hasText := artifactText(art)
 	if !hasText {
 		return
 	}
 	old, had := a.text[art.ID]
-	t := text.String()
 	if appendMode {
 		t = old + t
+	}
+	if shown, paused := a.shown[art.ID]; snapshot && paused && sha256.Sum256([]byte(t)) == shown {
+		return
 	}
 	stale := snapshot && strings.HasPrefix(old, t)
 	if t != old && !stale {
@@ -258,6 +259,23 @@ func (a *assembler) artifact(art *a2a.Artifact, appendMode, snapshot bool) {
 		a.text[art.ID] = t
 		a.emit(TextEvent{ArtifactID: art.ID, Text: t})
 	}
+}
+
+// artifactText is the text of an artifact or a chunk of it: its text parts in order, joined with nothing between them, and
+// whether it has any. A tool part is a data part (dialect.DecodeToolPart), never text, and a null part says nothing.
+func artifactText(art *a2a.Artifact) (string, bool) {
+	var text strings.Builder
+	hasText := false
+	for _, p := range art.Parts {
+		if p == nil {
+			continue
+		}
+		if t, isText := p.Content.(a2a.Text); isText {
+			text.WriteString(string(t))
+			hasText = true
+		}
+	}
+	return text.String(), hasText
 }
 
 // artifactTool delivers a tool part of an artifact chunk if the artifact has not delivered it. A chunk that adds to the
@@ -568,9 +586,15 @@ func (a *assembler) tool(place toolPlace, art a2a.ArtifactID, tp toolPart) {
 
 // seed takes the task an answer is about, as the agent holds it before the answer, and counts every tool part in it as
 // delivered: the task goes on, so its final snapshot holds the paused turn's calls and results again, and an answer
-// shows its own steps. The task is kept for fetchCall when the answer is a tool approval, whose approved call is a step of
-// the answer. A question's call (kagent's ask_user) is not: the paused turn showed it as it asked, and the answer streams
-// only its result, which then waits for a call that does not come and is delivered when the send ends.
+// shows its own steps. It notes a hash of the text of each of the task's artifacts too, which the paused turn showed: a
+// snapshot that repeats one unchanged is not delivered, where this send would see it first and show it after its own
+// text. A live chunk of such an artifact is the answer's and is delivered as any is. An answer that adds no text of its
+// own therefore delivers none. The task is kept for fetchCall when the answer is a tool approval, whose approved call
+// is a step of the answer. A question's call (kagent's ask_user) is not: the paused turn showed it as it asked, and the
+// answer streams only its result, which then waits for a call that does not come and is delivered when the send ends.
+//
+// An answer that a later send follows (Follow, after a lost stream or a restart) is not seeded: that send meets the
+// paused turn's tool parts and text in its first snapshot and delivers them as its own.
 //
 // What seed notes is not charged to the budget (keep). It is the paused turn's, not the reply of this one, and the task is
 // bounded by the answer to the call that read it (dialect.MaxResponseBytes), as is the task kept. A task that paused after some
@@ -579,6 +603,17 @@ func (a *assembler) tool(place toolPlace, art a2a.ArtifactID, tp toolPart) {
 func (a *assembler) seed(t *a2a.Task, approval bool) {
 	if approval {
 		a.paused = t
+	}
+	for _, art := range t.Artifacts {
+		if art == nil {
+			continue
+		}
+		if text, ok := artifactText(art); ok {
+			if a.shown == nil {
+				a.shown = map[a2a.ArtifactID][sha256.Size]byte{}
+			}
+			a.shown[art.ID] = sha256.Sum256([]byte(text))
+		}
 	}
 	eachToolPart(t, func(place toolPlace, art a2a.ArtifactID, tp toolPart) {
 		if place.source == inArtifact {
