@@ -321,7 +321,8 @@ func EveryMarkerHasAGuard(t testing.TB, prefix string) {
 	}
 }
 
-// moduleRoot returns the add-on module's root: the nearest directory above the working directory with a go.mod.
+// moduleRoot returns the root of the module the test runs in: the nearest directory above the working directory with a
+// go.mod.
 func moduleRoot() (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {

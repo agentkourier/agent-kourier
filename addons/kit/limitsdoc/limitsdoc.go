@@ -28,7 +28,7 @@ import (
 	"time"
 )
 
-// PagePath is the limits page, relative to the repository root: every limit of the add-on is on it.
+// PagePath is the limits page, relative to the repository root: every limit of each add-on, and of the kit, is on it.
 const PagePath = "docs/reference/limits.md"
 
 // markerRE finds a marker and the code span before it, which holds the value.
