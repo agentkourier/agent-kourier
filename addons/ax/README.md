@@ -39,7 +39,9 @@ Go and Debian bases; the runner is compiled from the pinned AX module.
 ## Deploy
 
 1. Build and push the image to a registry your Substrate workers can pull. Substitute
-   its immutable digest, model settings and OIDC settings in `task.yaml`. Use the
+   its immutable digest, model settings, OIDC settings and the gateway's A2A URL
+   (`PUBLIC_URL`, which the card names; the agent refuses to start with a URL that has
+   no host) in `task.yaml`. Use the
    same `MODEL_NAME` and `MODEL_REGION` as your kagent sandbox. The sample is a Haiku
    inference profile; your account must have access in that region.
 2. Provision the `agent-kourier-ax` atespace and AX control plane following the pinned
@@ -47,8 +49,9 @@ Go and Debian bases; the runner is compiled from the pinned AX module.
    The Task runs `/usr/local/bin/agent-kourier-ax-agent`; AX itself starts the fixed
    `/usr/local/bin/ax-task-runner` path. This image replaces that runner with the
    pinned Go runner on metadata port 8081 for running Tasks (port 80 during the
-   command-free golden-template build). The agent owns port 80 and proxies
-   `/metadata/` and `/readyz` to the runner. Workspaces still use AX preparation.
+   command-free golden-template build). The agent owns port 80 (`LISTEN_ADDR=:80` in
+   `task.yaml`) and proxies `/metadata/` and `/readyz` to the runner (`RUNNER_URL`).
+   Workspaces still use AX preparation.
 3. Configure Substrate TLS interception and credential injection, plus a registered
    credential provider containing the Bedrock API key. Apply `egress-policy.json`
    through `ateapi.Control/CreateActorEgressPolicy` once the actor exists. Replace the
@@ -83,9 +86,16 @@ Go and Debian bases; the runner is compiled from the pinned AX module.
 ## Persistence and acceptance
 
 ADK sessions, A2A task snapshots and owner/message-ID deduplication share
-`/workspace/agent-kourier-state/agent.db` (WAL, FULL synchronous). Include the complete
-directory, including WAL files, in the actor's durable data snapshot. Run one agent
-process per database. Completed tasks and unanswered questions survive reopening.
+`/workspace/agent-kourier-state/agent.db` (`SQLITE_PATH` in `task.yaml`; WAL, FULL
+synchronous). The agent no longer reads `STATE_DIR` and refuses to start while it is set.
+Include the complete directory, including WAL files, in the actor's durable data
+snapshot. One agent process opens a database: it holds an exclusive lock on
+`agent.db.lock` beside it, and a second process fails to start. A database written by an
+earlier version of the agent has its tasks imported into the current layout at the first
+start. Completed tasks and unanswered questions survive reopening; a settled task is
+deleted after `TASK_RETENTION` (720h), and a context with no task update for
+`SESSION_IDLE_TTL` (2160h) loses its ADK session and its tasks, unanswered questions
+included (`0` keeps them).
 Work that was `submitted` or `working` at restart becomes `failed`; model/tool work
 is not automatically replayed. A2A transport retries with the same message ID join
 or return the persisted task. Cancellation uses the SDK task lifecycle.

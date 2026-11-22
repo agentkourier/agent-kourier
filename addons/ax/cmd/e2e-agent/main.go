@@ -1,4 +1,6 @@
-// Command e2e-agent serves the reference AX/ADK stack with a deterministic scenario model.
+// Command e2e-agent serves the reference AX/ADK stack with a deterministic scenario model, for the kind AX tier. It
+// reads the agent's settings as the agent does, except that the model is AX_SCENARIO's and needs no MODEL_REGION or
+// MODEL_NAME.
 package main
 
 import (
@@ -6,15 +8,13 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
-	"github.com/agentkourier/agent-kourier/addons/ax/agent"
+	"github.com/agentkourier/agent-kourier/addons/ax/config"
 	"github.com/agentkourier/agent-kourier/addons/ax/e2emodel"
+	"github.com/agentkourier/agent-kourier/addons/ax/serve"
 )
 
 func main() {
@@ -23,51 +23,24 @@ func main() {
 		os.Exit(1)
 	}
 }
+
 func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	scenario := os.Getenv("AX_SCENARIO")
-	issuer, audience, subject := os.Getenv("OIDC_ISSUER"), os.Getenv("OIDC_AUDIENCE"), os.Getenv("OIDC_SUBJECT")
-	if scenario == "" || issuer == "" || audience == "" || subject == "" {
-		return errors.New("scenario and OIDC settings are required")
+	if scenario == "" {
+		return errors.New("AX_SCENARIO is required")
 	}
-	verify, err := agent.OIDCAuthenticate(ctx, issuer, audience, subject)
+	cfg, err := config.Parse(func(key string) string {
+		if v := os.Getenv(key); v != "" || (key != "MODEL_REGION" && key != "MODEL_NAME") {
+			return v
+		}
+		return "unused-by-the-scenario-model"
+	})
 	if err != nil {
 		return err
 	}
-
 	model := &e2emodel.Model{Scenario: scenario}
-	stateDir := os.Getenv("STATE_DIR")
-	if stateDir == "" {
-		stateDir = "/workspace/agent-kourier-state"
-	}
-	server, err := agent.New(ctx, agent.Config{StateDir: stateDir, Model: model, Authenticate: verify})
-	if err != nil {
-		return err
-	}
-	defer func() { _ = server.Close() }()
-	mux := http.NewServeMux()
-	mux.Handle("/_control/release/", model)
-	mux.Handle("/a2a", server.Handler)
-	mux.Handle("/a2a/", server.Handler)
-	metadata, _ := url.Parse("http://127.0.0.1:8081")
-	proxy := httputil.NewSingleHostReverseProxy(metadata)
-	mux.Handle("/metadata/", proxy)
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	mux.Handle("/readyz", proxy)
-	addr := os.Getenv("LISTEN_ADDR")
-	if addr == "" {
-		addr = ":80"
-	}
-	httpServer := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-	done := make(chan error, 1)
-	go func() { done <- httpServer.ListenAndServe() }()
-	select {
-	case err := <-done:
-		return err
-	case <-ctx.Done():
-		shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer cancel()
-		return httpServer.Shutdown(shutdown)
-	}
+	return serve.Run(ctx, cfg, model, serve.Options{Version: "e2e", Log: slog.Default(),
+		Routes: func(mux *http.ServeMux) { mux.Handle("/_control/release/", model) }})
 }
