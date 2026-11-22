@@ -10,6 +10,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/config"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
+	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/session"
 )
 
@@ -34,6 +35,26 @@ func (s quietSink) Turn(ctx context.Context, t session.TurnRef) agent.Handler {
 		return nil
 	}
 	return s.renderSink.Turn(ctx, t)
+}
+
+// The renderer's sink says what a paused turn's reply shows of the calls the pause waits on (interact.CardSink), and the quiet sink
+// passes it on to the tap, which takes a sink without it and goes without: these hold both to it.
+var (
+	_ interact.CardSink = (*live.Sink)(nil)
+	_ interact.CardSink = quietSink{}
+)
+
+// TurnCards is Turn, and the cards of the turn (interact.CardSink), which the renderer's sink says (live.Sink): the tap hands
+// them on with a pause, so that the ending of an approval leaves out what a card shows. A connection with no replies has no turn
+// rendered and no cards, and a sink that says nothing of cards gives none.
+func (s quietSink) TurnCards(ctx context.Context, t session.TurnRef) (agent.Handler, func() map[string]string) {
+	if s.quiet(t.Key.Connection) {
+		return nil, nil
+	}
+	if cs, ok := s.renderSink.(interact.CardSink); ok {
+		return cs.TurnCards(ctx, t)
+	}
+	return s.renderSink.Turn(ctx, t), nil
 }
 
 // Notice queues the notice, unless its connection has no replies.

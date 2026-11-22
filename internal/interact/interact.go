@@ -113,6 +113,10 @@ type Pause struct {
 	// Recovered says the task was found again after a restart. A recovered pause may already be past its
 	// original interaction deadline, so the tap gives a failed hand-off a fresh retry window.
 	Recovered bool
+	// Cards is the summary of the arguments that the reply the task paused in shows on the card of each tool call the pause
+	// waits on, by the call's ID (CardSink), or nil. The intake keeps with the request which tools of an approval it shows as
+	// their ending would (onCardOf), and their ending names them without it (chat.Tool.OnCard).
+	Cards map[string]string
 }
 
 // errAuthRequired is the cause of refusing a task that asks for authentication: no dialect can answer it from the thread,
@@ -395,8 +399,9 @@ func (i *Intake) record(ctx context.Context, p Pause, b Binding, in dialect.Inte
 		return store.Interaction{}, fmt.Errorf("interact: Binding %q has no interaction timeout", p.Binding)
 	}
 	// What is stored has the agent's secrets taken out (storable); the answer is built from the IDs and choices,
-	// which that leaves as they were.
-	request, err := json.Marshal(storable(in))
+	// which that leaves as they were. With it go the tools whose call the reply shows on its card: what the row records first
+	// stands, so a pause handed on again with no cards, as after a restart, changes nothing.
+	request, err := json.Marshal(storedRequest{Interaction: storable(in), OnCard: onCardOf(in, p.Cards)})
 	if err != nil {
 		return store.Interaction{}, fmt.Errorf("interact: encode the pause: %w", err)
 	}

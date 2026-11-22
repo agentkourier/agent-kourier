@@ -1,6 +1,9 @@
 package interact
 
 import (
+	"slices"
+
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/redact"
 	"github.com/agentkourier/agent-kourier/internal/render"
@@ -45,4 +48,43 @@ func storable(in dialect.Interaction) dialect.Interaction {
 		in.Nested = &n
 	}
 	return in
+}
+
+// storedRequest is an interaction's request as the store keeps it (store.Interaction.Request): the pause, as storable makes it,
+// and the tools whose call the reply shows on its card. It is the JSON of a dialect.Interaction with one key more, so a reader
+// that needs only the pause decodes it as one, and a request stored before the key decodes as one with no tool on its card.
+type storedRequest struct {
+	dialect.Interaction
+	// OnCard is the IDs (dialect.Tool.ID) of the tools of an approval whose call the reply the task paused in shows on its card
+	// with the summary of the arguments that their ending would show (onCardOf). The ending names them without it.
+	OnCard []string `json:"on_card,omitempty"`
+}
+
+// onCardOf is the IDs of the tools of the approval in whose call the reply shows on its card, from cards (Pause.Cards): those
+// whose card is of the tool's own call ID and shows the summary of the tool's own arguments, as the step of the call makes it
+// (render.Tool). A card of other arguments, or of none, does not say what the ending would. A sub-agent's approval has none: its
+// calls are not the reply's, and one may share an ID with a call that is. in is the pause as parsed, the one the card was made
+// from.
+func onCardOf(in dialect.Interaction, cards map[string]string) []string {
+	if in.Kind != dialect.ToolApproval || in.Nested != nil || len(cards) == 0 {
+		return nil
+	}
+	var ids []string
+	for _, t := range in.Tools {
+		if shown, ok := cards[t.CallID]; ok && t.CallID != "" && shown == render.Tool(t.Name, t.Args).Summary {
+			ids = append(ids, t.ID)
+		}
+	}
+	return ids
+}
+
+// markOnCard marks the tools of the prompt p, made from r in its order (toolsOf), whose call the reply shows on its card
+// (chat.Tool.OnCard), and returns p.
+func (r storedRequest) markOnCard(p chat.Prompt) chat.Prompt {
+	for i, t := range r.Tools {
+		if i < len(p.Tools) && slices.Contains(r.OnCard, t.ID) {
+			p.Tools[i].OnCard = true
+		}
+	}
+	return p
 }

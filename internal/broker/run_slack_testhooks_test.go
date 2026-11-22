@@ -4,6 +4,7 @@ package broker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -315,6 +316,71 @@ func TestRunTakesAPauseToAPromptAndAPressToTheAgent(t *testing.T) {
 
 	w.waitFor(t, "the agent's continuation", func(m fakeslack.Message) bool { return strings.Contains(m.Text, "deploying to prod") })
 	r.waitMetric(`agentkourier_interaction_decisions_total{result="answered"} 1`)
+}
+
+// buttonValue is the value of the button actionID in the blocks of a message.
+func buttonValue(t *testing.T, blocks []byte, actionID string) string {
+	t.Helper()
+	var bs []map[string]any
+	if err := json.Unmarshal(blocks, &bs); err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range bs {
+		els, _ := b["elements"].([]any)
+		for _, e := range els {
+			if el, _ := e.(map[string]any); el["action_id"] == actionID {
+				v, _ := el["value"].(string)
+				return v
+			}
+		}
+	}
+	t.Fatalf("no button %q in %s", actionID, blocks)
+	return ""
+}
+
+// A tool approval through the whole broker: the reply the task paused in shows the call's card with its arguments, the renderer
+// says so to the tap with the pause, the intake keeps it with the request, and once the call is approved the ending that replaces
+// the prompt names the tool and its verdict and leaves out the arguments that the card shows.
+func TestRunEndsAnApprovalWithoutTheArgumentsItsCardShows(t *testing.T) {
+	t.Parallel()
+	w := newSlackWorld(t, "xoxb-fake-bot")
+	w.cfg.sink = nil // the live renderer, whose cards, prompts and endings reach the fake
+	file := filepath.Join(w.cfg.ConfigDir, "binding.yaml")
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const asks = "  interactions:\n    askUser: true\n"
+	if !strings.Contains(string(raw), asks) {
+		t.Fatal("the example Binding has no interactions to add approvals to")
+	}
+	if err := os.WriteFile(file, []byte(strings.Replace(string(raw), asks, asks+"    toolApprovals: true\n", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w.stub.Agent("kagent", "k8s-agent").Reply(func(string) []stubagent.Step {
+		return []stubagent.Step{stubagent.RequestApproval([]stubagent.ToolRequest{{Name: "rollback", Args: map[string]any{"to": 6}, Result: map[string]any{"ok": true}}},
+			func(stubagent.Response) []stubagent.Step { return []stubagent.Step{stubagent.Text("rolled back")} })}
+	})
+	w.fake.AddUser(fakeslack.User{ID: "U1", Name: "ada"})
+	w.fake.SetMembers("C0123456789", "U1")
+	runsAlongside(&w.cfg)
+	r := start(t, w.cfg)
+	w.mention(t, r)
+
+	w.waitFor(t, "the call's card with its arguments", func(m fakeslack.Message) bool {
+		return slices.ContainsFunc(m.Tasks(), func(c fakeslack.Task) bool { return c.Title == "Approval requested: rollback" && c.Details == "to=6" })
+	})
+	prompt := w.waitFor(t, "the approval's prompt", func(m fakeslack.Message) bool { return strings.Contains(string(m.Blocks), `"approve_all"`) })
+	if _, err := w.fake.Click("U1", prompt.TS, "approve_all", buttonValue(t, prompt.Blocks, "approve_all")); err != nil {
+		t.Fatal(err)
+	}
+	ending := w.waitFor(t, "the ending", func(m fakeslack.Message) bool {
+		return m.TS == prompt.TS && strings.Contains(string(m.Blocks), "Approved")
+	})
+	if blocks := string(ending.Blocks); !strings.Contains(blocks, "rollback — Approved") || strings.Contains(blocks, "to=6") {
+		t.Errorf("ending blocks %s; want the line rollback — Approved, and not the arguments the card shows", blocks)
+	}
+	w.waitFor(t, "the agent's continuation", func(m fakeslack.Message) bool { return strings.Contains(m.Text, "rolled back") })
 }
 
 // A Binding that does not allow questions has the pause refused, through the intake's session, which is

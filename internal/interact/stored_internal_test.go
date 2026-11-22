@@ -49,3 +49,38 @@ func TestStorableTakesTheSecretsOutOfEveryFreeTextField(t *testing.T) {
 		t.Errorf("storable of nothing = %+v; want nothing", empty)
 	}
 }
+
+// onCardOf keeps the tools whose card in the reply shows the summary that their ending would: the card of the tool's own call,
+// of the tool's own arguments. A card of other arguments or of none, a card of another call, a tool with no call ID, a
+// sub-agent's approval and a question have none, and so does a pause handed on with no cards.
+func TestOnCardOfKeepsTheToolsWhoseCardShowsTheirArguments(t *testing.T) {
+	approval := dialect.Interaction{Kind: dialect.ToolApproval, TaskID: "task-1", Tools: []dialect.Tool{
+		{ID: "t1", CallID: "c1", Name: "delete_pod", Args: map[string]any{"name": "web-1"}},
+		{ID: "t2", CallID: "c2", Name: "add_numbers", Args: map[string]any{"a": 3, "b": 5}},
+		{ID: "t3", Name: "no_call_id", Args: map[string]any{"x": 1}},
+		{ID: "t4", CallID: "c4", Name: "secret", Args: map[string]any{"api_key": "planted-secret-value"}},
+	}}
+	nested := approval
+	nested.Nested = &dialect.Nested{Subagent: "planner"}
+	question := dialect.Interaction{Kind: dialect.AskUser, TaskID: "task-1", Questions: []dialect.Question{{Text: "q"}}}
+	for _, tc := range []struct {
+		name  string
+		in    dialect.Interaction
+		cards map[string]string
+		want  []string
+	}{
+		{"cards of the tools' own arguments", approval, map[string]string{"c1": `name="web-1"`, "c2": "a=3, b=5"}, []string{"t1", "t2"}},
+		{"a card of other arguments", approval, map[string]string{"c1": `name="web-2"`, "c2": "a=3, b=5"}, []string{"t2"}},
+		{"a card with no arguments", approval, map[string]string{"c1": ""}, nil},
+		{"a card of another call", approval, map[string]string{"c9": `name="web-1"`}, nil},
+		{"a tool with no call ID", approval, map[string]string{"": "x=1"}, nil},
+		{"a redacted card of the redacted arguments", approval, map[string]string{"c4": "api_key=[redacted]"}, []string{"t4"}},
+		{"a sub-agent's approval", nested, map[string]string{"c1": `name="web-1"`}, nil},
+		{"a question", question, map[string]string{"c1": `name="web-1"`}, nil},
+		{"no cards", approval, nil, nil},
+	} {
+		if got := onCardOf(tc.in, tc.cards); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s: onCardOf = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

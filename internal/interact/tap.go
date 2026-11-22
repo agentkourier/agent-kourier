@@ -22,9 +22,19 @@ type PauseHandler interface {
 	Paused(ctx context.Context, p Pause) error
 }
 
+// CardSink is a session.Sink that also says what the reply of a turn that paused for a tool approval shows of the calls the
+// pause waits on: live.Sink. The tap hands it on with the pause (Pause.Cards).
+type CardSink interface {
+	session.Sink
+	// TurnCards is Turn, and a func that gives, once the handler has taken a pause for an approval, the summary of the arguments
+	// that the turn's reply shows on the card of each call the pause waits on, by the call's ID (live.Run.Cards).
+	TurnCards(ctx context.Context, t session.TurnRef) (agent.Handler, func() map[string]string)
+}
+
 // TapConfig configures a Tap. Sink, Handler and Lookup are required.
 type TapConfig struct {
-	// Sink is the sink the tap wraps: the renderer.
+	// Sink is the sink the tap wraps: the renderer. A CardSink also gives the cards of its turns' pauses; any other gives none,
+	// and the endings of their approvals show the arguments of every tool.
 	Sink    session.Sink
 	Handler PauseHandler
 	// Lookup gives a Binding's interaction timeout, from which a pause's deadline comes.
@@ -76,15 +86,26 @@ func NewTap(cfg TapConfig) (*Tap, error) {
 }
 
 // Turn gives the turn to the wrapped sink and returns a handler that gives it every event, and hands off
-// a task that ends the turn paused for input.
+// a task that ends the turn paused for input, with what the sink says the turn's reply shows of the calls the pause waits on
+// (CardSink), asked once the sink has taken the pause.
 func (t *Tap) Turn(ctx context.Context, ref session.TurnRef) agent.Handler {
-	inner := t.cfg.Sink.Turn(ctx, ref)
+	var inner agent.Handler
+	var cards func() map[string]string
+	if cs, ok := t.cfg.Sink.(CardSink); ok {
+		inner, cards = cs.TurnCards(ctx, ref)
+	} else {
+		inner = t.cfg.Sink.Turn(ctx, ref)
+	}
 	return func(e agent.Event) {
 		if inner != nil {
 			inner(e)
 		}
 		if f, ok := e.(agent.FinalEvent); ok && f.Task != nil && (f.Task.Status.State == a2a.TaskStateInputRequired || f.Task.Status.State == a2a.TaskStateAuthRequired) {
-			t.handOff(ctx, ref, *f.Task)
+			var shown map[string]string
+			if cards != nil {
+				shown = cards()
+			}
+			t.handOff(ctx, ref, *f.Task, shown)
 		}
 	}
 }
@@ -114,7 +135,7 @@ func (t *Tap) Close(ctx context.Context) error {
 
 // handOff starts the hand-off of a pause, unless it is over or the same pause is in progress. A pause is
 // the task's and the message that asked: the same task paused again is another pause.
-func (t *Tap) handOff(ctx context.Context, ref session.TurnRef, task a2a.Task) {
+func (t *Tap) handOff(ctx context.Context, ref session.TurnRef, task a2a.Task, cards map[string]string) {
 	id := string(task.ID) + "|"
 	if m := task.Status.Message; m != nil {
 		id += m.ID
@@ -129,7 +150,7 @@ func (t *Tap) handOff(ctx context.Context, ref session.TurnRef, task a2a.Task) {
 	}
 	t.flying[id] = struct{}{}
 	t.wg.Add(1)
-	go t.run(ctx, id, Pause{Key: ref.Key, Binding: ref.Binding, Task: task, Recovered: ref.Restarted})
+	go t.run(ctx, id, Pause{Key: ref.Key, Binding: ref.Binding, Task: task, Recovered: ref.Restarted, Cards: cards})
 }
 
 // deadline is when the pause can no longer be answered: as the interaction's own, the task's time plus
