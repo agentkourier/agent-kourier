@@ -350,7 +350,7 @@ What differs from the chart:
 | Bedrock key | A Secret, or an IAM role | Injected by Substrate's egress gateway: the Task holds only a placeholder |
 | Store | SQLite on a volume, or Postgres | SQLite on the Task's durable workspace, `/workspace/agent-kourier-state/agent.db` |
 
-The files are in [`addons/ax`](https://github.com/agentkourier/agent-kourier/tree/main/addons/ax). AX is pinned
+The files are in `addons/ax` in the repository. AX is pinned
 there to the revision in `addons/ax/go.mod`; follow that revision's AX setup.
 
 ### 1. Build the image
