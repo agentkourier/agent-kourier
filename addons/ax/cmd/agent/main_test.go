@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -48,5 +49,28 @@ func TestUsageErrors(t *testing.T) {
 				t.Error("stderr echoes the argument")
 			}
 		})
+	}
+}
+
+// A bad OTEL setting stops the agent at start, like a bad setting of its own, and its value is not shown.
+func TestBadTraceSettingIsAUsageError(t *testing.T) {
+	env := map[string]string{"MODEL_REGION": "r", "MODEL_NAME": "m", "AUTH_TOKEN_FILE": "/t",
+		"OTEL_EXPORTER_OTLP_ENDPOINT": "http://user:canary@collector"}
+	var stdout, stderr bytes.Buffer
+	if code := run(nil, &stdout, &stderr, func(k string) string { return env[k] }); code != exitUsage {
+		t.Fatalf("exit %d, want %d", code, exitUsage)
+	}
+	if strings.Contains(stderr.String(), "canary") || !strings.Contains(stderr.String(), "OTEL") {
+		t.Fatalf("stderr %q: want an OTEL error that does not show the value", stderr.String())
+	}
+}
+
+// The configuration error is a line of the agent's own JSON log.
+func TestUsageErrorIsAJSONLogLine(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	run(nil, &stdout, &stderr, func(string) string { return "" })
+	var line map[string]any
+	if err := json.Unmarshal(stderr.Bytes(), &line); err != nil || line["level"] != "ERROR" || line["msg"] != "configuration" {
+		t.Fatalf("stderr %q is not one JSON error line: %v", stderr.String(), err)
 	}
 }

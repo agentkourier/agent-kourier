@@ -1,11 +1,13 @@
 // Command agent serves an ADK agent on Amazon Bedrock as an A2A agent.
 //
-// It is configured through its environment (package config holds every variable and its check) and reads AWS
-// credentials through the SDK's default chain (AWS_BEARER_TOKEN_BEDROCK, a role, a profile). A setting it cannot use
-// stops it at start, with an error that names the variable. It takes one flag, --version.
+// It is configured through its environment (package config holds every variable and its check; package telemetry the
+// OTEL_* ones) and reads AWS credentials through the SDK's default chain (AWS_BEARER_TOKEN_BEDROCK, a role, a
+// profile). A setting it cannot use stops it at start, with an error that names the variable. It takes one flag,
+// --version.
 //
 // Requests to the A2A endpoint and the card must pass the caller check: a token from AUTH_TOKEN_FILE, or, inside Google
-// AX, an OIDC ID token for Agent Kourier's service identity. /healthz and /readyz are open.
+// AX, an OIDC ID token for Agent Kourier's service identity. /healthz, /readyz and /metrics are open. With Postgres its
+// replicas elect a leader (package serve); a replica that loses the lease exits with cluster.ExitLeadershipLost (5).
 package main
 
 import (
@@ -25,12 +27,13 @@ import (
 	"github.com/agentkourier/agent-kourier/addons/ax/bedrock"
 	"github.com/agentkourier/agent-kourier/addons/ax/config"
 	"github.com/agentkourier/agent-kourier/addons/ax/serve"
+	"github.com/agentkourier/agent-kourier/addons/ax/telemetry"
 )
 
 // version is set at build time: -ldflags "-X main.version=<value>".
 var version = "dev"
 
-// The exit codes.
+// The exit codes. A replica that loses the leadership exits with cluster.ExitLeadershipLost (5).
 const (
 	exitOK      = 0
 	exitFailure = 1 // a dependency failed: the store, Bedrock's configuration, the listener
@@ -59,28 +62,48 @@ func run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 		return exitOK
 	}
 	cfg, err := config.Parse(getenv)
+	var traces telemetry.Config
+	if err == nil {
+		traces, err = telemetry.LoadConfig(getenv)
+	}
 	if err != nil {
-		slog.New(slog.NewJSONHandler(stderr, nil)).Error("configuration", "error", err)
+		slog.New(telemetry.NewLogHandler(stderr, slog.LevelInfo)).Error("configuration", "error", err)
 		return exitUsage
 	}
-	log := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: cfg.LogLevel}))
+	log := slog.New(telemetry.NewLogHandler(stderr, cfg.LogLevel))
 	slog.SetDefault(log)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if err := start(ctx, cfg, log); err != nil {
+	if err := start(ctx, cfg, traces, log); err != nil {
 		log.Error("agent stopped", "error", err)
 		return exitFailure
 	}
 	return exitOK
 }
 
-// start builds the Bedrock model and serves the agent until ctx ends.
-func start(ctx context.Context, cfg config.Config, log *slog.Logger) error {
+// start builds the telemetry and the Bedrock model, its calls observed, and serves the agent until ctx ends.
+func start(ctx context.Context, cfg config.Config, traces telemetry.Config, log *slog.Logger) error {
+	if traces.Endpoint != "" {
+		telemetry.InstallDiagnostics(log)
+	}
+	provider, shutdownTraces, err := traces.Provider(ctx, version, log)
+	if err != nil {
+		return fmt.Errorf("traces: %w", err)
+	}
+	defer func() {
+		flush, cancel := context.WithTimeout(context.WithoutCancel(ctx), serve.ShutdownTimeout)
+		defer cancel()
+		_ = shutdownTraces(flush)
+	}()
+	tel, err := telemetry.New(provider)
+	if err != nil {
+		return fmt.Errorf("metrics: %w", err)
+	}
 	aws, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(cfg.ModelRegion))
 	if err != nil {
 		// The SDK's error can quote a shared config file; it is not passed on.
 		return errors.New("bedrock: the AWS configuration could not be loaded")
 	}
-	model := &bedrock.Model{ID: cfg.ModelName, Client: bedrockruntime.NewFromConfig(aws)}
-	return serve.Run(ctx, cfg, model, serve.Options{Version: version, Log: log})
+	model := &bedrock.Model{ID: cfg.ModelName, Client: bedrock.Observe(bedrockruntime.NewFromConfig(aws), tel)}
+	return serve.Run(ctx, cfg, model, serve.Options{Version: version, Log: log, Telemetry: tel})
 }

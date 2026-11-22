@@ -76,7 +76,13 @@ func run(t *testing.T, overrides map[string]string) *running {
 	t.Cleanup(func() { _ = stop() })
 	select {
 	case a := <-listening:
-		return &running{base: "http://" + a.String(), stop: stop}
+		r := &running{base: "http://" + a.String(), stop: stop}
+		// Until its takeover is done the agent answers the A2A endpoint and the card 503.
+		waitFor(t, "the takeover", func() bool {
+			c, _ := probe(http.MethodGet, r.base+"/a2a/.well-known/agent-card.json", token)
+			return c != http.StatusServiceUnavailable
+		})
+		return r
 	case err := <-done:
 		t.Fatalf("Run: %v", err)
 	case <-time.After(30 * time.Second):
