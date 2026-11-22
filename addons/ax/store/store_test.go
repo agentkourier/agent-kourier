@@ -35,8 +35,8 @@ func SQLiteHarness() storetest.Harness {
 	}
 }
 
-// PostgresHarness opens Postgres stores, each location a schema of its own that the test drops after. It skips the
-// test when pgtest.DSNEnv is unset.
+// PostgresHarness opens Postgres stores, each location a schema of its own that the test drops after, and has each
+// take the lease. It skips the test when pgtest.DSNEnv is unset.
 func PostgresHarness(t *testing.T) storetest.Harness {
 	t.Helper()
 	pgtest.DSN(t) // skips when there is no Postgres
@@ -49,6 +49,10 @@ func PostgresHarness(t *testing.T) storetest.Harness {
 				t.Fatalf("OpenPostgres: %v", err)
 			}
 			t.Cleanup(func() { _ = s.Close() })
+			// A Postgres store writes only while it holds the lease. One holder for every open: a reopen takes it over.
+			if _, ok, err := s.TryLead(context.Background(), "storetest", "http://storetest.invalid:8090", time.Hour); err != nil || !ok {
+				t.Fatalf("TryLead: %v, %v", ok, err)
+			}
 			return s
 		},
 	}

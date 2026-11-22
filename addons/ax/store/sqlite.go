@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"time"
 
 	// The gorm dialector ADK's sessions go through. It registers the "sqlite" database/sql driver
 	// (github.com/glebarez/go-sqlite, a pure Go build of SQLite, so the agent stays CGO-free), which the store's own
@@ -26,6 +27,9 @@ var ErrInUse = errors.New("another agent has the SQLite file open")
 
 // sqliteReadConns is the size of the read pool.
 const sqliteReadConns = 4
+
+// sqliteBusyTimeout is how long a connection waits for a lock on the file before its statement fails with SQLITE_BUSY.
+const sqliteBusyTimeout = 5 * time.Second
 
 // OpenSQLite opens (creating it, and its directory, if needed) the SQLite store at path and applies its pending
 // migrations and ADK's. It holds an exclusive lock on path + ".lock" until Close, so a second agent on the same file
@@ -81,7 +85,8 @@ func (s *Store) openSQLite(ctx context.Context, c *sqliteConn) error {
 }
 
 func sqlitePool(ctx context.Context, path string, conns int, pragmas ...string) (*sql.DB, error) {
-	q := url.Values{"_pragma": append([]string{"busy_timeout(5000)", "foreign_keys(1)"}, pragmas...)}
+	busy := fmt.Sprintf("busy_timeout(%d)", sqliteBusyTimeout.Milliseconds())
+	q := url.Values{"_pragma": append([]string{busy, "foreign_keys(1)"}, pragmas...)}
 	u := url.URL{Scheme: "file", Path: path, RawQuery: q.Encode()}
 	db, err := sql.Open(sqlite.DriverName, u.String())
 	if err != nil {

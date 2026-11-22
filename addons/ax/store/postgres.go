@@ -33,7 +33,8 @@ const (
 )
 
 // OpenPostgres connects to the Postgres database at dsn and applies its pending migrations and ADK's. Several replicas
-// may open the same database. ADK's sessions go through gorm on the same pool. An error never shows dsn, which may
+// may open the same database, and elect a leader through it (lease.go): every write, the store's and ADK's, fails
+// with ErrDeposed unless this store holds the lease. ADK's sessions go through gorm on the same pool. An error never shows dsn, which may
 // hold a password.
 func OpenPostgres(ctx context.Context, dsn string, opts Options) (*Store, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
@@ -55,6 +56,7 @@ func OpenPostgres(ctx context.Context, dsn string, opts Options) (*Store, error)
 	}
 	c := &pgConn{pool: pool, std: stdlib.OpenDBFromPool(pool)}
 	s := newStore(c, opts)
+	s.elects = true
 	sub, err := fs.Sub(postgresMigrations, "migrations/postgres")
 	if err == nil {
 		err = migrate(ctx, c, sub, s.log)
@@ -66,6 +68,7 @@ func OpenPostgres(ctx context.Context, dsn string, opts Options) (*Store, error)
 		_ = s.Close()
 		return nil, fmt.Errorf("open postgres store: %w", err)
 	}
+	s.fence = s.checkEpoch // after the migrations, the store's and ADK's, which write without a lease
 	return s, nil
 }
 

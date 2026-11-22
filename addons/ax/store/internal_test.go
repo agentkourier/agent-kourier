@@ -80,8 +80,8 @@ func TestSQLiteRunsInWALModeWithFullSync(t *testing.T) {
 		if err := q.queryRow(ctx, `PRAGMA busy_timeout`).Scan(&timeout); err != nil {
 			return err
 		}
-		if sync != 2 || timeout <= 0 {
-			t.Errorf("write connection: synchronous = %d, busy_timeout = %d; want 2 (FULL) and one", sync, timeout)
+		if sync != 2 || int64(timeout) != sqliteBusyTimeout.Milliseconds() {
+			t.Errorf("write connection: synchronous = %d, busy_timeout = %d; want 2 (FULL) and %d", sync, timeout, sqliteBusyTimeout.Milliseconds())
 		}
 		return nil
 	})
@@ -166,7 +166,9 @@ func TestEveryWriteIsFenced(t *testing.T) {
 }
 
 func TestPostgresWritesAreFenced(t *testing.T) {
-	testEveryWriteIsFenced(t, openPostgres(t, pgtest.DSN(t)))
+	s := openPostgres(t, pgtest.DSN(t))
+	mustLead(t, s, "a", time.Hour)
+	testEveryWriteIsFenced(t, s)
 }
 
 // Every write, the store's and ADK's, runs the fence in its transaction: with a fence that refuses, every write fails
@@ -359,6 +361,7 @@ func TestPostgresReplicasMigrateTogether(t *testing.T) {
 		}
 	}
 	s := openPostgres(t, dsn)
+	mustLead(t, s, "a", time.Hour)
 	var n int
 	if err := s.conn.reader().queryRow(context.Background(), `SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil {
 		t.Fatal(err)

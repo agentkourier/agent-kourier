@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -37,6 +38,11 @@ type Options struct {
 	Now func() time.Time
 	// Log receives what the store finds worth a warning. Nil is slog.Default().
 	Log *slog.Logger
+	// OnDeposed, on Postgres, runs when a write, the store's or ADK's, finds that another replica has taken the lease
+	// since this store took it, before the write fails with ErrDeposed. It runs in the writer's goroutine and must not
+	// call the store. The agent ends its process in it: the error alone would reach whichever caller the write was made
+	// for. It does not run for a store that holds no epoch (a standby's, or one that released its lease).
+	OnDeposed func()
 }
 
 // Store is the agent's state on SQLite or Postgres. It implements taskstore.Store, and its Sessions is ADK's session
@@ -50,6 +56,11 @@ type Store struct {
 	// and its error aborts the write. It is the one place a check that must hold for any write runs: a leader's lease
 	// epoch, on Postgres, where several replicas share the store.
 	fence func(ctx context.Context, q querier) error
+	// elects is true on Postgres, where replicas elect a leader through the leadership row (lease.go).
+	elects bool
+	// epoch is the lease epoch this store took, 0 for none.
+	epoch     atomic.Int64
+	onDeposed func()
 
 	sessions session.Service
 
@@ -60,7 +71,7 @@ type Store struct {
 var _ taskstore.Store = (*Store)(nil)
 
 func newStore(c conn, opts Options) *Store {
-	s := &Store{conn: c, now: opts.Now, log: opts.Log}
+	s := &Store{conn: c, now: opts.Now, log: opts.Log, onDeposed: opts.OnDeposed}
 	if s.now == nil {
 		s.now = time.Now
 	}
