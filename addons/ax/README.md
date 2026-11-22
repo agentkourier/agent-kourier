@@ -25,7 +25,7 @@ This file keeps the developer's notes: building the add-on and its tests.
 From the repository root:
 
 ```sh
-make ax-test          # the module's tests, with the race detector
+make ax-test          # the module's tests, and the shared kit's (addons/kit) under its module graph, with the race detector
 make ax-lint
 make ax-image         # agent-kourier-ax:dev, the image the chart runs
 make ax-runner-image  # agent-kourier-ax-runner:dev, the image of the route inside Google AX

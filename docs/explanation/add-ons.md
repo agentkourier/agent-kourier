@@ -9,7 +9,10 @@ agent.
 ## What makes a component an add-on
 
 - **A module of its own.** An add-on is a Go module under `addons/` with its own `go.mod`, so its dependencies, such as
-  a vendor's SDK, never enter the broker's module or its binary.
+  a vendor's SDK, never enter the broker's module or its binary. The code the add-ons share is one more module in the
+  same repository, `addons/kit`. Each add-on requires it through a `replace` directive to that directory, so an add-on
+  is always built with the kit of its own commit. The kit has no version tags and no image of its own: a release's
+  add-ons are built with the kit of the release's commit.
 - **A public contract with the broker, and nothing else.** The broker does not import an add-on. An add-on that bridges
   to an agent, or is one, serves A2A, and a Binding reaches it through an AgentBackend with the `a2a` dialect, as it would reach
   any A2A agent. Any other A2A client can call it too.
