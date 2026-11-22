@@ -37,8 +37,8 @@ next runtime. Three reasons it was not built that way.
 
 - **For AX there was no other way in.** AX has no message model of its own: its API manages the lifecycle of sandboxed
   tasks, not conversations. The only route to a conversation with an agent running there is the A2A endpoint the agent
-  itself serves. AX no longer ships an A2A agent, so you build and run one as a Task; the
-  [AX guide](../how-to/connect-ax.md) covers what that needs.
+  itself serves. AX ships no A2A agent, so you run one as a Task, such as the AX add-on; the
+  [AX add-on's guide](../how-to/connect-ax.md#run-it-inside-google-ax) covers what that needs.
 - **For kagent, nothing internal is needed.** kagent's A2A gateway creates a session when a message carries no context
   ID, so a client that speaks public A2A and one published extension is enough. That keeps Agent Kourier clear of
   kagent's internal APIs, which were changing quickly through the 1.0 alphas.
@@ -121,7 +121,7 @@ describes it. If A2A publishes a standard extension for approvals, Agent Kourier
 
 To point a Binding at an agent that speaks A2A, see [Connect a generic A2A agent](../how-to/connect-a2a-agent.md). For
 kagent, whose agents ask structured questions through the extension, see [Connect a kagent agent](../how-to/connect-kagent.md).
-AX uses the generic dialect: see [Connect an agent on Google AX](../how-to/connect-ax.md).
+AX uses the generic dialect: see [Connect the AX add-on](../how-to/connect-ax.md).
 
 Plain A2A leaves some choices open, such as where an answer's text goes. The
 [agent contract](../reference/agent-contract.md) lists the ones Agent Kourier makes, and what it expects of an agent.
