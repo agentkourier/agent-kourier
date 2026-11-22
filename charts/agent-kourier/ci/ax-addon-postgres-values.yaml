@@ -1,0 +1,103 @@
+# The AX add-on (addons.ax) on Postgres at two replicas, which elect a leader and forward to it, beside the minimal install: a Bedrock API
+# key from a Secret, the token in a header of the AgentBackend's (X-Ax-Token) rather than the Binding's Authorization, the add-on's image
+# by digest, its election timings and durations set, OpenTelemetry through extraEnv, metrics scraped by prometheus-operator, and the
+# NetworkPolicies with the add-on's database.
+image:
+  repository: registry.example.test/agent-kourier
+  tag: v0.1.0
+
+config:
+  # The ConfigMap route, named: config.source defaults to crds. crds.install is left unset, which is false with files: no CRD.
+  source: files
+  chatConnections:
+    slack-main:
+      spec:
+        platform: slack
+        credentialsSecretRef: {name: slack-main}
+  agentBackends:
+    ax:
+      spec:
+        dialect: a2a
+        url: http://agent-kourier-ax.agent-kourier.svc:8090/a2a
+        headers:
+          - name: X-Ax-Token
+            valueSecretRef: {name: ax-token, key: token}
+  bindings:
+    ax-chat:
+      spec:
+        agent:
+          backendRef: {name: ax}
+          namespace: ax
+          name: assistant
+        identity:
+          userId: agent-kourier-ax
+        chat:
+          connectionRef: {name: slack-main}
+          channel: C0123456789
+          output: live
+          triggers:
+            - type: mention
+
+service:
+  enabled: true
+
+serviceMonitor:
+  enabled: true
+  namespace: monitoring
+  labels: {release: kube-prometheus-stack}
+
+networkPolicy:
+  enabled: true
+  kubeApiServer:
+    cidrs: ["10.0.0.1/32"]
+  extraEgress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: observability}}
+          podSelector: {matchLabels: {app.kubernetes.io/name: otel-collector}}
+      ports: [{port: 4318, protocol: TCP}]
+
+addons:
+  ax:
+    enabled: true
+    image:
+      repository: registry.example.test/platform/agent-kourier-ax
+      digest: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    replicaCount: 2
+    model:
+      region: eu-west-1
+      name: eu.anthropic.claude-haiku-4-5-20251001-v1:0
+    bedrock:
+      apiKeySecret: {name: bedrock, key: apiKey}
+    sessionIdleTTL: 720h
+    taskRetention: "0"
+    logLevel: debug
+    auth:
+      tokenSecret: {name: ax-token, key: token}
+      header: X-Ax-Token
+    store:
+      type: postgres
+      postgres:
+        dsnSecret: {name: ax-pg, key: dsn}
+    leaderElection:
+      leaseDuration: 20s
+      renewDeadline: 12s
+      retryPeriod: 3s
+    networkPolicy:
+      postgres:
+        to:
+          - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: db}}
+            podSelector: {matchLabels: {app: postgres}}
+        port: 5432
+      extraEgress:
+        - to:
+            - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: observability}}
+              podSelector: {matchLabels: {app.kubernetes.io/name: otel-collector}}
+          ports: [{port: 4318, protocol: TCP}]
+    extraEnv:
+      - {name: OTEL_TRACES_EXPORTER, value: otlp}
+      - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4318"}
+    podLabels: {example.test/team: platform}
+    podAnnotations: {example.test/scrape: "false"}
+    nodeSelector: {kubernetes.io/os: linux}
+    tolerations:
+      - {key: dedicated, operator: Equal, value: platform, effect: NoSchedule}
