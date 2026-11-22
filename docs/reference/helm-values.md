@@ -377,7 +377,7 @@ addons:
     auth: {tokenSecret: {name: cma-token}}
 ```
 
-addons.ax is the AX add-on: an ADK agent on Amazon Bedrock with one tool, ask_user, whose question the thread answers. It serves A2A, so that a Binding drives it with the a2a dialect. It renders &lt;fullname&gt;-ax: a Deployment, a ServiceAccount whose token is not mounted (the add-on does not call the Kubernetes API) and whose annotations can carry an IAM role, a ClusterIP Service on port 8090, named http, and with addons.ax.store.type sqlite a PersistentVolumeClaim. The add-on serves A2A at /a2a, its agent card, /healthz, /readyz and /metrics on that one port. Agent Kourier reaches it through an AgentBackend with dialect a2a and the url http://&lt;fullname&gt;-ax.&lt;namespace&gt;.svc:8090/a2a, which is also the endpoint the agent card names (PUBLIC_URL). With networkPolicy.enabled the add-on gets a NetworkPolicy of its own (addons.ax.networkPolicy), and with serviceMonitor.enabled a ServiceMonitor of its own, as addons.cma does. For example, with the release agent-kourier in the namespace agent-kourier and an IAM role for IRSA (a route not yet tested on EKS):
+addons.ax is the AX add-on: an ADK agent on Amazon Bedrock or the Anthropic API with one tool, ask_user, whose question the thread answers. It serves A2A, so that a Binding drives it with the a2a dialect. It renders &lt;fullname&gt;-ax: a Deployment, a ServiceAccount whose token is not mounted (the add-on does not call the Kubernetes API) and whose annotations can carry an IAM role, a ClusterIP Service on port 8090, named http, and with addons.ax.store.type sqlite a PersistentVolumeClaim. The add-on serves A2A at /a2a, its agent card, /healthz, /readyz and /metrics on that one port. Agent Kourier reaches it through an AgentBackend with dialect a2a and the url http://&lt;fullname&gt;-ax.&lt;namespace&gt;.svc:8090/a2a, which is also the endpoint the agent card names (PUBLIC_URL). With networkPolicy.enabled the add-on gets a NetworkPolicy of its own (addons.ax.networkPolicy), and with serviceMonitor.enabled a ServiceMonitor of its own, as addons.cma does. For example, with the release agent-kourier in the namespace agent-kourier and an IAM role for IRSA (a route not yet tested on EKS):
 
 ```yaml
 config:
@@ -397,6 +397,13 @@ addons:
     serviceAccount:
       annotations: {eks.amazonaws.com/role-arn: "arn:aws:iam::111122223333:role/agent-kourier-ax"}
     auth: {tokenSecret: {name: ax-token}}
+```
+
+On the Anthropic API instead, the model and its key replace the region and the role:
+
+```yaml
+model: {provider: anthropic, name: claude-haiku-4-5}
+anthropicApiKeySecret: {name: anthropic, key: apiKey}
 ```
 
 | Key | Default | Description |
@@ -472,13 +479,16 @@ addons:
 | `addons.ax.image.pullPolicy` | `IfNotPresent` |  |
 | `addons.ax.replicaCount` | `1` | 1, or 2 and more with addons.ax.store.type postgres (the render refuses more than 1 with sqlite: the add-on's SQLite file is on a ReadWriteOnce volume and may be open in one pod). With Postgres the replicas elect a leader (addons.ax.leaderElection), every replica is Ready and behind the Service, and the Deployment rolls one new pod in before it takes an old one away; at 2 and more the chart adds a PodDisruptionBudget, &lt;fullname&gt;-ax, with maxUnavailable 1, so that a node drain does not take every replica at once. 0 stops the add-on, and its volume or database stays. |
 | `addons.ax.model` |  | The model the agent runs on. |
-| `addons.ax.model.provider` | `bedrock` | Amazon Bedrock, the only provider (MODEL_PROVIDER) |
-| `addons.ax.model.region` | `""` | Required. The AWS region the add-on calls Bedrock in (MODEL_REGION), for example us-east-1. |
-| `addons.ax.model.name` | `""` | Required. The Bedrock model ID or inference profile (MODEL_NAME), for example us.anthropic.claude-haiku-4-5-20251001-v1:0. The account must have access to it in that region. |
-| `addons.ax.bedrock` |  | How the add-on authenticates to Bedrock. With apiKeySecret set, the chart passes a Bedrock API key, a bearer token, into the container's environment (AWS_BEARER_TOKEN_BEDROCK, with valueFrom.secretKeyRef), which Kubernetes reads when the container starts: after a change to the Secret, restart the add-on (kubectl rollout restart deployment/&lt;fullname&gt;-ax). With apiKeySecret empty, the AWS SDK's default chain finds AWS credentials: give the ServiceAccount an IAM role through serviceAccount.annotations (IRSA) or an EKS Pod Identity association. Neither route has been tested on EKS yet. |
-| `addons.ax.bedrock.apiKeySecret` |  | The Secret, in the release namespace, and its key: both or neither (the render refuses one alone). |
+| `addons.ax.model.provider` | `bedrock` | bedrock (Amazon Bedrock) or anthropic (the Anthropic API) (MODEL_PROVIDER) |
+| `addons.ax.model.region` | `""` | The AWS region the add-on calls Bedrock in (MODEL_REGION), for example us-east-1: required with bedrock, and refused with anthropic, which has no region. |
+| `addons.ax.model.name` | `""` | Required. The model (MODEL_NAME). With bedrock, a Bedrock model ID or inference profile, for example us.anthropic.claude-haiku-4-5-20251001-v1:0, which the account must have access to in that region. With anthropic, an Anthropic model ID or alias, for example claude-haiku-4-5. |
+| `addons.ax.bedrock` |  | How the add-on authenticates to Bedrock, with addons.ax.model.provider bedrock only. With apiKeySecret set, the chart passes a Bedrock API key, a bearer token, into the container's environment (AWS_BEARER_TOKEN_BEDROCK, with valueFrom.secretKeyRef), which Kubernetes reads when the container starts: after a change to the Secret, restart the add-on (kubectl rollout restart deployment/&lt;fullname&gt;-ax). With apiKeySecret empty, the AWS SDK's default chain finds AWS credentials: give the ServiceAccount an IAM role through serviceAccount.annotations (IRSA) or an EKS Pod Identity association. Neither route has been tested on EKS yet. |
+| `addons.ax.bedrock.apiKeySecret` |  | The Secret, in the release namespace, and its key: both or neither (the render refuses one alone, and either with anthropic). |
 | `addons.ax.bedrock.apiKeySecret.name` | `""` |  |
 | `addons.ax.bedrock.apiKeySecret.key` | `""` |  |
+| `addons.ax.anthropicApiKeySecret` |  | The Secret, in the release namespace, and its key, that hold the Anthropic API key: required with addons.ax.model.provider anthropic, and refused with bedrock. The chart passes it into the container's environment (ANTHROPIC_API_KEY, with valueFrom.secretKeyRef), which Kubernetes reads when the container starts: after a change to the Secret, restart the add-on (kubectl rollout restart deployment/&lt;fullname&gt;-ax). |
+| `addons.ax.anthropicApiKeySecret.name` | `""` |  |
+| `addons.ax.anthropicApiKeySecret.key` | `""` |  |
 | `addons.ax.serviceAccount` |  | The add-on's own ServiceAccount, &lt;fullname&gt;-ax, which the chart grants nothing. |
 | `addons.ax.serviceAccount.annotations` | `{}` | Added to it: for IRSA (not yet tested on EKS), eks.amazonaws.com/role-arn with the ARN of a role that may call Bedrock. |
 | `addons.ax.sessionIdleTTL` | `""` | How long a thread's context may go without a turn before the add-on deletes its ADK session and the context's tasks (SESSION_IDLE_TTL), a Go duration. Empty is the add-on's default, 2160h, which is Agent Kourier's default session.threadTTL: set it to the Binding's. "0" keeps them. |
@@ -504,10 +514,10 @@ addons:
 | `addons.ax.persistence.storageClassName` | `""` | Empty is the cluster's default class; "-" is an explicitly empty one. |
 | `addons.ax.persistence.accessModes` | `[ReadWriteOnce]` |  |
 | `addons.ax.persistence.retainOnUninstall` | `true` | Keep the claim (helm.sh/resource-policy: keep) when the release is uninstalled. Delete it by hand when you mean to. |
-| `addons.ax.networkPolicy` |  | With networkPolicy.enabled, the add-on's NetworkPolicy. Ingress is port 8090 from Agent Kourier's pods, from networkPolicy.metricsFrom (the metrics share the port with A2A: /a2a and the agent card need a token, and /healthz, /readyz and /metrics do not) and, with Postgres, from the add-on's other replicas, which forward to the leader. Egress is DNS (networkPolicy.dns), AWS on 443, with Postgres the add-on's other replicas on 8090 and its database, and what addons.ax.networkPolicy.extraEgress adds. Agent Kourier's own policy then also allows egress to the add-on's pods on 8090. |
-| `addons.ax.networkPolicy.bedrock` |  | Amazon Bedrock, and AWS STS for IRSA, on 443. A NetworkPolicy cannot name a host, so this is port 443 to anywhere outside the private and link-local ranges, as networkPolicy.slack is for Agent Kourier. Put an egress proxy's or a VPC endpoint's address in extraEgress and narrow this to [] to close it. Per AWS's EKS Pod Identity and EC2 instance metadata documentation, the Pod Identity agent and the instance metadata service listen on link-local addresses, which this rule leaves out: with Pod Identity add the agent's address and port to extraEgress. |
-| `addons.ax.networkPolicy.bedrock.cidrs` | `["0.0.0.0/0"]` |  |
-| `addons.ax.networkPolicy.bedrock.except` | `["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16"]` |  |
+| `addons.ax.networkPolicy` |  | With networkPolicy.enabled, the add-on's NetworkPolicy. Ingress is port 8090 from Agent Kourier's pods, from networkPolicy.metricsFrom (the metrics share the port with A2A: /a2a and the agent card need a token, and /healthz, /readyz and /metrics do not) and, with Postgres, from the add-on's other replicas, which forward to the leader. Egress is DNS (networkPolicy.dns), the model's provider on 443, with Postgres the add-on's other replicas on 8090 and its database, and what addons.ax.networkPolicy.extraEgress adds. Agent Kourier's own policy then also allows egress to the add-on's pods on 8090. |
+| `addons.ax.networkPolicy.model` |  | The model's provider on 443: Amazon Bedrock, and AWS STS for IRSA, with bedrock; the Anthropic API with anthropic. A NetworkPolicy cannot name a host, so this is port 443 to anywhere outside the private and link-local ranges, as networkPolicy.slack is for Agent Kourier. Put an egress proxy's or a VPC endpoint's address in extraEgress and narrow this to [] to close it. Per AWS's EKS Pod Identity and EC2 instance metadata documentation, the Pod Identity agent and the instance metadata service listen on link-local addresses, which this rule leaves out: with Pod Identity add the agent's address and port to extraEgress. |
+| `addons.ax.networkPolicy.model.cidrs` | `["0.0.0.0/0"]` |  |
+| `addons.ax.networkPolicy.model.except` | `["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16"]` |  |
 | `addons.ax.networkPolicy.postgres` |  | The add-on's database (addons.ax.store.type postgres), as NetworkPolicyPeers: required when the policy is enabled with Postgres, as networkPolicy.postgres.to is for Agent Kourier's. Egress is on port. |
 | `addons.ax.networkPolicy.postgres.to` | `[]` |  |
 | `addons.ax.networkPolicy.postgres.port` | `5432` |  |

@@ -29,14 +29,17 @@ const (
 	TurnInterrupted TurnOutcome = "interrupted"
 )
 
-// Operation names a call to Amazon Bedrock: the operation label of agentkourier_ax_operation_duration_seconds and the
-// last part of its span's name, agentkourier.ax.model.<operation>.
+// Operation names a call to the model's provider, Amazon Bedrock or the Anthropic API: the operation label of
+// agentkourier_ax_operation_duration_seconds and the last part of its span's name, agentkourier.ax.model.<operation>.
 type Operation string
 
 // The operations, a closed set.
 const (
+	// OpConverse and OpConverseStream are Bedrock's.
 	OpConverse       Operation = "converse"
 	OpConverseStream Operation = "converse_stream"
+	// OpMessagesStream is the Anthropic API's: the model always streams there.
+	OpMessagesStream Operation = "messages_stream"
 )
 
 // AuthReason is why the caller check refused a request: the label of agentkourier_ax_auth_refused_total. It is one of
@@ -113,7 +116,7 @@ func New(provider trace.TracerProvider) (*Telemetry, error) {
 		Help: "Turns the agent ran, by how they ended: completed, input_required (paused on an ask_user question), failed, canceled or interrupted (failed by the leader after a restart or a takeover)."},
 		[]string{"outcome"})
 	t.duration = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "agentkourier_ax_operation_duration_seconds",
-		Help:    "Duration of the agent's calls to Amazon Bedrock (converse, converse_stream (opening the stream)), by outcome: success, cancelled, timeout, the HTTP status Bedrock answered, or error.",
+		Help:    "Duration of the agent's calls to its model's provider, Amazon Bedrock (converse, converse_stream) or the Anthropic API (messages_stream), a stream timed while it opens, by outcome: success, cancelled, timeout, the HTTP status the provider answered, or error.",
 		Buckets: durationBuckets()}, []string{"operation", "outcome"})
 	t.authRefused = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_ax_auth_refused_total",
 		Help: "Requests to the A2A endpoint or the agent card that the caller check refused, by reason: missing (no credential, 401), invalid (not accepted, 401) or unavailable (the OIDC issuer could not be reached, 503)."},
@@ -245,7 +248,7 @@ func (tr *Turn) End(outcome TurnOutcome) {
 	}
 }
 
-// Call is one call to Bedrock: its span, agentkourier.ax.model.<operation>, and its duration.
+// Call is one call to the model's provider: its span, agentkourier.ax.model.<operation>, and its duration.
 type Call struct {
 	t       *Telemetry
 	op      Operation

@@ -15,7 +15,7 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// The AX add-on (addons.ax), an ADK agent on Amazon Bedrock that serves A2A: its objects are <fullname>-ax, and its pods are labelled
+// The AX add-on (addons.ax), an ADK agent on Amazon Bedrock or the Anthropic API that serves A2A: its objects are <fullname>-ax, and its pods are labelled
 // app.kubernetes.io/name=agent-kourier-ax, which none of Agent Kourier's selectors match. Its values files are ax-addon-*: ax-values.yaml
 // is the AX kind tier's Agent Kourier, not this add-on.
 
@@ -26,13 +26,18 @@ var axOn = []string{"-f", values("minimal"), "--set",
 	"addons.ax.enabled=true,addons.ax.model.region=us-east-1,addons.ax.model.name=us.anthropic.claude-haiku-4-5-20251001-v1:0," +
 		"addons.ax.auth.tokenSecret.name=ax-token"}
 
+// axAnthropicOn is the add-on with the least it needs on the Anthropic API, on the minimal install.
+var axAnthropicOn = []string{"-f", values("minimal"), "--set",
+	"addons.ax.enabled=true,addons.ax.model.provider=anthropic,addons.ax.model.name=claude-haiku-4-5," +
+		"addons.ax.anthropicApiKeySecret.name=anthropic,addons.ax.anthropicApiKeySecret.key=apiKey,addons.ax.auth.tokenSecret.name=ax-token"}
+
 // axPostgres switches axOn to Postgres.
 const axPostgres = "addons.ax.store.type=postgres,addons.ax.store.postgres.dsnSecret.name=ax-pg,addons.ax.store.postgres.dsnSecret.key=dsn"
 
 // axContract is every variable the add-on reads that the chart may set (the add-on's settings contract): the chart renders no other,
 // apart from what addons.ax.extraEnv adds.
 var axContract = []string{
-	"MODEL_PROVIDER", "MODEL_REGION", "MODEL_NAME", "AWS_BEARER_TOKEN_BEDROCK", "LISTEN_ADDR", "PUBLIC_URL", "AUTH_TOKEN_FILE", "AUTH_HEADER",
+	"MODEL_PROVIDER", "MODEL_REGION", "MODEL_NAME", "AWS_BEARER_TOKEN_BEDROCK", "ANTHROPIC_API_KEY", "LISTEN_ADDR", "PUBLIC_URL", "AUTH_TOKEN_FILE", "AUTH_HEADER",
 	"STORE", "SQLITE_PATH", "POSTGRES_DSN", "TASK_RETENTION", "SESSION_IDLE_TTL", "LEASE_DURATION", "LEASE_RENEW_DEADLINE", "LEASE_RETRY_PERIOD",
 	"ADVERTISE_URL", "POD_NAME", "LOG_LEVEL",
 	"POD_IP",     // the downward API's pod address, which ADVERTISE_URL refers to
@@ -74,6 +79,7 @@ func TestAXIsOffAndInertByDefault(t *testing.T) {
 			{"--set", "addons.ax=null"},
 			// Settings the checks would refuse if the block were on: off, they are not looked at.
 			{"--set", "addons.ax.replicaCount=3,addons.ax.leaderElection.leaseDuration=20s,addons.ax.store.postgres.dsnSecret.name=pg,addons.ax.bedrock.apiKeySecret.name=bedrock"},
+			{"--set", "addons.ax.model.provider=anthropic,addons.ax.model.region=us-east-1,addons.ax.anthropicApiKeySecret.key=apiKey"},
 		} {
 			got, err := render(t.Context(), t, "agent-kourier", "agent-kourier", append(slices.Clone(base), more...)...)
 			if err != nil {
@@ -96,14 +102,24 @@ func TestAXRefusals(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
 	on := func(more ...string) []string { return append(slices.Clone(axOn), more...) }
+	anthropic := func(more ...string) []string { return append(slices.Clone(axAnthropicOn), more...) }
 	tests := []struct {
 		name string
 		args []string
 		want string
 	}{
-		{"no region", on("--set", "addons.ax.model.region="), "addons.ax.enabled needs addons.ax.model.region"},
+		{"no region", on("--set", "addons.ax.model.region="), "addons.ax.model.provider bedrock needs addons.ax.model.region"},
 		{"no model", on("--set", "addons.ax.model.name="), "addons.ax.enabled needs addons.ax.model.name"},
-		{"a provider other than Bedrock", on("--set", "addons.ax.model.provider=openai"), "/addons/ax/model/provider"},
+		{"no model on the Anthropic API", anthropic("--set", "addons.ax.model.name="), "addons.ax.enabled needs addons.ax.model.name"},
+		{"a provider other than Bedrock or Anthropic", on("--set", "addons.ax.model.provider=openai"), "/addons/ax/model/provider"},
+		{"an empty provider", on("--set", "addons.ax.model.provider="), "/addons/ax/model/provider"},
+		{"a region on the Anthropic API", anthropic("--set", "addons.ax.model.region=us-east-1"), "addons.ax.model.region is for addons.ax.model.provider bedrock"},
+		{"no Anthropic key Secret", anthropic("--set", "addons.ax.anthropicApiKeySecret.name="), "addons.ax.model.provider anthropic needs addons.ax.anthropicApiKeySecret.name and addons.ax.anthropicApiKeySecret.key"},
+		{"an Anthropic key Secret with no key", anthropic("--set", "addons.ax.anthropicApiKeySecret.key="), "addons.ax.model.provider anthropic needs addons.ax.anthropicApiKeySecret.name and addons.ax.anthropicApiKeySecret.key"},
+		{"a Bedrock key on the Anthropic API", anthropic("--set", "addons.ax.bedrock.apiKeySecret.name=bedrock,addons.ax.bedrock.apiKeySecret.key=apiKey"), "addons.ax.bedrock.apiKeySecret is for addons.ax.model.provider bedrock"},
+		{"half a Bedrock key on the Anthropic API", anthropic("--set", "addons.ax.bedrock.apiKeySecret.key=apiKey"), "addons.ax.bedrock.apiKeySecret is for addons.ax.model.provider bedrock"},
+		{"an Anthropic key on Bedrock", on("--set", "addons.ax.anthropicApiKeySecret.name=anthropic,addons.ax.anthropicApiKeySecret.key=apiKey"), "addons.ax.anthropicApiKeySecret is for addons.ax.model.provider anthropic"},
+		{"half an Anthropic key on Bedrock", on("--set", "addons.ax.anthropicApiKeySecret.name=anthropic"), "addons.ax.anthropicApiKeySecret is for addons.ax.model.provider anthropic"},
 		{"a Bedrock key Secret with no key", on("--set", "addons.ax.bedrock.apiKeySecret.name=bedrock"), "addons.ax.bedrock.apiKeySecret needs both name and key"},
 		{"a Bedrock key with no Secret", on("--set", "addons.ax.bedrock.apiKeySecret.key=apiKey"), "addons.ax.bedrock.apiKeySecret needs both name and key"},
 		{"no token Secret", on("--set", "addons.ax.auth.tokenSecret.name="), "addons.ax.auth.tokenSecret.name and addons.ax.auth.tokenSecret.key"},
@@ -112,6 +128,7 @@ func TestAXRefusals(t *testing.T) {
 		{"OIDC, which is the AX route's", on("--set", "addons.ax.auth.oidc.issuer=https://issuer.example.test"), "additional properties 'oidc' not allowed"},
 		{"a runner, which is the AX route's", on("--set", "addons.ax.runnerURL=http://127.0.0.1:8081"), "additional properties 'runnerURL' not allowed"},
 		{"the CMA add-on's Anthropic rule", on("--set", "addons.ax.networkPolicy.anthropic.cidrs={0.0.0.0/0}"), "additional properties 'anthropic' not allowed"},
+		{"a rule named for Bedrock", on("--set", "addons.ax.networkPolicy.bedrock.cidrs={0.0.0.0/0}"), "additional properties 'bedrock' not allowed"},
 		{"two replicas on SQLite", on("--set", "addons.ax.replicaCount=2"), "addons.ax.replicaCount > 1 needs addons.ax.store.type postgres"},
 		{"Postgres without a DSN Secret", on("--set", "addons.ax.store.type=postgres"), "addons.ax.store.postgres.dsnSecret.name and addons.ax.store.postgres.dsnSecret.key"},
 		{"Postgres with a Secret and no key", on("--set", "addons.ax.store.type=postgres,addons.ax.store.postgres.dsnSecret.name=pg"), "addons.ax.store.postgres.dsnSecret.name and addons.ax.store.postgres.dsnSecret.key"},
@@ -250,6 +267,34 @@ func TestAXBedrockKey(t *testing.T) {
 	}
 }
 
+// TestAXAnthropicKey: with addons.ax.model.provider anthropic the Anthropic API key reaches the add-on as ANTHROPIC_API_KEY from its Secret,
+// and neither MODEL_REGION nor the Bedrock key is rendered; with bedrock, ANTHROPIC_API_KEY is not rendered.
+func TestAXAnthropicKey(t *testing.T) {
+	t.Parallel()
+	helmPath(t)
+	for _, args := range [][]string{axAnthropicOn, {"-f", values("ax-addon-anthropic")}} {
+		_, env := axDeployment(t, mustRender(t, "agent-kourier", "agent-kourier", args...))
+		if r := env["ANTHROPIC_API_KEY"].ValueFrom; r == nil || r.SecretKeyRef == nil || r.SecretKeyRef.Name != "anthropic" || r.SecretKeyRef.Key != "apiKey" ||
+			env["ANTHROPIC_API_KEY"].Value != "" {
+			t.Errorf("%v: ANTHROPIC_API_KEY %+v; want it from the Secret anthropic's key apiKey alone", args, env["ANTHROPIC_API_KEY"])
+		}
+		if env["MODEL_PROVIDER"].Value != "anthropic" || env["MODEL_NAME"].Value != "claude-haiku-4-5" {
+			t.Errorf("%v: MODEL_PROVIDER %q, MODEL_NAME %q; want anthropic and claude-haiku-4-5", args, env["MODEL_PROVIDER"].Value, env["MODEL_NAME"].Value)
+		}
+		for _, name := range []string{"MODEL_REGION", "AWS_BEARER_TOKEN_BEDROCK"} {
+			if _, has := env[name]; has {
+				t.Errorf("%v: %s is set on the Anthropic API", args, name)
+			}
+		}
+	}
+	for _, args := range [][]string{axOn, {"-f", values("ax-addon-postgres")}} {
+		_, env := axDeployment(t, mustRender(t, "agent-kourier", "agent-kourier", args...))
+		if _, has := env["ANTHROPIC_API_KEY"]; has {
+			t.Errorf("%v: ANTHROPIC_API_KEY is set on Bedrock", args)
+		}
+	}
+}
+
 // TestAXImage: the add-on's image defaults to its repository at the chart's appVersion, as Agent Kourier's does, and a digest wins.
 func TestAXImage(t *testing.T) {
 	t.Parallel()
@@ -301,11 +346,6 @@ func TestAXEnvironmentIsTheSettingsContract(t *testing.T) {
 
 	// Postgres, and every optional setting.
 	d, env := axDeployment(t, mustRender(t, "agent-kourier", "agent-kourier", "-f", values("ax-addon-postgres")))
-	for name := range env {
-		if !slices.Contains(axContract, name) && !strings.HasPrefix(name, "OTEL_") {
-			t.Errorf("env %s is not a setting of the add-on", name)
-		}
-	}
 	for name, value := range map[string]string{
 		"STORE": "postgres", "AUTH_HEADER": "X-Ax-Token", "SESSION_IDLE_TTL": "720h", "TASK_RETENTION": "0",
 		"LEASE_DURATION": "20s", "LEASE_RENEW_DEADLINE": "12s", "LEASE_RETRY_PERIOD": "3s", "LOG_LEVEL": "debug", "ADVERTISE_URL": "http://$(POD_IP):8090",
@@ -334,8 +374,13 @@ func TestAXEnvironmentIsTheSettingsContract(t *testing.T) {
 	if _, has := env["SQLITE_PATH"]; has {
 		t.Errorf("SQLITE_PATH with Postgres")
 	}
-	for _, args := range [][]string{axOn, {"-f", values("ax-addon")}, {"-f", values("ax-addon-postgres")}} {
+	for _, args := range [][]string{axOn, axAnthropicOn, {"-f", values("ax-addon")}, {"-f", values("ax-addon-postgres")}, {"-f", values("ax-addon-anthropic")}} {
 		_, env := axDeployment(t, mustRender(t, "agent-kourier", "agent-kourier", args...))
+		for name := range env {
+			if !slices.Contains(axContract, name) && !strings.HasPrefix(name, "OTEL_") {
+				t.Errorf("%v: env %s is not a setting of the add-on", args, name)
+			}
+		}
 		for _, name := range axNever {
 			if _, has := env[name]; has {
 				t.Errorf("%v: %s is set; the chart never sets it", args, name)
@@ -511,6 +556,8 @@ func TestAXNetworkPolicies(t *testing.T) {
 		{"ax-addon", 2, false, []int{53, 53, 443, 80}},
 		// Agent Kourier and the other replicas; DNS, Bedrock, the other replicas, the database, the collector.
 		{"ax-addon-postgres", 2, true, []int{53, 53, 443, 8090, 5432, 4318}},
+		// Agent Kourier alone (no metricsFrom); DNS and the Anthropic API.
+		{"ax-addon-anthropic", 1, false, []int{53, 53, 443}},
 	} {
 		t.Run(tc.values, func(t *testing.T) {
 			t.Parallel()
@@ -537,7 +584,7 @@ func TestAXNetworkPolicies(t *testing.T) {
 			}
 			if b := np.Spec.Egress[1].To; len(b) != 1 || b[0].IPBlock == nil || b[0].IPBlock.CIDR != "0.0.0.0/0" || !slices.Contains(b[0].IPBlock.Except, "10.0.0.0/8") ||
 				!slices.Contains(b[0].IPBlock.Except, "169.254.0.0/16") {
-				t.Errorf("the Bedrock rule %+v; want 443 to anywhere outside the private and link-local ranges", b)
+				t.Errorf("the rule for the model's provider %+v; want 443 to anywhere outside the private and link-local ranges", b)
 			}
 
 			var broker networkingv1.NetworkPolicy

@@ -28,6 +28,15 @@ const (
 	StorePostgres StoreKind = "postgres"
 )
 
+// The model providers.
+const (
+	// ProviderBedrock is Amazon Bedrock's Converse API, in MODEL_REGION.
+	ProviderBedrock = "bedrock"
+	// ProviderAnthropic is the Anthropic Messages API, whose SDK reads its own credentials (ANTHROPIC_API_KEY) and
+	// ANTHROPIC_BASE_URL.
+	ProviderAnthropic = "anthropic"
+)
+
 // jitterFactor is how much a retry period may stretch; the renew deadline must exceed the retry period times it, as
 // the broker's election requires.
 const jitterFactor = 1.2
@@ -44,10 +53,12 @@ type Lease struct {
 
 // Config is the agent's settings.
 type Config struct {
-	// ModelProvider is the model's provider; bedrock is the only one.
+	// ModelProvider is the model's provider: ProviderBedrock or ProviderAnthropic.
 	ModelProvider string
-	// ModelRegion and ModelName are the Bedrock region and the model (or inference profile) ID.
-	ModelRegion, ModelName string
+	// ModelRegion is the Bedrock region; Bedrock only.
+	ModelRegion string
+	// ModelName is the model: Bedrock's model or inference profile ID, or the Anthropic API's model ID.
+	ModelName string
 	// ListenAddr is where the agent listens.
 	ListenAddr string
 	// PublicURL is the JSON-RPC endpoint the agent card names.
@@ -102,7 +113,7 @@ func Parse(getenv func(string) string) (Config, error) {
 		return def
 	}
 	c := Config{
-		ModelProvider: strings.ToLower(get("MODEL_PROVIDER", "bedrock")),
+		ModelProvider: strings.ToLower(get("MODEL_PROVIDER", ProviderBedrock)),
 		ModelRegion:   getenv("MODEL_REGION"),
 		ModelName:     getenv("MODEL_NAME"),
 		ListenAddr:    get("LISTEN_ADDR", "127.0.0.1:8090"),
@@ -118,11 +129,17 @@ func Parse(getenv func(string) string) (Config, error) {
 	}
 	var errs []error
 	fail := func(err error) { errs = append(errs, err) }
-	if c.ModelProvider != "bedrock" {
-		fail(fmt.Errorf("MODEL_PROVIDER %q is not bedrock, the only provider", getenv("MODEL_PROVIDER")))
-	}
-	if c.ModelRegion == "" {
-		fail(errors.New("MODEL_REGION is required"))
+	switch c.ModelProvider {
+	case ProviderBedrock:
+		if c.ModelRegion == "" {
+			fail(errors.New("MODEL_REGION is required with MODEL_PROVIDER=bedrock"))
+		}
+	case ProviderAnthropic:
+		if c.ModelRegion != "" {
+			fail(errors.New("MODEL_REGION is set with MODEL_PROVIDER=anthropic, which has no region: unset it"))
+		}
+	default:
+		fail(fmt.Errorf("MODEL_PROVIDER %q is not bedrock or anthropic", getenv("MODEL_PROVIDER")))
 	}
 	if c.ModelName == "" {
 		fail(errors.New("MODEL_NAME is required"))

@@ -3,8 +3,11 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/agentkourier/agent-kourier/addons/ax/config"
 )
 
 func TestVersionFlagPrintsTheBuildVersion(t *testing.T) {
@@ -72,5 +75,27 @@ func TestUsageErrorIsAJSONLogLine(t *testing.T) {
 	var line map[string]any
 	if err := json.Unmarshal(stderr.Bytes(), &line); err != nil || line["level"] != "ERROR" || line["msg"] != "configuration" {
 		t.Fatalf("stderr %q is not one JSON error line: %v", stderr.String(), err)
+	}
+}
+
+// The model is the provider's: Bedrock's Converse in its region, or the Anthropic Messages API, each with its calls observed.
+func TestTheModelIsTheProviders(t *testing.T) {
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+	for _, tc := range []struct {
+		cfg  config.Config
+		want string
+	}{
+		{config.Config{ModelProvider: config.ProviderBedrock, ModelRegion: "us-east-1", ModelName: "us.anthropic.claude-haiku-4-5-20251001-v1:0"}, "*bedrock.Model"},
+		{config.Config{ModelProvider: config.ProviderAnthropic, ModelName: "claude-haiku-4-5"}, "*anthropic.Model"},
+	} {
+		t.Run(tc.cfg.ModelProvider, func(t *testing.T) {
+			m, err := newModel(t.Context(), tc.cfg, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := fmt.Sprintf("%T", m); got != tc.want || m.Name() != tc.cfg.ModelName {
+				t.Errorf("model %s named %q; want %s named %q", got, m.Name(), tc.want, tc.cfg.ModelName)
+			}
+		})
 	}
 }

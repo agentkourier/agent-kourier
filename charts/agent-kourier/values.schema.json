@@ -351,17 +351,18 @@
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "provider": {"enum": ["bedrock"], "description": "Amazon Bedrock, the only provider"},
-                "region": {"type": "string", "description": "the AWS region of Bedrock; required"},
-                "name": {"type": "string", "description": "the Bedrock model ID or inference profile; required"}
+                "provider": {"enum": ["bedrock", "anthropic"], "description": "bedrock (Amazon Bedrock) or anthropic (the Anthropic API)"},
+                "region": {"type": "string", "description": "the AWS region of Bedrock; required with bedrock, refused with anthropic"},
+                "name": {"type": "string", "description": "the Bedrock model ID or inference profile, or the Anthropic model ID; required"}
               }
             },
             "bedrock": {
               "type": "object",
               "additionalProperties": false,
-              "description": "the Bedrock API key, apiKeySecret with both name and key or neither; neither takes AWS credentials from the SDK's default chain",
+              "description": "with bedrock, the Bedrock API key, apiKeySecret with both name and key or neither; neither takes AWS credentials from the SDK's default chain; refused with anthropic",
               "properties": {"apiKeySecret": {"$ref": "#/definitions/secretKey"}}
             },
+            "anthropicApiKeySecret": {"$ref": "#/definitions/secretKey"},
             "serviceAccount": {
               "type": "object",
               "additionalProperties": false,
@@ -415,9 +416,10 @@
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "bedrock": {
+                "model": {
                   "type": "object",
                   "additionalProperties": false,
+                  "description": "egress to the model's provider on 443: Bedrock (and STS) or the Anthropic API",
                   "properties": {"cidrs": {"type": "array", "items": {"type": "string"}}, "except": {"type": "array", "items": {"type": "string"}}}
                 },
                 "postgres": {

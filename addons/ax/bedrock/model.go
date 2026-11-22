@@ -16,6 +16,8 @@ import (
 	"github.com/aws/smithy-go"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
+
+	"github.com/agentkourier/agent-kourier/addons/ax/internal/toolschema"
 )
 
 // Client is the AWS SDK contract, allowing deterministic model tests.
@@ -226,26 +228,10 @@ func (m *Model) request(req *model.LLMRequest) (*bedrockruntime.ConverseInput, e
 				if f == nil {
 					continue
 				}
-				schema := f.ParametersJsonSchema
-				if schema == nil && f.Parameters != nil {
-					schema = f.Parameters
-				}
-				if schema != nil {
-					// ADK's schema structs have a custom JSON marshaler. Smithy
-					// documents require normalized JSON values to preserve that schema.
-					raw, err := json.Marshal(schema)
-					if err != nil {
-						return nil, errors.New("invalid tool schema")
-					}
-					var mapped any
-					if json.Unmarshal(raw, &mapped) != nil {
-						return nil, errors.New("invalid tool schema")
-					}
-					lowerTypes(mapped)
-					schema = mapped
-				}
-				if schema == nil {
-					schema = map[string]any{"type": "object", "properties": map[string]any{}}
+				// Smithy documents need plain JSON values to keep ADK's schema, which has JSON marshalers of its own.
+				schema, err := toolschema.Of(f)
+				if err != nil {
+					return nil, err
 				}
 				if in.ToolConfig == nil {
 					in.ToolConfig = &bt.ToolConfiguration{}
@@ -255,24 +241,6 @@ func (m *Model) request(req *model.LLMRequest) (*bedrockruntime.ConverseInput, e
 		}
 	}
 	return in, nil
-}
-func lowerTypes(v any) {
-	switch x := v.(type) {
-	case map[string]any:
-		for k, val := range x {
-			if k == "type" {
-				if t, ok := val.(string); ok {
-					x[k] = strings.ToLower(t)
-				}
-			} else {
-				lowerTypes(val)
-			}
-		}
-	case []any:
-		for _, val := range x {
-			lowerTypes(val)
-		}
-	}
 }
 func fromBlocks(blocks []bt.ContentBlock) (*genai.Content, error) {
 	c := &genai.Content{Role: "model"}

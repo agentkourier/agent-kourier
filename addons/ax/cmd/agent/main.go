@@ -1,8 +1,9 @@
-// Command agent serves an ADK agent on Amazon Bedrock as an A2A agent.
+// Command agent serves an ADK agent on Amazon Bedrock or the Anthropic API as an A2A agent.
 //
 // It is configured through its environment (package config holds every variable and its check; package telemetry the
-// OTEL_* ones) and reads AWS credentials through the SDK's default chain (AWS_BEARER_TOKEN_BEDROCK, a role, a
-// profile). A setting it cannot use stops it at start, with an error that names the variable. It takes one flag,
+// OTEL_* ones). On Bedrock it reads AWS credentials through the AWS SDK's default chain (AWS_BEARER_TOKEN_BEDROCK, a
+// role, a profile); on the Anthropic API, the Anthropic SDK reads its own (ANTHROPIC_API_KEY first) and
+// ANTHROPIC_BASE_URL. A setting it cannot use stops it at start, with an error that names the variable. It takes one flag,
 // --version.
 //
 // Requests to the A2A endpoint and the card must pass the caller check: a token from AUTH_TOKEN_FILE, or, inside Google
@@ -23,7 +24,9 @@ import (
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	"google.golang.org/adk/v2/model"
 
+	"github.com/agentkourier/agent-kourier/addons/ax/anthropic"
 	"github.com/agentkourier/agent-kourier/addons/ax/bedrock"
 	"github.com/agentkourier/agent-kourier/addons/ax/config"
 	"github.com/agentkourier/agent-kourier/addons/ax/serve"
@@ -36,7 +39,7 @@ var version = "dev"
 // The exit codes. A replica that loses the leadership exits with cluster.ExitLeadershipLost (5).
 const (
 	exitOK      = 0
-	exitFailure = 1 // a dependency failed: the store, Bedrock's configuration, the listener
+	exitFailure = 1 // a dependency failed: the store, the AWS configuration, the listener
 	exitUsage   = 2 // a flag, an argument or a setting is wrong
 )
 
@@ -81,7 +84,7 @@ func run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 	return exitOK
 }
 
-// start builds the telemetry and the Bedrock model, its calls observed, and serves the agent until ctx ends.
+// start builds the telemetry and the model, its calls observed, and serves the agent until ctx ends.
 func start(ctx context.Context, cfg config.Config, traces telemetry.Config, log *slog.Logger) error {
 	if traces.Endpoint != "" {
 		telemetry.InstallDiagnostics(log)
@@ -99,11 +102,22 @@ func start(ctx context.Context, cfg config.Config, traces telemetry.Config, log 
 	if err != nil {
 		return fmt.Errorf("metrics: %w", err)
 	}
+	llm, err := newModel(ctx, cfg, tel)
+	if err != nil {
+		return err
+	}
+	return serve.Run(ctx, cfg, llm, serve.Options{Version: version, Log: log, Telemetry: tel})
+}
+
+// newModel is the model of cfg's provider, its calls observed by tel.
+func newModel(ctx context.Context, cfg config.Config, tel *telemetry.Telemetry) (model.LLM, error) {
+	if cfg.ModelProvider == config.ProviderAnthropic {
+		return &anthropic.Model{ID: cfg.ModelName, Client: anthropic.Observe(anthropic.NewClient(), tel)}, nil
+	}
 	aws, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(cfg.ModelRegion))
 	if err != nil {
 		// The SDK's error can quote a shared config file; it is not passed on.
-		return errors.New("bedrock: the AWS configuration could not be loaded")
+		return nil, errors.New("bedrock: the AWS configuration could not be loaded")
 	}
-	model := &bedrock.Model{ID: cfg.ModelName, Client: bedrock.Observe(bedrockruntime.NewFromConfig(aws), tel)}
-	return serve.Run(ctx, cfg, model, serve.Options{Version: version, Log: log, Telemetry: tel})
+	return &bedrock.Model{ID: cfg.ModelName, Client: bedrock.Observe(bedrockruntime.NewFromConfig(aws), tel)}, nil
 }

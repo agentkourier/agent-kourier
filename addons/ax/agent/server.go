@@ -1,4 +1,4 @@
-// Package agent is the ADK agent on Bedrock and its A2A request handler. A message whose ID the store has recorded
+// Package agent is the ADK agent and its A2A request handler. A message whose ID the store has recorded
 // joins that message's task instead of starting another turn, and an ask_user question is a plain-text pause that the
 // next message on the task answers.
 package agent
@@ -93,7 +93,7 @@ func New(cfg Config) (*Server, error) {
 	executor := &TextExecutor{Inner: adka2a.NewExecutor(adka2a.ExecutorConfig{RunnerConfig: runner.Config{AppName: store.AppName, Agent: root, SessionService: cfg.Store.Sessions()}, RunConfig: adkagent.RunConfig{StreamingMode: adkagent.StreamingModeSSE}, OutputMode: adka2a.OutputArtifactPerEvent}), Telemetry: cfg.Telemetry}
 	base := a2asrv.NewHandler(executor, a2asrv.WithTaskStore(cfg.Store))
 	handler := &a2asrv.InterceptedHandler{Handler: &replayHandler{RequestHandler: base, store: cfg.Store, tel: cfg.Telemetry}, Interceptors: []a2asrv.CallInterceptor{auth.Interceptor{}}}
-	card := &a2a.AgentCard{Name: "ax-adk-bedrock", Description: "An ADK agent on Amazon Bedrock, served over A2A", Version: cfg.Version, SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface(cfg.PublicURL, a2a.TransportProtocolJSONRPC)}, DefaultInputModes: []string{"text/plain"}, DefaultOutputModes: []string{"text/plain"}, Capabilities: a2a.AgentCapabilities{Streaming: true}}
+	card := &a2a.AgentCard{Name: "ax-adk", Description: "An ADK agent on Amazon Bedrock or the Anthropic API, served over A2A", Version: cfg.Version, SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface(cfg.PublicURL, a2a.TransportProtocolJSONRPC)}, DefaultInputModes: []string{"text/plain"}, DefaultOutputModes: []string{"text/plain"}, Capabilities: a2a.AgentCapabilities{Streaming: true}}
 	mux := http.NewServeMux()
 	mux.Handle(A2APath+CardPath, cfg.Check.Wrap(a2asrv.NewStaticAgentCardHandler(card)))
 	mux.Handle(A2APath, cfg.Check.Wrap(a2asrv.NewJSONRPCHandler(handler)))

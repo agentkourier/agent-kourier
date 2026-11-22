@@ -47,13 +47,13 @@ spec:
       ports:
         - {port: 53, protocol: UDP}
         - {port: 53, protocol: TCP}
-    {{- if $ax.networkPolicy.bedrock.cidrs }}
-    # Amazon Bedrock (and, with IRSA, AWS STS), over TLS.
+    {{- if $ax.networkPolicy.model.cidrs }}
+    # The model's provider over TLS: Amazon Bedrock (and, with IRSA, AWS STS), or the Anthropic API.
     - to:
-        {{- range $ax.networkPolicy.bedrock.cidrs }}
+        {{- range $ax.networkPolicy.model.cidrs }}
         - ipBlock:
             cidr: {{ . | quote }}
-            {{- with $ax.networkPolicy.bedrock.except }}
+            {{- with $ax.networkPolicy.model.except }}
             except:
               {{- range . }}
               - {{ . | quote }}

@@ -1,6 +1,6 @@
 # AX add-on
 
-The AX add-on is an agent: an ADK agent on Amazon Bedrock that serves A2A, with one tool, `ask_user`, whose question a
+The AX add-on is an agent: an ADK agent on Amazon Bedrock or the Anthropic API that serves A2A, with one tool, `ask_user`, whose question a
 person answers in the thread. Agent Kourier reaches it through an AgentBackend with the `a2a` dialect. The chart runs it
 beside Agent Kourier; it can also run inside Google AX as a Task, which is where its name comes from. It is
 experimental. [Connect the AX add-on](../how-to/connect-ax.md) installs it either way; [Add-ons](../explanation/add-ons.md)
@@ -11,11 +11,12 @@ flowchart LR
   thread[Thread] <--> binding["Binding<br/>a2a dialect"]
   binding <-- "A2A, streamed" --> addon["Add-on<br/>/a2a"]
   addon --- store[("tasks, message IDs,<br/>ADK sessions<br/>(SQLite or Postgres)")]
-  addon <-- "Converse,<br/>ConverseStream" --> bedrock["Amazon Bedrock"]
+  addon <-- "ConverseStream, or<br/>Messages, streamed" --> model["Amazon Bedrock<br/>or the Anthropic API"]
 ```
 
 Agent Kourier owns the chat side: the thread, its session, the question's prompt and its timeout, and audit. The add-on
-is the agent: it runs each turn through ADK, with Bedrock as the model, and keeps the ADK session of each thread.
+is the agent: it runs each turn through ADK, with a model on Bedrock or the Anthropic API ([The model](#the-model)), and
+keeps the ADK session of each thread.
 
 The agent answers chat messages and investigates the alert text it is given. It has no tool that reaches another system,
 so it works from what the thread's messages carry, and asks with `ask_user` for what is missing. It is a starting point
@@ -49,15 +50,15 @@ behind the caller check: Agent Kourier fetches it with the Binding's token.
 sequenceDiagram
   participant K as Agent Kourier
   participant A as Add-on
-  participant M as Bedrock
+  participant M as The model
 
   K->>A: message/stream (the thread's text)
-  A->>M: ConverseStream
+  A->>M: a streamed call
   M-->>A: ask_user {question}
   A-->>K: input-required + the question's text
   Note over K: The question in the thread
   K->>A: message/stream (the answer, on the same task)
-  A->>M: ConverseStream (ask_user's result)
+  A->>M: a streamed call (ask_user's result)
   M-->>A: the answer's text
   A-->>K: artifacts, then completed
 ```
@@ -65,6 +66,29 @@ sequenceDiagram
 The paused task waits in the store, so the answer may come after a restart of the add-on or of Agent Kourier. If nobody
 answers before the Binding's `interactions.timeout`, Agent Kourier ends the pause as its
 [agent contract](agent-contract.md#structured-questions-and-tool-approvals) says.
+
+## The model
+
+`MODEL_PROVIDER` picks where the model runs, and `MODEL_NAME` names it there:
+
+- `bedrock`, the default: Amazon Bedrock's `ConverseStream`, in `MODEL_REGION`, with the AWS SDK's credentials (a
+  Bedrock API key in `AWS_BEARER_TOKEN_BEDROCK`, or the SDK's default chain). `MODEL_NAME` is a Bedrock model ID or
+  inference profile, such as `us.anthropic.claude-haiku-4-5-20251001-v1:0`.
+- `anthropic`: the Anthropic Messages API, through Anthropic's Go SDK, which reads the API key from `ANTHROPIC_API_KEY`
+  and its other `ANTHROPIC_*` variables too, such as `ANTHROPIC_BASE_URL`. `MODEL_NAME` is an Anthropic model ID or
+  alias, such as `claude-haiku-4-5`. The add-on does not start with `MODEL_REGION` set.
+
+On the Anthropic API every call streams, and a reply has at most `8192` tokens, its thinking included
+([Limits](limits.md#ax-add-on)). A reply cut there in its text completes the turn with what was written; one cut in an
+`ask_user` call, or with nothing written, fails the turn, as does a refusal with nothing written. The SDK sends a
+request again, twice at most, after a connection error or a status of 408, 409, 429 or 5xx, unless the API's
+`x-should-retry` header says otherwise; after that the turn fails, with an error that names the HTTP status and the
+API's error type but not the API's message. The SDK waits 10 minutes at most for each request's response headers (its
+own default); a stream that stalls after it opens waits until the turn ends.
+
+The add-on does not ask the model to think. If a reply carries thinking blocks anyway, the add-on keeps them in the ADK
+session and sends them back unchanged with the rest of the turn, which the API needs when the turn goes on after a tool
+call; a question that waits across a restart keeps them too.
 
 ## Restarts
 
@@ -209,10 +233,11 @@ says otherwise.
 
 | Variable | Default | What it does | Chart value |
 |---|---|---|---|
-| `MODEL_PROVIDER` | `bedrock` | The model's provider. Bedrock is the only one. | `addons.ax.model.provider` |
-| `MODEL_REGION` | Required | The AWS region the add-on calls Bedrock in. | `addons.ax.model.region` |
-| `MODEL_NAME` | Required | The Bedrock model ID or inference profile. | `addons.ax.model.name` |
-| `AWS_BEARER_TOKEN_BEDROCK` | None | A Bedrock API key, which the AWS SDK reads. Without it, the SDK's default chain finds AWS credentials: access keys in the environment, a profile, a web identity (IRSA), EKS Pod Identity, or the instance's role. | `addons.ax.bedrock.apiKeySecret`; IRSA through `addons.ax.serviceAccount.annotations` |
+| `MODEL_PROVIDER` | `bedrock` | The model's provider: `bedrock` or `anthropic` ([The model](#the-model)). | `addons.ax.model.provider` |
+| `MODEL_REGION` | Required with `bedrock` | The AWS region the add-on calls Bedrock in. Refused with `anthropic`. | `addons.ax.model.region` |
+| `MODEL_NAME` | Required | The model: with `bedrock`, a Bedrock model ID or inference profile; with `anthropic`, an Anthropic model ID or alias. | `addons.ax.model.name` |
+| `ANTHROPIC_API_KEY` | None | With `anthropic`, the API key, which the Anthropic Go SDK reads. The SDK reads its other `ANTHROPIC_*` variables too, such as `ANTHROPIC_BASE_URL`. | `addons.ax.anthropicApiKeySecret`; the others through `addons.ax.extraEnv` |
+| `AWS_BEARER_TOKEN_BEDROCK` | None | With `bedrock`, a Bedrock API key, which the AWS SDK reads. Without it, the SDK's default chain finds AWS credentials: access keys in the environment, a profile, a web identity (IRSA), EKS Pod Identity, or the instance's role. | `addons.ax.bedrock.apiKeySecret`; IRSA through `addons.ax.serviceAccount.annotations` |
 | `LISTEN_ADDR` | `127.0.0.1:8090` | Where the add-on listens, as `host:port`. | Always `:8090` |
 | `PUBLIC_URL` | `http://` + `LISTEN_ADDR` + `/a2a` | The endpoint the agent card names: the URL Agent Kourier reaches. An `http` or `https` URL with a host. | Always `http://<fullname>-ax.<namespace>.svc:8090/a2a` |
 | `RUNNER_URL` | None | The AX task runner's metadata server, an `http` or `https` origin, to which `/readyz` and `/metadata/` are proxied. Unset, the add-on runs standalone and answers `/readyz` itself. | Never set |
@@ -253,7 +278,7 @@ ServiceMonitor of the add-on's own.
 | Metric | Type | What it counts |
 |---|---|---|
 | `agentkourier_ax_turns_total{outcome}` | Counter | Turns, by how they ended: `completed`, `input_required` (paused on a question), `failed`, `canceled`, or `interrupted` (failed by the leader after a restart or a takeover) |
-| `agentkourier_ax_operation_duration_seconds{operation,outcome}` | Histogram | Calls to Bedrock, `converse` or `converse_stream` (timed while the stream opens), by `success`, `cancelled`, `timeout`, the HTTP status Bedrock answered, or `error` |
+| `agentkourier_ax_operation_duration_seconds{operation,outcome}` | Histogram | Calls to the model's provider, Bedrock's `converse` or `converse_stream`, or the Anthropic API's `messages_stream` (a stream timed while it opens), by `success`, `cancelled`, `timeout`, the HTTP status the provider answered, or `error` |
 | `agentkourier_ax_auth_refused_total{reason}` | Counter | Requests the caller check refused, by `missing`, `invalid` or `unavailable` |
 | `agentkourier_ax_message_replays_total` | Counter | Resent messages that joined their first send's task |
 | `agentkourier_ax_tasks_interrupted_total` | Counter | Tasks a restart or takeover failed |
@@ -263,7 +288,7 @@ ServiceMonitor of the add-on's own.
 | `agentkourier_ax_forwarded_requests_total{outcome}` | Counter | Requests a standby forwarded to the leader, or could not: `forwarded`, `failed`, `cancelled`, `no_leader` or `loop` (a request another standby forwarded) |
 
 Each turn is a span, `agentkourier.ax.turn`, a child of the trace context Agent Kourier sends with the request, and
-each call to Bedrock a span `agentkourier.ax.model.<operation>` under it.
+each call to the model's provider a span `agentkourier.ax.model.<operation>` under it.
 
 ## Limits
 
@@ -271,7 +296,7 @@ each call to Bedrock a span `agentkourier.ax.model.<operation>` under it.
 
 - **Text only.** Questions go out as text, and answers come back as text.
 - **One tool.** The agent has `ask_user` and nothing that reaches another system, and asks for no tool approval.
-- **Bedrock only.**
+- **Two providers.** Amazon Bedrock and the Anthropic API.
 - **A restart fails the turns in flight**, and keeps paused questions.
 - **An idle context loses its questions.** `SESSION_IDLE_TTL` deletes a question it waits on with the rest.
 - **One replica on SQLite.**
