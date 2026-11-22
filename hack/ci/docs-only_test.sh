@@ -21,7 +21,7 @@ export GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.com
 export GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.com
 
 # Every class the script knows, in the order of the columns of the page cases below.
-CLASSES='tests scan crd-corpus docs-agent echo-agent prompt-agent cma'
+CLASSES='tests scan crd-corpus docs-agent echo-agent prompt-agent cma ax'
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -29,8 +29,8 @@ fail() {
 }
 
 # The base: a file at each kind of path the cases change, so a case can modify, delete or rename one. The Go files
-# make Go package trees: internal/broker, the docs agent's corpus package, the CMA add-on's adapter package, and
-# test/fixtures/pkg with a page two directories below it.
+# make Go package trees: internal/broker, the docs agent's corpus package, the CMA add-on's adapter package, the AX
+# add-on's agent package, and test/fixtures/pkg with a page two directories below it.
 REPO=${TMP}/repo
 git init -q -b main "${REPO}"
 for path in AGENTS.md README.md spec.md docs/index.md docs/how-to/install.md docs/assets/clip/team.gif \
@@ -39,7 +39,8 @@ for path in AGENTS.md README.md spec.md docs/index.md docs/how-to/install.md doc
   examples/recipes/docs-agent/agent/corpus/testdata/docs/index.md examples/recipes/echo-agent/agent/agent.py \
   examples/recipes/echo-agent/agent/README.md examples/recipes/prompt-agent/agent/agent.py \
   examples/recipes/prompt-agent/agent/README.md charts/agent-kourier/README.md test/fixtures/pkg/pkg.go \
-  test/fixtures/pkg/sub/deeper/page.md addons/cma/README.md addons/cma/adapter/server.go addons/cma/adapter/README.md; do
+  test/fixtures/pkg/sub/deeper/page.md addons/cma/README.md addons/cma/adapter/server.go addons/cma/adapter/README.md \
+  addons/ax/README.md addons/ax/agent/server.go addons/ax/agent/README.md; do
   mkdir -p "$(dirname "${REPO}/${path}")"
   printf 'base %s\n' "${path}" >"${REPO}/${path}"
 done
@@ -148,43 +149,47 @@ for change in \
 done
 
 # Markdown off the docs-only list: each class skips what it does not read. Columns: tests, scan, crd-corpus,
-# docs-agent, echo-agent, prompt-agent, cma. The tests read pages anywhere; the docs agent reads docs/ and its recipe's
-# directory; the echo and prompt agents' jobs read their agent directories (the prompt agent's, the webhook-github
-# recipe's agent directory too); the CMA add-on's job reads docs/ and addons/cma/ (not another add-on's directory,
-# nor one whose name only starts with cma); no class but tests skips a page in a Go package's tree, at any depth below
-# it.
+# docs-agent, echo-agent, prompt-agent, cma, ax. The tests read pages anywhere; the docs agent reads docs/ and its
+# recipe's directory; the echo and prompt agents' jobs read their agent directories (the prompt agent's, the
+# webhook-github recipe's agent directory too); each add-on's job reads docs/ and its own directory under addons/ (not
+# another add-on's directory, nor one whose name only starts with its own); no class but tests skips a page in a Go
+# package's tree, at any depth below it.
 while IFS='|' read -r wants change; do
   merge_case "${change}"
   expect_classes "${wants}" "page: ${change}"
 done <<'EOF'
-rssssss|echo x >>README.md
-rssrssr|echo x >>docs/index.md
-rssrssr|echo x >>docs/how-to/install.md
-rssrssr|mkdir -p docs/reference && echo x >docs/reference/new-page.md
-rssrssr|git rm -q docs/how-to/install.md
-rssrssr|echo x >docs/assets/clip/notes.md
-rssssss|echo x >>charts/agent-kourier/README.md
-rssssss|mkdir -p examples/recipes/echo-agent && echo x >examples/recipes/echo-agent/README.md
-rssssss|mkdir -p examples/recipes/prompt-agent && echo x >examples/recipes/prompt-agent/README.md
-rsssrss|echo x >>examples/recipes/echo-agent/agent/README.md
-rssssrs|echo x >>examples/recipes/prompt-agent/agent/README.md
-rssssrs|mkdir -p examples/recipes/webhook-github/agent && echo x >examples/recipes/webhook-github/agent/README.md
-rssssss|mkdir -p examples/recipes/webhook-github && echo x >examples/recipes/webhook-github/README.md
-rssrsss|echo x >>examples/recipes/docs-agent/README.md
-rssssss|mkdir -p .github && echo x >.github/pull_request_template.md
-rsssssr|echo x >>addons/cma/README.md
-rsssssr|mkdir -p addons/cma/kind && echo x >addons/cma/kind/notes.md
-rssssss|mkdir -p addons/cmax && echo x >addons/cmax/README.md
-rssssss|mkdir -p addons/other && echo x >addons/other/README.md
-rrrrrrr|echo x >>addons/cma/adapter/README.md
-rrrrrrr|echo x >>internal/broker/README.md
-rrrrrrr|mkdir -p internal/broker/testdata && echo x >internal/broker/testdata/page.md
-rrrrrrr|echo x >>examples/recipes/docs-agent/agent/corpus/testdata/docs/index.md
-rrrrrrr|echo x >>test/fixtures/pkg/sub/deeper/page.md
-rssrssr|echo x >>README.md; echo x >>docs/index.md; echo x >>AGENTS.md; echo x >>docs/assets/clip/team.gif
-rssrssr|git mv docs/index.md docs/start.md
-rrrrrrr|git mv internal/broker/README.md docs/broker.md
-rrrrrrr|echo x >>README.md; echo x >>internal/broker/README.md
+rsssssss|echo x >>README.md
+rssrssrr|echo x >>docs/index.md
+rssrssrr|echo x >>docs/how-to/install.md
+rssrssrr|mkdir -p docs/reference && echo x >docs/reference/new-page.md
+rssrssrr|git rm -q docs/how-to/install.md
+rssrssrr|echo x >docs/assets/clip/notes.md
+rsssssss|echo x >>charts/agent-kourier/README.md
+rsssssss|mkdir -p examples/recipes/echo-agent && echo x >examples/recipes/echo-agent/README.md
+rsssssss|mkdir -p examples/recipes/prompt-agent && echo x >examples/recipes/prompt-agent/README.md
+rsssrsss|echo x >>examples/recipes/echo-agent/agent/README.md
+rssssrss|echo x >>examples/recipes/prompt-agent/agent/README.md
+rssssrss|mkdir -p examples/recipes/webhook-github/agent && echo x >examples/recipes/webhook-github/agent/README.md
+rsssssss|mkdir -p examples/recipes/webhook-github && echo x >examples/recipes/webhook-github/README.md
+rssrssss|echo x >>examples/recipes/docs-agent/README.md
+rsssssss|mkdir -p .github && echo x >.github/pull_request_template.md
+rsssssrs|echo x >>addons/cma/README.md
+rsssssrs|mkdir -p addons/cma/kind && echo x >addons/cma/kind/notes.md
+rsssssss|mkdir -p addons/cmax && echo x >addons/cmax/README.md
+rsssssss|mkdir -p addons/other && echo x >addons/other/README.md
+rssssssr|echo x >>addons/ax/README.md
+rssssssr|mkdir -p addons/ax/kind && echo x >addons/ax/kind/notes.md
+rsssssss|mkdir -p addons/axe && echo x >addons/axe/README.md
+rrrrrrrr|echo x >>addons/cma/adapter/README.md
+rrrrrrrr|echo x >>addons/ax/agent/README.md
+rrrrrrrr|echo x >>internal/broker/README.md
+rrrrrrrr|mkdir -p internal/broker/testdata && echo x >internal/broker/testdata/page.md
+rrrrrrrr|echo x >>examples/recipes/docs-agent/agent/corpus/testdata/docs/index.md
+rrrrrrrr|echo x >>test/fixtures/pkg/sub/deeper/page.md
+rssrssrr|echo x >>README.md; echo x >>docs/index.md; echo x >>AGENTS.md; echo x >>docs/assets/clip/team.gif
+rssrssrr|git mv docs/index.md docs/start.md
+rrrrrrrr|git mv internal/broker/README.md docs/broker.md
+rrrrrrrr|echo x >>README.md; echo x >>internal/broker/README.md
 EOF
 
 # A Go file at the root puts every path in a Go package's tree, whose package could embed README.md: then no class
