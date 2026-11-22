@@ -98,7 +98,8 @@ func TestEverySetting(t *testing.T) {
 // The AX route: OIDC, the runner beside the agent, port 80 and the workspace's database file.
 func TestAXRoute(t *testing.T) {
 	c, err := Parse(env(oidc(map[string]string{
-		"LISTEN_ADDR": ":80", "RUNNER_URL": "http://127.0.0.1:8081", "SQLITE_PATH": "/workspace/agent-kourier-state/agent.db",
+		"LISTEN_ADDR": ":80", "PUBLIC_URL": "https://ax-gateway.example.test/a2a",
+		"RUNNER_URL": "http://127.0.0.1:8081", "SQLITE_PATH": "/workspace/agent-kourier-state/agent.db",
 	})))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -109,7 +110,7 @@ func TestAXRoute(t *testing.T) {
 	if c.OIDCIssuer != "https://issuer.example.test/dex" || c.OIDCAudience != "agent-kourier-binding" || c.OIDCSubject != "service" {
 		t.Errorf("OIDC = %q %q %q", c.OIDCIssuer, c.OIDCAudience, c.OIDCSubject)
 	}
-	if c.Standalone() || c.SQLitePath != "/workspace/agent-kourier-state/agent.db" || c.PublicURL != "http://:80/a2a" {
+	if c.Standalone() || c.SQLitePath != "/workspace/agent-kourier-state/agent.db" || c.PublicURL != "https://ax-gateway.example.test/a2a" {
 		t.Errorf("runner %q sqlite %q public %q", c.RunnerURL, c.SQLitePath, c.PublicURL)
 	}
 }
@@ -152,6 +153,8 @@ func TestRefused(t *testing.T) {
 		{"listen not host:port", map[string]string{"LISTEN_ADDR": "8090"}, "LISTEN_ADDR"},
 		{"public url relative", map[string]string{"PUBLIC_URL": "/a2a"}, "PUBLIC_URL"},
 		{"public url scheme", map[string]string{"PUBLIC_URL": "ftp://x/a2a"}, "PUBLIC_URL"},
+		{"public url no host", map[string]string{"PUBLIC_URL": "http://:80/a2a"}, "PUBLIC_URL"},
+		{"public url derived from a listen address with no host", map[string]string{"LISTEN_ADDR": ":80"}, "PUBLIC_URL"},
 		{"runner url relative", map[string]string{"RUNNER_URL": "127.0.0.1:8081"}, "RUNNER_URL"},
 		{"runner url with a path", map[string]string{"RUNNER_URL": "http://127.0.0.1:8081/readyz"}, "RUNNER_URL"},
 		{"idle ttl negative", map[string]string{"SESSION_IDLE_TTL": "-1h"}, "SESSION_IDLE_TTL"},
