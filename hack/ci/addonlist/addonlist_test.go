@@ -1,11 +1,14 @@
 package addonlist
 
 import (
+	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -20,9 +23,28 @@ type step struct {
 	Run string `json:"run"`
 }
 
+// needs is a job's needs, which a workflow writes as one job's ID or as a list of them.
+type needs []string
+
+// UnmarshalJSON reads a job's ID or a list of them.
+func (n *needs) UnmarshalJSON(b []byte) error {
+	var one string
+	if err := json.Unmarshal(b, &one); err == nil {
+		*n = needs{one}
+		return nil
+	}
+	var list []string
+	if err := json.Unmarshal(b, &list); err != nil {
+		return fmt.Errorf("needs: %w", err)
+	}
+	*n = list
+	return nil
+}
+
 type job struct {
-	Name     string   `json:"name"`
-	Needs    []string `json:"needs"`
+	Name     string            `json:"name"`
+	Needs    needs             `json:"needs"`
+	Outputs  map[string]string `json:"outputs"`
 	Strategy struct {
 		FailFast *bool          `json:"fail-fast"`
 		Matrix   map[string]any `json:"matrix"`
@@ -279,5 +301,94 @@ func TestCheckFindsDrift(t *testing.T) {
 				t.Errorf("problems = %q, want one with %q", problems, tt.want)
 			}
 		})
+	}
+}
+
+// cacheName finds the name in a cache's key or prune prefix, go-<name>-${{ runner.os }} or "go-<name>-${RUNNER_OS}-".
+var cacheName = regexp.MustCompile(`go-([a-z0-9]+(?:-[a-z0-9]+)*)-\$\{(?:\{ runner\.os|RUNNER_OS)`)
+
+// validName is the syntax of an add-on's name that hack/addons.sh accepts; a name the workflows use outside it cannot be
+// listed in the first place.
+var validName = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
+
+// takenNames returns the names that the workflows (file name to YAML) give to something an add-on's name would collide
+// with: job IDs, check names, govulncheck's modules, trivy's images, caches and release.yml's outputs. It leaves out the
+// add-ons of list, their caches among them, and names hack/addons.sh's syntax refuses anyway.
+func takenNames(t *testing.T, list []string, workflows map[string][]byte) []string {
+	t.Helper()
+	ours := func(n string) bool {
+		return slices.Contains(list, n) || slices.ContainsFunc(list, func(a string) bool { return n == "govulncheck-"+a })
+	}
+	seen := map[string]bool{}
+	take := func(n string) {
+		if validName.MatchString(n) && !ours(n) {
+			seen[n] = true
+		}
+	}
+	for file, b := range workflows {
+		var wf workflow
+		if err := yaml.Unmarshal(b, &wf); err != nil {
+			t.Fatalf("%s: %v", file, err)
+		}
+		for id, j := range wf.Jobs {
+			take(id)
+			take(j.Name)
+			for k := range j.Outputs {
+				take(k)
+			}
+			for _, row := range include(j) {
+				take(row["module"])
+				take(row["agent"])
+				for _, p := range platforms {
+					if n, ok := strings.CutSuffix(row["name"], "-"+strings.ReplaceAll(p, "/", "-")); ok {
+						take(n)
+					}
+				}
+			}
+		}
+		for _, m := range cacheName.FindAllStringSubmatch(string(b), -1) {
+			take(m[1])
+		}
+	}
+	return slices.Sorted(maps.Keys(seen))
+}
+
+// TestAddonsRefusesTakenNames: hack/addons.sh refuses every name the workflows already give to a job, a check, a
+// cache, an image or a release output, so that an add-on listed under one cannot take its check or its cache.
+func TestAddonsRefusesTakenNames(t *testing.T) {
+	list := readList(t)
+	files, err := filepath.Glob(filepath.Join(repoRoot, ".github", "workflows", "*.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflows := map[string][]byte{}
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		workflows[filepath.Base(f)] = b
+	}
+	taken := takenNames(t, list, workflows)
+	for _, want := range []string{"lint", "prompt-agent", "root", "chart", "test-1", "gitleaks"} {
+		if !slices.Contains(taken, want) {
+			t.Fatalf("takenNames = %q, which lacks %s: the workflows were not read as the test expects", taken, want)
+		}
+	}
+	file := filepath.Join(t.TempDir(), "addons.txt")
+	if err := os.WriteFile(file, []byte(strings.Join(taken, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.CommandContext(t.Context(), filepath.Join(repoRoot, "hack", "addons.sh"))
+	cmd.Env = append(slices.DeleteFunc(os.Environ(), func(e string) bool { return strings.HasPrefix(e, "ADDONS_FILE=") }), "ADDONS_FILE="+file)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if out, err := cmd.Output(); err == nil {
+		t.Fatalf("hack/addons.sh accepted the names the workflows take, printing %q", out)
+	}
+	for i, n := range taken {
+		if want := fmt.Sprintf("line %d: %s is ", i+1, n); !strings.Contains(stderr.String(), want) {
+			t.Errorf("hack/addons.sh does not refuse %s, which a workflow takes: add it to TAKEN (stderr: %s)", n, stderr.String())
+		}
 	}
 }

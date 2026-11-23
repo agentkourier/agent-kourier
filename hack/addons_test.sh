@@ -57,6 +57,18 @@ refuses leading-digit "line 1: '2x' is not an add-on name" 2x
 refuses dot "line 1: 'a.b' is not an add-on name" a.b
 refuses duplicate "line 3: cma is listed twice" cma ax cma
 refuses kit "line 2: kit is the add-ons' shared module, not an add-on" cma kit
+taken='is taken: a workflow already gives the name to a job, a check, a cache or an image'
+refuses taken-job "line 2: lint ${taken}" cma lint
+refuses taken-image "line 1: prompt-agent ${taken}" prompt-agent
+refuses taken-module "line 1: root ${taken}" root
+refuses taken-output "line 1: chart ${taken}" chart
+refuses taken-test "line 1: test ${taken}" test
+refuses taken-test-family "line 1: test-shard ${taken}" test-shard
+refuses taken-test-cache "line 1: test-3 ${taken}" test-3
+refuses taken-govulncheck-cache "line 1: govulncheck-cma ${taken}" govulncheck-cma
+accepts not-a-family $'tester\ngovulnchecker' tester govulnchecker
+refuses crlf "line 1: the line ends in a carriage return (CRLF): save the list with LF line endings" $'cma\r' $'ax\r'
+refuses crlf-comment "line 1: the line ends in a carriage return (CRLF)" $'# the add-ons\r' cma
 if ADDONS_FILE="${TMP}/no-such-file.txt" "${SCRIPT}" >"${TMP}/out" 2>"${TMP}/stderr"; then
   fail "missing: accepted a list that does not exist"
 fi
