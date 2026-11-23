@@ -12,8 +12,8 @@ of that thread's session. The agent's streamed replies, and its questions to peo
 back in the same thread, and each session is recovered after a restart or failover. The
 agent needs no chat code. It keeps its tools and task logic. An agent that does not serve
 A2A is reached through an [add-on](docs/explanation/add-ons.md), an optional component that
-is released with Agent Kourier and run by its chart: the first is for agents in Claude
-Managed Agents.
+is released with Agent Kourier and run by its chart. Two ship today: one puts an A2A endpoint in
+front of an agent in Claude Managed Agents, and the AX add-on is an agent of its own.
 
 Slack is the supported platform. Two more are new in 0.6.0, both experimental, and a broker of 0.5.x
 refuses either:
@@ -311,8 +311,8 @@ works and what a failover can still repeat;
 
 Agent Kourier speaks A2A to an agent you run inside an AX Task, through AX's router, with
 the generic `a2a` dialect; it does not call AX's own API or manage the Task. The
-[AX add-on](addons/ax/README.md) is such an agent: an ADK agent on Amazon Bedrock that the
-chart can also run beside Agent Kourier, on Bedrock or the Anthropic API. [Connect the AX add-on](docs/how-to/connect-ax.md)
+[AX add-on](addons/ax/README.md) is such an agent: an ADK agent on Amazon Bedrock or the
+Anthropic API, which runs in an AX Task or beside Agent Kourier, run by the chart. [Connect the AX add-on](docs/how-to/connect-ax.md)
 covers both routes: for AX, the image, the egress and template, the token verification, the
 TLS gateway and an acceptance procedure. Support is experimental.
 

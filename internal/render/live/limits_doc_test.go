@@ -18,3 +18,8 @@ func TestLimitsPageHoldsTheWaitForADownConnection(t *testing.T) {
 	limitsdoc.Duration(t, "renderRetry", defaultThrottle)
 	limitsdoc.Duration(t, "renderFinal", defaultFinalDeadline)
 }
+
+// TestLimitsPageHoldsTheWaitForTheCards holds the page to how long the prompt of an approval waits for the reply's last write.
+func TestLimitsPageHoldsTheWaitForTheCards(t *testing.T) {
+	limitsdoc.Duration(t, "cardsWait", cardsWait)
+}

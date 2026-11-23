@@ -27,8 +27,9 @@ import (
 )
 
 // A database the agent created before its store moved onto the kit: testdata/main holds the migrations it ran then,
-// copied from that version's SQL, which kept the leadership table in the agent's migration 0002. The kit's migration
-// adopts that table; nothing is lost or recreated, ADK's session included, and the lease still fences.
+// copied from that version's SQL, which kept the leadership table in the agent's migration 0002 and the task state in
+// its 0001. The kit's migrations adopt those tables, and give each context a ref, empty; nothing is lost or recreated,
+// ADK's session included, and the lease still fences.
 
 // seedMain migrates raw as the agent did before the kit (each file of testdata/main/<engine> in its own statement, and
 // its version in schema_migrations, then ADK's migration) and writes the agent's rows in that layout: a task paused on
@@ -97,9 +98,9 @@ func numberedForTest(query string) string {
 	return out
 }
 
-// assertMainRowsKept checks that the rows seedMain wrote read back as they were, and that the agent's version table
-// is the one the main layout left.
-func assertMainRowsKept(t *testing.T, s *Store) {
+// assertMainRowsKept checks that the rows seedMain wrote read back as they were, that the agent's version table is
+// the one the main layout left, and that the kit's records the migrations a new store, fresh, records.
+func assertMainRowsKept(t *testing.T, s, fresh *Store) {
 	t.Helper()
 	ctx := asCaller("agent-kourier")
 	got, err := s.Get(ctx, "t1")
@@ -109,9 +110,9 @@ func assertMainRowsKept(t *testing.T, s *Store) {
 	if task, err := s.MessageTask(ctx, "m1"); err != nil || task == nil || task.ID != "t1" {
 		t.Fatalf("its message: %+v, %v", task, err)
 	}
-	var active int64
-	if err := s.Reader().QueryRow(ctx, `SELECT last_active FROM contexts WHERE owner = ? AND context_id = ?`, "agent-kourier", "c1").Scan(&active); err != nil || active != 42 {
-		t.Fatalf("its context: %d, %v", active, err)
+	if cs, err := s.Contexts(ctx); err != nil || len(cs) != 1 ||
+		cs[0] != (kitstore.Context{Owner: "agent-kourier", ContextID: "c1", LastActive: time.Unix(0, 42).UTC(), Ref: ""}) {
+		t.Fatalf("its context: %+v, %v", cs, err)
 	}
 	if _, err := s.Sessions().Get(ctx, &session.GetRequest{AppName: AppName, UserID: "agent-kourier", SessionID: "c1"}); err != nil {
 		t.Fatalf("its ADK session: %v", err)
@@ -128,9 +129,12 @@ func assertMainRowsKept(t *testing.T, s *Store) {
 	if err != nil || !slices.Equal(versions, []int{1, 2}) {
 		t.Fatalf("schema_migrations: %v, %v; want the main layout's 1 and 2", versions, err)
 	}
-	var kit int
-	if err := s.Reader().QueryRow(ctx, `SELECT COUNT(*) FROM kit_schema_migrations`).Scan(&kit); err != nil || kit != 1 {
-		t.Fatalf("kit_schema_migrations: %d rows, %v; want the kit's one", kit, err)
+	var kit, want int
+	if err := s.Reader().QueryRow(ctx, `SELECT COUNT(*) FROM kit_schema_migrations`).Scan(&kit); err != nil {
+		t.Fatal(err)
+	}
+	if err := fresh.Reader().QueryRow(ctx, `SELECT COUNT(*) FROM kit_schema_migrations`).Scan(&want); err != nil || want < 2 || kit != want {
+		t.Fatalf("kit_schema_migrations: %d rows (%v), a new store's %d; want the kit's, the task state's included", kit, err, want)
 	}
 }
 
@@ -147,9 +151,10 @@ func TestSQLiteOpensADatabaseOfMain(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	fresh := openSQLite(t, filepath.Join(t.TempDir(), "fresh.db"))
 	for range 2 { // the second open finds every migration recorded
 		s := openSQLite(t, path)
-		assertMainRowsKept(t, s)
+		assertMainRowsKept(t, s, fresh)
 		if _, _, err := s.TryLead(ctx, "a", "http://a:8090", time.Minute); !errors.Is(err, kitstore.ErrNoElection) {
 			t.Fatalf("TryLead on SQLite: %v, want ErrNoElection", err)
 		}
@@ -185,7 +190,7 @@ func TestPostgresOpensADatabaseOfMain(t *testing.T) {
 	}
 
 	a := openPostgres(t, dsn)
-	assertMainRowsKept(t, a)
+	assertMainRowsKept(t, a, openPostgres(t, pgtest.DSN(t)))
 	if l, err := a.CurrentLeader(ctx); err != nil || l != (kitstore.Lease{Holder: "old-pod", Address: "http://old-pod:8090", Epoch: 7, Live: true}) {
 		t.Fatalf("the lease after the open: %+v, %v", l, err)
 	}

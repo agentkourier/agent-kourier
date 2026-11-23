@@ -212,6 +212,7 @@ func (u *Run) sendStep(ctx context.Context, st chat.Step, final bool) (bool, err
 	err := u.stream.Step(ctx, st)
 	if err == nil {
 		u.sentStep(st)
+		u.carry(false, st)
 		u.stepFails = 0
 		return true, nil
 	}
@@ -221,13 +222,15 @@ func (u *Run) sendStep(ctx context.Context, st chat.Step, final bool) (bool, err
 		return false, nil
 	case errors.Is(err, chat.ErrNoSteps): // the platform has no steps for this stream, which is no failure
 		u.cfg.Logger.InfoContext(ctx, "live: the stream shows no steps; the turn goes on without them", "channel", u.turn.Channel)
-		u.stepsOff, u.stepsSent = true, nil
+		u.stepsSent = nil
+		u.stepsGone()
 		return false, nil
 	case verdict.RetryAfter > 0 && !final:
 		return false, err
 	case verdict.Class != chat.Transient:
 		u.cfg.Logger.WarnContext(ctx, "live: the platform refused a step; the turn goes on without steps", "channel", u.turn.Channel, "err", err)
-		u.stepsOff, u.stepsSent = true, nil
+		u.stepsSent = nil
+		u.stepsGone()
 		return false, nil
 	}
 	u.stepFails++
@@ -238,7 +241,8 @@ func (u *Run) sendStep(ctx context.Context, st chat.Step, final bool) (bool, err
 		return true, nil
 	case u.stepFails >= u.cfg.Attempts:
 		u.cfg.Logger.WarnContext(ctx, "live: giving up on steps; the turn goes on without them", "channel", u.turn.Channel)
-		u.stepsOff, u.stepsSent = true, nil
+		u.stepsSent = nil
+		u.stepsGone()
 	}
 	return false, nil
 }
@@ -269,6 +273,7 @@ func (u *Run) takeOver(ctx context.Context, ref *chat.Ref, id string) error {
 // stream has no payload, and is not one that Run ever delivers.
 func (u *Run) postInstead(ctx context.Context, ref *chat.Ref) error {
 	u.streaming = false
+	u.carry(true) // a post carries no steps, and the stream that showed them is given up
 	u.turn.Source = outbox.RepostedSource(u.turn.Source)
 	return u.writeMoved(ctx, ref)
 }

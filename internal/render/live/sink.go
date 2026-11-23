@@ -76,6 +76,18 @@ func (s *Sink) queuedReaction(conn string) (name string, known bool) {
 // Turn starts the rendering of a turn and returns its handler. ctx is the turn's own, which ends
 // when its send returns.
 func (s *Sink) Turn(ctx context.Context, t session.TurnRef) agent.Handler {
+	return s.start(ctx, t).Handle
+}
+
+// TurnCards is Turn, and the cards of the turn: what its message shows of the tool calls a pause for an approval waits on
+// (Run.Cards), which the interactions' tap asks once the handler has taken the pause, and which waits for the run's last write.
+func (s *Sink) TurnCards(ctx context.Context, t session.TurnRef) (agent.Handler, func(context.Context) map[string]chat.ToolLine) {
+	u := s.start(ctx, t)
+	return u.Handle, u.Cards
+}
+
+// start starts the rendering of the turn t.
+func (s *Sink) start(ctx context.Context, t session.TurnRef) *Run {
 	recipient, mode := t.UserID, t.Output
 	if recipient == session.SystemUser { // an alert has no one to show a stream to
 		recipient = ""
@@ -86,7 +98,7 @@ func (s *Sink) Turn(ctx context.Context, t session.TurnRef) agent.Handler {
 	turn := Turn{Source: t.MessageID, Connection: t.Key.Connection, Channel: t.Key.Channel, Thread: t.Key.Thread, Mode: mode, Progress: t.Progress, Recipient: recipient, Recovered: t.Recovered}
 	turn.Footer = footerOf(t)
 	turn.Binding, turn.Mentions, turn.MaxMentions = t.Binding, t.Mentions, t.MaxMentions
-	return s.runs.Start(ctx, turn).Handle
+	return s.runs.Start(ctx, turn)
 }
 
 // FollowUpHint is the line that ends the final message of a turn in a thread that takes only mentioned replies: one of a Binding whose

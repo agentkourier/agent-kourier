@@ -23,7 +23,7 @@ hide:
 thread. A mention, a reply in the thread, or a message a trigger matches, such as an alert, goes to the agent; its
 streamed replies and its questions to people come back in the same thread, and the session survives a restart or
 failover. A Binding connects the channel to any agent that serves streaming A2A, and an add-on reaches one that does
-not: the first is for agents in Claude Managed Agents. Slack is supported today. New in 0.6.0, both experimental: Microsoft Teams as a
+not, such as an agent in Claude Managed Agents. Slack is supported today. New in 0.6.0, both experimental: Microsoft Teams as a
 second chat platform, and webhooks from services such as GitHub, Jira Cloud, Bitbucket Cloud or Linear that start a session of your agent,
 which answers on that service with its own tools.</p>
 

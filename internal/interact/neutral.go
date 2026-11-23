@@ -103,11 +103,13 @@ func argsText(args map[string]any) (string, error) {
 // the chosen choices and, for a free-text question, only that it was answered. The prompt of an ending is
 // the question as asked, which has no deadline of its own to show.
 //
-// An approval's ending shows its tools, hint and sub-agent as in, which must be the stored request: its secrets are
-// out already, and what it holds is what the prompt showed. When the approval timed out or was cancelled it needs
-// nothing more. An answered approval needs a verdict for each tool, which only the answer holds (approvalEnding), so
-// here it is an error and not an ending that says the wrong thing.
-func endingOf(outcome chat.Outcome, by string, at time.Time, in dialect.Interaction, answers [][]string) (chat.Ending, error) {
+// An approval's ending shows its tools, hint and sub-agent as req, the stored request, has them: its secrets are out
+// already, and what it holds is what the prompt showed, with the tools whose call the reply shows on its card marked so
+// (chat.Tool.OnCard). When the approval timed out or was cancelled it needs nothing more. An answered approval needs a
+// verdict for each tool, which only the answer holds (approvalEnding), so here it is an error and not an ending that says
+// the wrong thing.
+func endingOf(outcome chat.Outcome, by string, at time.Time, req storedRequest, answers [][]string) (chat.Ending, error) {
+	in := req.Interaction
 	if in.Kind == dialect.ToolApproval {
 		if outcome == chat.Answered {
 			return chat.Ending{}, errors.New("interact: an answered tool approval has verdicts, which endingOf is not given: use approvalEnding")
@@ -116,7 +118,7 @@ func endingOf(outcome chat.Outcome, by string, at time.Time, in dialect.Interact
 		if err != nil {
 			return chat.Ending{}, err
 		}
-		return chat.Ending{Outcome: outcome, By: by, At: at, Prompt: p}, nil
+		return chat.Ending{Outcome: outcome, By: by, At: at, Prompt: req.markOnCard(p)}, nil
 	}
 	e := chat.Ending{Outcome: outcome, By: by, At: at, Prompt: questionsOf("", in, time.Time{})}
 	if outcome != chat.Answered {
@@ -139,15 +141,17 @@ func endingOf(outcome chat.Outcome, by string, at time.Time, in dialect.Interact
 	return e, nil
 }
 
-// approvalEnding is the neutral ending of an answered tool approval: its tools as in (the stored request) shows them, and
-// the verdict of each, in the order of the tools and from the decisions by tool ID. The decisions must be exactly one for each
-// tool and for no other: an answer that does not match the request is an error, never an ending built from a guess. A
-// decision by the broker's own policy (auto) has no person to name, and so no By.
-func approvalEnding(by string, at time.Time, in dialect.Interaction, decisions []dialect.Decision) (chat.Ending, error) {
+// approvalEnding is the neutral ending of an answered tool approval: its tools as req (the stored request) shows them, those
+// whose call the reply shows on its card marked so, and the verdict of each, in the order of the tools and from the decisions by
+// tool ID. The decisions must be exactly one for each tool and for no other: an answer that does not match the request is an
+// error, never an ending built from a guess. A decision by the broker's own policy (auto) has no person to name, and so no By.
+func approvalEnding(by string, at time.Time, req storedRequest, decisions []dialect.Decision) (chat.Ending, error) {
+	in := req.Interaction
 	p, err := toolsOf("", in, time.Time{})
 	if err != nil {
 		return chat.Ending{}, err
 	}
+	p = req.markOnCard(p)
 	if len(decisions) != len(in.Tools) {
 		return chat.Ending{}, fmt.Errorf("interact: %d decisions for %d tools", len(decisions), len(in.Tools))
 	}

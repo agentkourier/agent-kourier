@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2asrv"
 
 	"github.com/agentkourier/agent-kourier/addons/cma/store"
+	"github.com/agentkourier/agent-kourier/addons/kit/auth"
 	kitstore "github.com/agentkourier/agent-kourier/addons/kit/store"
 	"github.com/agentkourier/agent-kourier/addons/kit/store/pgtest"
 )
@@ -53,8 +55,11 @@ func startReplica(t *testing.T, dsn, name string, lease, deadline, retry time.Du
 	return r
 }
 
+// write creates a task as the adapter's one caller, whom the store keeps each task for.
 func write(r *replica, id string) error {
-	_, err := r.store.Create(context.Background(), &a2a.Task{ID: a2a.TaskID(id), ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}})
+	ctx, callCtx := a2asrv.NewCallContext(context.Background(), nil)
+	callCtx.User = a2asrv.NewAuthenticatedUser(auth.Caller, nil)
+	_, err := r.store.Create(ctx, &a2a.Task{ID: a2a.TaskID(id), ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}})
 	return err
 }
 

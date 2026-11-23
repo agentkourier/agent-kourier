@@ -1,8 +1,10 @@
 // Package store is the database under an add-on's state: SQLite (one file, one replica) or Postgres (shared by
 // replicas, which elect a leader through it), with the kit's migrations and then the add-on's applied, and a fence that
 // every write runs first. On Postgres the fence is the leader's lease epoch (lease.go): a replica that has not taken
-// the lease, or has lost it, writes nothing. The add-on keeps its own tables on it, written through Write, and runs
-// Fence in the transactions of a library that writes them on connections of its own (ADK's sessions, through gorm).
+// the lease, or has lost it, writes nothing. On it, Store keeps the A2A task state every add-on has (tasks.go): the
+// tasks, by owner, the IDs of the messages that started or joined them, and the contexts. The add-on keeps its own
+// tables beside them, written through Write, and runs Fence in the transactions of a library that writes them on
+// connections of its own (ADK's sessions, through gorm).
 //
 // Both backends run the same SQL, written with ? placeholders, which the Postgres querier numbers. The kit imports no
 // SQLite driver: the add-on links one that registers "sqlite" (modernc.org/sqlite, or github.com/glebarez/go-sqlite,
@@ -36,6 +38,11 @@ type Options struct {
 	// or another add-on uses in a database they share. OpenPostgres refuses 0, which an add-on that forgot its own key
 	// would share with every other that did.
 	MigrationLockKey int64
+	// Prepare, if set, runs before the kit's migrations, in a transaction of its own that holds the migration lock, on a
+	// database that an earlier build of the add-on may have written: the add-on sets aside, or refuses, a layout of its
+	// own that the kit's migrations would not read. Its error rolls its transaction back and fails the open, before any
+	// migration has run.
+	Prepare func(ctx context.Context, q Querier) error
 }
 
 // DB is an add-on's database on SQLite or Postgres, with the kit's migrations applied.
@@ -79,8 +86,19 @@ const kitMigrations = "kit_schema_migrations"
 // addonMigrations is the version table of the add-on's migrations.
 const addonMigrations = "schema_migrations"
 
-// migrateKit applies the kit's migrations of the backend whose files are in dir.
-func (db *DB) migrateKit(ctx context.Context, dir string) error {
+// migrateKit runs the add-on's Prepare, then applies the kit's migrations of the backend whose files are in dir.
+func (db *DB) migrateKit(ctx context.Context, dir string, prepare func(ctx context.Context, q Querier) error) error {
+	if prepare != nil {
+		err := db.conn.inTx(ctx, func(q Querier) error {
+			if err := db.conn.lockMigrations(ctx, q); err != nil {
+				return err
+			}
+			return prepare(ctx, q)
+		})
+		if err != nil {
+			return err
+		}
+	}
 	sub, err := fs.Sub(kitMigrationFiles, dir)
 	if err != nil {
 		return err
@@ -139,8 +157,8 @@ func (db *DB) loadFence() fenceFunc {
 // SetFenceForTest replaces the fence that db's writes run, Write's and Fence's: nil runs none, which on Postgres turns
 // the lease's epoch check off. It is for tests alone, which use it to see that every write of an add-on runs the fence
 // in its transaction; a function rather than a method, so that a store that embeds DB does not offer it, and a lint
-// rule (forbidigo, in .golangci.yml) refuses a call outside _test.go files and the kit's sqlitetest. Writes may run
-// while it is called: each runs the fence that was set when it began, or none.
+// rule (forbidigo, in .golangci.yml) refuses a call outside _test.go files and the kit's sqlitetest and storetest.
+// Writes may run while it is called: each runs the fence that was set when it began, or none.
 func SetFenceForTest(db *DB, fence func(ctx context.Context, q Querier) error) { db.setFence(fence) }
 
 // SQL is the write connections as a database/sql DB, for a library that keeps its tables in the add-on's database

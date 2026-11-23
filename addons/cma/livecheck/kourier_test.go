@@ -130,7 +130,7 @@ func serve(t *testing.T, b adapter.Backend) string {
 		t.Fatal(err)
 	}
 	exec := &adapter.Executor{Backend: b, Store: st}
-	rpc := a2asrv.NewJSONRPCHandler(adapter.NewRequestHandler(exec, a2asrv.WithCallInterceptors(auth.Interceptor{})))
+	rpc := a2asrv.NewJSONRPCHandler(adapter.NewRequestHandler(exec, auth.Interceptor{}))
 	srv := httptest.NewServer(nil)
 	t.Cleanup(srv.Close)
 	url := srv.URL + "/a2a"

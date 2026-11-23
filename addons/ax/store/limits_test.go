@@ -17,7 +17,7 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Duration(t, "ax.lease-take-lock-timeout", kitstore.LeaseTakeLockTimeout)
 	limitsdoc.Duration(t, "ax.lease-take-statement-timeout", kitstore.LeaseTakeStatementTimeout)
 	limitsdoc.Duration(t, "ax.sqlite-busy-timeout", kitstore.SQLiteBusyTimeout)
-	limitsdoc.Count(t, "ax.list-page-default", defaultPageSize)
-	limitsdoc.Count(t, "ax.list-page-max", maxPageSize)
-	limitsdoc.Count(t, "ax.list-history", defaultHistoryLength)
+	limitsdoc.Count(t, "ax.list-page-default", kitstore.DefaultPageSize)
+	limitsdoc.Count(t, "ax.list-page-max", kitstore.MaxPageSize)
+	limitsdoc.Count(t, "ax.list-history", kitstore.DefaultHistoryLength)
 }

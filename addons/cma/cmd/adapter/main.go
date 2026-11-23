@@ -154,7 +154,7 @@ func serve(ctx context.Context, cfg config.Config, traces telemetry.Config, log 
 		return fmt.Errorf("metrics: %w", err)
 	}
 
-	rpc := a2asrv.NewJSONRPCHandler(adapter.NewRequestHandler(exec, a2asrv.WithCallInterceptors(auth.Interceptor{})))
+	rpc := a2asrv.NewJSONRPCHandler(adapter.NewRequestHandler(exec, auth.Interceptor{}))
 	// The background work ends when serve returns, whether or not ctx has ended, and before the store closes.
 	var background sync.WaitGroup
 	defer background.Wait()

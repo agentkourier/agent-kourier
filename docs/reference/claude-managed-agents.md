@@ -90,7 +90,15 @@ cuts a stream silent for 5 minutes, keeps a slow turn's stream open.
 ## Restarts
 
 The store keeps the A2A tasks, the message ID that started or joined each task, and each context's session, so a
-restart loses none of them. Its migrations are applied at start. At start, before it serves, the add-on:
+restart loses none of them. Its migrations are applied at start.
+
+A store that an earlier version of the add-on wrote, which kept each context's session in a table of its own, is
+refused: the add-on logs that the store holds an earlier layout and exits with code 1, before it writes to the store.
+Start the add-on on a new store: a new SQLite file, or an empty Postgres database or schema. The chart reuses the claim
+`<fullname>-cma-data` while it exists, so for SQLite set `addons.cma.persistence.existingClaim` to a new claim of your
+own, or delete that claim so that the chart makes a new one.
+
+At start, before it serves, the add-on:
 
 1. Loads each context's session from the store and checks it against the agent's unarchived, unterminated sessions in
    the environment that carry a context ID. It does not start if either cannot be read.
@@ -100,7 +108,10 @@ restart loses none of them. Its migrations are applied at start. At start, befor
     - A stored session that is no longer listed (archived, terminated, or in another environment) is forgotten with
       its context's tasks, and the context's next message starts a new session.
 2. Fails each task left `submitted` or `working` with the agent message "Interrupted by an adapter restart." and sends
-   its session `user.interrupt` (a failed interrupt is logged).
+   its session `user.interrupt` (a failed interrupt is logged). Each task is failed in a write of its own. A task whose
+   stored record does not decode is failed by its state alone, so that `TASK_RETENTION` deletes it, and is logged at
+   WARN; a task that changed since it was read is logged at WARN and left as it is. It does not start if the store
+   cannot be read or written.
 
 | Survives a restart | Is interrupted |
 |---|---|

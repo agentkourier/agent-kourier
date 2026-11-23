@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -120,8 +121,12 @@ func TestPostgresAdoptsTheAddOnsLeadershipTable(t *testing.T) {
 	if err := raw.QueryRow(ctx, `SELECT 'leadership'::regclass::oid`).Scan(&oid); err != nil {
 		t.Fatal(err)
 	}
+	kit, err := listMigrations(kitSub(t, "migrations/postgres"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	for range 2 { // the second open finds the migration recorded
+	for range 2 { // the second open finds the migrations recorded
 		db, err := OpenPostgres(ctx, dsn, Options{MigrationLockKey: testLockKey})
 		if err != nil {
 			t.Fatalf("OpenPostgres: %v", err)
@@ -130,8 +135,8 @@ func TestPostgresAdoptsTheAddOnsLeadershipTable(t *testing.T) {
 		if err != nil || lease != (Lease{Holder: "old-pod", Address: "http://old-pod:8090", Epoch: 7, Live: true}) {
 			t.Fatalf("the lease after the kit's migration: %+v, %v", lease, err)
 		}
-		if n := count(t, db, `SELECT COUNT(*) FROM kit_schema_migrations`); n != 1 {
-			t.Fatalf("kit_schema_migrations has %d rows, want 1", n)
+		if n := count(t, db, `SELECT COUNT(*) FROM kit_schema_migrations`); n != len(kit) {
+			t.Fatalf("kit_schema_migrations has %d rows, want the kit's %d", n, len(kit))
 		}
 		if n := count(t, db, `SELECT COUNT(*) FROM schema_migrations WHERE version <> 2`); n != 0 {
 			t.Fatalf("the kit wrote %d rows into the add-on's schema_migrations", n)
@@ -141,6 +146,80 @@ func TestPostgresAdoptsTheAddOnsLeadershipTable(t *testing.T) {
 	var after uint32
 	if err := raw.QueryRow(ctx, `SELECT 'leadership'::regclass::oid`).Scan(&after); err != nil || after != oid {
 		t.Fatalf("the leadership table is %d (%v), was %d: it was recreated", after, err, oid)
+	}
+}
+
+// Prepare runs before the kit's migrations, in a transaction that commits its writes, and its error fails the open
+// before any migration has run.
+func TestPostgresPrepareRunsBeforeTheMigrations(t *testing.T) {
+	dsn := pgtest.DSN(t)
+	ctx := context.Background()
+	refuse := errors.New("an earlier build's layout")
+	_, err := OpenPostgres(ctx, dsn, Options{MigrationLockKey: testLockKey, Prepare: func(ctx context.Context, q Querier) error {
+		if _, err := q.Exec(ctx, `CREATE TABLE prepared (id text PRIMARY KEY)`); err != nil {
+			return err
+		}
+		return refuse
+	}})
+	if !errors.Is(err, refuse) {
+		t.Fatalf("an open whose Prepare refuses: %v, want its error", err)
+	}
+	raw, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	var tables int
+	if err := raw.QueryRow(ctx, `SELECT COUNT(*) FROM pg_tables WHERE schemaname = current_schema()`).Scan(&tables); err != nil || tables != 0 {
+		t.Fatalf("the refused open left %d tables (%v), want none: no migration, and Prepare's write rolled back", tables, err)
+	}
+
+	var kitTable *string
+	db := openPostgresWith(t, dsn, Options{Prepare: func(ctx context.Context, q Querier) error {
+		if err := q.QueryRow(ctx, `SELECT to_regclass('kit_schema_migrations')::text`).Scan(&kitTable); err != nil {
+			return err
+		}
+		_, err := q.Exec(ctx, `CREATE TABLE prepared (id text PRIMARY KEY)`)
+		return err
+	}})
+	if kitTable != nil {
+		t.Fatalf("Prepare found %s: it ran after the kit's migrations", *kitTable)
+	}
+	if n := count(t, db, `SELECT COUNT(*) FROM pg_tables WHERE schemaname = current_schema() AND tablename IN ('prepared', 'kit_schema_migrations')`); n != 2 {
+		t.Fatalf("after the open: %d of Prepare's table and the kit's version table, want both", n)
+	}
+}
+
+// Replicas that start together run Prepare one at a time: it holds the migration lock.
+func TestPostgresPrepareHoldsTheMigrationLock(t *testing.T) {
+	dsn := pgtest.DSN(t)
+	var mu sync.Mutex
+	inside, most := 0, 0
+	prepare := func(context.Context, Querier) error {
+		mu.Lock()
+		inside++
+		most = max(most, inside)
+		mu.Unlock()
+		time.Sleep(100 * time.Millisecond)
+		mu.Lock()
+		inside--
+		mu.Unlock()
+		return nil
+	}
+	var wg sync.WaitGroup
+	for range 3 {
+		wg.Go(func() {
+			db, err := OpenPostgres(context.Background(), dsn, Options{MigrationLockKey: testLockKey, Prepare: prepare})
+			if err != nil {
+				t.Errorf("OpenPostgres: %v", err)
+				return
+			}
+			_ = db.Close()
+		})
+	}
+	wg.Wait()
+	if most != 1 {
+		t.Fatalf("%d Prepares ran at once, want 1", most)
 	}
 }
 
