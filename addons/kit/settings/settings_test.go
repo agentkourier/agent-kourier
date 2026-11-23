@@ -7,10 +7,9 @@ import (
 	"time"
 )
 
-// The two ways an add-on reads the shared variables today: the token check alone, with a URL's host allowed to be a
-// port alone, and the token check or OIDC.
+// The two ways an add-on reads the shared variables today: the token check alone, and the token check or OIDC.
 var (
-	tokenSpec = Spec{Name: "token", Noun: "adapter", PortOnlyHosts: true}
+	tokenSpec = Spec{Name: "token", Noun: "adapter"}
 	oidcSpec  = Spec{Name: "oidc", Noun: "agent", OIDC: true}
 )
 
@@ -188,6 +187,8 @@ func refusedCases() []struct {
 		{"public url relative", map[string]string{"PUBLIC_URL": "/a2a"}, "PUBLIC_URL"},
 		{"public url scheme", map[string]string{"PUBLIC_URL": "ftp://x/a2a"}, "PUBLIC_URL"},
 		{"public url made from a listen address that is no URL", map[string]string{"LISTEN_ADDR": "a b:80"}, "PUBLIC_URL"},
+		{"public url no host", map[string]string{"PUBLIC_URL": "http://:80/a2a"}, "PUBLIC_URL"},
+		{"public url made from a listen address with no host", map[string]string{"LISTEN_ADDR": ":80"}, "PUBLIC_URL"},
 		{"idle ttl negative", map[string]string{"SESSION_IDLE_TTL": "-1h"}, "SESSION_IDLE_TTL"},
 		{"idle ttl not a duration", map[string]string{"SESSION_IDLE_TTL": "90 days"}, "SESSION_IDLE_TTL"},
 		{"retention negative", map[string]string{"TASK_RETENTION": "-1s"}, "TASK_RETENTION"},
@@ -209,6 +210,7 @@ func refusedCases() []struct {
 		{"postgres without dsn", map[string]string{"STORE": "postgres", "ADVERTISE_URL": "http://10.0.0.7:8090"}, "POSTGRES_DSN"},
 		{"postgres without advertise url", map[string]string{"STORE": "postgres", "POSTGRES_DSN": "postgres://db/addon"}, "ADVERTISE_URL"},
 		{"advertise url relative", pg(map[string]string{"ADVERTISE_URL": "10.0.0.7:8090"}), "ADVERTISE_URL"},
+		{"advertise url no host", pg(map[string]string{"ADVERTISE_URL": "http://:8090"}), "ADVERTISE_URL"},
 		{"dsn with sqlite", map[string]string{"POSTGRES_DSN": "postgres://db/addon"}, "POSTGRES_DSN"},
 		{"lease with sqlite", map[string]string{"LEASE_DURATION": "15s"}, "LEASE_DURATION"},
 		{"renew deadline with sqlite", map[string]string{"LEASE_RENEW_DEADLINE": "10s"}, "LEASE_RENEW_DEADLINE"},
@@ -268,22 +270,6 @@ func TestOIDCRefused(t *testing.T) {
 	}
 }
 
-// A URL whose host is a port alone is refused without Spec.PortOnlyHosts, and passes with it.
-func TestPortOnlyHosts(t *testing.T) {
-	for _, overrides := range []map[string]string{
-		{"PUBLIC_URL": "http://:80/a2a"},
-		{"LISTEN_ADDR": ":80"},
-		pg(map[string]string{"ADVERTISE_URL": "http://:8090"}),
-	} {
-		if _, err := parse(env(overrides), oidcSpec); err == nil {
-			t.Errorf("%v: accepted without PortOnlyHosts", overrides)
-		}
-		if _, err := parse(env(overrides), tokenSpec); err != nil {
-			t.Errorf("%v: refused with PortOnlyHosts: %v", overrides, err)
-		}
-	}
-}
-
 // The errors whose text depends on the Spec, and a few more, word for word.
 func TestErrorText(t *testing.T) {
 	for _, tc := range []struct {
@@ -292,7 +278,8 @@ func TestErrorText(t *testing.T) {
 		overrides map[string]string
 		want      string
 	}{
-		{"auth disabled, adapter", tokenSpec, map[string]string{"AUTH_DISABLED": "true", "AUTH_TOKEN_FILE": "", "LISTEN_ADDR": ":8090"},
+		{"auth disabled, adapter", tokenSpec, map[string]string{"AUTH_DISABLED": "true", "AUTH_TOKEN_FILE": "", "LISTEN_ADDR": ":8090",
+			"PUBLIC_URL": "http://addon.agents.svc:8090/a2a"},
 			`AUTH_DISABLED=true needs a loopback LISTEN_ADDR, and ":8090" is not one: anyone who reaches the adapter could run the agent`},
 		{"auth disabled, agent", oidcSpec, map[string]string{"AUTH_DISABLED": "true", "AUTH_TOKEN_FILE": "", "LISTEN_ADDR": ":8090"},
 			`PUBLIC_URL is unset and the one made from LISTEN_ADDR, "http://:8090/a2a", is not an http or https URL with a host: set PUBLIC_URL to the URL callers reach the A2A endpoint at` + "\n" +
@@ -301,13 +288,13 @@ func TestErrorText(t *testing.T) {
 			`AUTH_TOKEN_FILE is required (or AUTH_DISABLED=true on a loopback LISTEN_ADDR)`},
 		{"no caller check, oidc", oidcSpec, map[string]string{"AUTH_TOKEN_FILE": ""},
 			`a caller check is required: AUTH_TOKEN_FILE, or OIDC_ISSUER, OIDC_AUDIENCE and OIDC_SUBJECT (or AUTH_DISABLED=true on a loopback LISTEN_ADDR)`},
-		{"public url made from listen, port-only allowed", tokenSpec, map[string]string{"LISTEN_ADDR": "a b:80"},
-			`PUBLIC_URL "http://a b:80/a2a" is not an http or https URL with a host`},
-		{"public url made from listen", oidcSpec, map[string]string{"LISTEN_ADDR": "a b:80"},
+		{"public url made from listen", tokenSpec, map[string]string{"LISTEN_ADDR": "a b:80"},
 			`PUBLIC_URL is unset and the one made from LISTEN_ADDR, "http://a b:80/a2a", is not an http or https URL with a host: set PUBLIC_URL to the URL callers reach the A2A endpoint at`},
-		{"public url set", oidcSpec, map[string]string{"PUBLIC_URL": "http://:80/a2a"},
+		{"public url made from listen with no host", tokenSpec, map[string]string{"LISTEN_ADDR": ":80"},
+			`PUBLIC_URL is unset and the one made from LISTEN_ADDR, "http://:80/a2a", is not an http or https URL with a host: set PUBLIC_URL to the URL callers reach the A2A endpoint at`},
+		{"public url set with no host", tokenSpec, map[string]string{"PUBLIC_URL": "http://:80/a2a"},
 			`PUBLIC_URL "http://:80/a2a" is not an http or https URL with a host`},
-		{"advertise url", oidcSpec, pg(map[string]string{"ADVERTISE_URL": "http://:8090"}),
+		{"advertise url with no host", tokenSpec, pg(map[string]string{"ADVERTISE_URL": "http://:8090"}),
 			`ADVERTISE_URL "http://:8090" is not an http or https URL with a host`},
 		{"lease order", tokenSpec, pg(map[string]string{"LEASE_RETRY_PERIOD": "9s"}),
 			`LEASE_RENEW_DEADLINE (10s) must be greater than LEASE_RETRY_PERIOD (9s) times 1.2`},

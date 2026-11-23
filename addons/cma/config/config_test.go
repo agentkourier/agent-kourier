@@ -96,27 +96,50 @@ func TestRefused(t *testing.T) {
 	}
 }
 
-// How the adapter reads the shared variables: the token check alone (the OIDC_* variables are not read), its own name
-// for itself in the refusal of AUTH_DISABLED, and a URL whose host is a port alone accepted, as before the kit.
+// How the adapter reads the shared variables: the token check alone (the OIDC_* variables are not read), and its own
+// name for itself in the refusal of AUTH_DISABLED.
 func TestSharedAsTheAdapterReadsThem(t *testing.T) {
-	c, err := Parse(env(map[string]string{"OIDC_ISSUER": "https://issuer.example.test", "OIDC_AUDIENCE": "a", "OIDC_SUBJECT": "s",
-		"LISTEN_ADDR": ":8090", "STORE": "postgres", "POSTGRES_DSN": "postgres://db/cma", "ADVERTISE_URL": "http://:8090"}))
+	c, err := Parse(env(map[string]string{"OIDC_ISSUER": "https://issuer.example.test", "OIDC_AUDIENCE": "a", "OIDC_SUBJECT": "s"}))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if c.OIDC() || c.PublicURL != "http://:8090/a2a" || c.AdvertiseURL != "http://:8090" {
-		t.Errorf("OIDC %v, PUBLIC_URL %q, ADVERTISE_URL %q", c.OIDC(), c.PublicURL, c.AdvertiseURL)
+	if c.OIDC() {
+		t.Errorf("OIDC = true, want the OIDC_* variables unread")
 	}
 	for _, tc := range []struct {
 		overrides map[string]string
 		want      string
 	}{
 		{map[string]string{"AUTH_TOKEN_FILE": ""}, "AUTH_TOKEN_FILE is required (or AUTH_DISABLED=true on a loopback LISTEN_ADDR)"},
-		{map[string]string{"AUTH_TOKEN_FILE": "", "AUTH_DISABLED": "true", "LISTEN_ADDR": ":8090"},
+		{map[string]string{"AUTH_TOKEN_FILE": "", "AUTH_DISABLED": "true", "LISTEN_ADDR": ":8090", "PUBLIC_URL": "http://cma.agents.svc:8090/a2a"},
 			`AUTH_DISABLED=true needs a loopback LISTEN_ADDR, and ":8090" is not one: anyone who reaches the adapter could run the agent`},
 	} {
 		if _, err := Parse(env(tc.overrides)); err == nil || err.Error() != tc.want {
 			t.Errorf("%v: error %v, want %s", tc.overrides, err, tc.want)
 		}
+	}
+}
+
+// A URL whose host is a port alone names no host a caller could reach: refused for PUBLIC_URL, set or made from
+// LISTEN_ADDR, and for ADVERTISE_URL. The adapter accepted one before it read its settings through the kit.
+func TestHostlessURLsRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		overrides map[string]string
+		want      string
+	}{
+		{"public url", map[string]string{"LISTEN_ADDR": ":8090", "PUBLIC_URL": "http://:8090"},
+			`PUBLIC_URL "http://:8090" is not an http or https URL with a host`},
+		{"public url made from LISTEN_ADDR", map[string]string{"LISTEN_ADDR": ":8090"},
+			`PUBLIC_URL is unset and the one made from LISTEN_ADDR, "http://:8090/a2a", is not an http or https URL with a host: ` +
+				"set PUBLIC_URL to the URL callers reach the A2A endpoint at"},
+		{"advertise url", map[string]string{"STORE": "postgres", "POSTGRES_DSN": "postgres://db/cma", "ADVERTISE_URL": "http://:8090"},
+			`ADVERTISE_URL "http://:8090" is not an http or https URL with a host`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := Parse(env(tc.overrides)); err == nil || err.Error() != tc.want {
+				t.Errorf("error %v, want %s", err, tc.want)
+			}
+		})
 	}
 }

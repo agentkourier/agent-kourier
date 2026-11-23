@@ -60,10 +60,6 @@ type Spec struct {
 	// OIDC reads OIDC_ISSUER, OIDC_AUDIENCE and OIDC_SUBJECT as a caller check of their own, besides AUTH_TOKEN_FILE.
 	// Without it they are not read, and AUTH_TOKEN_FILE is the only caller check.
 	OIDC bool
-	// PortOnlyHosts accepts a PUBLIC_URL or an ADVERTISE_URL whose host is a port alone, such as http://:8090/a2a,
-	// which names no host a caller could reach, and gives an unusable PUBLIC_URL made from LISTEN_ADDR the error of
-	// one that is set. Without it such a URL is refused, and the error of one made from LISTEN_ADDR says so.
-	PortOnlyHosts bool
 	// Vars are the add-on's own variables, read in order before the shared ones. None may name a shared variable or
 	// another Var's.
 	Vars []Var
@@ -156,8 +152,8 @@ func Parse(getenv func(string) string, spec Spec) (Config, Values, error) {
 		fail(fmt.Errorf("LISTEN_ADDR %q is not host:port", c.ListenAddr))
 	}
 	c.PublicURL = get("PUBLIC_URL", "http://"+c.ListenAddr+"/a2a")
-	if err := spec.httpURL(c.PublicURL); err != nil {
-		if getenv("PUBLIC_URL") == "" && !spec.PortOnlyHosts {
+	if err := httpURL(c.PublicURL); err != nil {
+		if getenv("PUBLIC_URL") == "" {
 			fail(fmt.Errorf("PUBLIC_URL is unset and the one made from LISTEN_ADDR, %q, %w: set PUBLIC_URL to the URL callers reach the A2A endpoint at", c.PublicURL, err))
 		} else {
 			fail(fmt.Errorf("PUBLIC_URL %q %w", c.PublicURL, err))
@@ -179,7 +175,7 @@ func Parse(getenv func(string) string, spec Spec) (Config, Values, error) {
 	if err := c.parseAuth(getenv, host, spec); err != nil {
 		fail(err)
 	}
-	if err := c.parseStore(getenv, spec); err != nil {
+	if err := c.parseStore(getenv); err != nil {
 		fail(err)
 	}
 	level, ok := map[string]slog.Level{"debug": slog.LevelDebug, "info": slog.LevelInfo, "warn": slog.LevelWarn, "error": slog.LevelError}[strings.ToLower(get("LOG_LEVEL", "info"))]
@@ -298,7 +294,7 @@ func reservedHeader(name string) bool {
 }
 
 // parseStore reads the store and the leader election's settings.
-func (c *Config) parseStore(getenv func(string) string, spec Spec) error {
+func (c *Config) parseStore(getenv func(string) string) error {
 	var errs []error
 	c.Store = StoreKind(strings.ToLower(getenv("STORE")))
 	if c.Store == "" {
@@ -325,7 +321,7 @@ func (c *Config) parseStore(getenv func(string) string, spec Spec) error {
 		c.AdvertiseURL = bracketIPv6(c.AdvertiseURL)
 		if c.AdvertiseURL == "" {
 			errs = append(errs, errors.New("ADVERTISE_URL is required with STORE=postgres"))
-		} else if err := spec.httpURL(c.AdvertiseURL); err != nil {
+		} else if err := httpURL(c.AdvertiseURL); err != nil {
 			errs = append(errs, fmt.Errorf("ADVERTISE_URL %q %w", c.AdvertiseURL, err))
 		}
 		if err := c.parseLease(getenv); err != nil {
@@ -385,15 +381,11 @@ func duration(v string, positive bool) (time.Duration, error) {
 	return d, nil
 }
 
-// httpURL reports why v is not an absolute http or https URL with a host. With s.PortOnlyHosts, a host that is a port
-// alone passes.
-func (s Spec) httpURL(v string) error {
+// httpURL reports why v is not an absolute http or https URL with a host. A host that is a port alone, as in
+// http://:8090, names none.
+func httpURL(v string) error {
 	u, err := url.Parse(v)
-	hostless := u == nil || u.Hostname() == ""
-	if s.PortOnlyHosts {
-		hostless = u == nil || u.Host == ""
-	}
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || hostless {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
 		return errors.New("is not an http or https URL with a host")
 	}
 	return nil

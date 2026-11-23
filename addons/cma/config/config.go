@@ -19,7 +19,7 @@ var (
 
 // Spec is how the adapter reads its settings: the shared ones with the token check alone, and its own.
 func Spec() settings.Spec {
-	return settings.Spec{Name: "cma", Noun: "adapter", PortOnlyHosts: true,
+	return settings.Spec{Name: "cma", Noun: "adapter",
 		Vars: []settings.Var{agentID, environmentID, toolResultTimeout}}
 }
 
