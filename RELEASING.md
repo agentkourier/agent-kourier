@@ -6,7 +6,7 @@ is that image by digest. It also publishes the images of two recipes' agents, `g
 and `ghcr.io/agentkourier/agent-kourier-echo-agent` (linux/amd64 and linux/arm64), built from
 `examples/recipes/<agent>/agent/Dockerfile`, and the images of the two add-ons, `ghcr.io/agentkourier/agent-kourier-cma`
 (the CMA add-on) and `ghcr.io/agentkourier/agent-kourier-ax` (the AX add-on) (linux/amd64 and linux/arm64), built from
-`addons/<name>/Dockerfile` on Agent Kourier's pinned bases. The add-ons are versioned with Agent Kourier: each release
+`addons/<name>/Dockerfile` on Agent Kourier's pinned bases (`hack/addons.txt` lists the add-ons). The add-ons are versioned with Agent Kourier: each release
 tags their images with the same `vX.Y.Z`. The AX add-on's image for the route inside Google AX (`addons/ax/Dockerfile.ax`,
 `make ax-runner-image`) is not released. Nothing is released by hand.
 
@@ -141,7 +141,8 @@ line's newest and perhaps as latest.
   `govulncheck (ax)`, `govulncheck (docs-agent)`, `govulncheck (cma)`, `govulncheck (kit)`, `gitleaks`, `trivy (linux-amd64)` and `trivy (linux-arm64)` jobs, the four scans of the agents'
   images: `trivy (prompt-agent-linux-amd64)`, `trivy (prompt-agent-linux-arm64)`, `trivy (echo-agent-linux-amd64)` and
   `trivy (echo-agent-linux-arm64)`, the two of the CMA add-on's: `trivy (cma-linux-amd64)` and `trivy (cma-linux-arm64)`, and
-  the two of the AX add-on's: `trivy (ax-linux-amd64)` and `trivy (ax-linux-arm64)`.
+  the two of the AX add-on's: `trivy (ax-linux-amd64)` and `trivy (ax-linux-arm64)`. The gate adds an add-on's
+  jobs (its `ci.yml` job, its `govulncheck` and its two `trivy` scans) for each add-on that `hack/addons.txt` lists.
   `codeql.yml` must contain a successful `analyze (go)` job. These are the status checks the `main` ruleset
   requires, `kit` and `govulncheck (kit)` once the owner adds them to it. `codeql.yml` skips `analyze` while the repository is private, and a skipped run blocks the release.
   The scheduled released-image rescan is the only permitted skipped job. A pending run fails closed with a message
@@ -155,7 +156,7 @@ line's newest and perhaps as latest.
 - Builds each platform with the Dockerfile, which cross-compiles Go on the runner (no emulation) and sets
   `main.version` from the tag. Then builds each platform of each agent image from its own Dockerfile, which runs `apk`
   and `pip` in the target platform: the arm64 build runs under QEMU, from the binfmt image the workflow pins by digest.
-  Then builds each platform of each add-on's image from `addons/cma/Dockerfile` and `addons/ax/Dockerfile`, with
+  Then builds each platform of the image of each add-on of `hack/addons.txt` from `addons/<name>/Dockerfile`, with
   `addons/` as the context for the shared kit each requires, on the same pinned Go and runtime images as Agent
   Kourier's, which cross-compile too.
 - Refuses to release a platform whose binary carries a test hook. The Dockerfile's `verify` stage runs
@@ -178,10 +179,12 @@ line's newest and perhaps as latest.
   the multi-platform push. High and critical vulnerabilities, including unfixed findings, fail the release and the
   SARIF reports remain in the release output.
 - Packages `charts/agent-kourier` (`hack/release/package-chart.sh`) with version `X.Y.Z`, appVersion `vX.Y.Z`, and
-  `image.repository` and `image.digest` stamped with Agent Kourier's pushed image, `addons.cma.image.repository` and
-  `addons.cma.image.digest` with the CMA add-on's, and `addons.ax.image.repository` and `addons.ax.image.digest` with the
-  AX add-on's, so a released chart pulls all three by digest, reads the package back to check them,
-  and pushes it to `oci://ghcr.io/agentkourier/charts`.
+  `image.repository` and `image.digest` stamped with Agent Kourier's pushed image, and `addons.<name>.image.repository`
+  and `addons.<name>.image.digest` with each add-on's (`addons.cma.image` with the CMA add-on's, `addons.ax.image` with
+  the AX add-on's), so a released chart pulls every image by digest, reads the package back to check them,
+  and pushes it to `oci://ghcr.io/agentkourier/charts`. `package-chart.sh` takes each add-on's digest as `name=digest`,
+  and refuses a list of them that is not one for each add-on of `hack/addons.txt`, or a chart without an image block
+  for one.
 - In a second job that runs no repository code (the only one with `id-token: write`), signs the image digests
   and the chart digest with cosign v3.1.4 keyless (GitHub's OIDC identity; no key, no secret).
 - In a separate read-only verification job, verifies every signature with the OIDC issuer and the exact identity
@@ -322,11 +325,16 @@ The `test-shard` legs have helm installed and `AGENTKOURIER_REQUIRE_HELM=1` so t
 conformance suite among them, and the broker's Postgres tests against a throwaway Postgres container; those tests skip
 in the race passes' legs, which have no database. It is not a required check. To make
 it one, the owner adds `test-postgres` from `ci` to the `main` ruleset, and the same change adds it to `CI_REQUIRED_JOBS` in
-`hack/release/check-ci.sh` and to the lists above. The `cma` job runs `make cma-test` through `hack/postgres/run.sh`,
-which starts the same throwaway Postgres container (`hack/postgres/lib.sh`) and sets `AGENTKOURIER_POSTGRES_DSN` for
-it, so the CMA add-on's Postgres store tests run there, and `make cma-lint`; the `ax` job runs `make ax-test` the same
-way, for the AX add-on's, and `make ax-lint`. Both test targets also run the shared kit's packages that the add-on links
-under the add-on's module graph; the `kit` job runs `make kit-test` and `make kit-lint` on the kit's own. The `crd-corpus` job (`make crd-corpus`, `hack/kind/crd-corpus.sh`) brings up
+`hack/release/check-ci.sh` and to the lists above. The `addon` job has a leg for each add-on that `hack/addons.txt`
+lists, named after it (`cma`, `ax`): a leg runs `make addon-test-<name>` through `hack/postgres/run.sh`, which starts
+the same throwaway Postgres container (`hack/postgres/lib.sh`) and sets `AGENTKOURIER_POSTGRES_DSN` for it, so the
+add-on's Postgres store tests run there, and `make addon-lint-<name>` (`make cma-test`, `make ax-lint` and the others
+run the same targets). Each test target also runs the shared kit's packages that the add-on links under the add-on's
+module graph, and the offline tests of a module nested in the add-on's directory (the CMA add-on's `livecheck`); the
+`kit` job runs `make kit-test` and `make kit-lint` on the kit's own. An add-on is added to CI and the release by a line
+in `hack/addons.txt`, a leg in the `addon` job, a row in `security.yml`'s `govulncheck` and two in its `trivy` matrix,
+and its cache prefixes in both workflows' `cache-prune`: `hack/ci/addonlist`'s test fails until the workflows hold the
+list, and the owner adds the new checks to the `main` ruleset. The `crd-corpus` job (`make crd-corpus`, `hack/kind/crd-corpus.sh`) brings up
 a kind cluster with only the three CRDs from `charts/agent-kourier/files/crds`, with no image and no Agent Kourier, and has
 `test/crdcorpus` send every entry of its corpus to it as a server-side dry-run create. It fails when the schema refuses
 an object the broker's own validation accepts, or when an entry's `schema:` flag no longer says what the schema does with
@@ -392,7 +400,7 @@ sets `GODEBUG=gocachetest=1`, so the log says for each package whether it reused
 no result was saved for its test binary (`input list not found`: the binary changed) or one was, for other inputs
 (`test output not found`: a file or variable its tests read changed). `go test` keys results on `GODEBUG` too: removing
 it from the legs makes pull requests run every package until a push to `main` saves results without it. `test-postgres`,
-`crd-corpus`, `docs-agent`, `kit`, `cma` and `ax` run `go test` with `-count=1`, which reuses nothing, and do not run `hack/ci/testmtimes`.
+`crd-corpus`, `docs-agent`, `kit` and the add-on legs run `go test` with `-count=1`, which reuses nothing, and do not run `hack/ci/testmtimes`.
 `docs-agent`'s must (`make docs-agent-test`): its smoke test reads `docs/`, outside its module, where `go test` checks
 nothing, so a reused result would pass a pull request that changes only the docs. `hack/ci/testshards`' test holds the
 legs to these steps and every other job to none of them. The limits of the reuse, none of which a setting changes:
@@ -431,16 +439,16 @@ scanner or CodeQL reads, but for two tests of the docs checks that `make docs-ch
 - `echo-agent`: the same Markdown except under `examples/recipes/echo-agent/agent/`, the one directory it reads.
 - `prompt-agent`: the same Markdown except under `examples/recipes/prompt-agent/agent/`, the one directory it reads.
 - `kit`: the same Markdown except under `docs/` (the pages its limits guard reads) and `addons/kit/`.
-- `cma`: the same Markdown except under `docs/` (the add-on's pages), `addons/cma/` and `addons/kit/` (it tests the kit
-  too).
-- `ax`: the same Markdown except under `docs/` (the add-on's pages), `addons/ax/` and `addons/kit/`.
+- `addon` (each leg of the `addon` job): the same Markdown except under `docs/` (the add-ons' pages) and `addons/`
+  (each leg's own directory and the kit's, which it tests too). It is one class for every leg, so a leg also runs on
+  Markdown of another add-on's directory.
 
 A Go package's tree is a directory of the merge commit with a `.go` file in it, and everything below it; the script
 finds them on each run, so no class skips a page under a new package's directory, which the package could embed, with
 no list to edit. The rule is wider than what Go embeds: a page in such a tree runs the jobs whether or not anything
 embeds it. So a pull request that changes `README.md` and pages under `docs/` skips both `crd-corpus` jobs,
 `echo-agent`, `prompt-agent`, the `govulncheck` and `trivy` jobs and `analyze`; one that changes only `README.md` also skips
-`docs-agent`, `kit`, `cma` and `ax`; one that changes only the docs-only list skips every gated job, and `test` and `test-testhooks` pass as
+`docs-agent`, `kit` and the add-on legs; one that changes only the docs-only list skips every gated job, and `test` and `test-testhooks` pass as
 their legs did. A pull request that skips `govulncheck` or `trivy` does not see a vulnerability published since its
 base was scanned; `main`'s push runs do, and so does the nightly `security` run's `govulncheck`. `lint`, with its zizmor
 audit, and `gitleaks` always run in full. A symlink or submodule anywhere in the changes runs every step of every gated job: the
