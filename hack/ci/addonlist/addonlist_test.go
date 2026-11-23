@@ -223,6 +223,18 @@ func TestCheckFindsDrift(t *testing.T) {
 	list := readList(t)
 	repo := readWorkflows(t)
 	first := list[0]
+	// The legs as ci.yml lists them, which the reordering case below moves; it holds whatever the list says.
+	var ci workflow
+	if err := yaml.Unmarshal(repo["ci.yml"], &ci); err != nil {
+		t.Fatal(err)
+	}
+	var legs []string
+	for _, v := range ci.Jobs[addonJob].Strategy.Matrix["addon"].([]any) {
+		legs = append(legs, fmt.Sprint(v))
+	}
+	if len(legs) < 2 {
+		t.Fatalf("ci.yml's job %s has %d legs; the reordering case needs two", addonJob, len(legs))
+	}
 	t.Run("an add-on in the list alone", func(t *testing.T) {
 		problems := checkProblems(t, append(slices.Clone(list), "third"), repo)
 		for _, want := range []string{
@@ -248,7 +260,7 @@ func TestCheckFindsDrift(t *testing.T) {
 	for _, tt := range []struct {
 		name, file, old, new, want string
 	}{
-		{"the legs in another order", "ci.yml", "addon: [" + strings.Join(list, ", ") + "]", "addon: [" + strings.Join(slices.Concat(list[1:], list[:1]), ", ") + "]", "in its order"},
+		{"the legs in another order", "ci.yml", "addon: [" + strings.Join(legs, ", ") + "]", "addon: [" + strings.Join(slices.Concat(legs[1:], legs[:1]), ", ") + "]", "in its order"},
 		{"a leg named by the matrix's index", "ci.yml", "name: ${{ matrix.addon }}\n", "name: addon (${{ strategy.job-index }})\n", "so that each leg's check is its add-on's name"},
 		{"a failing leg cancelling the others", "ci.yml", "      fail-fast: false\n      matrix:\n        addon:", "      fail-fast: true\n      matrix:\n        addon:", "strategy.fail-fast is not false"},
 		{"a leg's cache not pruned", "ci.yml", `"go-` + first + `-${RUNNER_OS}-"`, `"go-other-${RUNNER_OS}-"`, `does not prune "go-` + first + `-`},
