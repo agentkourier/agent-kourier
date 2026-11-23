@@ -1,9 +1,13 @@
 package adapter
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -86,6 +90,51 @@ func TestTheCard(t *testing.T) {
 	if want := in.Base + runtime.A2APath; len(card.SupportedInterfaces) != 1 || card.SupportedInterfaces[0].URL != want {
 		t.Errorf("card interfaces = %+v, want %s", card.SupportedInterfaces, want)
 	}
+}
+
+// The listening line names the agent, the environment and the tool result timeout, beside what the kit logs there.
+func TestTheListeningLineNamesTheAgent(t *testing.T) {
+	var log lockedBuffer
+	in := kittest.Start(t, kitSubject(), "cma-0", map[string]string{"SQLITE_PATH": filepath.Join(t.TempDir(), "cma.db"),
+		"TOOL_RESULT_TIMEOUT": "90s"}, runtime.Options{Log: slog.New(slog.NewJSONHandler(&log, nil))})
+	kittest.WaitFor(t, "the adapter to be ready", in.Ready)
+	if err := in.Stop(t); err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+	lines := bufio.NewScanner(bytes.NewReader(log.Bytes()))
+	for lines.Scan() {
+		var line map[string]any
+		if json.Unmarshal(lines.Bytes(), &line) != nil || line["msg"] != "adapter listening" {
+			continue
+		}
+		for key, want := range map[string]any{"agent": "agent_fake", "environment": "env_fake", "store": "sqlite",
+			"tool_result_timeout": float64(90 * time.Second)} { // JSON logs a duration in nanoseconds
+			if line[key] != want {
+				t.Errorf("the listening line's %s = %v, want %v", key, line[key], want)
+			}
+		}
+		return
+	}
+	t.Fatalf("no listening line in the log:\n%s", log.Bytes())
+}
+
+// lockedBuffer is a log the adapter and the test may use at once.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+// Bytes is a copy of what was written.
+func (l *lockedBuffer) Bytes() []byte {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return bytes.Clone(l.b.Bytes())
 }
 
 // A takeover fails and counts the turns a restart cut off, one whose stored record does not decode too, and
