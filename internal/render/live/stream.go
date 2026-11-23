@@ -212,6 +212,7 @@ func (u *Run) sendStep(ctx context.Context, st chat.Step, final bool) (bool, err
 	err := u.stream.Step(ctx, st)
 	if err == nil {
 		u.sentStep(st)
+		u.carry(false, st)
 		u.stepFails = 0
 		return true, nil
 	}
@@ -272,9 +273,7 @@ func (u *Run) takeOver(ctx context.Context, ref *chat.Ref, id string) error {
 // stream has no payload, and is not one that Run ever delivers.
 func (u *Run) postInstead(ctx context.Context, ref *chat.Ref) error {
 	u.streaming = false
-	u.mu.Lock()
-	u.cardless = true
-	u.mu.Unlock()
+	u.carry(true) // a post carries no steps, and the stream that showed them is given up
 	u.turn.Source = outbox.RepostedSource(u.turn.Source)
 	return u.writeMoved(ctx, ref)
 }

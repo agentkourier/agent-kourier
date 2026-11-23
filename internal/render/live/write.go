@@ -69,10 +69,15 @@ func (u *Run) message(v view) chat.Message {
 func (u *Run) update(ctx context.Context, ref chat.Ref, v view) error {
 	carried := len(v.steps) > 0 && !u.stepsOff
 	err := u.platform.Update(ctx, ref, chat.Say(u.message(v)))
-	if err == nil && carried {
-		for _, st := range v.steps {
-			u.sentStep(st)
+	if err == nil {
+		var shown []chat.Step // the message shows the steps it carried, and no others
+		if carried {
+			shown = v.steps
+			for _, st := range shown {
+				u.sentStep(st)
+			}
 		}
+		u.carry(true, shown...)
 	}
 	if err != nil && carried && u.cannotShow(err) {
 		u.cfg.Logger.WarnContext(ctx, "live: the platform refused the message with its steps; it is sent again without them", "channel", u.turn.Channel, "err", err)
@@ -155,6 +160,7 @@ func (u *Run) write(ctx context.Context, ref *chat.Ref, v view) (telemetryErr er
 	got, err := u.cfg.Sender.Send(ctx, outbox.Post{Source: u.turn.Source, Role: store.OutboxReply, Connection: u.turn.Connection, Channel: u.turn.Channel, Thread: u.turn.Thread, Out: chat.Say(posted)})
 	if err == nil {
 		*ref = got
+		u.carry(true) // a post carries no steps
 		// A Send that follows a failed one, or that finds the turn's row made already (by an earlier attempt, here or in an
 		// earlier process), returns the message that is there, or posts the payload stored first, not necessarily this content.
 		u.stale = u.sends > 1 || earlier

@@ -80,8 +80,8 @@ func (s *Sink) Turn(ctx context.Context, t session.TurnRef) agent.Handler {
 }
 
 // TurnCards is Turn, and the cards of the turn: what its message shows of the tool calls a pause for an approval waits on
-// (Run.Cards), which the interactions' tap asks once the handler has taken the pause.
-func (s *Sink) TurnCards(ctx context.Context, t session.TurnRef) (agent.Handler, func() map[string]string) {
+// (Run.Cards), which the interactions' tap asks once the handler has taken the pause, and which waits for the run's last write.
+func (s *Sink) TurnCards(ctx context.Context, t session.TurnRef) (agent.Handler, func(context.Context) map[string]chat.ToolLine) {
 	u := s.start(ctx, t)
 	return u.Handle, u.Cards
 }

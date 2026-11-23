@@ -246,6 +246,10 @@ type Run struct {
 	turn     Turn
 	wake     chan struct{} // a slot: the state changed
 	done     chan struct{}
+	// settled is closed once the run's writes are over, the final's included, and before what follows them (the mentions, the
+	// thread's busy mark): Cards waits on it. settle closes it, once, since a run that a later one ends runs its loop again (endLeft).
+	settled chan struct{}
+	settle  sync.Once
 	// end ends the run's context, as the end of the turn's does: a later run of the same turn ends it so, with
 	// session.ErrTurnContinues (see Start).
 	end   context.CancelCauseFunc
@@ -284,10 +288,11 @@ type Run struct {
 	// awaiting is the call IDs of the tool calls that the pause asks a person to approve (FinalEvent.AwaitingApproval):
 	// their steps end as waiting, not as how the call went so far.
 	awaiting []string
-	// cardless says the message shows none of the turn's cards from now on, though the turn is eligible for them: the platform
-	// turned the steps off (stepsOff), or the stream was given up for a post, which carries none (postInstead). The goroutine
-	// sets it, under mu, for Cards, which is called on another goroutine and cannot read stepsOff.
-	cardless bool
+	// carried is each step as the last write that went through showed it, by step ID: a step the platform took in a stream
+	// (sendStep) or in an update of the message (update). The goroutine empties it when the message may show the steps no more:
+	// the platform turned them off (stepsGone), the stream was given up for a post (postInstead), or the final write was given up.
+	// Cards reads it.
+	carried map[string]chat.Step
 
 	// Below: only a run that is timed keeps these.
 	started  time.Time       // when the run started
@@ -352,7 +357,7 @@ func (r *Renderer) Start(ctx context.Context, t Turn) *Run {
 		platform, caps = p, p.Capabilities()
 	}
 	streaming := t.Mode == v1alpha1.OutputLive && t.Recipient != "" && caps.Streams
-	u := &Run{cfg: r.cfg, platform: platform, caps: caps, owner: r, turn: t, streaming: streaming, wake: make(chan struct{}, 1), done: make(chan struct{}), texts: map[a2a.ArtifactID]string{}, progress: v1alpha1.ProgressSteps}
+	u := &Run{cfg: r.cfg, platform: platform, caps: caps, owner: r, turn: t, streaming: streaming, wake: make(chan struct{}, 1), done: make(chan struct{}), settled: make(chan struct{}), texts: map[a2a.ArtifactID]string{}, progress: v1alpha1.ProgressSteps}
 	if t.Mode == v1alpha1.OutputLive && (t.Progress == v1alpha1.ProgressStepsAndActivity || t.Progress == v1alpha1.ProgressActivity) {
 		u.progress = t.Progress
 	}
@@ -550,6 +555,11 @@ func (u *Run) run(ctx context.Context) {
 	}()
 	ref := u.ref // the message, once there is one: the one an earlier pass left, when the run is ending it (endLeft)
 	defer func() { u.ref = ref }()
+	defer u.settle.Do(func() {
+		if u.settled != nil { // a Run made by hand, in a test, has none
+			close(u.settled)
+		}
+	})
 	var next time.Time
 	fails := 0
 	_, startedDown := u.platform.(down)
@@ -558,6 +568,7 @@ func (u *Run) run(ctx context.Context) {
 	// giveUp ends the run on a final write that will not go through. Once the final text is shown it is the steps that were
 	// not added, and the turn was delivered: the alert on failed finals is not for them.
 	giveUp := func(outcome, msg string, args ...any) {
+		u.carry(true) // the write that would have shown them did not go through
 		args = append([]any{"channel", u.turn.Channel}, args...)
 		if shown {
 			finalOutcome = "delivered"
