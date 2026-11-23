@@ -16,7 +16,8 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
-	"github.com/agentkourier/agent-kourier/addons/ax/auth"
+	"github.com/agentkourier/agent-kourier/addons/kit/auth"
+	"github.com/agentkourier/agent-kourier/addons/kit/auth/oidc"
 )
 
 // The AX route's caller check, end to end: while the issuer is down, the card and the endpoint answer a retryable 503
@@ -53,7 +54,7 @@ func TestOIDCOutageIsRetryableAndRecovers(t *testing.T) {
 	}
 	token := payload + "." + base64.RawURLEncoding.EncodeToString(signature)
 
-	verifier, err := auth.NewOIDC(issuer, "agent-kourier", "service")
+	verifier, err := oidc.New(issuer, "agent-kourier", "service")
 	if err != nil {
 		t.Fatal(err)
 	}

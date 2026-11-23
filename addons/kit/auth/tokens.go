@@ -1,6 +1,3 @@
-// Package auth is the adapter's caller check: a request to the A2A endpoint must carry one of the tokens in a file,
-// which a mounted Secret keeps current. Every accepted token is the same caller, Agent Kourier: tokens exist so that
-// one can be rotated in before the other is removed, not to tell callers apart.
 package auth
 
 import (
@@ -16,13 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/a2aproject/a2a-go/v2/a2asrv"
 )
-
-// Caller is the user name a checked request runs as. The task store records it as each task's owner; tasks are not
-// partitioned by it, since every accepted token is Agent Kourier.
-const Caller = "agent-kourier"
 
 // ReloadInterval is how often Watch re-reads the token file.
 const ReloadInterval = 5 * time.Second
@@ -120,73 +111,30 @@ func (t *Tokens) Accepts(token string) bool {
 	return match == 1
 }
 
-// Check refuses a request that does not carry an accepted token.
-type Check struct {
+// TokenVerifier accepts a request that carries one of Tokens in Header, as Caller.
+type TokenVerifier struct {
 	// Header carries the token, in canonical form. Authorization carries "Bearer <token>" (the scheme in any case);
 	// any other header carries the token as its whole value.
 	Header string
 	// Tokens are the accepted tokens.
 	Tokens *Tokens
-	// Log receives each refusal, with its reason and never the presented value.
-	Log *slog.Logger
-	// Refused, if set, is told the reason of each refusal: missing or invalid.
-	Refused func(reason string)
 }
 
-// callerKey marks a request context that passed the check.
-type callerKey struct{}
-
-// Wrap returns next behind the check. A refused request gets 401, with a Bearer challenge when the header is
-// Authorization.
-func (c *Check) Wrap(next http.Handler) http.Handler {
-	bearer := strings.EqualFold(c.Header, "Authorization")
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token, reason := c.token(r, bearer)
-		if reason == "" && !c.Tokens.Accepts(token) {
-			reason = "invalid"
+// Verify implements Verifier.
+func (v TokenVerifier) Verify(r *http.Request) (string, error) {
+	value := r.Header.Get(v.Header)
+	if value == "" {
+		return "", ErrMissing
+	}
+	token := value
+	if strings.EqualFold(v.Header, "Authorization") {
+		var err error
+		if token, err = Bearer(value); err != nil {
+			return "", err
 		}
-		if reason != "" {
-			c.Log.Warn("refused an A2A request", "reason", reason, "header", c.Header, "remote", r.RemoteAddr)
-			if c.Refused != nil {
-				c.Refused(reason)
-			}
-			if bearer {
-				w.Header().Set("WWW-Authenticate", "Bearer")
-			}
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, true)))
-	})
-}
-
-// token returns the presented token, or the reason there is none: missing, or invalid for an Authorization header
-// that is not a Bearer one.
-func (c *Check) token(r *http.Request, bearer bool) (token, reason string) {
-	v := r.Header.Get(c.Header)
-	if v == "" {
-		return "", "missing"
 	}
-	if !bearer {
-		return v, ""
+	if !v.Tokens.Accepts(token) {
+		return "", ErrInvalid
 	}
-	scheme, token, ok := strings.Cut(v, " ")
-	if !ok || !strings.EqualFold(scheme, "Bearer") || token == "" {
-		return "", "invalid"
-	}
-	return token, ""
-}
-
-// Interceptor makes a call that passed the check run as Caller, so that the task store records an owner. A call that
-// did not pass it (the check is off) is left unauthenticated.
-type Interceptor struct {
-	a2asrv.PassthroughCallInterceptor
-}
-
-// Before implements a2asrv.CallInterceptor.
-func (Interceptor) Before(ctx context.Context, callCtx *a2asrv.CallContext, _ *a2asrv.Request) (context.Context, any, error) {
-	if ok, _ := ctx.Value(callerKey{}).(bool); ok {
-		callCtx.User = a2asrv.NewAuthenticatedUser(Caller, nil)
-	}
-	return ctx, nil, nil
+	return Caller, nil
 }

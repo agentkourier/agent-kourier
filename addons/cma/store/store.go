@@ -63,7 +63,7 @@ func newStore(db *kitstore.DB, opts Options) *Store {
 	return s
 }
 
-// owner is the authenticated user of the call, or "" when the call has none (the caller check is off).
+// owner is the authenticated user of the call, or "" when the call has none.
 func owner(ctx context.Context) string {
 	if cc, ok := a2asrv.CallContextFrom(ctx); ok && cc.User != nil && cc.User.Authenticated {
 		return cc.User.Name

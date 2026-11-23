@@ -180,12 +180,12 @@ func TestWatchReloadsUntilCancelled(t *testing.T) {
 
 // serve runs one request through the check and reports the status, the challenge, the caller the inner handler ran
 // as, and the reasons Refused was told.
-func serve(t *testing.T, check *Check, set map[string]string) (status int, challenge string, user *a2asrv.User, reason string) {
+func serve(t *testing.T, check *Check, set map[string]string) (status int, challenge string, user *a2asrv.User, reason Reason) {
 	t.Helper()
 	var reasons []string
 	log, buf := newLog()
 	check.Log = log
-	check.Refused = func(r string) { reasons = append(reasons, r) }
+	check.Refused = func(r Reason) { reasons = append(reasons, string(r)) }
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// What the JSON-RPC handler does: a fresh call context, then the interceptor.
 		ctx, callCtx := a2asrv.NewCallContext(r.Context(), nil)
@@ -207,7 +207,7 @@ func serve(t *testing.T, check *Check, set map[string]string) (status int, chall
 			t.Errorf("the log or the response shows the presented value %q", v)
 		}
 	}
-	return rec.Code, rec.Header().Get("WWW-Authenticate"), user, strings.Join(reasons, ",")
+	return rec.Code, rec.Header().Get("WWW-Authenticate"), user, Reason(strings.Join(reasons, ","))
 }
 
 // tokenCheck is the token file check with tokenA and tokenB, in header.
@@ -230,7 +230,7 @@ func TestTokenCheck(t *testing.T) {
 		set       map[string]string
 		status    int
 		challenge string
-		reason    string // what Refused was told
+		reason    Reason // what Refused was told
 	}{
 		{"bearer", "Authorization", map[string]string{"Authorization": "Bearer " + tokenA}, http.StatusOK, "", ""},
 		{"second token", "Authorization", map[string]string{"Authorization": "Bearer " + tokenB}, http.StatusOK, "", ""},

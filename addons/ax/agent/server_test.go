@@ -22,8 +22,8 @@ import (
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 
-	"github.com/agentkourier/agent-kourier/addons/ax/auth"
 	"github.com/agentkourier/agent-kourier/addons/ax/store"
+	"github.com/agentkourier/agent-kourier/addons/kit/auth"
 )
 
 type fakeModel struct {

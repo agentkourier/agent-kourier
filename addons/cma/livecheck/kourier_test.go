@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -17,8 +19,12 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 
 	"github.com/agentkourier/agent-kourier/addons/cma/adapter"
-	"github.com/agentkourier/agent-kourier/addons/cma/auth"
 	"github.com/agentkourier/agent-kourier/addons/cma/store"
+	"github.com/agentkourier/agent-kourier/addons/kit/auth"
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/dialect"
+	"github.com/agentkourier/agent-kourier/internal/dialect/generic"
+	"github.com/agentkourier/agent-kourier/internal/secret"
 )
 
 // scripted is an adapter.Backend whose agent asks to run bash, then reports the outcome of the decision.
@@ -128,7 +134,8 @@ func serve(t *testing.T, b adapter.Backend) string {
 	srv := httptest.NewServer(nil)
 	t.Cleanup(srv.Close)
 	url := srv.URL + "/a2a"
-	srv.Config.Handler = adapter.Mux("/a2a", adapter.Card("test", "test", url, "test"), (&auth.Check{Header: "Authorization", Tokens: tokens, Log: log}).Wrap(rpc))
+	check := &auth.Check{Verifier: auth.TokenVerifier{Header: "Authorization", Tokens: tokens}, Bearer: true, Log: log}
+	srv.Config.Handler = adapter.Mux("/a2a", adapter.Card("test", "test", url, "test"), rpc, check)
 	return url
 }
 
@@ -145,6 +152,35 @@ func TestKourierClientPassesTheCallerCheck(t *testing.T) {
 	if err := newChecker(url, testToken).text(ctx); err != nil {
 		t.Fatalf("with the token: %v", err)
 	}
+}
+
+// Agent Kourier's a2a dialect fetches the card, the first request of a connect, with the Binding's token: the card is
+// behind the caller check, so a connect without the token fails there with 401, and one with it gets the card.
+func TestKourierFetchesTheCardWithTheToken(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	url := serve(t, &scripted{})
+	d := generic.New(30 * time.Second)
+	backend := &v1alpha1.AgentBackend{Spec: v1alpha1.AgentBackendSpec{Dialect: v1alpha1.DialectA2A, URL: url}}
+	ref := v1alpha1.AgentRef{Name: "cma"}
+	for name, creds := range map[string]dialect.Credentials{
+		"no token":    {UserID: "livecheck"},
+		"wrong token": {Token: secret.New("fake-wrong-token")},
+	} {
+		_, err := d.Connect(ctx, backend, ref, creds)
+		var status *dialect.HTTPStatusError
+		if !errors.As(err, &status) || status.Code != http.StatusUnauthorized {
+			t.Errorf("%s: connect = %v, want the card refused with 401", name, err)
+		}
+	}
+	client, err := d.Connect(ctx, backend, ref, dialect.Credentials{Token: secret.New(testToken)})
+	if err != nil {
+		t.Fatalf("with the token: %v", err)
+	}
+	if got := client.Card().Name; got != "test" {
+		t.Fatalf("card name = %q, want the adapter's", got)
+	}
+	_ = client.Destroy()
 }
 
 // TestKourierClientDrivesAdapter runs Kourier's agent client and a2a dialect over HTTP against the adapter: a text

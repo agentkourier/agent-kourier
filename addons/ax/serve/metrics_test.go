@@ -15,9 +15,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/agentkourier/agent-kourier/addons/ax/agent"
-	"github.com/agentkourier/agent-kourier/addons/ax/auth"
 	"github.com/agentkourier/agent-kourier/addons/ax/config"
 	"github.com/agentkourier/agent-kourier/addons/ax/store"
+	"github.com/agentkourier/agent-kourier/addons/kit/auth"
 	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
@@ -52,12 +52,12 @@ func TestAuthRefusalsAreCountedUnderTheChecksReasons(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reasons := []string{auth.ReasonMissing, auth.ReasonInvalid, auth.ReasonUnavailable}
+	reasons := []auth.Reason{auth.ReasonMissing, auth.ReasonInvalid, auth.ReasonUnavailable}
 	for _, r := range reasons {
 		check.Refused(r)
 	}
 	for _, r := range reasons {
-		if series := `agentkourier_ax_auth_refused_total{reason="` + r + `"}`; !served(t, tel, series, "1") {
+		if series := `agentkourier_ax_auth_refused_total{reason="` + string(r) + `"}`; !served(t, tel, series, "1") {
 			t.Errorf("%s is not served at 1", series)
 		}
 	}

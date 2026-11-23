@@ -31,10 +31,11 @@ import (
 	"google.golang.org/adk/v2/model"
 
 	"github.com/agentkourier/agent-kourier/addons/ax/agent"
-	"github.com/agentkourier/agent-kourier/addons/ax/auth"
 	"github.com/agentkourier/agent-kourier/addons/ax/cluster"
 	"github.com/agentkourier/agent-kourier/addons/ax/config"
 	"github.com/agentkourier/agent-kourier/addons/ax/store"
+	"github.com/agentkourier/agent-kourier/addons/kit/auth"
+	"github.com/agentkourier/agent-kourier/addons/kit/auth/oidc"
 	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
@@ -286,13 +287,13 @@ func newUpkeep(cfg config.Config, st agent.UpkeepStore, log *slog.Logger, tel *t
 // callerCheck builds the check cfg names, which counts each refusal in tel, and for the token file the watch that keeps
 // its tokens current.
 func callerCheck(cfg config.Config, log *slog.Logger, tel *telemetry.Telemetry) (*auth.Check, func(context.Context), error) {
-	refused := tel.AuthRefused
+	refused := func(reason auth.Reason) { tel.AuthRefused(string(reason)) }
 	switch {
 	case cfg.AuthDisabled:
 		log.Warn("the caller check is off (AUTH_DISABLED=true): anything that reaches the loopback address can run the agent", "addr", cfg.ListenAddr)
 		return &auth.Check{Verifier: auth.Open{}, Log: log, Refused: refused}, nil, nil
 	case cfg.OIDC():
-		v, err := auth.NewOIDC(cfg.OIDCIssuer, cfg.OIDCAudience, cfg.OIDCSubject)
+		v, err := oidc.New(cfg.OIDCIssuer, cfg.OIDCAudience, cfg.OIDCSubject)
 		if err != nil {
 			return nil, nil, fmt.Errorf("OIDC: %w", err)
 		}

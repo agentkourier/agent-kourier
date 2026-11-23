@@ -3,6 +3,7 @@ package adapter
 import (
 	"testing"
 
+	"github.com/agentkourier/agent-kourier/addons/kit/auth"
 	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 	"github.com/agentkourier/agent-kourier/addons/kit/telemetry/telemetrytest"
 )
@@ -27,8 +28,9 @@ func TestMetricFamiliesAreUnchanged(t *testing.T) {
 		_, call := tel.StartCall(t.Context(), op)
 		call.End("success")
 	}
-	for _, r := range []string{"missing", "invalid"} {
-		tel.AuthRefused(r)
+	// The adapter's check verifies tokens alone, so it never refuses for want of an issuer (auth.ReasonUnavailable).
+	for _, r := range []auth.Reason{auth.ReasonMissing, auth.ReasonInvalid} {
+		tel.AuthRefused(string(r))
 	}
 	for _, r := range []ArchiveReason{ArchiveIdle, ArchiveSuperseded, ArchiveGone} {
 		exec.Metrics.SessionArchived(r)

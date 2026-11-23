@@ -1,16 +1,17 @@
-// Package auth is the agent's caller check. A request to the A2A endpoint or the card must pass one of two checks,
-// which the configuration picks:
+// Package auth is an add-on's caller check. A request to the A2A endpoint or the agent card must pass one of two
+// checks, which the add-on's configuration picks:
 //
 //   - The token file: the request carries one of the tokens in a file, which a mounted Secret keeps current. Every
 //     accepted token is the same caller, Agent Kourier: tokens exist so that one can be rotated in before the other is
 //     removed, not to tell callers apart. The request runs as Caller.
-//   - OIDC: the request carries an ID token from the configured issuer, for the configured audience, whose subject is
-//     the configured one (Agent Kourier's service identity inside AX). The request runs as that subject.
+//   - OIDC (package oidc, which only an add-on that offers it links): the request carries an ID token from the
+//     configured issuer, for the configured audience, whose subject is the configured one (Agent Kourier's service
+//     identity). The request runs as that subject.
 //
 // With the check off (on a loopback address only), every request runs as Caller.
 //
-// The caller a request runs as owns the tasks it creates and names its ADK sessions' user: a task is visible only to
-// the caller that created it.
+// The caller a request runs as is the A2A call's authenticated user (Interceptor), which the add-on's task store
+// records as the owner of each task the call creates.
 package auth
 
 import (
@@ -27,15 +28,18 @@ import (
 // Caller is the user name a request runs as when the token file checked it, or the check is off.
 const Caller = "agent-kourier"
 
-// The reasons a request is refused, which Check.Refused is told.
+// Reason is why Check refused a request, which Check.Refused is told: the label an add-on counts the refusal under.
+type Reason string
+
+// The reasons, a closed set.
 const (
-	// ReasonMissing is a request with no credential.
-	ReasonMissing = "missing"
-	// ReasonInvalid is a request whose credential is not accepted.
-	ReasonInvalid = "invalid"
+	// ReasonMissing is a request with no credential: 401.
+	ReasonMissing Reason = "missing"
+	// ReasonInvalid is a request whose credential is not accepted: 401.
+	ReasonInvalid Reason = "invalid"
 	// ReasonUnavailable is a request whose credential could not be checked, because the OIDC issuer or its keys could
-	// not be reached.
-	ReasonUnavailable = "unavailable"
+	// not be reached: 503. Only OIDC returns it; the token file is always at hand.
+	ReasonUnavailable Reason = "unavailable"
 )
 
 // The errors a Verifier refuses a request with. Any other error is an invalid credential.
@@ -68,10 +72,12 @@ type Check struct {
 	Verifier Verifier
 	// Bearer is set when the credential is an Authorization Bearer token: a 401 then carries WWW-Authenticate: Bearer.
 	Bearer bool
+	// Header, if set, is the header the credential is read from, which each refusal's log line names.
+	Header string
 	// Log receives each refusal, with its reason and never the presented value.
 	Log *slog.Logger
-	// Refused, if set, is told the reason of each refusal: ReasonMissing, ReasonInvalid or ReasonUnavailable.
-	Refused func(reason string)
+	// Refused, if set, is told the reason of each refusal, for the add-on to count it.
+	Refused func(Reason)
 }
 
 // callerKey holds, in a request context that passed the check, the caller it runs as.
@@ -93,7 +99,11 @@ func (c *Check) Wrap(next http.Handler) http.Handler {
 			case errors.Is(err, ErrUnavailable):
 				reason = ReasonUnavailable
 			}
-			c.Log.Warn("refused an A2A request", "reason", reason, "remote", r.RemoteAddr)
+			attrs := []any{"reason", reason}
+			if c.Header != "" {
+				attrs = append(attrs, "header", c.Header)
+			}
+			c.Log.Warn("refused an A2A request", append(attrs, "remote", r.RemoteAddr)...)
 			if c.Refused != nil {
 				c.Refused(reason)
 			}
@@ -112,8 +122,8 @@ func (c *Check) Wrap(next http.Handler) http.Handler {
 	})
 }
 
-// bearer returns the token of an Authorization value, "Bearer <token>" with the scheme in any case.
-func bearer(value string) (string, error) {
+// Bearer returns the token of an Authorization value, "Bearer <token>" with the scheme in any case, or ErrInvalid.
+func Bearer(value string) (string, error) {
 	scheme, token, ok := strings.Cut(value, " ")
 	if !ok || !strings.EqualFold(scheme, "Bearer") || token == "" {
 		return "", ErrInvalid
@@ -121,9 +131,9 @@ func bearer(value string) (string, error) {
 	return token, nil
 }
 
-// Interceptor makes a call that passed the check run as its caller, so that the task store records the owner and ADK
-// names the session's user. A call that did not pass it is refused: every route to the request handler is behind a
-// Check, so one without a caller is a wiring fault, and failing closed is the safe answer to it.
+// Interceptor makes a call that passed the check run as its caller, so that the task store records the owner. A call
+// that did not pass it is refused: every route to the request handler is behind a Check (Open, with the check off), so
+// one without a caller is a wiring fault, and failing closed is the safe answer to it.
 type Interceptor struct {
 	a2asrv.PassthroughCallInterceptor
 }

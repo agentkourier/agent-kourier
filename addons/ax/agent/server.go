@@ -23,8 +23,8 @@ import (
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/functiontool"
 
-	"github.com/agentkourier/agent-kourier/addons/ax/auth"
 	"github.com/agentkourier/agent-kourier/addons/ax/store"
+	"github.com/agentkourier/agent-kourier/addons/kit/auth"
 	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 

@@ -4,8 +4,8 @@ import (
 	"testing"
 
 	"github.com/agentkourier/agent-kourier/addons/ax/anthropic"
-	"github.com/agentkourier/agent-kourier/addons/ax/auth"
 	"github.com/agentkourier/agent-kourier/addons/ax/bedrock"
+	"github.com/agentkourier/agent-kourier/addons/kit/auth"
 	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 	"github.com/agentkourier/agent-kourier/addons/kit/telemetry/telemetrytest"
 )
@@ -30,8 +30,8 @@ func TestMetricFamiliesAreUnchanged(t *testing.T) {
 		_, call := tel.StartCall(t.Context(), op)
 		call.End("success")
 	}
-	for _, r := range []string{auth.ReasonMissing, auth.ReasonInvalid, auth.ReasonUnavailable} {
-		tel.AuthRefused(r)
+	for _, r := range []auth.Reason{auth.ReasonMissing, auth.ReasonInvalid, auth.ReasonUnavailable} {
+		tel.AuthRefused(string(r))
 	}
 	metrics.SessionsDeleted(DeleteIdle, 1)
 	tel.MessageReplay()
