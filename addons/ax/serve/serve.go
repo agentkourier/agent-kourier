@@ -36,6 +36,7 @@ import (
 	"github.com/agentkourier/agent-kourier/addons/ax/store"
 	"github.com/agentkourier/agent-kourier/addons/ax/telemetry"
 	"github.com/agentkourier/agent-kourier/addons/kit/auth"
+	"github.com/agentkourier/agent-kourier/addons/kit/auth/oidc"
 )
 
 // ShutdownTimeout bounds the wait for the requests in flight at a graceful stop (and the command's flush of its spans
@@ -279,7 +280,7 @@ func callerCheck(cfg config.Config, log *slog.Logger, tel *telemetry.Telemetry) 
 		log.Warn("the caller check is off (AUTH_DISABLED=true): anything that reaches the loopback address can run the agent", "addr", cfg.ListenAddr)
 		return &auth.Check{Verifier: auth.Open{}, Log: log, Refused: refused}, nil, nil
 	case cfg.OIDC():
-		v, err := auth.NewOIDC(cfg.OIDCIssuer, cfg.OIDCAudience, cfg.OIDCSubject)
+		v, err := oidc.New(cfg.OIDCIssuer, cfg.OIDCAudience, cfg.OIDCSubject)
 		if err != nil {
 			return nil, nil, fmt.Errorf("OIDC: %w", err)
 		}

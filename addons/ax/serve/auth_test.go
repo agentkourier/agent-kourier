@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/agentkourier/agent-kourier/addons/kit/auth"
+	"github.com/agentkourier/agent-kourier/addons/kit/auth/oidc"
 	"github.com/agentkourier/agent-kourier/addons/kit/limitsdoc"
 )
 
@@ -11,5 +12,5 @@ import (
 // long an OIDC discovery or key fetch may take, to the documentation.
 func TestCallerCheckLimits(t *testing.T) {
 	limitsdoc.Duration(t, "ax.token-reload", auth.ReloadInterval)
-	limitsdoc.Duration(t, "ax.oidc-timeout", auth.OIDCTimeout)
+	limitsdoc.Duration(t, "ax.oidc-timeout", oidc.Timeout)
 }

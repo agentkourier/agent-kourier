@@ -1,6 +1,7 @@
-package auth
+package oidc
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/rand"
@@ -9,13 +10,50 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/a2aproject/a2a-go/v2/a2asrv"
+
+	"github.com/agentkourier/agent-kourier/addons/kit/auth"
 )
+
+// serve runs one request through check and reports the status, the challenge, the caller the inner handler ran as,
+// and the reasons Refused was told. Neither the log nor the response may show a presented value.
+func serve(t *testing.T, check *auth.Check, set map[string]string) (status int, challenge string, user *a2asrv.User, reason auth.Reason) {
+	t.Helper()
+	var reasons []string
+	var buf bytes.Buffer
+	check.Log = slog.New(slog.NewTextHandler(&buf, nil))
+	check.Refused = func(r auth.Reason) { reasons = append(reasons, string(r)) }
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// What the JSON-RPC handler does: a fresh call context, then the interceptor.
+		ctx, callCtx := a2asrv.NewCallContext(r.Context(), nil)
+		if _, _, err := (auth.Interceptor{}).Before(ctx, callCtx, &a2asrv.Request{}); err != nil {
+			t.Errorf("Before: %v", err)
+		}
+		user = callCtx.User
+		w.WriteHeader(http.StatusOK)
+	})
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/a2a", strings.NewReader(`{}`))
+	for k, v := range set {
+		req.Header.Set(k, v)
+	}
+	rec := httptest.NewRecorder()
+	check.Wrap(inner).ServeHTTP(rec, req)
+	for _, v := range set {
+		if v != "" && strings.Contains(buf.String()+rec.Body.String(), v) {
+			t.Errorf("the log or the response shows the presented value %q", v)
+		}
+	}
+	return rec.Code, rec.Header().Get("WWW-Authenticate"), user, auth.Reason(strings.Join(reasons, ","))
+}
 
 // issuer is a fake OIDC issuer whose discovery document and key set can be taken down, and whose keys can rotate.
 type issuer struct {
@@ -100,30 +138,30 @@ func request(ctx context.Context, authorization ...string) *http.Request {
 
 func TestOIDCDiscoveryIsLazyAndIdentityIsVerified(t *testing.T) {
 	is := newIssuer(t)
-	v, err := NewOIDC(is.srv.URL, "agent-kourier", "service")
+	v, err := New(is.srv.URL, "agent-kourier", "service")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if is.requests.Load() != 0 {
-		t.Fatal("NewOIDC contacted the issuer; golden snapshot startup requires no egress")
+		t.Fatal("New contacted the issuer; golden snapshot startup requires no egress")
 	}
-	if _, err := v.Verify(request(t.Context())); !errors.Is(err, ErrMissing) {
-		t.Fatalf("no credential: %v, want ErrMissing", err)
+	if _, err := v.Verify(request(t.Context())); !errors.Is(err, auth.ErrMissing) {
+		t.Fatalf("no credential: %v, want auth.ErrMissing", err)
 	}
 	if is.requests.Load() != 0 {
 		t.Fatal("a request without a credential triggered discovery")
 	}
 	good := is.token("k1", is.srv.URL, "agent-kourier", "service", time.Now().Add(time.Hour))
-	if _, err := v.Verify(request(t.Context(), good, good)); err == nil || errors.Is(err, ErrUnavailable) {
+	if _, err := v.Verify(request(t.Context(), good, good)); err == nil || errors.Is(err, auth.ErrUnavailable) {
 		t.Fatalf("two Authorization headers: %v, want invalid", err)
 	}
-	if _, err := v.Verify(request(t.Context(), good)); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("issuer down: %v, want ErrUnavailable", err)
+	if _, err := v.Verify(request(t.Context(), good)); !errors.Is(err, auth.ErrUnavailable) {
+		t.Fatalf("issuer down: %v, want auth.ErrUnavailable", err)
 	}
 	is.available.Store(true)
 	// Discovery can recover while the signing-key endpoint is still unavailable: still retryable.
-	if _, err := v.Verify(request(t.Context(), good)); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("keys down: %v, want ErrUnavailable", err)
+	if _, err := v.Verify(request(t.Context(), good)); !errors.Is(err, auth.ErrUnavailable) {
+		t.Fatalf("keys down: %v, want auth.ErrUnavailable", err)
 	}
 	is.keysUp.Store(true)
 	if sub, err := v.Verify(request(t.Context(), good)); err != nil || sub != "service" {
@@ -140,13 +178,13 @@ func TestOIDCDiscoveryIsLazyAndIdentityIsVerified(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bad := is.token("k1", tc.iss, tc.aud, tc.sub, tc.expiry)
-			if _, err := v.Verify(request(t.Context(), bad)); err == nil || errors.Is(err, ErrUnavailable) || errors.Is(err, ErrMissing) {
+			if _, err := v.Verify(request(t.Context(), bad)); err == nil || errors.Is(err, auth.ErrUnavailable) || errors.Is(err, auth.ErrMissing) {
 				t.Fatalf("invalid identity: %v, want invalid", err)
 			}
 		})
 	}
 	forged := good[:len(good)-12] + "AAAAAAAAAAAA"
-	if _, err := v.Verify(request(t.Context(), forged)); err == nil || errors.Is(err, ErrUnavailable) {
+	if _, err := v.Verify(request(t.Context(), forged)); err == nil || errors.Is(err, auth.ErrUnavailable) {
 		t.Fatalf("forged signature: %v, want invalid", err)
 	}
 }
@@ -154,22 +192,22 @@ func TestOIDCDiscoveryIsLazyAndIdentityIsVerified(t *testing.T) {
 // The check answers an outage with a retryable 503, and a bad identity with 401 and the Bearer challenge.
 func TestOIDCCheckResponses(t *testing.T) {
 	is := newIssuer(t)
-	v, err := NewOIDC(is.srv.URL, "agent-kourier", "service")
+	v, err := New(is.srv.URL, "agent-kourier", "service")
 	if err != nil {
 		t.Fatal(err)
 	}
-	check := func() *Check { return &Check{Verifier: v, Bearer: true} }
+	check := func() *auth.Check { return &auth.Check{Verifier: v, Bearer: true} }
 	good := is.token("k1", is.srv.URL, "agent-kourier", "service", time.Now().Add(time.Hour))
 	bad := is.token("k1", is.srv.URL, "agent-kourier", "intruder", time.Now().Add(time.Hour))
 	rec := httptest.NewRecorder()
 	c := check()
-	c.Log, _ = newLog()
+	c.Log = slog.New(slog.DiscardHandler)
 	c.Wrap(http.NotFoundHandler()).ServeHTTP(rec, request(t.Context(), good))
 	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "1" {
 		t.Fatalf("outage = %d Retry-After %q, want 503 and 1", rec.Code, rec.Header().Get("Retry-After"))
 	}
 	status, _, _, reason := serve(t, check(), map[string]string{"Authorization": good})
-	if status != http.StatusServiceUnavailable || reason != ReasonUnavailable {
+	if status != http.StatusServiceUnavailable || reason != auth.ReasonUnavailable {
 		t.Fatalf("outage = %d %q, want 503 unavailable", status, reason)
 	}
 	is.available.Store(true)
@@ -179,11 +217,11 @@ func TestOIDCCheckResponses(t *testing.T) {
 		t.Fatalf("good = %d %q %+v, want 200 as service", status, reason, user)
 	}
 	status, challenge, _, reason := serve(t, check(), map[string]string{"Authorization": bad})
-	if status != http.StatusUnauthorized || challenge != "Bearer" || reason != ReasonInvalid {
+	if status != http.StatusUnauthorized || challenge != "Bearer" || reason != auth.ReasonInvalid {
 		t.Fatalf("bad subject = %d %q %q, want 401 Bearer invalid", status, challenge, reason)
 	}
 	status, _, _, reason = serve(t, check(), nil)
-	if status != http.StatusUnauthorized || reason != ReasonMissing {
+	if status != http.StatusUnauthorized || reason != auth.ReasonMissing {
 		t.Fatalf("missing = %d %q, want 401 missing", status, reason)
 	}
 }
@@ -194,7 +232,7 @@ func TestOIDCFetchesRotatedKeysAfterTheFirstRequestEnds(t *testing.T) {
 	is := newIssuer(t)
 	is.available.Store(true)
 	is.keysUp.Store(true)
-	v, err := NewOIDC(is.srv.URL, "agent-kourier", "service")
+	v, err := New(is.srv.URL, "agent-kourier", "service")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +248,7 @@ func TestOIDCFetchesRotatedKeysAfterTheFirstRequestEnds(t *testing.T) {
 	}
 }
 
-func TestNewOIDCRefuses(t *testing.T) {
+func TestNewRefuses(t *testing.T) {
 	for name, args := range map[string][3]string{
 		"relative issuer": {"issuer.example.test", "aud", "sub"},
 		"userinfo":        {"https://u:p@issuer.example.test", "aud", "sub"},
@@ -218,8 +256,8 @@ func TestNewOIDCRefuses(t *testing.T) {
 		"no audience":     {"https://issuer.example.test", "", "sub"},
 		"no subject":      {"https://issuer.example.test", "aud", ""},
 	} {
-		if _, err := NewOIDC(args[0], args[1], args[2]); err == nil {
-			t.Errorf("%s: NewOIDC accepted it", name)
+		if _, err := New(args[0], args[1], args[2]); err == nil {
+			t.Errorf("%s: New accepted it", name)
 		}
 	}
 }

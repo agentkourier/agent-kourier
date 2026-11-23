@@ -4,8 +4,9 @@
 //   - The token file: the request carries one of the tokens in a file, which a mounted Secret keeps current. Every
 //     accepted token is the same caller, Agent Kourier: tokens exist so that one can be rotated in before the other is
 //     removed, not to tell callers apart. The request runs as Caller.
-//   - OIDC: the request carries an ID token from the configured issuer, for the configured audience, whose subject is
-//     the configured one (Agent Kourier's service identity). The request runs as that subject.
+//   - OIDC (package oidc, which only an add-on that offers it links): the request carries an ID token from the
+//     configured issuer, for the configured audience, whose subject is the configured one (Agent Kourier's service
+//     identity). The request runs as that subject.
 //
 // With the check off (on a loopback address only), every request runs as Caller.
 //
@@ -121,8 +122,8 @@ func (c *Check) Wrap(next http.Handler) http.Handler {
 	})
 }
 
-// bearer returns the token of an Authorization value, "Bearer <token>" with the scheme in any case.
-func bearer(value string) (string, error) {
+// Bearer returns the token of an Authorization value, "Bearer <token>" with the scheme in any case, or ErrInvalid.
+func Bearer(value string) (string, error) {
 	scheme, token, ok := strings.Cut(value, " ")
 	if !ok || !strings.EqualFold(scheme, "Bearer") || token == "" {
 		return "", ErrInvalid

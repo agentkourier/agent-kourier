@@ -129,7 +129,7 @@ func (v TokenVerifier) Verify(r *http.Request) (string, error) {
 	token := value
 	if strings.EqualFold(v.Header, "Authorization") {
 		var err error
-		if token, err = bearer(value); err != nil {
+		if token, err = Bearer(value); err != nil {
 			return "", err
 		}
 	}
