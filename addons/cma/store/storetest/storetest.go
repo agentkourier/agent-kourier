@@ -134,7 +134,7 @@ func testCreateAndGet(t *testing.T, h Harness) {
 	}
 	same(t, got.Task, want)
 
-	// A call with no authenticated user (the check is off) records no owner, and every caller sees every task.
+	// A call with no authenticated user records no owner, and every caller sees every task.
 	mustCreate(t, s, task("t2", "c1", a2a.TaskStateSubmitted, nil))
 	if got, err := s.Get(asCaller("someone-else"), "t2"); err != nil || got.User != "" {
 		t.Fatalf("Get t2 = %+v, %v; want no owner", got, err)

@@ -6,6 +6,7 @@ require (
 	github.com/a2aproject/a2a-go/v2 v2.9.0
 	github.com/agentkourier/agent-kourier v0.0.0
 	github.com/agentkourier/agent-kourier/addons/cma v0.0.0
+	github.com/agentkourier/agent-kourier/addons/kit v0.0.0-00010101000000-000000000000
 )
 
 require (

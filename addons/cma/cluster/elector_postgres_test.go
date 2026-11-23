@@ -10,7 +10,8 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/addons/cma/store"
-	"github.com/agentkourier/agent-kourier/addons/cma/store/pgtest"
+	kitstore "github.com/agentkourier/agent-kourier/addons/kit/store"
+	"github.com/agentkourier/agent-kourier/addons/kit/store/pgtest"
 )
 
 // replica is one adapter process on a shared Postgres: its store and its elector.
@@ -80,7 +81,7 @@ func TestPostgresElectionAndTakeover(t *testing.T) {
 	if err := write(a, "t1"); err != nil {
 		t.Fatalf("the leader's write: %v", err)
 	}
-	if err := write(b, "t2"); !errors.Is(err, store.ErrDeposed) {
+	if err := write(b, "t2"); !errors.Is(err, kitstore.ErrDeposed) {
 		t.Fatalf("the standby's write: %v, want ErrDeposed", err)
 	}
 
@@ -105,7 +106,7 @@ func TestPostgresElectionAndTakeover(t *testing.T) {
 	if err != nil || second.Holder != "b" || second.Epoch <= first.Epoch {
 		t.Fatalf("lease after the takeover = %+v (before %+v), %v", second, first, err)
 	}
-	if err := write(a, "t3"); !errors.Is(err, store.ErrDeposed) {
+	if err := write(a, "t3"); !errors.Is(err, kitstore.ErrDeposed) {
 		t.Fatalf("the old leader's write: %v, want ErrDeposed", err)
 	}
 	if err := write(b, "t3"); err != nil {
@@ -133,7 +134,7 @@ func TestPostgresReleaseHandsOverAtOnce(t *testing.T) {
 	if since := time.Since(released); since > 2*time.Second {
 		t.Fatalf("b took over %s after the release", since)
 	}
-	if err := write(a, "t1"); !errors.Is(err, store.ErrDeposed) {
+	if err := write(a, "t1"); !errors.Is(err, kitstore.ErrDeposed) {
 		t.Fatalf("a write after the release: %v, want ErrDeposed", err)
 	}
 }

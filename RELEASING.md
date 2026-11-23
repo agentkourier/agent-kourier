@@ -325,8 +325,8 @@ it one, the owner adds `test-postgres` from `ci` to the `main` ruleset, and the 
 `hack/release/check-ci.sh` and to the lists above. The `cma` job runs `make cma-test` through `hack/postgres/run.sh`,
 which starts the same throwaway Postgres container (`hack/postgres/lib.sh`) and sets `AGENTKOURIER_POSTGRES_DSN` for
 it, so the CMA add-on's Postgres store tests run there, and `make cma-lint`; the `ax` job runs `make ax-test` the same
-way, for the AX add-on's, and `make ax-lint`. Both test targets also run the shared kit's packages under the add-on's
-module graph; the `kit` job runs `make kit-test` and `make kit-lint` on the kit's own. The `crd-corpus` job (`make crd-corpus`, `hack/kind/crd-corpus.sh`) brings up
+way, for the AX add-on's, and `make ax-lint`. Both test targets also run the shared kit's packages that the add-on links
+under the add-on's module graph; the `kit` job runs `make kit-test` and `make kit-lint` on the kit's own. The `crd-corpus` job (`make crd-corpus`, `hack/kind/crd-corpus.sh`) brings up
 a kind cluster with only the three CRDs from `charts/agent-kourier/files/crds`, with no image and no Agent Kourier, and has
 `test/crdcorpus` send every entry of its corpus to it as a server-side dry-run create. It fails when the schema refuses
 an object the broker's own validation accepts, or when an entry's `schema:` flag no longer says what the schema does with

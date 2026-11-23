@@ -10,7 +10,8 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 
-	"github.com/agentkourier/agent-kourier/addons/cma/telemetry"
+	"github.com/agentkourier/agent-kourier/addons/kit/auth"
+	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
 // NewRequestHandler is the A2A request handler over exec, with exec.Store as its task store; opts add to it (a call
@@ -41,12 +42,13 @@ func Card(name, description, url, version string) *a2a.AgentCard {
 // CardPath is where Mux serves the card, under the JSON-RPC endpoint's path.
 const CardPath = "/.well-known/agent-card.json"
 
-// Mux serves the card at path + CardPath and rpc, the JSON-RPC handler behind any caller check, at path, as Agent
-// Kourier's a2a dialect expects of an exact endpoint.
-func Mux(path string, card *a2a.AgentCard, rpc http.Handler) *http.ServeMux {
+// Mux serves the card at path + CardPath and rpc, the JSON-RPC handler, at path, as Agent Kourier's a2a dialect
+// expects of an exact endpoint. Both are behind check, which Agent Kourier passes at the card too: it sends the
+// Binding's credentials on every request to the endpoint, the card's fetch included.
+func Mux(path string, card *a2a.AgentCard, rpc http.Handler, check *auth.Check) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.Handle(path+CardPath, a2asrv.NewStaticAgentCardHandler(card))
-	mux.Handle(path, rpc)
+	mux.Handle(path+CardPath, check.Wrap(a2asrv.NewStaticAgentCardHandler(card)))
+	mux.Handle(path, check.Wrap(rpc))
 	return mux
 }
 

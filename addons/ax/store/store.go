@@ -16,14 +16,14 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/a2aproject/a2a-go/v2/a2asrv/taskstore"
 	"google.golang.org/adk/v2/session"
+
+	kitstore "github.com/agentkourier/agent-kourier/addons/kit/store"
 )
 
 // AppName is the ADK app the agent runs its sessions under; the store deletes an idle context's session of it.
@@ -39,39 +39,27 @@ type Options struct {
 	// Log receives what the store finds worth a warning. Nil is slog.Default().
 	Log *slog.Logger
 	// OnDeposed, on Postgres, runs when a write, the store's or ADK's, finds that another replica has taken the lease
-	// since this store took it, before the write fails with ErrDeposed. It runs in the writer's goroutine and must not
-	// call the store. The agent ends its process in it: the error alone would reach whichever caller the write was made
-	// for. It does not run for a store that holds no epoch (a standby's, or one that released its lease).
+	// since this store took it, before the write fails with kitstore.ErrDeposed. It runs in the writer's goroutine and
+	// must not call the store. The agent ends its process in it: the error alone would reach whichever caller the write
+	// was made for. It does not run for a store that holds no epoch (a standby's, or one that released its lease).
 	OnDeposed func()
 }
 
-// Store is the agent's state on SQLite or Postgres. It implements taskstore.Store, and its Sessions is ADK's session
-// service on the same database.
+// Store is the agent's state on SQLite or Postgres: its tables on the kit's database, whose lease (TryLead, Renew,
+// Release, CurrentLeader) fences every write, the store's and ADK's. It implements taskstore.Store, and its Sessions is
+// ADK's session service on the same database.
 type Store struct {
-	conn conn
-	now  func() time.Time
-	log  *slog.Logger
-
-	// fence, when set, runs first in every write transaction, the store's (write) and ADK's (a gorm callback, adk.go),
-	// and its error aborts the write. It is the one place a check that must hold for any write runs: a leader's lease
-	// epoch, on Postgres, where several replicas share the store.
-	fence func(ctx context.Context, q querier) error
-	// elects is true on Postgres, where replicas elect a leader through the leadership row (lease.go).
-	elects bool
-	// epoch is the lease epoch this store took, 0 for none.
-	epoch     atomic.Int64
-	onDeposed func()
+	*kitstore.DB
+	now func() time.Time
+	log *slog.Logger
 
 	sessions session.Service
-
-	closeOnce sync.Once
-	closeErr  error
 }
 
 var _ taskstore.Store = (*Store)(nil)
 
-func newStore(c conn, opts Options) *Store {
-	s := &Store{conn: c, now: opts.Now, log: opts.Log, onDeposed: opts.OnDeposed}
+func newStore(db *kitstore.DB, opts Options) *Store {
+	s := &Store{DB: db, now: opts.Now, log: opts.Log}
 	if s.now == nil {
 		s.now = time.Now
 	}
@@ -83,24 +71,6 @@ func newStore(c conn, opts Options) *Store {
 
 // Sessions is ADK's session service, on the store's database.
 func (s *Store) Sessions() session.Service { return s.sessions }
-
-// Close releases the store. Closing it again does nothing.
-func (s *Store) Close() error {
-	s.closeOnce.Do(func() { s.closeErr = s.conn.close() })
-	return s.closeErr
-}
-
-// write runs fn in one write transaction, after the fence. Every write of the store goes through it.
-func (s *Store) write(ctx context.Context, fn func(q querier) error) error {
-	return s.conn.inTx(ctx, func(q querier) error {
-		if s.fence != nil {
-			if err := s.fence(ctx, q); err != nil {
-				return err
-			}
-		}
-		return fn(q)
-	})
-}
 
 // owner is the authenticated caller of the call. A call without one is refused.
 func owner(ctx context.Context) (string, error) {
@@ -151,8 +121,8 @@ func (s *Store) Create(ctx context.Context, task *a2a.Task) (taskstore.TaskVersi
 		return taskstore.TaskVersionMissing, err
 	}
 	now := nanos(s.now())
-	err = s.write(ctx, func(q querier) error {
-		n, err := q.exec(ctx, `INSERT INTO a2a_tasks (id, context_id, owner, version, state, status_at, updated_at, payload)
+	err = s.Write(ctx, func(q kitstore.Querier) error {
+		n, err := q.Exec(ctx, `INSERT INTO a2a_tasks (id, context_id, owner, version, state, status_at, updated_at, payload)
 			VALUES (?, ?, ?, 1, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
 			string(task.ID), task.ContextID, user, string(task.Status.State), statusAt(task), now, raw)
 		if err != nil {
@@ -185,7 +155,7 @@ func (s *Store) Update(ctx context.Context, req *taskstore.UpdateRequest) (tasks
 	task := req.Task
 	now := nanos(s.now())
 	var version int64
-	err = s.write(ctx, func(q querier) error {
+	err = s.Write(ctx, func(q kitstore.Querier) error {
 		query := `UPDATE a2a_tasks SET context_id = ?, state = ?, status_at = ?, updated_at = ?, payload = ?, version = version + 1
 			WHERE id = ? AND owner = ?`
 		args := []any{task.ContextID, string(task.Status.State), statusAt(task), now, raw, string(task.ID), user}
@@ -193,11 +163,11 @@ func (s *Store) Update(ctx context.Context, req *taskstore.UpdateRequest) (tasks
 			query += ` AND version = ?`
 			args = append(args, int64(req.PrevVersion))
 		}
-		err := q.queryRow(ctx, query+` RETURNING version`, args...).Scan(&version)
-		if errors.Is(err, errNoRows) {
+		err := q.QueryRow(ctx, query+` RETURNING version`, args...).Scan(&version)
+		if errors.Is(err, kitstore.ErrNoRows) {
 			var one int
-			switch err := q.queryRow(ctx, `SELECT 1 FROM a2a_tasks WHERE id = ? AND owner = ?`, string(task.ID), user).Scan(&one); {
-			case errors.Is(err, errNoRows):
+			switch err := q.QueryRow(ctx, `SELECT 1 FROM a2a_tasks WHERE id = ? AND owner = ?`, string(task.ID), user).Scan(&one); {
+			case errors.Is(err, kitstore.ErrNoRows):
 				return a2a.ErrTaskNotFound
 			case err != nil:
 				return err
@@ -217,12 +187,12 @@ func (s *Store) Update(ctx context.Context, req *taskstore.UpdateRequest) (tasks
 
 // recordActivity records the IDs of the task's user messages, refusing one that another task of the owner holds, and
 // the time as its context's last activity.
-func recordActivity(ctx context.Context, q querier, user string, task *a2a.Task, now int64) error {
+func recordActivity(ctx context.Context, q kitstore.Querier, user string, task *a2a.Task, now int64) error {
 	for _, msg := range task.History {
 		if msg == nil || msg.Role != a2a.MessageRoleUser || msg.ID == "" {
 			continue
 		}
-		n, err := q.exec(ctx, `INSERT INTO message_ids (owner, message_id, task_id, created_at) VALUES (?, ?, ?, ?)
+		n, err := q.Exec(ctx, `INSERT INTO message_ids (owner, message_id, task_id, created_at) VALUES (?, ?, ?, ?)
 			ON CONFLICT (owner, message_id) DO NOTHING`, user, msg.ID, string(task.ID), now)
 		if err != nil {
 			return err
@@ -231,7 +201,7 @@ func recordActivity(ctx context.Context, q querier, user string, task *a2a.Task,
 			continue
 		}
 		var held string
-		if err := q.queryRow(ctx, `SELECT task_id FROM message_ids WHERE owner = ? AND message_id = ?`, user, msg.ID).Scan(&held); err != nil {
+		if err := q.QueryRow(ctx, `SELECT task_id FROM message_ids WHERE owner = ? AND message_id = ?`, user, msg.ID).Scan(&held); err != nil {
 			return err
 		}
 		if held != string(task.ID) {
@@ -245,8 +215,8 @@ func recordActivity(ctx context.Context, q querier, user string, task *a2a.Task,
 }
 
 // touch records now as the owner's context's last activity.
-func touch(ctx context.Context, q querier, user, contextID string, now int64) error {
-	_, err := q.exec(ctx, `INSERT INTO contexts (owner, context_id, last_active) VALUES (?, ?, ?)
+func touch(ctx context.Context, q kitstore.Querier, user, contextID string, now int64) error {
+	_, err := q.Exec(ctx, `INSERT INTO contexts (owner, context_id, last_active) VALUES (?, ?, ?)
 		ON CONFLICT (owner, context_id) DO UPDATE SET last_active = excluded.last_active`, user, contextID, now)
 	return err
 }
@@ -259,7 +229,7 @@ func (s *Store) TouchContext(ctx context.Context, contextID string) error {
 	if err != nil {
 		return err
 	}
-	if err := s.write(ctx, func(q querier) error { return touch(ctx, q, user, contextID, nanos(s.now())) }); err != nil {
+	if err := s.Write(ctx, func(q kitstore.Querier) error { return touch(ctx, q, user, contextID, nanos(s.now())) }); err != nil {
 		return fmt.Errorf("touch context %s: %w", contextID, err)
 	}
 	return nil
@@ -273,8 +243,8 @@ func (s *Store) Get(ctx context.Context, id a2a.TaskID) (*taskstore.StoredTask, 
 	}
 	var raw []byte
 	var version int64
-	err = s.conn.reader().queryRow(ctx, `SELECT payload, version FROM a2a_tasks WHERE id = ? AND owner = ?`, string(id), user).Scan(&raw, &version)
-	if errors.Is(err, errNoRows) {
+	err = s.Reader().QueryRow(ctx, `SELECT payload, version FROM a2a_tasks WHERE id = ? AND owner = ?`, string(id), user).Scan(&raw, &version)
+	if errors.Is(err, kitstore.ErrNoRows) {
 		return nil, a2a.ErrTaskNotFound
 	}
 	if err != nil {
@@ -295,8 +265,8 @@ func (s *Store) MessageTask(ctx context.Context, messageID string) (*a2a.Task, e
 		return nil, err
 	}
 	var id string
-	err = s.conn.reader().queryRow(ctx, `SELECT task_id FROM message_ids WHERE owner = ? AND message_id = ?`, user, messageID).Scan(&id)
-	if errors.Is(err, errNoRows) {
+	err = s.Reader().QueryRow(ctx, `SELECT task_id FROM message_ids WHERE owner = ? AND message_id = ?`, user, messageID).Scan(&id)
+	if errors.Is(err, kitstore.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -346,9 +316,9 @@ func (s *Store) List(ctx context.Context, req *a2a.ListTasksRequest) (*a2a.ListT
 	if req.StatusTimestampAfter != nil {
 		where, args = append(where, `(status_at IS NULL OR status_at >= ?)`), append(args, nanos(*req.StatusTimestampAfter))
 	}
-	q := s.conn.reader()
+	q := s.Reader()
 	var total int
-	if err := q.queryRow(ctx, `SELECT COUNT(*) FROM a2a_tasks WHERE `+strings.Join(where, ` AND `), args...).Scan(&total); err != nil {
+	if err := q.QueryRow(ctx, `SELECT COUNT(*) FROM a2a_tasks WHERE `+strings.Join(where, ` AND `), args...).Scan(&total); err != nil {
 		return nil, fmt.Errorf("count tasks: %w", err)
 	}
 	if req.PageToken != "" {
@@ -364,7 +334,7 @@ func (s *Store) List(ctx context.Context, req *a2a.ListTasksRequest) (*a2a.ListT
 		id  string
 	}
 	var rows []row
-	err = q.query(ctx, `SELECT payload, updated_at, id FROM a2a_tasks WHERE `+strings.Join(where, ` AND `)+` ORDER BY updated_at DESC, id DESC LIMIT ?`,
+	err = q.Query(ctx, `SELECT payload, updated_at, id FROM a2a_tasks WHERE `+strings.Join(where, ` AND `)+` ORDER BY updated_at DESC, id DESC LIMIT ?`,
 		append(args, size+1), func(scan func(...any) error) error {
 			var r row
 			if err := scan(&r.raw, &r.at, &r.id); err != nil {
@@ -419,14 +389,14 @@ func marks(n int) string { return strings.TrimSuffix(strings.Repeat("?, ", n), "
 // the database: before serving, and on Postgres only where no other replica serves turns from it.
 func (s *Store) SettleInterrupted(ctx context.Context) (int, error) {
 	n := 0
-	err := s.write(ctx, func(q querier) error {
+	err := s.Write(ctx, func(q kitstore.Querier) error {
 		type interrupted struct {
 			id      string
 			version int64
 			task    *a2a.Task
 		}
 		var found []interrupted
-		err := q.query(ctx, `SELECT id, version, payload FROM a2a_tasks WHERE state IN (`+marks(len(running))+`) ORDER BY id`, running,
+		err := q.Query(ctx, `SELECT id, version, payload FROM a2a_tasks WHERE state IN (`+marks(len(running))+`) ORDER BY id`, running,
 			func(scan func(...any) error) error {
 				var it interrupted
 				var raw []byte
@@ -452,7 +422,7 @@ func (s *Store) SettleInterrupted(ctx context.Context) (int, error) {
 			if err != nil {
 				return err
 			}
-			if _, err := q.exec(ctx, `UPDATE a2a_tasks SET state = ?, status_at = ?, updated_at = ?, payload = ?, version = version + 1
+			if _, err := q.Exec(ctx, `UPDATE a2a_tasks SET state = ?, status_at = ?, updated_at = ?, payload = ?, version = version + 1
 				WHERE id = ? AND version = ?`, string(a2a.TaskStateFailed), nanos(now), nanos(now), raw, it.id, it.version); err != nil {
 				return fmt.Errorf("task %s: %w", it.id, err)
 			}
@@ -472,12 +442,12 @@ func (s *Store) DeleteSettledBefore(ctx context.Context, cutoff time.Time) (int6
 	var n int64
 	filter := `state IN (` + marks(len(settled)) + `) AND updated_at < ?`
 	args := append(append([]any{}, settled...), nanos(cutoff))
-	err := s.write(ctx, func(q querier) error {
-		if _, err := q.exec(ctx, `DELETE FROM message_ids WHERE task_id IN (SELECT id FROM a2a_tasks WHERE `+filter+`)`, args...); err != nil {
+	err := s.Write(ctx, func(q kitstore.Querier) error {
+		if _, err := q.Exec(ctx, `DELETE FROM message_ids WHERE task_id IN (SELECT id FROM a2a_tasks WHERE `+filter+`)`, args...); err != nil {
 			return err
 		}
 		var err error
-		n, err = q.exec(ctx, `DELETE FROM a2a_tasks WHERE `+filter, args...)
+		n, err = q.Exec(ctx, `DELETE FROM a2a_tasks WHERE `+filter, args...)
 		return err
 	})
 	if err != nil {
@@ -493,7 +463,7 @@ func (s *Store) DeleteSettledBefore(ctx context.Context, cutoff time.Time) (int6
 func (s *Store) DeleteIdleContexts(ctx context.Context, cutoff time.Time) (int, error) {
 	type idle struct{ owner, contextID string }
 	var found []idle
-	err := s.conn.reader().query(ctx, `SELECT owner, context_id FROM contexts WHERE last_active < ? ORDER BY last_active`,
+	err := s.Reader().Query(ctx, `SELECT owner, context_id FROM contexts WHERE last_active < ? ORDER BY last_active`,
 		[]any{nanos(cutoff)}, func(scan func(...any) error) error {
 			var c idle
 			if err := scan(&c.owner, &c.contextID); err != nil {
@@ -508,8 +478,8 @@ func (s *Store) DeleteIdleContexts(ctx context.Context, cutoff time.Time) (int, 
 	deleted := 0
 	for _, c := range found {
 		gone := false
-		err := s.write(ctx, func(q querier) error {
-			n, err := q.exec(ctx, `DELETE FROM contexts WHERE owner = ? AND context_id = ? AND last_active < ?
+		err := s.Write(ctx, func(q kitstore.Querier) error {
+			n, err := q.Exec(ctx, `DELETE FROM contexts WHERE owner = ? AND context_id = ? AND last_active < ?
 				AND NOT EXISTS (SELECT 1 FROM a2a_tasks WHERE owner = ? AND context_id = ? AND state IN (`+marks(len(running))+`))`,
 				append([]any{c.owner, c.contextID, nanos(cutoff), c.owner, c.contextID}, running...)...)
 			if err != nil || n == 0 {
@@ -519,15 +489,15 @@ func (s *Store) DeleteIdleContexts(ctx context.Context, cutoff time.Time) (int, 
 				`DELETE FROM events WHERE app_name = ? AND user_id = ? AND session_id = ?`,
 				`DELETE FROM sessions WHERE app_name = ? AND user_id = ? AND id = ?`,
 			} {
-				if _, err := q.exec(ctx, stmt, AppName, c.owner, c.contextID); err != nil {
+				if _, err := q.Exec(ctx, stmt, AppName, c.owner, c.contextID); err != nil {
 					return err
 				}
 			}
-			if _, err := q.exec(ctx, `DELETE FROM message_ids WHERE owner = ? AND task_id IN (SELECT id FROM a2a_tasks WHERE owner = ? AND context_id = ?)`,
+			if _, err := q.Exec(ctx, `DELETE FROM message_ids WHERE owner = ? AND task_id IN (SELECT id FROM a2a_tasks WHERE owner = ? AND context_id = ?)`,
 				c.owner, c.owner, c.contextID); err != nil {
 				return err
 			}
-			if _, err := q.exec(ctx, `DELETE FROM a2a_tasks WHERE owner = ? AND context_id = ?`, c.owner, c.contextID); err != nil {
+			if _, err := q.Exec(ctx, `DELETE FROM a2a_tasks WHERE owner = ? AND context_id = ?`, c.owner, c.contextID); err != nil {
 				return err
 			}
 			gone = true

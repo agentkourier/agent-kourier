@@ -18,9 +18,10 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/adk/v2/model"
 
-	"github.com/agentkourier/agent-kourier/addons/ax/auth"
+	"github.com/agentkourier/agent-kourier/addons/ax/bedrock"
 	"github.com/agentkourier/agent-kourier/addons/ax/store"
-	"github.com/agentkourier/agent-kourier/addons/ax/telemetry"
+	"github.com/agentkourier/agent-kourier/addons/kit/auth"
+	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
 // startObserved is start with tel, and the handler behind telemetry.Extract, as the agent serves it.
@@ -43,7 +44,7 @@ func startObserved(t *testing.T, m model.LLM, tel *telemetry.Telemetry) *agentAt
 
 func newTelemetry(t *testing.T, provider trace.TracerProvider) *telemetry.Telemetry {
 	t.Helper()
-	tel, err := telemetry.New(provider)
+	tel, err := telemetry.New(TelemetrySpec(), provider)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +134,7 @@ type tracing struct{ tel *telemetry.Telemetry }
 
 func (tracing) Name() string { return "tracing" }
 func (m tracing) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
-	_, call := m.tel.StartCall(ctx, telemetry.OpConverseStream)
+	_, call := m.tel.StartCall(ctx, bedrock.OpConverseStream)
 	call.End("success")
 	return (&fakeModel{}).GenerateContent(ctx, req, stream)
 }
@@ -197,6 +198,10 @@ func TestTheTurnIsAChildOfTheCallerAndTheModelOfTheTurn(t *testing.T) {
 func TestUpkeepCountsDeletedSessions(t *testing.T) {
 	st, clk := upkeepFixture(t)
 	tel := newTelemetry(t, nil)
-	(&Upkeep{Store: st, SessionIdleTTL: 30 * time.Minute, Log: discard(), Now: clk.now, Telemetry: tel}).Sweep(t.Context())
+	metrics, err := NewMetrics(tel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	(&Upkeep{Store: st, SessionIdleTTL: 30 * time.Minute, Log: discard(), Now: clk.now, Metrics: metrics}).Sweep(t.Context())
 	wantSeries(t, tel, map[string]string{`agentkourier_ax_sessions_deleted_total{reason="idle"}`: "1"})
 }

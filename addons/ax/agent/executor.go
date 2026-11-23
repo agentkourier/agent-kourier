@@ -11,7 +11,7 @@ import (
 	"google.golang.org/adk/v2/server/adka2a/v2"
 	"google.golang.org/genai"
 
-	"github.com/agentkourier/agent-kourier/addons/ax/telemetry"
+	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
 // TextExecutor exposes ask_user as a plain-text A2A question while keeping its ADK payload durable.

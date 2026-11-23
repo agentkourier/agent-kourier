@@ -15,7 +15,8 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
-	"github.com/agentkourier/agent-kourier/addons/ax/telemetry"
+	"github.com/agentkourier/agent-kourier/addons/ax/agent"
+	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
 // scriptedClient answers each call with err.
@@ -55,7 +56,7 @@ func metricsText(t *testing.T, tel *telemetry.Telemetry) string {
 // the span in its context.
 func TestObserveTimesAndTracesEachCall(t *testing.T) {
 	rec := tracetest.NewSpanRecorder()
-	tel, err := telemetry.New(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec)))
+	tel, err := telemetry.New(agent.TelemetrySpec(), sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +121,7 @@ func TestObserveCountsBedrocksStatus(t *testing.T) {
 		_, _ = w.Write([]byte(`{"message":"Too many requests"}`))
 	}))
 	defer srv.Close()
-	tel, err := telemetry.New(nil)
+	tel, err := telemetry.New(agent.TelemetrySpec(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
