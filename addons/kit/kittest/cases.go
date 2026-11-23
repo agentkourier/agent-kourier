@@ -41,6 +41,13 @@ func answer(task *a2a.Task, parts ...*a2a.Part) *a2a.Message {
 	return m
 }
 
+// goodAnswer is the subject's answer to paused, which completes it.
+func goodAnswer[S runtime.Store](s Subject[S], paused *a2a.Task) *a2a.Message {
+	m := answer(paused, a2a.NewTextPart(s.Answer))
+	m.Metadata = s.AnswerMetadata
+	return m
+}
+
 // send sends msg and returns its task as the send answers it.
 func send(t *testing.T, c *a2aclient.Client, msg *a2a.Message) (*a2a.Task, error) {
 	t.Helper()
@@ -219,7 +226,7 @@ func aRefusedAnswerKeepsTheTaskPaused[S runtime.Store](t *testing.T, s Subject[S
 	if got, err := c.GetTask(t.Context(), &a2a.GetTaskRequest{ID: paused.ID}); err != nil || got.Status.State != a2a.TaskStateInputRequired {
 		t.Fatalf("the task after the bad answer = %+v, %v; want it still paused", got, err)
 	}
-	if done := want(t, c, answer(paused, a2a.NewTextPart(s.Answer)), a2a.TaskStateCompleted); done.ID != paused.ID {
+	if done := want(t, c, goodAnswer(s, paused), a2a.TaskStateCompleted); done.ID != paused.ID {
 		t.Fatalf("the answer completed %s, want %s", done.ID, paused.ID)
 	}
 	in.WantMetric(t, turns(s, "input_required"), "1")
@@ -345,7 +352,7 @@ func aStandbyForwardsAndTakesOver[S runtime.Store](t *testing.T, s Subject[S], e
 	if since := time.Since(stopped); since > 750*time.Millisecond { // half the lease: a take at expiry would be later
 		t.Errorf("b took over %s after a stopped: a released lease is taken on the next try, not when it expires", since)
 	}
-	if done := want(t, b.Client(t), answer(paused, a2a.NewTextPart(s.Answer)), a2a.TaskStateCompleted); done.ID != paused.ID {
+	if done := want(t, b.Client(t), goodAnswer(s, paused), a2a.TaskStateCompleted); done.ID != paused.ID {
 		t.Fatalf("the answer on the new leader completed %s, want %s", done.ID, paused.ID)
 	}
 	if got := b.Metric(metric(s, "tasks_interrupted_total")); got != "0" {

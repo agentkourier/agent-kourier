@@ -45,6 +45,9 @@ type Subject[S runtime.Store] struct {
 	Complete, Pause, Hold string
 	// Answer is the text of an answer to Pause's question, which completes its task.
 	Answer string
+	// AnswerMetadata is the metadata of Answer's message, for a backend that reads an answer there (a structured tool
+	// approval); nil sends the text alone.
+	AnswerMetadata map[string]any
 	// BadAnswer are the parts of an answer to Pause's question that the backend refuses (its ResumeValidator).
 	BadAnswer []*a2a.Part
 }
