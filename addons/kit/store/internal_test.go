@@ -93,6 +93,15 @@ func TestKitMigrationsInStep(t *testing.T) {
 	}
 }
 
+// OpenPostgres refuses a zero MigrationLockKey before it connects: an add-on that forgot its own key would share
+// advisory lock 0 with every other that did.
+func TestPostgresRefusesNoMigrationLockKey(t *testing.T) {
+	_, err := OpenPostgres(context.Background(), "postgres://u@127.0.0.1:1/db?connect_timeout=1", Options{})
+	if err == nil || err.Error() != "open postgres store: no migration lock key (Options.MigrationLockKey is 0)" {
+		t.Fatalf("OpenPostgres with no lock key = %v, want the refusal", err)
+	}
+}
+
 // fakeConn runs every transaction with a nil Querier: enough for a write that does not query.
 type fakeConn struct{ conn }
 

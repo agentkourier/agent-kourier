@@ -33,6 +33,9 @@ func OpenPostgres(ctx context.Context, dsn string, opts Options) (*DB, error) {
 	if err != nil {
 		return nil, errors.New("open postgres store: POSTGRES_DSN is not a connection string pgx can read (its value is not shown)")
 	}
+	if opts.MigrationLockKey == 0 {
+		return nil, errors.New("open postgres store: no migration lock key (Options.MigrationLockKey is 0)")
+	}
 	for name, d := range map[string]time.Duration{"idle_in_transaction_session_timeout": PostgresIdleInTxTimeout, "statement_timeout": PostgresStatementTimeout} {
 		if _, set := cfg.ConnConfig.RuntimeParams[name]; !set {
 			cfg.ConnConfig.RuntimeParams[name] = strconv.FormatInt(d.Milliseconds(), 10)

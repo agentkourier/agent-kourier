@@ -81,7 +81,7 @@ func TestPostgresReplicasMigrateTogether(t *testing.T) {
 func TestPostgresErrorsHideTheDSN(t *testing.T) {
 	const secret = "fake-password-do-not-print"
 	for _, dsn := range []string{"postgres://u:" + secret + "@[::1:5432/db", "host=127.0.0.1 port=1 user=u password=" + secret + " connect_timeout=1"} {
-		_, err := OpenPostgres(context.Background(), dsn, Options{})
+		_, err := OpenPostgres(context.Background(), dsn, Options{MigrationLockKey: testLockKey})
 		if err == nil {
 			t.Fatal("OpenPostgres accepted it")
 		}

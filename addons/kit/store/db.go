@@ -33,7 +33,8 @@ type Options struct {
 	OnDeposed func()
 	// MigrationLockKey, on Postgres, is the advisory lock each migration transaction takes, the kit's and the add-on's,
 	// so that replicas that start together migrate one at a time. It is the add-on's own, apart from any key the broker
-	// or another add-on uses in a database they share.
+	// or another add-on uses in a database they share. OpenPostgres refuses 0, which an add-on that forgot its own key
+	// would share with every other that did.
 	MigrationLockKey int64
 }
 
