@@ -496,24 +496,94 @@ func TestTheBackendsRoutesReadinessAndLogAttributesAreServed(t *testing.T) {
 	}
 }
 
-// A takeover settles the turns a restart cut off before the leader serves, and tells the backend's Interrupter which.
+// A takeover settles the turns a restart cut off before the leader serves, and tells the backend's Interrupter what it
+// settled.
 func TestATakeoverTellsTheInterrupterWhatItSettled(t *testing.T) {
 	st := newFakeStore()
-	var told atomic.Bool
-	st.settle = func(context.Context) error { return nil }
-	b := interrupter{scripted: &scripted{}, told: &told}
+	st.settled = store.Settlement{Failed: []*a2a.Task{{ID: "t-cut", ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateFailed}}}}
+	b := &hooks{scripted: &scripted{}, st: st, told: make(chan store.Settlement, 1)}
 	r := startRun(t, testAddon(st, b), nil, Options{})
 	waitUntil(t, "ready", func() bool { return status(r.base+"/readyz") == http.StatusOK })
-	if !told.Load() {
+	select {
+	case got := <-b.told:
+		if len(got.Failed) != 1 || got.Failed[0].ID != "t-cut" {
+			t.Fatalf("the Interrupter was told %+v, want the settled task t-cut", got)
+		}
+	default:
 		t.Fatal("the leader served before it told the backend what it settled")
+	}
+	wantMetric(t, r.tel, "agentkourier_kit_tasks_interrupted_total", "1")
+}
+
+// A takeover restores what the backend keeps before it settles the turns a restart cut off.
+func TestATakeoverRestoresBeforeItSettles(t *testing.T) {
+	st := newFakeStore()
+	st.settle = func(context.Context) error { st.note("settle"); return nil }
+	b := &hooks{scripted: &scripted{}, st: st, told: make(chan store.Settlement, 1)}
+	r := startRun(t, testAddon(st, b), nil, Options{})
+	waitUntil(t, "ready", func() bool { return status(r.base+"/readyz") == http.StatusOK })
+	if got := st.events(); !slices.Equal(got, []string{"restore", "settle"}) {
+		t.Fatalf("the takeover's events = %q, want the restore before the settlement", got)
 	}
 }
 
-type interrupter struct {
-	*scripted
-	told *atomic.Bool
+// A restore that fails stops the takeover: the replica never serves as the leader, settles nothing, and Run returns
+// the restore's error.
+func TestARestoreThatFailsStopsTheTakeover(t *testing.T) {
+	st := newFakeStore()
+	st.settle = func(context.Context) error { st.note("settle"); return nil }
+	errRestore := errors.New("the backend's sessions cannot be read")
+	b := &hooks{scripted: &scripted{}, st: st, told: make(chan store.Settlement, 1), proceed: make(chan struct{}), restoreErr: errRestore}
+	r := startRun(t, testAddon(st, b), nil, Options{})
+	if got := status(r.base + "/readyz"); got != http.StatusServiceUnavailable {
+		t.Fatalf("/readyz during the restore = %d, want 503", got)
+	}
+	close(b.proceed)
+	var ready atomic.Bool
+	polled := make(chan struct{})
+	go func() {
+		defer close(polled)
+		for range 50 {
+			if status(r.base+"/readyz") == http.StatusOK {
+				ready.Store(true)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+	select {
+	case err := <-r.done:
+		if !errors.Is(err, errRestore) {
+			t.Fatalf("Run = %v, want the restore's error", err)
+		}
+		r.done <- err
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run went on after the restore failed")
+	}
+	<-polled
+	if ready.Load() {
+		t.Fatal("/readyz answered 200 after the restore failed")
+	}
+	if got := st.events(); slices.Contains(got, "settle") {
+		t.Fatalf("the store's events = %q: the takeover settled after the restore failed", got)
+	}
 }
 
-func (i interrupter) Restore(context.Context) error { return nil }
+// hooks is scripted with a Restorer, which notes its restore in the store's events, waits for proceed when it is set,
+// and returns restoreErr, and an Interrupter, which passes on what it is told.
+type hooks struct {
+	*scripted
+	st         *fakeStore
+	told       chan store.Settlement
+	proceed    chan struct{}
+	restoreErr error
+}
 
-func (i interrupter) Interrupted(context.Context, store.Settlement) { i.told.Store(true) }
+func (h *hooks) Restore(context.Context) error {
+	h.st.note("restore")
+	if h.proceed != nil {
+		<-h.proceed
+	}
+	return h.restoreErr
+}
+
+func (h *hooks) Interrupted(_ context.Context, settled store.Settlement) { h.told <- settled }

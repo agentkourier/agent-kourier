@@ -31,14 +31,15 @@ type fakeStore struct {
 	*taskstore.InMemory
 
 	mu        sync.Mutex
-	messages  map[string]a2a.TaskID // the task each message ID started or joined
-	other     *store.Lease          // a live lease another replica holds: TryLead fails and CurrentLeader returns it
-	idle      []store.Context       // what IdleContexts returns
-	forgotten []string              // the contexts ForgetContext removed
-	deleted   int                   // what DeleteIdleContexts returns
-	log       []string              // the events in order: "close" and what the test adds
-	settle    func(ctx context.Context) error
-	detached  bool // the writes ignore their context's end, as a store whose writes have begun would
+	messages  map[string]a2a.TaskID           // the task each message ID started or joined
+	other     *store.Lease                    // a live lease another replica holds: TryLead fails and CurrentLeader returns it
+	idle      []store.Context                 // what IdleContexts returns
+	forgotten []string                        // the contexts ForgetContext removed
+	deleted   int                             // what DeleteIdleContexts returns
+	log       []string                        // the events in order: "close" and what the test adds
+	settle    func(ctx context.Context) error // runs in SettleInterrupted: its error is the settlement's
+	settled   store.Settlement                // what SettleInterrupted returns
+	detached  bool                            // the writes ignore their context's end, as a store whose writes have begun would
 }
 
 var _ Store = (*fakeStore)(nil)
@@ -121,9 +122,11 @@ func (s *fakeStore) TouchContext(context.Context, string) error { return nil }
 
 func (s *fakeStore) SettleInterrupted(ctx context.Context, _ string) (store.Settlement, error) {
 	if s.settle != nil {
-		return store.Settlement{}, s.settle(ctx)
+		if err := s.settle(ctx); err != nil {
+			return store.Settlement{}, err
+		}
 	}
-	return store.Settlement{}, nil
+	return s.settled, nil
 }
 
 func (s *fakeStore) DeleteSettledBefore(context.Context, time.Time) (int64, error) { return 0, nil }
