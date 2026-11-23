@@ -29,7 +29,7 @@ for an agent of your own as much as an agent to run.
 | A context (one thread) | One ADK session, whose ID is the context ID and whose user is the caller ([Caller check](#caller-check)), created on the context's first message. |
 | A task | One turn of the ADK runner on that session. ADK's A2A executor streams the agent's output as artifacts. |
 | `input-required`, with the question as the status message's text | The agent calls `ask_user`, a long-running tool. The add-on puts the call's `question` in the status message as text, and keeps the call in the task's metadata, `agentkourier.dev/ask-user`, so that a restart does not lose it. |
-| The next message on the paused task | The answer: the message's text parts joined with newlines, sent to ADK as `ask_user`'s result, `{"answer": "<text>"}`. A message with a part that is not text, or with no text, is refused as invalid before the turn starts, and the task stays paused. |
+| The next message on the paused task | The answer: the message's text parts joined with newlines, sent to ADK as `ask_user`'s result, `{"answer": "<text>"}`. A message with a part that is not text, or with no text, is refused as invalid before the turn starts, and the task stays paused; its ID is not recorded, so a resend of it is refused again. |
 | Cancel | ADK cancels the turn, and the task is canceled. |
 | `completed` | The turn ended. |
 | `failed` | The model call failed; the agent paused on two `ask_user` calls at once; or a restart cut the turn off ([Restarts](#restarts)). |

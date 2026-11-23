@@ -137,7 +137,9 @@ type Env[S Store] struct {
 
 // Backend runs the turns. The kit wraps it: each Execute is one turn, which it counts and traces, and ends when the
 // add-on stops; a message whose ID the store has recorded joins its task and never reaches the backend. It may
-// implement any of the hooks below, which the kit finds by type assertion.
+// implement any of the hooks below, which the kit finds by type assertion: a backend that wraps another must expose
+// the inner one's hooks itself, and a backend should assert each hook it means to implement
+// (var _ runtime.Restorer = (*Backend)(nil)), so that a changed signature fails the build rather than drop the hook.
 type Backend interface {
 	a2asrv.AgentExecutor
 }
