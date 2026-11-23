@@ -239,7 +239,7 @@ spec:
 ```
 
 1. The URL the agent card names too. Agent Kourier fetches the card at this URL plus `/.well-known/agent-card.json`,
-   with the same token: unlike the Claude Managed Agents add-on's, this card is behind the caller check.
+   with the same token, because the card is behind the caller check, as the Claude Managed Agents add-on's is.
 2. On the `a2a` dialect `agent.namespace` and `agent.name` are labels: the URL selects the agent, and they are not
    sent.
 3. The same Secret the add-on reads. A Binding in another namespace reads a Secret in its own namespace, so that
