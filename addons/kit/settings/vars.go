@@ -17,7 +17,9 @@ type Var interface {
 
 // Values are the add-on's own variables as Parse read them. A Var reads its own with From.
 type Values struct {
-	m map[string]any
+	// m holds each Var's value by its key; declared, the keys of every Var in Spec.Vars, read or not.
+	m        map[string]any
+	declared map[string]bool
 }
 
 // Of is a Var whose value is a T.
@@ -57,11 +59,18 @@ func Duration(key, def string) Of[time.Duration] {
 // Key is the variable's name.
 func (o Of[T]) Key() string { return o.key }
 
-// From is the variable's value in values, or the zero T when Parse did not read it.
+// From is the variable's value in values. It is the zero T, with no error, for a Var that was not in the Spec.Vars
+// of the Parse that returned values, and a zero value often means something: a TOOL_RESULT_TIMEOUT of 0 waits for
+// ever, where its default is 10m. A Var left out of Spec.Vars by mistake is not seen at start, so a test of the
+// add-on should check Declared for each Var it reads.
 func (o Of[T]) From(values Values) T {
 	v, _ := values.m[o.key].(T)
 	return v
 }
+
+// Declared reports whether the Var was in the Spec.Vars of the Parse that returned values, and so whether From reads
+// what Parse read.
+func (o Of[T]) Declared(values Values) bool { return values.declared[o.key] }
 
 func (o Of[T]) read(getenv func(string) string, values Values) error {
 	if o.parse == nil {

@@ -105,6 +105,8 @@ func TestVarsDeclaredOnce(t *testing.T) {
 		"lease":   {Duration("LEASE_DURATION", "15s")},
 		"twice":   {idVar, Required("ADDON_ID")},
 		"no func": {Of[string]{key: "ADDON_ID"}},
+		"no name": {idVar, Required("")},
+		"zero":    {Of[string]{}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := tokenSpec
@@ -117,16 +119,34 @@ func TestVarsDeclaredOnce(t *testing.T) {
 	}
 }
 
-// From is the zero value for a Var that Parse did not read.
+// From is the zero value for a Var that Parse did not read, and Declared tells it from one that Parse read.
 func TestFromUndeclared(t *testing.T) {
-	_, values, err := Parse(env(nil), tokenSpec)
+	s := tokenSpec
+	s.Vars = []Var{idVar, modeVar}
+	_, values, err := Parse(env(map[string]string{"ADDON_ID": "a1"}), s)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
 	if got := timeoutVar.From(values); got != 0 {
 		t.Fatalf("From = %s, want 0", got)
 	}
-	if got := idVar.From(Values{}); got != "" {
-		t.Fatalf("From of zero Values = %q", got)
+	if timeoutVar.Declared(values) {
+		t.Error("Declared = true for a Var not in Spec.Vars")
+	}
+	if !idVar.Declared(values) || !modeVar.Declared(values) {
+		t.Error("Declared = false for a Var in Spec.Vars")
+	}
+	if got := idVar.From(Values{}); got != "" || idVar.Declared(Values{}) {
+		t.Fatalf("zero Values: From = %q, Declared = %v", got, idVar.Declared(Values{}))
+	}
+}
+
+// The refusal of a Var with no name says which one it is.
+func TestVarWithNoName(t *testing.T) {
+	s := tokenSpec
+	s.Vars = []Var{idVar, Duration("", "1s")}
+	_, _, err := Parse(env(map[string]string{"ADDON_ID": "a1"}), s)
+	if want := "settings: the add-on's variable 1 (counting from 0) has no name"; err == nil || err.Error() != want {
+		t.Fatalf("Parse = %v, want %s", err, want)
 	}
 }

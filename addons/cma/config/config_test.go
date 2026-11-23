@@ -143,3 +143,16 @@ func TestHostlessURLsRefused(t *testing.T) {
 		})
 	}
 }
+
+// Each of the adapter's own variables is in its Spec, so Parse reads it: one left out would read as its zero value, and a
+// TOOL_RESULT_TIMEOUT of 0 waits for ever.
+func TestOwnVarsDeclared(t *testing.T) {
+	_, own, err := settings.Parse(env(nil), Spec())
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !agentID.Declared(own) || !environmentID.Declared(own) || !toolResultTimeout.Declared(own) {
+		t.Fatalf("declared: agent %v, environment %v, tool result timeout %v",
+			agentID.Declared(own), environmentID.Declared(own), toolResultTimeout.Declared(own))
+	}
+}

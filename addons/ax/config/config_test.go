@@ -205,3 +205,19 @@ func TestRunnerURLNeverShown(t *testing.T) {
 		t.Fatalf("error shows a secret value: %v", err)
 	}
 }
+
+// Each of the agent's own variables is in its Spec, so Parse reads it: one left out would read as its zero value.
+func TestOwnVarsDeclared(t *testing.T) {
+	_, own, err := settings.Parse(env(nil), Spec())
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	for _, v := range []interface {
+		Key() string
+		Declared(settings.Values) bool
+	}{modelProvider, modelRegion, modelName, stateDir, runnerURL} {
+		if !v.Declared(own) {
+			t.Errorf("%s is not in Spec().Vars", v.Key())
+		}
+	}
+}

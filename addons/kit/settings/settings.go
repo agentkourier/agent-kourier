@@ -130,8 +130,9 @@ func Parse(getenv func(string) string, spec Spec) (Config, Values, error) {
 	}
 	var errs []error
 	fail := func(err error) { errs = append(errs, err) }
-	values := Values{m: map[string]any{}}
+	values := Values{m: map[string]any{}, declared: map[string]bool{}}
 	for _, v := range spec.Vars {
+		values.declared[v.Key()] = true
 		if err := v.read(getenv, values); err != nil {
 			fail(err)
 		}
@@ -189,13 +190,16 @@ func Parse(getenv func(string) string, spec Spec) (Config, Values, error) {
 	return c, values, nil
 }
 
-// checkVars reports a Var that names a shared variable or another Var's.
+// checkVars reports a Var with no name, or one that names a shared variable or another Var's.
 func (s Spec) checkVars() error {
 	seen := map[string]bool{}
 	for _, k := range sharedKeys() {
 		seen[k] = true
 	}
-	for _, v := range s.Vars {
+	for i, v := range s.Vars {
+		if v.Key() == "" {
+			return fmt.Errorf("settings: the add-on's variable %d (counting from 0) has no name", i)
+		}
 		if seen[v.Key()] {
 			return fmt.Errorf("settings: the add-on declares %s, which is a shared variable or one it declares twice", v.Key())
 		}
