@@ -15,7 +15,7 @@ A2A is reached through an [add-on](docs/explanation/add-ons.md), an optional com
 is released with Agent Kourier and run by its chart. Two ship today: one puts an A2A endpoint in
 front of an agent in Claude Managed Agents, and the AX add-on is an agent of its own.
 
-Slack is the supported platform. Two more are new in 0.6.0, both experimental, and a broker of 0.5.x
+Slack is the supported platform. Two more arrived in 0.6.0, both experimental, and a broker of 0.5.x
 refuses either:
 
 - **Microsoft Teams**, a second chat platform (`platform: teams`):
@@ -32,10 +32,10 @@ without breaking a Slack `Binding`. Agents speak only A2A, so a new platform nee
 [Install with Helm](docs/how-to/install-with-helm.md) · [Architecture](docs/explanation/architecture.md) ·
 [Release notes](docs/release-notes.md)
 
-> **Status: v0.6.0.** Install the published chart and image with
+> **Status: v0.7.0.** Install the published chart and image with
 > [Install with Helm](docs/how-to/install-with-helm.md). The `v1alpha1` resource format can change before 1.0. See
 > [Status](#status). Slack HTTP mode, new in 0.5.0, is experimental. Teams and webhooks, new in 0.6.0, are both
-> experimental.
+> experimental. The add-ons, new in 0.7.0, are experimental.
 
 <p align="center">
   <img src="docs/assets/clip/team-app.gif" width="100%" alt="A terminal. The platform team creates the namespace agent-kourier and installs the agent-kourier chart with a values file of comments only, so the broker serves the ChatConnections of every namespace and starts with no Slack app of its own. The team then creates its Slack Secret in team-a from a file, a Role and RoleBinding that let the broker's ServiceAccount list and watch it, fills in the four lines marked yours in team-a.yaml (a ChatConnection, an AgentBackend and a Binding), applies it, and kubectl get akbinding shows the Binding become True OK. Then Slack: a mention of the team's bot, and the agent's answer in its thread.">
@@ -279,9 +279,9 @@ the contract.
 
 ## Status
 
-The current release is v0.6.0: a signed image for `linux/amd64` and `linux/arm64`,
-`ghcr.io/agentkourier/agent-kourier:v0.6.0`, and the Helm chart `oci://ghcr.io/agentkourier/charts/agent-kourier`
-version `0.6.0`, which pins that image by digest. It runs as one
+The current release is v0.7.0: a signed image for `linux/amd64` and `linux/arm64`,
+`ghcr.io/agentkourier/agent-kourier:v0.7.0`, and the Helm chart `oci://ghcr.io/agentkourier/charts/agent-kourier`
+version `0.7.0`, which pins that image by digest. It runs as one
 replica with a SQLite store, or as two replicas on Postgres with a leader election
 and fencing, installed with the [Helm chart](charts/agent-kourier/README.md). Agent Kourier writes
 an audit log, exports Prometheus metrics and can export OpenTelemetry traces. See

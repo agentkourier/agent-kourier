@@ -23,7 +23,7 @@ hide:
 thread. A mention, a reply in the thread, or a message a trigger matches, such as an alert, goes to the agent; its
 streamed replies and its questions to people come back in the same thread, and the session survives a restart or
 failover. A Binding connects the channel to any agent that serves streaming A2A, and an add-on reaches one that does
-not, such as an agent in Claude Managed Agents. Slack is supported today. New in 0.6.0, both experimental: Microsoft Teams as a
+not, such as an agent in Claude Managed Agents. Slack is supported today. Since 0.6.0, both experimental: Microsoft Teams as a
 second chat platform, and webhooks from services such as GitHub, Jira Cloud, Bitbucket Cloud or Linear that start a session of your agent,
 which answers on that service with its own tools.</p>
 
@@ -55,11 +55,12 @@ which answers on that service with its own tools.</p>
 </div>
 </div>
 
-!!! note "Status: v0.6.0"
-    The current release is `0.6.0`: install the published chart and image with [Install with Helm](how-to/install-with-helm.md).
+!!! note "Status: v0.7.0"
+    The current release is `0.7.0`: install the published chart and image with [Install with Helm](how-to/install-with-helm.md).
     The `v1alpha1` resource format can change before 1.0. The [release notes](release-notes.md) say what changed in each release.
-    New in 0.6.0, both experimental: Microsoft Teams ([Configure Microsoft Teams](how-to/configure-teams.md)) and webhooks
-    ([Start agents from webhooks](how-to/receive-webhooks.md)). 0.5.x refuses either.
+    New in 0.7.0, both experimental: the Claude Managed Agents and AX [add-ons](explanation/add-ons.md), released
+    and signed with Agent Kourier and run by its chart. Microsoft Teams ([Configure Microsoft Teams](how-to/configure-teams.md))
+    and webhooks ([Start agents from webhooks](how-to/receive-webhooks.md)) arrived in 0.6.0, both experimental.
 
 ## What Agent Kourier handles
 
@@ -120,7 +121,7 @@ whose namespace the platform admits can bring its own chat app as well ([Let a t
 
     ---
 
-    New in 0.6.0, both experimental. Bind an agent to a Teams channel, with Alertmanager's alerts read from
+    Experimental since 0.6.0. Bind an agent to a Teams channel, with Alertmanager's alerts read from
     it. Or let a signed webhook from a service such as GitHub, Jira Cloud, Bitbucket Cloud or Linear start a session for each pull request
     or issue, where the agent answers on the service itself.
 

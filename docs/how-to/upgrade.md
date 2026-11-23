@@ -4,7 +4,7 @@ For an operator running the Helm chart: at the end, Agent Kourier runs a newer r
 audit log intact, and you know how to roll back.
 
 Each release publishes a signed multi-arch image and a chart whose default image is that image by digest, as
-[Install with Helm](install-with-helm.md#the-release) describes. The current release is `0.6.0`. To run a build that is not
+[Install with Helm](install-with-helm.md#the-release) describes. The current release is `0.7.0`. To run a build that is not
 released, see [Build from source](install-with-helm.md#build-from-source).
 
 The [release notes](../release-notes.md) say what each release changed and what is breaking. 0.2.0 makes custom resources the chart's default, so a
@@ -1099,3 +1099,48 @@ start (exit code 2), and as a team's it is not served and each of its Bindings s
 have `spec.teams` and hold each chat ID to Slack's shape and caps, so the API server refuses a new write of such an object. No other stored
 object depends on this release. On custom resources, a Teams ChatConnection deleted while this release still runs also takes its rows of
 `teams_conversations` and `teams_poll_positions` with it; on the ConfigMap route, and for one deleted after the rollback, the rows stay, and an earlier release does not read them.
+
+## Upgrade to the release that ships the add-ons
+
+This release adds two add-ons, both experimental, which the chart runs beside Agent Kourier only when their blocks under `addons`
+turn them on ([Add-ons](../explanation/add-ons.md)). For the broker it is an ordinary upgrade:
+
+- **No CRD changes, no migration and no changed values.** The CRDs are those of 0.6.0, and the broker's database schema is unchanged. The
+  chart's new values are all under `addons`, with every add-on off, and a values file without them renders the objects it rendered on
+  0.6.0. No metric, label or log line of the broker changed.
+- **An answered tool approval's ending changes**, on Slack and on Microsoft Teams: one line for each tool, and the tool's name alone when
+  the reply's card shows its arguments ([Tool approvals](agent-questions.md#tool-approvals)). An approval that paused before the upgrade
+  and ends after it keeps the arguments on its line.
+- **To turn an add-on on**, follow [Connect Claude Managed Agents](connect-claude-managed-agents.md) or
+  [Connect the AX add-on](connect-ax.md). With `networkPolicy.enabled`, Agent Kourier's NetworkPolicy then also allows egress to the
+  add-on's pods on port 8090.
+
+### Move from the AX example of 0.6.0
+
+The agent of `examples/ax` is now the AX add-on, in `addons/ax`. The chart can run it ([Connect the AX add-on](connect-ax.md)). If you run
+it inside Google AX from 0.6.0's files, take `addons/ax/task.yaml` of this release, or make the same changes in your own:
+
+- **Replace `STATE_DIR` with `SQLITE_PATH`**, set to `STATE_DIR` plus `/agent.db` (`/workspace/agent-kourier-state/agent.db` in
+  `task.yaml`). The agent does not start while `STATE_DIR` is set, and says so. At its first start on that file it imports the tasks of
+  the old layout, so a question that waited across the upgrade can still be answered; ADK's tables carry over as they are.
+- **Set `LISTEN_ADDR=:80`, `PUBLIC_URL` and `RUNNER_URL`.** The agent now listens on `127.0.0.1:8090` by default, and its card names
+  `PUBLIC_URL`, which defaults to that address: set it to the gateway's A2A URL, the one the AgentBackend names. Without `RUNNER_URL`,
+  set to `http://127.0.0.1:8081`, the agent answers `/readyz` itself and does not serve `/metadata/`, where 0.6.0 proxied both to the
+  task runner.
+- **Build the image with `make ax-runner-image`**, which builds `agent-kourier-ax-runner:dev` from `addons/ax/Dockerfile.ax`: the agent,
+  AX's task runner and git, on Debian. `make ax-image` now builds the add-on's image, which has no task runner. No release publishes the
+  runner's image.
+- **Another A2A client must name the protocol version.** The agent is built with a2a-go v2.9.0, which reads a JSON-RPC request without
+  an `A2A-Version` header as A2A 0.3 and refuses it with `-32009`, version not supported; 0.6.0's agent, on v2.6.0, did not check it.
+  Agent Kourier sends the version that the agent card gives, so a Binding needs no change. The `OIDC_*` variables keep their names.
+
+### Roll back from the release that ships the add-ons
+
+- **Take `addons` out of the values first.** The values schema of 0.6.0 has no `addons` and refuses it, so `helm upgrade` to 0.6.0
+  with a values file that holds the block fails to render. Rolled back, the release no longer has the add-ons' Deployments, Services and
+  other objects; each SQLite claim, `<fullname>-<name>-data`, stays unless `persistence.retainOnUninstall` was `false`, and an add-on's
+  Postgres database is not touched.
+- **Delete or repoint the AgentBackends and Bindings that name an add-on's Service** before the rollback: once the add-on is gone they
+  have no agent to reach.
+- **An approval prompt that this release posted and 0.6.0 ends** gets 0.6.0's ending, with each tool's arguments in full: 0.6.0 reads
+  the stored request and ignores the mark this release adds to it (read in the source of 0.6.0, not run).
