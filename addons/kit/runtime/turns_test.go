@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2asrv"
 
 	"github.com/agentkourier/agent-kourier/addons/kit/auth"
 	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
@@ -101,5 +103,33 @@ func TestGuardedTasksRefuseWritesOnceStopped(t *testing.T) {
 	}
 	if _, err := g.Get(ctx, "t1"); err != nil {
 		t.Fatalf("Get = %v", err)
+	}
+}
+
+// A turn that a2a-go starts once the add-on's stop has begun (a send that waited on its message ID's claim, or a
+// connection still open after the drain) ends at once on errStopping: the backend never runs it, and the stop does not
+// wait for it.
+func TestATurnStartedOnceTheStopHasBegunNeverReachesTheBackend(t *testing.T) {
+	life, stop := context.WithCancel(context.Background())
+	stop()
+	b := &scripted{}
+	running := newTurns(life, b, newTel(t))
+	ec := &a2asrv.ExecutorContext{Message: message("m1", "done", "c1", ""), TaskID: "t1", ContextID: "c1"}
+	var errs []error
+	for _, err := range running.Execute(t.Context(), ec) {
+		errs = append(errs, err)
+	}
+	if len(errs) != 1 || !errors.Is(errs[0], errStopping) {
+		t.Fatalf("the turn yielded %v, want errStopping alone", errs)
+	}
+	if n := b.turnCount(); n != 0 {
+		t.Fatalf("the backend ran %d turns, want none", n)
+	}
+	if !running.wait(50 * time.Millisecond) {
+		t.Fatal("the stop waits for a turn that never ran")
+	}
+	running.Cleanup(t.Context(), ec, nil, errs[0])
+	if !running.wait(50 * time.Millisecond) {
+		t.Fatal("the stop waits after the refused turn's cleanup")
 	}
 }

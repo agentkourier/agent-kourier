@@ -28,6 +28,7 @@ type turns struct {
 	mu      sync.Mutex
 	running map[*a2asrv.ExecutorContext]bool // the turns Execute started that a2a-go has not cleaned up
 	byTask  map[a2a.TaskID]*outcome          // the outcome of each running turn, for Cancel to mark
+	closed  bool                             // wait has run: Execute starts no turn
 	wg      sync.WaitGroup
 }
 
@@ -42,9 +43,15 @@ func newTurns(life context.Context, backend Backend, tel *telemetry.Telemetry) *
 	return t
 }
 
-// Execute runs one turn of the backend.
+// Execute runs one turn of the backend. Once the add-on's stop has begun (a send that waited on its message ID's claim,
+// or a connection still open after the drain), the turn ends at once on errStopping, which leaves its task as it was:
+// the backend never runs it, and the stop does not wait for it.
 func (t *turns) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
 	t.mu.Lock()
+	if t.closed || t.life.Err() != nil {
+		t.mu.Unlock()
+		return func(yield func(a2a.Event, error) bool) { yield(nil, errStopping) }
+	}
 	if !t.running[ec] {
 		t.running[ec] = true
 		t.wg.Add(1)
@@ -91,8 +98,11 @@ func (t *turns) Cleanup(ctx context.Context, ec *a2asrv.ExecutorContext, result 
 	}
 }
 
-// wait waits up to timeout for every turn to be cleaned up, and reports whether they were.
+// wait starts no turn from then on, waits up to timeout for every turn to be cleaned up, and reports whether they were.
 func (t *turns) wait(timeout time.Duration) bool {
+	t.mu.Lock()
+	t.closed = true // every Add has happened by now, before the Wait
+	t.mu.Unlock()
 	done := make(chan struct{})
 	go func() {
 		t.wg.Wait()
@@ -186,8 +196,9 @@ func (o *outcome) of(ctx context.Context, classify TurnClassifier) telemetry.Tur
 	return telemetry.TurnFailed
 }
 
-// errStopping is a2a-go's write of a task refused once the add-on has begun to stop its turns: the task stays as it
-// was, and the leader that takes over next fails it as interrupted, as it would had the process ended.
+// errStopping is a2a-go's write of a task refused, or a turn not started, once the add-on has begun to stop its turns:
+// the task stays as it was, and the leader that takes over next fails it as interrupted, as it would had the process
+// ended.
 var errStopping = errors.New("the add-on is stopping: the task is left for the next leader to settle")
 
 // guardedTasks is the task store a2a-go writes through, which refuses its writes once stop has run.
