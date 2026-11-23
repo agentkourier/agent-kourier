@@ -536,8 +536,9 @@ addons:
     anthropicApiKeySecret:
       name: ""
       key: ""
-    # How long a thread's context may go without a turn before the add-on archives its CMA session (SESSION_IDLE_TTL), a Go duration. Empty
-    # is the add-on's default, 2160h, which is Agent Kourier's default session.threadTTL: set it to the Binding's. "0" never archives.
+    # How long a thread's context may go without activity (a message accepted for it, or a turn of it starting or ending), with no turn
+    # running, before the add-on archives its CMA session (SESSION_IDLE_TTL), a Go duration. Empty is the add-on's default, 2160h, which is
+    # Agent Kourier's default session.threadTTL: set it to the Binding's. "0" never archives.
     sessionIdleTTL: ""
     # How long a turn waits, with no session event, for the result of a tool that the sandbox runs (TOOL_RESULT_TIMEOUT), a Go duration.
     # Empty is the add-on's default, 10m; "0" waits for ever.
@@ -695,7 +696,8 @@ addons:
     serviceAccount:
       # Added to it: for IRSA (not yet tested on EKS), eks.amazonaws.com/role-arn with the ARN of a role that may call Bedrock.
       annotations: {}
-    # How long a thread's context may go without a turn before the add-on deletes its ADK session and the context's tasks
+    # How long a thread's context may go without activity (a message accepted for it, or a create or an update of one of its tasks, which a
+    # turn makes as it starts and as it ends), with no turn running, before the add-on deletes its ADK session and the context's tasks
     # (SESSION_IDLE_TTL), a Go duration. Empty is the add-on's default, 2160h, which is Agent Kourier's default session.threadTTL: set it to
     # the Binding's. "0" keeps them.
     sessionIdleTTL: ""
