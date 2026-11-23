@@ -20,10 +20,13 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/a2aproject/a2a-go/v2/a2asrv/taskstore"
 	"google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 
 	"github.com/agentkourier/agent-kourier/addons/ax/store"
 	"github.com/agentkourier/agent-kourier/addons/kit/auth"
+	"github.com/agentkourier/agent-kourier/addons/kit/runtime"
+	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
 type fakeModel struct {
@@ -110,17 +113,30 @@ func startWith(t *testing.T, dir string, m model.LLM, check *auth.Check) *agentA
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.SettleInterrupted(t.Context(), store.InterruptedMessage); err != nil {
+	if _, err := st.SettleInterrupted(t.Context(), runtime.InterruptedMessage("agent")); err != nil {
 		t.Fatal(err)
 	}
-	s, err := New(Config{Model: m, Store: st, Check: check, PublicURL: "http://ax.agents.svc:8090/a2a", Version: "1.2.3-test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	a := &agentAt{store: st, http: httptest.NewServer(s.Handler)}
+	a := &agentAt{store: st, http: httptest.NewServer(handler(t, m, st, check, nil))}
 	a.client = connect(t, a.http, "binding")
 	t.Cleanup(a.stop)
 	return a
+}
+
+// sessionStore is a store the agent's handler runs on: the kit's task state with ADK's sessions.
+type sessionStore interface {
+	runtime.Store
+	Sessions() session.Service
+}
+
+// handler is the agent on m and st behind check, as the kit's runtime serves it on the leader (Addon.Handler), its
+// turns counted in tel (nil counts nothing).
+func handler(t *testing.T, m model.LLM, st sessionStore, check *auth.Check, tel *telemetry.Telemetry) http.Handler {
+	t.Helper()
+	exec, err := NewTextExecutor(m, st.Sessions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Addon("1.2.3-test", nil).Handler(exec, st, check, "http://ax.agents.svc:8090/a2a", tel)
 }
 
 func (a *agentAt) stop() {
@@ -325,12 +341,7 @@ func TestAMessageTouchesItsContextFirst(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	rec := &recordingStore{Store: st}
-	s, err := New(Config{Model: &fakeModel{}, Store: rec, Check: &auth.Check{Verifier: bearerIsCaller{}, Bearer: true, Log: discard()},
-		PublicURL: "http://ax.agents.svc:8090/a2a", Version: "test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv := httptest.NewServer(s.Handler)
+	srv := httptest.NewServer(handler(t, &fakeModel{}, rec, &auth.Check{Verifier: bearerIsCaller{}, Bearer: true, Log: discard()}, nil))
 	t.Cleanup(srv.Close)
 	c := connect(t, srv, "binding")
 
@@ -389,7 +400,7 @@ func TestRestartFailsATurnItCutOff(t *testing.T) {
 	a.stop()
 	c := start(t, dir, m).client
 	got, err := c.GetTask(t.Context(), &a2a.GetTaskRequest{ID: cut.ID})
-	if err != nil || got.Status.State != a2a.TaskStateFailed || got.Status.Message == nil || got.Status.Message.Parts[0].Text() != store.InterruptedMessage {
+	if err != nil || got.Status.State != a2a.TaskStateFailed || got.Status.Message == nil || got.Status.Message.Parts[0].Text() != runtime.InterruptedMessage("agent") {
 		t.Fatalf("the cut-off turn after a restart: %+v, %v", got, err)
 	}
 	resent := message("m-cut", "hello")
@@ -402,7 +413,7 @@ func TestRestartFailsATurnItCutOff(t *testing.T) {
 // The card names the endpoint and the version the agent was given.
 func TestCardNamesThePublicURLAndVersion(t *testing.T) {
 	a := start(t, t.TempDir(), &fakeModel{})
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, a.http.URL+A2APath+CardPath, nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, a.http.URL+runtime.A2APath+runtime.CardPath, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

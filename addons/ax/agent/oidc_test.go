@@ -18,6 +18,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/addons/kit/auth"
 	"github.com/agentkourier/agent-kourier/addons/kit/auth/oidc"
+	"github.com/agentkourier/agent-kourier/addons/kit/runtime"
 )
 
 // The AX route's caller check, end to end: while the issuer is down, the card and the endpoint answer a retryable 503
@@ -63,7 +64,7 @@ func TestOIDCOutageIsRetryableAndRecovers(t *testing.T) {
 	check := func(path string, status int) {
 		t.Helper()
 		method := http.MethodPost
-		if strings.HasSuffix(path, CardPath) {
+		if strings.HasSuffix(path, runtime.CardPath) {
 			method = http.MethodGet
 		}
 		req, err := http.NewRequestWithContext(t.Context(), method, a.http.URL+path, strings.NewReader(`{"jsonrpc":"2.0","id":"request","method":"message/send"}`))
@@ -83,14 +84,14 @@ func TestOIDCOutageIsRetryableAndRecovers(t *testing.T) {
 			t.Fatal("outage response omitted retry interval")
 		}
 	}
-	for _, path := range []string{A2APath + CardPath, A2APath} {
+	for _, path := range []string{runtime.A2APath + runtime.CardPath, runtime.A2APath} {
 		check(path, http.StatusServiceUnavailable)
 	}
 	if m.calls.Load() != 0 {
 		t.Fatal("outage dispatched model work")
 	}
 	available.Store(true)
-	check(A2APath+CardPath, http.StatusOK)
+	check(runtime.A2APath+runtime.CardPath, http.StatusOK)
 	completed := send(t, connect(t, a.http, token), message("after-outage", "hello"))
 	if completed.Status.State != a2a.TaskStateCompleted || m.calls.Load() != 1 {
 		t.Fatalf("request did not recover after outage: task=%+v calls=%d", completed, m.calls.Load())

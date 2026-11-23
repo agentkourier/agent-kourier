@@ -22,10 +22,14 @@ import (
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 
+	"github.com/agentkourier/agent-kourier/addons/kit/runtime"
 	kitstore "github.com/agentkourier/agent-kourier/addons/kit/store"
 	"github.com/agentkourier/agent-kourier/addons/kit/store/pgtest"
 	"github.com/agentkourier/agent-kourier/addons/kit/store/sqlitetest"
 )
+
+// interruptedMessage is the text the kit's runtime fails a task a restart cut off with.
+var interruptedMessage = runtime.InterruptedMessage("agent")
 
 func openSQLite(t *testing.T, path string) *Store {
 	t.Helper()
@@ -194,7 +198,7 @@ func testEveryWriteIsFenced(t *testing.T, s *Store) {
 			_, err := s.Update(ctx, &taskstore.UpdateRequest{Task: seed, PrevVersion: 1})
 			return err
 		},
-		"SettleInterrupted":   func() error { _, err := s.SettleInterrupted(ctx, InterruptedMessage); return err },
+		"SettleInterrupted":   func() error { _, err := s.SettleInterrupted(ctx, interruptedMessage); return err },
 		"DeleteSettledBefore": func() error { _, err := s.DeleteSettledBefore(ctx, future); return err },
 		"DeleteIdleContexts":  func() error { _, err := s.DeleteIdleContexts(ctx, future); return err },
 		"TouchContext":        func() error { return s.TouchContext(ctx, "c1") },
@@ -301,7 +305,7 @@ func TestSQLiteImportsTheOldLayout(t *testing.T) {
 
 	s := openSQLite(t, path)
 	ctx := asCaller("service")
-	if settled, err := s.SettleInterrupted(context.Background(), InterruptedMessage); err != nil || len(settled.Failed) != 1 {
+	if settled, err := s.SettleInterrupted(context.Background(), interruptedMessage); err != nil || len(settled.Failed) != 1 {
 		t.Fatalf("SettleInterrupted = %+v, %v; want the cut-off task", settled, err)
 	}
 	asked, err := s.Get(ctx, "asked")

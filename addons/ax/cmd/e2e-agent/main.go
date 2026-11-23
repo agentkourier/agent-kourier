@@ -12,9 +12,13 @@ import (
 	"os/signal"
 	"syscall"
 
+	"google.golang.org/adk/v2/model"
+
+	"github.com/agentkourier/agent-kourier/addons/ax/agent"
 	"github.com/agentkourier/agent-kourier/addons/ax/config"
 	"github.com/agentkourier/agent-kourier/addons/ax/e2emodel"
-	"github.com/agentkourier/agent-kourier/addons/ax/serve"
+	"github.com/agentkourier/agent-kourier/addons/kit/runtime"
+	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
 func main() {
@@ -31,7 +35,9 @@ func run() error {
 	if scenario == "" {
 		return errors.New("AX_SCENARIO is required")
 	}
-	cfg, err := config.Parse(func(key string) string {
+	scripted := &e2emodel.Model{Scenario: scenario}
+	addon := agent.Addon("e2e", func(context.Context, config.Config, *telemetry.Telemetry) (model.LLM, error) { return scripted, nil })
+	cfg, own, err := runtime.Parse(addon, func(key string) string {
 		if v := os.Getenv(key); v != "" || (key != "MODEL_REGION" && key != "MODEL_NAME") {
 			return v
 		}
@@ -40,7 +46,6 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	model := &e2emodel.Model{Scenario: scenario}
-	return serve.Run(ctx, cfg, model, serve.Options{Version: "e2e", Log: slog.Default(),
-		Routes: func(mux *http.ServeMux) { mux.Handle("/_control/release/", model) }})
+	return runtime.Run(ctx, addon, cfg, own, runtime.Options{Log: slog.Default(),
+		Routes: func(mux *http.ServeMux) { mux.Handle("/_control/release/", scripted) }})
 }

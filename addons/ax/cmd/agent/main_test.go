@@ -8,13 +8,14 @@ import (
 	"testing"
 
 	"github.com/agentkourier/agent-kourier/addons/ax/config"
+	"github.com/agentkourier/agent-kourier/addons/kit/runtime"
 )
 
 func TestVersionFlagPrintsTheBuildVersion(t *testing.T) {
 	defer func(v string) { version = v }(version)
 	version = "1.2.3"
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"--version"}, &stdout, &stderr, func(string) string { return "" }); code != exitOK {
+	if code := runtime.Command(addon(), []string{"--version"}, &stdout, &stderr, func(string) string { return "" }); code != runtime.ExitOK {
 		t.Fatalf("exit %d, stderr %s", code, stderr.String())
 	}
 	if got := strings.TrimSpace(stdout.String()); got != "1.2.3" {
@@ -41,9 +42,9 @@ func TestUsageErrors(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			code := run(tc.args, &stdout, &stderr, func(k string) string { return tc.env[k] })
-			if code != exitUsage {
-				t.Fatalf("exit %d, want %d", code, exitUsage)
+			code := runtime.Command(addon(), tc.args, &stdout, &stderr, func(k string) string { return tc.env[k] })
+			if code != runtime.ExitUsage {
+				t.Fatalf("exit %d, want %d", code, runtime.ExitUsage)
 			}
 			if !strings.Contains(stderr.String(), tc.says) {
 				t.Errorf("stderr %q does not say %q", stderr.String(), tc.says)
@@ -60,8 +61,8 @@ func TestBadTraceSettingIsAUsageError(t *testing.T) {
 	env := map[string]string{"MODEL_REGION": "r", "MODEL_NAME": "m", "AUTH_TOKEN_FILE": "/t",
 		"OTEL_EXPORTER_OTLP_ENDPOINT": "http://user:canary@collector"}
 	var stdout, stderr bytes.Buffer
-	if code := run(nil, &stdout, &stderr, func(k string) string { return env[k] }); code != exitUsage {
-		t.Fatalf("exit %d, want %d", code, exitUsage)
+	if code := runtime.Command(addon(), nil, &stdout, &stderr, func(k string) string { return env[k] }); code != runtime.ExitUsage {
+		t.Fatalf("exit %d, want %d", code, runtime.ExitUsage)
 	}
 	if strings.Contains(stderr.String(), "canary") || !strings.Contains(stderr.String(), "OTEL") {
 		t.Fatalf("stderr %q: want an OTEL error that does not show the value", stderr.String())
@@ -71,7 +72,7 @@ func TestBadTraceSettingIsAUsageError(t *testing.T) {
 // The configuration error is a line of the agent's own JSON log.
 func TestUsageErrorIsAJSONLogLine(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	run(nil, &stdout, &stderr, func(string) string { return "" })
+	runtime.Command(addon(), nil, &stdout, &stderr, func(string) string { return "" })
 	var line map[string]any
 	if err := json.Unmarshal(stderr.Bytes(), &line); err != nil || line["level"] != "ERROR" || line["msg"] != "configuration" {
 		t.Fatalf("stderr %q is not one JSON error line: %v", stderr.String(), err)

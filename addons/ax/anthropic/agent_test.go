@@ -19,6 +19,7 @@ import (
 	"github.com/agentkourier/agent-kourier/addons/ax/anthropic"
 	"github.com/agentkourier/agent-kourier/addons/ax/store"
 	"github.com/agentkourier/agent-kourier/addons/kit/auth"
+	"github.com/agentkourier/agent-kourier/addons/kit/runtime"
 )
 
 // fixedCaller accepts every request as one caller.
@@ -33,15 +34,15 @@ func serveAgent(t *testing.T, dir string, model *anthropic.Model) (client *a2acl
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.SettleInterrupted(t.Context(), store.InterruptedMessage); err != nil {
+	if _, err := st.SettleInterrupted(t.Context(), runtime.InterruptedMessage("agent")); err != nil {
 		t.Fatal(err)
 	}
-	s, err := agent.New(agent.Config{Model: model, Store: st, Check: &auth.Check{Verifier: fixedCaller{}, Bearer: true, Log: slog.New(slog.NewTextHandler(io.Discard, nil))},
-		PublicURL: "http://ax.agents.svc:8090/a2a", Version: "test"})
+	exec, err := agent.NewTextExecutor(model, st.Sessions())
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(s.Handler)
+	check := &auth.Check{Verifier: fixedCaller{}, Bearer: true, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	srv := httptest.NewServer(agent.Addon("test", nil).Handler(exec, st, check, "http://ax.agents.svc:8090/a2a", nil))
 	var once sync.Once
 	stop = func() { once.Do(func() { srv.Close(); _ = st.Close() }) }
 	t.Cleanup(stop)

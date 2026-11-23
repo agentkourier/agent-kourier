@@ -22,9 +22,6 @@ import (
 // AppName is the ADK app the agent runs its sessions under; the store deletes an idle context's session of it.
 const AppName = "agent-kourier-ax"
 
-// InterruptedMessage is the agent message of a task that a restart failed (SettleInterrupted).
-const InterruptedMessage = "Interrupted by an agent restart."
-
 // Options configures a store.
 type Options struct {
 	// Now stamps each task's update time and each context's activity. Nil is time.Now.

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"iter"
 	"net/http/httptest"
 	"path/filepath"
@@ -57,9 +58,9 @@ func ask(t *testing.T, a *agentAt) *a2a.Task {
 	return asked
 }
 
-// The replay handler holds one lock over every send until the inner handler's first event. A resume's first event is
-// ADK's working update, which comes before the model call, so a resume whose model call waits does not hold back a
-// send for another context.
+// The kit's request handler holds a send of one message ID until the turn's first event. A resume's first event is
+// ADK's working update, which comes before the model call, and the hold is of that message's ID alone, so a resume
+// whose model call waits does not hold back a send for another context.
 func TestAResumeWaitingOnTheModelDoesNotHoldBackAnotherContext(t *testing.T) {
 	m := &resumeGate{resumed: make(chan struct{}), release: make(chan struct{})}
 	a := start(t, t.TempDir(), m)
@@ -122,9 +123,8 @@ func answerOnce(t *testing.T, a *agentAt, msg *a2a.Message) (*a2a.Task, error) {
 	return after, refusal
 }
 
-// A malformed answer to a paused task is refused, and the task stays paused: a2a-go fails the task on an executor
-// error, but it does so on the execution's context, which the error has already cancelled, and the kit's store does not
-// write on a cancelled context.
+// A malformed answer to a paused task is refused with invalid params before the turn starts (the executor's
+// ValidateResume), and the task stays paused.
 func TestAMalformedAnswerIsRefusedAndTheTaskStaysPaused(t *testing.T) {
 	a := start(t, t.TempDir(), &fakeModel{})
 	after, refusal := answerOnce(t, a, badAnswer(ask(t, a)))
@@ -140,24 +140,20 @@ func (d detachedStore) Update(ctx context.Context, req *taskstore.UpdateRequest)
 	return d.Store.Update(context.WithoutCancel(ctx), req)
 }
 
-// With a store that writes on a cancelled context, the same malformed answer fails the paused task, and the caller gets
-// no error: the refusal above rests on the store, not on the agent.
-func TestAMalformedAnswerFailsThePausedTaskOnAStoreThatIgnoresCancellation(t *testing.T) {
+// With a store that writes on a cancelled context, the same malformed answer is refused and the task stays paused: the
+// refusal rests on the agent, not on the store. Without ValidateResume, a2a-go would fail the task on the executor's
+// error, which the kit's store happens not to write because the error has cancelled the execution's context.
+func TestAMalformedAnswerIsRefusedOnAStoreThatIgnoresCancellation(t *testing.T) {
 	st, err := store.OpenSQLite(t.Context(), filepath.Join(t.TempDir(), "ax.db"), store.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	s, err := New(Config{Model: &fakeModel{}, Store: detachedStore{st}, Check: &auth.Check{Verifier: bearerIsCaller{}, Bearer: true, Log: discard()},
-		PublicURL: "http://ax.agents.svc:8090/a2a", Version: "test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv := httptest.NewServer(s.Handler)
+	srv := httptest.NewServer(handler(t, &fakeModel{}, detachedStore{st}, &auth.Check{Verifier: bearerIsCaller{}, Bearer: true, Log: discard()}, nil))
 	t.Cleanup(srv.Close)
 	a := &agentAt{store: st, http: srv, client: connect(t, srv, "binding")}
 	after, refusal := answerOnce(t, a, badAnswer(ask(t, a)))
-	if refusal != nil || after.Status.State != a2a.TaskStateFailed {
-		t.Fatalf("a malformed answer: refusal %v, the task is %s; want no refusal and the task failed", refusal, after.Status.State)
+	if !errors.Is(refusal, a2a.ErrInvalidParams) || after.Status.State != a2a.TaskStateInputRequired {
+		t.Fatalf("a malformed answer: refusal %v, the task is %s; want invalid params and still input-required", refusal, after.Status.State)
 	}
 }
