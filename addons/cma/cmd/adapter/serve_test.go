@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -77,6 +78,22 @@ func (p prober) status(url string) int {
 	}
 	_ = resp.Body.Close()
 	return resp.StatusCode
+}
+
+// post is the code and the body that a POST of a JSON-RPC body to url, with header, answers; 0 when it cannot be reached.
+func (p prober) post(url string, header http.Header) (int, string) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, strings.NewReader(`{"jsonrpc":"2.0"}`))
+	if err != nil {
+		return 0, ""
+	}
+	maps.Copy(req.Header, header)
+	resp, err := p.c.Do(req)
+	if err != nil {
+		return 0, ""
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(body)
 }
 
 // waitFor polls url until it answers want, failing the test after a few seconds.
@@ -155,8 +172,67 @@ func readyOnlyAfterStartUpWork(t *testing.T, more map[string]string) {
 	if got := p.status(base + "/healthz"); got != http.StatusOK {
 		t.Fatalf("/healthz = %d while the start-up work runs, want 200", got)
 	}
+	if code, body := p.post(base+"/a2a", nil); code != http.StatusServiceUnavailable || body != "the adapter is taking over as the leader\n" {
+		t.Fatalf("an A2A request while the start-up work runs = %d %q, want 503 and the adapter's words", code, body)
+	}
 	cma.release()
 	p.waitFor(t, base+"/readyz", http.StatusOK)
+}
+
+// A standby forwards an A2A request to the leader with the adapter's hop header, X-Agent-Kourier-Cma-Forwarded: 1, and
+// answers 503 to a request that already carries it instead of forwarding it again.
+func TestPostgresStandbyForwardsWithTheAdaptersHopHeader(t *testing.T) {
+	dsn := pgtest.DSN(t)
+	const hop = "X-Agent-Kourier-Cma-Forwarded"
+	hops := make(chan []string, 2)
+	leader := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { hops <- r.Header.Values(hop) }))
+	t.Cleanup(leader.Close)
+	seed, err := store.OpenPostgres(t.Context(), dsn, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = seed.Close() })
+	if _, ok, err := seed.TryLead(t.Context(), "seed", leader.URL, time.Hour); err != nil || !ok {
+		t.Fatalf("TryLead: %v, %v", ok, err)
+	}
+	t.Setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:1")
+	t.Setenv("ANTHROPIC_API_KEY", "fake-api-key-for-tests")
+	addr := freeAddr(t)
+	env := map[string]string{"CMA_AGENT_ID": "agent_test", "CMA_ENVIRONMENT_ID": "env_test", "AUTH_DISABLED": "true",
+		"LISTEN_ADDR": addr, "STORE": "postgres", "POSTGRES_DSN": dsn, "ADVERTISE_URL": "http://" + addr, "POD_NAME": "cma-1"}
+	cfg, err := config.Parse(func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() { served <- serve(ctx, cfg, telemetry.Config{}, slog.New(slog.DiscardHandler), serveOptions{}) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-served:
+			if err != nil {
+				t.Errorf("serve: %v", err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Error("serve did not return after its context ended")
+		}
+	})
+
+	base, p := "http://"+addr, newProber()
+	p.waitFor(t, base+"/readyz", http.StatusOK)
+	if code, body := p.post(base+"/a2a", nil); code != http.StatusOK {
+		t.Fatalf("an A2A request through the standby = %d %q, want the leader's 200", code, body)
+	}
+	if got := <-hops; len(got) != 1 || got[0] != "1" {
+		t.Fatalf("%s at the leader = %q, want [1]", hop, got)
+	}
+	if code, _ := p.post(base+"/a2a", http.Header{hop: {"1"}}); code != http.StatusServiceUnavailable {
+		t.Fatalf("a request another standby forwarded = %d, want 503", code)
+	}
+	if len(hops) != 0 {
+		t.Fatal("the standby forwarded a request that another standby had forwarded")
+	}
 }
 
 // A replica that took the lease before it listens, and then cannot listen, hands the lease over as it stops, so a
