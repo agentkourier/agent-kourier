@@ -10,6 +10,7 @@ require (
 
 require (
 	github.com/a2aproject/a2a-go v0.3.15 // indirect
+	github.com/agentkourier/agent-kourier/addons/kit v0.0.0-00010101000000-000000000000 // indirect
 	github.com/anthropics/anthropic-sdk-go/v2 v2.13.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect

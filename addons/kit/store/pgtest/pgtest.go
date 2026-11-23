@@ -26,7 +26,7 @@ func DSN(t testing.TB) string {
 	}
 	b := make([]byte, 6)
 	_, _ = rand.Read(b)
-	schema := "ax_test_" + hex.EncodeToString(b)
+	schema := "kit_test_" + hex.EncodeToString(b)
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {

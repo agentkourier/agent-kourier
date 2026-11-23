@@ -7,7 +7,7 @@ import (
 	"os"
 )
 
-// lockFile is not implemented off Unix: without it two adapters could share one file.
-func lockFile(string) (*os.File, error) {
+// lockFile is not implemented off Unix: without it two processes could share one file.
+func lockFile(string, string) (*os.File, error) {
 	return nil, errors.New("the SQLite store needs a Unix file lock, which this platform does not have")
 }

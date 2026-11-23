@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"fmt"
+
+	kitstore "github.com/agentkourier/agent-kourier/addons/kit/store"
 )
 
 // The agent kept its tasks, before it was an add-on, in a SQLite layout of its own beside ADK's tables: a2a_tasks(id,
@@ -11,13 +13,14 @@ import (
 // waiting across the upgrade can still be answered. ADK's tables are ADK's own, and carry over as they are.
 
 // setLegacyAside renames the old layout's tables, when the file is in it, and reports whether there are renamed
-// tables to import: the ones it renamed, or ones a start cut short left.
-func setLegacyAside(ctx context.Context, c *sqliteConn) (bool, error) {
+// tables to import: the ones it renamed, or ones a start cut short left. Its write, and importLegacy's, is not fenced:
+// SQLite has no fence.
+func setLegacyAside(ctx context.Context, db *kitstore.DB) (bool, error) {
 	legacy := false
-	err := c.inTx(ctx, func(q querier) error {
+	err := db.Write(ctx, func(q kitstore.Querier) error {
 		has := func(table string) (bool, error) {
 			var n int
-			err := q.queryRow(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&n)
+			err := q.QueryRow(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&n)
 			return n > 0, err
 		}
 		tasks, err := has("a2a_tasks")
@@ -35,12 +38,12 @@ func setLegacyAside(ctx context.Context, c *sqliteConn) (bool, error) {
 					return err
 				}
 				if !ok {
-					if _, err := q.exec(ctx, `CREATE TABLE `+rename.to+` (owner TEXT NOT NULL, message_id TEXT NOT NULL, task_id TEXT NOT NULL)`); err != nil {
+					if _, err := q.Exec(ctx, `CREATE TABLE `+rename.to+` (owner TEXT NOT NULL, message_id TEXT NOT NULL, task_id TEXT NOT NULL)`); err != nil {
 						return err
 					}
 					continue
 				}
-				if _, err := q.exec(ctx, `ALTER TABLE `+rename.from+` RENAME TO `+rename.to); err != nil {
+				if _, err := q.Exec(ctx, `ALTER TABLE `+rename.from+` RENAME TO `+rename.to); err != nil {
 					return err
 				}
 			}
@@ -59,14 +62,14 @@ func setLegacyAside(ctx context.Context, c *sqliteConn) (bool, error) {
 func (s *Store) importLegacy(ctx context.Context) error {
 	now := nanos(s.now())
 	imported := 0
-	err := s.conn.inTx(ctx, func(q querier) error {
+	err := s.Write(ctx, func(q kitstore.Querier) error {
 		type row struct {
 			id, owner string
 			version   int64
 			raw       []byte
 		}
 		var rows []row
-		err := q.query(ctx, `SELECT id, owner, version, payload FROM legacy_a2a_tasks ORDER BY id`, nil, func(scan func(...any) error) error {
+		err := q.Query(ctx, `SELECT id, owner, version, payload FROM legacy_a2a_tasks ORDER BY id`, nil, func(scan func(...any) error) error {
 			var r row
 			if err := scan(&r.id, &r.owner, &r.version, &r.raw); err != nil {
 				return err
@@ -82,24 +85,24 @@ func (s *Store) importLegacy(ctx context.Context) error {
 			if err != nil {
 				return fmt.Errorf("task %s: %w", r.id, err)
 			}
-			if _, err := q.exec(ctx, `INSERT INTO a2a_tasks (id, context_id, owner, version, state, status_at, updated_at, payload)
+			if _, err := q.Exec(ctx, `INSERT INTO a2a_tasks (id, context_id, owner, version, state, status_at, updated_at, payload)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
 				r.id, task.ContextID, r.owner, r.version, string(task.Status.State), statusAt(task), now, r.raw); err != nil {
 				return fmt.Errorf("task %s: %w", r.id, err)
 			}
 			if task.ContextID != "" {
-				if _, err := q.exec(ctx, `INSERT INTO contexts (owner, context_id, last_active) VALUES (?, ?, ?)
+				if _, err := q.Exec(ctx, `INSERT INTO contexts (owner, context_id, last_active) VALUES (?, ?, ?)
 					ON CONFLICT (owner, context_id) DO NOTHING`, r.owner, task.ContextID, now); err != nil {
 					return err
 				}
 			}
 		}
-		if _, err := q.exec(ctx, `INSERT INTO message_ids (owner, message_id, task_id, created_at)
+		if _, err := q.Exec(ctx, `INSERT INTO message_ids (owner, message_id, task_id, created_at)
 			SELECT owner, message_id, task_id, ? FROM legacy_a2a_messages WHERE true ON CONFLICT (owner, message_id) DO NOTHING`, now); err != nil {
 			return fmt.Errorf("message IDs: %w", err)
 		}
 		for _, table := range []string{"legacy_a2a_messages", "legacy_a2a_tasks"} {
-			if _, err := q.exec(ctx, `DROP TABLE IF EXISTS `+table); err != nil {
+			if _, err := q.Exec(ctx, `DROP TABLE IF EXISTS `+table); err != nil {
 				return err
 			}
 		}

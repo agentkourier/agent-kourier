@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agentkourier/agent-kourier/addons/cma/store"
+	"github.com/agentkourier/agent-kourier/addons/kit/store"
 )
 
 // fakeLease is one replica's view of a lease held in memory. other is the holder that leads when this one does not;
