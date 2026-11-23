@@ -20,7 +20,9 @@ import (
 var repoRoot = filepath.Join("..", "..", "..")
 
 type step struct {
-	Run string `json:"run"`
+	ID  string            `json:"id"`
+	Env map[string]string `json:"env"`
+	Run string            `json:"run"`
 }
 
 // needs is a job's needs, which a workflow writes as one job's ID or as a list of them.
@@ -45,6 +47,7 @@ type job struct {
 	Name     string            `json:"name"`
 	Needs    needs             `json:"needs"`
 	Outputs  map[string]string `json:"outputs"`
+	Env      map[string]string `json:"env"`
 	Strategy struct {
 		FailFast *bool          `json:"fail-fast"`
 		Matrix   map[string]any `json:"matrix"`
@@ -80,11 +83,11 @@ func readList(t *testing.T) []string {
 	return strings.Fields(string(out))
 }
 
-// readWorkflows returns ci.yml and security.yml.
+// readWorkflows returns ci.yml, security.yml and release.yml.
 func readWorkflows(t *testing.T) map[string][]byte {
 	t.Helper()
 	out := map[string][]byte{}
-	for _, file := range []string{"ci.yml", "security.yml"} {
+	for _, file := range []string{"ci.yml", "security.yml", "release.yml"} {
 		b, err := os.ReadFile(filepath.Join(repoRoot, ".github", "workflows", file))
 		if err != nil {
 			t.Fatal(err)
@@ -120,16 +123,15 @@ func include(j job) []map[string]string {
 }
 
 // check returns where the workflows (file name to YAML) do not hold the add-ons in list: ci.yml's add-on job, a leg
-// per add-on in the list's order, named after it, none cancelling the others, each cache pruned; and security.yml's
+// per add-on in the list's order, named after it, none cancelling the others, each cache pruned; security.yml's
 // govulncheck of each add-on's module and trivy scan of each add-on's image on each platform, each cache pruned, with
-// no row for an add-on the list lacks.
+// no row for an add-on the list lacks; and release.yml's outputs, signatures and notes (checkRelease).
 func check(list []string, workflows map[string][]byte) ([]string, error) {
-	var ci, security workflow
-	if err := yaml.Unmarshal(workflows["ci.yml"], &ci); err != nil {
-		return nil, fmt.Errorf("ci.yml: %w", err)
-	}
-	if err := yaml.Unmarshal(workflows["security.yml"], &security); err != nil {
-		return nil, fmt.Errorf("security.yml: %w", err)
+	var ci, security, release workflow
+	for file, wf := range map[string]*workflow{"ci.yml": &ci, "security.yml": &security, "release.yml": &release} {
+		if err := yaml.Unmarshal(workflows[file], wf); err != nil {
+			return nil, fmt.Errorf("%s: %w", file, err)
+		}
 	}
 	var problems []string
 	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
@@ -216,7 +218,132 @@ func check(list []string, workflows map[string][]byte) ([]string, error) {
 			add("security.yml: trivy scans the image of %s for %q, want %q", a, got, platforms)
 		}
 	}
-	return problems, nil
+	return append(problems, checkRelease(list, release)...), nil
+}
+
+// The outputs of release.yml's build job that are not an add-on's: Agent Kourier's image, the agents' and the chart.
+var releaseOutputs = []string{"image", "prompt-agent", "echo-agent", "chart"}
+
+// releaseNames returns what release.yml calls an add-on: its shell and jq variable, its environment variable and the
+// label of its line in the release notes. The publish job writes that line, and hack/security/select-release-images.sh
+// selects it for the released-image rescan.
+func releaseNames(a string) (variable, env, label string) {
+	variable = strings.ReplaceAll(a, "-", "_")
+	return variable, strings.ToUpper(variable) + "_REF", strings.ToUpper(a) + " add-on image"
+}
+
+// The env entries that take a build output, and the release notes' body: its format and its arguments.
+var (
+	buildOutputRef = regexp.MustCompile(`^\$\{\{ needs\.build\.outputs\.([a-z0-9-]+) \}\}$`)
+	notesPrintf    = regexp.MustCompile(`body=\$\(printf "([^"]*)" \\\n\s*([^)]*)\)`)
+	notesLine      = regexp.MustCompile("\\\\n- ([^:\\\\]+): \\\\`%s\\\\`")
+	notesArg       = regexp.MustCompile(`"\$\{([A-Za-z_]+)\}"`)
+)
+
+// loopStep returns the step of a job whose run goes over the references, `for ref in ...`, and that loop's line.
+func loopStep(j job) (step, string) {
+	for _, s := range j.Steps {
+		for line := range strings.Lines(s.Run) {
+			if strings.HasPrefix(strings.TrimSpace(line), "for ref in ") {
+				return s, strings.TrimSpace(line)
+			}
+		}
+	}
+	return step{}, ""
+}
+
+// checkRelease returns where release.yml does not carry each add-on of list from its build to its release: the build
+// job's output and the digest it reports, the reference that sign, verify and publish each take and that the first two
+// go over, the publish job's check of an existing release and the line it writes in the notes; and an output, or a
+// reference taken from one, of an add-on the list lacks.
+func checkRelease(list []string, release workflow) []string {
+	var problems []string
+	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
+
+	build := release.Jobs["build"]
+	for name := range build.Outputs {
+		if !slices.Contains(releaseOutputs, name) && !slices.Contains(list, name) {
+			add("release.yml: build has an output %s, which hack/addons.txt does not list", name)
+		}
+	}
+	var digests string
+	for _, s := range build.Steps {
+		if s.ID == "digests" {
+			digests = s.Run
+		}
+	}
+	for _, a := range list {
+		v, _, label := releaseNames(a)
+		if got, want := build.Outputs[a], "${{ steps.digests.outputs."+a+" }}"; got != want {
+			add("release.yml: build's output %s is %q, want %q", a, got, want)
+		}
+		for _, want := range []string{
+			v + `="${IMAGE}-` + a + `@$(cat bin/release/` + a + `-digest)"`,
+			`echo "` + a + `=${` + v + `}"`,
+			`echo "` + label + `: \` + "`${" + v + `}\` + "`",
+		} {
+			if !strings.Contains(digests, want) {
+				add("release.yml: build's step digests does not have %s, which reports the digest of %s", want, a)
+			}
+		}
+	}
+
+	for _, name := range []string{"sign", "verify", "publish"} {
+		j := release.Jobs[name]
+		s, loop := loopStep(j)
+		env := j.Env
+		if name != "publish" {
+			env = s.Env
+		}
+		for key, value := range env {
+			if m := buildOutputRef.FindStringSubmatch(value); m != nil && !slices.Contains(releaseOutputs, m[1]) && !slices.Contains(list, m[1]) {
+				add("release.yml: %s's %s takes the build output %s, which hack/addons.txt does not list", name, key, m[1])
+			}
+		}
+		for _, a := range list {
+			_, ref, _ := releaseNames(a)
+			if got, want := env[ref], "${{ needs.build.outputs."+a+" }}"; got != want {
+				add("release.yml: %s's %s is %q, want %q", name, ref, got, want)
+			}
+			if name != "publish" && !strings.Contains(loop, `"${`+ref+`}"`) {
+				add("release.yml: %s's loop %q does not go over ${%s}, the image of %s", name, loop, ref, a)
+			}
+		}
+	}
+
+	var publish string
+	if steps := release.Jobs["publish"].Steps; len(steps) > 0 {
+		publish = steps[0].Run
+	}
+	notes := map[string]string{}
+	if m := notesPrintf.FindStringSubmatch(publish); m == nil {
+		add("release.yml: publish writes no release notes with printf")
+	} else {
+		labels := notesLine.FindAllStringSubmatch(m[1], -1)
+		args := notesArg.FindAllStringSubmatch(m[2], -1)
+		if len(args) != len(labels)+1 {
+			add("release.yml: publish's notes have %d lines with a reference and %d references after the body", len(labels), len(args)-1)
+		} else {
+			for i, l := range labels {
+				notes[l[1]] = args[i+1][1]
+			}
+		}
+	}
+	for _, a := range list {
+		v, ref, label := releaseNames(a)
+		if got := notes[label]; got != ref {
+			add("release.yml: publish's notes have no line %q with ${%s} (it has %q)", "- "+label+": `...`", ref, got)
+		}
+		for _, want := range []string{
+			`--arg ` + v + ` "${` + ref + `}"`,
+			`contains("` + label + ": `\" + $" + v + ` + "` + "`" + `")`,
+		} {
+			if !strings.Contains(publish, want) {
+				add("release.yml: publish's check of an existing release does not have %s, for %s", want, a)
+			}
+		}
+	}
+	return problems
 }
 
 // checkProblems runs check and fails the test on an error.
@@ -244,7 +371,8 @@ func TestWorkflowsHoldEveryAddon(t *testing.T) {
 func TestCheckFindsDrift(t *testing.T) {
 	list := readList(t)
 	repo := readWorkflows(t)
-	first := list[0]
+	first, last := list[0], list[len(list)-1]
+	lastVar, lastRef, lastLabel := releaseNames(last)
 	// The legs as ci.yml lists them, which the reordering case below moves; it holds whatever the list says.
 	var ci workflow
 	if err := yaml.Unmarshal(repo["ci.yml"], &ci); err != nil {
@@ -262,6 +390,8 @@ func TestCheckFindsDrift(t *testing.T) {
 		for _, want := range []string{
 			"matrix.addon is", `cache-prune does not prune "go-third-${RUNNER_OS}-"`, "govulncheck has no row for addons/third",
 			`cache-prune does not prune "go-govulncheck-third-${RUNNER_OS}-"`, "trivy scans the image of third for []",
+			"build's output third is", `bin/release/third-digest`, "sign's THIRD_REF is", "verify's loop", "publish's THIRD_REF is",
+			"publish's notes have no line \"- THIRD add-on image", `--arg third "${THIRD_REF}"`,
 		} {
 			if !slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, want) }) {
 				t.Errorf("problems = %q, want one with %q", problems, want)
@@ -279,24 +409,49 @@ func TestCheckFindsDrift(t *testing.T) {
 			}
 		}
 	})
+	t.Run("the notes' lines in another order", func(t *testing.T) {
+		if first == last {
+			t.Skip("the list has one add-on, so there is no other order")
+		}
+		_, _, firstLabel := releaseNames(first)
+		wfs := maps.Clone(repo)
+		text := string(wfs["release.yml"])
+		at := strings.Index(text, "body=$(printf")
+		swap := strings.NewReplacer(`\n- `+firstLabel+": ", `\n- `+lastLabel+": ", `\n- `+lastLabel+": ", `\n- `+firstLabel+": ")
+		wfs["release.yml"] = []byte(text[:at] + swap.Replace(text[at:]))
+		if problems := checkProblems(t, list, wfs); !slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, "publish's notes have no line") }) {
+			t.Errorf("problems = %q, want the notes' lines and references paired", problems)
+		}
+	})
 	for _, tt := range []struct {
-		name, file, old, new, want string
+		name, file, old, new, want, after string
 	}{
-		{"the legs in another order", "ci.yml", "addon: [" + strings.Join(legs, ", ") + "]", "addon: [" + strings.Join(slices.Concat(legs[1:], legs[:1]), ", ") + "]", "in its order"},
-		{"a leg named by the matrix's index", "ci.yml", "name: ${{ matrix.addon }}\n", "name: addon (${{ strategy.job-index }})\n", "so that each leg's check is its add-on's name"},
-		{"a failing leg cancelling the others", "ci.yml", "      fail-fast: false\n      matrix:\n        addon:", "      fail-fast: true\n      matrix:\n        addon:", "strategy.fail-fast is not false"},
-		{"a leg's cache not pruned", "ci.yml", `"go-` + first + `-${RUNNER_OS}-"`, `"go-other-${RUNNER_OS}-"`, `does not prune "go-` + first + `-`},
-		{"cache-prune not waiting for the legs", "ci.yml", "kit, addon, echo-agent", "kit, echo-agent", "does not need addon"},
-		{"a govulncheck row of another go.sum", "security.yml", "go-sum: addons/" + first + "/go.sum", "go-sum: go.sum", "govulncheck's row"},
-		{"a trivy row of another platform", "security.yml", "- name: " + first + "-linux-arm64\n            platform: linux/arm64", "- name: " + first + "-linux-arm64\n            platform: linux/amd64", "trivy's row"},
-		{"a govulncheck cache not pruned", "security.yml", `"go-govulncheck-` + first + `-${RUNNER_OS}-"`, `"go-govulncheck-other-${RUNNER_OS}-"`, `does not prune "go-govulncheck-` + first + `-`},
+		{"the legs in another order", "ci.yml", "addon: [" + strings.Join(legs, ", ") + "]", "addon: [" + strings.Join(slices.Concat(legs[1:], legs[:1]), ", ") + "]", "in its order", ""},
+		{"a leg named by the matrix's index", "ci.yml", "name: ${{ matrix.addon }}\n", "name: addon (${{ strategy.job-index }})\n", "so that each leg's check is its add-on's name", ""},
+		{"a failing leg cancelling the others", "ci.yml", "      fail-fast: false\n      matrix:\n        addon:", "      fail-fast: true\n      matrix:\n        addon:", "strategy.fail-fast is not false", ""},
+		{"a leg's cache not pruned", "ci.yml", `"go-` + first + `-${RUNNER_OS}-"`, `"go-other-${RUNNER_OS}-"`, `does not prune "go-` + first + `-`, ""},
+		{"cache-prune not waiting for the legs", "ci.yml", "kit, addon, echo-agent", "kit, echo-agent", "does not need addon", ""},
+		{"a govulncheck row of another go.sum", "security.yml", "go-sum: addons/" + first + "/go.sum", "go-sum: go.sum", "govulncheck's row", ""},
+		{"a trivy row of another platform", "security.yml", "- name: " + first + "-linux-arm64\n            platform: linux/arm64", "- name: " + first + "-linux-arm64\n            platform: linux/amd64", "trivy's row", ""},
+		{"a govulncheck cache not pruned", "security.yml", `"go-govulncheck-` + first + `-${RUNNER_OS}-"`, `"go-govulncheck-other-${RUNNER_OS}-"`, `does not prune "go-govulncheck-` + first + `-`, ""},
+		// release.yml: after, when set, is where the change starts, for text that more than one job has.
+		{"an add-on's image not signed", "release.yml", `"${` + lastRef + `}" `, "", "sign's loop", "  sign:"},
+		{"an add-on's image not verified", "release.yml", `"${` + lastRef + `}" `, "", "verify's loop", "  verify:"},
+		{"an add-on's reference not in sign's env", "release.yml", "          " + lastRef + ": ", "          OTHER_REF: ", "sign's " + lastRef + " is", "  sign:"},
+		{"an output of an unlisted add-on", "release.yml", "      chart: ${{ steps.digests.outputs.chart }}\n", "      third: ${{ steps.digests.outputs.third }}\n      chart: ${{ steps.digests.outputs.chart }}\n", "build has an output third, which hack/addons.txt does not list", ""},
+		{"a reference of an unlisted add-on", "release.yml", "      CHART_REF: ", "      THIRD_REF: ${{ needs.build.outputs.third }}\n      CHART_REF: ", "publish's THIRD_REF takes the build output third", "  publish:"},
+		{"an add-on's line not in the notes", "release.yml", "\\n- " + lastLabel + ": ", "\\n- Other image: ", "publish's notes have no line \"- " + lastLabel, "body=$(printf"},
+		{"an add-on not checked in an existing release", "release.yml", "contains(\"" + lastLabel + ": ", "contains(\"Other image: ", "publish's check of an existing release does not have", "  publish:"},
+		{"an add-on's digest not reported", "release.yml", `echo "` + last + `=${` + lastVar + `}"`, `echo "` + last + `="`, "build's step digests does not have", ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			wfs := map[string][]byte{"ci.yml": repo["ci.yml"], "security.yml": repo["security.yml"]}
-			if !strings.Contains(string(wfs[tt.file]), tt.old) {
-				t.Fatalf("%s has no %q to change", tt.file, tt.old)
+			wfs := maps.Clone(repo)
+			text := string(wfs[tt.file])
+			at := strings.Index(text, tt.after)
+			if at < 0 || !strings.Contains(text[at:], tt.old) {
+				t.Fatalf("%s has no %q to change after %q", tt.file, tt.old, tt.after)
 			}
-			wfs[tt.file] = []byte(strings.Replace(string(wfs[tt.file]), tt.old, tt.new, 1))
+			wfs[tt.file] = []byte(text[:at] + strings.Replace(text[at:], tt.old, tt.new, 1))
 			if problems := checkProblems(t, list, wfs); !slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, tt.want) }) {
 				t.Errorf("problems = %q, want one with %q", problems, tt.want)
 			}
