@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agentkourier/agent-kourier/addons/cma/telemetry"
+	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
 // HopHeader marks a request that a standby forwarded. A replica that does not serve answers such a request 503

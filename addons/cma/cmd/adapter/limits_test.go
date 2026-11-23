@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/agentkourier/agent-kourier/addons/kit/limitsdoc"
+	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
 // TestLimitsPage holds the server's timeouts to docs/reference/limits.md: the wait for a request's headers, for the
@@ -12,6 +13,12 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Duration(t, "cma.read-header-timeout", readHeaderTimeout)
 	limitsdoc.Duration(t, "cma.shutdown-grace", shutdownTimeout)
 	limitsdoc.Duration(t, "cma.release-timeout", releaseTimeout)
+}
+
+// TestLogLimits holds the cap on an error's text in a log line, which the kit's log handler applies to the adapter's
+// log, to docs/reference/limits.md.
+func TestLogLimits(t *testing.T) {
+	limitsdoc.Bytes(t, "cma.log-error-bytes", telemetry.MaxLogErrorBytes)
 }
 
 // TestChartLimits holds the add-on's startup probe in the chart to the pages: how many times the kubelet tries it, and

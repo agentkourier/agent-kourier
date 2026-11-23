@@ -16,7 +16,8 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
-	"github.com/agentkourier/agent-kourier/addons/ax/telemetry"
+	"github.com/agentkourier/agent-kourier/addons/ax/agent"
+	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
 // scriptedClient opens each stream with err, or, without one, a stream of no events.
@@ -50,7 +51,7 @@ func metricsText(t *testing.T, tel *telemetry.Telemetry) string {
 // child of the span in its context.
 func TestObserveTimesAndTracesEachStream(t *testing.T) {
 	rec := tracetest.NewSpanRecorder()
-	tel, err := telemetry.New(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec)))
+	tel, err := telemetry.New(agent.TelemetrySpec(), sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +106,7 @@ func TestObserveCountsTheAPIsStatus(t *testing.T) {
 		w.WriteHeader(http.StatusTooManyRequests)
 		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`))
 	})
-	tel, err := telemetry.New(nil)
+	tel, err := telemetry.New(agent.TelemetrySpec(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

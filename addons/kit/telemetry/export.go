@@ -22,7 +22,7 @@ const maxWarnKeys = 64
 
 // errExportFailed and errExporterShutdown are all the SDK is ever told: what the exporter
 // reports can hold collector response bodies, URLs and authentication details. The class goes
-// to the agent's log instead, where safeExporter says it once a minute.
+// to the add-on's log instead, where safeExporter says it once a minute.
 var (
 	errExportFailed     = errors.New("OTLP trace export failed")
 	errExporterShutdown = errors.New("OTLP exporter shutdown failed")

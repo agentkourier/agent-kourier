@@ -2,7 +2,10 @@ package telemetry
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"regexp"
+	"slices"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -15,13 +18,14 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 )
 
-// TurnOutcome is how a turn ended: the label of agentkourier_ax_turns_total.
+// TurnOutcome is how a turn ended: the label of agentkourier_<add-on>_turns_total. An add-on may add outcomes of its
+// own (and names in Spec.ErrorTurns those that fail the turn's span).
 type TurnOutcome string
 
-// The turn outcomes, a closed set.
+// The turn outcomes every add-on has.
 const (
 	TurnCompleted TurnOutcome = "completed"
-	// TurnInputRequired is a turn that paused on an ask_user question.
+	// TurnInputRequired is a turn that paused for a person: an approval, or an answer to a question.
 	TurnInputRequired TurnOutcome = "input_required"
 	TurnFailed        TurnOutcome = "failed"
 	TurnCanceled      TurnOutcome = "canceled"
@@ -29,41 +33,13 @@ const (
 	TurnInterrupted TurnOutcome = "interrupted"
 )
 
-// Operation names a call to the model's provider, Amazon Bedrock or the Anthropic API: the operation label of
-// agentkourier_ax_operation_duration_seconds and the last part of its span's name, agentkourier.ax.model.<operation>.
+// Operation names a call to an add-on's backend: the operation label of agentkourier_<add-on>_operation_duration_seconds
+// and the last part of its span's name, agentkourier.<add-on>.<Spec.Calls>.<operation>. Each add-on has its own closed
+// set.
 type Operation string
 
-// The operations, a closed set.
-const (
-	// OpConverse and OpConverseStream are Bedrock's.
-	OpConverse       Operation = "converse"
-	OpConverseStream Operation = "converse_stream"
-	// OpMessagesStream is the Anthropic API's: the model always streams there.
-	OpMessagesStream Operation = "messages_stream"
-)
-
-// AuthReason is why the caller check refused a request: the label of agentkourier_ax_auth_refused_total. It is one of
-// package auth's reasons.
-type AuthReason string
-
-// The reasons, a closed set.
-const (
-	AuthMissing     AuthReason = "missing"
-	AuthInvalid     AuthReason = "invalid"
-	AuthUnavailable AuthReason = "unavailable"
-)
-
-// DeleteReason is why the agent deleted a context's ADK session: the label of agentkourier_ax_sessions_deleted_total.
-type DeleteReason string
-
-// The reasons, a closed set.
-const (
-	// DeleteIdle is a session deleted, with its context's tasks, after SESSION_IDLE_TTL without activity.
-	DeleteIdle DeleteReason = "idle"
-)
-
 // ForwardOutcome is what became of a request a standby forwarded: the label of
-// agentkourier_ax_forwarded_requests_total.
+// agentkourier_<add-on>_forwarded_requests_total.
 type ForwardOutcome string
 
 // The outcomes, a closed set.
@@ -81,23 +57,45 @@ const (
 	ForwardLoop ForwardOutcome = "loop"
 )
 
-// The span attributes the agent sets. Their values are IDs and outcomes, never content.
+// The span attributes an add-on sets. Their values are IDs and outcomes, never content.
 const (
 	AttrTaskID    = "agentkourier.task.id"
 	AttrContextID = "agentkourier.context.id"
 	AttrOutcome   = "agentkourier.outcome"
 )
 
-// Telemetry is the agent's metrics, in a registry of its own, and its tracer. A nil *Telemetry records nothing, so a
+// Spec is what names an add-on's telemetry: its metrics, its spans and its tracer, and the help of the metrics whose
+// words are the add-on's own.
+type Spec struct {
+	// Name is the add-on's, such as cma: its metrics are agentkourier_<Name>_*, its spans agentkourier.<Name>.*, and its
+	// tracer github.com/agentkourier/agent-kourier/addons/<Name>. Lower-case letters and digits, a letter first.
+	Name string
+	// Calls is the part of a call's span name that names the backend: agentkourier.<Name>.<Calls>.<operation>. The same
+	// characters as Name.
+	Calls string
+	// TurnsHelp, OperationHelp and AuthRefusedHelp are the help of agentkourier_<Name>_turns_total,
+	// agentkourier_<Name>_operation_duration_seconds and agentkourier_<Name>_auth_refused_total: the outcomes, the
+	// operations and the reasons each add-on has. None may be empty.
+	TurnsHelp, OperationHelp, AuthRefusedHelp string
+	// ErrorTurns are the outcomes, besides TurnFailed, that end a turn's span with the status Error.
+	ErrorTurns []TurnOutcome
+}
+
+// nameRE is what Spec.Name and Spec.Calls may be: part of a metric name, a span name and a service name alike.
+var nameRE = regexp.MustCompile(`^[a-z][a-z0-9]*$`)
+
+// Telemetry is an add-on's metrics, in a registry of its own, and its tracer. A nil *Telemetry records nothing, so a
 // part built without it (in a test) needs no check.
 type Telemetry struct {
-	reg    *prometheus.Registry
-	tracer trace.Tracer
+	reg        *prometheus.Registry
+	tracer     trace.Tracer
+	spans      string // agentkourier.<Name>.
+	calls      string // Spec.Calls
+	errorTurns []TurnOutcome
 
 	turns       *prometheus.CounterVec
 	duration    *prometheus.HistogramVec
 	authRefused *prometheus.CounterVec
-	deleted     *prometheus.CounterVec
 	replays     prometheus.Counter
 	interrupted prometheus.Counter
 	leader      prometheus.Gauge
@@ -105,37 +103,39 @@ type Telemetry struct {
 	forwarded   *prometheus.CounterVec
 }
 
-// New registers the agent's metrics, with the Go and process collectors, in a registry of their own, and takes its
-// tracer from provider (nil records no spans).
-func New(provider trace.TracerProvider) (*Telemetry, error) {
+// New registers the metrics every add-on has, named by spec, with the Go and process collectors, in a registry of
+// their own, and takes the tracer from provider (nil records no spans). The add-on adds its own metrics with Register.
+func New(spec Spec, provider trace.TracerProvider) (*Telemetry, error) {
+	if !nameRE.MatchString(spec.Name) || !nameRE.MatchString(spec.Calls) {
+		return nil, errors.New("telemetry: the add-on's name and its calls' name must be lower-case letters and digits, a letter first")
+	}
+	if spec.TurnsHelp == "" || spec.OperationHelp == "" || spec.AuthRefusedHelp == "" {
+		return nil, errors.New("telemetry: every help text of the spec must be set")
+	}
 	if provider == nil {
 		provider = noop.NewTracerProvider()
 	}
-	t := &Telemetry{reg: prometheus.NewRegistry(), tracer: provider.Tracer("github.com/agentkourier/agent-kourier/addons/ax")}
-	t.turns = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_ax_turns_total",
-		Help: "Turns the agent ran, by how they ended: completed, input_required (paused on an ask_user question), failed, canceled or interrupted (failed by the leader after a restart or a takeover)."},
-		[]string{"outcome"})
-	t.duration = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "agentkourier_ax_operation_duration_seconds",
-		Help:    "Duration of the agent's calls to its model's provider, Amazon Bedrock (converse, converse_stream) or the Anthropic API (messages_stream), a stream timed while it opens, by outcome: success, cancelled, timeout, the HTTP status the provider answered, or error.",
-		Buckets: durationBuckets()}, []string{"operation", "outcome"})
-	t.authRefused = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_ax_auth_refused_total",
-		Help: "Requests to the A2A endpoint or the agent card that the caller check refused, by reason: missing (no credential, 401), invalid (not accepted, 401) or unavailable (the OIDC issuer could not be reached, 503)."},
+	prefix := "agentkourier_" + spec.Name + "_"
+	t := &Telemetry{reg: prometheus.NewRegistry(), tracer: provider.Tracer("github.com/agentkourier/agent-kourier/addons/" + spec.Name),
+		spans: "agentkourier." + spec.Name + ".", calls: spec.Calls,
+		errorTurns: slices.Clone(spec.ErrorTurns)}
+	t.turns = prometheus.NewCounterVec(prometheus.CounterOpts{Name: prefix + "turns_total", Help: spec.TurnsHelp}, []string{"outcome"})
+	t.duration = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: prefix + "operation_duration_seconds",
+		Help: spec.OperationHelp, Buckets: durationBuckets()}, []string{"operation", "outcome"})
+	t.authRefused = prometheus.NewCounterVec(prometheus.CounterOpts{Name: prefix + "auth_refused_total", Help: spec.AuthRefusedHelp},
 		[]string{"reason"})
-	t.deleted = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_ax_sessions_deleted_total",
-		Help: "ADK sessions the agent deleted, each with its context's tasks, by reason: idle (no activity for SESSION_IDLE_TTL)."},
-		[]string{"reason"})
-	t.replays = prometheus.NewCounter(prometheus.CounterOpts{Name: "agentkourier_ax_message_replays_total",
+	t.replays = prometheus.NewCounter(prometheus.CounterOpts{Name: prefix + "message_replays_total",
 		Help: "Messages whose ID the store had recorded, which joined that message's task instead of starting another turn."})
-	t.interrupted = prometheus.NewCounter(prometheus.CounterOpts{Name: "agentkourier_ax_tasks_interrupted_total",
+	t.interrupted = prometheus.NewCounter(prometheus.CounterOpts{Name: prefix + "tasks_interrupted_total",
 		Help: "Tasks left submitted or working by a restart or a takeover, which the leader failed when it began to lead."})
-	t.leader = prometheus.NewGauge(prometheus.GaugeOpts{Name: "agentkourier_ax_leader",
+	t.leader = prometheus.NewGauge(prometheus.GaugeOpts{Name: prefix + "leader",
 		Help: "1 while this replica runs turns (it leads, or it is the only replica: SQLite), 0 while it is a standby."})
-	t.takeovers = prometheus.NewCounter(prometheus.CounterOpts{Name: "agentkourier_ax_leader_takeovers_total",
+	t.takeovers = prometheus.NewCounter(prometheus.CounterOpts{Name: prefix + "leader_takeovers_total",
 		Help: "Times this replica took the lease, each with a new epoch."})
-	t.forwarded = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "agentkourier_ax_forwarded_requests_total",
+	t.forwarded = prometheus.NewCounterVec(prometheus.CounterOpts{Name: prefix + "forwarded_requests_total",
 		Help: "Requests to the A2A endpoint or the agent card that this replica, a standby, forwarded or could not, by outcome: forwarded, failed, cancelled, no_leader or loop."},
 		[]string{"outcome"})
-	for _, c := range []prometheus.Collector{t.turns, t.duration, t.authRefused, t.deleted, t.replays, t.interrupted, t.leader,
+	for _, c := range []prometheus.Collector{t.turns, t.duration, t.authRefused, t.replays, t.interrupted, t.leader,
 		t.takeovers, t.forwarded, collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{})} {
 		if err := t.reg.Register(c); err != nil {
 			return nil, err
@@ -149,6 +149,15 @@ func durationBuckets() []float64 {
 	return []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30, 60, 120, 300, 900, 3600}
 }
 
+// Register adds one of the add-on's own metrics to the registry /metrics serves. Its name begins with
+// agentkourier_<Spec.Name>_, as the add-on writes it. A nil Telemetry registers nothing.
+func (t *Telemetry) Register(c prometheus.Collector) error {
+	if t == nil {
+		return nil
+	}
+	return t.reg.Register(c)
+}
+
 // Handler serves the metrics in Prometheus's text format.
 func (t *Telemetry) Handler() http.Handler {
 	if t == nil {
@@ -160,17 +169,10 @@ func (t *Telemetry) Handler() http.Handler {
 // Registry is the registry the metrics are in, for a test to gather.
 func (t *Telemetry) Registry() *prometheus.Registry { return t.reg }
 
-// AuthRefused counts a request the caller check refused.
-func (t *Telemetry) AuthRefused(reason AuthReason) {
+// AuthRefused counts a request the caller check refused, under reason: one of the check's own, a closed set.
+func (t *Telemetry) AuthRefused(reason string) {
 	if t != nil {
-		t.authRefused.WithLabelValues(string(reason)).Inc()
-	}
-}
-
-// SessionsDeleted counts n sessions deleted for reason.
-func (t *Telemetry) SessionsDeleted(reason DeleteReason, n int) {
-	if t != nil && n > 0 {
-		t.deleted.WithLabelValues(string(reason)).Add(float64(n))
+		t.authRefused.WithLabelValues(reason).Inc()
 	}
 }
 
@@ -190,7 +192,7 @@ func (t *Telemetry) TasksInterrupted(n int) {
 	}
 }
 
-// SetLeader sets agentkourier_ax_leader.
+// SetLeader sets agentkourier_<add-on>_leader.
 func (t *Telemetry) SetLeader(leading bool) {
 	if t != nil {
 		v := 0.0
@@ -215,14 +217,15 @@ func (t *Telemetry) Forward(outcome ForwardOutcome) {
 	}
 }
 
-func (t *Telemetry) tracerOrNoop() trace.Tracer {
+// start starts the span agentkourier.<add-on>.<name>, or one that records nothing when t is nil.
+func (t *Telemetry) start(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
 	if t == nil {
-		return noop.NewTracerProvider().Tracer("")
+		return noop.NewTracerProvider().Tracer("").Start(ctx, name, opts...)
 	}
-	return t.tracer
+	return t.tracer.Start(ctx, t.spans+name, opts...)
 }
 
-// Turn is one turn's span, agentkourier.ax.turn.
+// Turn is one turn's span, agentkourier.<add-on>.turn.
 type Turn struct {
 	t    *Telemetry
 	span trace.Span
@@ -231,15 +234,16 @@ type Turn struct {
 // StartTurn starts the span of a turn of taskID in contextID. Its parent is the span in ctx: the caller's, which Extract
 // took from the request's traceparent.
 func (t *Telemetry) StartTurn(ctx context.Context, taskID, contextID string) (context.Context, *Turn) {
-	ctx, span := t.tracerOrNoop().Start(ctx, "agentkourier.ax.turn", trace.WithSpanKind(trace.SpanKindServer),
+	ctx, span := t.start(ctx, "turn", trace.WithSpanKind(trace.SpanKindServer),
 		trace.WithAttributes(attribute.String(AttrTaskID, taskID), attribute.String(AttrContextID, contextID)))
 	return ctx, &Turn{t: t, span: span}
 }
 
-// End ends the turn's span and counts the turn under outcome.
+// End ends the turn's span and counts the turn under outcome. A failed turn's span, and one whose outcome is in
+// Spec.ErrorTurns, ends with the status Error.
 func (tr *Turn) End(outcome TurnOutcome) {
 	tr.span.SetAttributes(attribute.String(AttrOutcome, string(outcome)))
-	if outcome == TurnFailed {
+	if outcome == TurnFailed || (tr.t != nil && slices.Contains(tr.t.errorTurns, outcome)) {
 		tr.span.SetStatus(codes.Error, string(outcome))
 	}
 	tr.span.End()
@@ -248,7 +252,8 @@ func (tr *Turn) End(outcome TurnOutcome) {
 	}
 }
 
-// Call is one call to the model's provider: its span, agentkourier.ax.model.<operation>, and its duration.
+// Call is one call to the add-on's backend: its span, agentkourier.<add-on>.<Spec.Calls>.<operation>, and its
+// duration.
 type Call struct {
 	t       *Telemetry
 	op      Operation
@@ -256,14 +261,18 @@ type Call struct {
 	started time.Time
 }
 
-// StartCall starts a call's span, a child of the span in ctx.
+// StartCall starts a call's span, a child of the span in ctx. Observe starts and ends one around a function.
 func (t *Telemetry) StartCall(ctx context.Context, op Operation) (context.Context, *Call) {
-	ctx, span := t.tracerOrNoop().Start(ctx, "agentkourier.ax.model."+string(op), trace.WithSpanKind(trace.SpanKindClient))
+	name := string(op)
+	if t != nil {
+		name = t.calls + "." + name
+	}
+	ctx, span := t.start(ctx, name, trace.WithSpanKind(trace.SpanKindClient))
 	return ctx, &Call{t: t, op: op, span: span, started: time.Now()}
 }
 
 // End ends the call with outcome, "success" or a class of its error from a bounded set (the caller's to choose: never
-// an error's text).
+// an error's text; Outcome gives one).
 func (c *Call) End(outcome string) {
 	c.span.SetAttributes(attribute.String(AttrOutcome, outcome))
 	if outcome != "success" && outcome != "cancelled" {
