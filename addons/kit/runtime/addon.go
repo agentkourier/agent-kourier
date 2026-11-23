@@ -17,6 +17,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -164,11 +165,17 @@ type ResumeValidator interface {
 
 // ContextReleaser is a backend that keeps a context outside the store (cma: a session in CMA). For each context idle
 // past SESSION_IDLE_TTL with no turn running, the upkeep calls ReleaseContext, then forgets the context and its tasks
-// (store.Store.ForgetContext). An error leaves the context for the next sweep. Without it, the upkeep deletes idle
-// contexts in the store's own transaction (store.Store.DeleteIdleContexts, with store.TaskOptions.ReleaseContext).
+// (store.Store.ForgetContext). An error leaves the context for the next sweep, and is logged at WARN unless it wraps
+// ErrContextBusy. Without it, the upkeep deletes idle contexts in the store's own transaction
+// (store.Store.DeleteIdleContexts, with store.TaskOptions.ReleaseContext).
 type ContextReleaser interface {
 	ReleaseContext(ctx context.Context, c store.Context) error
 }
+
+// ErrContextBusy is what a ContextReleaser's error wraps when a turn of the context has begun since the store listed
+// it as idle: the store shows a turn only once a2a-go has stored its task, and a message that arrives during a sweep
+// can start one in between. The upkeep leaves the context, which the message made active, and logs it at DEBUG.
+var ErrContextBusy = errors.New("a turn of the context has begun")
 
 // IdleReporter is a backend that is told, after each sweep without a ContextReleaser, how many idle contexts the store
 // deleted and the error that stopped the sweep, if any (ax: it counts the ADK sessions deleted).
