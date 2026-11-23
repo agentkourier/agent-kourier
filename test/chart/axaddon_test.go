@@ -61,7 +61,7 @@ func TestAXServiceAccountCarriesTheAWSIdentity(t *testing.T) {
 		t.Errorf("ServiceAccount annotations %v; want eks.amazonaws.com/role-arn %q", sa.Annotations, want)
 	}
 	sa = corev1.ServiceAccount{}
-	find(t, mustRender(t, "agent-kourier", "agent-kourier", ax.on...), "ServiceAccount", ax.objectName(), &sa)
+	find(t, mustRender(t, "agent-kourier", "agent-kourier", ax.on()...), "ServiceAccount", ax.objectName(), &sa)
 	if len(sa.Annotations) != 0 {
 		t.Errorf("ServiceAccount annotations %v; want none by default", sa.Annotations)
 	}
@@ -78,7 +78,7 @@ func TestAXBedrockKey(t *testing.T) {
 		env["AWS_BEARER_TOKEN_BEDROCK"].Value != "" {
 		t.Errorf("AWS_BEARER_TOKEN_BEDROCK %+v; want it from the Secret bedrock's key apiKey alone", env["AWS_BEARER_TOKEN_BEDROCK"])
 	}
-	_, env = ax.deployment(t, mustRender(t, "agent-kourier", "agent-kourier", ax.on...))
+	_, env = ax.deployment(t, mustRender(t, "agent-kourier", "agent-kourier", ax.on()...))
 	if _, has := env["AWS_BEARER_TOKEN_BEDROCK"]; has {
 		t.Errorf("AWS_BEARER_TOKEN_BEDROCK is set without addons.ax.bedrock.apiKeySecret")
 	}
@@ -105,7 +105,7 @@ func TestAXAnthropicKey(t *testing.T) {
 			}
 		}
 	}
-	for _, args := range [][]string{ax.on, {"-f", values(ax.pg)}} {
+	for _, args := range [][]string{ax.on(), {"-f", values(ax.pg)}} {
 		_, env := ax.deployment(t, mustRender(t, "agent-kourier", "agent-kourier", args...))
 		if _, has := env["ANTHROPIC_API_KEY"]; has {
 			t.Errorf("%v: ANTHROPIC_API_KEY is set on Bedrock", args)

@@ -27,9 +27,9 @@ import (
 type addOn struct {
 	name string // its key under addons, and the suffix of its objects' names
 
-	// on is the add-on with the least it needs, on the minimal install (SQLite, one replica): -f, the minimal values
-	// file, --set and the add-on's settings, so that on[3] adds the add-on to another set of arguments.
-	on       []string
+	// set is the --set of the add-on with the least it needs (SQLite, one replica), which on() puts on the minimal install
+	// and TestAddOnsSideBySide adds to another set of arguments.
+	set      string
 	postgres string     // the --set that switches on to Postgres
 	sqlite   string     // its ci values file on SQLite with one replica (values() name)
 	pg       string     // its ci values file on Postgres with two replicas, and every optional setting
@@ -56,7 +56,7 @@ type addOn struct {
 // secretRef names a Secret and its key.
 type secretRef struct{ name, key string }
 
-// refusal is a render that must fail with an error that contains want: args after the add-on's on, or after base where it is set.
+// refusal is a render that must fail with an error that contains want: args after the add-on's on(), or after base where it is set.
 type refusal struct {
 	name string
 	args []string
@@ -72,23 +72,25 @@ type policyCase struct {
 	egressPorts []int
 }
 
-// with is on plus more arguments, as a new slice.
-func (a addOn) with(more ...string) []string { return append(slices.Clone(a.on), more...) }
+// on is the add-on with the least it needs, on the minimal install.
+func (a addOn) on() []string { return []string{"-f", values("minimal"), "--set", a.set} }
+
+// with is on plus more arguments.
+func (a addOn) with(more ...string) []string { return append(a.on(), more...) }
 
 // objectName is the name of the add-on's objects in a release agent-kourier: agent-kourier-<name>, also its pods' app.kubernetes.io/name.
 func (a addOn) objectName() string { return "agent-kourier-" + a.name }
 
 // valueSets are every set of arguments of the add-on that the tests render, each of which must work.
 func (a addOn) valueSets() [][]string {
-	return append([][]string{a.on, {"-f", values(a.sqlite)}, {"-f", values(a.pg)}}, a.more...)
+	return append([][]string{a.on(), {"-f", values(a.sqlite)}, {"-f", values(a.pg)}}, a.more...)
 }
 
 var addOns = []addOn{
 	{
 		name: "cma",
-		on: []string{"-f", values("minimal"), "--set",
-			"addons.cma.enabled=true,addons.cma.agentId=agent_x,addons.cma.environmentId=env_x," +
-				"addons.cma.anthropicApiKeySecret.name=anthropic,addons.cma.anthropicApiKeySecret.key=apiKey,addons.cma.auth.tokenSecret.name=cma-token"},
+		set: "addons.cma.enabled=true,addons.cma.agentId=agent_x,addons.cma.environmentId=env_x," +
+			"addons.cma.anthropicApiKeySecret.name=anthropic,addons.cma.anthropicApiKeySecret.key=apiKey,addons.cma.auth.tokenSecret.name=cma-token",
 		postgres: "addons.cma.store.type=postgres,addons.cma.store.postgres.dsnSecret.name=cma-pg,addons.cma.store.postgres.dsnSecret.key=dsn",
 		sqlite:   "cma",
 		pg:       "cma-postgres",
@@ -130,9 +132,8 @@ var addOns = []addOn{
 	{
 		name: "ax",
 		// SQLite, one replica, AWS credentials from the SDK's default chain.
-		on: []string{"-f", values("minimal"), "--set",
-			"addons.ax.enabled=true,addons.ax.model.region=us-east-1,addons.ax.model.name=us.anthropic.claude-haiku-4-5-20251001-v1:0," +
-				"addons.ax.auth.tokenSecret.name=ax-token"},
+		set: "addons.ax.enabled=true,addons.ax.model.region=us-east-1,addons.ax.model.name=us.anthropic.claude-haiku-4-5-20251001-v1:0," +
+			"addons.ax.auth.tokenSecret.name=ax-token",
 		postgres: "addons.ax.store.type=postgres,addons.ax.store.postgres.dsnSecret.name=ax-pg,addons.ax.store.postgres.dsnSecret.key=dsn",
 		// Its values files are ax-addon-*: ax-values.yaml is the AX kind tier's Agent Kourier, not this add-on.
 		sqlite: "ax-addon",
@@ -550,7 +551,7 @@ func TestAddOnImage(t *testing.T) {
 	}
 	eachAddOn(t, func(t *testing.T, a addOn) {
 		repository := "ghcr.io/agentkourier/" + a.objectName()
-		d, _ := a.deployment(t, mustRender(t, "agent-kourier", "agent-kourier", a.on...))
+		d, _ := a.deployment(t, mustRender(t, "agent-kourier", "agent-kourier", a.on()...))
 		if got, want := d.Spec.Template.Spec.Containers[0].Image, repository+":"+chart.AppVersion; got != want {
 			t.Errorf("image %q; want %q", got, want)
 		}
@@ -568,7 +569,7 @@ func TestAddOnEnvironmentIsTheSettingsContract(t *testing.T) {
 	t.Parallel()
 	eachAddOn(t, func(t *testing.T, a addOn) {
 		// A release and namespace of another name: the URL follows the add-on's Service.
-		objs := mustRender(t, "team", "ops", a.on...)
+		objs := mustRender(t, "team", "ops", a.on()...)
 		var d appsv1.Deployment
 		find(t, objs, "Deployment", "team-"+a.objectName(), &d)
 		got := map[string]string{}
@@ -832,7 +833,7 @@ func TestAddOnsSideBySide(t *testing.T) {
 	helmPath(t)
 	args := []string{"-f", values("minimal"), "--set", "networkPolicy.enabled=true,networkPolicy.kubeApiServer.cidrs={10.0.0.1/32}"}
 	for _, a := range addOns {
-		args = append(args, "--set", a.on[3])
+		args = append(args, "--set", a.set)
 	}
 	objs := mustRender(t, "agent-kourier", "agent-kourier", args...)
 	var broker networkingv1.NetworkPolicy
