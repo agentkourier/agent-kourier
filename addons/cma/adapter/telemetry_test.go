@@ -14,6 +14,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/anthropics/anthropic-sdk-go/v2"
+	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
@@ -98,6 +99,30 @@ func TestTurnOutcomesAreCounted(t *testing.T) {
 				t.Error("the send is not timed")
 			}
 		})
+	}
+}
+
+// A turn that waited too long for a sandbox tool's result fails its span, as a failed turn does: timeout is one of the
+// spec's ErrorTurns.
+func TestTimedOutTurnFailsItsSpan(t *testing.T) {
+	rec := tracetest.NewSpanRecorder()
+	tel := newTelemetry(t, sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec)))
+	_, h := observedHandler(t, newFake(script(toolUse("sevt_read", "read", nil, permissionAllow))), tel, 100*time.Millisecond)
+	turn(t, h, userText("", "go"))
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		for _, s := range rec.Ended() {
+			if s.Name() == "agentkourier.cma.turn" {
+				if s.Status().Code != codes.Error || s.Status().Description != string(turnTimeout) {
+					t.Fatalf("the timed-out turn's span status = %+v, want Error %q", s.Status(), turnTimeout)
+				}
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the turn's span did not end within 5s")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
