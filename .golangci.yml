@@ -11,6 +11,7 @@ linters:
     - depguard      # test fakes must not leak into production code
     - errcheck
     - errorlint     # enforce %w and errors.Is/As over ==/type assertions
+    - forbidigo     # test-only functions (the add-ons' SetFenceForTest) stay out of production code
     - gocritic
     - gosec
     - govet
@@ -32,12 +33,16 @@ linters:
             - pkg: github.com/agentkourier/agent-kourier/test/
               desc: packages under test/ (fakes, stubs, e2e helpers) are for tests; import them only from _test.go files and under test/
         test-support-is-test-only:
-          files: ["$all", "!$test", "!**/test/**", "!**/internal/testutil/**", "!**/internal/store/sqlite/sqlitetest/**", "!**/internal/config/sourcetest/**"]
+          files: ["$all", "!$test", "!**/test/**", "!**/internal/testutil/**", "!**/internal/store/sqlite/sqlitetest/**", "!**/internal/config/sourcetest/**", "!**/addons/kit/store/sqlitetest/**"]
           deny:
             - pkg: github.com/agentkourier/agent-kourier/internal/testutil
               desc: internal/testutil is test support and imports testing; import it only from _test.go files, other test support and under test/
             - pkg: github.com/agentkourier/agent-kourier/internal/store/sqlite/sqlitetest
               desc: sqlitetest is test support and imports testing; import it only from _test.go files, other test support and under test/
+            - pkg: github.com/agentkourier/agent-kourier/addons/kit/store/sqlitetest
+              desc: the kit's sqlitetest is test support and imports testing; import it only from _test.go files and other test support
+            - pkg: github.com/agentkourier/agent-kourier/addons/kit/store/pgtest
+              desc: the kit's pgtest is test support and imports testing; import it only from _test.go files and other test support
         slack-only-in-adapter:
           files: ["$all", "!$test", "!**/internal/chat/slack/**", "!**/internal/broker/**", "!**/cmd/**", "!**/test/**"]
           deny:
@@ -69,6 +74,10 @@ linters:
               desc: "the webhook platform is built from its own Go Config, which the broker maps the ChatConnection onto: it reads no API type"
             - pkg: github.com/agentkourier/agent-kourier/internal/telemetry
               desc: "the webhook platform counts through the Recorder of its Config, which the broker builds: it does not reach the broker's instruments itself"
+    forbidigo:
+      forbid:
+        - pattern: ^(\w+\.)?SetFenceForTest$
+          msg: "SetFenceForTest replaces a store's fence (on Postgres, the lease's epoch check); only tests and the kit's sqlitetest call it"
     nolintlint:
       require-explanation: true
       require-specific: true
@@ -86,6 +95,9 @@ linters:
       - path: _test\.go
         linters:
           - gosec  # test fixtures use fake credentials and loose file modes
+      - path: _test\.go|(^|/)addons/kit/store/sqlitetest/
+        linters:
+          - forbidigo  # tests, and the kit's SQLite conformance suite, may replace a store's fence
 
 formatters:
   enable:
