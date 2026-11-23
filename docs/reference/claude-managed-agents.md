@@ -84,8 +84,8 @@ built-in tool that the sandbox runs (one the agent may run, or one a person appr
 cut off the same way. MCP tools do not run in the sandbox, and a model that is thinking is not waiting on a tool, so
 neither is timed.
 
-The add-on also sends a `working` update after every 60 seconds without a session event, so that Agent Kourier, which
-cuts a stream silent for 5 minutes, keeps a slow turn's stream open.
+The add-on also sends a `working` update after each `60s`<!--addon-limit:cma.keepalive--> without a session event, so
+that Agent Kourier, which cuts a stream silent for 5 minutes, keeps a slow turn's stream open.
 
 ## Restarts
 
@@ -127,23 +127,24 @@ session once. A resend that names another context or another task than its first
 
 ## Sessions and their lifetime
 
-A session holds its sandbox until it is archived. `SESSION_IDLE_TTL` archives a context's session once the context
-has had no message and no turn running for that long, checked once a minute, and deletes the context's tasks from
-before the archive with their message IDs. The store keeps when each context was last active (a message for it was
-accepted, which a message refused as invalid or a resend of one already accepted is not, or a turn of it started or
-ended), so the clock survives a restart and a takeover. Archiving cannot be undone:
-the context's next message starts a new session without the old history. A session that fails to archive is logged at
-WARN and tried again at the next check. The check reads each context's last activity, then archives the contexts one
-by one, and keeps a session for a later check when, by the time it comes to it, a turn is running in it or creating
-it, or a turn of it started or ended after that read. A message that arrived after the read but whose turn has not
-started when the check comes to its context is not covered: its turn can start a new session, or fail.
+A session holds its sandbox until it is archived. `SESSION_IDLE_TTL` archives a context's session once the context has
+been inactive for that long with no turn running, checked every `1m`<!--addon-limit:kit.upkeep-interval-->, and deletes
+the context's tasks from before the archive with their message IDs. The store keeps when each context was last active (a
+message for it was accepted, which a message refused as invalid or a resend of one already accepted is not, or a turn of
+it started or ended), so the clock survives a restart and a takeover. Archiving cannot be undone: the context's next
+message starts a new session without the old history. A session that fails to archive is logged at WARN and tried again
+at the next check. The check reads each context's last activity, then archives the contexts one by one, and keeps a
+session for a later check when, by the time it comes to it, a turn is running in it or creating it, or a turn of it
+started or ended after that read. A message that arrived after the read but whose turn has not started when the check
+comes to its context is not covered: its turn can start a new session, or fail.
 
-Set it to the Binding's `session.threadTTL`, whose default, `2160h`, is the add-on's default too. Past that, Agent
-Kourier gives the thread a new context and never uses the old session again. A shorter value archives sessions a thread
-can still continue. `SESSION_IDLE_TTL` does not free an idle sandbox's memory; the environment's own idle timeout does.
+Set it to the Binding's `session.threadTTL`, whose default, `2160h`<!--addon-limit:kit.session-idle-ttl-->, is the
+add-on's default too. Past that, Agent Kourier gives the thread a new context and never uses the old session again. A
+shorter value archives sessions a thread can still continue. `SESSION_IDLE_TTL` does not free an idle sandbox's memory;
+the environment's own idle timeout does.
 
 `TASK_RETENTION` deletes a settled task (completed, failed, canceled or rejected), with its message IDs, once its last
-update is older than that, checked once a minute.
+update is older than that, checked every `1m`<!--addon-limit:kit.upkeep-interval-->.
 
 ## Replicas
 
@@ -157,19 +158,19 @@ the Recreate strategy, so the old pod has released the volume before the new one
 chart gives them a rolling update that starts a new pod before it takes an old one away, and at 2 replicas and more a
 PodDisruptionBudget with `maxUnavailable: 1`.
 
-The replicas elect a leader through a lease row in the add-on's database, not a Kubernetes Lease, so the add-on needs
-no RBAC. The leader serves A2A, and every write it makes checks the lease's epoch in the same transaction, so a leader
-that has lost the lease cannot write. A standby forwards each A2A request and the agent card to the leader's
-`ADVERTISE_URL`, streaming the answer through unbuffered; the caller check runs on the leader. The add-on answers 503 with `Retry-After` (the
-election's retry period, at least 1 second) on a leader that has not finished taking over, on a standby that knows of
-no leader or cannot reach it, and on a replica that is not serving when the request was already forwarded once: a
-request is forwarded once at most. A leader that cannot
-renew the lease for `LEASE_RENEW_DEADLINE`, or whose renewal or write finds that another replica has taken it, exits at
-once with code 5, without a drain, and Kubernetes restarts it. One that stops on SIGTERM drains its requests for at most
-5 seconds, then cancels the turns still running and waits at most 5 seconds for them, leaving their tasks for the next
-leader to fail, then hands the lease over, for at most 3 seconds; past that, a standby takes over once the lease has run
-out. A replica that takes over runs the same start-up work as a restart, so a turn that was running on the old leader
-fails, and a paused approval survives.
+The replicas elect a leader through a lease row in the add-on's database, not a Kubernetes Lease, so the add-on needs no
+RBAC. The leader serves A2A, and every write it makes checks the lease's epoch in the same transaction, so a leader that
+has lost the lease cannot write. A standby forwards each A2A request and the agent card to the leader's `ADVERTISE_URL`,
+streaming the answer through unbuffered; the caller check runs on the leader. The add-on answers 503 with `Retry-After`
+(the election's retry period, at least 1 second) on a leader that has not finished taking over, on a standby that knows
+of no leader or cannot reach it, and on a replica that is not serving when the request was already forwarded once: a
+request is forwarded once at most. A leader that cannot renew the lease for `LEASE_RENEW_DEADLINE`, or whose renewal or
+write finds that another replica has taken it, exits at once with code 5, without a drain, and Kubernetes restarts it.
+One that stops on SIGTERM drains its requests for at most `5s`<!--addon-limit:kit.shutdown-timeout-->, then cancels the
+turns still running and waits at most `5s`<!--addon-limit:kit.turn-stop-timeout--> for them, leaving their tasks for the
+next leader to fail, then hands the lease over, for at most `3s`<!--addon-limit:kit.release-timeout-->; past that, a
+standby takes over once the lease has run out. A replica that takes over runs the same start-up work as a restart, so a
+turn that was running on the old leader fails, and a paused approval survives.
 
 ## Caller check
 
@@ -186,8 +187,8 @@ every request to the endpoint. `/healthz`, `/readyz` and `/metrics` need no toke
   or `X-Kagent-Insecure-Runtime-Identity`. An AgentBackend may not set them, so none of them would ever carry the token.
 - **The file.** One token per line. Lines that are blank or start with `#` are skipped, and trailing whitespace (a CR
   included) is stripped. The add-on does not start with a file it cannot read or that holds no token. It reads the file
-  again every 5 seconds, because a mounted Secret changes by swapping a symlink; a read that fails or finds no token
-  keeps the last good tokens, and is logged once until the failure changes.
+  again every `5s`<!--addon-limit:kit.token-reload-->, because a mounted Secret changes by swapping a symlink; a read
+  that fails or finds no token keeps the last good tokens, and is logged once until the failure changes.
 - **The comparison.** The add-on keeps only each token's SHA-256 and compares the digest of the presented token with
   every one in constant time.
 - **One caller.** Every accepted token is Agent Kourier. The store records it as each task's owner, but tasks are not
@@ -217,28 +218,20 @@ The add-on reads its settings from its environment, and an empty value is an uns
 at start with an error that names the variable; the error never shows the value of `POSTGRES_DSN` or `AUTH_HEADER`.
 Every duration is a Go duration, such as `90s` or `720h`, of zero or more unless the row says otherwise.
 
+### The add-on's own
+
 | Variable | Default | What it does | Chart value |
 |---|---|---|---|
 | `CMA_AGENT_ID` | Required | The agent to run. Sessions use its latest version. | `addons.cma.agentId` |
 | `CMA_ENVIRONMENT_ID` | Required | The environment sessions run in. | `addons.cma.environmentId` |
 | `ANTHROPIC_API_KEY` | None | The API key, read by the Anthropic Go SDK. The SDK reads its other `ANTHROPIC_*` variables too, such as `ANTHROPIC_BASE_URL`. | `addons.cma.anthropicApiKeySecret`; the others through `addons.cma.extraEnv` |
-| `LISTEN_ADDR` | `127.0.0.1:8090` | Where the add-on listens, as `host:port`. | Always `:8090` |
-| `PUBLIC_URL` | `http://` + `LISTEN_ADDR` + `/a2a` | The endpoint the agent card names: the URL Agent Kourier reaches. An `http` or `https` URL with a host. | Always `http://<fullname>-cma.<namespace>.svc:8090/a2a` |
-| `SESSION_IDLE_TTL` | `2160h`<!--addon-limit:cma.session-idle-ttl--> | How long a context may go without a message or a turn before its session is archived. `0` never archives. | `addons.cma.sessionIdleTTL` |
 | `TOOL_RESULT_TIMEOUT` | `10m`<!--addon-limit:cma.tool-result-timeout--> | How long a turn waits, with no session event, on a tool the sandbox runs. `0` waits for ever. | `addons.cma.toolResultTimeout` |
-| `TASK_RETENTION` | `720h`<!--addon-limit:cma.task-retention--> | How long a settled task and its message IDs are kept after its last update. `0` keeps them. | `addons.cma.taskRetention` |
-| `AUTH_TOKEN_FILE` | Required, unless `AUTH_DISABLED` | The file of accepted tokens. | Always `/etc/agent-kourier-cma/auth/tokens`, the key of `addons.cma.auth.tokenSecret` |
-| `AUTH_HEADER` | `Authorization` | The header that carries the token. Must be a header name, and not one of the reserved names in [Caller check](#caller-check). | `addons.cma.auth.header` |
-| `AUTH_DISABLED` | `false` | `true` turns the caller check off, on a loopback `LISTEN_ADDR` only. | Never set |
-| `STORE` | `sqlite` | `sqlite` or `postgres`. | `addons.cma.store.type` |
-| `SQLITE_PATH` | `cma-addon.db` | The SQLite file, with `STORE=sqlite`. | Always `/data/cma.db`, on the claim `<fullname>-cma-data` |
-| `POSTGRES_DSN` | Required with `postgres` | The connection string, as pgx reads it. Refused with `STORE=sqlite`. | `addons.cma.store.postgres.dsnSecret` |
-| `LEASE_DURATION` | `15s`<!--addon-limit:cma.lease-duration--> | Postgres only, more than zero, and longer than the renew deadline. How long a lease lasts without renewal. | `addons.cma.leaderElection.leaseDuration` |
-| `LEASE_RENEW_DEADLINE` | `10s`<!--addon-limit:cma.lease-renew-deadline--> | Postgres only, more than zero, and longer than `1.2`<!--addon-limit:cma.lease-jitter--> times the retry period. How long the leader keeps trying to renew. | `addons.cma.leaderElection.renewDeadline` |
-| `LEASE_RETRY_PERIOD` | `2s`<!--addon-limit:cma.lease-retry-period--> | Postgres only, more than zero. How often a replica tries to take or renew the lease. | `addons.cma.leaderElection.retryPeriod` |
-| `ADVERTISE_URL` | Required with `postgres` | An `http` or `https` URL with a host, where the other replicas reach this one. | Always `http://$(POD_IP):8090`, from the downward API |
-| `POD_NAME` | The hostname | This replica's name as a lease holder. | The pod's name, with Postgres |
-| `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. Logs are JSON on standard error. | `addons.cma.logLevel` |
+
+### Every add-on's
+
+The variables every add-on reads. In the chart values, `<name>` is `cma`.
+
+--8<-- ".addon-settings.md:settings"
 
 The OpenTelemetry variables are the ones Agent Kourier reads (`OTEL_SERVICE_NAME`, `OTEL_TRACES_EXPORTER`,
 `OTEL_EXPORTER_OTLP_ENDPOINT` and the rest; see [Logs and traces](logs-and-traces.md)), with the service name
@@ -247,8 +240,8 @@ The OpenTelemetry variables are the ones Agent Kourier reads (`OTEL_SERVICE_NAME
 ## Telemetry
 
 The add-on logs JSON lines on standard error at `LOG_LEVEL`, with durations written as text (`10m0s`) and an error's
-text cut to 300 bytes ([Limits](limits.md#claude-managed-agents-add-on)). It never logs a token it was sent, a message's
-text or a tool's input.
+text cut to `300 bytes`<!--addon-limit:kit.log-error-bytes--> ([Limits](limits.md#every-add-on)). It never logs a token
+it was sent, a message's text or a tool's input.
 
 Metrics are on `/metrics`, with the prefix `agentkourier_cma_`. With `serviceMonitor.enabled` the chart adds a
 ServiceMonitor of the add-on's own.

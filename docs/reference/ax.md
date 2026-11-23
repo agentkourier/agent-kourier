@@ -78,13 +78,14 @@ answers before the Binding's `interactions.timeout`, Agent Kourier ends the paus
   and its other `ANTHROPIC_*` variables too, such as `ANTHROPIC_BASE_URL`. `MODEL_NAME` is an Anthropic model ID or
   alias, such as `claude-haiku-4-5`. The add-on does not start with `MODEL_REGION` set.
 
-On the Anthropic API every call streams, and a reply has at most `8192` tokens, its thinking included
-([Limits](limits.md#ax-add-on)). A reply cut there in its text completes the turn with what was written; one cut in an
-`ask_user` call, or with nothing written, fails the turn, as does a refusal with nothing written. The SDK sends a
-request again, twice at most, after a connection error or a status of 408, 409, 429 or 5xx, unless the API's
-`x-should-retry` header says otherwise; after that the turn fails, with an error that names the HTTP status and the
-API's error type but not the API's message. The SDK waits 10 minutes at most for each request's response headers (its
-own default); a stream that stalls after it opens waits until the turn ends.
+On the Anthropic API every call streams, and a reply has at most `8192`<!--addon-limit:ax.anthropic-max-tokens-->
+tokens, its thinking included ([Limits](limits.md#ax-add-on)). A reply cut there in its text completes the turn with
+what was written; one cut in an `ask_user` call, or with nothing written, fails the turn, as does a refusal with nothing
+written. The SDK sends a request again, `2`<!--addon-limit:ax.anthropic-retries--> times at most, after a connection
+error or a status of 408, 409, 429 or 5xx, unless the API's `x-should-retry` header says otherwise; after that the turn
+fails, with an error that names the HTTP status and the API's error type but not the API's message. The SDK waits 10
+minutes at most for each request's response headers (its own default); a stream that stalls after it opens waits until
+the turn ends.
 
 The add-on does not ask the model to think. If a reply carries thinking blocks anyway, the add-on keeps them in the ADK
 session and sends them back unchanged with the rest of the turn, which the API needs when the turn goes on after a tool
@@ -118,36 +119,40 @@ another context or task than the first send's is refused as invalid.
 
 ## Sessions and their lifetime
 
-A context is active when one of its tasks is created or updated, and when a message for it arrives, before the message is
-accepted. `SESSION_IDLE_TTL` deletes a context once it has been inactive for that long with no turn running, checked
-once a minute: its ADK session and the session's events, its tasks, a question it waits on included, and their message
-IDs. The context's next message starts a new session without the old history.
+A context is active when one of its tasks is created or updated, which a turn does as it starts and as it ends, and when
+a message for it is accepted, before its turn starts: a message refused as invalid, or a resend of one already accepted,
+does not count. `SESSION_IDLE_TTL` deletes a context once it has been inactive for that long with no turn running,
+checked every `1m`<!--addon-limit:kit.upkeep-interval-->: its ADK session and the session's events, its tasks, a
+question it waits on included, and their message IDs. The context's next message starts a new session without the old
+history.
 
-Set it to the Binding's `session.threadTTL`, whose default, `2160h`, is the add-on's default too. Past that, Agent
-Kourier gives the thread a new context and never uses the old one again. A shorter value deletes sessions a thread can
-still continue, and the questions they wait on.
+Set it to the Binding's `session.threadTTL`, whose default, `2160h`<!--addon-limit:kit.session-idle-ttl-->, is the
+add-on's default too. Past that, Agent Kourier gives the thread a new context and never uses the old one again. A
+shorter value deletes sessions a thread can still continue, and the questions they wait on.
 
 `TASK_RETENTION` deletes a settled task (completed, failed, canceled or rejected), with its message IDs, once its last
-update is older than that, checked once a minute. A sweep that fails is logged and tried again at the next one.
+update is older than that, checked every `1m`<!--addon-limit:kit.upkeep-interval-->. A sweep that fails is logged and
+tried again at the next one.
 
 ## Store
 
 **SQLite** (`STORE=sqlite`, the default) is one file, `SQLITE_PATH`, whose directory the add-on creates if it is
-missing. The add-on holds an exclusive lock on the file `SQLITE_PATH` plus `.lock` while it runs, so a second agent on the
-same file stops at start ("another agent has the SQLite file open"); the lock is the kernel's, so it goes with a process
-that dies. The file is in WAL mode, with FULL synchronous commits and a busy timeout of 5 seconds. The add-on's writes and
-ADK's go through one connection, and its reads through a pool of four beside it. Copy the file with its `-wal` file,
-which holds commits not yet written into it.
+missing. The add-on holds an exclusive lock on the file `SQLITE_PATH` plus `.lock` while it runs, so a second agent on
+the same file stops at start ("another agent has the SQLite file open"); the lock is the kernel's, so it goes with a
+process that dies. The file is in WAL mode, with FULL synchronous commits and a busy timeout of
+`5s`<!--addon-limit:kit.sqlite-busy-timeout-->. The add-on's writes and ADK's go through one connection, and its reads
+through a pool of four beside it. Copy the file with its `-wal` file, which holds commits not yet written into it.
 
 Before it was an add-on, the agent took a directory, `STATE_DIR`, and kept its tasks in a layout of its own beside ADK's
 tables. The add-on does not start while `STATE_DIR` is set: set `SQLITE_PATH` to the file in it (`STATE_DIR` plus
 `/agent.db`) instead. At the first start on such a file, it imports the old tasks and their message IDs, so a question
 that waited across the upgrade can still be answered; ADK's tables carry over as they are.
 
-**Postgres** (`STORE=postgres`) is shared by the replicas ([Replicas](#replicas)). Replicas that start together apply each
-migration, and ADK's, once, under an advisory lock of the add-on's own. Each connection starts with
-`idle_in_transaction_session_timeout` of 10 seconds and `statement_timeout` of 30 seconds, unless the DSN sets them. Give
-the add-on a database of its own, apart from Agent Kourier's and other add-ons'.
+**Postgres** (`STORE=postgres`) is shared by the replicas ([Replicas](#replicas)). Replicas that start together apply
+each migration, and ADK's, once, under an advisory lock of the add-on's own. Each connection starts with
+`idle_in_transaction_session_timeout` of `10s`<!--addon-limit:kit.pg-idle-in-transaction--> and `statement_timeout` of
+`30s`<!--addon-limit:kit.pg-statement-timeout-->, unless the DSN sets them. Give the add-on a database of its own, apart
+from Agent Kourier's and other add-ons'.
 
 ADK's own writes and the add-on's run the same check first, in the same transaction: on Postgres, that this replica
 still holds the leader's lease, so a leader that has lost it cannot write.
@@ -161,20 +166,21 @@ new one starts. The add-on refuses `LEASE_DURATION`, `LEASE_RENEW_DEADLINE` and 
 **Postgres** runs several replicas. The chart gives them a rolling update that starts a new pod before it takes an old
 one away, and at 2 replicas and more a PodDisruptionBudget with `maxUnavailable: 1`.
 
-The replicas elect a leader through a lease row in the add-on's database, not a Kubernetes Lease, so the add-on needs
-no RBAC. The leader serves A2A, and every write it makes checks the lease's epoch in the same transaction. A standby
-forwards each A2A request and the agent card to the leader's `ADVERTISE_URL`, streaming the answer through unbuffered; the
-caller check runs on the leader. The add-on answers 503 with `Retry-After` (the election's retry period, at least 1
+The replicas elect a leader through a lease row in the add-on's database, not a Kubernetes Lease, so the add-on needs no
+RBAC. The leader serves A2A, and every write it makes checks the lease's epoch in the same transaction. A standby
+forwards each A2A request and the agent card to the leader's `ADVERTISE_URL`, streaming the answer through unbuffered;
+the caller check runs on the leader. The add-on answers 503 with `Retry-After` (the election's retry period, at least 1
 second) on a leader that has not finished taking over, on a standby that knows of no leader or cannot reach it, and on a
 replica that is not serving when the request was already forwarded once: a request is forwarded once at most. A standby
-gives up on connecting to the leader after 5 seconds. A leader that cannot renew the lease for `LEASE_RENEW_DEADLINE`, or
-whose renewal or write finds that another replica has taken it, exits at once with code 5, without a drain, and
-Kubernetes restarts it. One that stops on SIGTERM drains its requests for at most 5 seconds, then cancels the turns
-still running and waits at most 5 seconds for them, leaving their tasks for the next leader to fail, then hands the
-lease over, for at most 3 seconds; past that, a standby takes over once the lease has run out. A replica fails the turns
-a restart cut off only once it holds the lease, so two replicas never fail each other's turns, and a replica that
-takes over runs the same start-up work as a restart: a turn that was running on the old leader fails, and a paused
-question survives.
+gives up on connecting to the leader after `5s`<!--addon-limit:kit.forward-dial-timeout-->. A leader that cannot renew
+the lease for `LEASE_RENEW_DEADLINE`, or whose renewal or write finds that another replica has taken it, exits at once
+with code 5, without a drain, and Kubernetes restarts it. One that stops on SIGTERM drains its requests for at most
+`5s`<!--addon-limit:kit.shutdown-timeout-->, then cancels the turns still running and waits at most
+`5s`<!--addon-limit:kit.turn-stop-timeout--> for them, leaving their tasks for the next leader to fail, then hands the
+lease over, for at most `3s`<!--addon-limit:kit.release-timeout-->; past that, a standby takes over once the lease has
+run out. A replica fails the turns a restart cut off only once it holds the lease, so two replicas never fail each
+other's turns, and a replica that takes over runs the same start-up work as a restart: a turn that was running on the
+old leader fails, and a paused question survives.
 
 ## Caller check
 
@@ -190,8 +196,9 @@ check is set: the token file, OIDC, or none with `AUTH_DISABLED=true` on a loopb
       `X-Agent-Name`, `X-Share-Token` or `X-Kagent-Insecure-Runtime-Identity`.
     - **The file.** One token per line. Lines that are blank or start with `#` are skipped, and trailing whitespace (a
       CR included) is stripped. The add-on does not start with a file it cannot read or that holds no token. It reads
-      the file again every 5 seconds, because a mounted Secret changes by swapping a symlink; a read that fails or finds
-      no token keeps the last good tokens, and is logged once until the failure changes.
+      the file again every `5s`<!--addon-limit:kit.token-reload-->, because a mounted Secret changes by swapping a
+      symlink; a read that fails or finds no token keeps the last good tokens, and is logged once until the failure
+      changes.
     - **The comparison.** The add-on keeps only each token's SHA-256 and compares the digest of the presented token
       with every one in constant time.
 - **OIDC** (`OIDC_ISSUER`, `OIDC_AUDIENCE` and `OIDC_SUBJECT`, all three), the check for the route inside Google AX.
@@ -222,7 +229,7 @@ All on one port: 8090 in the chart, named `http` on the Service, and 80 in the r
 | `/a2a` | A2A JSON-RPC, behind the caller check |
 | `/a2a/.well-known/agent-card.json` | The agent card, behind the caller check |
 | `/healthz` | 200 once the add-on listens: the process is alive. The chart's liveness probe asks it. |
-| `/readyz` | With `RUNNER_URL` unset: 200 on a standby, and on a leader once its takeover is done (the turns a restart cut off failed, the upkeep started), until it starts to stop; 503 otherwise. The chart's startup and readiness probes ask it. With `RUNNER_URL` set, the AX task runner's, proxied to it. |
+| `/readyz` | With `RUNNER_URL` unset: 200 on a standby, and on a leader once its takeover is done (the turns a restart cut off failed, the upkeep started), until it starts to stop; 503 before then, and once it stops a request that was already read gets 503 while a new one is refused (the listener has closed). The chart's startup and readiness probes ask it. With `RUNNER_URL` set, the AX task runner's, proxied to it. |
 | `/metadata/` | With `RUNNER_URL` set only: the AX task runner's metadata server, proxied to it |
 | `/metrics` | Prometheus metrics |
 
@@ -236,6 +243,8 @@ at start with an error that names the variable; the error never shows the value 
 `OIDC_ISSUER` or `RUNNER_URL`. Every duration is a Go duration, such as `90s` or `720h`, of zero or more unless the row
 says otherwise.
 
+### The add-on's own
+
 | Variable | Default | What it does | Chart value |
 |---|---|---|---|
 | `MODEL_PROVIDER` | `bedrock` | The model's provider: `bedrock` or `anthropic` ([The model](#the-model)). | `addons.ax.model.provider` |
@@ -243,25 +252,15 @@ says otherwise.
 | `MODEL_NAME` | Required | The model: with `bedrock`, a Bedrock model ID or inference profile; with `anthropic`, an Anthropic model ID or alias. | `addons.ax.model.name` |
 | `ANTHROPIC_API_KEY` | None | With `anthropic`, the API key, which the Anthropic Go SDK reads. The SDK reads its other `ANTHROPIC_*` variables too, such as `ANTHROPIC_BASE_URL`. | `addons.ax.anthropicApiKeySecret`; the others through `addons.ax.extraEnv` |
 | `AWS_BEARER_TOKEN_BEDROCK` | None | With `bedrock`, a Bedrock API key, which the AWS SDK reads. Without it, the SDK's default chain finds AWS credentials: access keys in the environment, a profile, a web identity (IRSA), EKS Pod Identity, or the instance's role. | `addons.ax.bedrock.apiKeySecret`; IRSA through `addons.ax.serviceAccount.annotations` |
-| `LISTEN_ADDR` | `127.0.0.1:8090` | Where the add-on listens, as `host:port`. | Always `:8090` |
-| `PUBLIC_URL` | `http://` + `LISTEN_ADDR` + `/a2a` | The endpoint the agent card names: the URL Agent Kourier reaches. An `http` or `https` URL with a host. | Always `http://<fullname>-ax.<namespace>.svc:8090/a2a` |
 | `RUNNER_URL` | None | The AX task runner's metadata server, an `http` or `https` origin, to which `/readyz` and `/metadata/` are proxied. Unset, the add-on runs standalone and answers `/readyz` itself. | Never set |
-| `AUTH_TOKEN_FILE` | None | The file of accepted tokens. One caller check is required: this, OIDC, or `AUTH_DISABLED`. | Always `/etc/agent-kourier-ax/auth/tokens`, the key of `addons.ax.auth.tokenSecret` |
-| `AUTH_HEADER` | `Authorization` | The header that carries the token. Must be a header name, and not one of the reserved names in [Caller check](#caller-check); with OIDC, `Authorization` only. | `addons.ax.auth.header` |
-| `OIDC_ISSUER`, `OIDC_AUDIENCE`, `OIDC_SUBJECT` | None | The OIDC check: all three or none. The issuer is an `http` or `https` URL with a host and no user info, query or fragment. | Never set |
-| `AUTH_DISABLED` | `false` | `true` turns the caller check off, on a loopback `LISTEN_ADDR` only. | Never set |
-| `STORE` | `sqlite` | `sqlite` or `postgres`. | `addons.ax.store.type` |
-| `SQLITE_PATH` | `ax-addon.db` | The SQLite file, with `STORE=sqlite`. | Always `/data/ax.db`, on the claim `<fullname>-ax-data` or `addons.ax.persistence.existingClaim` |
-| `POSTGRES_DSN` | Required with `postgres` | The connection string, as pgx reads it. Refused with `STORE=sqlite`. | `addons.ax.store.postgres.dsnSecret` |
-| `TASK_RETENTION` | `720h`<!--addon-limit:ax.task-retention--> | How long a settled task and its message IDs are kept after its last update. `0` keeps them. | `addons.ax.taskRetention` |
-| `SESSION_IDLE_TTL` | `2160h`<!--addon-limit:ax.session-idle-ttl--> | How long a context may go inactive before its ADK session and its tasks are deleted. `0` keeps them. | `addons.ax.sessionIdleTTL` |
-| `LEASE_DURATION` | `15s`<!--addon-limit:ax.lease-duration--> | Postgres only, more than zero, and longer than the renew deadline. How long a lease lasts without renewal. | `addons.ax.leaderElection.leaseDuration` |
-| `LEASE_RENEW_DEADLINE` | `10s`<!--addon-limit:ax.lease-renew-deadline--> | Postgres only, more than zero, and longer than `1.2`<!--addon-limit:ax.lease-jitter--> times the retry period. How long the leader keeps trying to renew. | `addons.ax.leaderElection.renewDeadline` |
-| `LEASE_RETRY_PERIOD` | `2s`<!--addon-limit:ax.lease-retry-period--> | Postgres only, more than zero. How often a replica tries to take or renew the lease. | `addons.ax.leaderElection.retryPeriod` |
-| `ADVERTISE_URL` | Required with `postgres` | An `http` or `https` URL with a host, where the other replicas reach this one. An IPv6 address without brackets is given them. | Always `http://$(POD_IP):8090`, from the downward API |
-| `POD_NAME` | The hostname | This replica's name as a lease holder. | The pod's name, with Postgres |
-| `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. Logs are JSON on standard error. | `addons.ax.logLevel` |
+| `OIDC_ISSUER`, `OIDC_AUDIENCE`, `OIDC_SUBJECT` | None | The OIDC check, a caller check in place of `AUTH_TOKEN_FILE`: all three or none. The issuer is an `http` or `https` URL with a host and no user info, query or fragment. With them, `AUTH_HEADER` must be unset or `Authorization`. | Never set |
 | `STATE_DIR` | None | No longer read: the add-on does not start while it is set. Set `SQLITE_PATH` instead. | Never set |
+
+### Every add-on's
+
+The variables every add-on reads. In the chart values, `<name>` is `ax`.
+
+--8<-- ".addon-settings.md:settings"
 
 The OpenTelemetry variables are the ones Agent Kourier reads (`OTEL_SERVICE_NAME`, `OTEL_TRACES_EXPORTER`,
 `OTEL_EXPORTER_OTLP_ENDPOINT` and the rest; see [Logs and traces](logs-and-traces.md)), with the service name
@@ -275,7 +274,8 @@ In the route inside Google AX, `addons/ax/task.yaml` sets `LISTEN_ADDR=:80`, `PU
 ## Telemetry
 
 The add-on logs JSON lines on standard error at `LOG_LEVEL`, with durations written as text (`10m0s`) and an error's
-text cut to 300 bytes ([Limits](limits.md#ax-add-on)). It never logs a token it was sent.
+text cut to `300 bytes`<!--addon-limit:kit.log-error-bytes--> ([Limits](limits.md#every-add-on)). It never logs a token
+it was sent.
 
 Metrics are on `/metrics`, with the prefix `agentkourier_ax_`. With `serviceMonitor.enabled` the chart adds a
 ServiceMonitor of the add-on's own.

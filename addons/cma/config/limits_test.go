@@ -1,28 +1,17 @@
 package config
 
 import (
-	"strconv"
 	"testing"
 
 	"github.com/agentkourier/agent-kourier/addons/kit/limitsdoc"
-	"github.com/agentkourier/agent-kourier/addons/kit/settings"
 )
 
-// TestLimitsPage holds the defaults that the settings fill in to docs/reference/limits.md. It parses the Postgres store, whose
-// leader election the lease timings pace, with none of the timings set.
+// TestLimitsPage holds the default of the adapter's own setting, TOOL_RESULT_TIMEOUT, to docs/reference/limits.md and
+// the add-on's reference page. The defaults of the shared settings are the kit's, which its tests hold.
 func TestLimitsPage(t *testing.T) {
-	c, err := parse(env(map[string]string{
-		"STORE": "postgres", "POSTGRES_DSN": "postgres://u:fake-password@db/cma",
-		"ADVERTISE_URL": "http://10.0.0.7:8090", "POD_NAME": "cma-0",
-	}))
+	c, err := parse(env(nil))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	limitsdoc.Duration(t, "cma.session-idle-ttl", c.SessionIdleTTL)
 	limitsdoc.Duration(t, "cma.tool-result-timeout", c.ToolResultTimeout)
-	limitsdoc.Duration(t, "cma.task-retention", c.TaskRetention)
-	limitsdoc.Duration(t, "cma.lease-duration", c.Lease.Duration)
-	limitsdoc.Duration(t, "cma.lease-renew-deadline", c.Lease.RenewDeadline)
-	limitsdoc.Duration(t, "cma.lease-retry-period", c.Lease.RetryPeriod)
-	limitsdoc.Text(t, "cma.lease-jitter", strconv.FormatFloat(settings.LeaseJitter, 'f', -1, 64))
 }
