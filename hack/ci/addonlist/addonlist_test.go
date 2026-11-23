@@ -547,3 +547,53 @@ func TestAddonsRefusesTakenNames(t *testing.T) {
 		}
 	}
 }
+
+// chartNamesFile is the chart's template that defines agentkourier.addon.names, the add-ons the chart renders.
+var chartNamesFile = filepath.Join("charts", "agent-kourier", "templates", "addons", "_addon.tpl")
+
+// chartNames finds the body of the define of agentkourier.addon.names.
+var chartNames = regexp.MustCompile(`\{\{-?\s*define "agentkourier\.addon\.names"\s*-?\}\}(.*?)\{\{-?\s*end\s*-?\}\}`)
+
+// checkChart returns where the chart's agentkourier.addon.names (tpl, the text of _addon.tpl) is not the add-ons of
+// list, in its order: the names joined by single spaces, which the chart's templates split on one space.
+func checkChart(list []string, tpl []byte) []string {
+	m := chartNames.FindAllSubmatch(tpl, -1)
+	if len(m) != 1 {
+		return []string{fmt.Sprintf("%s defines agentkourier.addon.names %d times, want once", chartNamesFile, len(m))}
+	}
+	if got, want := string(m[0][1]), strings.Join(list, " "); got != want {
+		return []string{fmt.Sprintf("%s: agentkourier.addon.names is %q, want hack/addons.txt's %q, in its order", chartNamesFile, got, want)}
+	}
+	return nil
+}
+
+// TestChartNamesEveryAddon: the chart renders the add-ons of hack/addons.txt, and no other.
+func TestChartNamesEveryAddon(t *testing.T) {
+	list := readList(t)
+	tpl, err := os.ReadFile(filepath.Join(repoRoot, chartNamesFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range checkChart(list, tpl) {
+		t.Error(p)
+	}
+	define := `{{- define "agentkourier.addon.names" -}}` + strings.Join(list, " ") + `{{- end -}}`
+	for _, tt := range []struct {
+		name, old, new, want string
+	}{
+		{"an add-on in the list alone", define, `{{- define "agentkourier.addon.names" -}}` + strings.Join(list[1:], " ") + `{{- end -}}`, "agentkourier.addon.names is"},
+		{"an add-on in the chart alone", define, `{{- define "agentkourier.addon.names" -}}` + strings.Join(append(slices.Clone(list), "third"), " ") + `{{- end -}}`, "agentkourier.addon.names is"},
+		{"two spaces between names", define, `{{- define "agentkourier.addon.names" -}}` + strings.Join(list, "  ") + `{{- end -}}`, "agentkourier.addon.names is"},
+		{"no define", define, "", "0 times"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if !strings.Contains(string(tpl), tt.old) {
+				t.Fatalf("%s has no %q to change", chartNamesFile, tt.old)
+			}
+			problems := checkChart(list, []byte(strings.Replace(string(tpl), tt.old, tt.new, 1)))
+			if !slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, tt.want) }) {
+				t.Errorf("problems = %q, want one with %q", problems, tt.want)
+			}
+		})
+	}
+}

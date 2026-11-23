@@ -4,6 +4,7 @@
 // and release.yml's output of each add-on's image, the reference that its sign, verify and publish jobs take and the
 // first two go over, and the line of the release notes that hack/security/select-release-images.sh reads. An add-on
 // listed but missing from a workflow would be released untested, unscanned or unsigned, and one in a workflow but not
-// listed would be tested but never released, with nothing else failing. It also holds hack/addons.sh to
-// refusing every name the workflows already give to a job, a check, a cache, an image or a release output.
+// listed would be tested but never released, with nothing else failing. It also holds the chart's
+// agentkourier.addon.names, the add-ons the chart renders, to the list, and hack/addons.sh to refusing every name the
+// workflows already give to a job, a check, a cache, an image or a release output.
 package addonlist
