@@ -3,6 +3,134 @@
 What changed in each release, newest first, and what you must do about it. The steps for an upgrade are in
 [Upgrade](how-to/upgrade.md), which has a section for each change that needs one; this page says what changed and points to it.
 
+## Version 0.7.0
+
+Two add-ons arrive, both experimental: components that the chart runs beside Agent Kourier, each off until its block under
+`addons` turns it on, and each built, scanned and signed by Agent Kourier's release under the same version.
+
+- **Claude Managed Agents** (`addons.cma`), an A2A server in front of one agent in Claude Managed Agents, Anthropic's hosted
+  agent runtime. A thread is one session of the agent, and a tool call that the agent's permission policy asks about waits on
+  Approve and Deny in the thread. [Connect Claude Managed Agents](how-to/connect-claude-managed-agents.md) has the setup.
+- **AX** (`addons.ax`), the agent that was `examples/ax`: an agent built with Google's Agent Development Kit (ADK), on Amazon
+  Bedrock or the Anthropic API, that serves A2A and asks its questions with one tool, `ask_user`. The chart runs it beside
+  Agent Kourier, and it can still run inside Google AX as a Task. [Connect the AX add-on](how-to/connect-ax.md) has both routes.
+
+A Binding reaches either through an AgentBackend with the `a2a` dialect, as it reaches any A2A agent; [Add-ons](explanation/add-ons.md)
+says what an add-on is. In threads, an answer to a paused task no longer repeats the paused turn's text, and the ending of an
+answered tool approval shows one line for each tool. The CRDs, the database schema and the chart's values of 0.6.0 are unchanged.
+[Upgrade to the release that ships the add-ons](how-to/upgrade.md#upgrade-to-the-release-that-ships-the-add-ons) has what to check,
+the move of the AX example, and how to roll back.
+
+### Breaking changes
+
+- **None for an install of the chart.** The CRDs are 0.6.0's, no migration runs, and no metric, label, log line or values key of the
+  broker changed. The chart's only new values are under `addons`, with every add-on off, and a values file without them renders the
+  objects it rendered on 0.6.0.
+- **For a deployment of 0.6.0's `examples/ax` agent only.** The agent is now `addons/ax`, and it does not start while `STATE_DIR` is
+  set: set `SQLITE_PATH` to `STATE_DIR` plus `/agent.db`, and its first start imports the old tasks. The route inside Google AX also needs
+  `LISTEN_ADDR`, `PUBLIC_URL` and `RUNNER_URL` in `task.yaml`, and its image is now built with `make ax-runner-image`. An A2A client
+  other than Agent Kourier must now name the protocol version (below). [The upgrade](how-to/upgrade.md#move-from-the-ax-example-of-060)
+  has the steps.
+
+### Add-ons (experimental)
+
+- **Turn one on** with `addons.<name>.enabled: true`, the caller token's Secret in `addons.<name>.auth.tokenSecret`, and its
+  settings: for `cma`, `agentId`, `environmentId` and the API key's Secret,
+  `anthropicApiKeySecret`; for `ax`, `model.name`, with `model.provider` `bedrock` (the default, which needs `model.region`) or
+  `anthropic`. Each runs as the Deployment `<fullname>-<name>`, with a Service of its own on port 8090, and serves A2A at
+  `http://<fullname>-<name>.<namespace>.svc:8090/a2a`, which the AgentBackend names. Its objects carry
+  `app.kubernetes.io/name: agent-kourier-<name>`, so nothing that selects the broker's pods selects an add-on's.
+- **Images**: `ghcr.io/agentkourier/agent-kourier-cma` and `ghcr.io/agentkourier/agent-kourier-ax`, for linux/amd64 and linux/arm64,
+  tagged with the release's `vX.Y.Z`, with SBOM and provenance attestations, and signed by the same workflow identity as Agent Kourier's
+  image. The release's chart pins each by digest. [RELEASING.md](https://github.com/agentkourier/agent-kourier/blob/main/RELEASING.md#verify-a-release)
+  has the commands that verify them. The AX add-on's image for the route inside Google AX is not released: you build it.
+- **The caller check.** A request to an add-on's `/a2a` or to its agent card must carry a token of the Secret in
+  `addons.<name>.auth.tokenSecret`, as `Authorization: Bearer <token>`, which a Binding's `identity.tokenSecretRef` sends, or, with
+  `addons.<name>.auth.header` set, as that header's whole value instead; any other request is answered 401. The add-on reads the token file again every
+  5 seconds, so a rotated Secret takes effect without a restart. `/healthz`, `/readyz` and `/metrics` need no token, and the chart never
+  turns the check off. The AX add-on also takes OIDC, for the route inside Google AX.
+- **The store.** Each add-on keeps the A2A tasks, the message IDs that started them and when each context was last active, with the
+  add-on's own state: for `cma`, each context's session of the agent; for `ax`, the ADK sessions. SQLite, the default, is a file on the
+  claim `<fullname>-<name>-data`, which the chart keeps when the release is uninstalled unless `persistence.retainOnUninstall` is
+  `false`; `store.type: postgres` takes a database of the add-on's own, named in `store.postgres.dsnSecret`. A task paused on an
+  approval or a question survives a restart, and a turn that was running fails. A settled task is deleted after `taskRetention`
+  (`720h` by default), and a context idle for `sessionIdleTTL` (`2160h`, the default of a Binding's `session.threadTTL`) is released:
+  the CMA add-on archives its session, and the AX add-on deletes its ADK session and tasks.
+- **Replicas.** On SQLite an add-on runs one replica, and the chart refuses `replicaCount` above 1. On Postgres several replicas elect a
+  leader through a lease row in the add-on's database, so the add-on needs no RBAC; a standby forwards each request to the leader, and
+  every write of the leader checks the lease in its own transaction. A leader that loses the lease exits with code 5. On SIGTERM a leader
+  drains its requests for up to 5 seconds, cancels the turns still running and waits up to 5 seconds for them, and hands the lease over.
+- **For an A2A client other than Agent Kourier.** A JSON-RPC request must name the protocol version in the header `A2A-Version`, as
+  `1.0`: one that names none is read as A2A 0.3 and refused with the error `-32009`, version not supported. That is the check of
+  a2a-go v2.9.0, which the add-ons are built with. Agent Kourier's client sends the version the agent card gives, so a Binding is not
+  affected. A message sent again with the same message ID joins its first send's task instead of starting a second turn, and a
+  non-streaming `SendMessage` is answered with the task once its turn ends or pauses. An answer to a paused task that the add-on
+  cannot use is refused as invalid before a turn starts, and the task stays paused: for `ax`, one with a part that is not text, or
+  with no text; for `cma`, one that does not decide each paused call once in a `tool_approval_response`. The CMA add-on also refuses
+  a new message with no text, or with a part that is neither text nor data.
+- **Telemetry**: metrics with the prefixes `agentkourier_cma_` and `agentkourier_ax_` on each add-on's `/metrics`, and a ServiceMonitor
+  of its own with `serviceMonitor.enabled`; a span for each turn, `agentkourier.cma.turn` or `agentkourier.ax.turn`, under the trace
+  that Agent Kourier sends; and JSON logs on standard error.
+- **NetworkPolicy.** With `networkPolicy.enabled`, each enabled add-on gets a policy of its own, and Agent Kourier's policy also allows
+  egress to the add-on's pods on port 8090.
+- **Every limit**, the ones the add-ons share and each one's own, is on [Limits](reference/limits.md#add-ons). The reference pages,
+  [Claude Managed Agents add-on](reference/claude-managed-agents.md) and [AX add-on](reference/ax.md), have every setting, endpoint,
+  metric and exit code. [Write an add-on on the kit](how-to/write-an-add-on.md) builds a new one on the code the two share, `addons/kit`.
+- **What was tested.** The repository's tests run each add-on, with the race detector, on SQLite and on Postgres. The add-ons were run
+  through the chart on kind clusters with a Slack test workspace on 2026-11-22 and 2026-11-23, on builds from before this tag:
+    - The CMA add-on, with a Haiku agent on a self-hosted environment: on SQLite, an alert posted by another app started a thread, and
+      the agent asked to approve a bash call; the add-on's pod was deleted while the call waited, and after Approve the call ran and
+      the agent posted its findings, and a reply in the thread went on in the same session. On Postgres with two replicas, the leader
+      was killed while approvals waited, another replica took over, and the same task completed after the approvals. An idle
+      timeout of 2 minutes archived the sessions. Cloud environments have not been tested; the add-on does not refuse them.
+    - The AX add-on, with `claude-haiku-4-5` on the Anthropic API, on SQLite: an alert started a thread and the agent asked a question;
+      the pod was deleted while it waited, and the answer resumed the same task on the new pod. On Postgres with two replicas, the
+      leader was killed while a question waited, the standby took over, and the same task completed after the answer. Bedrock has been
+      tested against a mock of its API, not called; the routes to Bedrock through an IAM role (IRSA, EKS Pod Identity) have not been run
+      on EKS; and the route inside Google AX was not run end to end after the move to `addons/ax`.
+
+### Chat
+
+- **An answer no longer repeats the paused turn's text.** The task that an answer to a question or a tool approval goes on with keeps
+  the artifacts of the turn that paused, and its last snapshot holds them again, so the answer's message ended with a line the paused
+  turn had already shown, under the answer's own text. Before it sends an answer, Agent Kourier now notes the text of each artifact of
+  the paused task, and a snapshot that repeats one unchanged adds nothing; a live chunk of that text, or a snapshot that changes it, is
+  shown as before. An answer whose agent adds no text of its own therefore shows none, and the thread gets "The agent finished without
+  any output." An answer that Agent Kourier follows after a lost stream or a restart is not covered, and can still show the paused turn's
+  text and steps again ([Agent contract](reference/agent-contract.md#tool-calls-and-results)).
+- **An answered tool approval shows one line for each tool**, in the form of a tool's status line: its name, a summary of its redacted
+  arguments on one line, and its verdict, such as `bash(command="kubectl get pods -n shop") — Approved`, numbered when there are several.
+  The summary of a JSON object is its `key=value` pairs in the order of the keys, cut and marked past 160 units; the prompt still shows
+  the arguments whole. The ending showed each tool's verdict and then its full arguments in a preformatted block. A timed-out or
+  cancelled ending shows the same lines without a verdict. This is on Slack and on Microsoft Teams, and the audit is unchanged.
+- **The ending leaves out the arguments that a card shows.** When the reply the agent paused in shows the call on its card, with the same
+  name and summary of its arguments, the ending names the tool alone, such as `bash — Approved`. That takes `output: live` with
+  `progress` set to `steps` or `steps-and-activity`, and the card in the reply's last write: the approval's prompt now waits for that
+  write, up to 5 seconds after the pause. The ending keeps the arguments in every other case, such as a sub-agent's approval, a tool
+  with no arguments or whose summary was cut, or a reply whose cards the platform refused
+  ([Tool approvals](how-to/agent-questions.md#tool-approvals) lists them), and an approval paused before the upgrade, which has no
+  such mark.
+
+### Other changes
+
+- **Documentation.**
+    - New pages: [Add-ons](explanation/add-ons.md), a how-to and a reference page for each add-on,
+      [Write an add-on on the kit](how-to/write-an-add-on.md), and the add-ons' sections of [Limits](reference/limits.md#add-ons).
+    - The README, the home page, the chart's description and its README lead with what Agent Kourier does: it carries messages between
+      team chat and agents, one session per thread, and an alert is one example of what starts a session. The chart's keywords add
+      `microsoft-teams` and `webhooks`.
+    - The [Agent contract](reference/agent-contract.md), Tool approvals and What each platform supports say what an answer and an
+      approval's ending show; the chart README lists the add-ons' Deployments and the NetworkPolicy's egress to them.
+
+### Dependencies
+
+- **Go modules:** `modernc.org/sqlite` from v1.62.0 to v1.63.0. The broker's a2a-go is v2.9.0, as in 0.6.0. The Go builder and runtime
+  images are 0.6.0's.
+- **The add-ons** are built with a2a-go v2.9.0; the AX add-on moves from 0.6.0's example with ADK from v2.5.0 to v2.8.0. The image of
+  the AX route, which you build, takes new digests of its Go and Debian bases.
+- **Postgres in tests only.** The repository's Postgres tests now run on `postgres:19`, from `postgres:18`, and the fast kind tier's
+  `postgres:17` takes a new digest. The chart and the recipes run no Postgres, so nothing changes for an install.
+
 ## Version 0.6.0
 
 Two new platforms arrive beside Slack, both experimental:
