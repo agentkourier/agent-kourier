@@ -8,19 +8,19 @@ import (
 	"unicode/utf8"
 )
 
-// MaxLogErrorBytes caps the text of an error attribute in a log line, as Agent Kourier caps its own: an error from the
-// Managed Agents API or the database can carry a response body, and a session error carries the agent's own words.
+// MaxLogErrorBytes caps the text of an error attribute in a log line, as Agent Kourier caps its own: an error from an
+// add-on's backend or the database can carry a response body, and a backend's error can carry the agent's own words.
 const MaxLogErrorBytes = 300
 
 // cutMark ends a text that MaxLogErrorBytes cut.
 const cutMark = "…"
 
-// errorKeys are the attribute keys whose string value is an error's text, or a message the adapter did not write.
+// errorKeys are the attribute keys whose string value is an error's text, or a message the add-on did not write.
 var errorKeys = map[string]bool{"err": true, "error": true, "cause": true, "reason": true, "message": true}
 
-// NewLogHandler returns the adapter's log handler: JSON lines on w at level and above, with every duration written as
+// NewLogHandler returns an add-on's log handler: JSON lines on w at level and above, with every duration written as
 // text ("10m0s", not nanoseconds) and every error attribute (an error value, or a string under an error key) cut to
-// MaxLogErrorBytes at a rune boundary. It is the only handler the adapter builds.
+// MaxLogErrorBytes at a rune boundary. It is the only handler an add-on builds.
 func NewLogHandler(w io.Writer, level slog.Leveler) slog.Handler {
 	return slog.NewJSONHandler(w, &slog.HandlerOptions{Level: level, ReplaceAttr: replaceAttr})
 }

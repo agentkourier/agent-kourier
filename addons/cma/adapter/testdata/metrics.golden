@@ -1,0 +1,46 @@
+# HELP agentkourier_cma_auth_refused_total A2A requests the caller check refused (401), by reason: missing (no token in the header) or invalid (not an accepted token, or an Authorization header that is not Bearer).
+# TYPE agentkourier_cma_auth_refused_total counter
+agentkourier_cma_auth_refused_total{reason="invalid"}
+agentkourier_cma_auth_refused_total{reason="missing"}
+# HELP agentkourier_cma_forwarded_requests_total Requests to the A2A endpoint or the agent card that this replica, a standby, forwarded or could not, by outcome: forwarded, failed, cancelled, no_leader or loop.
+# TYPE agentkourier_cma_forwarded_requests_total counter
+agentkourier_cma_forwarded_requests_total{outcome="cancelled"}
+agentkourier_cma_forwarded_requests_total{outcome="failed"}
+agentkourier_cma_forwarded_requests_total{outcome="forwarded"}
+agentkourier_cma_forwarded_requests_total{outcome="loop"}
+agentkourier_cma_forwarded_requests_total{outcome="no_leader"}
+# HELP agentkourier_cma_leader 1 while this replica runs turns (it leads, or it is the only replica: SQLite), 0 while it is a standby.
+# TYPE agentkourier_cma_leader gauge
+agentkourier_cma_leader
+# HELP agentkourier_cma_leader_takeovers_total Times this replica took the lease, each with a new epoch.
+# TYPE agentkourier_cma_leader_takeovers_total counter
+agentkourier_cma_leader_takeovers_total
+# HELP agentkourier_cma_message_replays_total Messages whose ID the store had recorded, which joined that message's task instead of starting another turn.
+# TYPE agentkourier_cma_message_replays_total counter
+agentkourier_cma_message_replays_total
+# HELP agentkourier_cma_operation_duration_seconds Duration of the adapter's calls to the Managed Agents API (create_session, stream (opening it), send, list_sessions, archive), by outcome: success, cancelled, timeout, the HTTP status the API answered, or error.
+# TYPE agentkourier_cma_operation_duration_seconds histogram
+agentkourier_cma_operation_duration_seconds{operation="archive",outcome="success"}
+agentkourier_cma_operation_duration_seconds{operation="create_session",outcome="success"}
+agentkourier_cma_operation_duration_seconds{operation="list_sessions",outcome="success"}
+agentkourier_cma_operation_duration_seconds{operation="send",outcome="success"}
+agentkourier_cma_operation_duration_seconds{operation="stream",outcome="success"}
+# HELP agentkourier_cma_sessions A2A contexts that have a CMA session in this replica's map: the leader's are every context the store holds; a standby's are none.
+# TYPE agentkourier_cma_sessions gauge
+agentkourier_cma_sessions
+# HELP agentkourier_cma_sessions_archived_total Sessions the adapter let go of, by reason: idle (archived after SESSION_IDLE_TTL), superseded (a context's extra session, archived at reconciliation) or gone (a stored session CMA no longer lists, forgotten at reconciliation).
+# TYPE agentkourier_cma_sessions_archived_total counter
+agentkourier_cma_sessions_archived_total{reason="gone"}
+agentkourier_cma_sessions_archived_total{reason="idle"}
+agentkourier_cma_sessions_archived_total{reason="superseded"}
+# HELP agentkourier_cma_tasks_interrupted_total Tasks left submitted or working by a restart or a takeover, which the leader failed when it began to lead.
+# TYPE agentkourier_cma_tasks_interrupted_total counter
+agentkourier_cma_tasks_interrupted_total
+# HELP agentkourier_cma_turns_total Turns of a CMA session the adapter ran, by how they ended: completed, input_required (paused on a tool approval), failed, canceled, timeout (no sandbox tool result for TOOL_RESULT_TIMEOUT) or interrupted (failed by the leader after a restart or a takeover).
+# TYPE agentkourier_cma_turns_total counter
+agentkourier_cma_turns_total{outcome="canceled"}
+agentkourier_cma_turns_total{outcome="completed"}
+agentkourier_cma_turns_total{outcome="failed"}
+agentkourier_cma_turns_total{outcome="input_required"}
+agentkourier_cma_turns_total{outcome="interrupted"}
+agentkourier_cma_turns_total{outcome="timeout"}

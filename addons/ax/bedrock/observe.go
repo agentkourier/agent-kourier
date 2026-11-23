@@ -3,12 +3,16 @@ package bedrock
 import (
 	"context"
 	"errors"
-	"net"
-	"strconv"
 
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 
-	"github.com/agentkourier/agent-kourier/addons/ax/telemetry"
+	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
+)
+
+// Bedrock's calls, the operation label of agentkourier_ax_operation_duration_seconds.
+const (
+	OpConverse       telemetry.Operation = "converse"
+	OpConverseStream telemetry.Operation = "converse_stream"
 )
 
 // Observe returns c with each call timed (agentkourier_ax_operation_duration_seconds) and traced
@@ -24,34 +28,23 @@ type observed struct {
 }
 
 func (o observed) Converse(ctx context.Context, in *bedrockruntime.ConverseInput, opts ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseOutput, error) {
-	ctx, call := o.tel.StartCall(ctx, telemetry.OpConverse)
-	out, err := o.next.Converse(ctx, in, opts...)
-	call.End(callOutcome(err))
-	return out, err
+	return telemetry.Observe(ctx, o.tel, OpConverse, statusOf, func(ctx context.Context) (*bedrockruntime.ConverseOutput, error) {
+		return o.next.Converse(ctx, in, opts...)
+	})
 }
 
 func (o observed) ConverseStream(ctx context.Context, in *bedrockruntime.ConverseStreamInput, opts ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseStreamOutput, error) {
-	// callCtx is ctx with the call's span, so the stream lives as long as ctx; the span ends once it is open.
-	callCtx, call := o.tel.StartCall(ctx, telemetry.OpConverseStream)
-	out, err := o.next.ConverseStream(callCtx, in, opts...)
-	call.End(callOutcome(err))
-	return out, err
+	// The call's context is ctx with the call's span, so the stream lives as long as ctx; the span ends once it is open.
+	return telemetry.Observe(ctx, o.tel, OpConverseStream, statusOf, func(ctx context.Context) (*bedrockruntime.ConverseStreamOutput, error) {
+		return o.next.ConverseStream(ctx, in, opts...)
+	})
 }
 
-// callOutcome is the bounded class of a call's error: success, cancelled, timeout, the HTTP status Bedrock answered
-// (an SDK error that carries one), or error. Never the error's text.
-func callOutcome(err error) string {
+// statusOf reads the HTTP status Bedrock answered, from an SDK error that carries one.
+func statusOf(err error) (int, bool) {
 	var status interface{ HTTPStatusCode() int }
-	var netErr net.Error
-	switch {
-	case err == nil:
-		return "success"
-	case errors.Is(err, context.Canceled):
-		return "cancelled"
-	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netErr) && netErr.Timeout():
-		return "timeout"
-	case errors.As(err, &status) && status.HTTPStatusCode() >= 100 && status.HTTPStatusCode() <= 599:
-		return strconv.Itoa(status.HTTPStatusCode())
+	if errors.As(err, &status) {
+		return status.HTTPStatusCode(), true
 	}
-	return "error"
+	return 0, false
 }

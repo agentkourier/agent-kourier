@@ -16,7 +16,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 
 	"github.com/agentkourier/agent-kourier/addons/cma/store"
-	"github.com/agentkourier/agent-kourier/addons/cma/telemetry"
+	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
 // HITLExtension is kagent's human-in-the-loop A2A extension. Agent Kourier's a2a dialect reads a pause marked with it
@@ -50,9 +50,11 @@ type Executor struct {
 	TaskRetention time.Duration
 	// Log receives what the adapter cannot tell the client. Nil is slog.Default().
 	Log *slog.Logger
-	// Telemetry counts the turns and the sessions let go of, and traces each turn. Nil records nothing. Wrap Backend in
-	// Observe to time and trace the calls to the API too.
+	// Telemetry counts the turns and traces each turn. Nil records nothing. Wrap Backend in Observe to time and trace the
+	// calls to the API too.
 	Telemetry *telemetry.Telemetry
+	// Metrics counts the sessions let go of. Nil records nothing.
+	Metrics *Metrics
 
 	now      func() time.Time // nil is time.Now
 	mu       sync.Mutex
@@ -158,7 +160,7 @@ func (o *outcome) of(ctx context.Context) telemetry.TurnOutcome {
 	case o.state == a2a.TaskStateInputRequired:
 		return telemetry.TurnInputRequired
 	case o.state == a2a.TaskStateFailed && o.timeout:
-		return telemetry.TurnTimeout
+		return turnTimeout
 	case o.state == a2a.TaskStateFailed, o.errored:
 		return telemetry.TurnFailed
 	case o.stopped || ctx.Err() != nil:

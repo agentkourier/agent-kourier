@@ -24,8 +24,8 @@ import (
 	"google.golang.org/adk/v2/tool/functiontool"
 
 	"github.com/agentkourier/agent-kourier/addons/ax/store"
-	"github.com/agentkourier/agent-kourier/addons/ax/telemetry"
 	"github.com/agentkourier/agent-kourier/addons/kit/auth"
+	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
 // Store is what the agent keeps across a restart: the A2A tasks (by caller), the message IDs that started or joined

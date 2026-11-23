@@ -22,8 +22,8 @@ import (
 	"github.com/agentkourier/agent-kourier/addons/cma/cluster"
 	"github.com/agentkourier/agent-kourier/addons/cma/config"
 	"github.com/agentkourier/agent-kourier/addons/cma/store"
-	"github.com/agentkourier/agent-kourier/addons/cma/telemetry"
 	"github.com/agentkourier/agent-kourier/addons/kit/store/pgtest"
+	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
 // fakeCMA answers every call with an empty page once it is released: until then, a start-up's listing of the sessions

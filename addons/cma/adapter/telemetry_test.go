@@ -3,6 +3,7 @@ package adapter
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -12,17 +13,19 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
+	"github.com/anthropics/anthropic-sdk-go/v2"
+	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/agentkourier/agent-kourier/addons/cma/store"
-	"github.com/agentkourier/agent-kourier/addons/cma/telemetry"
+	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
 func newTelemetry(t *testing.T, provider trace.TracerProvider) *telemetry.Telemetry {
 	t.Helper()
-	tel, err := telemetry.New(provider)
+	tel, err := telemetry.New(TelemetrySpec(), provider)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +66,8 @@ func wantSeries(t *testing.T, tel *telemetry.Telemetry, want map[string]string) 
 func observedHandler(t *testing.T, fake *fakeBackend, tel *telemetry.Telemetry, stall time.Duration) (*Executor, a2asrv.RequestHandler) {
 	t.Helper()
 	exec := &Executor{Backend: Observe(fake, tel), Store: newStore(t, nil), Keepalive: time.Hour, ToolResultTimeout: stall, Telemetry: tel}
-	if err := tel.ObserveSessions(exec.Contexts); err != nil {
+	var err error
+	if exec.Metrics, err = NewMetrics(tel, exec.Contexts); err != nil {
 		t.Fatal(err)
 	}
 	return exec, NewRequestHandler(exec)
@@ -79,7 +83,7 @@ func TestTurnOutcomesAreCounted(t *testing.T) {
 		{"completed", script(say("ok"), idle(stopEndTurn)), telemetry.TurnCompleted},
 		{"input required", approvalScript, telemetry.TurnInputRequired},
 		{"failed", script(idle("retries_exhausted")), telemetry.TurnFailed},
-		{"timeout", script(toolUse("sevt_read", "read", nil, permissionAllow)), telemetry.TurnTimeout},
+		{"timeout", script(toolUse("sevt_read", "read", nil, permissionAllow)), turnTimeout},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tel := newTelemetry(t, nil)
@@ -95,6 +99,30 @@ func TestTurnOutcomesAreCounted(t *testing.T) {
 				t.Error("the send is not timed")
 			}
 		})
+	}
+}
+
+// A turn that waited too long for a sandbox tool's result fails its span, as a failed turn does: timeout is one of the
+// spec's ErrorTurns.
+func TestTimedOutTurnFailsItsSpan(t *testing.T) {
+	rec := tracetest.NewSpanRecorder()
+	tel := newTelemetry(t, sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec)))
+	_, h := observedHandler(t, newFake(script(toolUse("sevt_read", "read", nil, permissionAllow))), tel, 100*time.Millisecond)
+	turn(t, h, userText("", "go"))
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		for _, s := range rec.Ended() {
+			if s.Name() == "agentkourier.cma.turn" {
+				if s.Status().Code != codes.Error || s.Status().Description != string(turnTimeout) {
+					t.Fatalf("the timed-out turn's span status = %+v, want Error %q", s.Status(), turnTimeout)
+				}
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the turn's span did not end within 5s")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -141,9 +169,11 @@ func TestFailedCallIsTimedByItsClass(t *testing.T) {
 		{context.DeadlineExceeded, "timeout"},
 		{errors.New("boom"), "error"},
 		{nil, "success"},
+		{&anthropic.Error{StatusCode: 429}, "429"},
+		{fmt.Errorf("send: %w", &anthropic.Error{StatusCode: 503}), "503"},
 	} {
-		if got := callOutcome(tc.err); got != tc.want {
-			t.Errorf("callOutcome(%v) = %q, want %q", tc.err, got, tc.want)
+		if got := telemetry.Outcome(tc.err, statusOf); got != tc.want {
+			t.Errorf("Outcome(%v) = %q, want %q", tc.err, got, tc.want)
 		}
 	}
 	tel := newTelemetry(t, nil)
@@ -195,6 +225,10 @@ func TestTakeoverAndReaperAreCounted(t *testing.T) {
 	fake.seed("sesn_c1_extra", "c1", clk.now().Add(-time.Hour))
 	tel := newTelemetry(t, nil)
 	exec := &Executor{Backend: Observe(fake, tel), Store: st, IdleTTL: time.Hour, Telemetry: tel, now: clk.now}
+	var err error
+	if exec.Metrics, err = NewMetrics(tel, exec.Contexts); err != nil {
+		t.Fatal(err)
+	}
 	if err := exec.Restore(ctx); err != nil {
 		t.Fatal(err)
 	}

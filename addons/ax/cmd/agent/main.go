@@ -26,11 +26,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"google.golang.org/adk/v2/model"
 
+	"github.com/agentkourier/agent-kourier/addons/ax/agent"
 	"github.com/agentkourier/agent-kourier/addons/ax/anthropic"
 	"github.com/agentkourier/agent-kourier/addons/ax/bedrock"
 	"github.com/agentkourier/agent-kourier/addons/ax/config"
 	"github.com/agentkourier/agent-kourier/addons/ax/serve"
-	"github.com/agentkourier/agent-kourier/addons/ax/telemetry"
+	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
 // version is set at build time: -ldflags "-X main.version=<value>".
@@ -67,7 +68,7 @@ func run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 	cfg, err := config.Parse(getenv)
 	var traces telemetry.Config
 	if err == nil {
-		traces, err = telemetry.LoadConfig(getenv)
+		traces, err = telemetry.LoadConfig(agent.TelemetrySpec().Name, getenv)
 	}
 	if err != nil {
 		slog.New(telemetry.NewLogHandler(stderr, slog.LevelInfo)).Error("configuration", "error", err)
@@ -98,7 +99,7 @@ func start(ctx context.Context, cfg config.Config, traces telemetry.Config, log 
 		defer cancel()
 		_ = shutdownTraces(flush)
 	}()
-	tel, err := telemetry.New(provider)
+	tel, err := telemetry.New(agent.TelemetrySpec(), provider)
 	if err != nil {
 		return fmt.Errorf("metrics: %w", err)
 	}

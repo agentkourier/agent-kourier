@@ -34,9 +34,9 @@ import (
 	"github.com/agentkourier/agent-kourier/addons/ax/cluster"
 	"github.com/agentkourier/agent-kourier/addons/ax/config"
 	"github.com/agentkourier/agent-kourier/addons/ax/store"
-	"github.com/agentkourier/agent-kourier/addons/ax/telemetry"
 	"github.com/agentkourier/agent-kourier/addons/kit/auth"
 	"github.com/agentkourier/agent-kourier/addons/kit/auth/oidc"
+	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
 // ShutdownTimeout bounds the wait for the requests in flight at a graceful stop (and the command's flush of its spans
@@ -57,8 +57,8 @@ type Options struct {
 	Version string
 	// Log receives the agent's log. Nil is slog.Default().
 	Log *slog.Logger
-	// Telemetry is the agent's metrics, which /metrics serves, and its tracer. Nil is a Telemetry of Run's own that
-	// records no spans.
+	// Telemetry is the agent's metrics, which /metrics serves, and its tracer: built from agent.TelemetrySpec, and Run
+	// adds the agent's own metrics to it (newUpkeep). Nil is a Telemetry of Run's own that records no spans.
 	Telemetry *telemetry.Telemetry
 	// Routes, if set, adds routes to the server's mux before it serves (the e2e agent's test controls).
 	Routes func(*http.ServeMux)
@@ -81,7 +81,7 @@ func Run(ctx context.Context, cfg config.Config, m model.LLM, opts Options) erro
 	tel := opts.Telemetry
 	if tel == nil {
 		var err error
-		if tel, err = telemetry.New(nil); err != nil {
+		if tel, err = telemetry.New(agent.TelemetrySpec(), nil); err != nil {
 			return fmt.Errorf("metrics: %w", err)
 		}
 	}
@@ -99,6 +99,10 @@ func Run(ctx context.Context, cfg config.Config, m model.LLM, opts Options) erro
 		return err
 	}
 	defer func() { _ = st.Close() }()
+	upkeep, err := newUpkeep(cfg, st, log, tel)
+	if err != nil {
+		return err
+	}
 	srv, err := agent.New(agent.Config{Model: m, Store: st, Check: check, PublicURL: cfg.PublicURL, Version: opts.Version, Telemetry: tel})
 	if err != nil {
 		return err
@@ -162,7 +166,6 @@ func Run(ctx context.Context, cfg config.Config, m model.LLM, opts Options) erro
 		"model", cfg.ModelName, "region", cfg.ModelRegion, "store", cfg.Store, "pod", cfg.PodName, "auth", authMode(cfg),
 		"auth_header", cfg.AuthHeader, "runner", !cfg.Standalone(), "task_retention", cfg.TaskRetention, "session_idle_ttl", cfg.SessionIdleTTL)
 
-	upkeep := &agent.Upkeep{Store: st, TaskRetention: cfg.TaskRetention, SessionIdleTTL: cfg.SessionIdleTTL, Log: log, Telemetry: tel}
 	// takeOver is the leader's work, once it holds the lease: fail the turns a restart or a takeover cut off, start the
 	// upkeep, then serve. On Postgres no other replica serves turns from the store by then: the lease's epoch fences
 	// every write of the one that held it. It returns when ctx ends, once the upkeep has stopped, or with the error
@@ -271,10 +274,20 @@ func Mux(a2a http.Handler, runnerURL string, ready func() bool) (*http.ServeMux,
 	return mux, nil
 }
 
+// newUpkeep builds the leader's upkeep of st, as cfg sets it, and registers in tel the metric of what it deletes
+// (agent.NewMetrics).
+func newUpkeep(cfg config.Config, st agent.UpkeepStore, log *slog.Logger, tel *telemetry.Telemetry) (*agent.Upkeep, error) {
+	metrics, err := agent.NewMetrics(tel)
+	if err != nil {
+		return nil, fmt.Errorf("metrics: %w", err)
+	}
+	return &agent.Upkeep{Store: st, TaskRetention: cfg.TaskRetention, SessionIdleTTL: cfg.SessionIdleTTL, Log: log, Metrics: metrics}, nil
+}
+
 // callerCheck builds the check cfg names, which counts each refusal in tel, and for the token file the watch that keeps
 // its tokens current.
 func callerCheck(cfg config.Config, log *slog.Logger, tel *telemetry.Telemetry) (*auth.Check, func(context.Context), error) {
-	refused := func(reason auth.Reason) { tel.AuthRefused(telemetry.AuthReason(reason)) }
+	refused := func(reason auth.Reason) { tel.AuthRefused(string(reason)) }
 	switch {
 	case cfg.AuthDisabled:
 		log.Warn("the caller check is off (AUTH_DISABLED=true): anything that reaches the loopback address can run the agent", "addr", cfg.ListenAddr)

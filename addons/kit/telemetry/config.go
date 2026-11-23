@@ -1,7 +1,7 @@
-// Package telemetry is the AX agent's Prometheus metrics and OpenTelemetry traces, built as Agent Kourier's are
-// (internal/telemetry): the same metric conventions under the prefix agentkourier_ax_, the same OTEL_* settings and
-// the same guards, without importing the broker's module. Nothing it records holds a message's text, a tool's input or
-// a token.
+// Package telemetry is an add-on's Prometheus metrics, OpenTelemetry traces and JSON log, built as Agent Kourier's are
+// (internal/telemetry): the same metric conventions under the prefix agentkourier_<add-on>_, the same OTEL_* settings
+// and the same guards, without importing the broker's module. Nothing it records holds a message's text, a tool's input
+// or a token. The add-on names itself in a Spec and registers its own metrics with Register.
 package telemetry
 
 import (
@@ -24,11 +24,11 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 )
 
-// DefaultServiceName is the service.name of the agent's spans when OTEL_SERVICE_NAME is unset.
-const DefaultServiceName = "agent-kourier-ax"
+// DefaultServiceName is the service.name of an add-on's spans when OTEL_SERVICE_NAME is unset: agent-kourier-<addon>.
+func DefaultServiceName(addon string) string { return "agent-kourier-" + addon }
 
 // maxAttributeValueLength bounds every span string attribute. Task IDs, context IDs and states
-// come from the caller, which the agent does not control, so no value may grow without limit.
+// come from the caller, which the add-on does not control, so no value may grow without limit.
 const maxAttributeValueLength = 256
 
 // Config is the trace export's settings, read from the environment as the broker reads them. No endpoint means no
@@ -41,9 +41,10 @@ type Config struct {
 	Headers     map[string]string
 }
 
-// LoadConfig reads supported OTEL settings without exposing their contents in errors.
-func LoadConfig(getenv func(string) string) (Config, error) {
-	c := Config{ServiceName: DefaultServiceName, SampleRatio: 1}
+// LoadConfig reads supported OTEL settings without exposing their contents in errors. addon is the add-on's name, which
+// names its spans' service when OTEL_SERVICE_NAME is unset.
+func LoadConfig(addon string, getenv func(string) string) (Config, error) {
+	c := Config{ServiceName: DefaultServiceName(addon), SampleRatio: 1}
 	if s := getenv("OTEL_SERVICE_NAME"); s != "" {
 		c.ServiceName = s
 	}
@@ -168,8 +169,8 @@ func headerToken(k string) bool {
 	return true
 }
 
-// Provider builds the OTLP/HTTP exporter and a tracer provider of the agent's own, or a provider that records nothing
-// when there is no endpoint. Call shutdown, with a bounded context, once the agent's work has drained. An export
+// Provider builds the OTLP/HTTP exporter and a tracer provider of the add-on's own, or a provider that records nothing
+// when there is no endpoint. Call shutdown, with a bounded context, once the add-on's work has drained. An export
 // failure is logged by its class, at most once a minute for each, never with its text.
 //
 // The exporter reads more OTEL_EXPORTER_OTLP_* variables (certificates, compression, timeout) than LoadConfig checks;

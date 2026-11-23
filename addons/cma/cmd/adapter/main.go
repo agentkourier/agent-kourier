@@ -36,8 +36,8 @@ import (
 	"github.com/agentkourier/agent-kourier/addons/cma/cluster"
 	"github.com/agentkourier/agent-kourier/addons/cma/config"
 	"github.com/agentkourier/agent-kourier/addons/cma/store"
-	"github.com/agentkourier/agent-kourier/addons/cma/telemetry"
 	"github.com/agentkourier/agent-kourier/addons/kit/auth"
+	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
 // version is set at build time: -ldflags "-X main.version=<value>".
@@ -87,7 +87,7 @@ func run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 	cfg, err := config.Parse(getenv)
 	if err == nil {
 		var traces telemetry.Config
-		if traces, err = telemetry.LoadConfig(getenv); err == nil {
+		if traces, err = telemetry.LoadConfig(adapter.TelemetrySpec().Name, getenv); err == nil {
 			log := slog.New(telemetry.NewLogHandler(stderr, cfg.LogLevel))
 			slog.SetDefault(log)
 			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -123,7 +123,7 @@ func serve(ctx context.Context, cfg config.Config, traces telemetry.Config, log 
 		defer cancel()
 		_ = shutdownTraces(flush)
 	}()
-	tel, err := telemetry.New(provider)
+	tel, err := telemetry.New(adapter.TelemetrySpec(), provider)
 	if err != nil {
 		return fmt.Errorf("metrics: %w", err)
 	}
@@ -150,7 +150,7 @@ func serve(ctx context.Context, cfg config.Config, traces telemetry.Config, log 
 		Log:               log,
 		Telemetry:         tel,
 	}
-	if err := tel.ObserveSessions(exec.Contexts); err != nil {
+	if exec.Metrics, err = adapter.NewMetrics(tel, exec.Contexts); err != nil {
 		return fmt.Errorf("metrics: %w", err)
 	}
 
@@ -160,7 +160,7 @@ func serve(ctx context.Context, cfg config.Config, traces telemetry.Config, log 
 	defer background.Wait()
 	backgroundCtx, stopBackground := context.WithCancel(ctx)
 	defer stopBackground()
-	refused := func(reason auth.Reason) { tel.AuthRefused(telemetry.AuthReason(reason)) }
+	refused := func(reason auth.Reason) { tel.AuthRefused(string(reason)) }
 	check := &auth.Check{Verifier: auth.Open{}, Log: log, Refused: refused}
 	if tokens != nil {
 		background.Go(func() { tokens.Watch(backgroundCtx, auth.ReloadInterval) })

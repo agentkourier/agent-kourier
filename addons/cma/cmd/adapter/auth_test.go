@@ -20,9 +20,9 @@ import (
 
 	"github.com/agentkourier/agent-kourier/addons/cma/adapter"
 	"github.com/agentkourier/agent-kourier/addons/cma/config"
-	"github.com/agentkourier/agent-kourier/addons/cma/telemetry"
 	"github.com/agentkourier/agent-kourier/addons/kit/auth"
 	"github.com/agentkourier/agent-kourier/addons/kit/limitsdoc"
+	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
 // testToken is the one token in the file the tests below write: obviously not a real credential.

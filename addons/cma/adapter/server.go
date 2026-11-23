@@ -10,8 +10,8 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 
-	"github.com/agentkourier/agent-kourier/addons/cma/telemetry"
 	"github.com/agentkourier/agent-kourier/addons/kit/auth"
+	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
 // NewRequestHandler is the A2A request handler over exec, with exec.Store as its task store; opts add to it (a call
