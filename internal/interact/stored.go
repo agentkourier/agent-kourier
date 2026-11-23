@@ -2,6 +2,7 @@ package interact
 
 import (
 	"slices"
+	"strings"
 
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
@@ -60,18 +61,24 @@ type storedRequest struct {
 	OnCard []string `json:"on_card,omitempty"`
 }
 
-// onCardOf is the IDs of the tools of the approval in whose call the reply shows on its card, from cards (Pause.Cards): those
-// whose card is of the tool's own call ID and shows the summary of the tool's own arguments, as the step of the call makes it
-// (render.Tool). A card of other arguments, or of none, does not say what the ending would. A sub-agent's approval has none: its
-// calls are not the reply's, and one may share an ID with a call that is. in is the pause as parsed, the one the card was made
-// from.
-func onCardOf(in dialect.Interaction, cards map[string]string) []string {
+// onCardOf is the IDs of the tools of the approval whose call the reply shows on its card, from cards (Pause.Cards): those
+// whose card is of the tool's own call ID and shows the tool's own name and the summary of its own arguments, as the step of the
+// call makes them (render.Tool). A card of another tool or of other arguments does not say what the ending would, and neither
+// does one whose summary is empty or cut, which shows less than the arguments: the ending keeps them. A sub-agent's approval
+// has none: its calls are not the reply's, and one may share an ID with a call that is. in is the pause as parsed, the one the
+// card was made from.
+func onCardOf(in dialect.Interaction, cards map[string]chat.ToolLine) []string {
 	if in.Kind != dialect.ToolApproval || in.Nested != nil || len(cards) == 0 {
 		return nil
 	}
 	var ids []string
 	for _, t := range in.Tools {
-		if shown, ok := cards[t.CallID]; ok && t.CallID != "" && shown == render.Tool(t.Name, t.Args).Summary {
+		shown, ok := cards[t.CallID]
+		if !ok || t.CallID == "" {
+			continue
+		}
+		want := render.Tool(t.Name, t.Args)
+		if shown.Name == want.Name && shown.Summary == want.Summary && want.Summary != "" && !strings.HasSuffix(want.Summary, chat.Truncated) {
 			ids = append(ids, t.ID)
 		}
 	}

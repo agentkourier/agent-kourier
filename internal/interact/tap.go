@@ -13,6 +13,7 @@ import (
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/backoff"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/telemetry"
 )
@@ -26,9 +27,11 @@ type PauseHandler interface {
 // pause waits on: live.Sink. The tap hands it on with the pause (Pause.Cards).
 type CardSink interface {
 	session.Sink
-	// TurnCards is Turn, and a func that gives, once the handler has taken a pause for an approval, the summary of the arguments
-	// that the turn's reply shows on the card of each call the pause waits on, by the call's ID (live.Run.Cards).
-	TurnCards(ctx context.Context, t session.TurnRef) (agent.Handler, func() map[string]string)
+	// TurnCards is Turn, and a func that gives, once the handler has taken a pause for an approval, the tool's name and the
+	// summary of its arguments that the turn's reply shows on the card of each call the pause waits on, by the call's ID
+	// (live.Run.Cards). The func waits, for a short bound or until its ctx ends, for the reply's last write, and says only what
+	// that showed: so it is asked on the hand-off's goroutine, never on the stream's.
+	TurnCards(ctx context.Context, t session.TurnRef) (agent.Handler, func(context.Context) map[string]chat.ToolLine)
 }
 
 // TapConfig configures a Tap. Sink, Handler and Lookup are required.
@@ -87,10 +90,10 @@ func NewTap(cfg TapConfig) (*Tap, error) {
 
 // Turn gives the turn to the wrapped sink and returns a handler that gives it every event, and hands off
 // a task that ends the turn paused for input, with what the sink says the turn's reply shows of the calls the pause waits on
-// (CardSink), asked once the sink has taken the pause.
+// (CardSink), which the hand-off asks once the sink has taken the pause.
 func (t *Tap) Turn(ctx context.Context, ref session.TurnRef) agent.Handler {
 	var inner agent.Handler
-	var cards func() map[string]string
+	var cards func(context.Context) map[string]chat.ToolLine
 	if cs, ok := t.cfg.Sink.(CardSink); ok {
 		inner, cards = cs.TurnCards(ctx, ref)
 	} else {
@@ -101,11 +104,7 @@ func (t *Tap) Turn(ctx context.Context, ref session.TurnRef) agent.Handler {
 			inner(e)
 		}
 		if f, ok := e.(agent.FinalEvent); ok && f.Task != nil && (f.Task.Status.State == a2a.TaskStateInputRequired || f.Task.Status.State == a2a.TaskStateAuthRequired) {
-			var shown map[string]string
-			if cards != nil {
-				shown = cards()
-			}
-			t.handOff(ctx, ref, *f.Task, shown)
+			t.handOff(ctx, ref, *f.Task, cards)
 		}
 	}
 }
@@ -134,8 +133,9 @@ func (t *Tap) Close(ctx context.Context) error {
 }
 
 // handOff starts the hand-off of a pause, unless it is over or the same pause is in progress. A pause is
-// the task's and the message that asked: the same task paused again is another pause.
-func (t *Tap) handOff(ctx context.Context, ref session.TurnRef, task a2a.Task, cards map[string]string) {
+// the task's and the message that asked: the same task paused again is another pause. cards, if not nil, gives the cards of the
+// turn's reply (CardSink), and the hand-off asks it before it hands the pause on.
+func (t *Tap) handOff(ctx context.Context, ref session.TurnRef, task a2a.Task, cards func(context.Context) map[string]chat.ToolLine) {
 	id := string(task.ID) + "|"
 	if m := task.Status.Message; m != nil {
 		id += m.ID
@@ -150,7 +150,7 @@ func (t *Tap) handOff(ctx context.Context, ref session.TurnRef, task a2a.Task, c
 	}
 	t.flying[id] = struct{}{}
 	t.wg.Add(1)
-	go t.run(ctx, id, Pause{Key: ref.Key, Binding: ref.Binding, Task: task, Recovered: ref.Restarted, Cards: cards})
+	go t.run(ctx, id, Pause{Key: ref.Key, Binding: ref.Binding, Task: task, Recovered: ref.Restarted}, cards)
 }
 
 // deadline is when the pause can no longer be answered: as the interaction's own, the task's time plus
@@ -168,13 +168,18 @@ func (t *Tap) deadline(binding string, task a2a.Task) (time.Time, time.Duration)
 	return pausedAt(task, now).Add(timeout), timeout
 }
 
-func (t *Tap) run(caller context.Context, id string, p Pause) {
+func (t *Tap) run(caller context.Context, id string, p Pause, cards func(context.Context) map[string]chat.ToolLine) {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(caller))
 	defer cancel()
 	defer context.AfterFunc(t.ctx, cancel)() //nolint:contextcheck // join the tap lifetime to detached turn values
 
 	defer t.wg.Done()
 	defer func() { t.mu.Lock(); delete(t.flying, id); t.mu.Unlock() }()
+	if cards != nil { // the reply's last write, which the prompt follows in the thread: a short wait, and none for a question
+		if p.Cards = cards(ctx); t.ctx.Err() != nil { // closed while it waited: the next start finds the pause again
+			return
+		}
+	}
 	deadline, timeout := t.deadline(p.Binding, p.Task)
 	if p.Recovered {
 		// A recovered task may have been paused before the process went down. Its original deadline is

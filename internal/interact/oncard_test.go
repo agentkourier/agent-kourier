@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"maps"
 	"testing"
+	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
@@ -18,44 +20,54 @@ import (
 )
 
 // cardSink is the renderer that says what its turns' replies show: the cards it is given, which it hands out only once the
-// handler has seen the final event, as the renderer knows them only then.
+// reply's last write is over (written), as the renderer knows them only then.
 type cardSink struct {
 	*tapInner
-	cards map[string]string
+	cards   map[string]chat.ToolLine
+	written chan struct{}
 }
 
-func (s cardSink) TurnCards(ctx context.Context, ref session.TurnRef) (agent.Handler, func() map[string]string) {
-	return s.Turn(ctx, ref), func() map[string]string {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if n := len(s.events); n == 0 || !isFinal(s.events[n-1]) {
+func (s cardSink) TurnCards(ctx context.Context, ref session.TurnRef) (agent.Handler, func(context.Context) map[string]chat.ToolLine) {
+	return s.Turn(ctx, ref), func(ctx context.Context) map[string]chat.ToolLine {
+		select {
+		case <-s.written:
+			return s.cards
+		case <-ctx.Done():
 			return nil
 		}
-		return s.cards
 	}
 }
 
-func isFinal(e agent.Event) bool { _, ok := e.(agent.FinalEvent); return ok }
-
 var _ interact.CardSink = cardSink{}
 
-// The tap hands the pause on with what the renderer says its reply shows of the calls the pause waits on, asked once the
-// renderer has had the final event. A sink that says nothing of cards hands on none.
+// The tap hands the pause on with what the renderer says its reply shows of the calls the pause waits on, which it asks on the
+// hand-off's goroutine: the handler, on the stream's, returns at once, and the pause waits for the reply's last write. A sink
+// that says nothing of cards hands on none.
 func TestThePauseCarriesTheCardsTheRendererShows(t *testing.T) {
-	cards := map[string]string{"c2": "a=3, b=5"}
+	cards := map[string]chat.ToolLine{"c2": {Name: "add_numbers", Summary: "a=3, b=5"}}
 	for _, tc := range []struct {
-		name string
-		sink func(*tapInner) session.Sink
-		want map[string]string
+		name  string
+		sink  func(*tapInner, chan struct{}) session.Sink
+		waits bool
+		want  map[string]chat.ToolLine
 	}{
-		{"a renderer that shows cards", func(in *tapInner) session.Sink { return cardSink{tapInner: in, cards: cards} }, cards},
-		{"a sink that says nothing of cards", func(in *tapInner) session.Sink { return in }, nil},
+		{"a renderer that shows cards", func(in *tapInner, written chan struct{}) session.Sink {
+			return cardSink{tapInner: in, cards: cards, written: written}
+		}, true, cards},
+		{"a sink that says nothing of cards", func(in *tapInner, _ chan struct{}) session.Sink { return in }, false, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			inner := &tapInner{}
-			r := newTap(t, func(c *interact.TapConfig) { c.Sink = tc.sink(inner) })
+			inner, written := &tapInner{}, make(chan struct{})
+			r := newTap(t, func(c *interact.TapConfig) { c.Sink = tc.sink(inner, written) })
 			task := pausedTask("task-1", "msg-1", d0)
-			r.tap.Turn(t.Context(), tapRef)(agent.FinalEvent{Task: &task, AwaitingApproval: []string{"c2"}})
+			r.tap.Turn(t.Context(), tapRef)(agent.FinalEvent{Task: &task, AwaitingApproval: []string{"c2"}}) // returns: it waits for nothing
+			if tc.waits {
+				time.Sleep(50 * time.Millisecond)
+				if n := r.pauses.calls(); n != 0 {
+					t.Fatalf("the pause was handed on %d times before the reply's last write", n)
+				}
+			}
+			close(written)
 			testutil.Eventually(t, "the hand-off", func() bool { return r.pauses.calls() == 1 })
 			r.pauses.mu.Lock()
 			got := r.pauses.got[0].Cards
@@ -64,6 +76,25 @@ func TestThePauseCarriesTheCardsTheRendererShows(t *testing.T) {
 				t.Errorf("the pause's cards = %v; want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// A tap that is closed while a hand-off waits for the reply's cards cuts the wait short: Close returns, and the pause is left for
+// the next start to find.
+func TestClosingTheTapCutsTheWaitForTheCards(t *testing.T) {
+	inner := &tapInner{}
+	r := newTap(t, func(c *interact.TapConfig) {
+		c.Sink = cardSink{tapInner: inner, cards: map[string]chat.ToolLine{"c2": {Name: "add_numbers", Summary: "a=3, b=5"}}, written: make(chan struct{})}
+	})
+	task := pausedTask("task-1", "msg-1", d0)
+	r.tap.Turn(t.Context(), tapRef)(agent.FinalEvent{Task: &task, AwaitingApproval: []string{"c2"}})
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if err := r.tap.Close(ctx); err != nil {
+		t.Fatalf("Close = %v; want the wait for the cards cut short", err)
+	}
+	if n := r.pauses.calls(); n != 0 {
+		t.Errorf("the pause was handed on %d times after Close; want it left for the next start", n)
 	}
 }
 
@@ -81,7 +112,7 @@ func cardedApproval() a2a.Task {
 // restart, changes nothing that was kept.
 func TestTheEndingOfAnApprovalLeavesOutTheArgumentsItsReplyShows(t *testing.T) {
 	r, task := newRig(t, allowApprovals), cardedApproval()
-	cards := map[string]string{"c1": `name="web-1"`, "c2": "a=4, b=5"} // the second card is of other arguments
+	cards := map[string]chat.ToolLine{"c1": {Name: "delete_pod", Summary: `name="web-1"`}, "c2": {Name: "add_numbers", Summary: "a=4, b=5"}} // the second card is of other arguments
 	if err := r.in.Paused(t.Context(), interact.Pause{Key: key, Binding: "ns/b", Task: task, Cards: cards}); err != nil {
 		t.Fatal(err)
 	}

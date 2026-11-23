@@ -47,7 +47,7 @@ var (
 // TurnCards is Turn, and the cards of the turn (interact.CardSink), which the renderer's sink says (live.Sink): the tap hands
 // them on with a pause, so that the ending of an approval leaves out what a card shows. A connection with no replies has no turn
 // rendered and no cards, and a sink that says nothing of cards gives none.
-func (s quietSink) TurnCards(ctx context.Context, t session.TurnRef) (agent.Handler, func() map[string]string) {
+func (s quietSink) TurnCards(ctx context.Context, t session.TurnRef) (agent.Handler, func(context.Context) map[string]chat.ToolLine) {
 	if s.quiet(t.Key.Connection) {
 		return nil, nil
 	}
