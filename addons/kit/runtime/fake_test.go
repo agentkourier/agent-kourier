@@ -190,7 +190,7 @@ func asCaller(ctx context.Context, name string) context.Context {
 }
 
 // scripted is a backend whose turns a test drives through the message's text: "pause" asks a question, "hold" runs
-// until the turn's context ends, "slow" waits for gate before its first event, "fail" ends failed with its status
+// until the turn's context ends and returns its error, "quiet" runs until then and returns nothing, "slow" waits for gate before its first event, "fail" ends failed with its status
 // message, anything else completes. An answer to a paused task completes it; one whose text is "bad" fails the turn
 // with a2a.ErrInvalidParams, as a backend that checks an answer only in its turn does.
 type scripted struct {
@@ -238,6 +238,9 @@ func (b *scripted) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 		case "hold":
 			<-ctx.Done()
 			yield(nil, ctx.Err())
+			return
+		case "quiet":
+			<-ctx.Done()
 			return
 		case "fail":
 			yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateFailed, a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("timeout"))), nil)

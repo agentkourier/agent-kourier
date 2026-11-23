@@ -278,15 +278,19 @@ func aStartFailsTheTurnsARestartCutOff[S runtime.Store](t *testing.T, s Subject[
 	in.WantMetric(t, turns(s, "interrupted"), "1")
 }
 
-// A stop cuts a running turn short and leaves its task as it was, uncounted; the next start fails it as interrupted and
-// counts it.
+// A stop cuts a running turn short, without waiting out runtime.TurnStopTimeout, and leaves its task as it was,
+// uncounted; the next start fails it as interrupted and counts it.
 func aStopLeavesARunningTurnForTheNextStart[S runtime.Store](t *testing.T, s Subject[S], env map[string]string) {
 	first := Start(t, s, "kittest-a", env, runtime.Options{})
 	WaitFor(t, "the replica to be ready", first.Ready)
 	id, hangUp := holding(t, first.Client(t), text(s.Hold))
 	hangUp()
+	began := time.Now()
 	if err := first.Stop(t); err != nil {
 		t.Fatalf("Run = %v", err)
+	}
+	if took := time.Since(began); took >= runtime.TurnStopTimeout {
+		t.Errorf("the stop took %s: it waited out the turn stop timeout (%s) for the cut turn", took, runtime.TurnStopTimeout)
 	}
 	for _, outcome := range []string{"canceled", "failed", "interrupted"} {
 		if got := first.Metric(turns(s, outcome)); got != "" {
