@@ -45,7 +45,8 @@ else
 		go test $(TESTHOOKS_BUILD_FLAGS) -timeout 20m -tags testhooks $$pkgs
 endif
 
-test-scripts: ## Run kind, security policy, release gate, PR label, Slack HTTP-mode probe, CI tool installers, testhooks package selection, test leg split, Actions cache upkeep and docs-only classification tests (no cluster)
+test-scripts: ## Run add-on list, kind, security policy, release gate, PR label, Slack HTTP-mode probe, CI tool installers, testhooks package selection, test leg split, Actions cache upkeep and docs-only classification tests (no cluster)
+	hack/addons_test.sh
 	hack/kind/netpol_test.sh
 	hack/security/test.sh
 	hack/release/test.sh
@@ -63,11 +64,10 @@ lint-workflows: ## Lint .github/workflows with zizmor after proving its policy f
 
 security: security-govulncheck security-gitleaks ## Run source vulnerability and secret scans (the image scan needs IMAGE_REF)
 
-security-govulncheck: ## Run govulncheck against the root, AX add-on, docs-agent, CMA add-on and add-on kit modules
+security-govulncheck: ## Run govulncheck against the root, docs-agent, each add-on's (hack/addons.txt) and add-on kit modules
 	hack/security/govulncheck.sh .
-	hack/security/govulncheck.sh addons/ax
 	hack/security/govulncheck.sh examples/recipes/docs-agent/agent
-	hack/security/govulncheck.sh addons/cma
+	$(foreach a,$(ADDONS),hack/security/govulncheck.sh addons/$(a)$(newline))
 	hack/security/govulncheck.sh addons/kit
 
 security-gitleaks: ## Scan repository history for leaked credentials (GITLEAKS_BIN may select a pinned binary)
@@ -161,7 +161,27 @@ sandbox-alert: ## Fire (STATE=firing, the default) or resolve (STATE=resolved) a
 # -count=1: the kit's tests read docs/reference, which go test's result cache never checks.
 KIT_PACKAGES = $$(go list -deps -test -f '{{if not .ForTest}}{{.ImportPath}}{{end}}' ./... | grep '^github.com/agentkourier/agent-kourier/addons/kit/' | sort -u)
 
-.PHONY: kit-test kit-lint addons-tidy
+# The add-ons are the names in hack/addons.txt, which hack/addons.sh reads (it fails on a malformed list, and then so does
+# every make). Add-on <name> is the Go module addons/<name>, and has the targets addon-test-<name>, addon-lint-<name> and
+# addon-image-<name>; cma-test, ax-lint and the others below run the same. A module nested in an add-on's directory
+# (addons/<name>/<dir>/go.mod: the CMA add-on's livecheck) is a module of its own: its tests run without the race
+# detector, every test on every run, offline (a live check skips without its credentials), and addons-tidy tidies it.
+ADDONS := $(shell hack/addons.sh)
+ifeq ($(strip $(ADDONS)),)
+$(error hack/addons.sh read no add-on from hack/addons.txt; it says why above)
+endif
+addon_nested = $(patsubst %/go.mod,%,$(wildcard addons/$(1)/*/go.mod))
+ADDON_TEST  := $(addprefix addon-test-,$(ADDONS))
+ADDON_LINT  := $(addprefix addon-lint-,$(ADDONS))
+ADDON_IMAGE := $(addprefix addon-image-,$(ADDONS))
+
+# A recipe line that expands to several lines (a $(foreach) ending each item with $(newline)) runs as that many lines.
+define newline
+
+
+endef
+
+.PHONY: kit-test kit-lint addons-tidy $(ADDON_TEST) $(ADDON_LINT) $(ADDON_IMAGE)
 kit-test: ## Test the add-ons' shared kit module with the race detector, every test on every run
 	cd addons/kit && go test -race -count=1 -timeout 20m ./...
 	cd addons/kit && go vet ./...
@@ -169,27 +189,35 @@ kit-test: ## Test the add-ons' shared kit module with the race detector, every t
 kit-lint: ## Lint the add-ons' shared kit module with the repository's golangci-lint and config
 	cd addons/kit && "$$(go tool -C ../.. -n golangci-lint)" run --config ../../.golangci.yml ./...
 
-addons-tidy: ## Run go mod tidy in the kit, the CMA add-on, its livecheck module and the AX add-on, which share dependencies through the kit
+addons-tidy: ## Run go mod tidy in the kit and in each add-on's modules (hack/addons.txt), which share dependencies through the kit
 	cd addons/kit && go mod tidy
-	cd addons/cma && go mod tidy
-	cd addons/cma/livecheck && go mod tidy
-	cd addons/ax && go mod tidy
+	$(foreach d,$(foreach a,$(ADDONS),addons/$(a) $(call addon_nested,$(a))),cd $(d) && go mod tidy$(newline))
 
-# The AX add-on (addons/ax) is a separate Go module, released with Agent Kourier. -count=1: the Postgres tests reach a
-# database that go test's result cache knows nothing of, so a reused result would say nothing about it. They read
-# AGENTKOURIER_POSTGRES_DSN and skip when it is unset; hack/postgres/run.sh starts a throwaway Postgres and sets it for
-# one command.
+# -count=1: the Postgres tests reach a database that go test's result cache knows nothing of, so a reused result would
+# say nothing about it. They read AGENTKOURIER_POSTGRES_DSN and skip when it is unset; hack/postgres/run.sh starts a
+# throwaway Postgres and sets it for one command (hack/postgres/run.sh make addon-test-cma).
+$(ADDON_TEST): addon-test-%:
+	cd addons/$* && go test -race -count=1 -timeout 20m ./...
+	cd addons/$* && go test -race -count=1 -timeout 20m $(KIT_PACKAGES)
+	cd addons/$* && go vet ./...
+	$(foreach m,$(call addon_nested,$*),cd $(m) && go test -count=1 ./...$(newline))
+
+$(ADDON_LINT): addon-lint-%:
+	cd addons/$* && "$$(go tool -C ../.. -n golangci-lint)" run --config ../../.golangci.yml ./...
+
+# The image agent-kourier-<name>:dev, from the context addons/ (which holds the kit the add-on requires through
+# `replace ../kit`) with addons/<name>/Dockerfile, on Agent Kourier's pinned bases (hack/kind/lib.sh).
+$(ADDON_IMAGE): addon-image-%:
+	bash -c '. hack/kind/lib.sh && docker build --build-arg "GO_IMAGE=$${GO_IMAGE}" --build-arg "RUNTIME_IMAGE=$${RUNTIME_IMAGE}" -f addons/$*/Dockerfile -t agent-kourier-$*:dev addons'
+
+# The AX add-on (addons/ax) is a separate Go module, released with Agent Kourier. ax-test, ax-lint and ax-image are
+# addon-test-ax, addon-lint-ax and addon-image-ax.
 .PHONY: ax-test ax-lint ax-image ax-runner-image ax-smoke
-ax-test: ## Test the AX add-on's module with the race detector, every test on every run, and the kit's packages under its module graph; its Postgres tests run with AGENTKOURIER_POSTGRES_DSN set (hack/postgres/run.sh make ax-test)
-	cd addons/ax && go test -race -count=1 -timeout 20m ./...
-	cd addons/ax && go test -race -count=1 -timeout 20m $(KIT_PACKAGES)
-	cd addons/ax && go vet ./...
+ax-test: addon-test-ax ## Test the AX add-on's module with the race detector, every test on every run, and the kit's packages under its module graph; its Postgres tests run with AGENTKOURIER_POSTGRES_DSN set (hack/postgres/run.sh make ax-test)
 
-ax-lint: ## Lint the AX add-on's module with the repository's golangci-lint and config
-	cd addons/ax && "$$(go tool -C ../.. -n golangci-lint)" run --config ../../.golangci.yml ./...
+ax-lint: addon-lint-ax ## Lint the AX add-on's module with the repository's golangci-lint and config
 
-ax-image: ## Build the AX add-on's image, agent-kourier-ax:dev, on Agent Kourier's pinned bases (hack/kind/lib.sh; Docker)
-	bash -c '. hack/kind/lib.sh && docker build --build-arg "GO_IMAGE=$${GO_IMAGE}" --build-arg "RUNTIME_IMAGE=$${RUNTIME_IMAGE}" -f addons/ax/Dockerfile -t agent-kourier-ax:dev addons'
+ax-image: addon-image-ax ## Build the AX add-on's image, agent-kourier-ax:dev, on Agent Kourier's pinned bases (hack/kind/lib.sh; Docker)
 
 ax-runner-image: ## Build the image of the route inside Google AX, agent-kourier-ax-runner:dev: AX's task runner, git and the agent on Debian (addons/ax/Dockerfile.ax; Docker)
 	docker build -f addons/ax/Dockerfile.ax -t agent-kourier-ax-runner:dev addons
@@ -217,22 +245,14 @@ docs-agent-smoke-live: ## Owner-run: the same questions with the real model name
 	bash examples/recipes/docs-agent/agent/smoke-live.sh
 
 # The CMA add-on (addons/cma) is a separate Go module, released with Agent Kourier. Its livecheck directory is a module
-# of its own, which imports the root module through a replace; only its offline test runs here. -count=1: the Postgres
-# tests reach a database that go test's result cache knows nothing of, so a reused result would say nothing about it.
-# They read AGENTKOURIER_POSTGRES_DSN and skip when it is unset; hack/postgres/run.sh starts a throwaway Postgres and
-# sets it for one command.
+# of its own, which imports the root module through a replace; only its offline test runs here. cma-test, cma-lint and
+# cma-image are addon-test-cma, addon-lint-cma and addon-image-cma.
 .PHONY: cma-test cma-lint cma-image
-cma-test: ## Test the CMA add-on's module with the race detector, every test on every run, the kit's packages under its module graph, and its livecheck module's offline test; its Postgres tests run with AGENTKOURIER_POSTGRES_DSN set (hack/postgres/run.sh make cma-test)
-	cd addons/cma && go test -race -count=1 -timeout 20m ./...
-	cd addons/cma && go test -race -count=1 -timeout 20m $(KIT_PACKAGES)
-	cd addons/cma && go vet ./...
-	cd addons/cma/livecheck && go test -count=1 ./...
+cma-test: addon-test-cma ## Test the CMA add-on's module with the race detector, every test on every run, the kit's packages under its module graph, and its livecheck module's offline test; its Postgres tests run with AGENTKOURIER_POSTGRES_DSN set (hack/postgres/run.sh make cma-test)
 
-cma-lint: ## Lint the CMA add-on's module with the repository's golangci-lint and config
-	cd addons/cma && "$$(go tool -C ../.. -n golangci-lint)" run --config ../../.golangci.yml ./...
+cma-lint: addon-lint-cma ## Lint the CMA add-on's module with the repository's golangci-lint and config
 
-cma-image: ## Build the CMA add-on's image, agent-kourier-cma:dev, on Agent Kourier's pinned bases (hack/kind/lib.sh; Docker)
-	bash -c '. hack/kind/lib.sh && docker build --build-arg "GO_IMAGE=$${GO_IMAGE}" --build-arg "RUNTIME_IMAGE=$${RUNTIME_IMAGE}" -f addons/cma/Dockerfile -t agent-kourier-cma:dev addons'
+cma-image: addon-image-cma ## Build the CMA add-on's image, agent-kourier-cma:dev, on Agent Kourier's pinned bases (hack/kind/lib.sh; Docker)
 
 # The echo-agent recipe (examples/recipes/echo-agent/agent) is Python, not Go: a virtualenv under bin/ with the
 # versions and hashes pinned in requirements-dev.txt, on CPython 3.14 (requirements.txt is compiled for it).
