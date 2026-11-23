@@ -373,7 +373,8 @@ func TestCheckFindsDrift(t *testing.T) {
 	repo := readWorkflows(t)
 	first, last := list[0], list[len(list)-1]
 	lastVar, lastRef, lastLabel := releaseNames(last)
-	// The legs as ci.yml lists them, which the reordering case below moves; it holds whatever the list says.
+	// The legs as ci.yml lists them, which the reordering case below moves (it skips with fewer than two); it holds
+	// whatever the list says.
 	var ci workflow
 	if err := yaml.Unmarshal(repo["ci.yml"], &ci); err != nil {
 		t.Fatal(err)
@@ -381,9 +382,6 @@ func TestCheckFindsDrift(t *testing.T) {
 	var legs []string
 	for _, v := range ci.Jobs[addonJob].Strategy.Matrix["addon"].([]any) {
 		legs = append(legs, fmt.Sprint(v))
-	}
-	if len(legs) < 2 {
-		t.Fatalf("ci.yml's job %s has %d legs; the reordering case needs two", addonJob, len(legs))
 	}
 	t.Run("an add-on in the list alone", func(t *testing.T) {
 		problems := checkProblems(t, append(slices.Clone(list), "third"), repo)
@@ -409,6 +407,20 @@ func TestCheckFindsDrift(t *testing.T) {
 			}
 		}
 	})
+	t.Run("the legs in another order", func(t *testing.T) {
+		if len(legs) < 2 {
+			t.Skipf("ci.yml's job %s has %d leg, so there is no other order", addonJob, len(legs))
+		}
+		wfs := maps.Clone(repo)
+		old := "addon: [" + strings.Join(legs, ", ") + "]"
+		if !strings.Contains(string(wfs["ci.yml"]), old) {
+			t.Fatalf("ci.yml has no %q to change", old)
+		}
+		wfs["ci.yml"] = []byte(strings.Replace(string(wfs["ci.yml"]), old, "addon: ["+strings.Join(slices.Concat(legs[1:], legs[:1]), ", ")+"]", 1))
+		if problems := checkProblems(t, list, wfs); !slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, "in its order") }) {
+			t.Errorf("problems = %q, want one with %q", problems, "in its order")
+		}
+	})
 	t.Run("the notes' lines in another order", func(t *testing.T) {
 		if first == last {
 			t.Skip("the list has one add-on, so there is no other order")
@@ -426,7 +438,6 @@ func TestCheckFindsDrift(t *testing.T) {
 	for _, tt := range []struct {
 		name, file, old, new, want, after string
 	}{
-		{"the legs in another order", "ci.yml", "addon: [" + strings.Join(legs, ", ") + "]", "addon: [" + strings.Join(slices.Concat(legs[1:], legs[:1]), ", ") + "]", "in its order", ""},
 		{"a leg named by the matrix's index", "ci.yml", "name: ${{ matrix.addon }}\n", "name: addon (${{ strategy.job-index }})\n", "so that each leg's check is its add-on's name", ""},
 		{"a failing leg cancelling the others", "ci.yml", "      fail-fast: false\n      matrix:\n        addon:", "      fail-fast: true\n      matrix:\n        addon:", "strategy.fail-fast is not false", ""},
 		{"a leg's cache not pruned", "ci.yml", `"go-` + first + `-${RUNNER_OS}-"`, `"go-other-${RUNNER_OS}-"`, `does not prune "go-` + first + `-`, ""},
