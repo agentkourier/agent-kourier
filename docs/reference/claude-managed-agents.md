@@ -121,14 +121,18 @@ At start, before it serves, the add-on:
 
 Agent Kourier sends a message again, with the same ID, when it cannot tell whether the first send arrived. A message
 whose ID the store has recorded joins that message's task instead of starting a second turn: it gets the task as it
-stands if the task has settled or paused, and the rest of its stream otherwise.
+stands if the task has settled or paused, and the rest of its stream otherwise. A resend that arrives before the first
+send's turn has answered anything waits for it, even when the first sender has hung up, so the message reaches the
+session once. A resend that names another context or another task than its first send's is refused as invalid.
 
 ## Sessions and their lifetime
 
 A session holds its sandbox until it is archived. `SESSION_IDLE_TTL` archives a context's session once the context
-has had no turn running for that long, checked once a minute, and deletes the context's tasks from before the archive
-with their message IDs. Archiving cannot be undone: the context's next message starts a new session without the old
-history. A session that fails to archive is tried again at the next check.
+has had no message and no turn running for that long, checked once a minute, and deletes the context's tasks from
+before the archive with their message IDs. The store keeps when each context was last active (a message for it
+arrived, or a turn of it started or ended), so the clock survives a restart and a takeover. Archiving cannot be undone:
+the context's next message starts a new session without the old history. A session that fails to archive is logged at
+WARN and tried again at the next check; one whose context started a turn after the check listed it is kept.
 
 Set it to the Binding's `session.threadTTL`, whose default, `2160h`, is the add-on's default too. Past that, Agent
 Kourier gives the thread a new context and never uses the old session again. A shorter value archives sessions a thread
@@ -157,10 +161,11 @@ election's retry period, at least 1 second) on a leader that has not finished ta
 no leader or cannot reach it, and on a replica that is not serving when the request was already forwarded once: a
 request is forwarded once at most. A leader that cannot
 renew the lease for `LEASE_RENEW_DEADLINE`, or whose renewal or write finds that another replica has taken it, exits at
-once with code 5, without a drain, and Kubernetes restarts it. One that stops on SIGTERM drains its requests, then hands
-the lease over, for at most 3 seconds; past that, a standby takes over once the lease has run out. A replica that takes
-over runs the same start-up work as a restart, so a turn that was running on the old leader fails, and a paused
-approval survives.
+once with code 5, without a drain, and Kubernetes restarts it. One that stops on SIGTERM drains its requests for at most
+5 seconds, then cancels the turns still running and waits at most 5 seconds for them, leaving their tasks for the next
+leader to fail, then hands the lease over, for at most 3 seconds; past that, a standby takes over once the lease has run
+out. A replica that takes over runs the same start-up work as a restart, so a turn that was running on the old leader
+fails, and a paused approval survives.
 
 ## Caller check
 
@@ -215,7 +220,7 @@ Every duration is a Go duration, such as `90s` or `720h`, of zero or more unless
 | `ANTHROPIC_API_KEY` | None | The API key, read by the Anthropic Go SDK. The SDK reads its other `ANTHROPIC_*` variables too, such as `ANTHROPIC_BASE_URL`. | `addons.cma.anthropicApiKeySecret`; the others through `addons.cma.extraEnv` |
 | `LISTEN_ADDR` | `127.0.0.1:8090` | Where the add-on listens, as `host:port`. | Always `:8090` |
 | `PUBLIC_URL` | `http://` + `LISTEN_ADDR` + `/a2a` | The endpoint the agent card names: the URL Agent Kourier reaches. An `http` or `https` URL with a host. | Always `http://<fullname>-cma.<namespace>.svc:8090/a2a` |
-| `SESSION_IDLE_TTL` | `2160h`<!--addon-limit:cma.session-idle-ttl--> | How long a context may go without a turn before its session is archived. `0` never archives. | `addons.cma.sessionIdleTTL` |
+| `SESSION_IDLE_TTL` | `2160h`<!--addon-limit:cma.session-idle-ttl--> | How long a context may go without a message or a turn before its session is archived. `0` never archives. | `addons.cma.sessionIdleTTL` |
 | `TOOL_RESULT_TIMEOUT` | `10m`<!--addon-limit:cma.tool-result-timeout--> | How long a turn waits, with no session event, on a tool the sandbox runs. `0` waits for ever. | `addons.cma.toolResultTimeout` |
 | `TASK_RETENTION` | `720h`<!--addon-limit:cma.task-retention--> | How long a settled task and its message IDs are kept after its last update. `0` keeps them. | `addons.cma.taskRetention` |
 | `AUTH_TOKEN_FILE` | Required, unless `AUTH_DISABLED` | The file of accepted tokens. | Always `/etc/agent-kourier-cma/auth/tokens`, the key of `addons.cma.auth.tokenSecret` |
