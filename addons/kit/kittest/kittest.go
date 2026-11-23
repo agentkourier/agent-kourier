@@ -45,8 +45,14 @@ type Subject[S runtime.Store] struct {
 	Complete, Pause, Hold string
 	// Answer is the text of an answer to Pause's question, which completes its task.
 	Answer string
-	// BadAnswer are the parts of an answer to Pause's question that the backend refuses (its ResumeValidator).
+	// AnswerMetadata is the metadata of Answer's message, for a backend that reads an answer there (a structured tool
+	// approval); nil sends the text alone.
+	AnswerMetadata map[string]any
+	// BadAnswer are the parts of an answer to Pause's question that the backend refuses (its MessageValidator).
 	BadAnswer []*a2a.Part
+	// BadMessage are the parts of a new message that the backend refuses before its turn (its MessageValidator); nil
+	// for a backend that accepts every new message, which skips that case.
+	BadMessage []*a2a.Part
 }
 
 // RunSQLite runs the cases on a SQLite file of each case's own. The test's binary must link the add-on's driver.
@@ -84,6 +90,7 @@ func run[S runtime.Store](t *testing.T, s Subject[S], postgres bool, newEnv func
 		{"MetricsAreServedAndTheCheckGuardsTheCard", false, metricsAreServed[S]},
 		{"AResentMessageJoinsItsTask", false, aResentMessageJoinsItsTask[S]},
 		{"ARefusedAnswerKeepsTheTaskPaused", false, aRefusedAnswerKeepsTheTaskPaused[S]},
+		{"ARefusedMessageStartsNoTurn", false, aRefusedMessageStartsNoTurn[S]},
 		{"ACancelEndsTheTurnCanceled", false, aCancelEndsTheTurnCanceled[S]},
 		{"AStartFailsTheTurnsARestartCutOff", false, aStartFailsTheTurnsARestartCutOff[S]},
 		{"AStopLeavesARunningTurnForTheNextStartToFail", false, aStopLeavesARunningTurnForTheNextStart[S]},

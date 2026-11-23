@@ -17,6 +17,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -156,31 +157,33 @@ type Interrupter interface {
 	Interrupted(ctx context.Context, settled store.Settlement)
 }
 
-// ResumeValidator is a backend that checks a message for a paused task (input-required) before the turn starts. Its
-// error refuses the request with a2a.ErrInvalidParams and leaves the task paused: an executor's error would fail it.
-type ResumeValidator interface {
-	ValidateResume(ctx context.Context, paused *a2a.Task, msg *a2a.Message) error
+// MessageValidator is a backend that checks each message before a turn starts for it: a message that starts a new task
+// (paused nil), or an answer to paused, a task waiting for one (input-required). Its error refuses the request with
+// a2a.ErrInvalidParams before any turn, so the message is not counted as a turn, has no span and its ID is not
+// recorded, and a paused task stays paused (an executor's error would fail it). A message for a task the caller does not
+// have, or one that is neither new nor an answer, is a2a-go's to answer.
+type MessageValidator interface {
+	ValidateMessage(ctx context.Context, msg *a2a.Message, paused *a2a.Task) error
 }
 
 // ContextReleaser is a backend that keeps a context outside the store (cma: a session in CMA). For each context idle
 // past SESSION_IDLE_TTL with no turn running, the upkeep calls ReleaseContext, then forgets the context and its tasks
-// (store.Store.ForgetContext). An error leaves the context for the next sweep. Without it, the upkeep deletes idle
-// contexts in the store's own transaction (store.Store.DeleteIdleContexts, with store.TaskOptions.ReleaseContext).
+// (store.Store.ForgetContext). An error leaves the context for the next sweep, and is logged at WARN unless it wraps
+// ErrContextBusy. Without it, the upkeep deletes idle contexts in the store's own transaction
+// (store.Store.DeleteIdleContexts, with store.TaskOptions.ReleaseContext).
 type ContextReleaser interface {
 	ReleaseContext(ctx context.Context, c store.Context) error
 }
+
+// ErrContextBusy is what a ContextReleaser's error wraps when a turn of the context has begun since the store listed
+// it as idle: the store shows a turn only once a2a-go has stored its task, and a message that arrives during a sweep
+// can start one in between. The upkeep leaves the context, which the message made active, and logs it at DEBUG.
+var ErrContextBusy = errors.New("a turn of the context has begun")
 
 // IdleReporter is a backend that is told, after each sweep without a ContextReleaser, how many idle contexts the store
 // deleted and the error that stopped the sweep, if any (ax: it counts the ADK sessions deleted).
 type IdleReporter interface {
 	IdleContextsDeleted(n int, err error)
-}
-
-// CancelSettler is a backend whose cancel can fail when the turn has ended canceled already. When CancelTask fails, the
-// kit reads the task and answers it as the cancel's result if CanceledAfterFailedCancel says so (cma: a session's idle
-// after its interrupt reaches the turn first).
-type CancelSettler interface {
-	CanceledAfterFailedCancel(ctx context.Context, task *a2a.Task) bool
 }
 
 // TurnClassifier is a backend whose failed turns have outcomes of their own (cma: timeout). FailedOutcome returns the

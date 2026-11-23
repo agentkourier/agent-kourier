@@ -133,3 +133,61 @@ func TestATurnStartedOnceTheStopHasBegunNeverReachesTheBackend(t *testing.T) {
 		t.Fatal("the stop waits after the refused turn's cleanup")
 	}
 }
+
+// A turn that the add-on's stop cuts short ends on an error even when its backend returns nothing (errStopping): a2a-go
+// ends an execution only on an event that settles it or on an error, and the stop would otherwise wait out
+// TurnStopTimeout.
+func TestATurnTheStopCutsEndsOnAnErrorWhateverTheBackendReturns(t *testing.T) {
+	for _, tc := range []struct {
+		text string
+		want error
+	}{
+		{"hold", context.Canceled}, // the backend's own error
+		{"quiet", errStopping},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			life, stop := context.WithCancel(context.Background())
+			b := &scripted{started: make(chan string, 1)}
+			running := newTurns(life, b, newTel(t))
+			ec := &a2asrv.ExecutorContext{Message: message("m1", tc.text, "c1", ""), TaskID: "t1", ContextID: "c1"}
+			done := make(chan []error, 1)
+			go func() {
+				var errs []error
+				for _, err := range running.Execute(t.Context(), ec) {
+					if err != nil {
+						errs = append(errs, err)
+					}
+				}
+				done <- errs
+			}()
+			<-b.started
+			stop()
+			if errs := <-done; len(errs) != 1 || !errors.Is(errs[0], tc.want) {
+				t.Fatalf("the cut turn yielded the errors %v, want %v alone", errs, tc.want)
+			}
+		})
+	}
+}
+
+// A turn that settled or paused before the stop yields nothing more: a2a-go has its result.
+func TestATurnThatEndedBeforeTheStopYieldsNoMore(t *testing.T) {
+	for _, text := range []string{"done", "pause", "fail"} {
+		t.Run(text, func(t *testing.T) {
+			life, stop := context.WithCancel(context.Background())
+			defer stop()
+			b := &scripted{}
+			running := newTurns(life, b, newTel(t))
+			ec := &a2asrv.ExecutorContext{Message: message("m1", text, "c1", ""), TaskID: "t1", ContextID: "c1"}
+			n := 0
+			for _, err := range running.Execute(t.Context(), ec) {
+				n++
+				if n == 3 {
+					stop() // after the last event, before the backend returns
+				}
+				if err != nil {
+					t.Fatalf("the turn yielded %v", err)
+				}
+			}
+		})
+	}
+}

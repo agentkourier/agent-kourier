@@ -6,14 +6,15 @@ import (
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
-	"github.com/a2aproject/a2a-go/v2/a2asrv"
+	"github.com/a2aproject/a2a-go/v2/a2aclient"
 )
 
 const permissionAllow = "allow"
 
-func newStallHandler(t *testing.T, fake *fakeBackend, timeout time.Duration) a2asrv.RequestHandler {
+func newStallHandler(t *testing.T, fake *fakeBackend, timeout time.Duration) *a2aclient.Client {
 	t.Helper()
-	return NewRequestHandler(&Executor{Backend: fake, Store: newStore(t, nil), Keepalive: time.Hour, ToolResultTimeout: timeout}, asKourier{})
+	st := newStore(t, nil)
+	return serve(t, &Executor{Backend: fake, Store: st, Keepalive: time.Hour, ToolResultTimeout: timeout}, st, nil)
 }
 
 func statusText(task *a2a.Task) string {

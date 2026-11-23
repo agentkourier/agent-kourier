@@ -8,10 +8,10 @@ import (
 	"github.com/agentkourier/agent-kourier/addons/kit/settings"
 )
 
-// TestLimitsPage holds the defaults that Parse fills in to docs/reference/limits.md. It parses the Postgres store, whose
+// TestLimitsPage holds the defaults that the settings fill in to docs/reference/limits.md. It parses the Postgres store, whose
 // leader election the lease timings pace, with none of the timings set.
 func TestLimitsPage(t *testing.T) {
-	c, err := Parse(env(map[string]string{
+	c, err := parse(env(map[string]string{
 		"STORE": "postgres", "POSTGRES_DSN": "postgres://u:fake-password@db/cma",
 		"ADVERTISE_URL": "http://10.0.0.7:8090", "POD_NAME": "cma-0",
 	}))

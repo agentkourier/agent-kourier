@@ -9,11 +9,17 @@ import (
 	"testing"
 
 	"github.com/agentkourier/agent-kourier/addons/cma/store"
+	"github.com/agentkourier/agent-kourier/addons/kit/runtime"
 )
+
+// run is the command as main runs it, with args, the environment getenv reads, and the two outputs.
+func run(args []string, stdout, stderr io.Writer, getenv func(string) string) int {
+	return runtime.Command(addon(), args, stdout, stderr, getenv)
+}
 
 func TestVersionFlag(t *testing.T) {
 	var out, errOut bytes.Buffer
-	if code := run([]string{"--version"}, &out, &errOut, func(string) string { return "" }); code != exitOK {
+	if code := run([]string{"--version"}, &out, &errOut, func(string) string { return "" }); code != runtime.ExitOK {
 		t.Fatalf("exit %d, stderr %s", code, errOut.String())
 	}
 	if got := strings.TrimSpace(out.String()); got != version || got != "dev" {
@@ -29,8 +35,8 @@ func TestUsageErrors(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			var out, errOut bytes.Buffer
-			if code := run(args, &out, &errOut, func(string) string { return "" }); code != exitUsage {
-				t.Fatalf("exit %d, want %d", code, exitUsage)
+			if code := run(args, &out, &errOut, func(string) string { return "" }); code != runtime.ExitUsage {
+				t.Fatalf("exit %d, want %d", code, runtime.ExitUsage)
 			}
 			if strings.Contains(errOut.String(), "fake-token") {
 				t.Fatal("the argument was echoed")
@@ -44,8 +50,8 @@ func TestBadTraceSettingIsAUsageError(t *testing.T) {
 	env := map[string]string{"CMA_AGENT_ID": "agent_test", "CMA_ENVIRONMENT_ID": "env_test", "AUTH_DISABLED": "true",
 		"OTEL_EXPORTER_OTLP_ENDPOINT": "http://user:canary@collector"}
 	var out, errOut bytes.Buffer
-	if code := run(nil, &out, &errOut, func(k string) string { return env[k] }); code != exitUsage {
-		t.Fatalf("exit %d, want %d", code, exitUsage)
+	if code := run(nil, &out, &errOut, func(k string) string { return env[k] }); code != runtime.ExitUsage {
+		t.Fatalf("exit %d, want %d", code, runtime.ExitUsage)
 	}
 	if strings.Contains(errOut.String(), "canary") {
 		t.Fatalf("stderr shows the value: %s", errOut.String())
@@ -69,8 +75,8 @@ func TestAnEarlierStoreStopsTheStart(t *testing.T) {
 	env := map[string]string{"CMA_AGENT_ID": "agent_test", "CMA_ENVIRONMENT_ID": "env_test", "AUTH_DISABLED": "true",
 		"LISTEN_ADDR": freeAddr(t), "SQLITE_PATH": path}
 	var errOut bytes.Buffer
-	if code := run(nil, io.Discard, &errOut, func(k string) string { return env[k] }); code != exitFailure {
-		t.Fatalf("exit %d, want %d; stderr %s", code, exitFailure, errOut.String())
+	if code := run(nil, io.Discard, &errOut, func(k string) string { return env[k] }); code != runtime.ExitFailure {
+		t.Fatalf("exit %d, want %d; stderr %s", code, runtime.ExitFailure, errOut.String())
 	}
 	// The log line cuts a long error (telemetry.MaxLogErrorBytes), and a test's directory is long: its reason leads.
 	if reason, _, _ := strings.Cut(store.ErrEarlierLayout.Error(), ":"); !strings.Contains(errOut.String(), reason) {

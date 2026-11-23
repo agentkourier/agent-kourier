@@ -41,6 +41,13 @@ func answer(task *a2a.Task, parts ...*a2a.Part) *a2a.Message {
 	return m
 }
 
+// goodAnswer is the subject's answer to paused, which completes it.
+func goodAnswer[S runtime.Store](s Subject[S], paused *a2a.Task) *a2a.Message {
+	m := answer(paused, a2a.NewTextPart(s.Answer))
+	m.Metadata = s.AnswerMetadata
+	return m
+}
+
 // send sends msg and returns its task as the send answers it.
 func send(t *testing.T, c *a2aclient.Client, msg *a2a.Message) (*a2a.Task, error) {
 	t.Helper()
@@ -219,10 +226,30 @@ func aRefusedAnswerKeepsTheTaskPaused[S runtime.Store](t *testing.T, s Subject[S
 	if got, err := c.GetTask(t.Context(), &a2a.GetTaskRequest{ID: paused.ID}); err != nil || got.Status.State != a2a.TaskStateInputRequired {
 		t.Fatalf("the task after the bad answer = %+v, %v; want it still paused", got, err)
 	}
-	if done := want(t, c, answer(paused, a2a.NewTextPart(s.Answer)), a2a.TaskStateCompleted); done.ID != paused.ID {
+	if done := want(t, c, goodAnswer(s, paused), a2a.TaskStateCompleted); done.ID != paused.ID {
 		t.Fatalf("the answer completed %s, want %s", done.ID, paused.ID)
 	}
 	in.WantMetric(t, turns(s, "input_required"), "1")
+	in.WantMetric(t, turns(s, "completed"), "1")
+	in.WantMetric(t, turns(s, "failed"), "")
+}
+
+// A new message the backend refuses is refused with invalid params before any turn: none is counted, and a resend of
+// it is refused again rather than joined to a task.
+func aRefusedMessageStartsNoTurn[S runtime.Store](t *testing.T, s Subject[S], env map[string]string) {
+	if s.BadMessage == nil {
+		t.Skip("the add-on accepts every new message")
+	}
+	in := Start(t, s, "kittest-a", env, runtime.Options{})
+	WaitFor(t, "the replica to be ready", in.Ready)
+	c := in.Client(t)
+	bad := a2a.NewMessage(a2a.MessageRoleUser, s.BadMessage...)
+	for _, what := range []string{"the bad message", "its resend"} {
+		if _, err := send(t, c, bad); !errors.Is(err, a2a.ErrInvalidParams) {
+			t.Fatalf("%s = %v, want invalid params", what, err)
+		}
+	}
+	want(t, c, text(s.Complete), a2a.TaskStateCompleted)
 	in.WantMetric(t, turns(s, "completed"), "1")
 	in.WantMetric(t, turns(s, "failed"), "")
 }
@@ -251,15 +278,19 @@ func aStartFailsTheTurnsARestartCutOff[S runtime.Store](t *testing.T, s Subject[
 	in.WantMetric(t, turns(s, "interrupted"), "1")
 }
 
-// A stop cuts a running turn short and leaves its task as it was, uncounted; the next start fails it as interrupted and
-// counts it.
+// A stop cuts a running turn short, without waiting out runtime.TurnStopTimeout, and leaves its task as it was,
+// uncounted; the next start fails it as interrupted and counts it.
 func aStopLeavesARunningTurnForTheNextStart[S runtime.Store](t *testing.T, s Subject[S], env map[string]string) {
 	first := Start(t, s, "kittest-a", env, runtime.Options{})
 	WaitFor(t, "the replica to be ready", first.Ready)
 	id, hangUp := holding(t, first.Client(t), text(s.Hold))
 	hangUp()
+	began := time.Now()
 	if err := first.Stop(t); err != nil {
 		t.Fatalf("Run = %v", err)
+	}
+	if took := time.Since(began); took >= runtime.TurnStopTimeout {
+		t.Errorf("the stop took %s: it waited out the turn stop timeout (%s) for the cut turn", took, runtime.TurnStopTimeout)
 	}
 	for _, outcome := range []string{"canceled", "failed", "interrupted"} {
 		if got := first.Metric(turns(s, outcome)); got != "" {
@@ -272,15 +303,19 @@ func aStopLeavesARunningTurnForTheNextStart[S runtime.Store](t *testing.T, s Sub
 	next.WantMetric(t, metric(s, "tasks_interrupted_total"), "1")
 }
 
-// A context idle past SESSION_IDLE_TTL is released with its tasks.
+// A context idle past SESSION_IDLE_TTL is released with its tasks. The upkeep's clock moves past the TTL only once the
+// turn has completed: a context is idle by its time alone, so a clock already past it would let a sweep release the
+// context while a2a-go still stores the turn's task, which the forget then deletes under it.
 func anIdleContextIsReleased[S runtime.Store](t *testing.T, s Subject[S], env map[string]string) {
 	idle := maps.Clone(env)
 	idle["SESSION_IDLE_TTL"] = "1h"
+	var ahead atomic.Int64 // how far the upkeep's clock runs ahead of the store's
 	in := Start(t, s, "kittest-a", idle, runtime.Options{UpkeepInterval: 20 * time.Millisecond,
-		Now: func() time.Time { return time.Now().Add(2 * time.Hour) }})
+		Now: func() time.Time { return time.Now().Add(time.Duration(ahead.Load())) }})
 	WaitFor(t, "the replica to be ready", in.Ready)
 	c := in.Client(t)
 	task := want(t, c, text(s.Complete), a2a.TaskStateCompleted)
+	ahead.Store(int64(2 * time.Hour))
 	WaitFor(t, "the idle context's task to be released", func() bool {
 		_, err := c.GetTask(t.Context(), &a2a.GetTaskRequest{ID: task.ID})
 		return errors.Is(err, a2a.ErrTaskNotFound)
@@ -345,7 +380,7 @@ func aStandbyForwardsAndTakesOver[S runtime.Store](t *testing.T, s Subject[S], e
 	if since := time.Since(stopped); since > 750*time.Millisecond { // half the lease: a take at expiry would be later
 		t.Errorf("b took over %s after a stopped: a released lease is taken on the next try, not when it expires", since)
 	}
-	if done := want(t, b.Client(t), answer(paused, a2a.NewTextPart(s.Answer)), a2a.TaskStateCompleted); done.ID != paused.ID {
+	if done := want(t, b.Client(t), goodAnswer(s, paused), a2a.TaskStateCompleted); done.ID != paused.ID {
 		t.Fatalf("the answer on the new leader completed %s, want %s", done.ID, paused.ID)
 	}
 	if got := b.Metric(metric(s, "tasks_interrupted_total")); got != "0" {

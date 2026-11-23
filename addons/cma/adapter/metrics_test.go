@@ -15,7 +15,7 @@ func TestMetricFamiliesAreUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	exec := &Executor{Telemetry: tel}
+	exec := &Executor{}
 	if exec.Metrics, err = NewMetrics(tel, exec.Contexts); err != nil {
 		t.Fatal(err)
 	}

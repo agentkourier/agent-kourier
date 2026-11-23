@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 )
@@ -68,7 +69,7 @@ func (u *upkeep) sweep(ctx context.Context) {
 
 // release has the backend let go of each idle context with no turn running, then forgets the context and its tasks
 // from before the release: they belong to what the backend let go of and can never run again. A context the backend
-// could not release is left for the next sweep.
+// could not release, or whose turn has begun since it was listed (ErrContextBusy), is left for the next sweep.
 func (u *upkeep) release(ctx context.Context, cutoff time.Time) {
 	idle, err := u.store.IdleContexts(ctx, cutoff)
 	if err != nil {
@@ -81,6 +82,10 @@ func (u *upkeep) release(ctx context.Context, cutoff time.Time) {
 		}
 		at := u.now()
 		if err := u.releaser.ReleaseContext(ctx, c); err != nil {
+			if errors.Is(err, ErrContextBusy) {
+				u.log.Debug("an idle context's turn has begun; left for a later sweep", "context", c.ContextID)
+				continue
+			}
 			u.log.Warn("release an idle context; will retry", "context", c.ContextID, "error", err)
 			continue
 		}

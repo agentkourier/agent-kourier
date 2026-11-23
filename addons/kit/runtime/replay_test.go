@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -116,7 +117,55 @@ func TestASubscriptionToAnotherCallersTaskIsNotFound(t *testing.T) {
 	}
 }
 
-// An answer the backend's ResumeValidator refuses is refused with invalid params before the turn starts: the task stays
+// A new message the backend's MessageValidator refuses is refused with invalid params before any turn: the backend never
+// sees it, no turn is counted, its message ID is not recorded, so a resend is refused again, and its context is not
+// marked active. Without the validator the message starts a turn.
+func TestARefusedNewMessageStartsNoTurn(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		backend func(*scripted) Backend
+		turns   int
+	}{
+		{"with a validator", func(b *scripted) Backend { return validating{b} }, 0},
+		{"without one", func(b *scripted) Backend { return b }, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := &scripted{}
+			st := newFakeStore()
+			s := serveHandler(t, st, tc.backend(b))
+			c := s.client(t, auth.Caller)
+			_, err := send(t, c, message("m1", "bad", "c1", ""))
+			if n := b.turnCount(); n != tc.turns {
+				t.Fatalf("the backend ran %d turns, want %d", n, tc.turns)
+			}
+			if tc.turns != 0 {
+				return
+			}
+			if !errors.Is(err, a2a.ErrInvalidParams) {
+				t.Fatalf("the bad message = %v, want invalid params", err)
+			}
+			if _, err := send(t, c, message("m1", "bad", "c1", "")); !errors.Is(err, a2a.ErrInvalidParams) {
+				t.Fatalf("the bad message resent = %v, want refused again", err)
+			}
+			if got := st.touchedContexts(); len(got) != 0 {
+				t.Fatalf("the refused messages marked the contexts %v active, want none", got)
+			}
+			for _, outcome := range []string{"completed", "failed", "canceled"} {
+				if got := metricOf(t, s.tel, `agentkourier_kit_turns_total{outcome="`+outcome+`"}`); got != "" {
+					t.Errorf("turns %s = %q, want none counted", outcome, got)
+				}
+			}
+			if done, err := send(t, c, message("m2", "done", "c1", "")); err != nil || done.Status.State != a2a.TaskStateCompleted {
+				t.Fatalf("a good message = %+v, %v", done, err)
+			}
+			if got := st.touchedContexts(); !slices.Equal(got, []string{"c1"}) {
+				t.Fatalf("the contexts marked active = %v, want the good message's c1", got)
+			}
+		})
+	}
+}
+
+// An answer the backend's MessageValidator refuses is refused with invalid params before the turn starts: the task stays
 // paused, the backend never sees the answer, and its message ID is not recorded. Without the validator, the same
 // refusal from the turn fails the task on a store whose write runs after the request's end.
 func TestARefusedAnswerKeepsTheTaskPaused(t *testing.T) {
@@ -161,51 +210,6 @@ func TestARefusedAnswerKeepsTheTaskPaused(t *testing.T) {
 			}
 			wantMetric(t, s.tel, "agentkourier_kit_message_replays_total", "0")
 		})
-	}
-}
-
-// failingCancel is scripted with a cancel that fails, and a CancelSettler that accepts the task as it stands.
-type failingCancel struct {
-	*scripted
-	asked chan *a2a.Task
-}
-
-func (failingCancel) Cancel(context.Context, *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
-	return func(yield func(a2a.Event, error) bool) { yield(nil, errors.New("the backend cannot cancel now")) }
-}
-
-func (f failingCancel) CanceledAfterFailedCancel(_ context.Context, task *a2a.Task) bool {
-	f.asked <- task
-	return true
-}
-
-// A cancel that fails is answered with the task as it stands when the backend's CancelSettler accepts it, and fails
-// without one.
-func TestAFailedCancelIsTheSettlersToAccept(t *testing.T) {
-	st := newFakeStore()
-	settler := failingCancel{scripted: &scripted{}, asked: make(chan *a2a.Task, 1)}
-	s := serveHandler(t, st, settler)
-	c := s.client(t, auth.Caller)
-	paused, err := send(t, c, message("m1", "pause", "c1", ""))
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := c.CancelTask(t.Context(), &a2a.CancelTaskRequest{ID: paused.ID})
-	if err != nil || got.ID != paused.ID {
-		t.Fatalf("CancelTask = %+v, %v; want the task the settler accepted", got, err)
-	}
-	if seen := <-settler.asked; seen.ID != paused.ID {
-		t.Fatalf("the settler was asked about %s", seen.ID)
-	}
-
-	plain := serveHandler(t, newFakeStore(), struct{ Backend }{failingCancel{scripted: &scripted{}}})
-	pc := plain.client(t, auth.Caller)
-	paused, err = send(t, pc, message("m1", "pause", "c1", ""))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pc.CancelTask(t.Context(), &a2a.CancelTaskRequest{ID: paused.ID}); err == nil {
-		t.Fatal("a failed cancel succeeded without a settler")
 	}
 }
 

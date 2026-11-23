@@ -77,8 +77,8 @@ type Backend struct {
 }
 
 var (
-	_ runtime.Backend         = (*Backend)(nil)
-	_ runtime.ResumeValidator = (*Backend)(nil)
+	_ runtime.Backend          = (*Backend)(nil)
+	_ runtime.MessageValidator = (*Backend)(nil)
 )
 
 // Execute answers the message: a question for "pause", a wait until the turn ends for "hold", the answer to a paused
@@ -122,8 +122,8 @@ func (b *Backend) Cancel(_ context.Context, ec *a2asrv.ExecutorContext) iter.Seq
 	}
 }
 
-// ValidateResume accepts an answer of text alone, not blank.
-func (b *Backend) ValidateResume(_ context.Context, _ *a2a.Task, msg *a2a.Message) error {
+// ValidateMessage accepts a message, new or an answer, of text alone, not blank: the one Execute answers.
+func (b *Backend) ValidateMessage(_ context.Context, msg *a2a.Message, _ *a2a.Task) error {
 	_, err := text(msg)
 	return err
 }
@@ -156,6 +156,7 @@ func Subject() kittest.Subject[*store.Store] {
 	return kittest.Subject[*store.Store]{
 		Addon: Addon("1.2.3-test"), Env: map[string]string{"ECHO_GREETING": "hi"},
 		Complete: "hello", Pause: Pause, Hold: Hold, Answer: "the first one",
-		BadAnswer: []*a2a.Part{a2a.NewDataPart(map[string]any{"not": "text"})},
+		BadAnswer:  []*a2a.Part{a2a.NewDataPart(map[string]any{"not": "text"})},
+		BadMessage: []*a2a.Part{a2a.NewTextPart("  ")},
 	}
 }

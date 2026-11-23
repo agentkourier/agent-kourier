@@ -68,6 +68,11 @@ func (t *turns) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter.Se
 				return
 			}
 		}
+		// a2a-go ends an execution only on an event that settles or pauses its task, or on an error: a backend that
+		// returns nothing once the stop has cut its turn would hold the stop for TurnStopTimeout.
+		if t.life.Err() != nil && !o.errored && !o.state.Terminal() && o.state != a2a.TaskStateInputRequired {
+			yield(nil, errStopping)
+		}
 	}
 }
 

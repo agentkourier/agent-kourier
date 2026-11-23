@@ -35,6 +35,7 @@ type fakeStore struct {
 	other     *store.Lease                    // a live lease another replica holds: TryLead fails and CurrentLeader returns it
 	idle      []store.Context                 // what IdleContexts returns
 	forgotten []string                        // the contexts ForgetContext removed
+	touched   []string                        // the contexts TouchContext marked active, in order
 	deleted   int                             // what DeleteIdleContexts returns
 	log       []string                        // the events in order: "close" and what the test adds
 	settle    func(ctx context.Context) error // runs in SettleInterrupted: its error is the settlement's
@@ -118,7 +119,18 @@ func (s *fakeStore) MessageTask(ctx context.Context, messageID string) (*a2a.Tas
 	return st.Task, nil
 }
 
-func (s *fakeStore) TouchContext(context.Context, string) error { return nil }
+func (s *fakeStore) TouchContext(_ context.Context, contextID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.touched = append(s.touched, contextID)
+	return nil
+}
+
+func (s *fakeStore) touchedContexts() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.touched)
+}
 
 func (s *fakeStore) SettleInterrupted(ctx context.Context, _ string) (store.Settlement, error) {
 	if s.settle != nil {
@@ -190,7 +202,7 @@ func asCaller(ctx context.Context, name string) context.Context {
 }
 
 // scripted is a backend whose turns a test drives through the message's text: "pause" asks a question, "hold" runs
-// until the turn's context ends, "slow" waits for gate before its first event, "fail" ends failed with its status
+// until the turn's context ends and returns its error, "quiet" runs until then and returns nothing, "slow" waits for gate before its first event, "fail" ends failed with its status
 // message, anything else completes. An answer to a paused task completes it; one whose text is "bad" fails the turn
 // with a2a.ErrInvalidParams, as a backend that checks an answer only in its turn does.
 type scripted struct {
@@ -239,6 +251,9 @@ func (b *scripted) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 			<-ctx.Done()
 			yield(nil, ctx.Err())
 			return
+		case "quiet":
+			<-ctx.Done()
+			return
 		case "fail":
 			yield(a2a.NewStatusUpdateEvent(ec, a2a.TaskStateFailed, a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("timeout"))), nil)
 			return
@@ -265,10 +280,10 @@ func (b *scripted) turnCount() int {
 	return b.turns
 }
 
-// validating is scripted with a ResumeValidator that refuses an answer "bad".
+// validating is scripted with a MessageValidator that refuses a message "bad", new or an answer.
 type validating struct{ *scripted }
 
-func (validating) ValidateResume(_ context.Context, _ *a2a.Task, msg *a2a.Message) error {
+func (validating) ValidateMessage(_ context.Context, msg *a2a.Message, _ *a2a.Task) error {
 	if len(msg.Parts) == 1 && msg.Parts[0] != nil && msg.Parts[0].Text() == "bad" {
 		return errors.New("the answer is bad")
 	}

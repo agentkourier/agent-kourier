@@ -81,7 +81,7 @@ func testEveryWriteIsFenced(t *testing.T, s *Store) {
 		"DeleteSettledBefore": func() error { _, err := s.DeleteSettledBefore(ctx, future); return err },
 		"PutSession":          func() error { return s.PutSession(ctx, Session{ContextID: "c1", SessionID: "sesn_1"}) },
 		"TouchSession":        func() error { return s.TouchSession(ctx, "c1", "sesn_1", future) },
-		"ForgetContext":       func() error { return s.ForgetContext(ctx, "c1", "sesn_1", future) },
+		"ForgetSession":       func() error { return s.ForgetSession(ctx, "c1", "sesn_1", future) },
 	}
 	for name, write := range writes {
 		if err := write(); !errors.Is(err, errFenced) {

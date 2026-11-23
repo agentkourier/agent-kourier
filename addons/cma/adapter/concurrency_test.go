@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
-	"github.com/a2aproject/a2a-go/v2/a2asrv"
+	"github.com/a2aproject/a2a-go/v2/a2aclient"
 )
 
 // waitLimit bounds how long a test waits for something that should happen at once; quiet is how long a test watches
@@ -69,7 +69,7 @@ type sent struct {
 }
 
 // sendAsync sends msg in a goroutine.
-func sendAsync(ctx context.Context, h a2asrv.RequestHandler, msg *a2a.Message) <-chan sent {
+func sendAsync(ctx context.Context, h *a2aclient.Client, msg *a2a.Message) <-chan sent {
 	done := make(chan sent, 1)
 	go func() {
 		var id a2a.TaskID
@@ -144,6 +144,43 @@ func TestResendDuringTheFirstSendJoinsItsTask(t *testing.T) {
 	if two.ID != one.ID {
 		t.Fatalf("resend made task %s, want %s", two.ID, one.ID)
 	}
+	if n := len(fake.sentEvents()); n != 1 {
+		t.Fatalf("messages sent to the session = %d, want 1", n)
+	}
+}
+
+// A resend whose first sender hung up while the first send of its message ID was still in CMA, before the turn had
+// yielded anything, waits for that turn and joins it: the message goes to the session once.
+func TestResendAfterTheFirstSenderHungUpSendsOnce(t *testing.T) {
+	fake := newFake(script(say("once"), idle(stopEndTurn)))
+	g := newGate(t)
+	holdSendOf(fake, "hi", g)
+	st := newStore(t, nil)
+	requests := make(chan context.Context, 8) // each request's context on the server, in order
+	h := dial(t, serveSeen(t, &Executor{Backend: fake, Store: st}, st, nil, requests), nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*waitLimit)
+	defer cancel()
+
+	msg := userText("ctx-hangup", "hi")
+	held, hangUp := context.WithCancel(ctx)
+	first := sendAsync(held, h, msg)
+	g.reached(t)
+	hangUp()
+	<-first
+	select {
+	case <-(<-requests).Done(): // the server has seen the hang-up
+	case <-time.After(waitLimit):
+		t.Fatal("the server did not see the first sender hang up")
+	}
+	again := *msg
+	second := sendAsync(ctx, h, &again)
+	select {
+	case r := <-second:
+		t.Fatalf("the resend ended (%v) while the first send was still held", r.err)
+	case <-time.After(quiet):
+	}
+	g.release()
+	settled(t, second, "the resend")
 	if n := len(fake.sentEvents()); n != 1 {
 		t.Fatalf("messages sent to the session = %d, want 1", n)
 	}

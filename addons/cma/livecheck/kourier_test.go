@@ -16,11 +16,11 @@ import (
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
-	"github.com/a2aproject/a2a-go/v2/a2asrv"
 
 	"github.com/agentkourier/agent-kourier/addons/cma/adapter"
 	"github.com/agentkourier/agent-kourier/addons/cma/store"
 	"github.com/agentkourier/agent-kourier/addons/kit/auth"
+	"github.com/agentkourier/agent-kourier/addons/kit/runtime"
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
 	"github.com/agentkourier/agent-kourier/internal/dialect/generic"
@@ -110,8 +110,8 @@ func (c *chanStream) Close() error           { return nil }
 // testToken is the adapter's one accepted token in these tests: an obviously fake value.
 const testToken = "fake-livecheck-token"
 
-// serve runs the adapter over b, as main wires it: a SQLite store and the caller check, with testToken accepted.
-// It returns the adapter's JSON-RPC URL.
+// serve runs the adapter over b as the kit's runtime serves it on the leader (Addon.Handler): a SQLite store and the
+// caller check, with testToken accepted. It returns the adapter's JSON-RPC URL.
 func serve(t *testing.T, b adapter.Backend) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -130,12 +130,11 @@ func serve(t *testing.T, b adapter.Backend) string {
 		t.Fatal(err)
 	}
 	exec := &adapter.Executor{Backend: b, Store: st}
-	rpc := a2asrv.NewJSONRPCHandler(adapter.NewRequestHandler(exec, auth.Interceptor{}))
 	srv := httptest.NewServer(nil)
 	t.Cleanup(srv.Close)
-	url := srv.URL + "/a2a"
+	url := srv.URL + runtime.A2APath
 	check := &auth.Check{Verifier: auth.TokenVerifier{Header: "Authorization", Tokens: tokens}, Bearer: true, Log: log}
-	srv.Config.Handler = adapter.Mux("/a2a", adapter.Card("test", "test", url, "test"), rpc, check)
+	srv.Config.Handler = adapter.Addon("test", nil).Handler(exec, st, check, url, nil)
 	return url
 }
 
@@ -177,7 +176,7 @@ func TestKourierFetchesTheCardWithTheToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("with the token: %v", err)
 	}
-	if got := client.Card().Name; got != "test" {
+	if got := client.Card().Name; got != "claude-managed-agent" {
 		t.Fatalf("card name = %q, want the adapter's", got)
 	}
 	_ = client.Destroy()

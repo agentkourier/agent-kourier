@@ -4,28 +4,71 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 
 	"github.com/agentkourier/agent-kourier/addons/cma/store"
 	"github.com/agentkourier/agent-kourier/addons/kit/auth"
+	"github.com/agentkourier/agent-kourier/addons/kit/runtime"
 	kitstore "github.com/agentkourier/agent-kourier/addons/kit/store"
+	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
-// asKourier is the call interceptor the tests' request handlers run behind in place of the caller check's
-// (auth.Interceptor): every call runs as the adapter's one caller, as the check runs it.
-type asKourier struct {
-	a2asrv.PassthroughCallInterceptor
+// serve serves exec on st as the kit's runtime serves a backend on the leader (Addon.Handler, behind telemetry.Extract),
+// with the caller check off, so that every request runs as the adapter's one caller, and returns an A2A client of it.
+// tel counts the turns, and may be nil. The server stops when the test ends.
+func serve(t *testing.T, exec *Executor, st *store.Store, tel *telemetry.Telemetry) *a2aclient.Client {
+	t.Helper()
+	return dial(t, serveURL(t, exec, st, tel), nil)
 }
 
-// Before implements a2asrv.CallInterceptor.
-func (asKourier) Before(ctx context.Context, callCtx *a2asrv.CallContext, _ *a2asrv.Request) (context.Context, any, error) {
-	callCtx.User = a2asrv.NewAuthenticatedUser(auth.Caller, nil)
-	return ctx, nil, nil
+// serveURL serves exec as serve does and returns the endpoint's URL.
+func serveURL(t *testing.T, exec *Executor, st *store.Store, tel *telemetry.Telemetry) string {
+	t.Helper()
+	return serveSeen(t, exec, st, tel, nil)
+}
+
+// serveSeen serves exec as serveURL does, and hands the server's context of each request to requests, when it is not
+// nil, before it serves it.
+func serveSeen(t *testing.T, exec *Executor, st *store.Store, tel *telemetry.Telemetry, requests chan<- context.Context) string {
+	t.Helper()
+	srv := httptest.NewServer(nil)
+	t.Cleanup(srv.Close)
+	url := srv.URL + runtime.A2APath
+	check := &auth.Check{Verifier: auth.Open{}, Log: slog.New(slog.DiscardHandler)}
+	endpoint := telemetry.Extract(Addon("9.9.9-test", nil).Handler(exec, st, check, url, tel))
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requests != nil {
+			requests <- r.Context()
+		}
+		endpoint.ServeHTTP(w, r)
+	})
+	return url
+}
+
+// dial is an A2A client of the endpoint at url, over transport (nil is a plain one).
+func dial(t *testing.T, url string, transport http.RoundTripper) *a2aclient.Client {
+	t.Helper()
+	if transport == nil {
+		transport = &http.Transport{}
+	}
+	card := &a2a.AgentCard{Name: "test", Version: "1", Capabilities: a2a.AgentCapabilities{Streaming: true},
+		SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface(url, a2a.TransportProtocolJSONRPC)}}
+	c, err := a2aclient.NewFromCard(t.Context(), card, a2aclient.WithDefaultsDisabled(),
+		a2aclient.WithJSONRPCTransport(&http.Client{Transport: transport}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
 }
 
 // kourier is a context whose call runs as the adapter's one caller, for a test that reads the store itself.

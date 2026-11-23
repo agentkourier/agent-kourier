@@ -34,7 +34,7 @@ var ErrEarlierLayout = errors.New("the store holds an earlier adapter's layout, 
 type Session struct {
 	ContextID string
 	SessionID string
-	// LastActive is when a turn of the context last started or ended.
+	// LastActive is when the context was last active: a message for it arrived, or a turn of it started or ended.
 	LastActive time.Time
 }
 
@@ -53,7 +53,8 @@ type Options struct {
 
 // Store is the adapter's state on SQLite or Postgres: the kit's task state, whose database's lease (TryLead, Renew,
 // Release, CurrentLeader) fences every write. It implements taskstore.Store. A task's create or update leaves its
-// context's activity alone: a context's activity is its session's (PutSession, TouchSession).
+// context's activity alone: a context's activity is a message's arrival (TouchContext) and its session's turns
+// (PutSession, TouchSession).
 type Store struct {
 	*kitstore.Store
 }
@@ -104,9 +105,11 @@ func (s *Store) TouchSession(ctx context.Context, contextID, sessionID string, a
 	return s.TouchContextRef(ctx, auth.Caller, contextID, sessionID, at)
 }
 
-// ForgetContext is for a context whose session, sessionID, was archived. It removes that session, if the context
+// ForgetSession is for a context whose session, sessionID, CMA no longer has. It removes that session, if the context
 // still has it, and deletes the context's tasks last updated before cutoff, with their message IDs: they belong to the
-// archived session and can never run again. A task the context started after cutoff, in a new session, is kept.
-func (s *Store) ForgetContext(ctx context.Context, contextID, sessionID string, cutoff time.Time) error {
-	return s.Store.ForgetContext(ctx, auth.Caller, contextID, sessionID, cutoff)
+// lost session and can never run again. A task the context started after cutoff, in a new session, is kept. It is
+// the kit's ForgetContext for the adapter's one caller, which the kit's upkeep calls itself once the adapter has
+// archived an idle context's session.
+func (s *Store) ForgetSession(ctx context.Context, contextID, sessionID string, cutoff time.Time) error {
+	return s.ForgetContext(ctx, auth.Caller, contextID, sessionID, cutoff)
 }

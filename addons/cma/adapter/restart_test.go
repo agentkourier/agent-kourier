@@ -1,40 +1,51 @@
 package adapter
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
-	"github.com/a2aproject/a2a-go/v2/a2asrv"
+	"github.com/a2aproject/a2a-go/v2/a2aclient"
 
 	"github.com/agentkourier/agent-kourier/addons/cma/store"
 	"github.com/agentkourier/agent-kourier/addons/kit/auth"
+	"github.com/agentkourier/agent-kourier/addons/kit/runtime"
 )
 
-// adapterRun is one start of the adapter over a store file: what main does, without the network.
+// interruptedText is the status text of a task a restart cut off, as the kit writes it for the adapter.
+var interruptedText = runtime.InterruptedMessage("adapter")
+
+// adapterRun is one start of the adapter over a store file: what the kit's runtime does when it takes over, without
+// the lease and the upkeep.
 type adapterRun struct {
 	exec  *Executor
-	h     a2asrv.RequestHandler
+	h     *a2aclient.Client
 	store *store.Store
 }
 
-// startAdapter opens the store at path, restores and settles as main does, and serves through a handler. The fake is
-// CMA, which outlives the adapter.
+// startAdapter opens the store at path, restores, settles and interrupts as the kit's runtime does on taking over, and
+// serves the adapter. The fake is CMA, which outlives the adapter.
 func startAdapter(t *testing.T, path string, fake *fakeBackend, clk *clock) *adapterRun {
 	t.Helper()
 	st := openStore(t, path, clk.now)
-	exec := &Executor{Backend: fake, Store: st, IdleTTL: time.Hour, TaskRetention: 24 * time.Hour, now: clk.now}
-	if err := exec.Restore(context.Background()); err != nil {
+	exec := &Executor{Backend: fake, Store: st, IdleTTL: time.Hour, now: clk.now}
+	ctx := context.Background()
+	if err := exec.Restore(ctx); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
-	if err := exec.Settle(context.Background()); err != nil {
-		t.Fatalf("Settle: %v", err)
+	settled, err := st.SettleInterrupted(ctx, interruptedText)
+	if err != nil {
+		t.Fatalf("SettleInterrupted: %v", err)
 	}
-	return &adapterRun{exec: exec, h: NewRequestHandler(exec, asKourier{}), store: st}
+	exec.Interrupted(ctx, settled)
+	return &adapterRun{exec: exec, h: serve(t, exec, st, nil), store: st}
 }
 
 // stop closes the run's store, releasing the file for the next run.
@@ -158,8 +169,8 @@ func TestRestartFailsTheTurnsItCutOff(t *testing.T) {
 			t.Errorf("%s: state %s, want %s", id, task.Status.State, want)
 		}
 		if want == a2a.TaskStateFailed {
-			if got := statusText(task); got != InterruptedMessage || task.Status.Message.Role != a2a.MessageRoleAgent {
-				t.Errorf("%s: status message %q, want the agent saying %q", id, got, InterruptedMessage)
+			if got := statusText(task); got != interruptedText || task.Status.Message.Role != a2a.MessageRoleAgent {
+				t.Errorf("%s: status message %q, want the agent saying %q", id, got, interruptedText)
 			}
 		}
 	}
@@ -175,8 +186,8 @@ func TestRestartFailsTheTurnsItCutOff(t *testing.T) {
 	}
 }
 
-// An interrupt that fails does not stop the adapter: the task is failed all the same.
-func TestSettleSurvivesAFailedInterrupt(t *testing.T) {
+// An interrupt that fails does not stop the adapter: the task is failed all the same, and the failure is logged.
+func TestAFailedInterruptIsLogged(t *testing.T) {
 	fake := newFake(nil)
 	fake.sendErr = errors.New("503")
 	clk := newClock()
@@ -186,16 +197,22 @@ func TestSettleSurvivesAFailedInterrupt(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake.seed("sesn_c1", "c1", clk.now())
-	exec := &Executor{Backend: fake, Store: st, now: clk.now}
+	var logs bytes.Buffer
+	exec := &Executor{Backend: fake, Store: st, Log: slog.New(slog.NewJSONHandler(&logs, nil)), now: clk.now}
 	if err := exec.Restore(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := exec.Settle(ctx); err != nil {
-		t.Fatalf("Settle: %v", err)
+	settled, err := st.SettleInterrupted(ctx, interruptedText)
+	if err != nil {
+		t.Fatalf("SettleInterrupted: %v", err)
 	}
+	exec.Interrupted(ctx, settled)
 	got, err := st.Get(ctx, "working")
 	if err != nil || got.Task.Status.State != a2a.TaskStateFailed {
 		t.Fatalf("task = %+v, %v; want failed", got, err)
+	}
+	if want := `"level":"WARN","msg":"interrupt the session of an interrupted task","context":"c1","session":"sesn_c1","error":"503"`; !strings.Contains(logs.String(), want) {
+		t.Fatalf("logs = %s, want %s", logs.String(), want)
 	}
 }
 
@@ -217,7 +234,7 @@ func TestRestorePrefersTheStoredSession(t *testing.T) {
 	if got := fake.archivedSessions(); !slices.Equal(got, []string{"sesn_stray"}) {
 		t.Fatalf("archived = %v, want the stray session", got)
 	}
-	turn(t, NewRequestHandler(exec, asKourier{}), userText("c1", "again"))
+	turn(t, serve(t, exec, st, nil), userText("c1", "again"))
 	if sent := fake.sentEvents(); len(sent) != 1 || sent[0].session != "sesn_stored" {
 		t.Fatalf("sent = %+v, want the message in the stored session", sent)
 	}
@@ -245,7 +262,7 @@ func TestRestoreForgetsASessionCMANoLongerLists(t *testing.T) {
 	if _, err := st.Get(ctx, "old"); !errors.Is(err, a2a.ErrTaskNotFound) {
 		t.Fatalf("the forgotten context's task: %v, want deleted", err)
 	}
-	turn(t, NewRequestHandler(exec, asKourier{}), userText("c1", "again"))
+	turn(t, serve(t, exec, st, nil), userText("c1", "again"))
 	if n := fake.sessionCount(); n != 1 {
 		t.Fatalf("sessions created = %d, want a new one for the context", n)
 	}
@@ -276,53 +293,6 @@ func TestStoreFailureStopsRestore(t *testing.T) {
 	if err := exec.Restore(context.Background()); err == nil {
 		t.Fatal("Restore succeeded on a closed store")
 	}
-	if err := exec.Settle(context.Background()); err == nil {
-		t.Fatal("Settle succeeded on a closed store")
-	}
-}
-
-func TestRetentionDeletesOldSettledTasks(t *testing.T) {
-	fake := newFake(approvalScript)
-	exec, clk, h := newClockedExec(t, fake, 0)
-	exec.TaskRetention = 24 * time.Hour
-	ctx := context.Background()
-	paused, _ := turn(t, h, userText("", "clean up"))
-	asked, _ := turn(t, h, userText("", "clean up too"))
-	finished, _ := turn(t, h, approvalReply(asked, true, ""))
-	if finished.Status.State != a2a.TaskStateCompleted {
-		t.Fatalf("state = %s", finished.Status.State)
-	}
-
-	clk.advance(24 * time.Hour)
-	exec.prune(ctx)
-	if _, err := h.GetTask(ctx, &a2a.GetTaskRequest{ID: finished.ID}); err != nil {
-		t.Fatalf("deleted at exactly the retention: %v", err)
-	}
-	clk.advance(time.Second)
-	exec.prune(ctx)
-	if _, err := h.GetTask(ctx, &a2a.GetTaskRequest{ID: finished.ID}); !errors.Is(err, a2a.ErrTaskNotFound) {
-		t.Fatalf("settled task after the retention: %v, want deleted", err)
-	}
-	for _, m := range finished.History {
-		if task, err := exec.Store.MessageTask(kourier(ctx), m.ID); err != nil || task != nil {
-			t.Fatalf("message %s of the deleted task: %+v, %v; want deleted", m.ID, task, err)
-		}
-	}
-	// A pause is not settled: retention keeps it.
-	if task, err := h.GetTask(ctx, &a2a.GetTaskRequest{ID: paused.ID}); err != nil || task.Status.State != a2a.TaskStateInputRequired {
-		t.Fatalf("paused task: %v; want kept", err)
-	}
-}
-
-func TestZeroRetentionKeepsTasks(t *testing.T) {
-	fake := newFake(script(say("ok"), idle(stopEndTurn)))
-	exec, clk, h := newClockedExec(t, fake, 0)
-	task, _ := turn(t, h, userText("", "one"))
-	clk.advance(100000 * time.Hour)
-	exec.prune(context.Background())
-	if _, err := h.GetTask(context.Background(), &a2a.GetTaskRequest{ID: task.ID}); err != nil {
-		t.Fatalf("task with no retention: %v", err)
-	}
 }
 
 func TestArchivingASessionDeletesItsContextsTasks(t *testing.T) {
@@ -334,7 +304,9 @@ func TestArchivingASessionDeletesItsContextsTasks(t *testing.T) {
 	clk.advance(30 * time.Minute)
 	turn(t, h, userText(other.ContextID, "keep this context alive"))
 	clk.advance(31 * time.Minute)
-	exec.reap(ctx)
+	if refused := exec.sweep(t); len(refused) != 0 {
+		t.Fatalf("sweep: %v", refused)
+	}
 	if got := fake.archivedSessions(); !slices.Equal(got, []string{"sesn_1"}) {
 		t.Fatalf("archived = %v, want sesn_1", got)
 	}
@@ -355,7 +327,7 @@ func TestArchivingASessionDeletesItsContextsTasks(t *testing.T) {
 func TestTaskOwnerIsTheCaller(t *testing.T) {
 	fake := newFake(script(say("ok"), idle(stopEndTurn)))
 	st := newStore(t, nil)
-	h := NewRequestHandler(&Executor{Backend: fake, Store: st}, asKourier{})
+	h := serve(t, &Executor{Backend: fake, Store: st}, st, nil)
 	msg := userText("", "hi")
 	var id a2a.TaskID
 	for ev, err := range h.SendStreamingMessage(context.Background(), &a2a.SendMessageRequest{Message: msg}) {
@@ -378,6 +350,6 @@ func TestTaskOwnerIsTheCaller(t *testing.T) {
 		t.Fatalf("a read for no caller: %v, want ErrUnauthenticated", err)
 	}
 	if _, err := h.GetTask(context.Background(), &a2a.GetTaskRequest{ID: id}); err != nil {
-		t.Fatalf("GetTask through the interceptor: %v", err)
+		t.Fatalf("GetTask through the caller check: %v", err)
 	}
 }

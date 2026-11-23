@@ -3,17 +3,15 @@ package adapter
 import (
 	"context"
 	"fmt"
-	"time"
+
+	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2asrv"
 
 	"github.com/agentkourier/agent-kourier/addons/cma/store"
+	"github.com/agentkourier/agent-kourier/addons/kit/runtime"
+	kitstore "github.com/agentkourier/agent-kourier/addons/kit/store"
+	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
-
-// reapInterval is how often Run looks for idle sessions and old tasks. A session can outlive IdleTTL, and a task
-// TaskRetention, by up to this much.
-const reapInterval = time.Minute
-
-// InterruptedMessage is the agent message of a task that a restart failed.
-const InterruptedMessage = "Interrupted by an adapter restart."
 
 // Restore loads each context's session from the store and reconciles it with the sessions this adapter made in CMA,
 // which carry their context ID in their metadata:
@@ -25,8 +23,9 @@ const InterruptedMessage = "Interrupted by an adapter restart."
 //   - A stored session that CMA no longer lists (archived, terminated, or in another environment) is forgotten, with
 //     the context's tasks: the context's next message starts a new session.
 //
-// A context the executor already has is left alone. Call it before serving; it fails when the store or CMA cannot be
-// read, or a change cannot be stored.
+// A context the executor already has is left alone. The runtime calls it when this replica takes over as the leader,
+// before it fails the turns a restart cut off and serves (runtime.Restorer); it fails, and stops the takeover, when the
+// store or CMA cannot be read, or a change cannot be stored.
 func (e *Executor) Restore(ctx context.Context) error {
 	stored, err := e.Store.Sessions(ctx)
 	if err != nil {
@@ -110,7 +109,7 @@ func (e *Executor) Restore(ctx context.Context) error {
 			continue
 		}
 		e.logger().Info("forgetting a context whose session CMA no longer lists", "context", contextID, "session", s.SessionID)
-		if err := e.Store.ForgetContext(ctx, contextID, s.SessionID, now); err != nil {
+		if err := e.Store.ForgetSession(ctx, contextID, s.SessionID, now); err != nil {
 			return fmt.Errorf("forget context %s: %w", contextID, err)
 		}
 		e.Metrics.SessionArchived(ArchiveGone)
@@ -127,17 +126,10 @@ func (e *Executor) Restore(ctx context.Context) error {
 	return nil
 }
 
-// Settle fails the tasks a restart left submitted or working, with the agent message InterruptedMessage, and sends
-// their sessions an interrupt (best effort: a failure is logged). A task paused on an approval (input-required)
-// survives, and its answer reaches the paused calls. Call it after Restore and before serving. The store fails each
-// task in a write of its own: one whose record does not decode by its state alone, and one that changed since it was
-// read it logs and leaves. Settle fails when the store cannot be read or written.
-func (e *Executor) Settle(ctx context.Context) error {
-	settled, err := e.Store.SettleInterrupted(ctx, InterruptedMessage)
-	e.Telemetry.TasksInterrupted(settled.Interrupted())
-	if err != nil {
-		return err
-	}
+// Interrupted sends user.interrupt to the session of each context whose task the runtime's settlement failed, so that
+// a session the cut-off turn left running stops (runtime.Interrupter). It is best effort: a failure is logged, and the
+// takeover goes on.
+func (e *Executor) Interrupted(ctx context.Context, settled kitstore.Settlement) {
 	contexts := map[string]bool{}
 	for _, task := range settled.Failed {
 		contexts[task.ContextID] = true
@@ -156,82 +148,97 @@ func (e *Executor) Settle(ctx context.Context) error {
 			e.logger().Warn("interrupt the session of an interrupted task", "context", contextID, "session", cs.id, "error", err)
 		}
 	}
-	if settled.Interrupted() > 0 || settled.Skipped > 0 {
-		e.logger().Info("failed the tasks a restart interrupted", "tasks", settled.Interrupted(),
-			"unreadable", len(settled.Unreadable), "skipped", settled.Skipped)
+}
+
+// ReleaseContext archives the session of a context the runtime's upkeep found idle past SESSION_IDLE_TTL, with no task
+// running (runtime.ContextReleaser); the upkeep then forgets the context with its tasks from before. The session is the
+// stored one, c.Ref, or, for a context whose session the store missed (a failed PutSession), the one in the map. A
+// context with no session has nothing to archive, and is forgotten.
+//
+// The listing can be stale by the time the release runs, so the decision is taken again under e.mu: a context whose
+// session is being created, whose session in the map a turn holds, or whose session to archive a turn started or ended
+// in after the activity the listing read (c.LastActive) is refused with runtime.ErrContextBusy. The last of these has
+// its activity written to the store again, in case the turn's own write of it failed. A stored session that is not
+// the map's is not archived: the map's is recorded in the store instead, for the next sweep to judge by its own
+// activity (which TouchSession could not store under the other session), and the release fails. A session that fails
+// to archive goes back in the map, unless the context has started a new one, for the next sweep.
+func (e *Executor) ReleaseContext(ctx context.Context, c kitstore.Context) error {
+	e.mu.Lock()
+	if _, creating := e.creating[c.ContextID]; creating {
+		e.mu.Unlock()
+		return fmt.Errorf("context %s: a session is being created: %w", c.ContextID, runtime.ErrContextBusy)
 	}
+	cs, mapped := e.sessions[c.ContextID]
+	if mapped && cs.turns > 0 {
+		e.mu.Unlock()
+		return fmt.Errorf("context %s: a turn runs in session %s: %w", c.ContextID, cs.id, runtime.ErrContextBusy)
+	}
+	id := c.Ref
+	if id == "" && mapped {
+		id = cs.id
+	}
+	if mapped && cs.id == id && cs.lastActive.After(c.LastActive) {
+		at := cs.lastActive
+		e.mu.Unlock()
+		// The activity is written again: a write of it that failed would leave the store behind the map, and every
+		// sweep refused, for good. A row that names no session (its PutSession failed) is given the map's.
+		var err error
+		if c.Ref == "" {
+			err = e.Store.PutSession(ctx, store.Session{ContextID: c.ContextID, SessionID: id, LastActive: at})
+		} else {
+			err = e.Store.TouchSession(ctx, c.ContextID, id, at)
+		}
+		if err != nil {
+			// Not busy, so that the upkeep logs it at WARN: the store is failing.
+			return fmt.Errorf("context %s: session %s was active since the listing: store its activity: %w", c.ContextID, id, err)
+		}
+		return fmt.Errorf("context %s: session %s was active since the listing: %w", c.ContextID, id, runtime.ErrContextBusy)
+	}
+	if mapped && cs.id != id {
+		s := store.Session{ContextID: c.ContextID, SessionID: cs.id, LastActive: cs.lastActive}
+		e.mu.Unlock()
+		if err := e.Store.PutSession(ctx, s); err != nil {
+			return fmt.Errorf("context %s: the store names session %s, not %s: record it: %w", c.ContextID, id, s.SessionID, err)
+		}
+		return fmt.Errorf("context %s: the store named session %s, not %s, and now names %s", c.ContextID, id, s.SessionID, s.SessionID)
+	}
+	if mapped {
+		delete(e.sessions, c.ContextID)
+	}
+	e.mu.Unlock()
+	if id == "" {
+		return nil
+	}
+	if err := e.Backend.Archive(ctx, id); err != nil {
+		if mapped {
+			e.mu.Lock()
+			if _, ok := e.sessions[c.ContextID]; !ok {
+				e.sessions[c.ContextID] = cs
+			}
+			e.mu.Unlock()
+		}
+		return fmt.Errorf("archive session %s: %w", id, err)
+	}
+	e.logger().Info("archived an idle session", "session", id, "context", c.ContextID, "idle_ttl", e.IdleTTL)
+	e.Metrics.SessionArchived(ArchiveIdle)
 	return nil
 }
 
-// Run archives the sessions of contexts idle past IdleTTL, and deletes the settled tasks older than TaskRetention,
-// once a minute until ctx ends. It returns at once when both are zero.
-func (e *Executor) Run(ctx context.Context) {
-	if e.IdleTTL <= 0 && e.TaskRetention <= 0 {
-		return
-	}
-	tick := time.NewTicker(reapInterval)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-			e.reap(ctx)
-			e.prune(ctx)
-		}
-	}
+// ValidateMessage refuses, with a2a.ErrInvalidParams and before any turn (runtime.MessageValidator), a message the
+// adapter cannot send to a session: a new message with a part other than text and data, or with no text, and an answer
+// to a task paused on tool approvals that does not decide each of its calls once, in a tool_approval_response. Plain
+// text never decides a call. Refused here, a new message is no turn and a paused task stays paused: Execute's error
+// would count a failed turn, and fail the task, whose session would then wait on the calls for good.
+func (e *Executor) ValidateMessage(_ context.Context, msg *a2a.Message, paused *a2a.Task) error {
+	_, _, err := e.outbound(&a2asrv.ExecutorContext{Message: msg, StoredTask: paused})
+	return err
 }
 
-// reap archives each session whose context has had no turn running for longer than IdleTTL, and forgets it with the
-// context's tasks. A session it fails to archive goes back in the map, unless its context has started a new one, for
-// the next reap.
-func (e *Executor) reap(ctx context.Context) {
-	if e.IdleTTL <= 0 {
-		return
+// FailedOutcome names a turn that failed waiting for a sandbox tool's result, whose status message carries the code
+// timeout, turnTimeout (runtime.TurnClassifier). Any other failed turn is the runtime's failed.
+func (e *Executor) FailedOutcome(status a2a.TaskStatus) telemetry.TurnOutcome {
+	if status.Message != nil && status.Message.Metadata["code"] == "timeout" {
+		return turnTimeout
 	}
-	type expired struct{ contextID, session string }
-	var due []expired
-	now := e.clock()
-	e.mu.Lock()
-	for contextID, cs := range e.sessions {
-		if cs.turns == 0 && now.Sub(cs.lastActive) > e.IdleTTL {
-			due = append(due, expired{contextID, cs.id})
-			delete(e.sessions, contextID)
-		}
-	}
-	e.mu.Unlock()
-	for _, d := range due {
-		log := e.logger().With("session", d.session, "context", d.contextID)
-		if err := e.Backend.Archive(ctx, d.session); err != nil {
-			log.Warn("archive an idle session; will retry", "error", err)
-			e.mu.Lock()
-			if _, ok := e.sessions[d.contextID]; !ok {
-				e.sessions[d.contextID] = &contextSession{id: d.session, lastActive: now.Add(-e.IdleTTL - time.Nanosecond)}
-			}
-			e.mu.Unlock()
-			continue
-		}
-		log.Info("archived an idle session", "idle_ttl", e.IdleTTL)
-		e.Metrics.SessionArchived(ArchiveIdle)
-		// The tasks before now ran in the archived session and can never run again; a turn that started since runs in
-		// a new session and is kept. Should this fail, Restore forgets the context at the next start.
-		if err := e.Store.ForgetContext(ctx, d.contextID, d.session, now); err != nil {
-			log.Warn("forget an archived session's context", "error", err)
-		}
-	}
-}
-
-// prune deletes the settled tasks last updated more than TaskRetention ago, with their message IDs.
-func (e *Executor) prune(ctx context.Context) {
-	if e.TaskRetention <= 0 {
-		return
-	}
-	n, err := e.Store.DeleteSettledBefore(ctx, e.clock().Add(-e.TaskRetention))
-	if err != nil {
-		e.logger().Warn("delete old settled tasks", "error", err)
-		return
-	}
-	if n > 0 {
-		e.logger().Info("deleted old settled tasks", "tasks", n, "task_retention", e.TaskRetention)
-	}
+	return ""
 }

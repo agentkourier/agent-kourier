@@ -8,6 +8,19 @@ import (
 	"github.com/agentkourier/agent-kourier/addons/kit/settings"
 )
 
+// parse reads the settings as the adapter's command does (runtime.Parse of adapter.Addon, which this package cannot
+// import): the adapter's own and the shared ones, with the token check alone.
+func parse(getenv func(string) string) (Config, error) {
+	shared, own, err := settings.Parse(getenv, spec())
+	if err != nil {
+		return Config{}, err
+	}
+	return From(shared, own), nil
+}
+
+// spec is the settings.Spec that the kit's runtime makes of adapter.Addon.
+func spec() settings.Spec { return settings.Spec{Name: "cma", Noun: "adapter", Vars: Vars()} }
+
 // env is a fake environment: the minimal valid one plus the overrides. An override of "" unsets the variable.
 func env(overrides map[string]string) func(string) string {
 	base := map[string]string{
@@ -22,7 +35,7 @@ func env(overrides map[string]string) func(string) string {
 }
 
 func TestDefaults(t *testing.T) {
-	c, err := Parse(env(nil))
+	c, err := parse(env(nil))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -44,7 +57,7 @@ func TestDefaults(t *testing.T) {
 }
 
 func TestEverySetting(t *testing.T) {
-	c, err := Parse(env(map[string]string{
+	c, err := parse(env(map[string]string{
 		"LISTEN_ADDR": ":9000", "PUBLIC_URL": "http://cma.agents.svc:9000/a2a",
 		"SESSION_IDLE_TTL": "0", "TOOL_RESULT_TIMEOUT": "90s",
 		"AUTH_HEADER": "x-kourier-token",
@@ -85,7 +98,7 @@ func TestRefused(t *testing.T) {
 			"CMA_AGENT_ID is required\n" + `LOG_LEVEL "chatty" is not debug, info, warn or error`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := Parse(env(tc.overrides))
+			_, err := parse(env(tc.overrides))
 			if err == nil {
 				t.Fatal("Parse accepted it")
 			}
@@ -99,7 +112,7 @@ func TestRefused(t *testing.T) {
 // How the adapter reads the shared variables: the token check alone (the OIDC_* variables are not read), and its own
 // name for itself in the refusal of AUTH_DISABLED.
 func TestSharedAsTheAdapterReadsThem(t *testing.T) {
-	c, err := Parse(env(map[string]string{"OIDC_ISSUER": "https://issuer.example.test", "OIDC_AUDIENCE": "a", "OIDC_SUBJECT": "s"}))
+	c, err := parse(env(map[string]string{"OIDC_ISSUER": "https://issuer.example.test", "OIDC_AUDIENCE": "a", "OIDC_SUBJECT": "s"}))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -114,7 +127,7 @@ func TestSharedAsTheAdapterReadsThem(t *testing.T) {
 		{map[string]string{"AUTH_TOKEN_FILE": "", "AUTH_DISABLED": "true", "LISTEN_ADDR": ":8090", "PUBLIC_URL": "http://cma.agents.svc:8090/a2a"},
 			`AUTH_DISABLED=true needs a loopback LISTEN_ADDR, and ":8090" is not one: anyone who reaches the adapter could run the agent`},
 	} {
-		if _, err := Parse(env(tc.overrides)); err == nil || err.Error() != tc.want {
+		if _, err := parse(env(tc.overrides)); err == nil || err.Error() != tc.want {
 			t.Errorf("%v: error %v, want %s", tc.overrides, err, tc.want)
 		}
 	}
@@ -137,17 +150,17 @@ func TestHostlessURLsRefused(t *testing.T) {
 			`ADVERTISE_URL "http://:8090" is not an http or https URL with a host`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := Parse(env(tc.overrides)); err == nil || err.Error() != tc.want {
+			if _, err := parse(env(tc.overrides)); err == nil || err.Error() != tc.want {
 				t.Errorf("error %v, want %s", err, tc.want)
 			}
 		})
 	}
 }
 
-// Each of the adapter's own variables is in its Spec, so Parse reads it: one left out would read as its zero value, and a
-// TOOL_RESULT_TIMEOUT of 0 waits for ever.
+// Each of the adapter's own variables is in Vars, so the runtime reads it: one left out would read as its zero value,
+// and a TOOL_RESULT_TIMEOUT of 0 waits for ever.
 func TestOwnVarsDeclared(t *testing.T) {
-	_, own, err := settings.Parse(env(nil), Spec())
+	_, own, err := settings.Parse(env(nil), spec())
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}

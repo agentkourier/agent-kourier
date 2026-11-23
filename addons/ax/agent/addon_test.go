@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -155,18 +156,22 @@ func TestTheAgentRegistersItsOwnMetrics(t *testing.T) {
 	}
 }
 
-// The runtime's idle sweep deletes a context's ADK session with its tasks, and the agent counts it.
+// The runtime's idle sweep deletes a context's ADK session with its tasks, and the agent counts it. The sweep's clock
+// moves past the TTL only once the turn has completed: a clock already past it would let a sweep delete the context
+// while a2a-go still stores the turn's task.
 func TestTheIdleSweepDeletesTheADKSessionAndCountsIt(t *testing.T) {
 	env := sqliteEnv(t)
 	env["SESSION_IDLE_TTL"] = "1h"
+	var ahead atomic.Int64 // how far the sweep's clock runs ahead of the store's
 	in := kittest.Start(t, kitSubject(), "ax-0", env, runtime.Options{UpkeepInterval: 20 * time.Millisecond,
-		Now: func() time.Time { return time.Now().Add(2 * time.Hour) }})
+		Now: func() time.Time { return time.Now().Add(time.Duration(ahead.Load())) }})
 	kittest.WaitFor(t, "the agent to be ready", in.Ready)
 	res, err := in.Client(t).SendMessage(t.Context(), &a2a.SendMessageRequest{Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hello"))})
 	task, ok := res.(*a2a.Task)
 	if err != nil || !ok || task.Status.State != a2a.TaskStateCompleted {
 		t.Fatalf("turn = %+v, %v", res, err)
 	}
+	ahead.Store(int64(2 * time.Hour))
 	kittest.WaitFor(t, "the idle session to be counted", func() bool {
 		return in.Metric(`agentkourier_ax_sessions_deleted_total{reason="idle"}`) != ""
 	})

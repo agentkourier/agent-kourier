@@ -2,10 +2,8 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
-	"log/slog"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -14,15 +12,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
-	"github.com/agentkourier/agent-kourier/addons/cma/adapter"
-	"github.com/agentkourier/agent-kourier/addons/cma/config"
 	"github.com/agentkourier/agent-kourier/addons/kit/auth"
 	"github.com/agentkourier/agent-kourier/addons/kit/limitsdoc"
-	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
+	"github.com/agentkourier/agent-kourier/addons/kit/runtime"
 )
 
 // testToken is the one token in the file the tests below write: obviously not a real credential.
@@ -62,31 +57,10 @@ func startServing(t *testing.T, more map[string]string, log io.Writer) string {
 	t.Cleanup(api.Close)
 	t.Setenv("ANTHROPIC_BASE_URL", api.URL)
 	t.Setenv("ANTHROPIC_API_KEY", "fake-api-key-for-tests")
-	addr := freeAddr(t)
-	env := map[string]string{"CMA_AGENT_ID": "agent_test", "CMA_ENVIRONMENT_ID": "env_test", "LISTEN_ADDR": addr,
+	env := map[string]string{"CMA_AGENT_ID": "agent_test", "CMA_ENVIRONMENT_ID": "env_test", "LISTEN_ADDR": freeAddr(t),
 		"SQLITE_PATH": filepath.Join(t.TempDir(), "cma.db")}
 	maps.Copy(env, more)
-	cfg, err := config.Parse(func(k string) string { return env[k] })
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	served := make(chan error, 1)
-	go func() {
-		served <- serve(ctx, cfg, telemetry.Config{}, slog.New(slog.NewJSONHandler(log, nil)), serveOptions{})
-	}()
-	t.Cleanup(func() {
-		cancel()
-		select {
-		case err := <-served:
-			if err != nil {
-				t.Errorf("serve: %v", err)
-			}
-		case <-time.After(10 * time.Second):
-			t.Error("serve did not return after its context ended")
-		}
-	})
-	base := "http://" + addr
+	base := start(t, env, log)
 	newProber().waitFor(t, base+"/readyz", http.StatusOK)
 	return base
 }
@@ -122,27 +96,26 @@ func get(t *testing.T, url string, header http.Header) (status int, challenge, b
 }
 
 // The agent card is behind the caller check, as the A2A endpoint is: a caller without an accepted token is refused
-// with 401, logged with the reason and the header, and counted by reason, and one with it gets the card, in the header
-// the check reads.
+// with 401, logged with the reason, and counted by reason, and one with it gets the card, in the header the check
+// reads.
 func TestCardIsBehindTheCallerCheck(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
-		header    string
 		env       map[string]string
 		accepted  http.Header
 		wrong     http.Header
 		challenge string
 	}{
-		{"authorization", "Authorization", map[string]string{},
+		{"authorization", map[string]string{},
 			http.Header{"Authorization": {"Bearer " + testToken}}, http.Header{"Authorization": {"Bearer fake-wrong-token"}}, "Bearer"},
-		{"named header", "X-Kourier-Token", map[string]string{"AUTH_HEADER": "X-Kourier-Token"},
+		{"named header", map[string]string{"AUTH_HEADER": "X-Kourier-Token"},
 			http.Header{"X-Kourier-Token": {testToken}}, http.Header{"Authorization": {"Bearer " + testToken}, "X-Kourier-Token": {"fake-wrong-token"}}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.env["AUTH_TOKEN_FILE"] = tokenFile(t)
 			log := &logSink{}
 			base := startServing(t, tc.env, log)
-			card := base + a2aPath + adapter.CardPath
+			card := base + runtime.A2APath + runtime.CardPath
 			for name, h := range map[string]http.Header{"no credentials": nil, "a wrong token": tc.wrong} {
 				status, challenge, body := get(t, card, h)
 				if status != http.StatusUnauthorized || challenge != tc.challenge || strings.Contains(body, "claude-managed-agent") {
@@ -153,7 +126,7 @@ func TestCardIsBehindTheCallerCheck(t *testing.T) {
 				t.Fatalf("card with the token = %d %q, want 200 and the card", status, body)
 			}
 			for _, reason := range []string{"missing", "invalid"} {
-				want := `"msg":"refused an A2A request","reason":"` + reason + `","header":"` + tc.header + `","remote":`
+				want := `"msg":"refused an A2A request","reason":"` + reason + `","remote":`
 				if !strings.Contains(log.String(), want) {
 					t.Errorf("the log lacks %s", want)
 				}
@@ -174,7 +147,7 @@ func TestCardIsBehindTheCallerCheck(t *testing.T) {
 // With the check off, the card needs no token.
 func TestCardWithTheCallerCheckOff(t *testing.T) {
 	base := startServing(t, map[string]string{"AUTH_DISABLED": "true"}, io.Discard)
-	if status, _, body := get(t, base+a2aPath+adapter.CardPath, nil); status != http.StatusOK || !strings.Contains(body, `"name":"claude-managed-agent"`) {
+	if status, _, body := get(t, base+runtime.A2APath+runtime.CardPath, nil); status != http.StatusOK || !strings.Contains(body, `"name":"claude-managed-agent"`) {
 		t.Fatalf("card = %d %q, want 200 and the card", status, body)
 	}
 }
@@ -189,7 +162,7 @@ func call(t *testing.T, base, method string, params any) (code int) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+a2aPath, bytes.NewReader(raw))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+runtime.A2APath, bytes.NewReader(raw))
 	if err != nil {
 		t.Fatal(err)
 	}

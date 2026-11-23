@@ -20,8 +20,8 @@ type TextExecutor struct {
 }
 
 var (
-	_ a2asrv.AgentExecutor    = (*TextExecutor)(nil)
-	_ runtime.ResumeValidator = (*TextExecutor)(nil)
+	_ a2asrv.AgentExecutor     = (*TextExecutor)(nil)
+	_ runtime.MessageValidator = (*TextExecutor)(nil)
 )
 
 // Execute bridges only ask_user; it never treats plain text as tool authorization. The kit's runtime counts and traces
@@ -30,8 +30,12 @@ func (e *TextExecutor) Execute(ctx context.Context, req *a2asrv.ExecutorContext)
 	return func(yield func(a2a.Event, error) bool) { e.execute(ctx, req, yield) }
 }
 
-// ValidateResume accepts an answer to an ask_user question that is text, not blank: the one Execute can pass to ADK.
-func (e *TextExecutor) ValidateResume(_ context.Context, _ *a2a.Task, msg *a2a.Message) error {
+// ValidateMessage accepts an answer to an ask_user question that is text, not blank: the one Execute can pass to ADK.
+// A new message (paused nil) is accepted as it is, and Execute answers it.
+func (e *TextExecutor) ValidateMessage(_ context.Context, msg *a2a.Message, paused *a2a.Task) error {
+	if paused == nil {
+		return nil
+	}
 	_, err := answerText(msg)
 	return err
 }
