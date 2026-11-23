@@ -15,19 +15,11 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
-	"github.com/agentkourier/agent-kourier/addons/kit/auth"
-	"github.com/agentkourier/agent-kourier/addons/kit/limitsdoc"
 	"github.com/agentkourier/agent-kourier/addons/kit/runtime"
 )
 
 // testToken is the one token in the file the tests below write: obviously not a real credential.
 const testToken = "fake-token-for-tests"
-
-// TestCallerCheckLimits holds how often the add-on reads its token file, which it watches at the kit's interval, to
-// docs/reference/limits.md.
-func TestCallerCheckLimits(t *testing.T) {
-	limitsdoc.Duration(t, "cma.token-reload", auth.ReloadInterval)
-}
 
 // logSink is a log the server and the test may use at once.
 type logSink struct {

@@ -97,10 +97,11 @@ markdown_extensions:
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.inlinehilite
-  # Includes a recipe's files into a page (--8<-- "sre-triage/agent/agent.yaml"), so the page cannot drift from the
-  # files. Only files under examples/recipes can be included; a missing file fails the build.
+  # Includes files into a page (--8<-- "sre-triage/agent/agent.yaml"), so the page cannot drift from them: a recipe's
+  # files, the Helm examples, the add-ons' shared settings (docs/reference/.addon-settings.md) and the kit's echo.
+  # Only files under the base_path directories can be included; a missing file fails the build.
   - pymdownx.snippets:
-      base_path: [examples/recipes, examples/helm]
+      base_path: [examples/recipes, examples/helm, docs/reference, addons/kit/kittest/echo]
       restrict_base_path: true
       check_paths: true
   - pymdownx.superfences:
@@ -155,6 +156,7 @@ nav:
       - Connect a generic A2A agent: how-to/connect-a2a-agent.md
       - Connect the AX add-on: how-to/connect-ax.md
       - Connect Claude Managed Agents: how-to/connect-claude-managed-agents.md
+      - Write an add-on on the kit: how-to/write-an-add-on.md
       - Let the agent ask questions: how-to/agent-questions.md
       - Rotate the Binding token: how-to/rotate-binding-token.md
       - Put a verifying front door before kagent: how-to/front-door.md

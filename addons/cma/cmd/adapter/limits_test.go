@@ -3,22 +3,8 @@ package main
 import (
 	"testing"
 
-	"github.com/agentkourier/agent-kourier/addons/kit/cluster"
 	"github.com/agentkourier/agent-kourier/addons/kit/limitsdoc"
-	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
-
-// TestForwardLimits holds how long a standby waits to connect to the leader before it answers 503, the kit's router's
-// constant, to docs/reference/limits.md.
-func TestForwardLimits(t *testing.T) {
-	limitsdoc.Duration(t, "cma.forward-dial-timeout", cluster.ForwardDialTimeout)
-}
-
-// TestLogLimits holds the cap on an error's text in a log line, which the kit's log handler applies to the adapter's
-// log, to docs/reference/limits.md.
-func TestLogLimits(t *testing.T) {
-	limitsdoc.Bytes(t, "cma.log-error-bytes", telemetry.MaxLogErrorBytes)
-}
 
 // TestChartLimits holds the add-on's startup probe in the chart to the pages: how many times the kubelet tries it, and
 // how far apart, which bound the start-up work.

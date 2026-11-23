@@ -26,7 +26,34 @@ agent.
 - **Checked in CI like the broker.** Its tests (with the race detector, and on Postgres where it has a store), its lint,
   `govulncheck` and a scan of its image for each platform are checks that a release requires to have passed.
 - **Documented with its limits.** Each add-on has a how-to, a reference page, and a section in
-  [Limits](../reference/limits.md#add-ons) with every limit it has.
+  [Limits](../reference/limits.md#add-ons) with its own limits, beside [those every add-on
+  shares](../reference/limits.md#every-add-on).
+
+## What the add-ons share: the kit
+
+An add-on is an A2A agent in front of a backend, and most of such a process has nothing to do with the backend. The kit,
+`addons/kit`, holds that part once, and each add-on supplies the rest: an A2A executor that runs its turns, the hooks it
+needs, its own settings, and its store's own tables, if it keeps anything beside the tasks.
+
+| Package | What it holds for every add-on |
+|---|---|
+| `runtime` | The command and its one flag, `--version`; the A2A endpoint and the agent card; the replay of a resent message, which joins its first send's task instead of starting a second turn; the check of a message before its turn; the takeover of a new leader, which fails the turns a restart cut off; the upkeep that deletes old tasks and releases idle contexts; and the order of the stop |
+| `settings` | The variables every add-on reads, and an add-on's own, with their defaults and refusals |
+| `store` | The tasks, the IDs of the messages that started them and each context's last activity, on SQLite (one replica) or Postgres (several), with the fence that every write of a leader runs first. It links no SQLite driver: each add-on brings its own |
+| `cluster` | The leader election through a lease row in the store, and a standby's forwarding to the leader |
+| `auth`, `auth/oidc` | The caller check: a token file, or OIDC for an add-on that offers it, apart so that only that add-on links an OIDC library |
+| `telemetry` | The metrics, traces and JSON log, built as Agent Kourier's are |
+| `kittest` | The cases every add-on runs, under the runtime on each store, and `kittest/echo`, the reference add-on they run in the kit |
+
+So the add-ons behave alike wherever the kit decides: the same settings, the same task store, readiness and stop, and
+the same limits ([Every add-on](../reference/limits.md#every-add-on)). What differs is the backend: what a turn runs,
+what a pause waits for, and what an idle context loses.
+
+The broker does not use the kit, and the kit does not use the broker. The broker's packages are internal to its module,
+which another module cannot import, and having the broker import the kit would put the add-ons' code and its
+dependencies in the broker's module. The kit's telemetry is built as the broker's is, and its limits test began as a
+copy of the broker's: one copy for every add-on, beside the broker's own.
+[Write an add-on on the kit](../how-to/write-an-add-on.md) builds one, step by step.
 
 ## Supported add-ons
 

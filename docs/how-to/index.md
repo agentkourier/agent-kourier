@@ -23,6 +23,8 @@ The guides assume you know Kubernetes and Helm, and link to [explanation](../exp
   Agent Kourier, or on Bedrock in a Google AX Task (experimental).
 - [Connect Claude Managed Agents](connect-claude-managed-agents.md): an agent in Claude Managed Agents, through the
   add-on the chart runs beside Agent Kourier (experimental).
+- [Write an add-on on the kit](write-an-add-on.md): a new add-on in this repository, from the kit's reference backend
+  to the tests that drive it on SQLite and Postgres.
 - [Let the agent ask questions](agent-questions.md): answers from the thread.
 
 ## Alerts

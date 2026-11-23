@@ -192,7 +192,7 @@ type TurnClassifier interface {
 	FailedOutcome(status a2a.TaskStatus) telemetry.TurnOutcome
 }
 
-// Routes is a backend that serves routes of its own beside the kit's (a test control).
+// Routes is a backend that serves routes of its own beside the kit's (ax: /metadata/, proxied to the AX task runner).
 type Routes interface {
 	Routes(mux *http.ServeMux)
 }

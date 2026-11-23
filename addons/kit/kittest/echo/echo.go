@@ -3,6 +3,9 @@
 // package kittest, on Postgres; an add-on's tests run it on SQLite under the driver the add-on links (the kit links
 // none). It shows what an add-on writes on the kit: an Addon, a store opened on the kit's, and an a2asrv.AgentExecutor
 // with the hooks it needs. Only tests import it.
+//
+// The sections between the --8<-- comments are the code of docs/how-to/write-an-add-on.md, which includes them (the
+// snippets extension of mkdocs.yml): keep each one whole and readable on its own.
 package echo
 
 import (
@@ -29,6 +32,8 @@ const (
 	Question = "Which one?"
 )
 
+// --8<-- [start:setting]
+
 // greeting is the echo's own setting, which the reply starts with: the add-on's own variables are read with the
 // shared ones.
 var greeting = settings.Func("ECHO_GREETING", "echo", func(v string, _ settings.Values) (string, error) {
@@ -37,6 +42,10 @@ var greeting = settings.Func("ECHO_GREETING", "echo", func(v string, _ settings.
 	}
 	return v, nil
 })
+
+// --8<-- [end:setting]
+
+// --8<-- [start:addon]
 
 // Addon is the echo add-on, version version, named echo: metrics agentkourier_echo_*, process "agent".
 func Addon(version string) runtime.Addon[*store.Store] {
@@ -52,6 +61,10 @@ func Addon(version string) runtime.Addon[*store.Store] {
 		},
 	}
 }
+
+// --8<-- [end:addon]
+
+// --8<-- [start:open]
 
 // Open opens the kit's task state on the SQLite file or the Postgres database cfg names, with each task's create and
 // update marking its context active, so that the upkeep's idle sweep deletes a context whose tasks have not changed.
@@ -70,6 +83,10 @@ func Open(ctx context.Context, cfg settings.Config, opts runtime.StoreOptions) (
 	return store.NewStore(db, store.TaskOptions{ContextActivity: true}), nil
 }
 
+// --8<-- [end:open]
+
+// --8<-- [start:backend]
+
 // Backend answers the turns.
 type Backend struct {
 	// Greeting starts each reply.
@@ -80,6 +97,10 @@ var (
 	_ runtime.Backend          = (*Backend)(nil)
 	_ runtime.MessageValidator = (*Backend)(nil)
 )
+
+// --8<-- [end:backend]
+
+// --8<-- [start:execute]
 
 // Execute answers the message: a question for "pause", a wait until the turn ends for "hold", the answer to a paused
 // question, or the message's own text.
@@ -115,6 +136,8 @@ func (b *Backend) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter.
 	}
 }
 
+// --8<-- [end:execute]
+
 // Cancel ends the task canceled.
 func (b *Backend) Cancel(_ context.Context, ec *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
 	return func(yield func(a2a.Event, error) bool) {
@@ -122,11 +145,15 @@ func (b *Backend) Cancel(_ context.Context, ec *a2asrv.ExecutorContext) iter.Seq
 	}
 }
 
+// --8<-- [start:validate]
+
 // ValidateMessage accepts a message, new or an answer, of text alone, not blank: the one Execute answers.
 func (b *Backend) ValidateMessage(_ context.Context, msg *a2a.Message, _ *a2a.Task) error {
 	_, err := text(msg)
 	return err
 }
+
+// --8<-- [end:validate]
 
 // text is msg's text, its text parts joined, or why it has none.
 func text(msg *a2a.Message) (string, error) {
@@ -151,6 +178,8 @@ func text(msg *a2a.Message) (string, error) {
 	return joined, nil
 }
 
+// --8<-- [start:subject]
+
 // Subject is the echo add-on as kittest drives it, version 1.2.3-test.
 func Subject() kittest.Subject[*store.Store] {
 	return kittest.Subject[*store.Store]{
@@ -160,3 +189,5 @@ func Subject() kittest.Subject[*store.Store] {
 		BadMessage: []*a2a.Part{a2a.NewTextPart("  ")},
 	}
 }
+
+// --8<-- [end:subject]

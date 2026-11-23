@@ -202,8 +202,9 @@ still needs a `userId` or a `tokenSecretRef`.
 ## 4. Match the session lifetimes
 
 Agent Kourier gives a thread a new A2A context once it has had no activity for the Binding's `session.threadTTL`
-(default `2160h`). The add-on archives a context's session once the context has had no turn for `sessionIdleTTL`
-(`SESSION_IDLE_TTL`, the same default), and an archived session cannot be used again. Keep the two equal:
+(default `2160h`). The add-on archives a context's session once the context has had no activity (a message
+accepted for it, or a turn of it starting or ending), with no turn running, for `sessionIdleTTL` (`SESSION_IDLE_TTL`, the
+same default), and an archived session cannot be used again. Keep the two equal:
 
 - Shorter than `threadTTL`, the add-on archives sessions that a thread can still continue, and the thread's next turn
   starts a new session without the old history.

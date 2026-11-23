@@ -1,6 +1,6 @@
 // Package limitsdoc ties the limits that the add-ons' documentation states to the add-ons' code. A value on
 // docs/reference/limits.md that is a constant of an add-on (or a default that its code fills in) is written as a code
-// span followed at once by a marker, `5s`<!--addon-limit:ax.token-reload-->, and the add-on's reference page may write
+// span followed at once by a marker, `5s`<!--addon-limit:kit.token-reload-->, and the add-on's reference page may write
 // the same value with the same marker. A test in the package that holds the constant calls Count, Bytes, Duration or
 // Text with the marker's ID and the constant, and fails when the limits page has no such marker, or when any reference
 // page says something else, at each place it writes that ID. So a constant cannot change without the pages.

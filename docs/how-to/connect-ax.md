@@ -287,8 +287,10 @@ still needs a `userId` or a `tokenSecretRef`.
 ## 4. Match the session lifetimes
 
 Agent Kourier gives a thread a new A2A context once it has had no activity for the Binding's `session.threadTTL`
-(default `2160h`). The add-on deletes a context's ADK session and its tasks once the context has been inactive for
-`sessionIdleTTL` (`SESSION_IDLE_TTL`, the same default) with no turn running, a question the context waits on included.
+(default `2160h`). The add-on deletes a context's ADK session and its tasks, a question the context waits on
+included, once the context has had no activity (a message accepted for it, or a create or an update of one of its tasks,
+which a turn makes as it starts and as it ends), with no turn running, for `sessionIdleTTL` (`SESSION_IDLE_TTL`, the same
+default).
 Keep the two equal:
 
 - Shorter than `threadTTL`, the add-on deletes sessions that a thread can still continue, and the thread's next turn

@@ -15,7 +15,8 @@ The documentation site has the user's pages:
   the AgentBackend and Binding that reach it.
 - [Claude Managed Agents add-on](../../docs/reference/claude-managed-agents.md): how A2A maps to sessions and turns,
   restarts, replicas, the caller check, every setting and the telemetry.
-- [Limits](../../docs/reference/limits.md#claude-managed-agents-add-on): every limit, with its value.
+- [Limits](../../docs/reference/limits.md#claude-managed-agents-add-on): the add-on's own limits, and
+  [those every add-on shares](../../docs/reference/limits.md#every-add-on), each with its value.
 
 This file keeps the developer's notes: running the add-on by hand, and its tests.
 
