@@ -180,7 +180,9 @@ func TestCardWithTheCallerCheckOff(t *testing.T) {
 }
 
 // call sends the JSON-RPC request method with params to the A2A endpoint at base, with no credentials, and returns the
-// code of the response's error, 0 for none. A response that is not JSON-RPC fails t.
+// code of the response's error, 0 for none. It names the protocol version the server serves, as Agent Kourier's client
+// does: without it the request handler answers as to a 0.3 client, with -32009 (version not supported). A response
+// that is not JSON-RPC fails t.
 func call(t *testing.T, base, method string, params any) (code int) {
 	t.Helper()
 	raw, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
@@ -192,6 +194,7 @@ func call(t *testing.T, base, method string, params any) (code int) {
 		t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(a2a.SvcParamVersion, string(a2a.Version))
 	resp, err := newProber().c.Do(req)
 	if err != nil {
 		t.Fatal(err)
