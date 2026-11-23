@@ -101,6 +101,43 @@ func TestTurnOutcomesAreCounted(t *testing.T) {
 	}
 }
 
+// A new message the adapter cannot send to a session (a file, or no text) is refused as invalid before any turn: CMA is
+// never called, and no turn is counted or traced, so the failed turns count the agent's failures alone.
+func TestARefusedMessageIsNoTurn(t *testing.T) {
+	for name, parts := range map[string][]*a2a.Part{
+		"a file":  {a2a.NewFileURLPart("https://example.test/report.pdf", "application/pdf")},
+		"no text": {a2a.NewTextPart("  ")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := tracetest.NewSpanRecorder()
+			tel := newTelemetry(t, sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec)))
+			fake := newFake(script(say("ok"), idle(stopEndTurn)))
+			_, h := observedHandler(t, fake, tel, 0)
+			_, err := h.SendMessage(t.Context(), &a2a.SendMessageRequest{Message: a2a.NewMessage(a2a.MessageRoleUser, parts...)})
+			if !errors.Is(err, a2a.ErrInvalidParams) {
+				t.Fatalf("SendMessage = %v, want invalid params", err)
+			}
+			turn(t, h, userText("", "a good one")) // its count shows the refused one's would have been in by now
+			wantSeries(t, tel, map[string]string{`agentkourier_cma_turns_total{outcome="completed"}`: "1"})
+			if got := series(t, tel, `agentkourier_cma_turns_total{outcome="failed"}`); got != "" {
+				t.Errorf("failed turns = %s, want none", got)
+			}
+			if n := fake.sessionCount(); n != 1 {
+				t.Errorf("sessions created = %d, want the good message's alone", n)
+			}
+			spans := 0
+			for _, s := range rec.Ended() {
+				if s.Name() == "agentkourier.cma.turn" {
+					spans++
+				}
+			}
+			if spans != 1 {
+				t.Errorf("turn spans = %d, want the good message's alone", spans)
+			}
+		})
+	}
+}
+
 // A turn that waited too long for a sandbox tool's result fails its span, as a failed turn does: timeout is one of the
 // spec's ErrorTurns.
 func TestTimedOutTurnFailsItsSpan(t *testing.T) {

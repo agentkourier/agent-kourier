@@ -116,7 +116,48 @@ func TestASubscriptionToAnotherCallersTaskIsNotFound(t *testing.T) {
 	}
 }
 
-// An answer the backend's ResumeValidator refuses is refused with invalid params before the turn starts: the task stays
+// A new message the backend's MessageValidator refuses is refused with invalid params before any turn: the backend never
+// sees it, no turn is counted, and its message ID is not recorded, so a resend is refused again. Without the validator
+// the message starts a turn.
+func TestARefusedNewMessageStartsNoTurn(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		backend func(*scripted) Backend
+		turns   int
+	}{
+		{"with a validator", func(b *scripted) Backend { return validating{b} }, 0},
+		{"without one", func(b *scripted) Backend { return b }, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := &scripted{}
+			s := serveHandler(t, newFakeStore(), tc.backend(b))
+			c := s.client(t, auth.Caller)
+			_, err := send(t, c, message("m1", "bad", "c1", ""))
+			if n := b.turnCount(); n != tc.turns {
+				t.Fatalf("the backend ran %d turns, want %d", n, tc.turns)
+			}
+			if tc.turns != 0 {
+				return
+			}
+			if !errors.Is(err, a2a.ErrInvalidParams) {
+				t.Fatalf("the bad message = %v, want invalid params", err)
+			}
+			if _, err := send(t, c, message("m1", "bad", "c1", "")); !errors.Is(err, a2a.ErrInvalidParams) {
+				t.Fatalf("the bad message resent = %v, want refused again", err)
+			}
+			for _, outcome := range []string{"completed", "failed", "canceled"} {
+				if got := metricOf(t, s.tel, `agentkourier_kit_turns_total{outcome="`+outcome+`"}`); got != "" {
+					t.Errorf("turns %s = %q, want none counted", outcome, got)
+				}
+			}
+			if done, err := send(t, c, message("m2", "done", "c1", "")); err != nil || done.Status.State != a2a.TaskStateCompleted {
+				t.Fatalf("a good message = %+v, %v", done, err)
+			}
+		})
+	}
+}
+
+// An answer the backend's MessageValidator refuses is refused with invalid params before the turn starts: the task stays
 // paused, the backend never sees the answer, and its message ID is not recorded. Without the validator, the same
 // refusal from the turn fails the task on a store whose write runs after the request's end.
 func TestARefusedAnswerKeepsTheTaskPaused(t *testing.T) {

@@ -210,10 +210,12 @@ func (e *Executor) ReleaseContext(ctx context.Context, c kitstore.Context) error
 	return nil
 }
 
-// ValidateResume refuses an answer to a task paused on tool approvals that does not decide each of its calls once, in
-// a tool_approval_response, with a2a.ErrInvalidParams, before the turn runs (runtime.ResumeValidator): Execute's error
-// would fail the task, and the session would wait on the calls for good. Plain text never decides a call.
-func (e *Executor) ValidateResume(_ context.Context, paused *a2a.Task, msg *a2a.Message) error {
+// ValidateMessage refuses, with a2a.ErrInvalidParams and before any turn (runtime.MessageValidator), a message the
+// adapter cannot send to a session: a new message with a part other than text and data, or with no text, and an answer
+// to a task paused on tool approvals that does not decide each of its calls once, in a tool_approval_response. Plain
+// text never decides a call. Refused here, a new message is no turn and a paused task stays paused: Execute's error
+// would count a failed turn, and fail the task, whose session would then wait on the calls for good.
+func (e *Executor) ValidateMessage(_ context.Context, msg *a2a.Message, paused *a2a.Task) error {
 	_, _, err := e.outbound(&a2asrv.ExecutorContext{Message: msg, StoredTask: paused})
 	return err
 }

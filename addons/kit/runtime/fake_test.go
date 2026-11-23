@@ -265,10 +265,10 @@ func (b *scripted) turnCount() int {
 	return b.turns
 }
 
-// validating is scripted with a ResumeValidator that refuses an answer "bad".
+// validating is scripted with a MessageValidator that refuses a message "bad", new or an answer.
 type validating struct{ *scripted }
 
-func (validating) ValidateResume(_ context.Context, _ *a2a.Task, msg *a2a.Message) error {
+func (validating) ValidateMessage(_ context.Context, msg *a2a.Message, _ *a2a.Task) error {
 	if len(msg.Parts) == 1 && msg.Parts[0] != nil && msg.Parts[0].Text() == "bad" {
 		return errors.New("the answer is bad")
 	}

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"iter"
 	"log/slog"
@@ -492,4 +493,18 @@ func callerContext(name string) context.Context {
 	ctx, cc := a2asrv.NewCallContext(context.Background(), nil)
 	cc.User = a2asrv.NewAuthenticatedUser(name, nil)
 	return ctx
+}
+
+// The executor checks only an answer to a question before its turn: a new message, whatever its parts, reaches
+// Execute as it did before the kit checked messages, and an answer must be text.
+func TestTheExecutorChecksOnlyAnswers(t *testing.T) {
+	data := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewDataPart(map[string]any{"not": "text"}))
+	asked := &a2a.Task{ID: "t1", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired}}
+	e := &TextExecutor{}
+	if err := e.ValidateMessage(t.Context(), data, nil); err != nil {
+		t.Errorf("a new message of data = %v, want accepted", err)
+	}
+	if err := e.ValidateMessage(t.Context(), data, asked); !errors.Is(err, a2a.ErrInvalidParams) {
+		t.Errorf("an answer of data = %v, want invalid params", err)
+	}
 }

@@ -294,7 +294,7 @@ func (a Addon[S]) Handler(backend Backend, st Store, check *auth.Check, publicUR
 // a2a-go writes the tasks through tasks.
 func endpoint[S Store](a Addon[S], backend Backend, st Store, tasks taskstore.Store, running *turns, check *auth.Check, publicURL string,
 	tel *telemetry.Telemetry) http.Handler {
-	validator, _ := backend.(ResumeValidator)
+	validator, _ := backend.(MessageValidator)
 	handler := &a2asrv.InterceptedHandler{
 		Handler: &replayHandler{RequestHandler: a2asrv.NewHandler(running, a2asrv.WithTaskStore(tasks)), store: st, tel: tel,
 			validator: validator, life: running.life},

@@ -33,7 +33,7 @@ const DefaultKeepalive = 60 * time.Second
 // is one session, created on the context's first message with the context ID in its metadata. The context-to-session
 // map is kept in Store, with a copy in memory. The runtime calls the executor's hooks: Restore when this replica takes
 // over as the leader, to reconcile the map with CMA; Interrupted once it has failed the turns a restart cut off;
-// ValidateResume before an answer to a paused task runs; ReleaseContext for each context idle past SESSION_IDLE_TTL;
+// ValidateMessage before a message's turn runs; ReleaseContext for each context idle past SESSION_IDLE_TTL;
 // FailedOutcome to name a timed-out turn.
 type Executor struct {
 	Backend Backend
@@ -70,12 +70,12 @@ type contextSession struct {
 }
 
 var (
-	_ a2asrv.AgentExecutor    = (*Executor)(nil)
-	_ runtime.Restorer        = (*Executor)(nil)
-	_ runtime.Interrupter     = (*Executor)(nil)
-	_ runtime.ResumeValidator = (*Executor)(nil)
-	_ runtime.ContextReleaser = (*Executor)(nil)
-	_ runtime.TurnClassifier  = (*Executor)(nil)
+	_ a2asrv.AgentExecutor     = (*Executor)(nil)
+	_ runtime.Restorer         = (*Executor)(nil)
+	_ runtime.Interrupter      = (*Executor)(nil)
+	_ runtime.MessageValidator = (*Executor)(nil)
+	_ runtime.ContextReleaser  = (*Executor)(nil)
+	_ runtime.TurnClassifier   = (*Executor)(nil)
 )
 
 // Execute sends the message, or the answer to a paused task, to the context's session and translates the session's

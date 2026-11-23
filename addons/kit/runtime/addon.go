@@ -157,10 +157,13 @@ type Interrupter interface {
 	Interrupted(ctx context.Context, settled store.Settlement)
 }
 
-// ResumeValidator is a backend that checks a message for a paused task (input-required) before the turn starts. Its
-// error refuses the request with a2a.ErrInvalidParams and leaves the task paused: an executor's error would fail it.
-type ResumeValidator interface {
-	ValidateResume(ctx context.Context, paused *a2a.Task, msg *a2a.Message) error
+// MessageValidator is a backend that checks each message before a turn starts for it: a message that starts a new task
+// (paused nil), or an answer to paused, a task waiting for one (input-required). Its error refuses the request with
+// a2a.ErrInvalidParams before any turn, so the message is not counted as a turn, has no span and its ID is not
+// recorded, and a paused task stays paused (an executor's error would fail it). A message for a task the caller does not
+// have, or one that is neither new nor an answer, is a2a-go's to answer.
+type MessageValidator interface {
+	ValidateMessage(ctx context.Context, msg *a2a.Message, paused *a2a.Task) error
 }
 
 // ContextReleaser is a backend that keeps a context outside the store (cma: a session in CMA). For each context idle

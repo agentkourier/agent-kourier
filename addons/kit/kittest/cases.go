@@ -234,6 +234,26 @@ func aRefusedAnswerKeepsTheTaskPaused[S runtime.Store](t *testing.T, s Subject[S
 	in.WantMetric(t, turns(s, "failed"), "")
 }
 
+// A new message the backend refuses is refused with invalid params before any turn: none is counted, and a resend of
+// it is refused again rather than joined to a task.
+func aRefusedMessageStartsNoTurn[S runtime.Store](t *testing.T, s Subject[S], env map[string]string) {
+	if s.BadMessage == nil {
+		t.Skip("the add-on accepts every new message")
+	}
+	in := Start(t, s, "kittest-a", env, runtime.Options{})
+	WaitFor(t, "the replica to be ready", in.Ready)
+	c := in.Client(t)
+	bad := a2a.NewMessage(a2a.MessageRoleUser, s.BadMessage...)
+	for _, what := range []string{"the bad message", "its resend"} {
+		if _, err := send(t, c, bad); !errors.Is(err, a2a.ErrInvalidParams) {
+			t.Fatalf("%s = %v, want invalid params", what, err)
+		}
+	}
+	want(t, c, text(s.Complete), a2a.TaskStateCompleted)
+	in.WantMetric(t, turns(s, "completed"), "1")
+	in.WantMetric(t, turns(s, "failed"), "")
+}
+
 // A cancel ends a running turn canceled, and the turn counts as canceled.
 func aCancelEndsTheTurnCanceled[S runtime.Store](t *testing.T, s Subject[S], env map[string]string) {
 	in := Start(t, s, "kittest-a", env, runtime.Options{})

@@ -42,7 +42,8 @@ func kitSubject() kittest.Subject[*store.Store] {
 		Complete: "hello", Pause: "clean up", Hold: "hold", Answer: "approved",
 		AnswerMetadata: map[string]any{HITLExtension: map[string]any{"type": "tool_approval_response",
 			"approvals": []any{map[string]any{"id": "sevt_ask", "approved": true}}}},
-		BadAnswer: []*a2a.Part{a2a.NewTextPart("yes, go ahead")}, // an approval is structured; text alone is refused
+		BadAnswer:  []*a2a.Part{a2a.NewTextPart("yes, go ahead")}, // an approval is structured; text alone is refused
+		BadMessage: []*a2a.Part{a2a.NewFileURLPart("https://example.test/report.pdf", "application/pdf")},
 	}
 }
 

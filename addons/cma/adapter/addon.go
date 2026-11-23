@@ -59,12 +59,12 @@ type addonBackend struct {
 }
 
 var (
-	_ runtime.Restorer        = (*addonBackend)(nil)
-	_ runtime.Interrupter     = (*addonBackend)(nil)
-	_ runtime.ResumeValidator = (*addonBackend)(nil)
-	_ runtime.ContextReleaser = (*addonBackend)(nil)
-	_ runtime.TurnClassifier  = (*addonBackend)(nil)
-	_ runtime.Describer       = (*addonBackend)(nil)
+	_ runtime.Restorer         = (*addonBackend)(nil)
+	_ runtime.Interrupter      = (*addonBackend)(nil)
+	_ runtime.MessageValidator = (*addonBackend)(nil)
+	_ runtime.ContextReleaser  = (*addonBackend)(nil)
+	_ runtime.TurnClassifier   = (*addonBackend)(nil)
+	_ runtime.Describer        = (*addonBackend)(nil)
 )
 
 // LogAttrs are the agent, the environment and the tool result timeout.

@@ -20,14 +20,14 @@ import (
 // turn runs), so the handler holds a send of one ID, and only of that ID, from its lookup until the turn's first event,
 // also when its caller hangs up before that (follow): a resend that races it in this process waits and finds the task.
 //
-// It also marks a message's context active before the message is accepted (touch), refuses an answer the backend's
-// ResumeValidator does not accept before the turn starts, and follows a task only for its own caller.
+// It also marks a message's context active before the message is accepted (touch), refuses a message the backend's
+// MessageValidator does not accept before a turn starts, and follows a task only for its own caller.
 type replayHandler struct {
 	a2asrv.RequestHandler
 	store     Store
 	tel       *telemetry.Telemetry
-	validator ResumeValidator // nil: every answer reaches the backend
-	life      context.Context // ends with the add-on's stop, which ends a stream that outlived its request
+	validator MessageValidator // nil: every message reaches the backend
+	life      context.Context  // ends with the add-on's stop, which ends a stream that outlived its request
 
 	mu      sync.Mutex
 	sending map[string]chan struct{} // by message ID: a send between its lookup and its first event, closed at its end
@@ -90,7 +90,7 @@ func (h *replayHandler) SendStreamingMessage(ctx context.Context, req *a2a.SendM
 			h.rejoin(ctx, req.Message, old, yield)
 			return
 		}
-		if err := h.checkResume(ctx, req.Message); err != nil {
+		if err := h.checkMessage(ctx, req.Message); err != nil {
 			yield(nil, err)
 			return
 		}
@@ -153,18 +153,22 @@ func settledOrPaused(task *a2a.Task) bool {
 	return task.Status.State.Terminal() || task.Status.State == a2a.TaskStateInputRequired
 }
 
-// checkResume refuses a message for a paused task that the backend's ResumeValidator does not accept, with
-// a2a.ErrInvalidParams. A message for a task the caller does not have, or one that is not paused, is the inner
-// handler's to answer.
-func (h *replayHandler) checkResume(ctx context.Context, msg *a2a.Message) error {
-	if h.validator == nil || msg.TaskID == "" {
+// checkMessage refuses a new message, or an answer to a paused task, that the backend's MessageValidator does not
+// accept, with a2a.ErrInvalidParams. A message for a task the caller does not have, or one that is not paused, is the
+// inner handler's to answer.
+func (h *replayHandler) checkMessage(ctx context.Context, msg *a2a.Message) error {
+	if h.validator == nil {
 		return nil
 	}
-	task, err := h.GetTask(ctx, &a2a.GetTaskRequest{ID: msg.TaskID})
-	if err != nil || task.Status.State != a2a.TaskStateInputRequired {
-		return nil
+	var paused *a2a.Task
+	if msg.TaskID != "" {
+		task, err := h.GetTask(ctx, &a2a.GetTaskRequest{ID: msg.TaskID})
+		if err != nil || task.Status.State != a2a.TaskStateInputRequired {
+			return nil
+		}
+		paused = task
 	}
-	if err := h.validator.ValidateResume(ctx, task, msg); err != nil {
+	if err := h.validator.ValidateMessage(ctx, msg, paused); err != nil {
 		if !errors.Is(err, a2a.ErrInvalidParams) {
 			err = fmt.Errorf("%w: %w", a2a.ErrInvalidParams, err)
 		}

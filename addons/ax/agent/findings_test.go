@@ -99,7 +99,7 @@ func TestAResumeWaitingOnTheModelDoesNotHoldBackAnotherContext(t *testing.T) {
 }
 
 // badAnswer answers the paused task with a data part, which the agent refuses with ErrInvalidParams before the turn
-// starts (ValidateResume).
+// starts (ValidateMessage).
 func badAnswer(asked *a2a.Task) *a2a.Message {
 	bad := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewDataPart(map[string]any{"not": "text"}))
 	bad.ID, bad.TaskID, bad.ContextID = "bad1", asked.ID, asked.ContextID
@@ -124,7 +124,7 @@ func answerOnce(t *testing.T, a *agentAt, msg *a2a.Message) (*a2a.Task, error) {
 }
 
 // A malformed answer to a paused task is refused with invalid params before the turn starts (the executor's
-// ValidateResume), and the task stays paused.
+// ValidateMessage), and the task stays paused.
 func TestAMalformedAnswerIsRefusedAndTheTaskStaysPaused(t *testing.T) {
 	a := start(t, t.TempDir(), &fakeModel{})
 	after, refusal := answerOnce(t, a, badAnswer(ask(t, a)))
@@ -141,7 +141,7 @@ func (d detachedStore) Update(ctx context.Context, req *taskstore.UpdateRequest)
 }
 
 // With a store that writes on a cancelled context, the same malformed answer is refused and the task stays paused: the
-// refusal rests on the agent, not on the store. The hazard was latent: before ValidateResume, the kit's store kept the
+// refusal rests on the agent, not on the store. The hazard was latent: before the answer was validated, the kit's store kept the
 // task paused too, because the executor's error cancels the execution's context before a2a-go writes the task failed,
 // and that store does not write on a cancelled context; only a store that does failed the task.
 func TestAMalformedAnswerIsRefusedOnAStoreThatIgnoresCancellation(t *testing.T) {
