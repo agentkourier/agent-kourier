@@ -263,8 +263,10 @@ func TestAResendJoinsARunningTurnOnceItsFirstEventHasCome(t *testing.T) {
 			break
 		}
 	}
-	if got == nil || got.ID != id || got.Status.State != a2a.TaskStateWorking {
-		t.Fatalf("the resend's task = %+v; want %s, working", got, id)
+	// The resend reads the stored task, which a2a-go may not yet have moved from submitted to working: either is the
+	// running turn's. What matters is that the resend joined that task at once instead of waiting for the turn to end.
+	if got == nil || got.ID != id || (got.Status.State != a2a.TaskStateSubmitted && got.Status.State != a2a.TaskStateWorking) {
+		t.Fatalf("the resend's task = %+v; want %s, submitted or working", got, id)
 	}
 	if n := b.turnCount(); n != 1 {
 		t.Fatalf("the backend ran %d turns, want 1", n)
