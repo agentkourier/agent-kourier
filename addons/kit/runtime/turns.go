@@ -28,7 +28,6 @@ type turns struct {
 	mu      sync.Mutex
 	running map[*a2asrv.ExecutorContext]bool // the turns Execute started that a2a-go has not cleaned up
 	byTask  map[a2a.TaskID]*outcome          // the outcome of each running turn, for Cancel to mark
-	closed  bool                             // wait has run: Execute starts no turn
 	wg      sync.WaitGroup
 }
 
@@ -48,7 +47,7 @@ func newTurns(life context.Context, backend Backend, tel *telemetry.Telemetry) *
 // the backend never runs it, and the stop does not wait for it.
 func (t *turns) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
 	t.mu.Lock()
-	if t.closed || t.life.Err() != nil {
+	if t.life.Err() != nil {
 		t.mu.Unlock()
 		return func(yield func(a2a.Event, error) bool) { yield(nil, errStopping) }
 	}
@@ -98,11 +97,12 @@ func (t *turns) Cleanup(ctx context.Context, ec *a2asrv.ExecutorContext, result 
 	}
 }
 
-// wait starts no turn from then on, waits up to timeout for every turn to be cleaned up, and reports whether they were.
+// wait waits up to timeout for every turn to be cleaned up, and reports whether they were. It runs once life has ended,
+// and takes mu first: an Execute that found life live made its Add under mu before then, and every later one starts no
+// turn, so each Add happens before the Wait.
 func (t *turns) wait(timeout time.Duration) bool {
 	t.mu.Lock()
-	t.closed = true // every Add has happened by now, before the Wait
-	t.mu.Unlock()
+	t.mu.Unlock() //nolint:staticcheck // an empty critical section: it orders every Add before the Wait
 	done := make(chan struct{})
 	go func() {
 		t.wg.Wait()
