@@ -86,6 +86,12 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			rt.unavailable(w, "no replica leads")
 			return
 		}
+		// The caller's body goes on to the leader while the leader's answer comes back. Otherwise net/http's server
+		// reads what is left of an unread request body, and closes it, as the answer starts: a leader that answers
+		// before it has read the body (a stream's first event, a 503, a 401) then has the body taken from under the
+		// forward, whose transport closes its connection to the leader and cuts the answer short. A writer that cannot
+		// (a test's recorder) keeps the server's default.
+		_ = http.NewResponseController(w).EnableFullDuplex()
 		rt.once.Do(rt.build)
 		rt.proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), targetKey{}, target)))
 	}

@@ -217,6 +217,55 @@ func TestStandbyForwardsAStreamUnbuffered(t *testing.T) {
 	}
 }
 
+// A standby passes the caller's request body on to the leader while the leader's answer streams back: here the leader
+// answers before it reads the body, and the caller sends the body only once the answer has begun. Unless the standby
+// is full duplex, net/http's server reads and closes what is left of the body as the standby's answer starts, which
+// takes the body from under the forward (the transport then closes its connection to the leader and the answer is cut
+// short) or, as here, holds the answer until the body has come.
+func TestStandbyForwardsTheBodyWhileTheAnswerStreams(t *testing.T) {
+	const payload = `{"jsonrpc":"2.0"}`
+	leader := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := http.NewResponseController(w).EnableFullDuplex(); err != nil {
+			t.Error(err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: first\n\n")
+		w.(http.Flusher).Flush()
+		body, err := io.ReadAll(r.Body)
+		_, _ = fmt.Fprintf(w, "data: got %s %v\n\n", body, err)
+	}))
+	defer leader.Close()
+	target, _ := url.Parse(leader.URL)
+	srv := standby(t, addons[0], &fixedLeaders{leader: target}, nil)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	sent, send := io.Pipe()
+	defer context.AfterFunc(ctx, func() { _ = send.CloseWithError(ctx.Err()) })() // a client that waits for the answer sends no body
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/a2a", sent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.ContentLength = int64(len(payload))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("the answer did not start before the body was sent: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	events := bufio.NewReader(resp.Body)
+	if line, err := events.ReadString('\n'); line != "data: first\n" {
+		t.Fatalf("first line %q, %v", line, err)
+	}
+	if _, err := io.WriteString(send, payload); err != nil {
+		t.Fatal(err)
+	}
+	_ = send.Close()
+	rest, err := io.ReadAll(events)
+	if want := "data: got " + payload + " <nil>"; err != nil || !strings.Contains(string(rest), want) {
+		t.Fatalf("rest of the stream %q, %v; want %q", rest, err, want)
+	}
+}
+
 // A custom AUTH_HEADER reaches the leader as it came.
 func TestStandbyKeepsACustomAuthHeader(t *testing.T) {
 	var got string
