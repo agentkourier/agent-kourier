@@ -17,7 +17,7 @@ const migrateLockKey int64 = 0x636d615f6d696772 // "cma_migr"
 // error never shows dsn, which may hold a password.
 func OpenPostgres(ctx context.Context, dsn string, opts Options) (*Store, error) {
 	db, err := kitstore.OpenPostgres(ctx, dsn, kitstore.Options{Noun: noun, Log: opts.Log, OnDeposed: opts.OnDeposed, MigrationLockKey: migrateLockKey,
-		Prepare: refuseEarlierLayout(`SELECT to_regclass('context_sessions') IS NOT NULL`)})
+		Prepare: refuseEarlierLayout(`SELECT to_regclass('context_sessions') IS NOT NULL OR to_regclass('schema_migrations') IS NOT NULL`)})
 	if err != nil {
 		return nil, err
 	}

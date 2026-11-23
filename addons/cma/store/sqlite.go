@@ -16,7 +16,7 @@ const noun = "adapter"
 // build of the adapter wrote fails with ErrEarlierLayout, unchanged.
 func OpenSQLite(ctx context.Context, path string, opts Options) (*Store, error) {
 	db, err := kitstore.OpenSQLite(ctx, path, kitstore.Options{Noun: noun, Log: opts.Log, OnDeposed: opts.OnDeposed,
-		Prepare: refuseEarlierLayout(`SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = 'context_sessions'`)})
+		Prepare: refuseEarlierLayout(`SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name IN ('context_sessions', 'schema_migrations')`)})
 	if err != nil {
 		return nil, err
 	}

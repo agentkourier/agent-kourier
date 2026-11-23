@@ -7,8 +7,9 @@
 // refused; the sessions are auth.Caller's contexts.
 //
 // The store keeps no tables of its own: the kit's migrations make them all. A database an earlier build of the adapter
-// wrote, which kept the sessions in a table of the adapter's (context_sessions), is refused at the open, before
-// anything is written (ErrEarlierLayout).
+// wrote, which kept the sessions in a table of the adapter's (context_sessions) and its migrations in a version table
+// (schema_migrations) this build never makes, is refused at the open, by either table, before anything is written
+// (ErrEarlierLayout).
 package store
 
 import (
@@ -63,8 +64,8 @@ func newStore(db *kitstore.DB, opts Options) *Store {
 	return &Store{Store: kitstore.NewStore(db, kitstore.TaskOptions{Now: opts.Now})}
 }
 
-// refuseEarlierLayout is the open's kitstore.Options Prepare: it refuses a database that has the earlier layout's
-// sessions table, found by exists, before the kit's migrations write anything.
+// refuseEarlierLayout is the open's kitstore.Options Prepare: it refuses a database that has a table of the earlier
+// layout's (its sessions table, or its version table), found by exists, before the kit's migrations write anything.
 func refuseEarlierLayout(exists string) func(ctx context.Context, q kitstore.Querier) error {
 	return func(ctx context.Context, q kitstore.Querier) error {
 		var earlier bool

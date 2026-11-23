@@ -132,7 +132,7 @@ func tableNames(t *testing.T, raw *sql.DB, tables string) []string {
 func assertRefused(t *testing.T, raw *sql.DB, tables string, open func() (*Store, error)) {
 	t.Helper()
 	before := snapshot(t, raw, tables)
-	if before["context_sessions"] != 1 || before["a2a_tasks"] != 1 {
+	if before["a2a_tasks"] != 1 || before["message_ids"] != 1 {
 		t.Fatalf("the earlier layout = %v, want its seeded rows", before)
 	}
 	for range 2 { // a restart finds it refused again
@@ -149,33 +149,59 @@ func assertRefused(t *testing.T, raw *sql.DB, tables string, open func() (*Store
 	}
 }
 
+// earlierLayouts are the earlier layouts the open refuses, each by the table it drops from the full one: the earlier
+// builds' version table, schema_migrations, which this build never makes, is enough without context_sessions.
+var earlierLayouts = []struct{ name, drop string }{
+	{"the earlier layout", ""},
+	{"without context_sessions", "context_sessions"},
+}
+
 func TestSQLiteRefusesAnEarlierLayout(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "cma.db")
-	ctx := context.Background()
-	raw, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String())
-	if err != nil {
-		t.Fatal(err)
+	for _, tc := range earlierLayouts {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "cma.db")
+			ctx := context.Background()
+			raw, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = raw.Close() }()
+			raw.SetMaxOpenConns(1)
+			exec := func(query string, args ...any) error { _, err := raw.ExecContext(ctx, query, args...); return err }
+			applyMain(t, "sqlite", exec)
+			seedMain(t, exec, false)
+			if tc.drop != "" {
+				if err := exec(`DROP TABLE ` + tc.drop); err != nil {
+					t.Fatal(err)
+				}
+			}
+			assertRefused(t, raw, `SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`,
+				func() (*Store, error) { return OpenSQLite(ctx, path, Options{}) })
+		})
 	}
-	defer func() { _ = raw.Close() }()
-	raw.SetMaxOpenConns(1)
-	exec := func(query string, args ...any) error { _, err := raw.ExecContext(ctx, query, args...); return err }
-	applyMain(t, "sqlite", exec)
-	seedMain(t, exec, false)
-	assertRefused(t, raw, `SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`,
-		func() (*Store, error) { return OpenSQLite(ctx, path, Options{}) })
 }
 
 func TestPostgresRefusesAnEarlierLayout(t *testing.T) {
-	dsn := pgtest.DSN(t)
-	ctx := context.Background()
-	raw, err := sql.Open("pgx", dsn)
-	if err != nil {
-		t.Fatal(err)
+	pgtest.DSN(t) // skips when there is no Postgres
+	for _, tc := range earlierLayouts {
+		t.Run(tc.name, func(t *testing.T) {
+			dsn := pgtest.DSN(t)
+			ctx := context.Background()
+			raw, err := sql.Open("pgx", dsn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = raw.Close() }()
+			exec := func(query string, args ...any) error { _, err := raw.ExecContext(ctx, query, args...); return err }
+			applyMain(t, "postgres", exec)
+			seedMain(t, exec, true)
+			if tc.drop != "" {
+				if err := exec(`DROP TABLE ` + tc.drop); err != nil {
+					t.Fatal(err)
+				}
+			}
+			assertRefused(t, raw, `SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema() ORDER BY table_name`,
+				func() (*Store, error) { return OpenPostgres(ctx, dsn, Options{}) })
+		})
 	}
-	defer func() { _ = raw.Close() }()
-	exec := func(query string, args ...any) error { _, err := raw.ExecContext(ctx, query, args...); return err }
-	applyMain(t, "postgres", exec)
-	seedMain(t, exec, true)
-	assertRefused(t, raw, `SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema() ORDER BY table_name`,
-		func() (*Store, error) { return OpenPostgres(ctx, dsn, Options{}) })
 }
