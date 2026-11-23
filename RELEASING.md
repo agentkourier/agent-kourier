@@ -332,9 +332,16 @@ add-on's Postgres store tests run there, and `make addon-lint-<name>` (`make cma
 run the same targets). Each test target also runs the shared kit's packages that the add-on links under the add-on's
 module graph, and the offline tests of a module nested in the add-on's directory (the CMA add-on's `livecheck`); the
 `kit` job runs `make kit-test` and `make kit-lint` on the kit's own. An add-on is added to CI and the release by a line
-in `hack/addons.txt`, a leg in the `addon` job, a row in `security.yml`'s `govulncheck` and two in its `trivy` matrix,
-and its cache prefixes in both workflows' `cache-prune`: `hack/ci/addonlist`'s test fails until the workflows hold the
-list, and the owner adds the new checks to the `main` ruleset. The `crd-corpus` job (`make crd-corpus`, `hack/kind/crd-corpus.sh`) brings up
+in `hack/addons.txt` (`hack/addons.sh` refuses `kit` and any name a workflow already gives to a job, a check, a cache, an
+image or a release output), which the Makefile, `release.sh`, `package-chart.sh` and `check-ci.sh` read; a leg in the
+`addon` job; a row in `security.yml`'s `govulncheck` and two in its `trivy` matrix; its cache prefixes in both
+workflows' `cache-prune`; in `release.yml`, the `build` job's output and the digest its `digests` step reports, the
+reference (`<NAME>_REF`) that `sign`, `verify` and `publish` take, in `sign`'s and `verify`'s loops and in `publish`'s
+check of an existing release, and the line `- <NAME> add-on image: ...` that `publish` writes in the notes, the shape
+by which the released-image rescan (`hack/security/select-release-images.sh`) selects every add-on's image; and its name
+in the chart's `agentkourier.addon.names`, with the rest that `charts/agent-kourier/templates/addons/_addon.tpl` lists.
+`hack/ci/addonlist`'s tests fail until the workflows and the chart hold the list, and the owner adds the new checks to
+the `main` ruleset. The `crd-corpus` job (`make crd-corpus`, `hack/kind/crd-corpus.sh`) brings up
 a kind cluster with only the three CRDs from `charts/agent-kourier/files/crds`, with no image and no Agent Kourier, and has
 `test/crdcorpus` send every entry of its corpus to it as a server-side dry-run create. It fails when the schema refuses
 an object the broker's own validation accepts, or when an entry's `schema:` flag no longer says what the schema does with
