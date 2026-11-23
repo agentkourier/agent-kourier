@@ -13,6 +13,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/addons/cma/store"
 	"github.com/agentkourier/agent-kourier/addons/kit/auth"
+	kitstore "github.com/agentkourier/agent-kourier/addons/kit/store"
 )
 
 // asKourier is the call interceptor the tests' request handlers run behind in place of the caller check's
@@ -49,6 +50,17 @@ func openStore(t *testing.T, path string, now func() time.Time) *store.Store {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	return s
+}
+
+// corrupt overwrites the stored record of task id with one that does not decode, as a damaged or foreign write leaves it.
+func corrupt(t *testing.T, s *store.Store, id string) {
+	t.Helper()
+	if err := s.Write(context.Background(), func(q kitstore.Querier) error {
+		_, err := q.Exec(context.Background(), `UPDATE a2a_tasks SET payload = ? WHERE id = ?`, []byte(`[1]`), id)
+		return err
+	}); err != nil {
+		t.Fatalf("corrupt %s: %v", id, err)
+	}
 }
 
 // fakeBackend is a Managed Agents session service in memory. A stream receives only the events published after it

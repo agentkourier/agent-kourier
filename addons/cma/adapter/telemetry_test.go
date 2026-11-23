@@ -204,7 +204,7 @@ func TestReplayIsCounted(t *testing.T) {
 	})
 }
 
-// Settle counts each task it fails; Restore counts the sessions it archives as superseded and those CMA no longer lists
+// Settle counts each task it fails, one whose stored record does not decode too; Restore counts the sessions it archives as superseded and those CMA no longer lists
 // as gone; the reaper counts the idle ones.
 func TestTakeoverAndReaperAreCounted(t *testing.T) {
 	fake := newFake(nil)
@@ -212,9 +212,15 @@ func TestTakeoverAndReaperAreCounted(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cma.db")
 	st := openStore(t, path, clk.now)
 	ctx := kourier(context.Background())
-	if _, err := st.Create(ctx, &a2a.Task{ID: "working", ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}}); err != nil {
-		t.Fatal(err)
+	for _, tk := range []*a2a.Task{
+		{ID: "working", ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}},
+		{ID: "unreadable", ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}},
+	} {
+		if _, err := st.Create(ctx, tk); err != nil {
+			t.Fatal(err)
+		}
 	}
+	corrupt(t, st, "unreadable")
 	for _, s := range []store.Session{{ContextID: "c1", SessionID: "sesn_c1"}, {ContextID: "gone", SessionID: "sesn_gone"}} {
 		s.LastActive = clk.now()
 		if err := st.PutSession(ctx, s); err != nil {
@@ -238,8 +244,8 @@ func TestTakeoverAndReaperAreCounted(t *testing.T) {
 	clk.advance(2 * time.Hour)
 	exec.reap(ctx)
 	wantSeries(t, tel, map[string]string{
-		`agentkourier_cma_tasks_interrupted_total`:                                                       "1",
-		`agentkourier_cma_turns_total{outcome="interrupted"}`:                                            "1",
+		`agentkourier_cma_tasks_interrupted_total`:                                                       "2",
+		`agentkourier_cma_turns_total{outcome="interrupted"}`:                                            "2",
 		`agentkourier_cma_sessions_archived_total{reason="superseded"}`:                                  "1",
 		`agentkourier_cma_sessions_archived_total{reason="gone"}`:                                        "1",
 		`agentkourier_cma_sessions_archived_total{reason="idle"}`:                                        "1",

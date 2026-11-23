@@ -118,7 +118,8 @@ func TestApprovalAfterRestartReachesThePausedCall(t *testing.T) {
 func TestRestartFailsTheTurnsItCutOff(t *testing.T) {
 	fake := newFake(nil)
 	path, clk := filepath.Join(t.TempDir(), "cma.db"), newClock()
-	// What a crash leaves: tasks in flight, a paused one, a settled one, and the contexts' sessions.
+	// What a crash leaves: tasks in flight (one whose stored record does not decode), a paused one, a settled one, and
+	// the contexts' sessions.
 	st := openStore(t, path, clk.now)
 	ctx := kourier(context.Background())
 	for _, tk := range []*a2a.Task{
@@ -126,12 +127,14 @@ func TestRestartFailsTheTurnsItCutOff(t *testing.T) {
 		{ID: "working", ContextID: "c2", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}},
 		{ID: "paused", ContextID: "c3", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired}},
 		{ID: "done", ContextID: "c3", Status: a2a.TaskStatus{State: a2a.TaskStateCompleted}},
+		{ID: "unreadable", ContextID: "c4", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}},
 	} {
 		if _, err := st.Create(ctx, tk); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for i, c := range []string{"c1", "c2", "c3"} {
+	corrupt(t, st, "unreadable")
+	for i, c := range []string{"c1", "c2", "c3", "c4"} {
 		id := "sesn_" + c
 		fake.seed(id, c, clk.now())
 		if err := st.PutSession(ctx, store.Session{ContextID: c, SessionID: id, LastActive: clk.now().Add(time.Duration(i) * time.Second)}); err != nil {
@@ -167,7 +170,7 @@ func TestRestartFailsTheTurnsItCutOff(t *testing.T) {
 		}
 	}
 	slices.Sort(interrupted)
-	if !slices.Equal(interrupted, []string{"sesn_c1", "sesn_c2"}) {
+	if !slices.Equal(interrupted, []string{"sesn_c1", "sesn_c2", "sesn_c4"}) {
 		t.Fatalf("interrupted %v, want the sessions of the cut-off turns alone", interrupted)
 	}
 }
