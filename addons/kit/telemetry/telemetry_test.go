@@ -388,3 +388,26 @@ func TestTurnSpanStatus(t *testing.T) {
 		t.Fatalf("timeout without ErrorTurns: status %v", got)
 	}
 }
+
+// A turn that the add-on's stop cut short ends its span as interrupted, with the status Error, and is not counted: the
+// leader that fails its task later counts it (TasksInterrupted and turns_total{interrupted}).
+func TestACutTurnEndsItsSpanUncounted(t *testing.T) {
+	rec := tracetest.NewSpanRecorder()
+	tel := newTelemetry(t, sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec)))
+	_, turn := tel.StartTurn(t.Context(), "t", "c")
+	turn.Cut()
+	span := rec.Ended()[0]
+	attrs := map[string]string{}
+	for _, kv := range span.Attributes() {
+		attrs[string(kv.Key)] = kv.Value.AsString()
+	}
+	if span.Status().Code != codes.Error || attrs[AttrOutcome] != string(TurnInterrupted) {
+		t.Fatalf("cut turn's span: status %v, outcome %q; want Error and interrupted", span.Status().Code, attrs[AttrOutcome])
+	}
+	if body := scrape(t, tel); strings.Contains(body, "agentkourier_demo_turns_total{") {
+		t.Fatalf("a cut turn was counted:\n%s", body)
+	}
+	var nilTel *Telemetry
+	_, turn = nilTel.StartTurn(t.Context(), "t", "c")
+	turn.Cut()
+}
