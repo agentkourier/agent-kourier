@@ -132,7 +132,10 @@ has had no message and no turn running for that long, checked once a minute, and
 before the archive with their message IDs. The store keeps when each context was last active (a message for it
 arrived, or a turn of it started or ended), so the clock survives a restart and a takeover. Archiving cannot be undone:
 the context's next message starts a new session without the old history. A session that fails to archive is logged at
-WARN and tried again at the next check; one whose context started a turn after the check listed it is kept.
+WARN and tried again at the next check. The check reads each context's last activity, then archives the contexts one
+by one, and keeps a session for a later check when, by the time it comes to it, a turn is running in it or creating
+it, or a turn of it started or ended after that read. A message that arrived after the read but whose turn has not
+started when the check comes to its context is not covered: its turn can start a new session, or fail.
 
 Set it to the Binding's `session.threadTTL`, whose default, `2160h`, is the add-on's default too. Past that, Agent
 Kourier gives the thread a new context and never uses the old session again. A shorter value archives sessions a thread

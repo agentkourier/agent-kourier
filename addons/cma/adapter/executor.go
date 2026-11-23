@@ -62,10 +62,11 @@ type Executor struct {
 	canceled map[a2a.TaskID]*atomic.Bool // the turns running here, by task: set by Cancel before it interrupts
 }
 
-// contextSession is a context's session.
+// contextSession is a context's session and its activity.
 type contextSession struct {
-	id    string
-	turns int // turns running now; a session with one is never archived
+	id         string
+	lastActive time.Time // when a turn of it last started or ended, as TouchSession stored it
+	turns      int       // turns running now; a session with one is never archived
 }
 
 var (
@@ -197,9 +198,10 @@ func (e *Executor) acquire(ctx context.Context, contextID string) (string, error
 		e.mu.Lock()
 		if cs, ok := e.sessions[contextID]; ok {
 			cs.turns++
-			id := cs.id
+			cs.lastActive = e.clock()
+			id, at := cs.id, cs.lastActive
 			e.mu.Unlock()
-			e.touch(ctx, contextID, id, e.clock())
+			e.touch(ctx, contextID, id, at)
 			return id, nil
 		}
 		if pending, ok := e.creating[contextID]; ok {
@@ -241,9 +243,9 @@ func (e *Executor) create(ctx context.Context, contextID string, done chan struc
 		finish(nil)
 		return "", err
 	}
-	cs := &contextSession{id: id, turns: 1}
+	cs := &contextSession{id: id, lastActive: e.clock(), turns: 1}
 	// Stored before the map has it, so that no other turn of the context can run before the store knows its session.
-	if err := e.Store.PutSession(ctx, store.Session{ContextID: contextID, SessionID: id, LastActive: e.clock()}); err != nil {
+	if err := e.Store.PutSession(ctx, store.Session{ContextID: contextID, SessionID: id, LastActive: cs.lastActive}); err != nil {
 		e.logger().Warn("store a new session", "context", contextID, "session", id, "error", err)
 	}
 	finish(cs)
@@ -259,8 +261,10 @@ func (e *Executor) release(ctx context.Context, contextID, session string) {
 		return
 	}
 	cs.turns--
+	cs.lastActive = e.clock()
+	at := cs.lastActive
 	e.mu.Unlock()
-	e.touch(context.WithoutCancel(ctx), contextID, session, e.clock())
+	e.touch(context.WithoutCancel(ctx), contextID, session, at)
 }
 
 // touch stores a session's last activity, which the runtime's upkeep counts the idle time from.

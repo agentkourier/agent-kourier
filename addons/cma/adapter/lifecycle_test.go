@@ -240,7 +240,7 @@ func TestRestoredSessionAgesFromItsLastActivity(t *testing.T) {
 // the sweep), is refused as busy, and its session is neither archived nor dropped from the map.
 func TestATurnThatBeganSinceTheListingKeepsItsSession(t *testing.T) {
 	fake := newFake(script(say("thinking")))
-	exec, _, _ := newClockedExec(t, fake, time.Hour)
+	exec, clk, _ := newClockedExec(t, fake, time.Hour)
 	if _, err := exec.acquire(t.Context(), "c1"); err != nil {
 		t.Fatal(err)
 	}
@@ -252,11 +252,80 @@ func TestATurnThatBeganSinceTheListingKeepsItsSession(t *testing.T) {
 		t.Fatalf("archived %v, %d contexts mapped; want the session kept", got, exec.Contexts())
 	}
 	exec.release(t.Context(), "c1", "sesn_1")
-	if err := exec.ReleaseContext(t.Context(), listed); err != nil {
-		t.Fatalf("ReleaseContext once the turn has ended = %v", err)
+	if err := exec.ReleaseContext(t.Context(), listed); !errors.Is(err, runtime.ErrContextBusy) {
+		t.Fatalf("ReleaseContext of the old listing once the turn has ended = %v, want ErrContextBusy: the turn ended after it", err)
+	}
+	clk.advance(2 * time.Hour)
+	if refused := exec.sweep(t); len(refused) != 0 {
+		t.Fatalf("a sweep listing the context after its turn = %v", refused)
 	}
 	if got := fake.archivedSessions(); !slices.Equal(got, []string{"sesn_1"}) {
 		t.Fatalf("archived = %v, want sesn_1", got)
+	}
+}
+
+// A whole turn that runs between the sweep's listing of its idle context and the context's release keeps the session,
+// and the task it finished: the session was active after the listing.
+func TestATurnBetweenTheListingAndTheReleaseKeepsItsSession(t *testing.T) {
+	fake := newFake(script(say("ok"), idle(stopEndTurn)))
+	exec, clk, h := newClockedExec(t, fake, time.Hour)
+	first, _ := turn(t, h, userText("", "one"))
+	clk.advance(2 * time.Hour)
+	listed, err := exec.st.IdleContexts(t.Context(), clk.now().Add(-time.Hour))
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("idle contexts = %+v, %v", listed, err)
+	}
+	second, _ := turn(t, h, userText(first.ContextID, "two")) // while the sweep is still on earlier contexts
+	if second.Status.State != a2a.TaskStateCompleted {
+		t.Fatalf("the second turn = %s", second.Status.State)
+	}
+	if err := exec.ReleaseContext(t.Context(), listed[0]); !errors.Is(err, runtime.ErrContextBusy) {
+		t.Fatalf("ReleaseContext = %v, want ErrContextBusy", err)
+	}
+	if got := fake.archivedSessions(); len(got) != 0 || exec.Contexts() != 1 {
+		t.Fatalf("archived %v, %d contexts mapped; want the session kept", got, exec.Contexts())
+	}
+	if _, err := h.GetTask(t.Context(), &a2a.GetTaskRequest{ID: second.ID}); err != nil {
+		t.Fatalf("the task the turn finished: %v", err)
+	}
+}
+
+// A stored session that is not the one in the map (a PutSession that failed after the stored one was let go of) is
+// not archived: the release records the map's session in the store and leaves the context for the next sweep, which
+// counts its idle time from that session's activity. A turn running in the map's session refuses the context as busy.
+func TestAStoredSessionThatIsNotTheMapsIsReplacedForTheNextSweep(t *testing.T) {
+	fake := newFake(nil)
+	exec, clk, _ := newClockedExec(t, fake, time.Hour)
+	if err := exec.st.PutSession(t.Context(), store.Session{ContextID: "c1", SessionID: "sesn_stale", LastActive: clk.now()}); err != nil {
+		t.Fatal(err)
+	}
+	newer := &contextSession{id: "sesn_new", lastActive: clk.now().Add(time.Minute), turns: 1}
+	exec.sessions = map[string]*contextSession{"c1": newer}
+	clk.advance(2 * time.Hour)
+	listed, err := exec.st.IdleContexts(t.Context(), clk.now().Add(-time.Hour))
+	if err != nil || len(listed) != 1 || listed[0].Ref != "sesn_stale" {
+		t.Fatalf("idle contexts = %+v, %v; want c1 with the stale session", listed, err)
+	}
+	if err := exec.ReleaseContext(t.Context(), listed[0]); !errors.Is(err, runtime.ErrContextBusy) {
+		t.Fatalf("ReleaseContext while a turn runs in the map's session = %v, want ErrContextBusy", err)
+	}
+	newer.turns = 0
+	err = exec.ReleaseContext(t.Context(), listed[0])
+	if err == nil || errors.Is(err, runtime.ErrContextBusy) {
+		t.Fatalf("ReleaseContext = %v, want an error that is not ErrContextBusy", err)
+	}
+	if got := fake.archivedSessions(); len(got) != 0 || exec.Contexts() != 1 {
+		t.Fatalf("archived %v, %d contexts mapped; want nothing archived and the map's session kept", got, exec.Contexts())
+	}
+	stored, err := exec.st.Sessions(t.Context())
+	if err != nil || len(stored) != 1 || stored[0].SessionID != "sesn_new" || !stored[0].LastActive.Equal(newer.lastActive) {
+		t.Fatalf("stored sessions = %+v, %v; want sesn_new with its activity", stored, err)
+	}
+	if refused := exec.sweep(t); len(refused) != 0 {
+		t.Fatalf("the next sweep = %v", refused)
+	}
+	if got := fake.archivedSessions(); !slices.Equal(got, []string{"sesn_new"}) || exec.Contexts() != 0 {
+		t.Fatalf("archived %v, %d contexts mapped; want sesn_new archived", got, exec.Contexts())
 	}
 }
 

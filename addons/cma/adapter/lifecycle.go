@@ -87,7 +87,7 @@ func (e *Executor) Restore(ctx context.Context) error {
 	var add []store.Session
 	for contextID, s := range keep {
 		if _, ok := e.sessions[contextID]; !ok {
-			e.sessions[contextID] = &contextSession{id: s.SessionID}
+			e.sessions[contextID] = &contextSession{id: s.SessionID, lastActive: s.LastActive}
 			add = append(add, s)
 		}
 	}
@@ -153,28 +153,42 @@ func (e *Executor) Interrupted(ctx context.Context, settled kitstore.Settlement)
 // ReleaseContext archives the session of a context the runtime's upkeep found idle past SESSION_IDLE_TTL, with no task
 // running (runtime.ContextReleaser); the upkeep then forgets the context with its tasks from before. The session is the
 // stored one, c.Ref, or, for a context whose session the store missed (a failed PutSession), the one in the map. A
-// context with no session has nothing to archive, and is forgotten. A context whose session a turn here holds, or is
-// creating, since the store listed it, is refused with runtime.ErrContextBusy. A session that fails to archive goes back
-// in the map, unless the context has started a new one, for the next sweep.
+// context with no session has nothing to archive, and is forgotten.
+//
+// The listing can be stale by the time the release runs, so the decision is taken again under e.mu: a context whose
+// session is being created, whose session in the map a turn holds, or whose session to archive a turn started or ended
+// in after the activity the listing read (c.LastActive) is refused with runtime.ErrContextBusy. A stored session that
+// is not the map's is not archived: the map's is recorded in the store instead, for the next sweep to judge by its own
+// activity (which TouchSession could not store under the other session), and the release fails. A session that fails to archive goes back in the map, unless the context has
+// started a new one, for the next sweep.
 func (e *Executor) ReleaseContext(ctx context.Context, c kitstore.Context) error {
 	e.mu.Lock()
 	if _, creating := e.creating[c.ContextID]; creating {
 		e.mu.Unlock()
 		return fmt.Errorf("context %s: a session is being created: %w", c.ContextID, runtime.ErrContextBusy)
 	}
-	id := c.Ref
 	cs, mapped := e.sessions[c.ContextID]
+	if mapped && cs.turns > 0 {
+		e.mu.Unlock()
+		return fmt.Errorf("context %s: a turn runs in session %s: %w", c.ContextID, cs.id, runtime.ErrContextBusy)
+	}
+	id := c.Ref
 	if id == "" && mapped {
 		id = cs.id
 	}
+	if mapped && cs.id == id && cs.lastActive.After(c.LastActive) {
+		e.mu.Unlock()
+		return fmt.Errorf("context %s: session %s was active since the listing: %w", c.ContextID, cs.id, runtime.ErrContextBusy)
+	}
 	if mapped && cs.id != id {
-		mapped = false // the map's session is newer than the stored one, which is the one to archive
+		s := store.Session{ContextID: c.ContextID, SessionID: cs.id, LastActive: cs.lastActive}
+		e.mu.Unlock()
+		if err := e.Store.PutSession(ctx, s); err != nil {
+			return fmt.Errorf("context %s: the store names session %s, not %s: record it: %w", c.ContextID, id, s.SessionID, err)
+		}
+		return fmt.Errorf("context %s: the store named session %s, not %s, and now names %s", c.ContextID, id, s.SessionID, s.SessionID)
 	}
 	if mapped {
-		if cs.turns > 0 {
-			e.mu.Unlock()
-			return fmt.Errorf("context %s: a turn runs in session %s: %w", c.ContextID, id, runtime.ErrContextBusy)
-		}
 		delete(e.sessions, c.ContextID)
 	}
 	e.mu.Unlock()
