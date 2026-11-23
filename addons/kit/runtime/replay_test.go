@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -117,8 +118,8 @@ func TestASubscriptionToAnotherCallersTaskIsNotFound(t *testing.T) {
 }
 
 // A new message the backend's MessageValidator refuses is refused with invalid params before any turn: the backend never
-// sees it, no turn is counted, and its message ID is not recorded, so a resend is refused again. Without the validator
-// the message starts a turn.
+// sees it, no turn is counted, its message ID is not recorded, so a resend is refused again, and its context is not
+// marked active. Without the validator the message starts a turn.
 func TestARefusedNewMessageStartsNoTurn(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -130,7 +131,8 @@ func TestARefusedNewMessageStartsNoTurn(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := &scripted{}
-			s := serveHandler(t, newFakeStore(), tc.backend(b))
+			st := newFakeStore()
+			s := serveHandler(t, st, tc.backend(b))
 			c := s.client(t, auth.Caller)
 			_, err := send(t, c, message("m1", "bad", "c1", ""))
 			if n := b.turnCount(); n != tc.turns {
@@ -145,6 +147,9 @@ func TestARefusedNewMessageStartsNoTurn(t *testing.T) {
 			if _, err := send(t, c, message("m1", "bad", "c1", "")); !errors.Is(err, a2a.ErrInvalidParams) {
 				t.Fatalf("the bad message resent = %v, want refused again", err)
 			}
+			if got := st.touchedContexts(); len(got) != 0 {
+				t.Fatalf("the refused messages marked the contexts %v active, want none", got)
+			}
 			for _, outcome := range []string{"completed", "failed", "canceled"} {
 				if got := metricOf(t, s.tel, `agentkourier_kit_turns_total{outcome="`+outcome+`"}`); got != "" {
 					t.Errorf("turns %s = %q, want none counted", outcome, got)
@@ -152,6 +157,9 @@ func TestARefusedNewMessageStartsNoTurn(t *testing.T) {
 			}
 			if done, err := send(t, c, message("m2", "done", "c1", "")); err != nil || done.Status.State != a2a.TaskStateCompleted {
 				t.Fatalf("a good message = %+v, %v", done, err)
+			}
+			if got := st.touchedContexts(); !slices.Equal(got, []string{"c1"}) {
+				t.Fatalf("the contexts marked active = %v, want the good message's c1", got)
 			}
 		})
 	}

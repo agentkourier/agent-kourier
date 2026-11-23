@@ -20,8 +20,10 @@ import (
 // turn runs), so the handler holds a send of one ID, and only of that ID, from its lookup until the turn's first event,
 // also when its caller hangs up before that (follow): a resend that races it in this process waits and finds the task.
 //
-// It also marks a message's context active before the message is accepted (touch), refuses a message the backend's
-// MessageValidator does not accept before a turn starts, and follows a task only for its own caller.
+// It also refuses a message the backend's MessageValidator does not accept before a turn starts, marks the context of a
+// message it accepts active before the message reaches the turn (touch), so that a refused message leaves no context
+// and moves no context's idle clock, and follows a task only for its own caller. A resend, which joins its first send's
+// task, marks nothing.
 type replayHandler struct {
 	a2asrv.RequestHandler
 	store     Store
@@ -69,10 +71,6 @@ func (h *replayHandler) SendStreamingMessage(ctx context.Context, req *a2a.SendM
 			yield(nil, a2a.ErrInvalidParams)
 			return
 		}
-		if err := h.touch(ctx, req.Message); err != nil {
-			yield(nil, err)
-			return
-		}
 		unclaim, err := h.claim(ctx, req.Message.ID)
 		if err != nil {
 			yield(nil, err)
@@ -91,6 +89,10 @@ func (h *replayHandler) SendStreamingMessage(ctx context.Context, req *a2a.SendM
 			return
 		}
 		if err := h.checkMessage(ctx, req.Message); err != nil {
+			yield(nil, err)
+			return
+		}
+		if err := h.touch(ctx, req.Message); err != nil {
 			yield(nil, err)
 			return
 		}

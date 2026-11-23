@@ -129,8 +129,9 @@ session once. A resend that names another context or another task than its first
 
 A session holds its sandbox until it is archived. `SESSION_IDLE_TTL` archives a context's session once the context
 has had no message and no turn running for that long, checked once a minute, and deletes the context's tasks from
-before the archive with their message IDs. The store keeps when each context was last active (a message for it
-arrived, or a turn of it started or ended), so the clock survives a restart and a takeover. Archiving cannot be undone:
+before the archive with their message IDs. The store keeps when each context was last active (a message for it was
+accepted, which a message refused as invalid or a resend of one already accepted is not, or a turn of it started or
+ended), so the clock survives a restart and a takeover. Archiving cannot be undone:
 the context's next message starts a new session without the old history. A session that fails to archive is logged at
 WARN and tried again at the next check. The check reads each context's last activity, then archives the contexts one
 by one, and keeps a session for a later check when, by the time it comes to it, a turn is running in it or creating
