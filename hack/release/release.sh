@@ -5,8 +5,8 @@
 #
 #   VERSION   the release tag, vX.Y.Z or vX.Y.Z-rc.1 (required); it becomes main.version and the images' tag
 #   REGISTRY  the image repository, e.g. ghcr.io/agentkourier/agent-kourier; required to push, no default. Each other
-#             image goes to REGISTRY-<name>, e.g. ghcr.io/agentkourier/agent-kourier-prompt-agent,
-#             ghcr.io/agentkourier/agent-kourier-cma or ghcr.io/agentkourier/agent-kourier-ax
+#             image goes to REGISTRY-<name>, e.g. ghcr.io/agentkourier/agent-kourier-prompt-agent or, for the CMA
+#             add-on, ghcr.io/agentkourier/agent-kourier-cma
 #   PUSH      1 to push; anything else (the default) builds to a local OCI archive and pushes nothing
 #   PLATFORMS comma-separated, default linux/amd64,linux/arm64
 #   CHART_REGISTRY  where the chart is pushed, e.g. oci://ghcr.io/agentkourier/charts; required to push, no default
@@ -16,11 +16,11 @@
 #   SCAN_IMAGE_SCRIPT  scanner path, default hack/security/scan-image.sh
 #
 # The other images are IMAGES, each a build context and a Dockerfile: a recipe's agent, examples/recipes/<agent>/agent,
-# is the Dockerfile of its directory and needs no build argument; an add-on, addons/<name>, a Go module of its own that
-# requires the shared kit (addons/kit), is built from the context addons/ with addons/<name>/Dockerfile, on Agent
-# Kourier's pinned bases (GO_IMAGE and RUNTIME_IMAGE from hack/kind/lib.sh). After the images it packages
-# charts/agent-kourier with the version stamped, Agent Kourier's digest as the default image and each add-on's as
-# addons.<name>'s (package-chart.sh), and with PUSH=1 pushes the chart. The digests are written to OUT/digest (Agent Kourier), OUT/<name>-digest and OUT/chart-digest.
+# is the Dockerfile of its directory and needs no build argument; an add-on, each of hack/addons.txt (addons/<name>, a
+# Go module of its own that requires the shared kit, addons/kit), is built from the context addons/ with
+# addons/<name>/Dockerfile, on Agent Kourier's pinned bases (GO_IMAGE and RUNTIME_IMAGE from hack/kind/lib.sh). After
+# the images it packages charts/agent-kourier with the version stamped, Agent Kourier's digest as the default image and
+# each add-on's as addons.<name>'s (package-chart.sh), and with PUSH=1 pushes the chart. The digests are written to OUT/digest (Agent Kourier), OUT/<name>-digest and OUT/chart-digest.
 #
 # The test hooks never ship. The Dockerfile's verify stage fails the build of any platform whose binary has
 # a hook (internal/testhooks, the same traces `make image-check` looks for) or the wrong version or
@@ -45,14 +45,19 @@ SCAN_IMAGES=${SCAN_IMAGES:-}
 SCAN_IMAGE_SCRIPT=${SCAN_IMAGE_SCRIPT:-${ROOT}/hack/security/scan-image.sh}
 SOURCE_URL=https://github.com/agentkourier/agent-kourier
 # The images a release publishes beside Agent Kourier's, as NAME=CONTEXT:DOCKERFILE (both relative to the repository):
-# the recipes' agents and the add-ons. Each goes to REGISTRY-NAME. An add-on's context is addons/, which holds the kit it
-# requires through `replace ../kit`; the Dockerfile.dockerignore beside its Dockerfile keeps the other add-ons out.
+# the recipes' agents, then the add-ons of hack/addons.txt (ADDONS, in its order). Each goes to REGISTRY-NAME. An
+# add-on's context is addons/, which holds the kit it requires through `replace ../kit`; the Dockerfile.dockerignore
+# beside its Dockerfile keeps the other add-ons out.
 IMAGES=(
   prompt-agent=examples/recipes/prompt-agent/agent:examples/recipes/prompt-agent/agent/Dockerfile
   echo-agent=examples/recipes/echo-agent/agent:examples/recipes/echo-agent/agent/Dockerfile
-  cma=addons:addons/cma/Dockerfile
-  ax=addons:addons/ax/Dockerfile
 )
+addons=$("${ROOT}/hack/addons.sh") || die "could not read the add-ons of hack/addons.txt"
+ADDONS=()
+while IFS= read -r a; do
+  ADDONS+=("${a}")
+  IMAGES+=("${a}=addons:addons/${a}/Dockerfile")
+done <<<"${addons}"
 IMAGE_NAMES=()
 for i in "${IMAGES[@]}"; do IMAGE_NAMES+=("${i%%=*}"); done
 
@@ -247,10 +252,15 @@ for a in "${IMAGE_NAMES[@]}"; do
   image_digest "${OUT}/${a}-metadata.json" >"${OUT}/${a}-digest"
 done
 
-cma_digest=$(cat "${OUT}/cma-digest")
-ax_digest=$(cat "${OUT}/ax-digest")
-echo "==> packaging the chart with image ${REPOSITORY}@${digest}, the CMA add-on's ${REPOSITORY}-cma@${cma_digest} and the AX add-on's ${REPOSITORY}-ax@${ax_digest}"
-chart=$("${HERE}/package-chart.sh" "${VERSION}" "${REPOSITORY}" "${digest}" "${cma_digest}" "${ax_digest}" "${OUT}")
+# Each add-on's digest, as NAME=DIGEST for package-chart.sh.
+pairs=()
+shown=''
+for a in "${ADDONS[@]}"; do
+  pairs+=("${a}=$(cat "${OUT}/${a}-digest")")
+  shown+="${shown:+, }${REPOSITORY}-${a}@$(cat "${OUT}/${a}-digest")"
+done
+echo "==> packaging the chart with image ${REPOSITORY}@${digest} and the add-ons' ${shown}"
+chart=$("${HERE}/package-chart.sh" "${VERSION}" "${REPOSITORY}" "${digest}" "${OUT}" "${pairs[@]}")
 if [ "${PUSH}" = 1 ]; then
   pushed=$(helm push "${chart}" "${CHART_REGISTRY}" 2>&1) || die "helm push failed: ${pushed}"
   chart_digest=$(sed -n 's/^Digest: //p' <<<"${pushed}")

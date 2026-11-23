@@ -64,6 +64,8 @@ jobs:
     permissions:
       contents: read # checkout
       packages: write # push to GHCR with GITHUB_TOKEN
+    # Each add-on of hack/addons.txt has an output here, its reference in sign, verify and publish, and its line in the
+    # release notes: hack/ci/addonlist's test fails when they and the list differ.
     outputs:
       image: ${{ steps.digests.outputs.image }}
       prompt-agent: ${{ steps.digests.outputs.prompt-agent }}

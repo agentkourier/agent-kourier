@@ -42,14 +42,13 @@
 #   kit         kit: also Markdown outside docs/, addons/kit/ and every Go package's tree. Its tests (the add-ons' shared
 #               kit, a module of its own) read the pages under docs/reference and may read its own Markdown; its lint
 #               reads Go only.
-#   cma         cma: also Markdown outside docs/, addons/cma/, addons/kit/ and every Go package's tree. Its tests (the
-#               add-on's module, the kit's packages under the add-on's module graph, and its livecheck module) may read
-#               the add-on's pages, under docs/, its own README and what the kit's tests read, as the root's tests read
-#               theirs; its lint reads Go only, and the Postgres it starts reads nothing of the tree.
-#   ax          ax: also Markdown outside docs/, addons/ax/, addons/kit/ and every Go package's tree, as for cma: its tests
-#               (the add-on's module and the kit's packages under its module graph) may read the add-on's pages, under
-#               docs/, its own README and what the kit's tests read; its lint reads Go only, and the Postgres it starts
-#               reads nothing of the tree.
+#   addon       the legs of the add-on job, one per add-on (hack/addons.txt): also Markdown outside docs/, addons/ and
+#               every Go package's tree. A leg's tests (the add-on's module, the kit's packages under the add-on's module
+#               graph, and the modules nested in its directory, such as the CMA add-on's livecheck) may read the
+#               add-on's pages, under docs/, its own README and what the kit's tests read, as the root's tests read
+#               theirs; its lint reads Go only, and the Postgres it starts reads nothing of the tree. Every leg passes
+#               this one class (a class is a literal in the workflow, not the matrix's value), so a leg also runs on
+#               Markdown of another add-on's directory, which it does not read.
 # A Go package's tree is a directory of the merge commit that holds a .go file, and everything under it: //go:embed
 # reaches only the package's own directory and those below it, and testdata lives there too. It is computed from the
 # merge commit on each run, so a page that a new package could embed stops qualifying with no list to edit. An unknown
@@ -114,11 +113,8 @@ class_skips() {
     kit)
       case "$1" in docs/* | addons/kit/*) return 1 ;; esac
       ;;
-    cma)
-      case "$1" in docs/* | addons/cma/* | addons/kit/*) return 1 ;; esac
-      ;;
-    ax)
-      case "$1" in docs/* | addons/ax/* | addons/kit/*) return 1 ;; esac
+    addon)
+      case "$1" in docs/* | addons/*) return 1 ;; esac
       ;;
   esac
   case "$1" in
@@ -170,7 +166,7 @@ run() {
 }
 
 case "${CLASS}" in
-  tests | scan | crd-corpus | docs-agent | echo-agent | prompt-agent | kit | cma | ax) ;;
+  tests | scan | crd-corpus | docs-agent | echo-agent | prompt-agent | kit | addon) ;;
   *) run "'${CLASS}' is not a class" ;;
 esac
 [ -n "${PR_HEAD_SHA:-}" ] || run "PR_HEAD_SHA is not set"

@@ -10,6 +10,7 @@
 set -euo pipefail
 
 GH=${GH:-gh}
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 usage() {
   echo "usage: check-ci.sh REPOSITORY SHA [WORKFLOW ...]" >&2
@@ -31,13 +32,13 @@ WORKFLOWS=("$@")
 # These are the display names returned by the Actions jobs API. Matrix jobs include their matrix value
 # in the name, as security.yml and codeql.yml define it. Together they are the status checks the main
 # ruleset requires. Keep these lists in lockstep with the workflows and the ruleset: a renamed or
-# missing required job must stop a release until this gate is reviewed with that change.
-CI_REQUIRED_JOBS=(lint test test-testhooks docs-agent 'crd-corpus (1.37)' 'crd-corpus (1.33)' echo-agent prompt-agent kit cma ax)
+# missing required job must stop a release until this gate is reviewed with that change. Each add-on
+# of hack/addons.txt adds its own: ci.yml's leg named after it, its govulncheck and its image's trivy
+# scan on each platform (hack/ci/addonlist's test holds the workflows to the same list).
+CI_REQUIRED_JOBS=(lint test test-testhooks docs-agent 'crd-corpus (1.37)' 'crd-corpus (1.33)' echo-agent prompt-agent kit)
 SECURITY_REQUIRED_JOBS=(
   'govulncheck (root)'
-  'govulncheck (ax)'
   'govulncheck (docs-agent)'
-  'govulncheck (cma)'
   'govulncheck (kit)'
   gitleaks
   'trivy (linux-amd64)'
@@ -46,12 +47,13 @@ SECURITY_REQUIRED_JOBS=(
   'trivy (prompt-agent-linux-arm64)'
   'trivy (echo-agent-linux-amd64)'
   'trivy (echo-agent-linux-arm64)'
-  'trivy (cma-linux-amd64)'
-  'trivy (cma-linux-arm64)'
-  'trivy (ax-linux-amd64)'
-  'trivy (ax-linux-arm64)'
 )
 CODEQL_REQUIRED_JOBS=('analyze (go)')
+addons=$("${HERE}/../addons.sh") || die "could not read the add-ons of hack/addons.txt"
+while IFS= read -r a; do
+  CI_REQUIRED_JOBS+=("${a}")
+  SECURITY_REQUIRED_JOBS+=("govulncheck (${a})" "trivy (${a}-linux-amd64)" "trivy (${a}-linux-arm64)")
+done <<<"${addons}"
 
 [[ "${REPOSITORY}" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] || die "REPOSITORY must be OWNER/REPOSITORY (got '${REPOSITORY}')"
 [[ "${SHA}" =~ ^[0-9a-fA-F]{40}$ ]] || die "SHA must be a 40-character commit SHA (got '${SHA}')"

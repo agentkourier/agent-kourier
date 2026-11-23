@@ -1,0 +1,6 @@
+# The add-ons, one per line: each is addons/<name>, a Go module of its own, built from the context addons/ with
+# addons/<name>/Dockerfile and released as REGISTRY-<name> beside Agent Kourier. The kit (addons/kit) is their shared
+# module, not an add-on. hack/addons.sh reads this list for the Makefile and the release scripts, and hack/ci/addonlist's
+# test holds the workflows' add-on matrices to it. # starts a comment.
+cma
+ax

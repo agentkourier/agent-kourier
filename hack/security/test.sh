@@ -154,6 +154,27 @@ for body in '- Image: `ghcr.io/agentkourier/agent-kourier@sha256:444444444444444
   fi
 done
 
+# The line release.yml writes for each add-on of hack/addons.txt (hack/ci/addonlist holds it to this shape) is selected;
+# one whose label is not its image's name upper-cased, or is not upper-case, is not.
+addon_body='- Image: `ghcr.io/agentkourier/agent-kourier@sha256:4444444444444444444444444444444444444444444444444444444444444444`'
+addon_digest=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+addons=$("${HERE}/../addons.sh") || fail "could not read the add-ons of hack/addons.txt"
+while IFS= read -r a; do
+  label=$(tr '[:lower:]' '[:upper:]' <<<"${a}")
+  addon_body+=$'\n'"- ${label} add-on image: \`ghcr.io/agentkourier/agent-kourier-${a}@sha256:${addon_digest}\`"
+done <<<"${addons}"
+addon_body+=$'\n''- THIRD add-on image: `ghcr.io/agentkourier/agent-kourier-fourth@sha256:abababababababababababababababababababababababababababababababab`'
+addon_body+=$'\n''- Third add-on image: `ghcr.io/agentkourier/agent-kourier-third@sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd`'
+addon_releases="${tmp}/addon-releases.json"
+jq -n --arg body "${addon_body}" '[{tag_name:"v2.0.0",draft:false,prerelease:false,body:$body}]' >"${addon_releases}"
+"${HERE}/select-release-images.sh" "${addon_releases}" "${selected}"
+while IFS= read -r a; do
+  grep -x -F "ghcr.io/agentkourier/agent-kourier-${a}@sha256:${addon_digest}" "${selected}" >/dev/null ||
+    fail "the release notes' line of the add-on ${a} was not selected"
+done <<<"${addons}"
+grep -F 'abababab' "${selected}" >/dev/null && fail "an add-on line whose label is another add-on's was selected"
+grep -F 'cdcdcdcd' "${selected}" >/dev/null && fail "an add-on line whose label is not upper-case was selected"
+
 invalid_releases="${tmp}/invalid-releases.json"
 printf '%s\n' '{' >"${invalid_releases}"
 if "${HERE}/select-release-images.sh" "${invalid_releases}" "${selected}"; then

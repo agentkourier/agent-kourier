@@ -38,8 +38,9 @@ run_case() { # FIXTURE WANT_STATUS
   local fixture=$1 want=$2 name=$3 status output
   output=${TMP}/${name}.out
   set +e
+  # shellcheck disable=SC2086 # CHECK_WORKFLOWS, when a case sets it, is a list of workflows
   GH_FIXTURE=${FIXTURES}/${fixture} GH="${FAKE_GH}" \
-    "${CHECK}" "${REPOSITORY}" "${SHA}" >"${output}" 2>&1
+    "${CHECK}" "${REPOSITORY}" "${SHA}" ${CHECK_WORKFLOWS:-} >"${output}" 2>&1
   status=$?
   set -e
   check "${name}: exit status" "${want}" "${status}"
@@ -127,6 +128,20 @@ contains "ax-missing: names the missing required job" "required job 'ax' is miss
 echo "== a missing scan of the AX add-on's image fails closed"
 run_case ax-scan-missing 1 ax-scan-missing
 contains "ax-scan-missing: names the missing required job" "required job 'trivy (ax-linux-arm64)' is missing" "${TMP}/ax-scan-missing.out"
+
+echo "== each add-on of hack/addons.txt adds its required jobs"
+printf 'cma\nax\nthird\n' >"${TMP}/third-addons.txt"
+ADDONS_FILE="${TMP}/third-addons.txt" run_case success 1 third-addon
+contains "third-addon: names the third add-on's leg" "required job 'third' is missing" "${TMP}/third-addon.out"
+printf 'ax\nthird\ncma\n' >"${TMP}/third-first-addons.txt"
+ADDONS_FILE="${TMP}/third-first-addons.txt" CHECK_WORKFLOWS=security.yml run_case success 1 third-addon-scan
+contains "third-addon-scan: names the third add-on's govulncheck" "required job 'govulncheck (third)' is missing" "${TMP}/third-addon-scan.out"
+printf 'cma\n' >"${TMP}/one-addon.txt"
+ADDONS_FILE="${TMP}/one-addon.txt" CHECK_WORKFLOWS=ci.yml run_case ax-missing 0 one-addon
+contains "one-addon: an add-on the list lacks is not required" "ok: ci.yml run 813" "${TMP}/one-addon.out"
+printf 'Cma\n' >"${TMP}/bad-addons.txt"
+ADDONS_FILE="${TMP}/bad-addons.txt" run_case success 1 bad-addons
+contains "bad-addons: says the list could not be read" "could not read the add-ons of hack/addons.txt" "${TMP}/bad-addons.out"
 
 echo "== a skipped required job fails closed"
 run_case skipped-required 1 skipped-required
@@ -320,6 +335,74 @@ release_chart_case chart-cma-digest-set 's/^      digest: ""$/      digest: sha2
 release_chart_case chart-no-ax 's/^  ax:$/  axe:/' "no longer has exactly one addons.ax.image.repository"
 release_chart_case chart-ax-digest-set '/^  ax:$/,/^  cma:$/s/^      digest: ""$/      digest: sha256:0/' "no longer has exactly one addons.ax.image.repository"
 release_chart_case chart-no-image-digest 's/^  digest: ""$/  digest: sha256:0/' "no longer has exactly one empty image.repository"
+
+# package_case NAME WANT_STATUS ARG...: package-chart.sh for v1.2.3 of ghcr.io/example/agent-kourier at DIGEST_A, with the
+# fake helm and the fixture chart, the ARGs after its output directory; its output goes to TMP/NAME.out.
+DIGEST_A=sha256:$(printf 'a%.0s' {1..64})
+DIGEST_B=sha256:$(printf 'b%.0s' {1..64})
+DIGEST_C=sha256:$(printf 'c%.0s' {1..64})
+package_case() {
+  local name=$1 want=$2 status
+  shift 2
+  set +e
+  env PATH="${FIXTURES}/fakebin:${PATH}" CHART_DIR="${CHART_DIR:-${FIXTURES}/chart}" \
+    "${HERE}/package-chart.sh" v1.2.3 ghcr.io/example/agent-kourier "${DIGEST_A}" "${TMP}/${name}" "$@" >"${TMP}/${name}.out" 2>&1
+  status=$?
+  set -e
+  check "${name}: exit status" "${want}" "${status}"
+}
+
+echo "== package-chart.sh stamps each add-on of hack/addons.txt with its NAME=DIGEST, in any order"
+package_case package-pairs 0 ax="${DIGEST_C}" cma="${DIGEST_B}"
+values=${TMP}/package-pairs/agent-kourier-1.2.3.tgz.values
+check "package-pairs: addons.cma.image.digest" 1 "$(grep -c -x -F "      digest: ${DIGEST_B}" "${values}")"
+check "package-pairs: addons.ax.image.digest" 1 "$(grep -c -x -F "      digest: ${DIGEST_C}" "${values}")"
+check "package-pairs: addons.ax.image.repository" 1 "$(grep -c -x -F "      repository: ghcr.io/example/agent-kourier-ax" "${values}")"
+check "package-pairs: prints the package" "${TMP}/package-pairs/agent-kourier-1.2.3.tgz" "$(cat "${TMP}/package-pairs.out")"
+
+echo "== package-chart.sh refuses pairs that are not one per add-on of hack/addons.txt"
+package_case package-missing 1 cma="${DIGEST_B}"
+contains "package-missing: names the add-on" "no digest for the add-on ax" "${TMP}/package-missing.out"
+package_case package-unknown 1 cma="${DIGEST_B}" ax="${DIGEST_C}" other="${DIGEST_A}"
+contains "package-unknown: names the add-on" "other is not an add-on of hack/addons.txt" "${TMP}/package-unknown.out"
+package_case package-twice 1 cma="${DIGEST_B}" ax="${DIGEST_C}" cma="${DIGEST_C}"
+contains "package-twice: names the add-on" "cma has two digests" "${TMP}/package-twice.out"
+package_case package-bad-digest 1 cma="${DIGEST_B}" ax=sha256:0
+contains "package-bad-digest: names the add-on" "the digest of ax must be a sha256 digest (got 'sha256:0')" "${TMP}/package-bad-digest.out"
+package_case package-no-name 1 cma="${DIGEST_B}" "${DIGEST_C}"
+contains "package-no-name: says what an argument is" "want NAME=DIGEST" "${TMP}/package-no-name.out"
+package_case package-old-order 1 "${DIGEST_B}" "${DIGEST_C}"
+contains "package-old-order: says what an argument is" "want NAME=DIGEST" "${TMP}/package-old-order.out"
+check "package-old-order: no package written" 0 "$(find "${TMP}/package-old-order" -name '*.tgz' 2>/dev/null | wc -l | tr -d ' ')"
+
+echo "== a third add-on in the list is stamped too, and the chart must have its block"
+printf 'cma\nax\nthird\n' >"${TMP}/third-addons.txt"
+rm -rf "${TMP}/third-chart"
+cp -R "${FIXTURES}/chart" "${TMP}/third-chart"
+printf '  third:\n    image:\n      repository: ghcr.io/agentkourier/agent-kourier-third\n      digest: ""\n' >>"${TMP}/third-chart/values.yaml"
+ADDONS_FILE="${TMP}/third-addons.txt" CHART_DIR="${TMP}/third-chart" package_case package-third 0 cma="${DIGEST_B}" ax="${DIGEST_C}" third="${DIGEST_A}"
+check "package-third: addons.third.image.repository" 1 \
+  "$(grep -c -x -F "      repository: ghcr.io/example/agent-kourier-third" "${TMP}/package-third/agent-kourier-1.2.3.tgz.values")"
+ADDONS_FILE="${TMP}/third-addons.txt" package_case package-third-no-block 1 cma="${DIGEST_B}" ax="${DIGEST_C}" third="${DIGEST_A}"
+contains "package-third-no-block: names the add-on's keys" "no longer has exactly one addons.third.image.repository and empty addons.third.image.digest" \
+  "${TMP}/package-third-no-block.out"
+
+echo "== release.sh builds, scans and stamps each add-on of the list"
+if ! ADDONS_FILE="${TMP}/third-addons.txt" run_release_build third CHART_DIR="${TMP}/third-chart"; then
+  cat "${TMP}/third.out" >&2
+  echo "FAIL: third: release.sh failed" >&2
+  exit 1
+fi
+for want in \
+  "build load linux/amd64 agent-kourier-release-check:third-linux-amd64 addons addons/third/Dockerfile" \
+  "build load linux/arm64 agent-kourier-release-check:third-linux-arm64 addons addons/third/Dockerfile" \
+  "build output linux/amd64,linux/arm64 ghcr.io/example/agent-kourier-third:v1.2.3 addons addons/third/Dockerfile"; do
+  check "third: ${want}" 1 "$(grep -c -x -F -- "${want}" "${TMP}/third.builds")"
+done
+check "third: eighteen builds in all" 18 "$(wc -l <"${TMP}/third.builds" | tr -d ' ')"
+check "third: twelve platform images scanned" 12 "$(wc -l <"${TMP}/third.scans" | tr -d ' ')"
+check "third: addons.third.image.digest is its digest" 1 \
+  "$(grep -c -x -F "      digest: $(cat "${TMP}/third/third-digest")" "${TMP}/third/agent-kourier-1.2.3.tgz.values")"
 
 echo "== a finding in an agent image's last platform leaves no image built to keep"
 if run_release_build scan-fails FAKE_SCAN_FAIL=echo-agent-linux-arm64; then
