@@ -353,3 +353,40 @@ func TestAStreamThatOutlivesItsRequestEndsWithTheAddOnsStop(t *testing.T) {
 		t.Fatal("the add-on's stop did not end the stream")
 	}
 }
+
+// firstThenBlock is a2a-go's handler for a turn that yields its task, then nothing until its stream's context ends.
+type firstThenBlock struct {
+	a2asrv.RequestHandler
+	yielded chan struct{}
+	ended   chan struct{}
+}
+
+func (b firstThenBlock) SendStreamingMessage(ctx context.Context, req *a2a.SendMessageRequest) iter.Seq2[a2a.Event, error] {
+	return func(yield func(a2a.Event, error) bool) {
+		defer close(b.ended)
+		task := &a2a.Task{ID: "t1", ContextID: req.Message.ContextID, Status: a2a.TaskStatus{State: a2a.TaskStateWorking}}
+		if !yield(task, nil) {
+			return
+		}
+		close(b.yielded)
+		<-ctx.Done()
+		yield(nil, ctx.Err())
+	}
+}
+
+// Once the turn's first event has come, the request's end ends the stream, also for a send that is not streamed, which
+// would otherwise follow the turn to its end after its caller has gone.
+func TestTheRequestsEndEndsTheStreamOnceTheFirstEventHasCome(t *testing.T) {
+	inner := firstThenBlock{yielded: make(chan struct{}), ended: make(chan struct{})}
+	h := &replayHandler{RequestHandler: inner, store: newFakeStore(), tel: newTel(t), life: context.Background()}
+	req, hangUp := context.WithCancel(asCaller(t.Context(), auth.Caller))
+	defer hangUp()
+	go func() { _, _ = h.SendMessage(req, &a2a.SendMessageRequest{Message: message("m1", "x", "c1", "")}) }()
+	<-inner.yielded
+	hangUp()
+	select {
+	case <-inner.ended:
+	case <-time.After(time.Second):
+		t.Fatal("the stream outlived its request after the first event")
+	}
+}
