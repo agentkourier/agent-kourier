@@ -36,6 +36,11 @@ type Options struct {
 	// or another add-on uses in a database they share. OpenPostgres refuses 0, which an add-on that forgot its own key
 	// would share with every other that did.
 	MigrationLockKey int64
+	// Prepare, if set, runs before the kit's migrations, in a transaction of its own that holds the migration lock, on a
+	// database that an earlier build of the add-on may have written: the add-on sets aside, or refuses, a layout of its
+	// own that the kit's migrations would not read. Its error rolls its transaction back and fails the open, before any
+	// migration has run.
+	Prepare func(ctx context.Context, q Querier) error
 }
 
 // DB is an add-on's database on SQLite or Postgres, with the kit's migrations applied.
@@ -79,8 +84,19 @@ const kitMigrations = "kit_schema_migrations"
 // addonMigrations is the version table of the add-on's migrations.
 const addonMigrations = "schema_migrations"
 
-// migrateKit applies the kit's migrations of the backend whose files are in dir.
-func (db *DB) migrateKit(ctx context.Context, dir string) error {
+// migrateKit runs the add-on's Prepare, then applies the kit's migrations of the backend whose files are in dir.
+func (db *DB) migrateKit(ctx context.Context, dir string, prepare func(ctx context.Context, q Querier) error) error {
+	if prepare != nil {
+		err := db.conn.inTx(ctx, func(q Querier) error {
+			if err := db.conn.lockMigrations(ctx, q); err != nil {
+				return err
+			}
+			return prepare(ctx, q)
+		})
+		if err != nil {
+			return err
+		}
+	}
 	sub, err := fs.Sub(kitMigrationFiles, dir)
 	if err != nil {
 		return err

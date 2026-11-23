@@ -31,12 +31,12 @@ const SQLiteBusyTimeout = 5 * time.Second
 // register this name.
 const sqliteDriver = "sqlite"
 
-// OpenSQLite opens (creating it if needed, in a directory that exists) the SQLite database at path and applies the
-// kit's pending migrations; Migrate applies the add-on's. It holds an exclusive lock on path + ".lock" until Close, so
-// a second process on the same file fails with ErrInUse instead of sharing it; the lock is the kernel's, so it goes with
-// a process that dies. The file is in WAL mode with FULL synchronous commits and a busy timeout. Writes, Write's and a
-// library's on SQL, go through one connection, so writers queue in Go rather than contend for the file; Reader uses a
-// read-only pool beside it. The add-on links the driver (sqliteDriver).
+// OpenSQLite opens (creating it if needed, in a directory that exists) the SQLite database at path, runs Prepare and
+// applies the kit's pending migrations; Migrate applies the add-on's. It holds an exclusive lock on path + ".lock" until
+// Close, so a second process on the same file fails with ErrInUse instead of sharing it; the lock is the kernel's, so it
+// goes with a process that dies. The file is in WAL mode with FULL synchronous commits and a busy timeout. Writes,
+// Write's and a library's on SQL, go through one connection, so writers queue in Go rather than contend for the file;
+// Reader uses a read-only pool beside it. The add-on links the driver (sqliteDriver).
 func OpenSQLite(ctx context.Context, path string, opts Options) (*DB, error) {
 	c := &sqliteConn{}
 	db := newDB(c, opts)
@@ -54,7 +54,7 @@ func OpenSQLite(ctx context.Context, path string, opts Options) (*DB, error) {
 		_ = lock.Close()
 		return nil, fmt.Errorf("open sqlite store %q (read pool): %w", path, err)
 	}
-	if err := db.migrateKit(ctx, "migrations/sqlite"); err != nil {
+	if err := db.migrateKit(ctx, "migrations/sqlite", opts.Prepare); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("open sqlite store %q: %w", path, err)
 	}
