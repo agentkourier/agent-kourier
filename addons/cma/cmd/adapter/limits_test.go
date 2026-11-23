@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	"github.com/agentkourier/agent-kourier/addons/kit/cluster"
 	"github.com/agentkourier/agent-kourier/addons/kit/limitsdoc"
 	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
@@ -13,6 +14,12 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Duration(t, "cma.read-header-timeout", readHeaderTimeout)
 	limitsdoc.Duration(t, "cma.shutdown-grace", shutdownTimeout)
 	limitsdoc.Duration(t, "cma.release-timeout", releaseTimeout)
+}
+
+// TestForwardLimits holds how long a standby waits to connect to the leader before it answers 503, the kit's router's
+// constant, to docs/reference/limits.md.
+func TestForwardLimits(t *testing.T) {
+	limitsdoc.Duration(t, "cma.forward-dial-timeout", cluster.ForwardDialTimeout)
 }
 
 // TestLogLimits holds the cap on an error's text in a log line, which the kit's log handler applies to the adapter's

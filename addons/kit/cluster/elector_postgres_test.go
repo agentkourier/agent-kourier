@@ -10,12 +10,14 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 
-	"github.com/agentkourier/agent-kourier/addons/ax/store"
-	kitstore "github.com/agentkourier/agent-kourier/addons/kit/store"
+	"github.com/agentkourier/agent-kourier/addons/kit/store"
 	"github.com/agentkourier/agent-kourier/addons/kit/store/pgtest"
 )
 
-// replica is one agent process on a shared Postgres: its store and its elector.
+// testLockKey is the tests' migration lock, as an add-on's MigrationLockKey.
+const testLockKey int64 = 0x6b69745f636c7573 // "kit_clus"
+
+// replica is one add-on process on a shared Postgres: its store and its elector.
 type replica struct {
 	store   *store.Store
 	elector *Elector
@@ -39,11 +41,12 @@ func (s *stallable) Renew(ctx context.Context, d time.Duration) error {
 
 func startReplica(t *testing.T, dsn, name string, lease, deadline, retry time.Duration) *replica {
 	t.Helper()
-	st, err := store.OpenPostgres(context.Background(), dsn, store.Options{})
+	db, err := store.OpenPostgres(context.Background(), dsn, store.Options{MigrationLockKey: testLockKey})
 	if err != nil {
 		t.Fatalf("OpenPostgres: %v", err)
 	}
-	t.Cleanup(func() { _ = st.Close() })
+	t.Cleanup(func() { _ = db.Close() })
+	st := store.NewStore(db, store.TaskOptions{})
 	r := &replica{store: st, lease: &stallable{Store: st}}
 	r.elector = &Elector{Lease: r.lease, Holder: name, Address: "http://" + name + ":8090", LeaseDuration: lease,
 		RenewDeadline: deadline, RetryPeriod: retry, Status: &Status{}, Log: discard()}
@@ -54,9 +57,10 @@ func startReplica(t *testing.T, dsn, name string, lease, deadline, retry time.Du
 	return r
 }
 
+// write creates a task as the add-on's caller, whom the store keeps each task for.
 func write(r *replica, id string) error {
-	ctx, call := a2asrv.NewCallContext(context.Background(), nil)
-	call.User = a2asrv.NewAuthenticatedUser("agent-kourier", nil)
+	ctx, callCtx := a2asrv.NewCallContext(context.Background(), nil)
+	callCtx.User = a2asrv.NewAuthenticatedUser("agent-kourier", nil)
 	_, err := r.store.Create(ctx, &a2a.Task{ID: a2a.TaskID(id), ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}})
 	return err
 }
@@ -84,7 +88,7 @@ func TestPostgresElectionAndTakeover(t *testing.T) {
 	if err := write(a, "t1"); err != nil {
 		t.Fatalf("the leader's write: %v", err)
 	}
-	if err := write(b, "t2"); !errors.Is(err, kitstore.ErrDeposed) {
+	if err := write(b, "t2"); !errors.Is(err, store.ErrDeposed) {
 		t.Fatalf("the standby's write: %v, want ErrDeposed", err)
 	}
 
@@ -109,7 +113,7 @@ func TestPostgresElectionAndTakeover(t *testing.T) {
 	if err != nil || second.Holder != "b" || second.Epoch <= first.Epoch {
 		t.Fatalf("lease after the takeover = %+v (before %+v), %v", second, first, err)
 	}
-	if err := write(a, "t3"); !errors.Is(err, kitstore.ErrDeposed) {
+	if err := write(a, "t3"); !errors.Is(err, store.ErrDeposed) {
 		t.Fatalf("the old leader's write: %v, want ErrDeposed", err)
 	}
 	if err := write(b, "t3"); err != nil {
@@ -137,7 +141,7 @@ func TestPostgresReleaseHandsOverAtOnce(t *testing.T) {
 	if since := time.Since(released); since > 2*time.Second {
 		t.Fatalf("b took over %s after the release", since)
 	}
-	if err := write(a, "t1"); !errors.Is(err, kitstore.ErrDeposed) {
+	if err := write(a, "t1"); !errors.Is(err, store.ErrDeposed) {
 		t.Fatalf("a write after the release: %v, want ErrDeposed", err)
 	}
 }

@@ -50,7 +50,7 @@ internal/testutil       helpers only tests import: Eventually (poll until a cond
 charts/agent-kourier    Helm chart
 addons/cma              add-on: A2A server in front of a Claude Managed Agents agent (separate module, released with the broker)
 addons/ax               add-on: ADK agent on Bedrock, run by the chart or inside Google AX (separate module)
-addons/kit              the add-ons' shared Go module (each requires it through replace ../kit; released with them): limitsdoc, telemetry (metrics, traces and the JSON log), store (connections, migrations, the lease and its fence; no SQLite driver), auth (the caller check), auth/oidc (its OIDC verifier, apart so that only AX links go-oidc). Add-on images build from addons/
+addons/kit              the add-ons' shared Go module (each requires it through replace ../kit; released with them): limitsdoc, telemetry (metrics, traces and the JSON log), store (connections, migrations, the lease and its fence; no SQLite driver), auth (the caller check), auth/oidc (its OIDC verifier, apart so that only AX links go-oidc), cluster (the leader election, a standby's forward to the leader, the leadership-lost exit). Add-on images build from addons/
 docs/                   the documentation site (mkdocs; docs/brand is the brand kit and is not published)
 test/{fakeslack,stubagent,e2e,fixtures,kindmanifests,chart,...}
 test/crdcorpus          valid and invalid objects that the CRD schemas and the broker's Validate must treat alike (`make crd-corpus` sends them to a real API server)

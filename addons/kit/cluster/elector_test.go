@@ -85,34 +85,40 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	}
 }
 
+// The leader renews its lease until ctx ends, never releases it itself, and counts its takeover under the add-on's
+// prefix.
 func TestElectorLeadsAndRenews(t *testing.T) {
-	lease := &fakeLease{}
-	e := newElector(lease, "a")
-	e.Telemetry = newTelemetry(t)
-	ctx, cancel := context.WithCancel(t.Context())
-	led := make(chan struct{})
-	done := run(ctx, e, func(ctx context.Context) error {
-		close(led)
-		<-ctx.Done()
-		return nil
-	})
-	<-led
-	if !e.Status.Leading() || e.Status.Serving() {
-		t.Fatalf("leading %v serving %v: the leader serves only once its takeover says so", e.Status.Leading(), e.Status.Serving())
-	}
-	waitFor(t, "renewals", func() bool { lease.mu.Lock(); defer lease.mu.Unlock(); return lease.renewals >= 3 })
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("Run after ctx ended: %v", err)
-	}
-	if lease.released {
-		t.Fatal("Run released the lease itself: the caller does, once it has stopped serving")
-	}
-	if err := e.Release(t.Context()); err != nil || !lease.released {
-		t.Fatalf("Release: %v, released %v", err, lease.released)
-	}
-	if got := lineValue(metrics(t, e), "agentkourier_ax_leader_takeovers_total"); got != "1" {
-		t.Fatalf("takeovers = %q", got)
+	for _, a := range addons {
+		t.Run(a.name, func(t *testing.T) {
+			lease := &fakeLease{}
+			e := newElector(lease, "a")
+			e.Telemetry = newTelemetry(t, a.name)
+			ctx, cancel := context.WithCancel(t.Context())
+			led := make(chan struct{})
+			done := run(ctx, e, func(ctx context.Context) error {
+				close(led)
+				<-ctx.Done()
+				return nil
+			})
+			<-led
+			if !e.Status.Leading() || e.Status.Serving() {
+				t.Fatalf("leading %v serving %v: the leader serves only once its takeover says so", e.Status.Leading(), e.Status.Serving())
+			}
+			waitFor(t, "renewals", func() bool { lease.mu.Lock(); defer lease.mu.Unlock(); return lease.renewals >= 3 })
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatalf("Run after ctx ended: %v", err)
+			}
+			if lease.released {
+				t.Fatal("Run released the lease itself: the caller does, once it has stopped serving")
+			}
+			if err := e.Release(t.Context()); err != nil || !lease.released {
+				t.Fatalf("Release: %v, released %v", err, lease.released)
+			}
+			if got := lineValue(metrics(t, e), "agentkourier_"+a.name+"_leader_takeovers_total"); got != "1" {
+				t.Fatalf("takeovers = %q", got)
+			}
+		})
 	}
 }
 
@@ -226,51 +232,62 @@ func TestElectorWaitsForTheLeadersWork(t *testing.T) {
 	}
 }
 
-// A takeover that fails (the store cannot settle the interrupted turns) ends Run with its error.
+// A takeover that fails ends Run with its error: CMA's, which cannot be read, or the store's, which cannot settle the
+// interrupted turns.
 func TestElectorReturnsTheTakeoversError(t *testing.T) {
-	boom := errors.New("fail the interrupted tasks: connection refused")
-	err := <-run(t.Context(), newElector(&fakeLease{}, "a"), func(context.Context) error { return boom })
-	if !errors.Is(err, boom) {
-		t.Fatalf("Run = %v", err)
+	for name, boom := range map[string]error{
+		"cma": errors.New("list sessions: 503"),
+		"ax":  errors.New("fail the interrupted tasks: connection refused"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := <-run(t.Context(), newElector(&fakeLease{}, "a"), func(context.Context) error { return boom })
+			if !errors.Is(err, boom) {
+				t.Fatalf("Run = %v", err)
+			}
+		})
 	}
 }
 
 // A replica that takes the lease in its one attempt before it listens leads, and is not ready, from then on; Run then
 // runs the takeover without campaigning again, and counts one takeover.
 func TestTryLeadOnceLeadsBeforeRun(t *testing.T) {
-	lease := &fakeLease{}
-	e := newElector(lease, "a")
-	e.Telemetry = newTelemetry(t)
-	if !e.TryLeadOnce(t.Context()) {
-		t.Fatal("TryLeadOnce did not take a free lease")
-	}
-	if !e.Status.Leading() || e.Status.Ready() {
-		t.Fatalf("leading %v ready %v; want leading, not ready until the takeover is done", e.Status.Leading(), e.Status.Ready())
-	}
-	if got := lineValue(metrics(t, e), "agentkourier_ax_leader"); got != "1" {
-		t.Fatalf("leader gauge = %q before Run, want 1", got)
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	led := make(chan struct{})
-	done := run(ctx, e, func(ctx context.Context) error {
-		close(led)
-		<-ctx.Done()
-		return nil
-	})
-	<-led
-	waitFor(t, "renewals", func() bool { lease.mu.Lock(); defer lease.mu.Unlock(); return lease.renewals >= 2 })
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	lease.mu.Lock()
-	tries := lease.tries
-	lease.mu.Unlock()
-	if tries != 1 {
-		t.Fatalf("lease attempts = %d, want the one before Run", tries)
-	}
-	if got := lineValue(metrics(t, e), "agentkourier_ax_leader_takeovers_total"); got != "1" {
-		t.Fatalf("takeovers = %q, want 1", got)
+	for _, a := range addons {
+		t.Run(a.name, func(t *testing.T) {
+			lease := &fakeLease{}
+			e := newElector(lease, "a")
+			e.Telemetry = newTelemetry(t, a.name)
+			if !e.TryLeadOnce(t.Context()) {
+				t.Fatal("TryLeadOnce did not take a free lease")
+			}
+			if !e.Status.Leading() || e.Status.Ready() {
+				t.Fatalf("leading %v ready %v; want leading, not ready until the takeover is done", e.Status.Leading(), e.Status.Ready())
+			}
+			if got := lineValue(metrics(t, e), "agentkourier_"+a.name+"_leader"); got != "1" {
+				t.Fatalf("leader gauge = %q before Run, want 1", got)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			led := make(chan struct{})
+			done := run(ctx, e, func(ctx context.Context) error {
+				close(led)
+				<-ctx.Done()
+				return nil
+			})
+			<-led
+			waitFor(t, "renewals", func() bool { lease.mu.Lock(); defer lease.mu.Unlock(); return lease.renewals >= 2 })
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			lease.mu.Lock()
+			tries := lease.tries
+			lease.mu.Unlock()
+			if tries != 1 {
+				t.Fatalf("lease attempts = %d, want the one before Run", tries)
+			}
+			if got := lineValue(metrics(t, e), "agentkourier_"+a.name+"_leader_takeovers_total"); got != "1" {
+				t.Fatalf("takeovers = %q, want 1", got)
+			}
+		})
 	}
 }
 
@@ -283,7 +300,7 @@ func TestTryLeadOnceLeavesAStandby(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := newElector(lease, "a")
-			e.Telemetry = newTelemetry(t)
+			e.Telemetry = newTelemetry(t, "cma")
 			if e.TryLeadOnce(t.Context()) {
 				t.Fatal("TryLeadOnce took the lease")
 			}
