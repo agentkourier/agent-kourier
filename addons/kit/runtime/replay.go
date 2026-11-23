@@ -17,8 +17,8 @@ import (
 // message's task instead of starting another turn, after a restart too: Agent Kourier resends a message with the same
 // ID when it cannot tell whether the first send arrived. The store records a message's ID in the transaction that
 // stores its task (a new task's history holds the message, and an answer is added to its task's history before the
-// turn runs), so the handler holds a send of one ID, and only of that ID, from its lookup until the turn's first event:
-// a resend that races it in this process waits and finds the task.
+// turn runs), so the handler holds a send of one ID, and only of that ID, from its lookup until the turn's first event,
+// also when its caller hangs up before that (follow): a resend that races it in this process waits and finds the task.
 //
 // It also marks a message's context active before the message is accepted (touch), refuses an answer the backend's
 // ResumeValidator does not accept before the turn starts, and follows a task only for its own caller.
@@ -28,6 +28,7 @@ type replayHandler struct {
 	tel       *telemetry.Telemetry
 	validator ResumeValidator // nil: every answer reaches the backend
 	settler   CancelSettler   // nil: a failed cancel fails
+	life      context.Context // ends with the add-on's stop, which ends a stream that outlived its request
 
 	mu      sync.Mutex
 	sending map[string]chan struct{} // by message ID: a send between its lookup and its first event, closed at its end
@@ -94,11 +95,28 @@ func (h *replayHandler) SendStreamingMessage(ctx context.Context, req *a2a.SendM
 			yield(nil, err)
 			return
 		}
-		for ev, err := range h.RequestHandler.SendStreamingMessage(ctx, req) {
+		h.follow(ctx, req, unclaim, yield)
+	}
+}
+
+// follow streams the turn of req, holding its message ID's claim until the turn's first event, which a2a-go sends once
+// it has stored the task and so the message ID, or the end of the execution without one. A caller who hangs up before
+// that does not end the claim: the stream goes on, detached from the request, until that event, or the add-on's stop,
+// so that a resend waits and joins the one turn rather than sending the message to the backend again. Once the event
+// has come, the request's end ends the stream.
+func (h *replayHandler) follow(ctx context.Context, req *a2a.SendMessageRequest, unclaim func(), yield func(a2a.Event, error) bool) {
+	inner, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancel()
+	defer context.AfterFunc(h.life, cancel)() //nolint:contextcheck // the add-on's stop ends a stream that outlived its request
+	first := true
+	for ev, err := range h.RequestHandler.SendStreamingMessage(inner, req) {
+		if first {
+			first = false
 			unclaim()
-			if !yield(ev, err) {
-				return
-			}
+			defer context.AfterFunc(ctx, cancel)()
+		}
+		if !yield(ev, err) {
+			return
 		}
 	}
 }

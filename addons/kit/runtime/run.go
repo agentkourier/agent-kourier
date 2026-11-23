@@ -298,7 +298,7 @@ func endpoint[S Store](a Addon[S], backend Backend, st Store, tasks taskstore.St
 	settler, _ := backend.(CancelSettler)
 	handler := &a2asrv.InterceptedHandler{
 		Handler: &replayHandler{RequestHandler: a2asrv.NewHandler(running, a2asrv.WithTaskStore(tasks)), store: st, tel: tel,
-			validator: validator, settler: settler},
+			validator: validator, settler: settler, life: running.life},
 		Interceptors: []a2asrv.CallInterceptor{auth.Interceptor{}},
 	}
 	mux := http.NewServeMux()

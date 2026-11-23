@@ -221,3 +221,135 @@ func TestANonStreamingAnswerIsAnsweredWithItsTask(t *testing.T) {
 		t.Fatalf("SendMessage = %+v, %v; want the paused task, completed", res, err)
 	}
 }
+
+// A send's hold on its message ID ends at its turn's first event, not at the turn's end: a resend while the turn runs
+// joins its task at once.
+func TestAResendJoinsARunningTurnOnceItsFirstEventHasCome(t *testing.T) {
+	st := newFakeStore()
+	b := &scripted{started: make(chan string, 2)}
+	s := serveHandler(t, st, b)
+	c := s.client(t, auth.Caller)
+	held, hangUp := context.WithCancel(t.Context())
+	defer hangUp()
+	ids := make(chan a2a.TaskID, 1)
+	go func() {
+		for ev, err := range c.SendStreamingMessage(held, &a2a.SendMessageRequest{Message: message("m1", "hold", "c1", "")}) {
+			if err == nil && taskOf(ev) != "" {
+				select {
+				case ids <- taskOf(ev):
+				default:
+				}
+			}
+		}
+	}()
+	id := <-ids
+	t.Cleanup(func() { _, _ = c.CancelTask(context.Background(), &a2a.CancelTaskRequest{ID: id}) })
+	resend, stop := context.WithTimeout(t.Context(), 2*time.Second)
+	defer stop()
+	var got *a2a.Task
+	for ev, err := range c.SendStreamingMessage(resend, &a2a.SendMessageRequest{Message: message("m1", "hold", "c1", "")}) {
+		if err != nil {
+			t.Fatalf("the resend while the turn runs: %v; want its task at once", err)
+		}
+		if task, ok := ev.(*a2a.Task); ok {
+			got = task
+			break
+		}
+	}
+	if got == nil || got.ID != id || got.Status.State != a2a.TaskStateWorking {
+		t.Fatalf("the resend's task = %+v; want %s, working", got, id)
+	}
+	if n := b.turnCount(); n != 1 {
+		t.Fatalf("the backend ran %d turns, want 1", n)
+	}
+}
+
+// A send whose caller hangs up before the turn's first event keeps its hold on the message ID until that event: a
+// resend then joins the one turn rather than starting a second, which would send the message to the backend twice.
+func TestAResendAfterTheSenderHungUpBeforeTheFirstEventJoinsTheOneTurn(t *testing.T) {
+	st := newFakeStore()
+	b := &scripted{gate: make(chan struct{}), started: make(chan string, 2)}
+	s := serveHandler(t, st, b)
+	c := s.client(t, auth.Caller)
+	held, hangUp := context.WithCancel(t.Context())
+	gone := make(chan struct{})
+	go func() {
+		defer close(gone)
+		for _, err := range c.SendStreamingMessage(held, &a2a.SendMessageRequest{Message: message("m1", "slow", "c1", "")}) {
+			if err != nil {
+				return
+			}
+		}
+	}()
+	if got := <-b.started; got != "slow" {
+		t.Fatalf("the first turn's text = %q", got)
+	}
+	hangUp()
+	<-gone
+	time.Sleep(100 * time.Millisecond) // the server sees the hang-up
+	resent := make(chan sent, 1)
+	go func() { task, err := send(t, c, message("m1", "slow", "c1", "")); resent <- sent{task, err} }()
+	select {
+	case text := <-b.started:
+		t.Fatalf("the resend started a second turn (%q) while the first had yielded nothing", text)
+	case r := <-resent:
+		t.Fatalf("the resend answered before the first turn's first event: %+v, %v", r.task, r.err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(b.gate)
+	r := <-resent
+	if r.err != nil || r.task.Status.State != a2a.TaskStateCompleted {
+		t.Fatalf("the resend = %+v, %v; want the one turn's task, completed", r.task, r.err)
+	}
+	if n := b.turnCount(); n != 1 {
+		t.Fatalf("the backend ran %d turns, want 1", n)
+	}
+}
+
+// blockingInner is a2a-go's handler for a turn that yields nothing until its stream's context ends.
+type blockingInner struct {
+	a2asrv.RequestHandler
+	started chan struct{}
+	ended   chan struct{}
+}
+
+func (b blockingInner) SendStreamingMessage(ctx context.Context, _ *a2a.SendMessageRequest) iter.Seq2[a2a.Event, error] {
+	return func(yield func(a2a.Event, error) bool) {
+		close(b.started)
+		<-ctx.Done()
+		close(b.ended)
+		yield(nil, ctx.Err())
+	}
+}
+
+// A stream whose request ends before its first event goes on, and the add-on's stop ends it.
+func TestAStreamThatOutlivesItsRequestEndsWithTheAddOnsStop(t *testing.T) {
+	inner := blockingInner{started: make(chan struct{}), ended: make(chan struct{})}
+	life, stop := context.WithCancel(context.Background())
+	defer stop()
+	h := &replayHandler{RequestHandler: inner, store: newFakeStore(), tel: newTel(t), life: life}
+	req, hangUp := context.WithCancel(asCaller(t.Context(), auth.Caller))
+	defer hangUp()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for _, err := range h.SendStreamingMessage(req, &a2a.SendMessageRequest{Message: message("m1", "x", "c1", "")}) {
+			if err == nil {
+				t.Error("the stream yielded an event; want only its end's error")
+			}
+		}
+	}()
+	<-inner.started
+	hangUp()
+	select {
+	case <-inner.ended:
+		t.Fatal("the request's end ended the stream before its first event")
+	case <-time.After(100 * time.Millisecond):
+	}
+	stop()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the add-on's stop did not end the stream")
+	}
+}
