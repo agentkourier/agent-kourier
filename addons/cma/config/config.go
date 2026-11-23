@@ -1,7 +1,7 @@
-// Package config reads the adapter's settings from its environment and checks them, so that a setting the adapter
-// cannot use stops it at start with an error that names the variable. The kit's settings package reads the ones every
-// add-on shares; this package holds the adapter's own. An error never shows the value of a variable that may hold a
-// secret (POSTGRES_DSN, AUTH_HEADER).
+// Package config holds the adapter's own settings, which the kit's runtime reads from the environment with the ones
+// every add-on shares (package settings) and checks, so that a setting the adapter cannot use stops it at start with an
+// error that names the variable. An error never shows the value of a variable that may hold a secret (POSTGRES_DSN,
+// AUTH_HEADER).
 package config
 
 import (
@@ -17,11 +17,8 @@ var (
 	toolResultTimeout = settings.Duration("TOOL_RESULT_TIMEOUT", "10m")
 )
 
-// Spec is how the adapter reads its settings: the shared ones with the token check alone, and its own.
-func Spec() settings.Spec {
-	return settings.Spec{Name: "cma", Noun: "adapter",
-		Vars: []settings.Var{agentID, environmentID, toolResultTimeout}}
-}
+// Vars are the adapter's own variables, in the order they are read (runtime.Addon.Settings).
+func Vars() []settings.Var { return []settings.Var{agentID, environmentID, toolResultTimeout} }
 
 // Config is the adapter's settings.
 type Config struct {
@@ -32,13 +29,8 @@ type Config struct {
 	ToolResultTimeout time.Duration
 }
 
-// Parse reads the settings through getenv (os.Getenv in production), where an empty value is an unset one, and checks
-// them.
-func Parse(getenv func(string) string) (Config, error) {
-	shared, own, err := settings.Parse(getenv, Spec())
-	if err != nil {
-		return Config{}, err
-	}
+// From is the adapter's settings: shared, the ones every add-on has, and its own, as the kit's runtime read them (Vars).
+func From(shared settings.Config, own settings.Values) Config {
 	return Config{Config: shared, AgentID: agentID.From(own), EnvironmentID: environmentID.From(own),
-		ToolResultTimeout: toolResultTimeout.From(own)}, nil
+		ToolResultTimeout: toolResultTimeout.From(own)}
 }

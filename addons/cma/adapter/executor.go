@@ -16,7 +16,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 
 	"github.com/agentkourier/agent-kourier/addons/cma/store"
-	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
+	"github.com/agentkourier/agent-kourier/addons/kit/runtime"
 )
 
 // HITLExtension is kagent's human-in-the-loop A2A extension. Agent Kourier's a2a dialect reads a pause marked with it
@@ -28,49 +28,55 @@ const HITLExtension = "https://kagent.dev/extensions/hitl/v1"
 // it moves a session to a new pod.
 const DefaultKeepalive = 60 * time.Second
 
-// Executor runs A2A tasks as turns of Managed Agents sessions. One A2A context is one session, created on the
-// context's first message with the context ID in its metadata. The context-to-session map is kept in Store, with a copy
-// in memory; Restore loads it when the adapter starts and reconciles it with CMA, Settle fails the turns a restart cut
-// off, and Run archives the sessions of contexts idle past IdleTTL and deletes settled tasks past TaskRetention.
+// Executor runs A2A tasks as turns of Managed Agents sessions, as the kit's runtime runs a backend (package runtime):
+// the runtime counts and traces each Execute as a turn, replays a resent message, and keeps the tasks. One A2A context
+// is one session, created on the context's first message with the context ID in its metadata. The context-to-session
+// map is kept in Store, with a copy in memory. The runtime calls the executor's hooks: Restore when this replica takes
+// over as the leader, to reconcile the map with CMA; Interrupted once it has failed the turns a restart cut off;
+// ValidateResume before an answer to a paused task runs; ReleaseContext for each context idle past SESSION_IDLE_TTL;
+// CanceledAfterFailedCancel and FailedOutcome to settle a cancel and name a timed-out turn.
 type Executor struct {
 	Backend Backend
-	// Store keeps the tasks, the message IDs and each context's session across a restart. Required.
+	// Store keeps each context's session across a restart. Required.
 	Store Store
 	// Keepalive is the silence after which a working update is sent. Zero is DefaultKeepalive.
 	Keepalive time.Duration
-	// IdleTTL is how long a context may go without a turn before Run archives its session; the context's next
-	// message then starts a new session, without the old one's history. Zero never archives.
+	// IdleTTL is SESSION_IDLE_TTL, which the log line of an idle session's archive names. The runtime's upkeep decides
+	// when a context is idle.
 	IdleTTL time.Duration
 	// ToolResultTimeout is how long a turn waits, with no session event, for the result of a tool call the session
 	// runs in its sandbox (one the agent may run, or one a person approved). Past it the adapter interrupts the
 	// session and fails the turn: a sandbox that cannot start sends nothing at all. A tool that runs silently for
 	// longer is cut off the same way. Zero waits for ever.
 	ToolResultTimeout time.Duration
-	// TaskRetention is how long Run keeps a settled task, and its message IDs, after its last update. Zero keeps them.
-	TaskRetention time.Duration
 	// Log receives what the adapter cannot tell the client. Nil is slog.Default().
 	Log *slog.Logger
-	// Telemetry counts the turns and traces each turn. Nil records nothing. Wrap Backend in Observe to time and trace the
-	// calls to the API too.
-	Telemetry *telemetry.Telemetry
-	// Metrics counts the sessions let go of. Nil records nothing.
+	// Metrics counts the sessions let go of. Nil records nothing. Wrap Backend in Observe to time and trace the calls
+	// to the API.
 	Metrics *Metrics
 
 	now      func() time.Time // nil is time.Now
 	mu       sync.Mutex
-	sessions map[string]*contextSession // by A2A context ID; Store's map, plus the turns running here
-	creating map[string]chan struct{}   // by A2A context ID: a session being created, closed once that is over
-	turns    map[a2a.TaskID]*outcome    // the turns running here, by task, for Cancel to mark
+	sessions map[string]*contextSession  // by A2A context ID; Store's map, plus the turns running here
+	creating map[string]chan struct{}    // by A2A context ID: a session being created, closed once that is over
+	canceled map[a2a.TaskID]*atomic.Bool // the turns running here, by task: set by Cancel before it interrupts
 }
 
-// contextSession is a context's session and its activity.
+// contextSession is a context's session.
 type contextSession struct {
-	id         string
-	lastActive time.Time // when a turn last started or ended
-	turns      int       // turns running now; a session with one is never archived
+	id    string
+	turns int // turns running now; a session with one is never archived
 }
 
-var _ a2asrv.AgentExecutor = (*Executor)(nil)
+var (
+	_ a2asrv.AgentExecutor    = (*Executor)(nil)
+	_ runtime.Restorer        = (*Executor)(nil)
+	_ runtime.Interrupter     = (*Executor)(nil)
+	_ runtime.ResumeValidator = (*Executor)(nil)
+	_ runtime.ContextReleaser = (*Executor)(nil)
+	_ runtime.CancelSettler   = (*Executor)(nil)
+	_ runtime.TurnClassifier  = (*Executor)(nil)
+)
 
 // Execute sends the message, or the answer to a paused task, to the context's session and translates the session's
 // events into A2A events until the turn ends or pauses.
@@ -81,10 +87,8 @@ func (e *Executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 			yield(nil, err)
 			return
 		}
-		ctx, span := e.Telemetry.StartTurn(ctx, string(ec.TaskID), ec.ContextID)
-		o := e.startTurn(ec.TaskID)
-		defer func() { span.End(e.endTurn(ctx, ec.TaskID, o)) }()
-		yield = o.track(yield)
+		canceled := e.startTurn(ec.TaskID)
+		defer e.endTurn(ec.TaskID, canceled)
 		session, err := e.acquire(ctx, ec.ContextID)
 		if err != nil {
 			yield(nil, fmt.Errorf("start session: %w", err))
@@ -111,7 +115,7 @@ func (e *Executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 			return
 		}
 		t := &turnState{ec: ec, session: session, names: known, asks: map[string]Event{}, running: map[string]bool{},
-			canceled: &o.canceled, log: e.logger().With("session", session, "task", ec.TaskID)}
+			canceled: canceled, log: e.logger().With("session", session, "task", ec.TaskID)}
 		for _, o := range out {
 			if c := o.Confirmation; c != nil && c.Allow {
 				t.running[c.ToolUseID] = true
@@ -121,74 +125,25 @@ func (e *Executor) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 	}
 }
 
-// outcome follows what a running turn yields, to say how it ended. Its fields are the turn's goroutine's, but for
-// canceled, which Cancel sets.
-type outcome struct {
-	state    a2a.TaskState
-	timeout  bool // the turn failed waiting for a sandbox tool's result
-	errored  bool // the turn ended on an error
-	stopped  bool // the consumer stopped taking events
-	canceled atomic.Bool
-}
-
-// track returns yield, noting each status update and error it passes and whether the consumer stopped.
-func (o *outcome) track(yield func(a2a.Event, error) bool) func(a2a.Event, error) bool {
-	return func(ev a2a.Event, err error) bool {
-		if err != nil {
-			o.errored = true
-		}
-		if su, ok := ev.(*a2a.TaskStatusUpdateEvent); ok {
-			o.state = su.Status.State
-			o.timeout = su.Status.Message != nil && su.Status.Message.Metadata["code"] == "timeout"
-		}
-		if !yield(ev, err) {
-			o.stopped = true
-			return false
-		}
-		return true
-	}
-}
-
-// of is the turn's outcome once Execute returns. A cancel wins over whatever the session said after its interrupt; a
-// turn that ended on an error failed; one that stopped before it settled or paused was canceled.
-func (o *outcome) of(ctx context.Context) telemetry.TurnOutcome {
-	switch {
-	case o.canceled.Load(), o.state == a2a.TaskStateCanceled:
-		return telemetry.TurnCanceled
-	case o.state == a2a.TaskStateCompleted:
-		return telemetry.TurnCompleted
-	case o.state == a2a.TaskStateInputRequired:
-		return telemetry.TurnInputRequired
-	case o.state == a2a.TaskStateFailed && o.timeout:
-		return turnTimeout
-	case o.state == a2a.TaskStateFailed, o.errored:
-		return telemetry.TurnFailed
-	case o.stopped || ctx.Err() != nil:
-		return telemetry.TurnCanceled
-	}
-	return telemetry.TurnFailed
-}
-
-// startTurn registers a running turn of task, which Cancel can mark.
-func (e *Executor) startTurn(task a2a.TaskID) *outcome {
-	o := &outcome{}
+// startTurn registers a running turn of task, which Cancel can mark canceled.
+func (e *Executor) startTurn(task a2a.TaskID) *atomic.Bool {
+	canceled := &atomic.Bool{}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.turns == nil {
-		e.turns = map[a2a.TaskID]*outcome{}
+	if e.canceled == nil {
+		e.canceled = map[a2a.TaskID]*atomic.Bool{}
 	}
-	e.turns[task] = o
-	return o
+	e.canceled[task] = canceled
+	return canceled
 }
 
-// endTurn forgets a turn startTurn registered and returns how it ended.
-func (e *Executor) endTurn(ctx context.Context, task a2a.TaskID, o *outcome) telemetry.TurnOutcome {
+// endTurn forgets a turn startTurn registered.
+func (e *Executor) endTurn(task a2a.TaskID, canceled *atomic.Bool) {
 	e.mu.Lock()
-	if e.turns[task] == o {
-		delete(e.turns, task)
+	defer e.mu.Unlock()
+	if e.canceled[task] == canceled {
+		delete(e.canceled, task)
 	}
-	e.mu.Unlock()
-	return o.of(ctx)
 }
 
 // Contexts is how many contexts have a session in the executor's map, for the sessions gauge.
@@ -203,8 +158,8 @@ func (e *Executor) Cancel(ctx context.Context, ec *a2asrv.ExecutorContext) iter.
 	return func(yield func(a2a.Event, error) bool) {
 		e.mu.Lock()
 		cs, ok := e.sessions[ec.ContextID]
-		if o := e.turns[ec.TaskID]; o != nil {
-			o.canceled.Store(true)
+		if canceled := e.canceled[ec.TaskID]; canceled != nil {
+			canceled.Store(true)
 		}
 		e.mu.Unlock()
 		if ok {
@@ -242,10 +197,9 @@ func (e *Executor) acquire(ctx context.Context, contextID string) (string, error
 		e.mu.Lock()
 		if cs, ok := e.sessions[contextID]; ok {
 			cs.turns++
-			cs.lastActive = e.clock()
-			id, at := cs.id, cs.lastActive
+			id := cs.id
 			e.mu.Unlock()
-			e.touch(ctx, contextID, id, at)
+			e.touch(ctx, contextID, id, e.clock())
 			return id, nil
 		}
 		if pending, ok := e.creating[contextID]; ok {
@@ -287,9 +241,9 @@ func (e *Executor) create(ctx context.Context, contextID string, done chan struc
 		finish(nil)
 		return "", err
 	}
-	cs := &contextSession{id: id, lastActive: e.clock(), turns: 1}
+	cs := &contextSession{id: id, turns: 1}
 	// Stored before the map has it, so that no other turn of the context can run before the store knows its session.
-	if err := e.Store.PutSession(ctx, store.Session{ContextID: contextID, SessionID: id, LastActive: cs.lastActive}); err != nil {
+	if err := e.Store.PutSession(ctx, store.Session{ContextID: contextID, SessionID: id, LastActive: e.clock()}); err != nil {
 		e.logger().Warn("store a new session", "context", contextID, "session", id, "error", err)
 	}
 	finish(cs)
@@ -305,13 +259,11 @@ func (e *Executor) release(ctx context.Context, contextID, session string) {
 		return
 	}
 	cs.turns--
-	cs.lastActive = e.clock()
-	at := cs.lastActive
 	e.mu.Unlock()
-	e.touch(context.WithoutCancel(ctx), contextID, session, at)
+	e.touch(context.WithoutCancel(ctx), contextID, session, e.clock())
 }
 
-// touch stores a session's last activity, which the idle clock counts from after a restart.
+// touch stores a session's last activity, which the runtime's upkeep counts the idle time from.
 func (e *Executor) touch(ctx context.Context, contextID, session string, at time.Time) {
 	if err := e.Store.TouchSession(ctx, contextID, session, at); err != nil {
 		e.logger().Warn("store a session's activity", "context", contextID, "session", session, "error", err)

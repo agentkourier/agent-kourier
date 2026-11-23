@@ -48,7 +48,7 @@ func Run(t *testing.T, h Harness) {
 		fn   func(*testing.T, Harness)
 	}{
 		{"Sessions", testSessions},
-		{"ForgetContext", testForgetContext},
+		{"ForgetSession", testForgetSession},
 		{"Reopen", testReopen},
 	} {
 		t.Run(tc.name, func(t *testing.T) { tc.fn(t, h) })
@@ -132,7 +132,7 @@ func testSessions(t *testing.T, h Harness) {
 	}
 }
 
-func testForgetContext(t *testing.T, h Harness) {
+func testForgetSession(t *testing.T, h Harness) {
 	s, clk := open(t, h)
 	ctx := context.Background()
 	start := clk.Now()
@@ -151,14 +151,14 @@ func testForgetContext(t *testing.T, h Harness) {
 	mustCreate(t, s, task("c1-after", "c1", a2a.TaskStateSubmitted)) // a turn that started after the archive
 
 	// A context whose session was replaced keeps its new session, and the tasks since.
-	if err := s.ForgetContext(ctx, "c2", "sesn_old", start); err != nil {
+	if err := s.ForgetSession(ctx, "c2", "sesn_old", start); err != nil {
 		t.Fatal(err)
 	}
 	if got := sessions(t, s); got["c2"].SessionID != "sesn_2" {
 		t.Fatalf("forgetting a replaced session removed the context's current one: %+v", got)
 	}
 
-	if err := s.ForgetContext(ctx, "c1", "sesn_1", cutoff); err != nil {
+	if err := s.ForgetSession(ctx, "c1", "sesn_1", cutoff); err != nil {
 		t.Fatal(err)
 	}
 	if got := sessions(t, s); len(got) != 1 || got["c2"].SessionID != "sesn_2" {

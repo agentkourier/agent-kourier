@@ -6,20 +6,18 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
-	"github.com/a2aproject/a2a-go/v2/a2asrv"
+	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/anthropics/anthropic-sdk-go/v2"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/agentkourier/agent-kourier/addons/cma/store"
 	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
@@ -62,15 +60,16 @@ func wantSeries(t *testing.T, tel *telemetry.Telemetry, want map[string]string) 
 	}
 }
 
-// observedHandler is a handler over fake, observed by tel, with the stall timeout given.
-func observedHandler(t *testing.T, fake *fakeBackend, tel *telemetry.Telemetry, stall time.Duration) (*Executor, a2asrv.RequestHandler) {
+// observedHandler is a client of an adapter over fake, observed by tel, with the stall timeout given.
+func observedHandler(t *testing.T, fake *fakeBackend, tel *telemetry.Telemetry, stall time.Duration) (*Executor, *a2aclient.Client) {
 	t.Helper()
-	exec := &Executor{Backend: Observe(fake, tel), Store: newStore(t, nil), Keepalive: time.Hour, ToolResultTimeout: stall, Telemetry: tel}
+	st := newStore(t, nil)
+	exec := &Executor{Backend: Observe(fake, tel), Store: st, Keepalive: time.Hour, ToolResultTimeout: stall}
 	var err error
 	if exec.Metrics, err = NewMetrics(tel, exec.Contexts); err != nil {
 		t.Fatal(err)
 	}
-	return exec, NewRequestHandler(exec, asKourier{})
+	return exec, serve(t, exec, st, tel)
 }
 
 // Each way a turn ends is counted under its outcome, and the calls it made under theirs.
@@ -204,65 +203,17 @@ func TestReplayIsCounted(t *testing.T) {
 	})
 }
 
-// Settle counts each task it fails, one whose stored record does not decode too; Restore counts the sessions it archives as superseded and those CMA no longer lists
-// as gone; the reaper counts the idle ones.
-func TestTakeoverAndReaperAreCounted(t *testing.T) {
-	fake := newFake(nil)
-	clk := newClock()
-	path := filepath.Join(t.TempDir(), "cma.db")
-	st := openStore(t, path, clk.now)
-	ctx := kourier(context.Background())
-	for _, tk := range []*a2a.Task{
-		{ID: "working", ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}},
-		{ID: "unreadable", ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}},
-	} {
-		if _, err := st.Create(ctx, tk); err != nil {
-			t.Fatal(err)
-		}
-	}
-	corrupt(t, st, "unreadable")
-	for _, s := range []store.Session{{ContextID: "c1", SessionID: "sesn_c1"}, {ContextID: "gone", SessionID: "sesn_gone"}} {
-		s.LastActive = clk.now()
-		if err := st.PutSession(ctx, s); err != nil {
-			t.Fatal(err)
-		}
-	}
-	fake.seed("sesn_c1", "c1", clk.now())
-	fake.seed("sesn_c1_extra", "c1", clk.now().Add(-time.Hour))
-	tel := newTelemetry(t, nil)
-	exec := &Executor{Backend: Observe(fake, tel), Store: st, IdleTTL: time.Hour, Telemetry: tel, now: clk.now}
-	var err error
-	if exec.Metrics, err = NewMetrics(tel, exec.Contexts); err != nil {
-		t.Fatal(err)
-	}
-	if err := exec.Restore(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := exec.Settle(ctx); err != nil {
-		t.Fatal(err)
-	}
-	clk.advance(2 * time.Hour)
-	exec.reap(ctx)
-	wantSeries(t, tel, map[string]string{
-		`agentkourier_cma_tasks_interrupted_total`:                                                       "2",
-		`agentkourier_cma_turns_total{outcome="interrupted"}`:                                            "2",
-		`agentkourier_cma_sessions_archived_total{reason="superseded"}`:                                  "1",
-		`agentkourier_cma_sessions_archived_total{reason="gone"}`:                                        "1",
-		`agentkourier_cma_sessions_archived_total{reason="idle"}`:                                        "1",
-		`agentkourier_cma_operation_duration_seconds_count{operation="list_sessions",outcome="success"}`: "1",
-		`agentkourier_cma_operation_duration_seconds_count{operation="archive",outcome="success"}`:       "2",
-	})
-}
-
-// The turn's span is a child of the caller's, and each call to the API a child of the turn.
+// The turn's span is a child of the caller's, whose trace context the request carries, and each call to the API a
+// child of the turn.
 func TestTurnSpanIsTheCallersChild(t *testing.T) {
 	rec := tracetest.NewSpanRecorder()
 	tel := newTelemetry(t, sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec)))
-	_, h := observedHandler(t, newFake(script(say("ok"), idle(stopEndTurn))), tel, 0)
+	st := newStore(t, nil)
+	exec := &Executor{Backend: Observe(newFake(script(say("ok"), idle(stopEndTurn))), tel), Store: st}
 	traceID, _ := trace.TraceIDFromHex("4bf92f3577b34da6a3ce929d0e0e4736")
 	spanID, _ := trace.SpanIDFromHex("00f067aa0ba902b7")
-	caller := trace.NewSpanContext(trace.SpanContextConfig{TraceID: traceID, SpanID: spanID, TraceFlags: trace.FlagsSampled, Remote: true})
-	ctx, cancel := context.WithTimeout(trace.ContextWithRemoteSpanContext(context.Background(), caller), 5*time.Second)
+	h := dial(t, serveURL(t, exec, st, tel), traceparent{"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var task a2a.TaskID
 	for ev, err := range h.SendStreamingMessage(ctx, &a2a.SendMessageRequest{Message: userText("", "go")}) {
@@ -306,4 +257,14 @@ func TestTurnSpanIsTheCallersChild(t *testing.T) {
 	if calls < 3 {
 		t.Fatalf("%d call spans, want create_session, stream and send", calls)
 	}
+}
+
+// traceparent sets a W3C trace context on each request, as a traced caller does.
+type traceparent struct{ value string }
+
+// RoundTrip implements http.RoundTripper.
+func (p traceparent) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set("traceparent", p.value)
+	return http.DefaultTransport.RoundTrip(r)
 }

@@ -8,16 +8,17 @@ import (
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
-	"github.com/a2aproject/a2a-go/v2/a2asrv"
+	"github.com/a2aproject/a2a-go/v2/a2aclient"
 )
 
-func newHandler(t *testing.T, fake *fakeBackend, keepalive time.Duration) a2asrv.RequestHandler {
+func newHandler(t *testing.T, fake *fakeBackend, keepalive time.Duration) *a2aclient.Client {
 	t.Helper()
-	return NewRequestHandler(&Executor{Backend: fake, Store: newStore(t, nil), Keepalive: keepalive}, asKourier{})
+	st := newStore(t, nil)
+	return serve(t, &Executor{Backend: fake, Store: st, Keepalive: keepalive}, st, nil)
 }
 
 // turn sends msg and returns the task it settled in and the events the stream carried.
-func turn(t *testing.T, h a2asrv.RequestHandler, msg *a2a.Message) (*a2a.Task, []a2a.Event) {
+func turn(t *testing.T, h *a2aclient.Client, msg *a2a.Message) (*a2a.Task, []a2a.Event) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
