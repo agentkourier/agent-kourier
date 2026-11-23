@@ -69,8 +69,8 @@ the variable), 1 for a failure once it runs, and 5 when a replica on Postgres lo
 
 ## 3. Declare the add-on's own settings
 
-The kit reads the variables every add-on shares (the
-[Claude Managed Agents add-on's reference](../reference/claude-managed-agents.md#every-add-ons) lists them). An add-on's
+The kit reads the variables every add-on shares (each add-on's reference lists them:
+[Claude Managed Agents](../reference/claude-managed-agents.md#every-add-ons), [AX](../reference/ax.md#every-add-ons)). An add-on's
 own are `settings.Var` values in `Addon.Settings`, read in order before the shared ones:
 
 ```go

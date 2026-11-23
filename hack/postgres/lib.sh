@@ -7,7 +7,7 @@
 # file (not on a command line, where ps shows it), to the tests in the environment, and the file and the
 # container are removed on every way out.
 
-# postgres:18 on Debian, by digest of its multi-arch index. To move to another major or a newer build:
+# postgres:19 on Debian, by digest of its multi-arch index. To move to another major or a newer build:
 # docker pull postgres:<major>, then docker image inspect it for the digest.
 POSTGRES_IMAGE="postgres:19@sha256:bb6e70add742cd868fb62cb3b2f67d1dd2bdd2b65a521e778420748753687c60"
 

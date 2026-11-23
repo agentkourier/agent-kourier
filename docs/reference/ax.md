@@ -41,8 +41,8 @@ answer form. The `ask_user` call shows no step card: the add-on replaces the cal
 
 The agent card, at `/a2a/.well-known/agent-card.json`, names the endpoint `PUBLIC_URL` and the add-on's version, and
 advertises streaming over JSON-RPC and text input and output. It lists no extension, so Agent Kourier never reads a pause
-of the add-on as a tool approval. Unlike the card of the [Claude Managed Agents add-on](claude-managed-agents.md), it is
-behind the caller check: Agent Kourier fetches it with the Binding's token.
+of the add-on as a tool approval. The card is behind the caller check, as every add-on's is: Agent Kourier fetches it
+with the Binding's token.
 
 ## A turn with a question
 
@@ -52,12 +52,12 @@ sequenceDiagram
   participant A as Add-on
   participant M as The model
 
-  K->>A: message/stream (the thread's text)
+  K->>A: SendStreamingMessage (the thread's text)
   A->>M: a streamed call
   M-->>A: ask_user {question}
   A-->>K: input-required + the question's text
   Note over K: The question in the thread
-  K->>A: message/stream (the answer, on the same task)
+  K->>A: SendStreamingMessage (the answer, on the same task)
   A->>M: a streamed call (ask_user's result)
   M-->>A: the answer's text
   A-->>K: artifacts, then completed
@@ -234,7 +234,13 @@ All on one port: 8090 in the chart, named `http` on the Service, and 80 in the r
 | `/metrics` | Prometheus metrics |
 
 On Postgres, `/readyz` answers 200 on a standby too, since a standby forwards to the leader, so every replica is behind
-the Service. The binary prints its version with `--version` and takes no other argument.
+the Service.
+
+## Command line
+
+The binary takes one flag, `--version`, which prints its version, and no argument. An argument, an unknown flag or a
+setting it cannot use stops it with exit code 2. It exits with 1 for a failure once it runs, logged as
+`agent stopped`, with 5 when a leader on Postgres loses the lease, and with 0 once a stop has finished.
 
 ## Settings
 
