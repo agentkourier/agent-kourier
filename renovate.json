@@ -36,6 +36,29 @@
       "enabled": false
     },
     {
+      "description": "AX and its Agent Substrate module move together, by hand, and are checked with make e2e-ax: addons/ax builds its ax and ax-server tools from the github.com/google/ax pin, and Substrate's releases from v0.6.0 declare the module path go.ate.dev/substrate, which a version bump of github.com/agent-substrate/substrate cannot follow",
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchPackageNames": [
+        "github.com/google/ax",
+        "github.com/agent-substrate/**",
+        "go.ate.dev/**"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "The addons reach Agent Kourier's own modules through replace directives, so the version they require is a placeholder",
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchPackageNames": [
+        "github.com/agentkourier/agent-kourier",
+        "github.com/agentkourier/agent-kourier/**"
+      ],
+      "enabled": false
+    },
+    {
       "description": "Agent Kourier's own images: the digests in hack/security/test.sh are fake fixtures, and a release stamps the real one",
       "matchDepNames": [
         "ghcr.io/agentkourier/agent-kourier",

@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/agentkourier/agent-kourier/addons/ax/store"
+	"github.com/agentkourier/agent-kourier/addons/kit/store"
 	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
@@ -27,7 +27,8 @@ const ExitLeadershipLost = 5
 // ExitLeadershipLost.
 var ErrLeadershipLost = errors.New("leadership lost: the lease was taken or could not be renewed")
 
-// Lease is the store's side of the election. *store.Store implements it on Postgres.
+// Lease is the store's side of the election. *store.DB implements it on Postgres, and so does the add-on's store,
+// which embeds it.
 type Lease interface {
 	// TryLead makes one attempt to take the lease for holder, reachable at address, for d; ok reports a take, and
 	// lease is the row after the attempt.

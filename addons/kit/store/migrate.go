@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"embed"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -11,6 +12,12 @@ import (
 	"strings"
 	"time"
 )
+
+// kitMigrationFiles are the kit's migrations, one directory per backend: the leadership row, which Postgres replicas
+// elect a leader through. The add-on's own come after them, under a version table of their own.
+//
+//go:embed migrations/sqlite/*.sql migrations/postgres/*.sql
+var kitMigrationFiles embed.FS
 
 // migration is one numbered SQL file: NNNN_name.sql.
 type migration struct {
@@ -43,11 +50,12 @@ func listMigrations(fsys fs.FS) ([]migration, error) {
 	return out, nil
 }
 
-// migrate applies the migrations in fsys that schema_migrations does not record, in version order, each in its own
-// transaction with its schema_migrations row, so a failure leaves the earlier ones applied and the failing one not at
-// all. Each transaction first takes the backend's migration lock, before it creates the table of versions. A database
-// that records a migration fsys does not have (an older adapter after a newer one) is logged at WARN, not refused.
-func migrate(ctx context.Context, c conn, fsys fs.FS, log *slog.Logger) error {
+// migrate applies the migrations in fsys that table, a version table, does not record, in version order, each in its
+// own transaction with its row of table, so a failure leaves the earlier ones applied and the failing one not at all.
+// Each transaction first takes the backend's migration lock, before it creates table. A database that records a
+// migration fsys does not have (an older add-on after a newer one) is logged at WARN, not refused; noun names the
+// add-on's process in that message and its key.
+func migrate(ctx context.Context, c conn, table string, fsys fs.FS, noun string, log *slog.Logger) error {
 	ms, err := listMigrations(fsys)
 	if err != nil {
 		return err
@@ -60,24 +68,24 @@ func migrate(ctx context.Context, c conn, fsys fs.FS, log *slog.Logger) error {
 		if err != nil {
 			return fmt.Errorf("migration %q: read: %w", m.name, err)
 		}
-		err = c.inTx(ctx, func(q querier) error {
+		err = c.inTx(ctx, func(q Querier) error {
 			if err := c.lockMigrations(ctx, q); err != nil {
 				return err
 			}
-			if _, err := q.exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (version integer PRIMARY KEY, applied_at bigint NOT NULL)`); err != nil {
-				return fmt.Errorf("create schema_migrations: %w", err)
+			if _, err := q.Exec(ctx, `CREATE TABLE IF NOT EXISTS `+table+` (version integer PRIMARY KEY, applied_at bigint NOT NULL)`); err != nil {
+				return fmt.Errorf("create %s: %w", table, err)
 			}
 			var applied int
-			if err := q.queryRow(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, m.version).Scan(&applied); err != nil {
-				return fmt.Errorf("read schema_migrations: %w", err)
+			if err := q.QueryRow(ctx, `SELECT COUNT(*) FROM `+table+` WHERE version = ?`, m.version).Scan(&applied); err != nil {
+				return fmt.Errorf("read %s: %w", table, err)
 			}
 			if applied > 0 {
 				return nil
 			}
-			if _, err := q.exec(ctx, string(body)); err != nil {
+			if _, err := q.Exec(ctx, string(body)); err != nil {
 				return fmt.Errorf("apply: %w", err)
 			}
-			_, err := q.exec(ctx, `INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`, m.version, nanos(time.Now()))
+			_, err := q.Exec(ctx, `INSERT INTO `+table+` (version, applied_at) VALUES (?, ?)`, m.version, nanos(time.Now()))
 			return err
 		})
 		if err != nil {
@@ -85,12 +93,12 @@ func migrate(ctx context.Context, c conn, fsys fs.FS, log *slog.Logger) error {
 		}
 	}
 	var newest int
-	if err := c.reader().queryRow(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&newest); err != nil {
+	if err := c.reader().QueryRow(ctx, `SELECT COALESCE(MAX(version), 0) FROM `+table).Scan(&newest); err != nil {
 		return fmt.Errorf("read the newest migration: %w", err)
 	}
 	if known := ms[len(ms)-1].version; newest > known {
-		log.WarnContext(ctx, "the database records a migration this adapter does not have; an older adapter runs on a newer schema",
-			"database_version", newest, "adapter_version", known)
+		log.WarnContext(ctx, "the database records a migration this "+noun+" does not have; an older "+noun+" runs on a newer schema",
+			"database_version", newest, noun+"_version", known)
 	}
 	return nil
 }
