@@ -98,11 +98,14 @@ prompt with an ending that shows who decided and removes the controls. The endin
 form of a tool's status line: its name, a summary of its redacted arguments cut short and marked (only the prompt shows
 the arguments whole), and its verdict, such as `bash(command="kubectl get pods -n shop") — Approved`, numbered when there are
 several ([Limits](../reference/limits.md#what-a-thread-shows)). A tool whose call the paused reply shows on its card, with
-the same summary of its arguments, is named without them, such as `bash — Approved`: the card says them already.
-That is a reply with `output: live` and `progress` set to `steps` or `steps-and-activity`. The ending keeps the arguments
-when the thread has no such card: with `output: final` or `progress: activity`, for an approval that a sub-agent raised,
-on a platform without step cards, when the platform refused the reply's cards or its stream, and for a call whose card an alert thread's
-reply no longer shows among its latest 20. A timed-out or cancelled ending shows the same lines without a verdict. The audit records the
+the same name and summary of its arguments, is named without them, such as `bash — Approved`: the card says them already.
+That takes a reply with `output: live` and `progress` set to `steps` or `steps-and-activity` whose last write showed the
+card; the prompt waits up to 5 seconds after the pause for that write ([Limits](../reference/limits.md#what-a-thread-shows)).
+The ending keeps the arguments when the thread has no such card: with `output: final` or `progress: activity`, for an
+approval that a sub-agent raised, on a platform without step cards, when the platform refused the reply's cards or its
+stream, when the reply's last write failed or had not finished within that wait, and for a call whose card an alert thread's
+reply no longer shows among its latest 20. It keeps them too for a tool with no arguments, and for one whose summary was cut.
+A timed-out or cancelled ending shows the same lines without a verdict. The audit records the
 Binding, Slack user, time, counts and cleaned tool names; it never records arguments or rejection text. A denial uses the
 dialect's fixed reason.
 
