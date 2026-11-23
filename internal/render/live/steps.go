@@ -1,6 +1,8 @@
 package live
 
 import (
+	"context"
+	"fmt"
 	"slices"
 	"time"
 
@@ -261,4 +263,78 @@ func (u *Run) stepIndex(callID string) int {
 		return -1
 	}
 	return slices.IndexFunc(u.steps, func(s stepRec) bool { return s.call.CallID == callID })
+}
+
+// stepsGone turns the turn's steps off for good (stepsOff): the message shows no card from now on, so none is carried. It is
+// the goroutine's.
+func (u *Run) stepsGone() {
+	u.stepsOff = true
+	u.carry(true)
+}
+
+// carry records that a write went through with the steps given, each as it was sent. A write that replaces the message
+// (replace: an update, or a post) leaves it showing those steps alone, and with none, no card; a stream's step adds to what the
+// stream shows. The goroutine calls it with replace and no step, too, when the message may show no card any more. It takes the
+// lock for Cards.
+func (u *Run) carry(replace bool, steps ...chat.Step) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if replace {
+		u.carried = nil
+	}
+	for _, st := range steps {
+		if u.carried == nil {
+			u.carried = map[string]chat.Step{}
+		}
+		u.carried[st.ID] = st
+	}
+}
+
+// cardsWait is the longest that Cards waits for the run's last write, from when it is asked: the prompt of the approval waits
+// for it. A run that writes its final at once, as it does unless a write is in its throttle's gap or the platform is slow, is
+// over in well under it.
+const cardsWait = 5 * time.Second
+
+// Cards is, once the turn has paused for a tool approval, what the turn's message shows on the card of each call the pause waits
+// on (render.AwaitingApproval), by the call's ID: the tool's name and the summary of its arguments, as render.Tool makes them
+// from the call. It waits for the run's writes to be over (settled), at most cardsWait or until ctx ends, and names only a card
+// that a write which went through carried, as the pause leaves it, and that no later write took away: none of a turn that shows
+// no steps (output final, the activity mode, a platform without them), of one whose cards the platform refused or turned off, of
+// one whose stream was given up for a post, or of one whose final write was given up; and no card that a listed message dropped,
+// or that a stream shows no more of (maxSteps). Whatever it cannot tell, by the wait's end, it leaves out: the ending then shows
+// the arguments. It is nil before such a pause and for one that waits on no call of the turn's own, a question or a sub-agent's
+// approval (FinalEvent.AwaitingApproval), which it says at once.
+func (u *Run) Cards(ctx context.Context) map[string]chat.ToolLine {
+	u.mu.Lock()
+	asks := u.paused && len(u.awaiting) > 0 && len(u.steps) > 0 // a turn that shows no steps has no step record (beginStep)
+	u.mu.Unlock()
+	if !asks {
+		return nil
+	}
+	wait := time.NewTimer(cardsWait)
+	defer wait.Stop()
+	select {
+	case <-u.settled:
+	case <-wait.C:
+		return nil
+	case <-ctx.Done():
+		return nil
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	var cards map[string]chat.ToolLine
+	for i, r := range u.steps {
+		if r.kind != callStep || r.call.CallID == "" || !slices.Contains(u.awaiting, r.call.CallID) {
+			continue
+		}
+		card := render.AwaitingApproval(fmt.Sprintf("s%d", u.dropped+i+1), r.call) // the step's ID, as snapshot gives it
+		if shown, ok := u.carried[card.ID]; !ok || shown != card {
+			continue
+		}
+		if cards == nil {
+			cards = map[string]chat.ToolLine{}
+		}
+		cards[r.call.CallID] = render.Tool(r.call.Name, r.call.Args)
+	}
+	return cards
 }

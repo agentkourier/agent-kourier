@@ -9,8 +9,31 @@ import (
 	"testing"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2asrv"
+
 	"github.com/agentkourier/agent-kourier/addons/cma/store"
+	"github.com/agentkourier/agent-kourier/addons/kit/auth"
+	kitstore "github.com/agentkourier/agent-kourier/addons/kit/store"
 )
+
+// asKourier is the call interceptor the tests' request handlers run behind in place of the caller check's
+// (auth.Interceptor): every call runs as the adapter's one caller, as the check runs it.
+type asKourier struct {
+	a2asrv.PassthroughCallInterceptor
+}
+
+// Before implements a2asrv.CallInterceptor.
+func (asKourier) Before(ctx context.Context, callCtx *a2asrv.CallContext, _ *a2asrv.Request) (context.Context, any, error) {
+	callCtx.User = a2asrv.NewAuthenticatedUser(auth.Caller, nil)
+	return ctx, nil, nil
+}
+
+// kourier is a context whose call runs as the adapter's one caller, for a test that reads the store itself.
+func kourier(ctx context.Context) context.Context {
+	ctx, callCtx := a2asrv.NewCallContext(ctx, nil)
+	callCtx.User = a2asrv.NewAuthenticatedUser(auth.Caller, nil)
+	return ctx
+}
 
 // newStore is a SQLite store in the test's directory, stamped by now (nil is time.Now), closed when the test ends.
 func newStore(t *testing.T, now func() time.Time) *store.Store {
@@ -27,6 +50,17 @@ func openStore(t *testing.T, path string, now func() time.Time) *store.Store {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	return s
+}
+
+// corrupt overwrites the stored record of task id with one that does not decode, as a damaged or foreign write leaves it.
+func corrupt(t *testing.T, s *store.Store, id string) {
+	t.Helper()
+	if err := s.Write(context.Background(), func(q kitstore.Querier) error {
+		_, err := q.Exec(context.Background(), `UPDATE a2a_tasks SET payload = ? WHERE id = ?`, []byte(`[1]`), id)
+		return err
+	}); err != nil {
+		t.Fatalf("corrupt %s: %v", id, err)
+	}
 }
 
 // fakeBackend is a Managed Agents session service in memory. A stream receives only the events published after it

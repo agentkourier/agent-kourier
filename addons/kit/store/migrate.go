@@ -14,7 +14,8 @@ import (
 )
 
 // kitMigrationFiles are the kit's migrations, one directory per backend: the leadership row, which Postgres replicas
-// elect a leader through. The add-on's own come after them, under a version table of their own.
+// elect a leader through, and the task state (Store). The add-on's own come after them, under a version table of
+// their own.
 //
 //go:embed migrations/sqlite/*.sql migrations/postgres/*.sql
 var kitMigrationFiles embed.FS

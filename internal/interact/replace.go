@@ -279,8 +279,8 @@ func ReplacementOutgoing(row store.Interaction) (chat.Outgoing, error) {
 	default:
 		return chat.Outgoing{}, fmt.Errorf("an interaction that is %q has no replacement", row.State)
 	}
-	var in dialect.Interaction
-	if err := json.Unmarshal(row.Request, &in); err != nil {
+	var req storedRequest
+	if err := json.Unmarshal(row.Request, &req); err != nil {
 		return chat.Outgoing{}, fmt.Errorf("the stored request: %w", err)
 	}
 	var answers [][]string
@@ -289,8 +289,8 @@ func ReplacementOutgoing(row store.Interaction) (chat.Outgoing, error) {
 		if err := json.Unmarshal(row.Answer, &a); err != nil {
 			return chat.Outgoing{}, fmt.Errorf("the stored answer: %w", err)
 		}
-		if in.Kind == dialect.ToolApproval { // by the request's kind, not the row's: a sub-agent's approval is stored as "nested"
-			e, err := approvalEnding(row.Decider, row.DecidedAt, in, a.Decisions)
+		if req.Kind == dialect.ToolApproval { // by the request's kind, not the row's: a sub-agent's approval is stored as "nested"
+			e, err := approvalEnding(row.Decider, row.DecidedAt, req, a.Decisions)
 			if err != nil {
 				return chat.Outgoing{}, err
 			}
@@ -298,7 +298,7 @@ func ReplacementOutgoing(row store.Interaction) (chat.Outgoing, error) {
 		}
 		answers = a.Answers
 	}
-	e, err := endingOf(outcome, row.Decider, row.DecidedAt, in, answers)
+	e, err := endingOf(outcome, row.Decider, row.DecidedAt, req, answers)
 	if err != nil {
 		return chat.Outgoing{}, err
 	}

@@ -47,7 +47,8 @@ type Question struct {
 // is the caller's: Args arrives already redacted and serialised. An adapter shows both cleaned and whole: a
 // prompt with a tool that does not fit its place's limit is ErrTooLarge (Platform.Fits) and is never shown
 // cut, because a person cannot approve what they cannot read. The ending of a prompt, which cannot be
-// refused, shows each tool on one line, its arguments as their Summary, and is cut and marked like any other text.
+// refused, shows each tool on one line, its arguments as their Summary unless the thread shows them already (OnCard), and
+// is cut and marked like any other text.
 type Tool struct {
 	// Name is the tool's name. It may be empty, or clean to nothing; the adapter then shows a placeholder, so
 	// that the tool can still be told apart and decided.
@@ -55,13 +56,18 @@ type Tool struct {
 	// Args are the tool's arguments as text, in the caller's own serialisation, or "" if it has none. They
 	// may run to several lines.
 	Args string `json:"args,omitempty"`
+	// OnCard says that the thread shows this call already, with the summary of its arguments, on the call's card in the
+	// reply the agent paused in. The ending of the prompt then names the tool and its verdict and leaves the arguments out,
+	// which would only say again what the card says; the prompt itself shows them whole all the same. The zero value, which
+	// a prompt stored before the field has, keeps them in the ending.
+	OnCard bool `json:"on_card,omitempty"`
 }
 
 // MaxToolSummary is the most UTF-16 units of a tool's arguments that the ending of a prompt of tools shows (Tool.Summary): a
 // line, as long as the summary of a call in a status line.
 const MaxToolSummary = 160
 
-// Summary is the tool's arguments on one line, as the ending of its prompt shows them, and as a status line shows a call's: a
+// Summary is the tool's arguments on one line, as the ending of its prompt shows them (unless OnCard), and as a status line shows a call's: a
 // JSON object, which is what Agent Kourier makes of a tool call's arguments, as "key=value, ..." in the order of the keys, each
 // value compact JSON as written; any other text as it is. It is cleaned onto one line and cut to MaxToolSummary units, the
 // cut marked with Truncated, and is "" for a tool with no arguments. It shows nothing of the arguments that Args does not, so it

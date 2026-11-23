@@ -95,10 +95,23 @@ recorded, while the broker keeps it, is sent again, and the task takes it only w
 approval. A task that has gone on, to its end or to a later question or approval, gets nothing, and nobody is told.
 Agent Kourier audits the decision before sending it under the Binding's service identity, then replaces the
 prompt with an ending that shows who decided and removes the controls. The ending shows each tool on one line, in the
-form of a tool's status line: its name, a summary of its redacted arguments cut short and marked (only the prompt shows
-the arguments whole), and its verdict, such as `bash(command="kubectl get pods -n shop") — Approved`, numbered when there are
-several ([Limits](../reference/limits.md#what-a-thread-shows)). A timed-out or cancelled ending shows the same lines
-without a verdict. The audit records the
+form of a tool's status line: its name, a summary of its redacted arguments, cut and marked when it is longer than the
+limit ([Limits](../reference/limits.md#what-a-thread-shows); only the prompt shows the arguments whole), and its verdict,
+such as `bash(command="kubectl get pods -n shop") — Approved`, numbered when there are several. A tool whose call the paused reply shows on its card, with
+the same name and summary of its arguments, is named without them, such as `bash — Approved`: the card says them already.
+That takes a reply with `output: live` and `progress` set to `steps` or `steps-and-activity` whose last write showed the
+card; the prompt waits up to 5 seconds after the pause for that write ([Limits](../reference/limits.md#what-a-thread-shows)).
+The ending keeps the arguments when the thread has no such card:
+
+- with `output: final` or `progress: activity`;
+- for an approval that a sub-agent raised;
+- when the platform refused the reply's cards or its stream;
+- when the reply's last write failed or had not finished within that wait;
+- for a call whose card the reply no longer shows: past the latest 20 steps of a reply that is one updated message (an alert
+  thread's reply on Slack, every reply on Microsoft Teams), or past the first 50 steps of a streamed reply.
+
+It keeps them too for a tool with no arguments, and for one whose summary was cut.
+A timed-out or cancelled ending shows the same lines without a verdict. The audit records the
 Binding, Slack user, time, counts and cleaned tool names; it never records arguments or rejection text. A denial uses the
 dialect's fixed reason.
 

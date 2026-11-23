@@ -672,6 +672,43 @@ func TestTheEndingOfAnApprovalThatNobodyDecidedShowsTheToolsAndNoVerdict(t *test
 	}
 }
 
+// A tool whose call the thread shows already, with the summary of its arguments, on the call's card in the reply the agent paused
+// in (chat.Tool.OnCard) is named in the ending with its verdict and no arguments, which would only say again what the card says.
+// A tool with no card keeps them, and so does every tool of a prompt stored before the flag, whose tools are all unmarked.
+func TestTheEndingLeavesOutTheArgumentsThatACardShows(t *testing.T) {
+	w := newWorld(t)
+	carded := chat.Tool{Name: "bash", Args: "{\n  \"command\": \"kubectl get pods -n shop\"\n}", OnCard: true}
+	plain := chat.Tool{Name: "psql", Args: `{"user":"ops"}`}
+	unmarked := carded
+	unmarked.OnCard = false
+	for _, tc := range []struct {
+		name     string
+		tools    []chat.Tool
+		outcome  chat.Outcome
+		verdicts []chat.ToolVerdict
+		want     []string
+	}{
+		{"one tool shown", []chat.Tool{carded}, chat.Answered, []chat.ToolVerdict{chat.ToolApproved}, []string{"bash — Approved"}},
+		{"shown and not", []chat.Tool{carded, plain}, chat.Answered, []chat.ToolVerdict{chat.ToolApproved, chat.ToolDenied},
+			[]string{"1. bash — Approved", `2. psql(user="ops") — Denied`}},
+		{"timed out", []chat.Tool{carded, plain}, chat.TimedOut, nil, []string{"1. bash", `2. psql(user="ops")`}},
+		{"stored before the flag", []chat.Tool{unmarked}, chat.Answered, []chat.ToolVerdict{chat.ToolApproved},
+			[]string{`bash(command="kubectl get pods -n shop") — Approved`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			blocks := w.post(t, chat.End(chat.Ending{Outcome: tc.outcome, By: "U0123456789", Prompt: approvalOf(tc.tools...), Verdicts: tc.verdicts}))
+			if len(blocks) != 1+len(tc.want) {
+				t.Fatalf("blocks = %s, want the status and a line for each tool", strings.Join(types(blocks), ","))
+			}
+			for i, want := range tc.want {
+				if got := unescaped.Replace(textOf(blocks[1+i])); got != want {
+					t.Errorf("tool %d: %q, want %q", i, got, want)
+				}
+			}
+		})
+	}
+}
+
 // An ending is never refused for size. A name and arguments over the bounds of a line are cut and marked, so that each tool's
 // line is short whatever the agent sent, and twenty such tools fit.
 func TestTheEndingOfAnApprovalIsCutAndNeverRefused(t *testing.T) {

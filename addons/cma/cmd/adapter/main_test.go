@@ -2,9 +2,14 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
+	"io"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/agentkourier/agent-kourier/addons/cma/store"
 )
 
 func TestVersionFlag(t *testing.T) {
@@ -45,6 +50,36 @@ func TestBadTraceSettingIsAUsageError(t *testing.T) {
 	}
 	if strings.Contains(errOut.String(), "canary") {
 		t.Fatalf("stderr shows the value: %s", errOut.String())
+	}
+}
+
+// A store an earlier build of the adapter wrote stops the adapter at start: it logs why and exits 1, and the store
+// keeps the layout it had.
+func TestAnEarlierStoreStopsTheStart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cma.db")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = raw.Close() }()
+	if _, err := raw.ExecContext(t.Context(), `CREATE TABLE context_sessions (context_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, last_active INTEGER NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:1")
+	t.Setenv("ANTHROPIC_API_KEY", "fake-api-key-for-tests")
+	env := map[string]string{"CMA_AGENT_ID": "agent_test", "CMA_ENVIRONMENT_ID": "env_test", "AUTH_DISABLED": "true",
+		"LISTEN_ADDR": freeAddr(t), "SQLITE_PATH": path}
+	var errOut bytes.Buffer
+	if code := run(nil, io.Discard, &errOut, func(k string) string { return env[k] }); code != exitFailure {
+		t.Fatalf("exit %d, want %d; stderr %s", code, exitFailure, errOut.String())
+	}
+	// The log line cuts a long error (telemetry.MaxLogErrorBytes), and a test's directory is long: its reason leads.
+	if reason, _, _ := strings.Cut(store.ErrEarlierLayout.Error(), ":"); !strings.Contains(errOut.String(), reason) {
+		t.Fatalf("stderr does not say why: %s", errOut.String())
+	}
+	var tables int
+	if err := raw.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'`).Scan(&tables); err != nil || tables != 1 {
+		t.Fatalf("tables = %d, %v; want the earlier layout's one alone", tables, err)
 	}
 }
 

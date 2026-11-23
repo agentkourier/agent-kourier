@@ -53,6 +53,7 @@ type leaks struct {
 	cutToolArgs                                 bool // a tool too long for a prompt is cut and shown, not refused as too large
 	fitsLongTool                                bool // Fits says a tool too long for a prompt fits, while Post and Update refuse it
 	undeclaredTools                             bool // shows tool approvals, and does not say so (Subject.ToolApprovals false)
+	cardArgsShown                               bool // the ending shows the arguments of a tool whose card shows them already (chat.Tool.OnCard)
 	busyRefused                                 bool // Busy is true and a mark is refused with an error of its own
 	busyNoThread                                bool // a mark of a target with no thread is taken
 	busyUnsaid                                  bool // Busy is false and a mark is taken, with no ErrNoBusy
@@ -259,9 +260,23 @@ func (m *markupPlatform) Post(ctx context.Context, t chat.Target, o chat.Outgoin
 	o = m.cutTools(o)
 	ref, err := m.FakePlatform.Post(ctx, t, o, tag)
 	if err == nil {
-		m.record("Post", Fields(o))
+		m.record("Post", m.cardArgs(o, Fields(o)))
 	}
 	return ref, err
+}
+
+// cardArgs is fields with the summary of the arguments of each tool of an ending that the thread shows on its card already
+// (chat.Tool.OnCard), which is what the leak cardArgsShown shows in the ending all the same.
+func (m *markupPlatform) cardArgs(o chat.Outgoing, fields []Field) []Field {
+	if !m.leaks.cardArgsShown || o.Ending == nil {
+		return fields
+	}
+	for _, tl := range o.Ending.Prompt.Tools {
+		if tl.OnCard {
+			fields = append(fields, Field{tl.Summary(), chat.WhereToolArg})
+		}
+	}
+	return fields
 }
 
 // React and Unreact are the fake's, but for the leaks of a platform with no reactions that takes one, or shows a text instead.
@@ -511,6 +526,8 @@ func TestEveryWayAnAdapterCanBeUnsafeIsCaught(t *testing.T) {
 		{"tool approvals shown by an adapter that does not say so", slackPlainText, leaks{undeclaredTools: true}, RuleContract, ""},
 		{"a prompt of one tool said to be too large", slackPlainText, leaks{smallToolsDoNotFit: true}, RuleContract, ""},
 		{"a tool's arguments dropped", slackPlainText, leaks{dropping: true, drop: chat.WhereToolArgs}, RuleDropped, ""},
+		{"an ending that shows the arguments of a tool whose card shows them", slackPlainText, leaks{cardArgsShown: true}, RuleContract, ""},
+		{"an ending that drops the arguments of every tool", slackPlainText, leaks{dropping: true, drop: chat.WhereToolArg}, RuleContract, ""},
 
 		{"Slack: a backslash before every punctuation, which Slack does not honour", slackPlainText, leaks{backslashAll: true}, RuleActive, KindHTML},
 		{"Slack: a backslash before < and & only", slackPlainText, leaks{backslashLt: true}, RuleActive, KindMention},

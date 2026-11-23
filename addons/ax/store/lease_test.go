@@ -118,7 +118,7 @@ func TestPostgresStandbyWritesNothing(t *testing.T) {
 	if err := createTask(s, "t1"); !errors.Is(err, kitstore.ErrDeposed) {
 		t.Fatalf("a standby's write: %v, want ErrDeposed", err)
 	}
-	if _, err := s.SettleInterrupted(context.Background()); !errors.Is(err, kitstore.ErrDeposed) {
+	if _, err := s.SettleInterrupted(context.Background(), InterruptedMessage); !errors.Is(err, kitstore.ErrDeposed) {
 		t.Fatalf("a standby's settlement: %v, want ErrDeposed", err)
 	}
 	if err := createSession(s, "c1"); !errors.Is(err, kitstore.ErrDeposed) {

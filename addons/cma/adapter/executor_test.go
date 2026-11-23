@@ -13,7 +13,7 @@ import (
 
 func newHandler(t *testing.T, fake *fakeBackend, keepalive time.Duration) a2asrv.RequestHandler {
 	t.Helper()
-	return NewRequestHandler(&Executor{Backend: fake, Store: newStore(t, nil), Keepalive: keepalive})
+	return NewRequestHandler(&Executor{Backend: fake, Store: newStore(t, nil), Keepalive: keepalive}, asKourier{})
 }
 
 // turn sends msg and returns the task it settled in and the events the stream carried.

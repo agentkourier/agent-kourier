@@ -44,7 +44,7 @@ func TestSQLiteElectsNoLeader(t *testing.T) {
 	if _, _, err := s.TryLead(context.Background(), "a", "http://a:8090", time.Minute); !errors.Is(err, kitstore.ErrNoElection) {
 		t.Fatalf("TryLead on SQLite: %v, want ErrNoElection", err)
 	}
-	if err := createTask(context.Background(), s, "t1"); err != nil {
+	if err := createTask(asKourier(), s, "t1"); err != nil {
 		t.Fatalf("a SQLite write is never fenced: %v", err)
 	}
 }
@@ -56,7 +56,7 @@ func TestPostgresTakeoverAfterExpiry(t *testing.T) {
 	var deposed atomic.Int32
 	a := openPostgresWith(t, dsn, Options{OnDeposed: func() { deposed.Add(1) }})
 	b := openPostgres(t, dsn)
-	ctx := context.Background()
+	ctx := asKourier()
 	first := mustLead(t, a, "a", time.Second)
 	if err := createTask(ctx, a, "t1"); err != nil {
 		t.Fatalf("the leader's write: %v", err)
@@ -90,7 +90,7 @@ func TestPostgresTakeoverAfterExpiry(t *testing.T) {
 func TestPostgresStandbyWritesNothing(t *testing.T) {
 	var deposed atomic.Int32
 	s := openPostgresWith(t, pgtest.DSN(t), Options{OnDeposed: func() { deposed.Add(1) }})
-	if err := createTask(context.Background(), s, "t1"); !errors.Is(err, kitstore.ErrDeposed) {
+	if err := createTask(asKourier(), s, "t1"); !errors.Is(err, kitstore.ErrDeposed) {
 		t.Fatalf("a standby's write: %v, want ErrDeposed", err)
 	}
 	if deposed.Load() != 0 {

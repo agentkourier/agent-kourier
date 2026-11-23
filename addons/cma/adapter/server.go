@@ -3,7 +3,6 @@ package adapter
 import (
 	"context"
 	"iter"
-	"log/slog"
 	"net/http"
 	"sync"
 
@@ -14,13 +13,15 @@ import (
 	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
-// NewRequestHandler is the A2A request handler over exec, with exec.Store as its task store; opts add to it (a call
-// interceptor, say). A message whose ID the store has recorded joins that message's task instead of starting another
-// turn, after a restart too: Agent Kourier resends a message with the same ID when it cannot tell whether the first
-// send arrived.
-func NewRequestHandler(exec *Executor, opts ...a2asrv.RequestHandlerOption) a2asrv.RequestHandler {
-	inner := a2asrv.NewHandler(exec, append([]a2asrv.RequestHandlerOption{a2asrv.WithTaskStore(exec.Store)}, opts...)...)
-	return &replayHandler{RequestHandler: inner, messages: exec.Store, log: exec.logger(), tel: exec.Telemetry}
+// NewRequestHandler is the A2A request handler over exec, with exec.Store as its task store, behind interceptors (the
+// caller check's, auth.Interceptor), which run before anything reads the store: the store keeps each task, and the
+// IDs of the messages that started or joined it, for the call's caller. A message whose ID the store has recorded
+// joins that message's task instead of starting another turn, after a restart too: Agent Kourier resends a message
+// with the same ID when it cannot tell whether the first send arrived.
+func NewRequestHandler(exec *Executor, interceptors ...a2asrv.CallInterceptor) a2asrv.RequestHandler {
+	inner := a2asrv.NewHandler(exec, a2asrv.WithTaskStore(exec.Store))
+	replay := &replayHandler{RequestHandler: inner, messages: exec.Store, tel: exec.Telemetry}
+	return &a2asrv.InterceptedHandler{Handler: replay, Interceptors: interceptors}
 }
 
 // Card is the adapter's agent card. url is the JSON-RPC endpoint clients reach it at; version is the adapter's.
@@ -52,20 +53,18 @@ func Mux(path string, card *a2a.AgentCard, rpc http.Handler, check *auth.Check) 
 	return mux
 }
 
-// messageStore records which task each message ID started or joined.
+// messageStore finds the task each message ID started or joined.
 type messageStore interface {
-	MessageTask(ctx context.Context, messageID string) (a2a.TaskID, bool, error)
-	RecordMessage(ctx context.Context, messageID string, taskID a2a.TaskID) error
+	MessageTask(ctx context.Context, messageID string) (*a2a.Task, error)
 }
 
 type replayHandler struct {
 	a2asrv.RequestHandler
 	messages messageStore
-	log      *slog.Logger
 	tel      *telemetry.Telemetry
-	// sending holds, by message ID, a send from its lookup until its task is recorded, so that a resend that races the
-	// first send in this process waits for the task and finds it. Sends of other message IDs never wait on it. The
-	// store is for a resend after a restart.
+	// sending holds, by message ID, a send from its lookup until its task is stored, which records the message ID in
+	// the task's transaction, so that a resend that races the first send in this process waits for the task and finds
+	// it. Sends of other message IDs never wait on it. The store is for a resend after a restart.
 	mu      sync.Mutex
 	sending map[string]chan struct{}
 }
@@ -114,15 +113,15 @@ func (h *replayHandler) SendStreamingMessage(ctx context.Context, req *a2a.SendM
 			return
 		}
 		defer unclaim()
-		id, ok, err := h.messages.MessageTask(ctx, req.Message.ID)
+		task, err := h.messages.MessageTask(ctx, req.Message.ID)
 		if err != nil {
 			yield(nil, err)
 			return
 		}
-		if ok {
+		if task != nil {
 			unclaim()
 			h.tel.MessageReplay()
-			h.rejoin(ctx, id, yield)
+			h.rejoin(ctx, task.ID, yield)
 			return
 		}
 		// Refuse an answer that does not decide the paused task's tool calls here, before the executor runs: an
@@ -133,17 +132,14 @@ func (h *replayHandler) SendStreamingMessage(ctx context.Context, req *a2a.SendM
 				return
 			}
 		}
-		// Keep the claim until the turn has a task, so a resend that races the first send finds it.
-		recorded := false
+		// Keep the claim until the turn has a task: the request handler stores an event before it passes it on, and
+		// the store records the message ID with the task (a new task's history holds the message, and an answer is
+		// added to its task's history before the turn runs), so a resend that races the first send finds it.
+		stored := false
 		for ev, err := range h.RequestHandler.SendStreamingMessage(ctx, req) {
-			if !recorded && err == nil && ev != nil {
-				if id := ev.TaskInfo().TaskID; id != "" {
-					if err := h.messages.RecordMessage(context.WithoutCancel(ctx), req.Message.ID, id); err != nil {
-						h.log.Warn("record a message ID; a resend of the message will start another turn", "message", req.Message.ID, "task", id, "error", err)
-					}
-					unclaim()
-					recorded = true
-				}
+			if !stored && err == nil && ev != nil && ev.TaskInfo().TaskID != "" {
+				unclaim()
+				stored = true
 			}
 			if !yield(ev, err) {
 				return
