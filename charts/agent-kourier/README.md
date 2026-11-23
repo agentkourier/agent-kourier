@@ -1,7 +1,7 @@
 # Agent Kourier
 
 Installs agent-kourier, the broker that carries messages between chat and A2A agents, and starts agent sessions from other services' webhooks: one Deployment of the
-production image, its state (a SQLite volume, or a Postgres database you run), its resources (custom resources, or a ConfigMap), and the read
+production image (and, when switched on, each add-on's own Deployment and Service), its state (a SQLite volume, or a Postgres database you run), its resources (custom resources, or a ConfigMap), and the read
 access to the Secrets they name.
 
 **One replica with SQLite, or two with Postgres.** SQLite is one file on a volume that one pod may use, so the
@@ -119,7 +119,7 @@ tier's, with the token-refresh CronJob).
 | CustomResourceDefinitions `agentbackends`, `bindings` and `chatconnections` of `agentkourier.dev` | `crds.install`: unset, true with `config.source: crds` and false with `files`; an explicit value wins | the generated files of `files/crds`; kept on `helm uninstall` and when `crds.install` is turned off (`helm.sh/resource-policy: keep`, which is Helm's; for Argo CD see [below](#custom-resources-instead-of-a-configmap)) |
 | ClusterRole and ClusterRoleBinding `<fullname>-<namespace>-crs` | `config.source: crds`, the default (`rbac.create`) | `list` and `watch` on the three kinds, `patch` on `bindings/status`, `get` on the three CRDs by name, and `list` and `watch` on `namespaces` with a `config.connectionNamespaceSelector` other than `{}`; see Custom resources instead of a ConfigMap |
 | PersistentVolumeClaim `<fullname>-data` | `store.type: sqlite`, unless `persistence.existingClaim` | kept on `helm uninstall` (`persistence.retainOnUninstall`); none with Postgres |
-| Service | `service.enabled` | ClusterIP on the health and metrics port, and nothing else; it selects every pod, a standby's included |
+| Service | `service.enabled` | ClusterIP on the health and metrics port, and nothing else; it selects every broker pod, a standby's included |
 | Service `<fullname>-chat` | `chatListener.enabled` | the chat listener's port, on the pod that carries `agentkourier.dev/role: leader` (the leader labels its own); `chatListener.service.type` (default ClusterIP); see [Chat listener](#chat-listener) |
 | Ingress `<fullname>-chat` | `chatListener.ingress.enabled` (needs `chatListener.enabled`) | the path prefix `/chat/` to the chat Service, and nothing else |
 | Role and RoleBinding `<fullname>-leader-label` | `chatListener.enabled` (`rbac.create`) | `patch` on `pods` in the release namespace, for the leader label; not limited by name (see [Chat listener](#chat-listener)) |
@@ -512,7 +512,7 @@ looks like a credential (key, token, secret, auth, cookie, password), which belo
 - **NetworkPolicy** (`networkPolicy.enabled`, which needs a CNI that enforces it): egress to DNS, to the API server (you give
   its addresses in `kubeApiServer.cidrs`, since a policy cannot select it), to Slack on
   443 (to anywhere outside the private, CGNAT and link-local ranges, since a policy cannot name a host) and to what `extraEgress` adds (the agent
-  backend's front door, an OTLP collector); ingress only from `metricsFrom` on the metrics port and, with `chatListener.enabled`, from
+  backend's front door, an OTLP collector), and to each enabled add-on's pods on its port (8090); ingress only from `metricsFrom` on the metrics port and, with `chatListener.enabled`, from
   `chatFrom` on the chat port. Agent Kourier calls the verifying
   front door, never the controller on 8083; put the front door in `extraEgress`, and nothing else in that namespace.
   - On kind or kubeadm, `kubectl get endpoints kubernetes` gives the API server's addresses as /32s. On EKS those are
@@ -605,7 +605,7 @@ was the largest of them at 188 MiB.
 
 ## Tests
 
-`go test ./test/chart` renders the chart with `helm template` and checks it: golden files for ten of the `ci/` values files (`fast-postgres-ha` is an overlay, checked layered on `fast-postgres`), the
+`go test ./test/chart` renders the chart with `helm template` and checks it: golden files for thirteen of the `ci/` values files (`fast-postgres-ha` is an overlay, checked layered on `fast-postgres`), the
 refusals (replicas above 1 with SQLite, Postgres without its Secret, a monitor without a Service, a NetworkPolicy without the API server, and the rest), the security
 properties above, and what the kind tiers' values render (the object names, labels, image and volume that `hack/kind`'s scripts and the E2E tests rely
 on), and the fast and AX tiers' config, which is loaded through Agent Kourier's own loader. It needs `helm` on PATH and skips without it, so that `make test` runs on a machine with only Go;
