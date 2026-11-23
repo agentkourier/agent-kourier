@@ -549,8 +549,8 @@ addons:
     # Who may call the add-on. The chart has it listen on every interface of the pod (LISTEN_ADDR :8090), where the add-on refuses to start
     # without a caller check, so the chart offers no way to turn the check off: a request without an accepted token is refused. The chart
     # mounts tokenSecret's key as a file (AUTH_TOKEN_FILE) that holds the accepted tokens, one per line (blank lines, and lines that begin
-    # with #, are ignored). The add-on re-reads the file when it changes, and the kubelet updates a mounted Secret in place (after its own
-    # sync delay), so a change of the tokens needs no restart.
+    # with #, are ignored). The add-on reads the file again every few seconds, and the kubelet updates a mounted Secret in place (after its
+    # own sync delay), so a change of the tokens needs no restart.
     #
     # Agent Kourier sends the token in one of two ways, which header below picks. With header empty, a Binding's identity.tokenSecretRef
     # names a Secret with the token, which Agent Kourier sends as Authorization: Bearer <token>. With header set, the AgentBackend has an

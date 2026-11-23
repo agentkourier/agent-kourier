@@ -1,15 +1,1 @@
-{{- if and (include "agentkourier.ax.enabled" .) (gt (int .Values.addons.ax.replicaCount) 1) }}
-# Two replicas and more (Postgres only): a node drain takes one at a time, so a replica is left to serve.
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: {{ include "agentkourier.ax.fullname" . }}
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "agentkourier.ax.labels" . | nindent 4 }}
-spec:
-  maxUnavailable: 1
-  selector:
-    matchLabels:
-      {{- include "agentkourier.ax.selectorLabels" . | nindent 6 }}
-{{- end }}
+{{- include "agentkourier.addon.podDisruptionBudget" (dict "ctx" . "name" "ax") }}

@@ -69,23 +69,17 @@ spec:
       ports:
         - {port: {{ int .Values.networkPolicy.postgres.port }}, protocol: TCP}
     {{- end }}
-    {{- if include "agentkourier.cma.enabled" . }}
-    # The CMA add-on's pods (addons.cma), which Agent Kourier reaches through the add-on's Service.
+    {{- range $name := include "agentkourier.addon.names" . | splitList " " }}
+    {{- $addon := dict "ctx" $ "name" $name }}
+    {{- if include "agentkourier.addon.enabled" $addon }}
+    # The pods of the add-on addons.{{ $name }}, which Agent Kourier reaches through the add-on's Service.
     - to:
         - podSelector:
             matchLabels:
-              {{- include "agentkourier.cma.selectorLabels" . | nindent 14 }}
+              {{- include "agentkourier.addon.selectorLabels" $addon | nindent 14 }}
       ports:
-        - {port: {{ include "agentkourier.cma.port" . | int }}, protocol: TCP}
+        - {port: {{ include "agentkourier.addon.port" $addon | int }}, protocol: TCP}
     {{- end }}
-    {{- if include "agentkourier.ax.enabled" . }}
-    # The AX add-on's pods (addons.ax), which Agent Kourier reaches through the add-on's Service.
-    - to:
-        - podSelector:
-            matchLabels:
-              {{- include "agentkourier.ax.selectorLabels" . | nindent 14 }}
-      ports:
-        - {port: {{ include "agentkourier.ax.port" . | int }}, protocol: TCP}
     {{- end }}
     {{- with .Values.networkPolicy.extraEgress }}
     {{- toYaml . | nindent 4 }}
