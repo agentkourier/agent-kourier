@@ -303,15 +303,19 @@ func aStopLeavesARunningTurnForTheNextStart[S runtime.Store](t *testing.T, s Sub
 	next.WantMetric(t, metric(s, "tasks_interrupted_total"), "1")
 }
 
-// A context idle past SESSION_IDLE_TTL is released with its tasks.
+// A context idle past SESSION_IDLE_TTL is released with its tasks. The upkeep's clock moves past the TTL only once the
+// turn has completed: a context is idle by its time alone, so a clock already past it would let a sweep release the
+// context while a2a-go still stores the turn's task, which the forget then deletes under it.
 func anIdleContextIsReleased[S runtime.Store](t *testing.T, s Subject[S], env map[string]string) {
 	idle := maps.Clone(env)
 	idle["SESSION_IDLE_TTL"] = "1h"
+	var ahead atomic.Int64 // how far the upkeep's clock runs ahead of the store's
 	in := Start(t, s, "kittest-a", idle, runtime.Options{UpkeepInterval: 20 * time.Millisecond,
-		Now: func() time.Time { return time.Now().Add(2 * time.Hour) }})
+		Now: func() time.Time { return time.Now().Add(time.Duration(ahead.Load())) }})
 	WaitFor(t, "the replica to be ready", in.Ready)
 	c := in.Client(t)
 	task := want(t, c, text(s.Complete), a2a.TaskStateCompleted)
+	ahead.Store(int64(2 * time.Hour))
 	WaitFor(t, "the idle context's task to be released", func() bool {
 		_, err := c.GetTask(t.Context(), &a2a.GetTaskRequest{ID: task.ID})
 		return errors.Is(err, a2a.ErrTaskNotFound)
