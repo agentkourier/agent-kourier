@@ -218,13 +218,6 @@ func (e *Executor) ValidateResume(_ context.Context, paused *a2a.Task, msg *a2a.
 	return err
 }
 
-// CanceledAfterFailedCancel accepts a cancel that failed when the task has ended canceled (runtime.CancelSettler). That
-// happens when the session's idle after the interrupt reaches the turn first: the turn ends canceled (turnState), and
-// the request handler, which hands the cancel to the running turn, then finds that turn gone.
-func (e *Executor) CanceledAfterFailedCancel(_ context.Context, task *a2a.Task) bool {
-	return task.Status.State == a2a.TaskStateCanceled
-}
-
 // FailedOutcome names a turn that failed waiting for a sandbox tool's result, whose status message carries the code
 // timeout, turnTimeout (runtime.TurnClassifier). Any other failed turn is the runtime's failed.
 func (e *Executor) FailedOutcome(status a2a.TaskStatus) telemetry.TurnOutcome {

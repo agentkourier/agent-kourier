@@ -164,51 +164,6 @@ func TestARefusedAnswerKeepsTheTaskPaused(t *testing.T) {
 	}
 }
 
-// failingCancel is scripted with a cancel that fails, and a CancelSettler that accepts the task as it stands.
-type failingCancel struct {
-	*scripted
-	asked chan *a2a.Task
-}
-
-func (failingCancel) Cancel(context.Context, *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
-	return func(yield func(a2a.Event, error) bool) { yield(nil, errors.New("the backend cannot cancel now")) }
-}
-
-func (f failingCancel) CanceledAfterFailedCancel(_ context.Context, task *a2a.Task) bool {
-	f.asked <- task
-	return true
-}
-
-// A cancel that fails is answered with the task as it stands when the backend's CancelSettler accepts it, and fails
-// without one.
-func TestAFailedCancelIsTheSettlersToAccept(t *testing.T) {
-	st := newFakeStore()
-	settler := failingCancel{scripted: &scripted{}, asked: make(chan *a2a.Task, 1)}
-	s := serveHandler(t, st, settler)
-	c := s.client(t, auth.Caller)
-	paused, err := send(t, c, message("m1", "pause", "c1", ""))
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := c.CancelTask(t.Context(), &a2a.CancelTaskRequest{ID: paused.ID})
-	if err != nil || got.ID != paused.ID {
-		t.Fatalf("CancelTask = %+v, %v; want the task the settler accepted", got, err)
-	}
-	if seen := <-settler.asked; seen.ID != paused.ID {
-		t.Fatalf("the settler was asked about %s", seen.ID)
-	}
-
-	plain := serveHandler(t, newFakeStore(), struct{ Backend }{failingCancel{scripted: &scripted{}}})
-	pc := plain.client(t, auth.Caller)
-	paused, err = send(t, pc, message("m1", "pause", "c1", ""))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pc.CancelTask(t.Context(), &a2a.CancelTaskRequest{ID: paused.ID}); err == nil {
-		t.Fatal("a failed cancel succeeded without a settler")
-	}
-}
-
 // A send that is not streamed answers with its task also when the turn resumes a paused task, whose events are updates
 // alone.
 func TestANonStreamingAnswerIsAnsweredWithItsTask(t *testing.T) {

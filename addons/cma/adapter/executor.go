@@ -34,7 +34,7 @@ const DefaultKeepalive = 60 * time.Second
 // map is kept in Store, with a copy in memory. The runtime calls the executor's hooks: Restore when this replica takes
 // over as the leader, to reconcile the map with CMA; Interrupted once it has failed the turns a restart cut off;
 // ValidateResume before an answer to a paused task runs; ReleaseContext for each context idle past SESSION_IDLE_TTL;
-// CanceledAfterFailedCancel and FailedOutcome to settle a cancel and name a timed-out turn.
+// FailedOutcome to name a timed-out turn.
 type Executor struct {
 	Backend Backend
 	// Store keeps each context's session across a restart. Required.
@@ -75,7 +75,6 @@ var (
 	_ runtime.Interrupter     = (*Executor)(nil)
 	_ runtime.ResumeValidator = (*Executor)(nil)
 	_ runtime.ContextReleaser = (*Executor)(nil)
-	_ runtime.CancelSettler   = (*Executor)(nil)
 	_ runtime.TurnClassifier  = (*Executor)(nil)
 )
 

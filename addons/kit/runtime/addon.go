@@ -183,13 +183,6 @@ type IdleReporter interface {
 	IdleContextsDeleted(n int, err error)
 }
 
-// CancelSettler is a backend whose cancel can fail when the turn has ended canceled already. When CancelTask fails, the
-// kit reads the task and answers it as the cancel's result if CanceledAfterFailedCancel says so (cma: a session's idle
-// after its interrupt reaches the turn first).
-type CancelSettler interface {
-	CanceledAfterFailedCancel(ctx context.Context, task *a2a.Task) bool
-}
-
 // TurnClassifier is a backend whose failed turns have outcomes of their own (cma: timeout). FailedOutcome returns the
 // outcome of a turn that ended failed with status, or "" for telemetry.TurnFailed.
 type TurnClassifier interface {

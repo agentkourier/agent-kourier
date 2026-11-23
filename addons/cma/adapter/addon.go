@@ -63,7 +63,6 @@ var (
 	_ runtime.Interrupter     = (*addonBackend)(nil)
 	_ runtime.ResumeValidator = (*addonBackend)(nil)
 	_ runtime.ContextReleaser = (*addonBackend)(nil)
-	_ runtime.CancelSettler   = (*addonBackend)(nil)
 	_ runtime.TurnClassifier  = (*addonBackend)(nil)
 	_ runtime.Describer       = (*addonBackend)(nil)
 )

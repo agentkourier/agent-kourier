@@ -27,7 +27,6 @@ type replayHandler struct {
 	store     Store
 	tel       *telemetry.Telemetry
 	validator ResumeValidator // nil: every answer reaches the backend
-	settler   CancelSettler   // nil: a failed cancel fails
 	life      context.Context // ends with the add-on's stop, which ends a stream that outlived its request
 
 	mu      sync.Mutex
@@ -240,17 +239,4 @@ func (h *replayHandler) SendMessage(ctx context.Context, req *a2a.SendMessageReq
 		return nil, errors.New("task result missing")
 	}
 	return h.GetTask(ctx, &a2a.GetTaskRequest{ID: id})
-}
-
-// CancelTask cancels the task. With a CancelSettler, a cancel that fails succeeds when the settler accepts the task as
-// it now stands.
-func (h *replayHandler) CancelTask(ctx context.Context, req *a2a.CancelTaskRequest) (*a2a.Task, error) {
-	task, err := h.RequestHandler.CancelTask(ctx, req)
-	if err == nil || req == nil || h.settler == nil {
-		return task, err
-	}
-	if settled, getErr := h.GetTask(ctx, &a2a.GetTaskRequest{ID: req.ID}); getErr == nil && h.settler.CanceledAfterFailedCancel(ctx, settled) {
-		return settled, nil
-	}
-	return task, err
 }
