@@ -1,8 +1,9 @@
 # Connect the AX add-on
 
 For a platform team that wants an agent on Amazon Bedrock or the Anthropic API behind a Binding: at the end, the chart
-runs the AX add-on, an ADK agent on either, and a Binding sends its threads to it. Each thread is one ADK session, and a question the agent
-asks with its `ask_user` tool waits for a reply in the thread. The add-on is experimental.
+runs the AX add-on, an ADK agent whose model runs on one of the two, and a Binding sends its threads to it. Each thread
+is one ADK session, and a question the agent asks with its `ask_user` tool waits for a reply in the thread. The add-on
+is experimental.
 
 The chart is the first route, and this page starts with it. The second route runs the same agent inside Google AX, as a
 Task behind AX's router: [Run it inside Google AX](#run-it-inside-google-ax).
@@ -458,7 +459,7 @@ Run this against an isolated atespace before you bind a real channel:
 3. Pause the actor while a question waits, resume it by fetching the card through the gateway, and answer. Check that
    the task and context IDs and the ADK session survive.
 4. With a completed task, resend the same message ID, and check that the model is not called again. Drop the stream and
-   reconnect with `tasks/resubscribe`.
+   reconnect with `SubscribeToTask`.
 5. Pause the actor during a model call, and check that the task fails once and the context takes a new turn. Cancel a
    running task and check its final state.
 6. Check that a missing, expired, wrong-audience or wrong-subject token is refused, that a forged actor header cannot

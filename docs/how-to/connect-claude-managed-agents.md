@@ -15,10 +15,10 @@ own tools, permission policies and skills. Each session gets a sandbox, which a 
 cluster, next to the systems it works on. What it does not have is a way into chat: putting such an agent in a channel
 means writing a chat app, with its threads, approval buttons and audit.
 
-Agent Kourier is that front door already. A Binding gives the agent a session per thread, triggers such as the alerts
-another app posts, audit, metrics and traces, on Slack, and on Microsoft Teams and webhooks (both experimental), with
-tool approvals as buttons on Slack and Teams. The add-on is the piece between them: an A2A server in front of one agent, so the
-broker needs no change. A tool set to `always_ask` in the agent's permission policy becomes Approve and Deny in the
+Agent Kourier is that way into chat. A Binding gives the agent a session per thread, audit, metrics and traces, and
+triggers such as the alerts another app posts. It runs on Slack, and on Microsoft Teams and webhooks (both
+experimental); on Slack and Teams, tool approvals are buttons. The add-on sits between the two: an A2A server in front
+of one agent, so the broker needs no change. A tool set to `always_ask` in the agent's permission policy becomes Approve and Deny in the
 thread, so a command in your cluster runs only after a person approves it.
 
 ## Before you start
