@@ -155,10 +155,11 @@ sandbox-alert: ## Fire (STATE=firing, the default) or resolve (STATE=resolved) a
 
 # The add-ons' shared kit (addons/kit) is a separate Go module, which each add-on requires through `replace ../kit` and
 # which is released with them. kit-test runs its tests at the kit's own versions. An add-on's go.mod may require a newer
-# version of a dependency than the kit's floor, so each add-on's test target runs the kit's packages again, under the
-# add-on's module graph (KIT_PACKAGES). -count=1: the kit's tests read docs/reference, which go test's result cache never
-# checks.
-KIT_PACKAGES := github.com/agentkourier/agent-kourier/addons/kit/...
+# version of a dependency than the kit's floor, so each add-on's test target runs again, under the add-on's module graph,
+# the kit's packages that the add-on links, its tests included (KIT_PACKAGES, run in the add-on's directory). A kit
+# package it does not link may need a module its graph lacks: kit/auth/oidc, which only AX links, needs go-oidc.
+# -count=1: the kit's tests read docs/reference, which go test's result cache never checks.
+KIT_PACKAGES = $$(go list -deps -test -f '{{if not .ForTest}}{{.ImportPath}}{{end}}' ./... | grep '^github.com/agentkourier/agent-kourier/addons/kit/' | sort -u)
 
 .PHONY: kit-test kit-lint addons-tidy
 kit-test: ## Test the add-ons' shared kit module with the race detector, every test on every run

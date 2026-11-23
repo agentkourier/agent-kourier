@@ -67,6 +67,6 @@ go test -race ./...
 ADAPTER_URL=http://127.0.0.1:8090/a2a ADAPTER_TOKEN="$(cat ../cma-token)" go run .
 ```
 
-CI runs the same through `make cma-test` (with Postgres), which also runs the shared kit's tests (`addons/kit`) under
-the add-on's module graph, and `make cma-lint`, and `make cma-image` builds the image.
+CI runs the same through `make cma-test` (with Postgres), which also runs the tests of the shared kit's packages it
+links (`addons/kit`) under the add-on's module graph, and `make cma-lint`, and `make cma-image` builds the image.
 
