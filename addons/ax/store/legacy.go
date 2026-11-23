@@ -30,11 +30,15 @@ func setLegacyAside(ctx context.Context, q kitstore.Querier) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("set the old task tables aside: %w", err)
 	}
-	migrated, err := has("schema_migrations")
-	if err != nil {
-		return false, fmt.Errorf("set the old task tables aside: %w", err)
+	// The old layout is known by its a2a_tasks, which has no context_id: a version table would not tell it from the
+	// kit's tables of a first start cut short before the agent's migrations made theirs.
+	var contextIDs int
+	if tasks {
+		if err := q.QueryRow(ctx, `SELECT COUNT(*) FROM pragma_table_info('a2a_tasks') WHERE name = 'context_id'`).Scan(&contextIDs); err != nil {
+			return false, fmt.Errorf("set the old task tables aside: %w", err)
+		}
 	}
-	if tasks && !migrated {
+	if tasks && contextIDs == 0 {
 		for _, rename := range []struct{ from, to string }{{"a2a_tasks", "legacy_a2a_tasks"}, {"a2a_messages", "legacy_a2a_messages"}} {
 			ok, err := has(rename.from)
 			if err != nil {
