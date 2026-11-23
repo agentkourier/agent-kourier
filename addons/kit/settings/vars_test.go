@@ -150,3 +150,28 @@ func TestVarWithNoName(t *testing.T) {
 		t.Fatalf("Parse = %v, want %s", err, want)
 	}
 }
+
+// Values remember each Var that From read but Spec.Vars did not declare, in key order; a Var that a later Var's parse
+// reads before Parse has come to it counts too, since that read gets the zero value.
+func TestUndeclaredReadsAreRecorded(t *testing.T) {
+	early := Func("ADDON_EARLY", "", func(_ string, earlier Values) (string, error) { return modeVar.From(earlier), nil })
+	s := tokenSpec
+	s.Vars = []Var{idVar, early, modeVar}
+	_, values, err := Parse(env(map[string]string{"ADDON_ID": "a1"}), s)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got := values.Undeclared(); len(got) != 1 || got[0] != "ADDON_MODE" {
+		t.Fatalf("Undeclared after Parse = %q, want [ADDON_MODE] (read by ADDON_EARLY before it was declared)", got)
+	}
+	_ = idVar.From(values)
+	_ = slownessVar.From(values)
+	_ = timeoutVar.From(values)
+	if got := strings.Join(values.Undeclared(), ","); got != "ADDON_MODE,ADDON_SLOWNESS,ADDON_TIMEOUT" {
+		t.Fatalf("Undeclared = %s, want ADDON_MODE,ADDON_SLOWNESS,ADDON_TIMEOUT", got)
+	}
+	if got := (Values{}).Undeclared(); len(got) != 0 {
+		t.Fatalf("zero Values: Undeclared = %q", got)
+	}
+	_ = idVar.From(Values{}) // a zero Values records nothing, and does not panic
+}

@@ -53,12 +53,11 @@ func run() error {
 	}
 	defer func() { _ = st.Close() }()
 	check := &auth.Check{Verifier: smokeCaller{}, Bearer: true, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	s, err := agent.New(agent.Config{Model: printingModel{llm},
-		Store: st, Check: check, PublicURL: "http://127.0.0.1/a2a", Version: "smoke"})
+	exec, err := agent.NewTextExecutor(printingModel{llm}, st.Sessions())
 	if err != nil {
 		return errors.New("agent startup failed")
 	}
-	h := httptest.NewServer(s.Handler)
+	h := httptest.NewServer(agent.Addon("smoke", nil).Handler(exec, st, check, "http://127.0.0.1/a2a", nil))
 	defer h.Close()
 	card := &a2a.AgentCard{Name: "smoke", Version: "1", Capabilities: a2a.AgentCapabilities{Streaming: true}, SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface(h.URL+"/a2a", a2a.TransportProtocolJSONRPC)}}
 	c, err := a2aclient.NewFromCard(ctx, card, a2aclient.WithDefaultsDisabled(), a2aclient.WithJSONRPCTransport(&http.Client{Transport: transport{h.Client().Transport}}))

@@ -35,6 +35,30 @@ func (s *Store) DeleteSettledBefore(ctx context.Context, cutoff time.Time) (int6
 	return n, nil
 }
 
+// IdleContexts returns the contexts last active before cutoff in which no turn is running, every owner's, the least
+// recently active first. An add-on whose release of a context is outside the database (an archive in the backend's
+// API) lets go of each, then forgets it (ForgetContext); one whose release is in the database uses DeleteIdleContexts.
+func (s *Store) IdleContexts(ctx context.Context, cutoff time.Time) ([]Context, error) {
+	var found []Context
+	err := s.Reader().Query(ctx, `SELECT c.owner, c.context_id, c.last_active, c.ref FROM contexts c WHERE c.last_active < ?
+		AND NOT EXISTS (SELECT 1 FROM a2a_tasks t WHERE t.owner = c.owner AND t.context_id = c.context_id AND t.state IN (`+marks(len(running))+`))
+		ORDER BY c.last_active, c.owner, c.context_id`,
+		append([]any{nanos(cutoff)}, running...), func(scan func(...any) error) error {
+			var c Context
+			var at int64
+			if err := scan(&c.Owner, &c.ContextID, &at, &c.Ref); err != nil {
+				return err
+			}
+			c.LastActive = fromNanos(at)
+			found = append(found, c)
+			return nil
+		})
+	if err != nil {
+		return nil, fmt.Errorf("find idle contexts: %w", err)
+	}
+	return found, nil
+}
+
 // DeleteIdleContexts deletes each context last active before cutoff, with no turn running: what the add-on keeps of it
 // (TaskOptions.ReleaseContext), its tasks (a question it paused on included) and their message IDs. The context's next
 // message starts it afresh. It returns how many contexts it deleted. Each context goes in a transaction of its own,

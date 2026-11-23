@@ -1,6 +1,6 @@
-// Package config reads the agent's settings from its environment and checks them, so that a setting the agent cannot
-// use stops it at start with an error that names the variable. The kit's settings package reads the ones every add-on
-// shares; this package holds the agent's own. An error never shows the value of a variable that may hold a secret
+// Package config holds the agent's own settings, which the kit's runtime reads from the environment with the ones every
+// add-on shares (package settings) and checks, so that a setting the agent cannot use stops it at start with an error
+// that names the variable. An error never shows the value of a variable that may hold a secret
 // (POSTGRES_DSN, AUTH_HEADER, OIDC_ISSUER, RUNNER_URL).
 package config
 
@@ -62,10 +62,9 @@ var (
 	})
 )
 
-// Spec is how the agent reads its settings: the shared ones with the token check or OIDC, and its own.
-func Spec() settings.Spec {
-	return settings.Spec{Name: "ax", Noun: "agent", OIDC: true,
-		Vars: []settings.Var{modelProvider, modelRegion, modelName, stateDir, runnerURL}}
+// Vars are the agent's own variables, in the order they are read (runtime.Addon.Settings).
+func Vars() []settings.Var {
+	return []settings.Var{modelProvider, modelRegion, modelName, stateDir, runnerURL}
 }
 
 // Config is the agent's settings.
@@ -85,15 +84,10 @@ type Config struct {
 // Standalone reports whether the agent runs without the AX task runner beside it, and so answers /readyz itself.
 func (c Config) Standalone() bool { return c.RunnerURL == "" }
 
-// Parse reads the settings through getenv (os.Getenv in production), where an empty value is an unset one, and checks
-// them.
-func Parse(getenv func(string) string) (Config, error) {
-	shared, own, err := settings.Parse(getenv, Spec())
-	if err != nil {
-		return Config{}, err
-	}
+// From is the agent's settings: shared, the ones every add-on has, and its own, as the kit's runtime read them (Vars).
+func From(shared settings.Config, own settings.Values) Config {
 	return Config{Config: shared, ModelProvider: modelProvider.From(own), ModelRegion: modelRegion.From(own),
-		ModelName: modelName.From(own), RunnerURL: runnerURL.From(own)}, nil
+		ModelName: modelName.From(own), RunnerURL: runnerURL.From(own)}
 }
 
 // originURL reports why v is not an http or https origin: a scheme and a host, with no user info, path, query or

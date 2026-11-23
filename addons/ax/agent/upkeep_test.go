@@ -65,7 +65,9 @@ func hasSession(t *testing.T, st *store.Store, contextID string) bool {
 	return err == nil
 }
 
-func TestUpkeepDeletesIdleContextsAndOldTasks(t *testing.T) {
+// What the runtime's upkeep deletes from the agent's store: an idle context with its ADK session and its tasks, and an
+// old settled task, whose session stays.
+func TestTheUpkeepDeletesIdleContextsWithTheirSessionsAndOldTasks(t *testing.T) {
 	for _, tc := range []struct {
 		name                string
 		retention, idle     time.Duration
@@ -79,7 +81,7 @@ func TestUpkeepDeletesIdleContextsAndOldTasks(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st, clk := upkeepFixture(t)
-			(&Upkeep{Store: st, TaskRetention: tc.retention, SessionIdleTTL: tc.idle, Log: discard(), Now: clk.now}).Sweep(t.Context())
+			sweep(t, st, clk.now(), tc.retention, tc.idle)
 			if got := kept(t, st, "old"); got != tc.oldTask {
 				t.Errorf("old task kept = %v, want %v", got, tc.oldTask)
 			}
@@ -93,12 +95,21 @@ func TestUpkeepDeletesIdleContextsAndOldTasks(t *testing.T) {
 	}
 }
 
-func TestUpkeepRunReturnsAtOnceWithNothingToDo(t *testing.T) {
-	done := make(chan struct{})
-	go func() { (&Upkeep{Log: discard()}).Run(context.Background()); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("Run with both durations zero did not return")
+// sweep deletes what the runtime's upkeep deletes as of now: the contexts idle for idle, then the settled tasks older
+// than retention; zero keeps them.
+func sweep(t *testing.T, st *store.Store, now time.Time, retention, idle time.Duration) int {
+	t.Helper()
+	n := 0
+	if idle > 0 {
+		var err error
+		if n, err = st.DeleteIdleContexts(t.Context(), now.Add(-idle)); err != nil {
+			t.Fatal(err)
+		}
 	}
+	if retention > 0 {
+		if _, err := st.DeleteSettledBefore(t.Context(), now.Add(-retention)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return n
 }

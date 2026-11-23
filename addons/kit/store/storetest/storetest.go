@@ -81,6 +81,7 @@ func Run(t *testing.T, h Harness) {
 		{"ContextRefs", testContextRefs},
 		{"ForgetContext", testForgetContext},
 		{"DeleteIdleContexts", testDeleteIdleContexts},
+		{"IdleContexts", testIdleContexts},
 		{"ReleaseContext", testReleaseContext},
 		{"TouchContext", testTouchContext},
 		{"Reopen", testReopen},
@@ -857,6 +858,39 @@ func testDeleteIdleContexts(t *testing.T, h Harness) {
 	mustCreate(t, s, task("idle-again", "idle", a2a.TaskStateCompleted, nil))
 	if n, err := s.DeleteIdleContexts(ctx, clk.Now().Add(-90*time.Minute)); err != nil || n != 0 {
 		t.Fatalf("a second DeleteIdleContexts = %d, %v; want 0", n, err)
+	}
+}
+
+// IdleContexts lists the contexts last active before the cutoff in which no turn is running, every owner's, with their
+// refs, the least recently active first, and changes nothing.
+func testIdleContexts(t *testing.T, h Harness) {
+	s, clk := open(t, h)
+	ctx := context.Background()
+	mustCreate(t, s, task("idle-done", "idle", a2a.TaskStateCompleted, nil))
+	mustCreate(t, s, task("busy-working", "busy", a2a.TaskStateWorking, nil))
+	clk.Advance(time.Minute)
+	if err := s.PutContext(ctx, store.Context{Owner: "other-binding", ContextID: "idle", LastActive: clk.Now(), Ref: "sess-other"}); err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(time.Hour)
+	mustCreate(t, s, task("active-done", "active", a2a.TaskStateCompleted, nil))
+
+	got, err := s.IdleContexts(ctx, clk.Now().Add(-30*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys []string
+	for _, c := range got {
+		keys = append(keys, c.Owner+"/"+c.ContextID+"/"+c.Ref)
+	}
+	if want := []string{"agent-kourier/idle/", "other-binding/idle/sess-other"}; !slices.Equal(keys, want) {
+		t.Fatalf("IdleContexts = %q, want %q", keys, want)
+	}
+	if len(contexts(t, s)) != 4 {
+		t.Fatalf("IdleContexts changed the contexts: %v", contexts(t, s))
+	}
+	if got, err := s.IdleContexts(ctx, clk.Now().Add(-2*time.Hour)); err != nil || len(got) != 0 {
+		t.Fatalf("IdleContexts before every activity = %v, %v; want none", got, err)
 	}
 }
 

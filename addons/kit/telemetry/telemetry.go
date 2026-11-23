@@ -252,6 +252,15 @@ func (tr *Turn) End(outcome TurnOutcome) {
 	}
 }
 
+// Cut ends the span of a turn that the add-on's own stop cut short, with the outcome interrupted and the status Error,
+// and does not count it: its task stays as it was, and the leader that fails it at its takeover counts it
+// (TasksInterrupted, and turns_total under interrupted).
+func (tr *Turn) Cut() {
+	tr.span.SetAttributes(attribute.String(AttrOutcome, string(TurnInterrupted)))
+	tr.span.SetStatus(codes.Error, string(TurnInterrupted))
+	tr.span.End()
+}
+
 // Call is one call to the add-on's backend: its span, agentkourier.<add-on>.<Spec.Calls>.<operation>, and its
 // duration.
 type Call struct {

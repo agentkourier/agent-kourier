@@ -9,6 +9,19 @@ import (
 	"github.com/agentkourier/agent-kourier/addons/kit/settings"
 )
 
+// parse reads the settings as the agent's command does (runtime.Parse of agent.Addon, which this package cannot import):
+// the agent's own and the shared ones, with the OIDC check.
+func parse(getenv func(string) string) (Config, error) {
+	shared, own, err := settings.Parse(getenv, spec())
+	if err != nil {
+		return Config{}, err
+	}
+	return From(shared, own), nil
+}
+
+// spec is the settings.Spec that the kit's runtime makes of agent.Addon.
+func spec() settings.Spec { return settings.Spec{Name: "ax", Noun: "agent", OIDC: true, Vars: Vars()} }
+
 // env is a fake environment: the minimal valid one plus the overrides. An override of "" unsets the variable.
 func env(overrides map[string]string) func(string) string {
 	base := map[string]string{
@@ -44,7 +57,7 @@ func pg(overrides map[string]string) map[string]string {
 }
 
 func TestDefaults(t *testing.T) {
-	c, err := Parse(env(nil))
+	c, err := parse(env(nil))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -69,7 +82,7 @@ func TestDefaults(t *testing.T) {
 }
 
 func TestEverySetting(t *testing.T) {
-	c, err := Parse(env(pg(map[string]string{
+	c, err := parse(env(pg(map[string]string{
 		"MODEL_PROVIDER": "Bedrock",
 		"LISTEN_ADDR":    ":9000", "PUBLIC_URL": "http://ax.agents.svc:9000/a2a", "RUNNER_URL": "http://127.0.0.1:8081",
 		"AUTH_HEADER":    "x-kourier-token",
@@ -101,7 +114,7 @@ func TestEverySetting(t *testing.T) {
 
 // The Anthropic API: the model's name alone, with no region. The key is the SDK's to read, not the settings'.
 func TestAnthropicProvider(t *testing.T) {
-	c, err := Parse(env(map[string]string{"MODEL_PROVIDER": "Anthropic", "MODEL_REGION": "", "MODEL_NAME": "claude-haiku-4-5"}))
+	c, err := parse(env(map[string]string{"MODEL_PROVIDER": "Anthropic", "MODEL_REGION": "", "MODEL_NAME": "claude-haiku-4-5"}))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -112,7 +125,7 @@ func TestAnthropicProvider(t *testing.T) {
 
 // The AX route: OIDC, the runner beside the agent, port 80 and the workspace's database file.
 func TestAXRoute(t *testing.T) {
-	c, err := Parse(env(oidc(map[string]string{
+	c, err := parse(env(oidc(map[string]string{
 		"LISTEN_ADDR": ":80", "PUBLIC_URL": "https://ax-gateway.example.test/a2a",
 		"RUNNER_URL": "http://127.0.0.1:8081", "SQLITE_PATH": "/workspace/agent-kourier-state/agent.db",
 	})))
@@ -148,7 +161,7 @@ func TestRefused(t *testing.T) {
 		{"runner url with a path", map[string]string{"RUNNER_URL": "http://127.0.0.1:8081/readyz"}, "RUNNER_URL"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := Parse(env(tc.overrides))
+			_, err := parse(env(tc.overrides))
 			if err == nil {
 				t.Fatal("Parse accepted it")
 			}
@@ -176,7 +189,7 @@ func TestSharedAsTheAgentReadsThem(t *testing.T) {
 		{oidc(map[string]string{"AUTH_TOKEN_FILE": "/run/secrets/tokens"}), "AUTH_TOKEN_FILE and OIDC_ISSUER, OIDC_AUDIENCE or OIDC_SUBJECT are both set: " +
 			"the caller check is the token file or OIDC, not both"},
 	} {
-		if _, err := Parse(env(tc.overrides)); err == nil || err.Error() != tc.want {
+		if _, err := parse(env(tc.overrides)); err == nil || err.Error() != tc.want {
 			t.Errorf("%v: error %v, want %s", tc.overrides, err, tc.want)
 		}
 	}
@@ -184,7 +197,7 @@ func TestSharedAsTheAgentReadsThem(t *testing.T) {
 
 // The agent's own errors come before the shared ones, in the order it reads its own.
 func TestErrorOrder(t *testing.T) {
-	_, err := Parse(env(map[string]string{"MODEL_REGION": "", "MODEL_NAME": "", "STATE_DIR": "/x", "RUNNER_URL": "x", "LISTEN_ADDR": "8090"}))
+	_, err := parse(env(map[string]string{"MODEL_REGION": "", "MODEL_NAME": "", "STATE_DIR": "/x", "RUNNER_URL": "x", "LISTEN_ADDR": "8090"}))
 	want := "MODEL_REGION is required with MODEL_PROVIDER=bedrock\nMODEL_NAME is required\n" +
 		"STATE_DIR is no longer read: set SQLITE_PATH to the database file instead (STATE_DIR plus /agent.db, such as " +
 		"/workspace/agent-kourier-state/agent.db) and unset STATE_DIR\n" +
@@ -197,7 +210,7 @@ func TestErrorOrder(t *testing.T) {
 
 func TestRunnerURLNeverShown(t *testing.T) {
 	const secret = "fake-password-do-not-print"
-	_, err := Parse(env(map[string]string{"RUNNER_URL": "http://u:" + secret + "@127.0.0.1:8081"}))
+	_, err := parse(env(map[string]string{"RUNNER_URL": "http://u:" + secret + "@127.0.0.1:8081"}))
 	if err == nil {
 		t.Fatal("Parse accepted a RUNNER_URL with user info")
 	}
@@ -206,9 +219,9 @@ func TestRunnerURLNeverShown(t *testing.T) {
 	}
 }
 
-// Each of the agent's own variables is in its Spec, so Parse reads it: one left out would read as its zero value.
+// Each of the agent's own variables is in Vars, so the runtime reads it: one left out would read as its zero value.
 func TestOwnVarsDeclared(t *testing.T) {
-	_, own, err := settings.Parse(env(nil), Spec())
+	_, own, err := settings.Parse(env(nil), spec())
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -217,7 +230,7 @@ func TestOwnVarsDeclared(t *testing.T) {
 		Declared(settings.Values) bool
 	}{modelProvider, modelRegion, modelName, stateDir, runnerURL} {
 		if !v.Declared(own) {
-			t.Errorf("%s is not in Spec().Vars", v.Key())
+			t.Errorf("%s is not in Vars", v.Key())
 		}
 	}
 }

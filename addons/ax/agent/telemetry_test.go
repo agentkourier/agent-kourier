@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"iter"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -31,12 +32,7 @@ func startObserved(t *testing.T, m model.LLM, tel *telemetry.Telemetry) *agentAt
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := New(Config{Model: m, Store: st, Check: &auth.Check{Verifier: bearerIsCaller{}, Bearer: true, Log: discard()},
-		PublicURL: "http://ax.agents.svc:8090/a2a", Version: "1.2.3-test", Telemetry: tel})
-	if err != nil {
-		t.Fatal(err)
-	}
-	a := &agentAt{store: st, http: httptest.NewServer(telemetry.Extract(s.Handler))}
+	a := &agentAt{store: st, http: httptest.NewServer(telemetry.Extract(handler(t, m, st, &auth.Check{Verifier: bearerIsCaller{}, Bearer: true, Log: discard()}, tel)))}
 	a.client = connect(t, a.http, "binding")
 	t.Cleanup(a.stop)
 	return a
@@ -194,14 +190,21 @@ func TestTheTurnIsAChildOfTheCallerAndTheModelOfTheTurn(t *testing.T) {
 	}
 }
 
-// What a sweep deletes for idleness is counted, by reason.
-func TestUpkeepCountsDeletedSessions(t *testing.T) {
+// The sessions a sweep deletes for idleness are counted, by reason, and logged; a sweep that fails counts what it
+// deleted before it failed and leaves the warning to the runtime.
+func TestTheBackendCountsTheSessionsASweepDeletes(t *testing.T) {
 	st, clk := upkeepFixture(t)
 	tel := newTelemetry(t, nil)
 	metrics, err := NewMetrics(tel)
 	if err != nil {
 		t.Fatal(err)
 	}
-	(&Upkeep{Store: st, SessionIdleTTL: 30 * time.Minute, Log: discard(), Now: clk.now, Metrics: metrics}).Sweep(t.Context())
-	wantSeries(t, tel, map[string]string{`agentkourier_ax_sessions_deleted_total{reason="idle"}`: "1"})
+	var logs strings.Builder
+	b := &Backend{metrics: metrics, log: slog.New(slog.NewJSONHandler(&logs, nil)), idleTTL: 30 * time.Minute}
+	b.IdleContextsDeleted(sweep(t, st, clk.now(), 0, 30*time.Minute), nil)
+	b.IdleContextsDeleted(2, errors.New("the sweep failed"))
+	wantSeries(t, tel, map[string]string{`agentkourier_ax_sessions_deleted_total{reason="idle"}`: "3"})
+	if got := strings.Count(logs.String(), `"msg":"deleted the ADK sessions and tasks of idle contexts","contexts":1,"session_idle_ttl":1800000000000`); got != 1 {
+		t.Fatalf("the log = %s", logs.String())
+	}
 }
