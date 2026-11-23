@@ -16,7 +16,8 @@ The documentation site has the user's pages:
   `agent-kourier.yaml`).
 - [AX add-on](../../docs/reference/ax.md): how A2A maps to ADK, restarts, the store, replicas, the caller check, every
   setting and the telemetry.
-- [Limits](../../docs/reference/limits.md#ax-add-on): every limit, with its value.
+- [Limits](../../docs/reference/limits.md#ax-add-on): the add-on's own limits, and
+  [those every add-on shares](../../docs/reference/limits.md#every-add-on), each with its value.
 
 This file keeps the developer's notes: building the add-on and its tests.
 
