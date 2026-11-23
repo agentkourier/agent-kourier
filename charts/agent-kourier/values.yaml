@@ -604,7 +604,7 @@ addons:
       # Keep the claim (helm.sh/resource-policy: keep) when the release is uninstalled. Delete it by hand when you mean to.
       retainOnUninstall: true
     # With networkPolicy.enabled, the add-on's NetworkPolicy. Ingress is port 8090 from Agent Kourier's pods, from networkPolicy.metricsFrom
-    # (the metrics share the port with A2A: /a2a needs a token, and the agent card, /healthz, /readyz and /metrics do not) and, with
+    # (the metrics share the port with A2A: /a2a and the agent card need a token, and /healthz, /readyz and /metrics do not) and, with
     # Postgres, from the add-on's other replicas, which forward to the leader. Egress is DNS (networkPolicy.dns), the Anthropic API, with
     # Postgres the add-on's other replicas on 8090 and its database, and what addons.cma.networkPolicy.extraEgress adds. Agent Kourier's own
     # policy then also allows egress to the add-on's pods on 8090.
