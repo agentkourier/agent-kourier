@@ -48,15 +48,16 @@ internal/limitsdoc      test support that holds docs/reference/limits.md to the 
 internal/testhooks      test-only hooks, compiled in under the testhooks build tag
 internal/testutil       helpers only tests import: Eventually (poll until a condition holds), DiscardLogger; standard library only (a migrated SQLite store for a test: internal/store/sqlite/sqlitetest)
 charts/agent-kourier    Helm chart
-addons/cma              add-on: A2A server in front of a Claude Managed Agents agent (separate module, released with the broker)
-addons/ax               add-on: ADK agent on Bedrock, run by the chart or inside Google AX (separate module)
-addons/kit              the add-ons' shared Go module (each requires it through replace ../kit; released with them): limitsdoc, telemetry (metrics, traces and the JSON log), store (connections, migrations, the lease and its fence; no SQLite driver), auth (the caller check), auth/oidc (its OIDC verifier, apart so that only AX links go-oidc), cluster (the leader election, a standby's forward to the leader, the leadership-lost exit), settings (the environment every add-on shares, and an add-on's own variables), runtime (Main and Run: an add-on's backend served over A2A, the replay of a resent message, the turns' outcomes, the upkeep and the stop order), kittest (the cases every add-on runs under runtime.Run on each store; kittest/echo is its reference backend; tests only). Add-on images build from addons/
+addons/cma              add-on: A2A server in front of a Claude Managed Agents agent, on the kit's runtime (separate module, released with the broker)
+addons/ax               add-on: ADK agent on Bedrock or the Anthropic API, on the kit's runtime, run by the chart or inside Google AX (separate module)
+addons/kit              the add-ons' shared Go module (each requires it through replace ../kit; released with them): limitsdoc (the guards of the add-ons' limits markers; the kit.* ones are guarded in the kit), telemetry (metrics, traces and the JSON log), store (connections, migrations, the lease and its fence; no SQLite driver), auth (the caller check), auth/oidc (its OIDC verifier, apart so that only AX links go-oidc), cluster (the leader election, a standby's forward to the leader, the leadership-lost exit), settings (the environment every add-on shares, and an add-on's own variables), runtime (Main and Run: an add-on's backend served over A2A with its optional hooks, the replay of a resent message, the check of a message before its turn, the turns' outcomes, the leader's takeover, the upkeep and the stop order), kittest (the cases every add-on runs under runtime.Run on each store; kittest/echo is its reference backend, whose marked sections docs/how-to/write-an-add-on.md includes; tests only). Add-on images build from addons/
 docs/                   the documentation site (mkdocs; docs/brand is the brand kit and is not published)
 test/{fakeslack,stubagent,e2e,fixtures,kindmanifests,chart,...}
 test/crdcorpus          valid and invalid objects that the CRD schemas and the broker's Validate must treat alike (`make crd-corpus` sends them to a real API server)
 hack/kind/              kind tier scripts (fast, full, ax, sandbox)
 hack/{docs,release,postgres,crdhashes}  doc generators, release scripts, Postgres test helpers, the CRD schema hashes
-hack/{ci,github,security,clip}  CI tool installer and testhooks package selection, PR label check, scan and workflow policy, the demo clip's recording
+hack/{ci,github,security,clip}  CI tool installer and testhooks package selection, the add-on list's hold on the workflows and the chart (hack/ci/addonlist), PR label check, scan and workflow policy, the demo clip's recording
+hack/addons.txt         the add-ons, one name per line, which hack/addons.sh reads for the Makefile and the release scripts
 hack/slack/             the live probe of a ChatConnection in Slack's HTTP mode, run against Slack itself before a release that touches the mode
 ```
 
@@ -65,7 +66,7 @@ hack/slack/             the live probe of a ChatConnection in Slack's HTTP mode,
 Run `make` for help. Only Go and the tools pinned in `go.mod` (`tool` directive) are needed;
 golangci-lint runs as `go tool golangci-lint`, never a global install.
 
-- `make fmt lint test build tidy`: `test` runs `go test -race ./...`, then `go test -race -tags testhooks` over the `./internal/...` packages whose test build the tag changes (`hack/ci/testhooks-packages.sh`), then the scripts' own tests (`test-scripts`: kind, security policy, release gate, PR labels, the Slack HTTP-mode probe, CI tool installer, testhooks package selection, Actions cache upkeep); `build` writes `bin/agent-kourier`.
+- `make fmt lint test build tidy`: `test` runs `go test -race ./...`, then `go test -race -tags testhooks` over the `./internal/...` packages whose test build the tag changes (`hack/ci/testhooks-packages.sh`), then the scripts' own tests (`test-scripts`: the add-on list (`hack/addons.sh`, which reads `hack/addons.txt`), kind, security policy, release gate, PR labels, the Slack HTTP-mode probe, CI tool installer, testhooks package selection, test leg split, Actions cache upkeep, docs-only classification); `go test ./...` also runs `hack/ci/addonlist`, which holds the workflows' add-on legs and the chart's add-on names to the list; `build` writes `bin/agent-kourier`.
 - `make crds` regenerates the CustomResourceDefinitions in `charts/agent-kourier/files/crds/` from the markers in `api/v1alpha1` with
   `controller-gen` (pinned as a `tool` in `go.mod`, run as `go tool controller-gen`). Run it after changing an API type or marker and commit the
   result: `TestCommittedCRDsMatchGeneration` in `make test` fails when the committed files differ from what generation produces. The
