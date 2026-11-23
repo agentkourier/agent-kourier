@@ -1,9 +1,9 @@
 // Command adapter serves a Claude Managed Agents agent as an A2A agent.
 //
-// It is configured through its environment (package config holds every variable and its check; package telemetry the
-// OTEL_* ones) and reads credentials as the Anthropic Go SDK does (ANTHROPIC_API_KEY, or the active `ant auth login`
-// profile). A setting it cannot use stops it at start, with an error that names the variable. It takes one flag,
-// --version.
+// It is configured through its environment (the kit's package settings holds the variables every add-on shares, package
+// config the adapter's own, and package telemetry the OTEL_* ones) and reads credentials as the Anthropic Go SDK does
+// (ANTHROPIC_API_KEY, or the active `ant auth login` profile). A setting it cannot use stops it at start, with an error
+// that names the variable. It takes one flag, --version.
 //
 // With SQLite it is the only replica and leads at once. With Postgres its replicas elect a leader through the store
 // (package cluster). The leader restores each A2A context's session from the store and reconciles it with the agent's
@@ -37,6 +37,7 @@ import (
 	"github.com/agentkourier/agent-kourier/addons/cma/store"
 	"github.com/agentkourier/agent-kourier/addons/kit/auth"
 	"github.com/agentkourier/agent-kourier/addons/kit/cluster"
+	"github.com/agentkourier/agent-kourier/addons/kit/settings"
 	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
@@ -174,7 +175,7 @@ func serve(ctx context.Context, cfg config.Config, traces telemetry.Config, log 
 	router := &cluster.Router{Local: telemetry.Extract(adapter.Mux(a2aPath, card, rpc, check)), Status: status,
 		Addon: adapter.TelemetrySpec().Name, Noun: "adapter", RetryAfter: cfg.Lease.RetryPeriod, Telemetry: tel, Log: log}
 	var elector *cluster.Elector
-	if cfg.Store == config.StorePostgres {
+	if cfg.Store == settings.StorePostgres {
 		elector = &cluster.Elector{Lease: st, Holder: cfg.PodName, Address: cfg.AdvertiseURL, LeaseDuration: cfg.Lease.Duration,
 			RenewDeadline: cfg.Lease.RenewDeadline, RetryPeriod: cfg.Lease.RetryPeriod, Status: status, Telemetry: tel, Log: log}
 		router.Leaders = elector
@@ -314,7 +315,7 @@ func mux(router http.Handler, ready func() bool, tel *telemetry.Telemetry) *http
 
 // openStore opens the store the configuration names.
 func openStore(ctx context.Context, cfg config.Config, opts store.Options) (*store.Store, error) {
-	if cfg.Store == config.StorePostgres {
+	if cfg.Store == settings.StorePostgres {
 		return store.OpenPostgres(ctx, cfg.PostgresDSN, opts)
 	}
 	return store.OpenSQLite(ctx, cfg.SQLitePath, opts)

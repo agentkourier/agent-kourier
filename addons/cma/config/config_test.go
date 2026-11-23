@@ -2,9 +2,10 @@ package config
 
 import (
 	"log/slog"
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/agentkourier/agent-kourier/addons/kit/settings"
 )
 
 // env is a fake environment: the minimal valid one plus the overrides. An override of "" unsets the variable.
@@ -26,20 +27,19 @@ func TestDefaults(t *testing.T) {
 		t.Fatalf("Parse: %v", err)
 	}
 	want := Config{
-		AgentID: "agent_test", EnvironmentID: "env_test",
-		ListenAddr: "127.0.0.1:8090", PublicURL: "http://127.0.0.1:8090/a2a",
-		SessionIdleTTL: 2160 * time.Hour, ToolResultTimeout: 10 * time.Minute,
-		AuthTokenFile: "/run/secrets/tokens", AuthHeader: "Authorization",
-		Store: StoreSQLite, SQLitePath: "cma-addon.db", TaskRetention: 720 * time.Hour,
-		Lease:    Lease{Duration: 15 * time.Second, RenewDeadline: 10 * time.Second, RetryPeriod: 2 * time.Second},
-		PodName:  c.PodName,
-		LogLevel: slog.LevelInfo,
+		Config: settings.Config{
+			ListenAddr: "127.0.0.1:8090", PublicURL: "http://127.0.0.1:8090/a2a",
+			SessionIdleTTL: 2160 * time.Hour,
+			AuthTokenFile:  "/run/secrets/tokens", AuthHeader: "Authorization",
+			Store: settings.StoreSQLite, SQLitePath: "cma-addon.db", TaskRetention: 720 * time.Hour,
+			Lease:    settings.Lease{Duration: 15 * time.Second, RenewDeadline: 10 * time.Second, RetryPeriod: 2 * time.Second},
+			PodName:  c.PodName,
+			LogLevel: slog.LevelInfo,
+		},
+		AgentID: "agent_test", EnvironmentID: "env_test", ToolResultTimeout: 10 * time.Minute,
 	}
 	if c != want {
 		t.Fatalf("Parse =\n%+v\nwant\n%+v", c, want)
-	}
-	if c.PodName == "" {
-		t.Error("POD_NAME unset should default to the hostname")
 	}
 }
 
@@ -56,143 +56,103 @@ func TestEverySetting(t *testing.T) {
 		t.Fatalf("Parse: %v", err)
 	}
 	want := Config{
-		AgentID: "agent_test", EnvironmentID: "env_test",
-		ListenAddr: ":9000", PublicURL: "http://cma.agents.svc:9000/a2a",
-		ToolResultTimeout: 90 * time.Second,
-		AuthTokenFile:     "/run/secrets/tokens", AuthHeader: "X-Kourier-Token",
-		Store: StorePostgres, SQLitePath: "cma-addon.db", PostgresDSN: "postgres://u:fake-password@db/cma",
-		Lease:        Lease{Duration: 30 * time.Second, RenewDeadline: 20 * time.Second, RetryPeriod: 4 * time.Second},
-		AdvertiseURL: "http://10.0.0.7:9000", PodName: "cma-0", LogLevel: slog.LevelDebug,
+		Config: settings.Config{
+			ListenAddr: ":9000", PublicURL: "http://cma.agents.svc:9000/a2a",
+			AuthTokenFile: "/run/secrets/tokens", AuthHeader: "X-Kourier-Token",
+			Store: settings.StorePostgres, SQLitePath: "cma-addon.db", PostgresDSN: "postgres://u:fake-password@db/cma",
+			Lease:        settings.Lease{Duration: 30 * time.Second, RenewDeadline: 20 * time.Second, RetryPeriod: 4 * time.Second},
+			AdvertiseURL: "http://10.0.0.7:9000", PodName: "cma-0", LogLevel: slog.LevelDebug,
+		},
+		AgentID: "agent_test", EnvironmentID: "env_test", ToolResultTimeout: 90 * time.Second,
 	}
 	if c != want {
 		t.Fatalf("Parse =\n%+v\nwant\n%+v", c, want)
 	}
 }
 
-// Authorization, the default, may be named, in any case.
-func TestAuthHeaderAuthorization(t *testing.T) {
-	c, err := Parse(env(map[string]string{"AUTH_HEADER": "authorization"}))
-	if err != nil || c.AuthHeader != "Authorization" {
-		t.Fatalf("Parse = %q, %v; want Authorization", c.AuthHeader, err)
-	}
-}
-
-func TestAuthDisabledOnLoopback(t *testing.T) {
-	for _, addr := range []string{"127.0.0.1:8090", "127.9.9.9:1", "[::1]:8090", "localhost:8090"} {
-		t.Run(addr, func(t *testing.T) {
-			c, err := Parse(env(map[string]string{"AUTH_DISABLED": "true", "AUTH_TOKEN_FILE": "", "LISTEN_ADDR": addr}))
-			if err != nil {
-				t.Fatalf("Parse: %v", err)
-			}
-			if !c.AuthDisabled {
-				t.Fatal("AuthDisabled = false")
-			}
-		})
-	}
-}
-
+// The adapter's own variables. The shared ones are the kit's, and tested there.
 func TestRefused(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		overrides map[string]string
-		names     string // the variable the error must name
+		want      string // the whole error
 	}{
-		{"no agent", map[string]string{"CMA_AGENT_ID": ""}, "CMA_AGENT_ID"},
-		{"no environment", map[string]string{"CMA_ENVIRONMENT_ID": ""}, "CMA_ENVIRONMENT_ID"},
-		{"listen not host:port", map[string]string{"LISTEN_ADDR": "8090"}, "LISTEN_ADDR"},
-		{"public url relative", map[string]string{"PUBLIC_URL": "/a2a"}, "PUBLIC_URL"},
-		{"public url scheme", map[string]string{"PUBLIC_URL": "ftp://x/a2a"}, "PUBLIC_URL"},
-		{"idle ttl negative", map[string]string{"SESSION_IDLE_TTL": "-1h"}, "SESSION_IDLE_TTL"},
-		{"idle ttl not a duration", map[string]string{"SESSION_IDLE_TTL": "90 days"}, "SESSION_IDLE_TTL"},
-		{"tool timeout negative", map[string]string{"TOOL_RESULT_TIMEOUT": "-5s"}, "TOOL_RESULT_TIMEOUT"},
-		{"retention negative", map[string]string{"TASK_RETENTION": "-1s"}, "TASK_RETENTION"},
-		{"retention not a duration", map[string]string{"TASK_RETENTION": "30d"}, "TASK_RETENTION"},
-		{"no token file", map[string]string{"AUTH_TOKEN_FILE": ""}, "AUTH_TOKEN_FILE"},
-		{"auth disabled not a bool", map[string]string{"AUTH_DISABLED": "nope"}, "AUTH_DISABLED"},
-		{"auth disabled on every interface", map[string]string{"AUTH_DISABLED": "true", "AUTH_TOKEN_FILE": "", "LISTEN_ADDR": ":8090"}, "AUTH_DISABLED"},
-		{"auth disabled on a pod address", map[string]string{"AUTH_DISABLED": "true", "AUTH_TOKEN_FILE": "", "LISTEN_ADDR": "10.0.0.7:8090"}, "AUTH_DISABLED"},
-		{"auth disabled with a token file", map[string]string{"AUTH_DISABLED": "true"}, "AUTH_TOKEN_FILE"},
-		{"auth header not a token", map[string]string{"AUTH_HEADER": "X Token"}, "AUTH_HEADER"},
-		{"auth header proxy-authorization", map[string]string{"AUTH_HEADER": "Proxy-Authorization"}, "AUTH_HEADER"},
-		{"auth header cookie", map[string]string{"AUTH_HEADER": "cookie"}, "AUTH_HEADER"},
-		{"auth header x-user-id", map[string]string{"AUTH_HEADER": "x-user-id"}, "AUTH_HEADER"},
-		{"auth header x-agent-name", map[string]string{"AUTH_HEADER": "X-AGENT-NAME"}, "AUTH_HEADER"},
-		{"auth header x-share-token", map[string]string{"AUTH_HEADER": "X-Share-Token"}, "AUTH_HEADER"},
-		{"auth header kagent runtime identity", map[string]string{"AUTH_HEADER": "x-kagent-insecure-runtime-identity"}, "AUTH_HEADER"},
-		{"unknown store", map[string]string{"STORE": "mysql"}, "STORE"},
-		{"empty sqlite path", map[string]string{"SQLITE_PATH": "   "}, "SQLITE_PATH"},
-		{"postgres without dsn", map[string]string{"STORE": "postgres", "ADVERTISE_URL": "http://10.0.0.7:8090"}, "POSTGRES_DSN"},
-		{"postgres without advertise url", map[string]string{"STORE": "postgres", "POSTGRES_DSN": "postgres://db/cma"}, "ADVERTISE_URL"},
-		{"advertise url relative", map[string]string{"STORE": "postgres", "POSTGRES_DSN": "postgres://db/cma", "ADVERTISE_URL": "10.0.0.7:8090"}, "ADVERTISE_URL"},
-		{"dsn with sqlite", map[string]string{"POSTGRES_DSN": "postgres://db/cma"}, "POSTGRES_DSN"},
-		{"lease with sqlite", map[string]string{"LEASE_DURATION": "15s"}, "LEASE_DURATION"},
-		{"renew deadline with sqlite", map[string]string{"LEASE_RENEW_DEADLINE": "10s"}, "LEASE_RENEW_DEADLINE"},
-		{"retry period with sqlite", map[string]string{"LEASE_RETRY_PERIOD": "2s"}, "LEASE_RETRY_PERIOD"},
-		{"lease not above renew", pg(map[string]string{"LEASE_DURATION": "10s"}), "LEASE_DURATION"},
-		{"renew not above 1.2 retry", pg(map[string]string{"LEASE_RETRY_PERIOD": "9s"}), "LEASE_RENEW_DEADLINE"},
-		{"retry zero", pg(map[string]string{"LEASE_RETRY_PERIOD": "0"}), "LEASE_RETRY_PERIOD"},
-		{"lease negative", pg(map[string]string{"LEASE_DURATION": "-15s"}), "LEASE_DURATION"},
-		{"log level", map[string]string{"LOG_LEVEL": "chatty"}, "LOG_LEVEL"},
+		{"no agent", map[string]string{"CMA_AGENT_ID": ""}, "CMA_AGENT_ID is required"},
+		{"no environment", map[string]string{"CMA_ENVIRONMENT_ID": ""}, "CMA_ENVIRONMENT_ID is required"},
+		{"tool timeout negative", map[string]string{"TOOL_RESULT_TIMEOUT": "-5s"}, `TOOL_RESULT_TIMEOUT "-5s" is not a duration of zero or more`},
+		{"tool timeout not a duration", map[string]string{"TOOL_RESULT_TIMEOUT": "10"}, `TOOL_RESULT_TIMEOUT "10" is not a Go duration such as 90s or 720h`},
+		{"own before shared", map[string]string{"CMA_AGENT_ID": "", "LOG_LEVEL": "chatty"},
+			"CMA_AGENT_ID is required\n" + `LOG_LEVEL "chatty" is not debug, info, warn or error`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Parse(env(tc.overrides))
 			if err == nil {
 				t.Fatal("Parse accepted it")
 			}
-			if !strings.Contains(err.Error(), tc.names) {
-				t.Errorf("error %q does not name %s", err, tc.names)
+			if err.Error() != tc.want {
+				t.Errorf("error =\n%s\nwant\n%s", err, tc.want)
 			}
 		})
 	}
 }
 
-// pg is a valid Postgres environment plus the overrides.
-func pg(overrides map[string]string) map[string]string {
-	out := map[string]string{"STORE": "postgres", "POSTGRES_DSN": "postgres://u:fake-password@db/cma", "ADVERTISE_URL": "http://10.0.0.7:8090"}
-	for k, v := range overrides {
-		out[k] = v
+// How the adapter reads the shared variables: the token check alone (the OIDC_* variables are not read), and its own
+// name for itself in the refusal of AUTH_DISABLED.
+func TestSharedAsTheAdapterReadsThem(t *testing.T) {
+	c, err := Parse(env(map[string]string{"OIDC_ISSUER": "https://issuer.example.test", "OIDC_AUDIENCE": "a", "OIDC_SUBJECT": "s"}))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
 	}
-	return out
+	if c.OIDC() {
+		t.Errorf("OIDC = true, want the OIDC_* variables unread")
+	}
+	for _, tc := range []struct {
+		overrides map[string]string
+		want      string
+	}{
+		{map[string]string{"AUTH_TOKEN_FILE": ""}, "AUTH_TOKEN_FILE is required (or AUTH_DISABLED=true on a loopback LISTEN_ADDR)"},
+		{map[string]string{"AUTH_TOKEN_FILE": "", "AUTH_DISABLED": "true", "LISTEN_ADDR": ":8090", "PUBLIC_URL": "http://cma.agents.svc:8090/a2a"},
+			`AUTH_DISABLED=true needs a loopback LISTEN_ADDR, and ":8090" is not one: anyone who reaches the adapter could run the agent`},
+	} {
+		if _, err := Parse(env(tc.overrides)); err == nil || err.Error() != tc.want {
+			t.Errorf("%v: error %v, want %s", tc.overrides, err, tc.want)
+		}
+	}
 }
 
-func TestErrorsNeverShowTheDSN(t *testing.T) {
-	const secret = "fake-password-do-not-print"
-	for name, overrides := range map[string]map[string]string{
-		"with sqlite":     {"POSTGRES_DSN": "postgres://u:" + secret + "@db/cma"},
-		"bad lease":       pg(map[string]string{"POSTGRES_DSN": "postgres://u:" + secret + "@db/cma", "LEASE_DURATION": "1s"}),
-		"no advertise":    {"STORE": "postgres", "POSTGRES_DSN": "postgres://u:" + secret + "@db/cma"},
-		"bad auth header": {"AUTH_HEADER": secret + " x"},
+// A URL whose host is a port alone names no host a caller could reach: refused for PUBLIC_URL, set or made from
+// LISTEN_ADDR, and for ADVERTISE_URL. The adapter accepted one before it read its settings through the kit.
+func TestHostlessURLsRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		overrides map[string]string
+		want      string
+	}{
+		{"public url", map[string]string{"LISTEN_ADDR": ":8090", "PUBLIC_URL": "http://:8090"},
+			`PUBLIC_URL "http://:8090" is not an http or https URL with a host`},
+		{"public url made from LISTEN_ADDR", map[string]string{"LISTEN_ADDR": ":8090"},
+			`PUBLIC_URL is unset and the one made from LISTEN_ADDR, "http://:8090/a2a", is not an http or https URL with a host: ` +
+				"set PUBLIC_URL to the URL callers reach the A2A endpoint at"},
+		{"advertise url", map[string]string{"STORE": "postgres", "POSTGRES_DSN": "postgres://db/cma", "ADVERTISE_URL": "http://:8090"},
+			`ADVERTISE_URL "http://:8090" is not an http or https URL with a host`},
 	} {
-		t.Run(name, func(t *testing.T) {
-			_, err := Parse(env(overrides))
-			if err == nil {
-				t.Fatal("Parse accepted it")
-			}
-			if strings.Contains(err.Error(), secret) {
-				t.Fatalf("error shows a secret value: %v", err)
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := Parse(env(tc.overrides)); err == nil || err.Error() != tc.want {
+				t.Errorf("error %v, want %s", err, tc.want)
 			}
 		})
 	}
 }
 
-// The chart sets ADVERTISE_URL to http://$(POD_IP):8090, which leaves an IPv6 address unbracketed: Parse brackets it.
-func TestAdvertiseURLBracketsIPv6(t *testing.T) {
-	for in, want := range map[string]string{
-		"http://fd00::7:8090":      "http://[fd00::7]:8090",
-		"http://::1:8090/":         "http://[::1]:8090/",
-		"http://fd00::7":           "http://[fd00::7]",
-		"http://[fd00::7]:8090":    "http://[fd00::7]:8090",
-		"http://10.0.0.7:8090":     "http://10.0.0.7:8090",
-		"https://cma-0.cma:8090":   "https://cma-0.cma:8090",
-		"http://2001:db8::1:65535": "http://[2001:db8::1]:65535",
-	} {
-		c, err := Parse(env(map[string]string{"STORE": "postgres", "POSTGRES_DSN": "postgres://db/cma", "ADVERTISE_URL": in}))
-		if err != nil {
-			t.Errorf("%s: %v", in, err)
-			continue
-		}
-		if c.AdvertiseURL != want {
-			t.Errorf("ADVERTISE_URL %s = %s, want %s", in, c.AdvertiseURL, want)
-		}
+// Each of the adapter's own variables is in its Spec, so Parse reads it: one left out would read as its zero value, and a
+// TOOL_RESULT_TIMEOUT of 0 waits for ever.
+func TestOwnVarsDeclared(t *testing.T) {
+	_, own, err := settings.Parse(env(nil), Spec())
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !agentID.Declared(own) || !environmentID.Declared(own) || !toolResultTimeout.Declared(own) {
+		t.Fatalf("declared: agent %v, environment %v, tool result timeout %v",
+			agentID.Declared(own), environmentID.Declared(own), toolResultTimeout.Declared(own))
 	}
 }

@@ -1,10 +1,10 @@
 // Command agent serves an ADK agent on Amazon Bedrock or the Anthropic API as an A2A agent.
 //
-// It is configured through its environment (package config holds every variable and its check; package telemetry the
-// OTEL_* ones). On Bedrock it reads AWS credentials through the AWS SDK's default chain (AWS_BEARER_TOKEN_BEDROCK, a
-// role, a profile); on the Anthropic API, the Anthropic SDK reads its own (ANTHROPIC_API_KEY first) and
-// ANTHROPIC_BASE_URL. A setting it cannot use stops it at start, with an error that names the variable. It takes one flag,
-// --version.
+// It is configured through its environment (the kit's package settings holds the variables every add-on shares, package
+// config the agent's own, and package telemetry the OTEL_* ones). On Bedrock it reads AWS credentials through the AWS
+// SDK's default chain (AWS_BEARER_TOKEN_BEDROCK, a role, a profile); on the Anthropic API, the Anthropic SDK reads its
+// own (ANTHROPIC_API_KEY first) and ANTHROPIC_BASE_URL. A setting it cannot use stops it at start, with an error that
+// names the variable. It takes one flag, --version.
 //
 // Requests to the A2A endpoint and the card must pass the caller check: a token from AUTH_TOKEN_FILE, or, inside Google
 // AX, an OIDC ID token for Agent Kourier's service identity. /healthz, /readyz and /metrics are open. With Postgres its
