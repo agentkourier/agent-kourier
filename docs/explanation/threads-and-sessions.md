@@ -136,7 +136,8 @@ A tool call's card that has no result when the turn ends is complete, with `No r
 agent pauses for a [tool approval](../how-to/agent-questions.md#tool-approvals), the card of each call the approval is
 about ends as `Approval requested: name`, complete, whatever the call reported before the pause (kagent reports such a
 call with an error that asks for the confirmation). The prompt is a message of its own, and the reply after the decision
-shows the call again with how it ended.
+shows the call again with how it ended. Because the card shows the summary of the call's arguments, the prompt's ending
+names that tool without them ([Tool approvals](../how-to/agent-questions.md#tool-approvals) says when it keeps them).
 
 A Binding that sets no `progress` gets `steps-and-activity`, so a Binding written before the field existed now shows
 `Working…` in a gap. Set `progress: steps` to keep the cards and lines alone.

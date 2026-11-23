@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"errors"
+	"maps"
 	"regexp"
 	"slices"
 	"strconv"
@@ -118,6 +119,43 @@ func TestAConnectionWithNoRepliesHasNothingRenderedOrQueued(t *testing.T) {
 
 	if noRepliesIn(func() *config.Snapshot { return nil })("platform/github") {
 		t.Error("with no config yet, a connection has no replies; want it to have them, and its rows to go to the outbox")
+	}
+}
+
+// cardSpySink is a renderer's sink that says the cards of its turns (interact.CardSink), as live.Sink does.
+type cardSpySink struct {
+	*spySink
+	cards map[string]chat.ToolLine
+}
+
+func (s cardSpySink) TurnCards(ctx context.Context, t session.TurnRef) (agent.Handler, func(context.Context) map[string]chat.ToolLine) {
+	return s.Turn(ctx, t), func(context.Context) map[string]chat.ToolLine { return s.cards }
+}
+
+// The quiet sink hands the tap the cards of a turn the renderer renders, so that the ending of an approval leaves out what a card
+// shows; a connection with no replies has no turn rendered and no cards, and a renderer's sink that says nothing of cards gives none.
+func TestTheQuietSinkGivesTheRenderersCards(t *testing.T) {
+	cards := map[string]chat.ToolLine{"c1": {Name: "add", Summary: "a=1"}}
+	quiet := func(conn string) bool { return conn == "platform/github" }
+	for _, tc := range []struct {
+		name    string
+		inner   renderSink
+		conn    string
+		handler bool
+		want    map[string]chat.ToolLine
+	}{
+		{"a connection with replies", cardSpySink{spySink: &spySink{}, cards: cards}, "platform/slack", true, cards},
+		{"a connection with no replies", cardSpySink{spySink: &spySink{}, cards: cards}, "platform/github", false, nil},
+		{"a sink that says nothing of cards", &spySink{}, "platform/slack", true, nil},
+	} {
+		h, got := quietSink{renderSink: tc.inner, quiet: quiet}.TurnCards(t.Context(), session.TurnRef{Key: session.Key{Connection: tc.conn}})
+		var shown map[string]chat.ToolLine
+		if got != nil {
+			shown = got(t.Context())
+		}
+		if (h != nil) != tc.handler || !maps.Equal(shown, tc.want) {
+			t.Errorf("%s: a handler %t and cards %v; want a handler %t and cards %v", tc.name, h != nil, shown, tc.handler, tc.want)
+		}
 	}
 }
 

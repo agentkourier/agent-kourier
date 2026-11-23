@@ -25,7 +25,9 @@ func Fields(o chat.Outgoing) []Field {
 		out = append(out, promptFields(ended)...)
 		for _, t := range o.Ending.Prompt.Tools {
 			add(t.Name, chat.WhereToolName)
-			add(t.Summary(), chat.WhereToolArg)
+			if !t.OnCard { // the thread shows them on the call's card already
+				add(t.Summary(), chat.WhereToolArg)
+			}
 		}
 		add(o.Ending.By, chat.WhereUser)
 		for _, a := range o.Ending.Answers {

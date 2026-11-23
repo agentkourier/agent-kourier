@@ -67,7 +67,7 @@ func TestEndingOfShowsChoicesAndNeverFreeText(t *testing.T) {
 		dialect.Question{Text: "Unasked?"},
 	)
 	answers := [][]string{{"my password is hunter2"}, {"b"}, {"a", "c"}, {}}
-	got, err := endingOf(chat.Answered, "UALICE1", askBy, in, answers)
+	got, err := endingOf(chat.Answered, "UALICE1", askBy, storedRequest{Interaction: in}, answers)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,12 +91,12 @@ func TestEndingOfOtherOutcomesHasNoAnswers(t *testing.T) {
 	in := askUser(dialect.Question{Text: "Which?", Choices: []string{"a", "b"}})
 	in.Nested = &dialect.Nested{Subagent: "planner"}
 	for _, outcome := range []chat.Outcome{chat.TimedOut, chat.Cancelled} {
-		got, err := endingOf(outcome, "", askBy, in, [][]string{{"a"}})
+		got, err := endingOf(outcome, "", askBy, storedRequest{Interaction: in}, [][]string{{"a"}})
 		if err != nil || got.Answers != nil || got.Outcome != outcome || got.Prompt.Subagent != "planner" {
 			t.Errorf("%s: ending = %+v; want no answers, and the sub-agent kept", outcome, got)
 		}
 	}
-	if got, err := endingOf(chat.TimedOut, "", askBy, dialect.Interaction{}, nil); err != nil || got.Validate() != nil || len(got.Prompt.Questions) != 0 {
+	if got, err := endingOf(chat.TimedOut, "", askBy, storedRequest{}, nil); err != nil || got.Validate() != nil || len(got.Prompt.Questions) != 0 {
 		t.Errorf("an unreadable request: ending = %+v, %v, %v; want one that is still valid", got, err, got.Validate())
 	}
 }
@@ -185,7 +185,7 @@ func TestAnApprovalBuiltFromTheStoredRequestIsTheSameAsFromThePause(t *testing.T
 func TestEndingOfAnApprovalNeedsNoVerdictsWhenItWasNotAnswered(t *testing.T) {
 	in := storable(secretPause())
 	for _, outcome := range []chat.Outcome{chat.TimedOut, chat.Cancelled} {
-		got, err := endingOf(outcome, "", askBy, in, nil)
+		got, err := endingOf(outcome, "", askBy, storedRequest{Interaction: in}, nil)
 		if err != nil || got.Validate() != nil {
 			t.Fatalf("%s: ending = %+v, %v, %v; want a valid one", outcome, got, err, got.Validate())
 		}
@@ -194,7 +194,7 @@ func TestEndingOfAnApprovalNeedsNoVerdictsWhenItWasNotAnswered(t *testing.T) {
 			t.Errorf("%s: ending prompt = %+v; want the tools as stored, the sub-agent, and no verdicts", outcome, got.Prompt)
 		}
 	}
-	if _, err := endingOf(chat.Answered, "UALICE1", askBy, in, nil); err == nil {
+	if _, err := endingOf(chat.Answered, "UALICE1", askBy, storedRequest{Interaction: in}, nil); err == nil {
 		t.Error("an answered approval was given an ending without verdicts")
 	}
 }
@@ -202,7 +202,7 @@ func TestEndingOfAnApprovalNeedsNoVerdictsWhenItWasNotAnswered(t *testing.T) {
 // The ending shows each tool's arguments on one line (chat.Tool.Summary), made from the stored request: the secrets are out of
 // it as they are out of the prompt.
 func TestTheSummaryAnEndingShowsHoldsNoSecret(t *testing.T) {
-	end, err := endingOf(chat.TimedOut, "", askBy, storable(secretPause()), nil)
+	end, err := endingOf(chat.TimedOut, "", askBy, storedRequest{Interaction: storable(secretPause())}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +229,7 @@ func TestTheEndingOfAnApprovalShowsWhatThePromptShowed(t *testing.T) {
 		t.Fatalf("hint %q; want it cut once", prompt.Hint[len(prompt.Hint)-40:])
 	}
 	for _, outcome := range []chat.Outcome{chat.TimedOut, chat.Cancelled} {
-		end, err := endingOf(outcome, "", askBy, storable(in), nil)
+		end, err := endingOf(outcome, "", askBy, storedRequest{Interaction: storable(in)}, nil)
 		want := prompt
 		want.ID, want.Deadline = "", time.Time{}
 		if err != nil || !reflect.DeepEqual(end.Prompt, want) {

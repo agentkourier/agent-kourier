@@ -142,7 +142,8 @@ them), the time it closes, and Submit. An approval of one tool shows its name an
 tool numbered with its arguments and a choice of Approve or Deny under them, then Submit, Approve all and Deny all. When the question
 or approval ends, Agent Kourier replaces the card with one that has no controls: who answered or cancelled it, or that nobody
 answered in time, then what was asked with each answer, or each tool on one line with a summary of its arguments cut short
-and `Approved` or `Denied`, as the ending on Slack shows it. With
+(or its name alone, when the reply's card for the call shows that summary) and `Approved` or `Denied`, as the ending on Slack
+shows it. With
 `feedback.enabled` set, the useful and not-useful buttons are a card of their own, a message that Agent Kourier posts in the thread
 right after the reply's text, or, for a reply that it edits as the agent works, after the final edit. When Agent Kourier replaces a
 card, Teams marks the message `Edited`.
