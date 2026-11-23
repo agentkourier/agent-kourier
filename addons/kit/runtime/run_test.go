@@ -428,10 +428,14 @@ func TestAStandbyForwardsInFullDuplexThroughItsMux(t *testing.T) {
 		t.Fatal(err)
 	}
 	req.Header.Set("Authorization", "Bearer "+fakeToken)
+	// A connection kept alive: with Connection: close, net/http's server would not read what is left of the body as the
+	// answer starts, and the test would pass without full duplex.
+	keepAlive := &http.Transport{}
+	t.Cleanup(keepAlive.CloseIdleConnections)
 	answered := make(chan *http.Response, 1)
 	failed := make(chan error, 1)
 	go func() {
-		resp, err := (&http.Client{Transport: &http.Transport{DisableKeepAlives: true}}).Do(req) //nolint:bodyclose // the test closes it once it has the answer
+		resp, err := (&http.Client{Transport: keepAlive}).Do(req) //nolint:bodyclose // the test closes it once it has the answer
 		if err != nil {
 			failed <- err
 			return
