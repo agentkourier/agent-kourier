@@ -94,8 +94,9 @@ restart loses none of them. Its migrations are applied at start.
 
 A store that an earlier version of the add-on wrote, which kept each context's session in a table of its own, is
 refused: the add-on logs that the store holds an earlier layout and exits with code 1, before it writes to the store.
-Start the add-on on a new store: a new SQLite file (with the chart, a new claim `<fullname>-cma-data`), or an empty
-Postgres database or schema.
+Start the add-on on a new store: a new SQLite file, or an empty Postgres database or schema. The chart reuses the claim
+`<fullname>-cma-data` while it exists, so for SQLite set `addons.cma.persistence.existingClaim` to a new claim of your
+own, or delete that claim so that the chart makes a new one.
 
 At start, before it serves, the add-on:
 
