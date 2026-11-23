@@ -2,8 +2,9 @@
 
 The Claude Managed Agents add-on is an A2A server in front of one agent in Claude Managed Agents. Agent Kourier reaches
 it through an AgentBackend with the `a2a` dialect, and it turns each A2A turn into a turn of a session of the agent,
-through the Anthropic API. It is experimental: it was tested against a self-hosted environment with a Haiku agent, and
-cloud environments are untested. [Connect Claude Managed Agents](../how-to/connect-claude-managed-agents.md) installs
+through the Anthropic API. It is experimental: it was tested against a self-hosted environment with a Haiku agent, and,
+on a build before the release (22 and 23 November 2026), on Postgres with two replicas, where a leader killed during
+an approval left the standby to take over and complete the same task. Cloud environments are untested. [Connect Claude Managed Agents](../how-to/connect-claude-managed-agents.md) installs
 it; [Add-ons](../explanation/add-ons.md) says what an add-on is.
 
 ```mermaid
@@ -46,13 +47,13 @@ sequenceDiagram
   participant C as Session
   participant W as Worker and sandbox
 
-  K->>A: message/stream (the thread's text)
+  K->>A: SendStreamingMessage (the thread's text)
   A->>C: open the event stream, then user.message
   C-->>A: agent.tool_use bash (permission: ask)
   C-->>A: session.status_idle (requires_action)
   A-->>K: input-required + tool_approval_request
   Note over K: Approve and Deny in the thread
-  K->>A: message/stream (tool_approval_response)
+  K->>A: SendStreamingMessage (tool_approval_response)
   A->>C: user.tool_confirmation (allow)
   C->>W: run bash
   W-->>C: user.tool_result
@@ -105,8 +106,10 @@ At start, before it serves, the add-on:
     - A stored session that is still listed is kept, and the context's other listed sessions are archived.
     - A context the store lacks adopts the session listed for it (the one active last, when there are several; the
       others are archived).
-    - A stored session that is no longer listed (archived, terminated, or in another environment) is forgotten with
-      its context's tasks, and the context's next message starts a new session.
+    - A stored session that is no longer listed (archived, terminated, or in another environment) is replaced: when
+      another session is listed for its context, the context adopts that one (the one active last, when there are
+      several; the others are archived) and keeps its tasks. When none is, the context is forgotten with its tasks,
+      and its next message starts a new session.
 2. Fails each task left `submitted` or `working` with the agent message "Interrupted by an adapter restart." and sends
    its session `user.interrupt` (a failed interrupt is logged). Each task is failed in a write of its own. A task whose
    stored record does not decode is failed by its state alone, so that `TASK_RETENTION` deletes it, and is logged at
@@ -133,10 +136,12 @@ the context's tasks from before the archive with their message IDs. The store ke
 message for it was accepted, which a message refused as invalid or a resend of one already accepted is not, or a turn of
 it started or ended), so the clock survives a restart and a takeover. Archiving cannot be undone: the context's next
 message starts a new session without the old history. A session that fails to archive is logged at WARN and tried again
-at the next check. The check reads each context's last activity, then archives the contexts one by one, and keeps a
-session for a later check when, by the time it comes to it, a turn is running in it or creating it, or a turn of it
-started or ended after that read. A message that arrived after the read but whose turn has not started when the check
-comes to its context is not covered: its turn can start a new session, or fail.
+at the next check.
+
+Each check first reads every context's last activity, then archives the idle contexts one at a time. It leaves a session
+for a later check if, when it comes to that context, a turn is running in the session or creating it, or a turn of it
+started or ended after the read. It does not see a message accepted after the read whose turn has not started yet: that
+turn can start a new session, or fail.
 
 Set it to the Binding's `session.threadTTL`, whose default, `2160h`<!--addon-limit:kit.session-idle-ttl-->, is the
 add-on's default too. Past that, Agent Kourier gives the thread a new context and never uses the old session again. A
@@ -149,10 +154,15 @@ update is older than that, checked every `1m`<!--addon-limit:kit.upkeep-interval
 ## Replicas
 
 **SQLite** (the default) is one replica. The add-on holds an exclusive lock on the file `SQLITE_PATH` plus `.lock` while
-it runs, so a second add-on on the same file stops at start ("another adapter has the SQLite file open"). The chart
-refuses `addons.cma.replicaCount` above 1 with SQLite, puts the file on a ReadWriteOnce volume, and replaces the pod with
-the Recreate strategy, so the old pod has released the volume before the new one starts. The add-on refuses
-`LEASE_DURATION`, `LEASE_RENEW_DEADLINE` and `LEASE_RETRY_PERIOD` with SQLite.
+it runs, so a second add-on on the same file stops at start ("another adapter has the SQLite file open"); the lock is the
+kernel's, so it goes with a process that dies. The chart refuses `addons.cma.replicaCount` above 1 with SQLite, puts the
+file on a ReadWriteOnce volume, and replaces the pod with the Recreate strategy, so the old pod has released the volume
+before the new one starts. The add-on refuses `LEASE_DURATION`, `LEASE_RENEW_DEADLINE` and `LEASE_RETRY_PERIOD` with
+SQLite.
+
+The file is in WAL mode, with FULL synchronous commits and a busy timeout of
+`5s`<!--addon-limit:kit.sqlite-busy-timeout-->. The add-on's writes go through one connection, and its reads through a
+pool of four beside it. Copy the file with its `-wal` file, which holds commits not yet written into it.
 
 **Postgres** runs several replicas. Replicas that start together apply each migration once, under an advisory lock. The
 chart gives them a rolling update that starts a new pod before it takes an old one away, and at 2 replicas and more a
@@ -191,8 +201,10 @@ every request to the endpoint. `/healthz`, `/readyz` and `/metrics` need no toke
   that fails or finds no token keeps the last good tokens, and is logged once until the failure changes.
 - **The comparison.** The add-on keeps only each token's SHA-256 and compares the digest of the presented token with
   every one in constant time.
-- **One caller.** Every accepted token is Agent Kourier. The store records it as each task's owner, but tasks are not
-  kept apart by token: any accepted token reaches every task.
+- **One caller.** Tasks are kept apart by caller: the caller a request passes as owns the tasks it creates, and every
+  read and write made for a request is limited to its caller's tasks. The add-on has no check but the token file, and
+  every accepted token is the same caller, Agent Kourier, so any accepted token reaches every task: the tokens exist to
+  be rotated, not to tell callers apart.
 - **Off.** `AUTH_DISABLED=true` turns the check off, and is refused unless `LISTEN_ADDR` is a loopback address
   (`127.0.0.0/8`, `::1` or `localhost`) and `AUTH_TOKEN_FILE` is unset. The chart has the add-on listen on every
   interface of its pod and never sets it.
@@ -210,7 +222,13 @@ All on one port, 8090 in the chart, named `http` on the Service:
 | `/metrics` | Prometheus metrics |
 
 On Postgres, `/readyz` answers 200 on a standby too, since a standby forwards to the leader, so every replica is behind
-the Service. The binary prints its version with `--version`.
+the Service.
+
+## Command line
+
+The binary takes one flag, `--version`, which prints its version, and no argument. An argument, an unknown flag or a
+setting it cannot use stops it with exit code 2. It exits with 1 for a failure once it runs, logged as
+`adapter stopped`, with 5 when a leader on Postgres loses the lease, and with 0 once a stop has finished.
 
 ## Settings
 
@@ -248,16 +266,16 @@ ServiceMonitor of the add-on's own.
 
 | Metric | Type | What it counts |
 |---|---|---|
-| `agentkourier_cma_turns_total{outcome}` | Counter | Turns, by how they ended |
-| `agentkourier_cma_operation_duration_seconds{operation,outcome}` | Histogram | Calls to the Managed Agents API |
+| `agentkourier_cma_turns_total{outcome}` | Counter | Turns, by how they ended: `completed`, `input_required` (paused on a tool approval), `failed`, `canceled`, `timeout` (no session event for `TOOL_RESULT_TIMEOUT` while the turn waited on a tool the sandbox runs), or `interrupted` (failed by the leader after a restart or a takeover) |
+| `agentkourier_cma_operation_duration_seconds{operation,outcome}` | Histogram | Calls to the Managed Agents API, `create_session`, `stream` (timed while it opens), `send`, `list_sessions` or `archive`, by `success`, `cancelled`, `timeout`, the HTTP status the API answered, or `error` |
 | `agentkourier_cma_auth_refused_total{reason}` | Counter | Requests the caller check refused, by `missing` or `invalid` |
-| `agentkourier_cma_sessions` | Gauge | Contexts with a session |
-| `agentkourier_cma_sessions_archived_total{reason}` | Counter | Sessions archived |
+| `agentkourier_cma_sessions` | Gauge | Contexts with a session: on the leader, every context the store holds; on a standby, 0 |
+| `agentkourier_cma_sessions_archived_total{reason}` | Counter | Sessions the add-on let go of, by `idle` (archived after `SESSION_IDLE_TTL`), `superseded` (a context's extra session, archived at start or takeover) or `gone` (a stored session no longer listed, forgotten at start or takeover, not archived) |
 | `agentkourier_cma_message_replays_total` | Counter | Resent messages that joined their first send's task |
 | `agentkourier_cma_tasks_interrupted_total` | Counter | Tasks a restart or takeover failed |
-| `agentkourier_cma_leader` | Gauge | 1 on the leader, 0 elsewhere |
+| `agentkourier_cma_leader` | Gauge | 1 on the leader (on SQLite, the only replica), 0 on a standby |
 | `agentkourier_cma_leader_takeovers_total` | Counter | Times this replica became the leader |
-| `agentkourier_cma_forwarded_requests_total{outcome}` | Counter | Requests a standby forwarded to the leader |
+| `agentkourier_cma_forwarded_requests_total{outcome}` | Counter | Requests a standby forwarded to the leader, or could not: `forwarded`, `failed`, `cancelled`, `no_leader` or `loop` (a request another standby forwarded) |
 
 Each turn is a span, `agentkourier.cma.turn`, a child of the trace context Agent Kourier sends with the request, and
 each call to the Managed Agents API a span `agentkourier.cma.backend.<operation>` under it.

@@ -302,9 +302,9 @@ The broker does not bound these, and the code confirms it. Where the number can 
 
 ## Add-ons
 
-An [add-on](../explanation/add-ons.md) is a module of its own, so its limits are its own: no setting of the broker
-changes them, and no limit above applies inside an add-on. The add-ons share a module, the kit, and the limits it holds
-for every add-on are in [Every add-on](#every-add-on); each add-on's section has the limits that are its own. The rows
+An [add-on](../explanation/add-ons.md) is a separate module with separate limits: no setting of the broker changes
+them, and no limit above applies inside an add-on. The add-ons share a module, the kit, whose limits apply to every
+add-on ([Every add-on](#every-add-on)); each add-on's section has the rest. The rows
 give the add-on's environment variable, and the chart value that sets it, in which `<name>` is the add-on's block under
 `addons`: `cma` or `ax`.
 
@@ -335,6 +335,9 @@ What the kit's runtime, store, settings and caller check hold for each add-on.
 | Handing the lease over, on Postgres, when the add-on stops after its requests | `3s`<!--addon-limit:kit.release-timeout--> | The add-on exits without handing it over, and a standby takes over once the lease has run out. | None |
 | A page of `ListTasks` | `50`<!--addon-limit:kit.list-page-default--> tasks unless the request names a size, at most `100`<!--addon-limit:kit.list-page-max--> | A larger size is refused as an invalid request. Each task carries its last `100`<!--addon-limit:kit.list-history--> history messages unless the request names another length; a negative length is refused as invalid parameters. | None |
 | An error's text in a log line | `300 bytes`<!--addon-limit:kit.log-error-bytes--> | Cut at a character boundary and marked with `…`. This covers an error value and a string logged as `error`, `err`, `cause`, `reason` or `message`. Unlike Agent Kourier, the add-on does not run its secret redaction over the text: it cuts it only. | None |
+| A string value of a span attribute, such as a task or context ID that the caller chose | `256`<!--addon-limit:kit.span-attribute-length--> characters | Cut there, with no mark. A list of strings is cut the same way, each string on its own. | None |
+| A warning of the trace exporter, or of OpenTelemetry's own diagnostics, while traces are exported | Each kind at most once every `1m`<!--addon-limit:kit.diagnostic-log-interval--> | The warnings of that kind within the interval are not logged. The next line logged for the kind carries their count as `suppressed`. A kind is the warning's message, and for a failed export or exporter shutdown its error's class too (such as `timeout`, `tls` or `http_401`); the error's text is never logged. | None |
+| The kinds of those warnings that the add-on keeps track of | `64`<!--addon-limit:kit.diagnostic-kinds--> for the exporter's warnings, and as many again for OpenTelemetry's diagnostics | A kind that first comes once that many are tracked is never logged, and is not counted in any `suppressed`. A tracked kind is never dropped while the process runs. | None |
 
 ### Claude Managed Agents add-on
 
@@ -347,13 +350,15 @@ The [Claude Managed Agents add-on](claude-managed-agents.md) bridges A2A to sess
 | A turn with no event from the session | A `working` update after each `60s`<!--addon-limit:cma.keepalive--> | The update keeps Agent Kourier's stream open, so the broker's own cut of a silent stream, at [5 minutes](#how-long-the-broker-waits-on-an-agent), does not reach a slow turn. | None |
 | A turn that waits on a tool the sandbox runs, with no event from the session | `10m`<!--addon-limit:cma.tool-result-timeout--> | The add-on interrupts the session and fails the task with `code: timeout`, and the thread shows Agent Kourier's timeout notice. A sandbox that cannot be scheduled ends this way, and so does a command that runs silently for longer. MCP tools and the model's own thinking are not timed. `0` waits for ever. | `TOOL_RESULT_TIMEOUT` (`addons.cma.toolResultTimeout`) |
 | What a context idle past `SESSION_IDLE_TTL` loses | Its session | Archived, which cannot be undone, and the context's tasks from before are deleted with their message IDs. The context's next message starts a new session without the old history. A context's activity is a message accepted for it, and a turn of it that starts or ends. | `SESSION_IDLE_TTL` (`addons.cma.sessionIdleTTL`) |
-| Callers | One: every accepted token is Agent Kourier | Tasks are not kept apart by token: any accepted token reaches every task. | None |
+| Callers | One: every accepted token is the same caller, Agent Kourier | Tasks are kept apart by caller, so any accepted token reaches every task: the tokens exist to be rotated, not to tell callers apart. | None |
 | The start-up work: reading the store, checking each context's session against Claude Managed Agents, and failing the turns a restart cut off | The chart's startup probe, which asks `/readyz`: `30`<!--addon-limit:cma.startup-failures--> tries, `2s`<!--addon-limit:cma.startup-period--> apart | The kubelet restarts the container, which starts the work again. The add-on serves nothing until the work is done. On Postgres a replica tries the lease once before it listens: one that takes it is bounded the same way, and one that does not is a standby, ready at once. A standby that starts to lead later, after its probe has passed, is not bounded by it: until its work is done it is out of the Service and answers A2A requests 503. | None |
 | A turn running when the add-on stops | Not kept | The next start, or a standby's takeover, fails its task with "Interrupted by an adapter restart." and interrupts its session, and the thread shows Agent Kourier's failure notice. A task paused on an approval is kept. | None |
 | What a message may carry | Text and data parts | A message with a file part, or with no text, is refused as invalid. Data parts reach the agent as JSON text. The agent's content blocks that are not text are not shown. | None |
 | How a tool approval is answered | The Approve and Deny buttons | A typed reply to a paused approval is refused as invalid, and the task stays paused. | None |
 | What a pause may wait on | Tool calls whose permission is `ask` | A pause on a custom tool, or on a call the turn did not see ask for approval, fails the turn. If one pause names both a call the sandbox runs and one that needs approval, and the session pauses on the first call again after the approval, the turn fails the same way. | None |
 | A `session.error` event | Logged | The turn goes on until the session idles or terminates; the thread is not told. | None |
+| A request to the Managed Agents API that fails with a connection error or status 408, 409, 429 or 5xx, unless the API's `x-should-retry` header says otherwise | Sent again up to 2 times, the Anthropic Go SDK's own default (v2.13.0), which the add-on does not set | The SDK waits as the API's `retry-after` header says, or backs off, before each. After the last, the call fails: a call a turn makes fails the turn, an archive of an idle session is tried again at the next check, and a list of the sessions stops the start-up work. An event stream that breaks after it opens is not opened again. | None |
+| The wait for the Managed Agents API's response headers, on each of those requests | 10 minutes, the Anthropic Go SDK's own default (v2.13.0), which the add-on does not set | The attempt fails as a connection error, so it counts against the retries above. It does not bound the event stream once its headers have come: a session that sends no event is timed only while the turn waits on a tool the sandbox runs (the row on that wait). | None |
 | Environments | Self-hosted | Cloud environments have not been tested and are not supported. The add-on does not refuse one. | None |
 
 ### AX add-on

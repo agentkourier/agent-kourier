@@ -51,16 +51,15 @@ what a pause waits for, and what an idle context loses.
 
 The broker does not use the kit, and the kit does not use the broker. The broker's packages are internal to its module,
 which another module cannot import, and having the broker import the kit would put the add-ons' code and its
-dependencies in the broker's module. The kit's telemetry is built as the broker's is, and its limits test began as a
-copy of the broker's: one copy for every add-on, beside the broker's own.
+dependencies in the broker's module. The kit's telemetry is built as the broker's is.
 [Write an add-on on the kit](../how-to/write-an-add-on.md) builds one, step by step.
 
 ## Supported add-ons
 
 | Add-on | What it does | Chart block | Pages |
 |---|---|---|---|
-| Claude Managed Agents | An A2A server in front of one agent in Claude Managed Agents, Anthropic's hosted agent runtime. A thread is one session of the agent, and a tool call whose permission policy asks first waits on Approve and Deny in the thread. Experimental: tested against a self-hosted environment with a Haiku agent; cloud environments are untested. | `addons.cma` | [Connect Claude Managed Agents](../how-to/connect-claude-managed-agents.md), [Claude Managed Agents add-on](../reference/claude-managed-agents.md) |
-| AX | An agent on Amazon Bedrock or the Anthropic API, built with Google's Agent Development Kit (ADK), that serves A2A. A thread is one ADK session, and a question the agent asks with its one tool, `ask_user`, waits for a reply in the thread. The chart runs it beside Agent Kourier, and it can run inside Google AX as a Task. Experimental: tested in kind through the chart with a Haiku model on the Anthropic API, on SQLite; Bedrock is tested against a mock of its API, and its routes through an IAM role (IRSA, EKS Pod Identity) have not been tested on EKS. | `addons.ax` | [Connect the AX add-on](../how-to/connect-ax.md), [AX add-on](../reference/ax.md) |
+| Claude Managed Agents | An A2A server in front of one agent in Claude Managed Agents, Anthropic's hosted agent runtime. A thread is one session of the agent, and a tool call whose permission policy asks first waits on Approve and Deny in the thread. Experimental: tested against a self-hosted environment with a Haiku agent, and, on a build before the release (22 and 23 November 2026), on Postgres with two replicas, where a leader killed during an approval left the standby to take over and complete the same task; cloud environments are untested. | `addons.cma` | [Connect Claude Managed Agents](../how-to/connect-claude-managed-agents.md), [Claude Managed Agents add-on](../reference/claude-managed-agents.md) |
+| AX | An agent on Amazon Bedrock or the Anthropic API, built with Google's Agent Development Kit (ADK), that serves A2A. A thread is one ADK session, and a question the agent asks with its one tool, `ask_user`, waits for a reply in the thread. The chart runs it beside Agent Kourier, and it can run inside Google AX as a Task. Experimental: tested in kind through the chart with a Haiku model on the Anthropic API, on SQLite, and, on a build before the release (22 and 23 November 2026), on Postgres with two replicas, where a leader killed during a question left the standby to take over and complete the same task; Bedrock is tested against a mock of its API, and its routes through an IAM role (IRSA, EKS Pod Identity) have not been tested on EKS. | `addons.ax` | [Connect the AX add-on](../how-to/connect-ax.md), [AX add-on](../reference/ax.md) |
 
 The 0.6.0 chart has no `addons` block, and its values schema refuses one: use the chart of a release whose
 [release notes](../release-notes.md) list the add-on.
