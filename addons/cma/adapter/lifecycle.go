@@ -157,10 +157,11 @@ func (e *Executor) Interrupted(ctx context.Context, settled kitstore.Settlement)
 //
 // The listing can be stale by the time the release runs, so the decision is taken again under e.mu: a context whose
 // session is being created, whose session in the map a turn holds, or whose session to archive a turn started or ended
-// in after the activity the listing read (c.LastActive) is refused with runtime.ErrContextBusy. A stored session that
-// is not the map's is not archived: the map's is recorded in the store instead, for the next sweep to judge by its own
-// activity (which TouchSession could not store under the other session), and the release fails. A session that fails to archive goes back in the map, unless the context has
-// started a new one, for the next sweep.
+// in after the activity the listing read (c.LastActive) is refused with runtime.ErrContextBusy. The last of these has
+// its activity written to the store again, in case the turn's own write of it failed. A stored session that is not
+// the map's is not archived: the map's is recorded in the store instead, for the next sweep to judge by its own
+// activity (which TouchSession could not store under the other session), and the release fails. A session that fails
+// to archive goes back in the map, unless the context has started a new one, for the next sweep.
 func (e *Executor) ReleaseContext(ctx context.Context, c kitstore.Context) error {
 	e.mu.Lock()
 	if _, creating := e.creating[c.ContextID]; creating {
@@ -177,8 +178,21 @@ func (e *Executor) ReleaseContext(ctx context.Context, c kitstore.Context) error
 		id = cs.id
 	}
 	if mapped && cs.id == id && cs.lastActive.After(c.LastActive) {
+		at := cs.lastActive
 		e.mu.Unlock()
-		return fmt.Errorf("context %s: session %s was active since the listing: %w", c.ContextID, cs.id, runtime.ErrContextBusy)
+		// The activity is written again: a write of it that failed would leave the store behind the map, and every
+		// sweep refused, for good. A row that names no session (its PutSession failed) is given the map's.
+		var err error
+		if c.Ref == "" {
+			err = e.Store.PutSession(ctx, store.Session{ContextID: c.ContextID, SessionID: id, LastActive: at})
+		} else {
+			err = e.Store.TouchSession(ctx, c.ContextID, id, at)
+		}
+		if err != nil {
+			// Not busy, so that the upkeep logs it at WARN: the store is failing.
+			return fmt.Errorf("context %s: session %s was active since the listing: store its activity: %w", c.ContextID, id, err)
+		}
+		return fmt.Errorf("context %s: session %s was active since the listing: %w", c.ContextID, id, runtime.ErrContextBusy)
 	}
 	if mapped && cs.id != id {
 		s := store.Session{ContextID: c.ContextID, SessionID: cs.id, LastActive: cs.lastActive}

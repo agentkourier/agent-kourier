@@ -386,3 +386,100 @@ func TestASweepForgetsAContextThatNeverHadASession(t *testing.T) {
 		t.Fatalf("contexts = %+v, %v; want none", all, err)
 	}
 }
+
+// flakyTouch is the executor's store with its next failures writes of a session's activity refused.
+type flakyTouch struct {
+	Store
+	mu       sync.Mutex
+	failures int
+}
+
+func (f *flakyTouch) failNext(n int) { f.mu.Lock(); defer f.mu.Unlock(); f.failures = n }
+
+func (f *flakyTouch) TouchSession(ctx context.Context, contextID, sessionID string, at time.Time) error {
+	f.mu.Lock()
+	fail := f.failures > 0
+	if fail {
+		f.failures--
+	}
+	f.mu.Unlock()
+	if fail {
+		return errors.New("database is locked")
+	}
+	return f.Store.TouchSession(ctx, contextID, sessionID, at)
+}
+
+// A turn's activity that the store failed to record leaves the store behind the map: the sweep that finds it so is
+// refused as busy and writes the activity again, so that a later sweep past the TTL archives the session.
+func TestAnActivityTheStoreMissedIsWrittenAgainForTheNextSweep(t *testing.T) {
+	var clk *clock
+	fake := newFake(func(session string, out Outbound) []Event {
+		clk.advance(time.Minute) // the turn runs a minute after its message arrived
+		return script(say("ok"), idle(stopEndTurn))(session, out)
+	})
+	exec, c, h := newClockedExec(t, fake, time.Hour)
+	clk = c
+	flaky := &flakyTouch{Store: exec.st}
+	exec.Store = flaky
+	first, _ := turn(t, h, userText("", "one"))
+	flaky.failNext(2) // the second turn's start and end
+	turn(t, h, userText(first.ContextID, "two"))
+
+	clk.advance(2 * time.Hour)
+	if refused := exec.sweep(t); len(refused) != 1 || !errors.Is(refused[0], runtime.ErrContextBusy) {
+		t.Fatalf("the first sweep's refusals = %v, want busy: the store's activity is behind the map's", refused)
+	}
+	if got := fake.archivedSessions(); len(got) != 0 {
+		t.Fatalf("archived %v by the refused sweep", got)
+	}
+	clk.advance(time.Minute)
+	if refused := exec.sweep(t); len(refused) != 0 {
+		t.Fatalf("the next sweep's refusals = %v, want none: the refused sweep wrote the activity again", refused)
+	}
+	if got := fake.archivedSessions(); !slices.Equal(got, []string{"sesn_1"}) {
+		t.Fatalf("archived = %v, want [sesn_1]", got)
+	}
+}
+
+// A context whose stored row names no session, while the map has one active since the listing (its PutSession was
+// lost), is refused as busy and has the map's session recorded, with its activity, for the next sweep.
+func TestAMappedSessionTheStoreMissedIsRecordedWhenBusy(t *testing.T) {
+	fake := newFake(nil)
+	exec, clk, _ := newClockedExec(t, fake, time.Hour)
+	listed := clk.now()
+	exec.sessions = map[string]*contextSession{"c1": {id: "sesn_mapped", lastActive: listed.Add(time.Minute)}}
+	err := exec.ReleaseContext(t.Context(), kitstore.Context{Owner: auth.Caller, ContextID: "c1", LastActive: listed})
+	if !errors.Is(err, runtime.ErrContextBusy) {
+		t.Fatalf("ReleaseContext = %v, want busy", err)
+	}
+	stored, err := exec.st.Sessions(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []store.Session{{ContextID: "c1", SessionID: "sesn_mapped", LastActive: listed.Add(time.Minute)}}
+	if len(stored) != 1 || stored[0].ContextID != want[0].ContextID || stored[0].SessionID != want[0].SessionID ||
+		!stored[0].LastActive.Equal(want[0].LastActive) {
+		t.Fatalf("stored sessions = %+v, want %+v", stored, want)
+	}
+	if got := fake.archivedSessions(); len(got) != 0 {
+		t.Fatalf("archived %v", got)
+	}
+}
+
+// A release refused as busy whose write of the activity fails says so as a failure, which the upkeep logs at WARN.
+func TestAFailedWriteOfAMissedActivityIsNotBusy(t *testing.T) {
+	fake := newFake(nil)
+	exec, clk, _ := newClockedExec(t, fake, time.Hour)
+	flaky := &flakyTouch{Store: exec.st}
+	exec.Store = flaky
+	listed := clk.now()
+	exec.sessions = map[string]*contextSession{"c1": {id: "sesn_1", lastActive: listed.Add(time.Minute)}}
+	flaky.failNext(1)
+	err := exec.ReleaseContext(t.Context(), kitstore.Context{Owner: auth.Caller, ContextID: "c1", Ref: "sesn_1", LastActive: listed})
+	if err == nil || errors.Is(err, runtime.ErrContextBusy) {
+		t.Fatalf("ReleaseContext = %v, want the store's failure, not busy", err)
+	}
+	if got := fake.archivedSessions(); len(got) != 0 || exec.Contexts() != 1 {
+		t.Fatalf("archived %v, %d contexts mapped; want the session kept", got, exec.Contexts())
+	}
+}
