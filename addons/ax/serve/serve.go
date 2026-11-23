@@ -31,11 +31,11 @@ import (
 	"google.golang.org/adk/v2/model"
 
 	"github.com/agentkourier/agent-kourier/addons/ax/agent"
-	"github.com/agentkourier/agent-kourier/addons/ax/cluster"
 	"github.com/agentkourier/agent-kourier/addons/ax/config"
 	"github.com/agentkourier/agent-kourier/addons/ax/store"
 	"github.com/agentkourier/agent-kourier/addons/kit/auth"
 	"github.com/agentkourier/agent-kourier/addons/kit/auth/oidc"
+	"github.com/agentkourier/agent-kourier/addons/kit/cluster"
 	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
@@ -93,8 +93,8 @@ func Run(ctx context.Context, cfg config.Config, m model.LLM, opts Options) erro
 	if err != nil {
 		return err
 	}
-	lost := &failStop{log: log, exit: exit}
-	st, err := openStore(ctx, cfg, store.Options{Log: log, OnDeposed: func() { lost.now("a write found that another replica has taken the lease") }})
+	lost := &cluster.FailStop{Log: log, Exit: exit}
+	st, err := openStore(ctx, cfg, store.Options{Log: log, OnDeposed: lost.Deposed})
 	if err != nil {
 		return err
 	}
@@ -108,7 +108,8 @@ func Run(ctx context.Context, cfg config.Config, m model.LLM, opts Options) erro
 		return err
 	}
 	status := &cluster.Status{}
-	router := &cluster.Router{Local: telemetry.Extract(srv.Handler), Status: status, RetryAfter: cfg.Lease.RetryPeriod, Telemetry: tel, Log: log}
+	router := &cluster.Router{Local: telemetry.Extract(srv.Handler), Status: status, Addon: agent.TelemetrySpec().Name, Noun: "agent",
+		RetryAfter: cfg.Lease.RetryPeriod, Telemetry: tel, Log: log}
 	var stopping atomic.Bool
 	mux, err := Mux(router, cfg.RunnerURL, func() bool { return !stopping.Load() && status.Ready() })
 	if err != nil {
@@ -210,7 +211,7 @@ func Run(ctx context.Context, cfg config.Config, m model.LLM, opts Options) erro
 	case err := <-led:
 		ledDone = true
 		if errors.Is(err, cluster.ErrLeadershipLost) {
-			lost.now("the lease was lost or could not be renewed")
+			lost.LeaseLost()
 		}
 		failure = err
 	}
@@ -230,21 +231,6 @@ func Run(ctx context.Context, cfg config.Config, m model.LLM, opts Options) erro
 	}
 	release()
 	return failure
-}
-
-// failStop ends the process at once, once, with a line that says why: the answer to a lost lease and to a write the
-// store refused as deposed. A drain would let a replica that no longer leads keep running turns.
-type failStop struct {
-	log  *slog.Logger
-	exit func(code int)
-	once sync.Once
-}
-
-func (f *failStop) now(reason string) {
-	f.once.Do(func() {
-		f.log.Error("leadership lost: stopping at once, without a drain", "reason", reason)
-		f.exit(cluster.ExitLeadershipLost)
-	})
 }
 
 // Mux serves a2a, the A2A endpoint and its card, with /healthz and /readyz. With runnerURL set, /readyz and /metadata/

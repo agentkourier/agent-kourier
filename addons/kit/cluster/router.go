@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"cmp"
 	"context"
 	"log/slog"
 	"math"
@@ -15,13 +16,17 @@ import (
 	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
-// HopHeader marks a request that a standby forwarded. A replica that does not serve answers such a request 503
-// instead of forwarding it again, so a request crosses at most one hop, even while two replicas disagree on who leads.
-const HopHeader = "X-Agent-Kourier-Ax-Forwarded"
+// HopHeader returns the header that marks a request a standby of the add-on named addon forwarded:
+// X-Agent-Kourier-<Addon>-Forwarded in its canonical form, X-Agent-Kourier-Cma-Forwarded for "cma". A replica that does
+// not serve answers such a request 503 instead of forwarding it again, so a request crosses at most one hop, even while
+// two replicas disagree on who leads.
+func HopHeader(addon string) string {
+	return http.CanonicalHeaderKey("X-Agent-Kourier-" + addon + "-Forwarded")
+}
 
-// forwardDialTimeout bounds the connection to the leader's address: a leader whose pod is gone is answered 503 after
+// ForwardDialTimeout bounds the connection to the leader's address: a leader whose pod is gone is answered 503 after
 // it, not after the operating system's much longer connect timeout.
-const forwardDialTimeout = 5 * time.Second
+const ForwardDialTimeout = 5 * time.Second
 
 // Leaders finds the replica to forward to. *Elector implements it.
 type Leaders interface {
@@ -47,6 +52,11 @@ type Router struct {
 	Status *Status
 	// Leaders finds the leader; nil when there is no election (SQLite), and the replica never forwards.
 	Leaders Leaders
+	// Addon is the add-on's name, as its metrics carry it ("cma"), which names its hop header (HopHeader). Required.
+	Addon string
+	// Noun is what the answer of a leader still taking over calls the add-on's process: "adapter" makes "the adapter is
+	// taking over as the leader". Empty is "add-on".
+	Noun string
 	// RetryAfter is what a 503 asks the caller to wait: the election's retry period, in which a standby takes over.
 	RetryAfter time.Duration
 	Telemetry  *telemetry.Telemetry
@@ -65,8 +75,8 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case rt.Status.Serving():
 		rt.Local.ServeHTTP(w, r)
 	case rt.Status.Leading() || rt.Leaders == nil:
-		rt.unavailable(w, "the agent is taking over as the leader")
-	case r.Header.Get(HopHeader) != "":
+		rt.unavailable(w, "the "+cmp.Or(rt.Noun, "add-on")+" is taking over as the leader")
+	case r.Header.Get(HopHeader(rt.Addon)) != "":
 		rt.Telemetry.Forward(telemetry.ForwardLoop)
 		rt.unavailable(w, "this replica is not the leader")
 	default:
@@ -84,15 +94,16 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // build makes the proxy. It flushes each write of the leader's answer at once (FlushInterval -1), so a stream of
 // server-sent events reaches the caller event by event.
 func (rt *Router) build() {
-	dialer := &net.Dialer{Timeout: forwardDialTimeout, KeepAlive: 30 * time.Second}
+	dialer := &net.Dialer{Timeout: ForwardDialTimeout, KeepAlive: 30 * time.Second}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.DialContext = dialer.DialContext
+	hop := HopHeader(rt.Addon)
 	rt.proxy = &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(pr.In.Context().Value(targetKey{}).(*url.URL))
 			pr.Out.Header["X-Forwarded-For"] = pr.In.Header["X-Forwarded-For"] // SetXForwarded appends the caller to it
 			pr.SetXForwarded()
-			pr.Out.Header.Set(HopHeader, "1")
+			pr.Out.Header.Set(hop, "1")
 		},
 		Transport:     transport,
 		FlushInterval: -1,

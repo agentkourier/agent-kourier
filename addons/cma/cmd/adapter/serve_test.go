@@ -20,9 +20,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agentkourier/agent-kourier/addons/cma/cluster"
 	"github.com/agentkourier/agent-kourier/addons/cma/config"
 	"github.com/agentkourier/agent-kourier/addons/cma/store"
+	"github.com/agentkourier/agent-kourier/addons/kit/cluster"
 	"github.com/agentkourier/agent-kourier/addons/kit/store/pgtest"
 	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"database/sql"
 	"io"
-	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -82,16 +81,3 @@ func TestAnEarlierStoreStopsTheStart(t *testing.T) {
 		t.Fatalf("tables = %d, %v; want the earlier layout's one alone", tables, err)
 	}
 }
-
-func TestFailStopExitsOnceWithItsCode(t *testing.T) {
-	var codes []int
-	var log bytes.Buffer
-	f := &failStop{log: newLogger(&log), exit: func(code int) { codes = append(codes, code) }}
-	f.now("deposed")
-	f.now("again")
-	if len(codes) != 1 || codes[0] != 5 {
-		t.Fatalf("exit codes %v, want one 5", codes)
-	}
-}
-
-func newLogger(w *bytes.Buffer) *slog.Logger { return slog.New(slog.NewJSONHandler(w, nil)) }
