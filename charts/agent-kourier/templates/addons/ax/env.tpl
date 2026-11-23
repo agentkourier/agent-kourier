@@ -12,6 +12,8 @@ egress:
   key: model
   comment: "The model's provider over TLS: Amazon Bedrock (and, with IRSA, AWS STS), or the Anthropic API."
   name: the rule for the model's provider
+serviceAccount:
+  comment: Its annotations (addons.ax.serviceAccount.annotations) are where IRSA's role goes, for the AWS SDK's default chain.
 {{- end -}}
 
 {{- define "agentkourier.addon.ax.validate" -}}

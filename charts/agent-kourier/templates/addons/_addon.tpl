@@ -10,7 +10,8 @@ Each template here takes (dict "ctx" <the chart's root context> "name" <the add-
   - templates/addons/<name>/env.tpl, which defines what is its own, each taking the same dict:
       agentkourier.addon.<name>.spec         YAML: description, the lines of the comment above its Deployment; egress, the rule of
                                              egress to its backend on 443 (key, under addons.<name>.networkPolicy; comment, above the
-                                             rule; name, in a refusal)
+                                             rule; name, in a refusal); optionally serviceAccount.comment, a line above its
+                                             ServiceAccount. The templates read it through agentkourier.addon.spec, which checks it.
       agentkourier.addon.<name>.validate     the checks of its own keys, which run before the common ones
       agentkourier.addon.<name>.env          its own container environment (its backend and the backend's credentials), first
       agentkourier.addon.<name>.settingsEnv  its own settings' environment, after SESSION_IDLE_TTL (may render nothing)
@@ -21,6 +22,17 @@ Each template here takes (dict "ctx" <the chart's root context> "name" <the add-
 
 {{/* The add-ons the chart knows, in the order in which Agent Kourier's NetworkPolicy lists its rules to them. */}}
 {{- define "agentkourier.addon.names" -}}cma ax{{- end -}}
+
+{{/* The add-on's spec (agentkourier.addon.<name>.spec), as YAML, for fromYaml. Fails the render when the define is not YAML or lacks a
+     field the templates read: a mistake in env.tpl, which no values file can make. */}}
+{{- define "agentkourier.addon.spec" -}}
+{{- $spec := include (printf "agentkourier.addon.%s.spec" .name) . | fromYaml -}}
+{{- $egress := $spec.egress | default dict -}}
+{{- if or (hasKey $spec "Error") (not $spec.description) (not (kindIs "map" $egress)) (not $egress.key) (not $egress.comment) (not $egress.name) -}}
+{{- fail (printf "templates/addons/%[1]s/env.tpl: agentkourier.addon.%[1]s.spec must be YAML with description, egress.key, egress.comment and egress.name (it is %q)" .name (include (printf "agentkourier.addon.%s.spec" .name) .)) -}}
+{{- end -}}
+{{- toYaml $spec -}}
+{{- end -}}
 
 {{/* True (non-empty) when the add-on is enabled. addons, or addons.<name>, may be absent: a release upgraded with --reuse-values from a
      chart before the block hands the chart no such key, and that reads as off. */}}
@@ -83,7 +95,7 @@ app.kubernetes.io/managed-by: {{ .ctx.Release.Service }}
 {{- define "agentkourier.addon.validate" -}}
 {{- $a := index .ctx.Values.addons .name -}}
 {{- $p := printf "addons.%s" .name -}}
-{{- $spec := include (printf "agentkourier.addon.%s.spec" .name) . | fromYaml -}}
+{{- $spec := include "agentkourier.addon.spec" . | fromYaml -}}
 {{- include (printf "agentkourier.addon.%s.validate" .name) . -}}
 {{- if not (and $a.auth.tokenSecret.name $a.auth.tokenSecret.key) -}}
 {{- fail (printf "%[1]s.enabled needs %[1]s.auth.tokenSecret.name and %[1]s.auth.tokenSecret.key: the Secret, in the release namespace, of the tokens the add-on accepts. The add-on listens on every interface of its pod, where it refuses to start without a caller check, and the chart has no setting that turns the check off" $p) -}}
@@ -117,7 +129,7 @@ app.kubernetes.io/managed-by: {{ .ctx.Release.Service }}
 {{- $ctx := .ctx }}
 {{- $name := .name }}
 {{- $a := index $ctx.Values.addons $name }}
-{{- $spec := include (printf "agentkourier.addon.%s.spec" $name) . | fromYaml }}
+{{- $spec := include "agentkourier.addon.spec" . | fromYaml }}
 {{- $port := include "agentkourier.addon.port" . | int }}
 {{- range splitList "\n" $spec.description }}
 # {{ . }}
@@ -291,14 +303,15 @@ spec:
 {{- end }}
 {{- end -}}
 
-{{/* serviceAccount.annotations is a key of the add-ons whose backend's SDK reads an identity from the ServiceAccount (IRSA); the values
-     schema refuses it for the others. */}}
+{{/* addons.<name>.serviceAccount.annotations, where an add-on has that key (the values schema refuses it for the others), are added to
+     the ServiceAccount; the add-on's spec says what they are for (serviceAccount.comment). */}}
 {{- define "agentkourier.addon.serviceAccount" -}}
 {{- if include "agentkourier.addon.enabled" . }}
 {{- $a := index .ctx.Values.addons .name }}
+{{- $spec := include "agentkourier.addon.spec" . | fromYaml }}
 # The add-on's own ServiceAccount, with no API token mounted: the add-on never calls the Kubernetes API, and the chart grants it nothing.
-{{- if hasKey $a "serviceAccount" }}
-# Its annotations (addons.{{ .name }}.serviceAccount.annotations) are where IRSA's role goes, for the AWS SDK's default chain.
+{{- with ($spec.serviceAccount).comment }}
+# {{ . }}
 {{- end }}
 apiVersion: v1
 kind: ServiceAccount
@@ -365,7 +378,7 @@ spec:
 {{- if and (include "agentkourier.addon.enabled" .) .ctx.Values.networkPolicy.enabled }}
 {{- $ctx := .ctx }}
 {{- $a := index $ctx.Values.addons .name }}
-{{- $spec := include (printf "agentkourier.addon.%s.spec" .name) . | fromYaml }}
+{{- $spec := include "agentkourier.addon.spec" . | fromYaml }}
 {{- $egress := index $a.networkPolicy $spec.egress.key }}
 {{- $port := include "agentkourier.addon.port" . | int }}
 apiVersion: networking.k8s.io/v1
