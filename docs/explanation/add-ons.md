@@ -26,7 +26,8 @@ agent.
 - **Checked in CI like the broker.** Its tests (with the race detector, and on Postgres where it has a store), its lint,
   `govulncheck` and a scan of its image for each platform are checks that a release requires to have passed.
 - **Documented with its limits.** Each add-on has a how-to, a reference page, and a section in
-  [Limits](../reference/limits.md#add-ons) with every limit it has.
+  [Limits](../reference/limits.md#add-ons) with its own limits, beside [those every add-on
+  shares](../reference/limits.md#every-add-on).
 
 ## What the add-ons share: the kit
 
@@ -45,8 +46,8 @@ needs, its own settings, and its store's own tables, if it keeps anything beside
 | `kittest` | The cases every add-on runs, under the runtime on each store, and `kittest/echo`, the reference add-on they run in the kit |
 
 So the add-ons behave alike wherever the kit decides: the same settings, the same task store, readiness and stop, and
-the same limits ([Every add-on](../reference/limits.md#every-add-on)). What differs is the backend: what a turn runs, what
-a pause waits for, and what an idle context loses.
+the same limits ([Every add-on](../reference/limits.md#every-add-on)). What differs is the backend: what a turn runs,
+what a pause waits for, and what an idle context loses.
 
 The broker does not use the kit, and the kit does not use the broker. The broker's packages are internal to its module,
 which another module cannot import, and having the broker import the kit would put the add-ons' code and its

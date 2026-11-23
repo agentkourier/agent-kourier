@@ -97,8 +97,9 @@ markdown_extensions:
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.inlinehilite
-  # Includes a recipe's files into a page (--8<-- "sre-triage/agent/agent.yaml"), so the page cannot drift from the
-  # files. Only files under examples/recipes can be included; a missing file fails the build.
+  # Includes files into a page (--8<-- "sre-triage/agent/agent.yaml"), so the page cannot drift from them: a recipe's
+  # files, the Helm examples, the add-ons' shared settings (docs/reference/.addon-settings.md) and the kit's echo.
+  # Only files under the base_path directories can be included; a missing file fails the build.
   - pymdownx.snippets:
       base_path: [examples/recipes, examples/helm, docs/reference, addons/kit/kittest/echo]
       restrict_base_path: true

@@ -5,8 +5,8 @@ serves A2A in front of your backend, and the kit's tests drive it end to end on 
 own code is its backend; the kit (`addons/kit`) runs the rest of the process.
 
 [Add-ons](../explanation/add-ons.md) says what an add-on is and what the kit holds. The kit is a module of this
-repository, not one you can fetch: an add-on lives under `addons/` beside the two there are, and requires the kit through
-a `replace` directive.
+repository, not one you can fetch: an add-on lives under `addons/` beside the two there are, and requires the kit
+through a `replace` directive.
 
 The code on this page is the kit's reference add-on, echo (`addons/kit/kittest/echo`), included from its source. It
 answers each message with its own text, asks a question when a message says `pause`, and runs until it is canceled when
@@ -34,8 +34,9 @@ require github.com/agentkourier/agent-kourier/addons/kit v0.0.0-00010101000000-0
 replace github.com/agentkourier/agent-kourier/addons/kit => ../kit
 ```
 
-The name is lower-case letters and digits, a letter first, which the kit's telemetry refuses otherwise: it becomes the metrics' prefix (`agentkourier_<name>_`), the spans'
-(`agentkourier.<name>.`), the service name (`agent-kourier-<name>`), the default SQLite file and the chart's block.
+The name is lower-case letters and digits, a letter first, which the kit's telemetry refuses otherwise: it becomes the
+metrics' prefix (`agentkourier_<name>_`), the spans' (`agentkourier.<name>.`), the service name
+(`agent-kourier-<name>`), the default SQLite file and the chart's block.
 
 ## 2. Describe the add-on
 
@@ -90,8 +91,8 @@ An empty value is an unset one, for the add-on's variables as for the shared one
 ## 4. Open the store
 
 The kit's store keeps the A2A tasks, the IDs of the messages that started or joined them, and when each context was
-last active, on SQLite or on Postgres. Every write of a leader on Postgres checks its lease in the same transaction, so a
-leader that has lost the lease cannot write. Echo's store is the kit's task state alone:
+last active, on SQLite or on Postgres. Every write of a leader on Postgres checks its lease in the same transaction, so
+a leader that has lost the lease cannot write. Echo's store is the kit's task state alone:
 
 ```go
 --8<-- "echo.go:open"
@@ -150,7 +151,7 @@ inner one's hooks itself.
 | `TurnClassifier` | Some failed turns have an outcome of their own in the turns metric. | Claude Managed Agents (`timeout`) |
 | `Describer` | The `listening` log line should report settings of the add-on's own. | Both add-ons |
 | `Readiness` | Another server answers for the add-on's readiness: `/readyz` is its handler. | AX, beside the AX task runner |
-| `Routes` | The add-on serves routes of its own beside the kit's. | AX (a test control) |
+| `Routes` | The add-on serves routes of its own beside the kit's. | AX: `/metadata/`, proxied to the AX task runner |
 
 ```go
 --8<-- "echo.go:validate"
@@ -180,10 +181,10 @@ func TestTheKitCases(t *testing.T) {
 ```
 
 The cases check that a resent message joins its task, that a refused answer keeps the task paused and a refused message
-starts no turn, that a cancel ends the turn canceled, that a start fails the turns a restart cut off, that a stop leaves a
-running turn for the next start, and that an idle context is released. On Postgres they add two replicas: a standby
-forwards with its hop header and takes over a paused task, a leader settles before it serves, and a leader whose write is
-deposed, or that loses the lease, exits. The Postgres cases skip unless `AGENTKOURIER_POSTGRES_DSN` names a database;
+starts no turn, that a cancel ends the turn canceled, that a start fails the turns a restart cut off, that a stop leaves
+a running turn for the next start, and that an idle context is released. On Postgres they add two replicas: a standby
+forwards with its hop header and takes over a paused task, a leader settles before it serves, and a leader whose write
+is deposed, or that loses the lease, exits. The Postgres cases skip unless `AGENTKOURIER_POSTGRES_DSN` names a database;
 `hack/postgres/run.sh` starts a throwaway one for a command:
 
 ```sh
@@ -196,10 +197,23 @@ make addon-lint-<name>
 
 - **The list.** Add the name to `hack/addons.txt`. The Makefile's `addon-test-<name>`, `addon-lint-<name>` and
   `addon-image-<name>` targets, the release scripts and the workflows' add-on legs follow the list, and a test holds the
-  workflows to it. The image builds from `addons/<name>/Dockerfile` with the context `addons/`.
-- **The chart.** An add-on has a values block, `addons.<name>`, with the keys every add-on has; its name in the list
-  that `templates/addons/_addon.tpl` keeps; and a directory `templates/addons/<name>/` whose `env.tpl` defines what is its
-  own and whose `deployment.yaml` defines its startup probe. The comment at the top of `_addon.tpl` lists each define.
+  workflows to it. The image builds from `addons/<name>/Dockerfile` with the context `addons/`, which holds every
+  add-on; `addons/<name>/Dockerfile.dockerignore`, which BuildKit reads in place of the context's own, lets in only the
+  kit and the add-on.
+- **The chart.** An add-on has:
+    - a values block, `addons.<name>`, with the keys every add-on has and its own;
+    - a block for it in `values.schema.json`, whose `addons` refuses any key it does not list, so Helm refuses a values
+      block that has no schema; the common keys take the same rules as the other add-ons';
+    - its name in the list that `templates/addons/_addon.tpl` keeps;
+    - a directory `templates/addons/<name>/`: `env.tpl` defines what is its own, `deployment.yaml` defines its startup
+      probe and renders its Deployment, and `service.yaml`, `serviceaccount.yaml`, `pvc.yaml`,
+      `poddisruptionbudget.yaml`, `networkpolicy.yaml` and `servicemonitor.yaml` are one line each that includes the
+      common template of that kind.
+
+    The comment at the top of `_addon.tpl` lists each define. The chart's tests in `test/chart` cover each add-on of
+    their `addOns` list, and a test fails when that list, the chart's list, the template directories, the values blocks
+    and the schema's blocks name different add-ons.
+
 - **The docs.** A how-to, and a reference page whose settings include the shared table:
 
     ```text
