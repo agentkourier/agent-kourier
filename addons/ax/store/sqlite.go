@@ -30,23 +30,24 @@ func OpenSQLite(ctx context.Context, path string, opts Options) (*Store, error) 
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("open sqlite store %q: create its directory: %w", path, err)
 	}
-	db, err := kitstore.OpenSQLite(ctx, path, kitstore.Options{Noun: noun, Log: opts.Log, OnDeposed: opts.OnDeposed})
+	var legacy bool
+	prepare := func(ctx context.Context, q kitstore.Querier) (err error) {
+		legacy, err = setLegacyAside(ctx, q)
+		return err
+	}
+	db, err := kitstore.OpenSQLite(ctx, path, kitstore.Options{Noun: noun, Log: opts.Log, OnDeposed: opts.OnDeposed, Prepare: prepare})
 	if err != nil {
 		return nil, err
 	}
 	s := newStore(db, opts)
-	if err := s.openSQLite(ctx); err != nil {
+	if err := s.openSQLite(ctx, legacy); err != nil {
 		_ = s.Close()
 		return nil, fmt.Errorf("open sqlite store %q: %w", path, err)
 	}
 	return s, nil
 }
 
-func (s *Store) openSQLite(ctx context.Context) error {
-	legacy, err := setLegacyAside(ctx, s.DB)
-	if err != nil {
-		return err
-	}
+func (s *Store) openSQLite(ctx context.Context, legacy bool) error {
 	sub, err := fs.Sub(sqliteMigrations, "migrations/sqlite")
 	if err != nil {
 		return err

@@ -121,8 +121,12 @@ func TestPostgresAdoptsTheAddOnsLeadershipTable(t *testing.T) {
 	if err := raw.QueryRow(ctx, `SELECT 'leadership'::regclass::oid`).Scan(&oid); err != nil {
 		t.Fatal(err)
 	}
+	kit, err := listMigrations(kitSub(t, "migrations/postgres"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	for range 2 { // the second open finds the migration recorded
+	for range 2 { // the second open finds the migrations recorded
 		db, err := OpenPostgres(ctx, dsn, Options{MigrationLockKey: testLockKey})
 		if err != nil {
 			t.Fatalf("OpenPostgres: %v", err)
@@ -131,8 +135,8 @@ func TestPostgresAdoptsTheAddOnsLeadershipTable(t *testing.T) {
 		if err != nil || lease != (Lease{Holder: "old-pod", Address: "http://old-pod:8090", Epoch: 7, Live: true}) {
 			t.Fatalf("the lease after the kit's migration: %+v, %v", lease, err)
 		}
-		if n := count(t, db, `SELECT COUNT(*) FROM kit_schema_migrations`); n != 1 {
-			t.Fatalf("kit_schema_migrations has %d rows, want 1", n)
+		if n := count(t, db, `SELECT COUNT(*) FROM kit_schema_migrations`); n != len(kit) {
+			t.Fatalf("kit_schema_migrations has %d rows, want the kit's %d", n, len(kit))
 		}
 		if n := count(t, db, `SELECT COUNT(*) FROM schema_migrations WHERE version <> 2`); n != 0 {
 			t.Fatalf("the kit wrote %d rows into the add-on's schema_migrations", n)

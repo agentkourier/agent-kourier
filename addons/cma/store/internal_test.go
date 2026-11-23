@@ -3,8 +3,6 @@ package store
 import (
 	"context"
 	"errors"
-	"io/fs"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -12,8 +10,10 @@ import (
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/a2aproject/a2a-go/v2/a2asrv/taskstore"
 
+	"github.com/agentkourier/agent-kourier/addons/kit/auth"
 	kitstore "github.com/agentkourier/agent-kourier/addons/kit/store"
 	"github.com/agentkourier/agent-kourier/addons/kit/store/pgtest"
 	"github.com/agentkourier/agent-kourier/addons/kit/store/sqlitetest"
@@ -29,90 +29,16 @@ func openSQLite(t *testing.T, path string) *Store {
 	return s
 }
 
+// asKourier is a context whose call runs as the adapter's one caller, as the caller check runs every call.
+func asKourier() context.Context {
+	ctx, callCtx := a2asrv.NewCallContext(context.Background(), nil)
+	callCtx.User = a2asrv.NewAuthenticatedUser(auth.Caller, nil)
+	return ctx
+}
+
 // The kit's SQLite store, under the adapter's driver and in its words.
 func TestKitSQLite(t *testing.T) {
 	sqlitetest.Run(t, noun)
-}
-
-func TestMigrationsApplyOnce(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "cma.db")
-	s := openSQLite(t, path)
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-	s = openSQLite(t, path)
-	var n int
-	if err := s.Reader().QueryRow(context.Background(), `SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	ms, err := migrationNames(mustSub(t, "migrations/sqlite"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != len(ms) {
-		t.Fatalf("schema_migrations has %d rows, want %d", n, len(ms))
-	}
-}
-
-// The two backends' migrations are one list: the same files, translated.
-func TestMigrationsInStep(t *testing.T) {
-	sq, err := migrationNames(mustSub(t, "migrations/sqlite"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	pg, err := migrationNames(mustSub(t, "migrations/postgres"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(sq) != len(pg) {
-		t.Fatalf("sqlite has %d migrations, postgres %d", len(sq), len(pg))
-	}
-	for i := range sq {
-		if sq[i] != pg[i] {
-			t.Errorf("migration %d: sqlite %+v, postgres %+v", i, sq[i], pg[i])
-		}
-	}
-	for _, dir := range []string{"migrations/sqlite", "migrations/postgres"} {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, e := range entries {
-			body, err := os.ReadFile(filepath.Join(dir, e.Name()))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if strings.Contains(string(body), "?") {
-				t.Errorf("%s/%s holds a ?, which the Postgres driver would take for a placeholder", dir, e.Name())
-			}
-		}
-	}
-}
-
-// migrationNames lists the migration files of fsys, in order: the kit applies them by the number their names begin with.
-func migrationNames(fsys fs.FS) ([]string, error) {
-	entries, err := fs.ReadDir(fsys, ".")
-	if err != nil {
-		return nil, err
-	}
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		names = append(names, e.Name())
-	}
-	return names, nil
-}
-
-func mustSub(t *testing.T, dir string) fs.FS {
-	t.Helper()
-	src := sqliteMigrations
-	if strings.HasSuffix(dir, "postgres") {
-		src = postgresMigrations
-	}
-	sub, err := fs.Sub(src, dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return sub
 }
 
 // errFenced stands for a deposed leader's refusal.
@@ -127,7 +53,7 @@ func TestEveryWriteIsFenced(t *testing.T) {
 
 func testEveryWriteIsFenced(t *testing.T, s *Store) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := asKourier()
 	seed := &a2a.Task{ID: "t1", ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateCompleted}}
 	if _, err := s.Create(ctx, seed); err != nil {
 		t.Fatal(err)
@@ -151,8 +77,8 @@ func testEveryWriteIsFenced(t *testing.T, s *Store) {
 			_, err := s.Update(ctx, &taskstore.UpdateRequest{Task: seed, PrevVersion: 1})
 			return err
 		},
+		"SettleInterrupted":   func() error { _, err := s.SettleInterrupted(ctx, "interrupted"); return err },
 		"DeleteSettledBefore": func() error { _, err := s.DeleteSettledBefore(ctx, future); return err },
-		"RecordMessage":       func() error { return s.RecordMessage(ctx, "m1", "t1") },
 		"PutSession":          func() error { return s.PutSession(ctx, Session{ContextID: "c1", SessionID: "sesn_1"}) },
 		"TouchSession":        func() error { return s.TouchSession(ctx, "c1", "sesn_1", future) },
 		"ForgetContext":       func() error { return s.ForgetContext(ctx, "c1", "sesn_1", future) },
@@ -191,6 +117,16 @@ func TestPostgresWritesAreFenced(t *testing.T) {
 	testEveryWriteIsFenced(t, s)
 }
 
+// kitMigrations counts the migrations the kit has recorded on s's database.
+func kitMigrations(t *testing.T, s *Store) int {
+	t.Helper()
+	var n int
+	if err := s.Reader().QueryRow(context.Background(), `SELECT COUNT(*) FROM kit_schema_migrations`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
 // Replicas that start together on an empty database each apply the migrations once between them.
 func TestPostgresReplicasMigrateTogether(t *testing.T) {
 	dsn := pgtest.DSN(t)
@@ -212,17 +148,9 @@ func TestPostgresReplicasMigrateTogether(t *testing.T) {
 			t.Cleanup(func() { _ = s.Close() })
 		}
 	}
-	s := openPostgres(t, dsn)
-	var n int
-	if err := s.Reader().QueryRow(context.Background(), `SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	ms, err := migrationNames(mustSub(t, "migrations/postgres"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != len(ms) {
-		t.Fatalf("schema_migrations has %d rows, want %d", n, len(ms))
+	got, want := kitMigrations(t, openPostgres(t, dsn)), kitMigrations(t, openPostgres(t, pgtest.DSN(t)))
+	if got != want {
+		t.Fatalf("kit_schema_migrations has %d rows, want the %d one store records", got, want)
 	}
 }
 

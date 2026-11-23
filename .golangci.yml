@@ -33,7 +33,7 @@ linters:
             - pkg: github.com/agentkourier/agent-kourier/test/
               desc: packages under test/ (fakes, stubs, e2e helpers) are for tests; import them only from _test.go files and under test/
         test-support-is-test-only:
-          files: ["$all", "!$test", "!**/test/**", "!**/internal/testutil/**", "!**/internal/store/sqlite/sqlitetest/**", "!**/internal/config/sourcetest/**", "!**/addons/kit/store/sqlitetest/**"]
+          files: ["$all", "!$test", "!**/test/**", "!**/internal/testutil/**", "!**/internal/store/sqlite/sqlitetest/**", "!**/internal/config/sourcetest/**", "!**/addons/kit/store/sqlitetest/**", "!**/addons/kit/store/storetest/**"]
           deny:
             - pkg: github.com/agentkourier/agent-kourier/internal/testutil
               desc: internal/testutil is test support and imports testing; import it only from _test.go files, other test support and under test/
@@ -43,6 +43,8 @@ linters:
               desc: the kit's sqlitetest is test support and imports testing; import it only from _test.go files and other test support
             - pkg: github.com/agentkourier/agent-kourier/addons/kit/store/pgtest
               desc: the kit's pgtest is test support and imports testing; import it only from _test.go files and other test support
+            - pkg: github.com/agentkourier/agent-kourier/addons/kit/store/storetest
+              desc: the kit's storetest is test support and imports testing; import it only from _test.go files and other test support
         slack-only-in-adapter:
           files: ["$all", "!$test", "!**/internal/chat/slack/**", "!**/internal/broker/**", "!**/cmd/**", "!**/test/**"]
           deny:
@@ -77,7 +79,7 @@ linters:
     forbidigo:
       forbid:
         - pattern: ^(\w+\.)?SetFenceForTest$
-          msg: "SetFenceForTest replaces a store's fence (on Postgres, the lease's epoch check); only tests and the kit's sqlitetest call it"
+          msg: "SetFenceForTest replaces a store's fence (on Postgres, the lease's epoch check); only tests and the kit's sqlitetest and storetest call it"
     nolintlint:
       require-explanation: true
       require-specific: true
@@ -95,9 +97,9 @@ linters:
       - path: _test\.go
         linters:
           - gosec  # test fixtures use fake credentials and loose file modes
-      - path: _test\.go|(^|/)addons/kit/store/sqlitetest/
+      - path: _test\.go|(^|/)addons/kit/store/(sqlitetest|storetest)/
         linters:
-          - forbidigo  # tests, and the kit's SQLite conformance suite, may replace a store's fence
+          - forbidigo  # tests, and the kit's conformance suites, may replace a store's fence
 
 formatters:
   enable:

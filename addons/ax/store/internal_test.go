@@ -194,7 +194,7 @@ func testEveryWriteIsFenced(t *testing.T, s *Store) {
 			_, err := s.Update(ctx, &taskstore.UpdateRequest{Task: seed, PrevVersion: 1})
 			return err
 		},
-		"SettleInterrupted":   func() error { _, err := s.SettleInterrupted(ctx); return err },
+		"SettleInterrupted":   func() error { _, err := s.SettleInterrupted(ctx, InterruptedMessage); return err },
 		"DeleteSettledBefore": func() error { _, err := s.DeleteSettledBefore(ctx, future); return err },
 		"DeleteIdleContexts":  func() error { _, err := s.DeleteIdleContexts(ctx, future); return err },
 		"TouchContext":        func() error { return s.TouchContext(ctx, "c1") },
@@ -279,8 +279,8 @@ func TestSQLiteImportsTheOldLayout(t *testing.T) {
 
 	s := openSQLite(t, path)
 	ctx := asCaller("service")
-	if n, err := s.SettleInterrupted(context.Background()); err != nil || n != 1 {
-		t.Fatalf("SettleInterrupted = %d, %v; want the cut-off task", n, err)
+	if failed, err := s.SettleInterrupted(context.Background(), InterruptedMessage); err != nil || len(failed) != 1 {
+		t.Fatalf("SettleInterrupted = %d, %v; want the cut-off task", len(failed), err)
 	}
 	asked, err := s.Get(ctx, "asked")
 	if err != nil || asked.Version != 3 || asked.Task.Status.State != a2a.TaskStateInputRequired {

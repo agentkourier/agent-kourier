@@ -12,6 +12,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 
 	"github.com/agentkourier/agent-kourier/addons/cma/store"
+	"github.com/agentkourier/agent-kourier/addons/kit/auth"
 )
 
 // adapterRun is one start of the adapter over a store file: what main does, without the network.
@@ -33,7 +34,7 @@ func startAdapter(t *testing.T, path string, fake *fakeBackend, clk *clock) *ada
 	if err := exec.Settle(context.Background()); err != nil {
 		t.Fatalf("Settle: %v", err)
 	}
-	return &adapterRun{exec: exec, h: NewRequestHandler(exec), store: st}
+	return &adapterRun{exec: exec, h: NewRequestHandler(exec, asKourier{}), store: st}
 }
 
 // stop closes the run's store, releasing the file for the next run.
@@ -119,7 +120,7 @@ func TestRestartFailsTheTurnsItCutOff(t *testing.T) {
 	path, clk := filepath.Join(t.TempDir(), "cma.db"), newClock()
 	// What a crash leaves: tasks in flight, a paused one, a settled one, and the contexts' sessions.
 	st := openStore(t, path, clk.now)
-	ctx := context.Background()
+	ctx := kourier(context.Background())
 	for _, tk := range []*a2a.Task{
 		{ID: "submitted", ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateSubmitted}},
 		{ID: "working", ContextID: "c2", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}},
@@ -177,7 +178,7 @@ func TestSettleSurvivesAFailedInterrupt(t *testing.T) {
 	fake.sendErr = errors.New("503")
 	clk := newClock()
 	st := newStore(t, clk.now)
-	ctx := context.Background()
+	ctx := kourier(context.Background())
 	if _, err := st.Create(ctx, &a2a.Task{ID: "working", ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}}); err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +214,7 @@ func TestRestorePrefersTheStoredSession(t *testing.T) {
 	if got := fake.archivedSessions(); !slices.Equal(got, []string{"sesn_stray"}) {
 		t.Fatalf("archived = %v, want the stray session", got)
 	}
-	turn(t, NewRequestHandler(exec), userText("c1", "again"))
+	turn(t, NewRequestHandler(exec, asKourier{}), userText("c1", "again"))
 	if sent := fake.sentEvents(); len(sent) != 1 || sent[0].session != "sesn_stored" {
 		t.Fatalf("sent = %+v, want the message in the stored session", sent)
 	}
@@ -223,7 +224,7 @@ func TestRestoreForgetsASessionCMANoLongerLists(t *testing.T) {
 	fake := newFake(script(say("ok"), idle(stopEndTurn)))
 	clk := newClock()
 	st := newStore(t, clk.now)
-	ctx := context.Background()
+	ctx := kourier(context.Background())
 	if err := st.PutSession(ctx, store.Session{ContextID: "c1", SessionID: "sesn_archived", LastActive: clk.now()}); err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +242,7 @@ func TestRestoreForgetsASessionCMANoLongerLists(t *testing.T) {
 	if _, err := st.Get(ctx, "old"); !errors.Is(err, a2a.ErrTaskNotFound) {
 		t.Fatalf("the forgotten context's task: %v, want deleted", err)
 	}
-	turn(t, NewRequestHandler(exec), userText("c1", "again"))
+	turn(t, NewRequestHandler(exec, asKourier{}), userText("c1", "again"))
 	if n := fake.sessionCount(); n != 1 {
 		t.Fatalf("sessions created = %d, want a new one for the context", n)
 	}
@@ -300,8 +301,8 @@ func TestRetentionDeletesOldSettledTasks(t *testing.T) {
 		t.Fatalf("settled task after the retention: %v, want deleted", err)
 	}
 	for _, m := range finished.History {
-		if _, ok, err := exec.Store.MessageTask(ctx, m.ID); err != nil || ok {
-			t.Fatalf("message %s of the deleted task: ok %v, %v; want deleted", m.ID, ok, err)
+		if task, err := exec.Store.MessageTask(kourier(ctx), m.ID); err != nil || task != nil {
+			t.Fatalf("message %s of the deleted task: %+v, %v; want deleted", m.ID, task, err)
 		}
 	}
 	// A pause is not settled: retention keeps it.
@@ -346,29 +347,34 @@ func TestArchivingASessionDeletesItsContextsTasks(t *testing.T) {
 	}
 }
 
-// Every accepted caller is Agent Kourier: the store records it as the task's owner, and the task is not hidden from
-// a call that has no user.
+// Every accepted caller is Agent Kourier, whom the caller check's interceptor runs each call as: the store keeps the
+// task, and the message that started it, for that caller, and refuses a read made for no caller.
 func TestTaskOwnerIsTheCaller(t *testing.T) {
 	fake := newFake(script(say("ok"), idle(stopEndTurn)))
 	st := newStore(t, nil)
-	h := NewRequestHandler(&Executor{Backend: fake, Store: st})
-	ctx, callCtx := a2asrv.NewCallContext(context.Background(), nil)
-	callCtx.User = a2asrv.NewAuthenticatedUser("agent-kourier", nil)
+	h := NewRequestHandler(&Executor{Backend: fake, Store: st}, asKourier{})
+	msg := userText("", "hi")
 	var id a2a.TaskID
-	for ev, err := range h.SendStreamingMessage(ctx, &a2a.SendMessageRequest{Message: userText("", "hi")}) {
+	for ev, err := range h.SendStreamingMessage(context.Background(), &a2a.SendMessageRequest{Message: msg}) {
 		if err != nil {
 			t.Fatal(err)
 		}
 		id = ev.TaskInfo().TaskID
 	}
-	got, err := st.Get(context.Background(), id)
+	got, err := st.Get(kourier(context.Background()), id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.User != "agent-kourier" {
-		t.Fatalf("owner = %q, want agent-kourier", got.User)
+	if got.User != auth.Caller {
+		t.Fatalf("owner = %q, want %s", got.User, auth.Caller)
+	}
+	if task, err := st.MessageTask(kourier(context.Background()), msg.ID); err != nil || task == nil || task.ID != id {
+		t.Fatalf("the message's task = %+v, %v; want %s", task, err, id)
+	}
+	if _, err := st.Get(context.Background(), id); !errors.Is(err, a2a.ErrUnauthenticated) {
+		t.Fatalf("a read for no caller: %v, want ErrUnauthenticated", err)
 	}
 	if _, err := h.GetTask(context.Background(), &a2a.GetTaskRequest{ID: id}); err != nil {
-		t.Fatalf("GetTask with no user: %v", err)
+		t.Fatalf("GetTask through the interceptor: %v", err)
 	}
 }

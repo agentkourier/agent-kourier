@@ -70,7 +70,7 @@ func observedHandler(t *testing.T, fake *fakeBackend, tel *telemetry.Telemetry, 
 	if exec.Metrics, err = NewMetrics(tel, exec.Contexts); err != nil {
 		t.Fatal(err)
 	}
-	return exec, NewRequestHandler(exec)
+	return exec, NewRequestHandler(exec, asKourier{})
 }
 
 // Each way a turn ends is counted under its outcome, and the calls it made under theirs.
@@ -211,7 +211,7 @@ func TestTakeoverAndReaperAreCounted(t *testing.T) {
 	clk := newClock()
 	path := filepath.Join(t.TempDir(), "cma.db")
 	st := openStore(t, path, clk.now)
-	ctx := context.Background()
+	ctx := kourier(context.Background())
 	if _, err := st.Create(ctx, &a2a.Task{ID: "working", ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}}); err != nil {
 		t.Fatal(err)
 	}

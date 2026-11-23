@@ -14,14 +14,14 @@ import (
 // and each context's session. store.Store implements it on SQLite and Postgres.
 type Store interface {
 	taskstore.Store
-	// TasksInStates returns the tasks whose state is one of states.
-	TasksInStates(ctx context.Context, states ...a2a.TaskState) ([]*taskstore.StoredTask, error)
+	// SettleInterrupted fails every task a restart left submitted or working, with an agent message of text, and
+	// returns the tasks it failed. A task it cannot fail for a reason of its own is logged and left.
+	SettleInterrupted(ctx context.Context, text string) ([]*a2a.Task, error)
 	// DeleteSettledBefore deletes the settled tasks last updated before cutoff, with their message IDs.
 	DeleteSettledBefore(ctx context.Context, cutoff time.Time) (int64, error)
-	// MessageTask returns the task a message ID started or joined, if one is recorded.
-	MessageTask(ctx context.Context, messageID string) (a2a.TaskID, bool, error)
-	// RecordMessage records that a message ID started or joined a task; a recorded ID keeps its task.
-	RecordMessage(ctx context.Context, messageID string, taskID a2a.TaskID) error
+	// MessageTask returns the call's caller's task that a message ID started or joined, or nil when none is recorded.
+	// The store records a task's message IDs when it stores the task.
+	MessageTask(ctx context.Context, messageID string) (*a2a.Task, error)
 	// Sessions returns every context's session.
 	Sessions(ctx context.Context) ([]store.Session, error)
 	// PutSession records a context's session, replacing the one it had.

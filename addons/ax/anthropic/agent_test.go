@@ -33,7 +33,7 @@ func serveAgent(t *testing.T, dir string, model *anthropic.Model) (client *a2acl
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.SettleInterrupted(t.Context()); err != nil {
+	if _, err := st.SettleInterrupted(t.Context(), store.InterruptedMessage); err != nil {
 		t.Fatal(err)
 	}
 	s, err := agent.New(agent.Config{Model: model, Store: st, Check: &auth.Check{Verifier: fixedCaller{}, Bearer: true, Log: slog.New(slog.NewTextHandler(io.Discard, nil))},

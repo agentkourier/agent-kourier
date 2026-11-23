@@ -171,13 +171,13 @@ func Run(ctx context.Context, cfg config.Config, m model.LLM, opts Options) erro
 	// every write of the one that held it. It returns when ctx ends, once the upkeep has stopped, or with the error
 	// that stopped the takeover.
 	takeOver := func(ctx context.Context) error {
-		n, err := st.SettleInterrupted(ctx)
+		failed, err := st.SettleInterrupted(ctx, store.InterruptedMessage)
+		tel.TasksInterrupted(len(failed)) // each in a write of its own: those failed before an error stay failed
 		if err != nil {
 			return err
 		}
-		tel.TasksInterrupted(n)
-		if n > 0 {
-			log.Info("failed the turns a restart or a takeover cut off", "tasks", n)
+		if len(failed) > 0 {
+			log.Info("failed the turns a restart or a takeover cut off", "tasks", len(failed))
 		}
 		var swept sync.WaitGroup
 		swept.Go(func() { upkeep.Run(ctx) })
