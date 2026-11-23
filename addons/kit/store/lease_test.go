@@ -281,7 +281,7 @@ func TestPostgresWritesRunTheFenceInTheirTransaction(t *testing.T) {
 	db := openPostgres(t, pgtest.DSN(t))
 	mustLead(t, db, "a", time.Hour)
 	calls := 0
-	db.SetFence(func(ctx context.Context, q Querier) error {
+	SetFenceForTest(db, func(ctx context.Context, q Querier) error {
 		calls++
 		marker := fmt.Sprintf("marker-%d", calls)
 		if _, err := q.Exec(ctx, `INSERT INTO notes (id) VALUES (?)`, marker); err != nil {
@@ -302,7 +302,7 @@ func TestPostgresWritesRunTheFenceInTheirTransaction(t *testing.T) {
 	if calls != 2 {
 		t.Errorf("the fence ran %d times, want once for each write", calls)
 	}
-	db.SetFence(db.checkEpoch)
+	SetFenceForTest(db, db.checkEpoch)
 	if n := count(t, db, `SELECT COUNT(*) FROM notes`); n != 0 {
 		t.Fatalf("the refused writes left %d rows: the fence ran outside their transactions", n)
 	}

@@ -134,13 +134,13 @@ func testEveryWriteIsFenced(t *testing.T, s *Store) {
 	}
 	var mu sync.Mutex
 	calls := 0
-	s.SetFence(func(context.Context, kitstore.Querier) error {
+	kitstore.SetFenceForTest(s.DB, func(context.Context, kitstore.Querier) error {
 		mu.Lock()
 		defer mu.Unlock()
 		calls++
 		return errFenced
 	})
-	defer s.SetFence(nil)
+	defer kitstore.SetFenceForTest(s.DB, nil)
 	future := time.Now().Add(time.Hour)
 	writes := map[string]func() error{
 		"Create": func() error {
@@ -165,7 +165,7 @@ func testEveryWriteIsFenced(t *testing.T, s *Store) {
 	if calls != len(writes) {
 		t.Errorf("the fence ran %d times for %d writes", calls, len(writes))
 	}
-	s.SetFence(nil)
+	kitstore.SetFenceForTest(s.DB, nil)
 	got, err := s.Get(ctx, "t1")
 	if err != nil || got.Version != 1 {
 		t.Fatalf("a fenced write changed the store: %+v, %v", got, err)

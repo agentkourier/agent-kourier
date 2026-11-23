@@ -199,7 +199,7 @@ func writesRunTheFenceInTheirTransaction(t *testing.T, noun string) {
 	db := openWithNotes(t, filepath.Join(t.TempDir(), "addon.db"), noun)
 	ctx := context.Background()
 	calls := 0
-	db.SetFence(func(ctx context.Context, q store.Querier) error {
+	store.SetFenceForTest(db, func(ctx context.Context, q store.Querier) error {
 		calls++
 		if _, err := q.Exec(ctx, `INSERT INTO notes (id) VALUES (?)`, "marker-"+strings.Repeat("x", calls)); err != nil {
 			t.Errorf("the fence's marker: %v", err)
@@ -224,7 +224,7 @@ func writesRunTheFenceInTheirTransaction(t *testing.T, noun string) {
 	if calls != 2 {
 		t.Errorf("the fence ran %d times, want once for each write", calls)
 	}
-	db.SetFence(nil)
+	store.SetFenceForTest(db, nil)
 	if n := count(t, db, `SELECT COUNT(*) FROM notes`); n != 0 {
 		t.Fatalf("the refused writes left %d rows: the fence ran outside their transactions", n)
 	}

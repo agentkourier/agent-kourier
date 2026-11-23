@@ -53,7 +53,7 @@ func OpenPostgres(ctx context.Context, dsn string, opts Options) (*DB, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("open postgres store: %w", err)
 	}
-	db.fence = db.checkEpoch // after the kit's migrations; every migration writes without a lease
+	db.setFence(db.checkEpoch) // after the kit's migrations; every migration writes without a lease
 	return db, nil
 }
 

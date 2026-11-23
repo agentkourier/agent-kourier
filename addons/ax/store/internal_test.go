@@ -166,7 +166,7 @@ func testEveryWriteIsFenced(t *testing.T, s *Store) {
 	}
 	var mu sync.Mutex
 	calls := 0
-	s.SetFence(func(fenceCtx context.Context, q kitstore.Querier) error {
+	kitstore.SetFenceForTest(s.DB, func(fenceCtx context.Context, q kitstore.Querier) error {
 		mu.Lock()
 		defer mu.Unlock()
 		calls++
@@ -183,7 +183,7 @@ func testEveryWriteIsFenced(t *testing.T, s *Store) {
 		}
 		return errFenced
 	})
-	defer s.SetFence(nil)
+	defer kitstore.SetFenceForTest(s.DB, nil)
 	future := time.Now().Add(time.Hour)
 	writes := map[string]func() error{
 		"Create": func() error {
@@ -221,7 +221,7 @@ func testEveryWriteIsFenced(t *testing.T, s *Store) {
 			t.Errorf("%s did not run the fence", name)
 		}
 	}
-	s.SetFence(nil)
+	kitstore.SetFenceForTest(s.DB, nil)
 	var markers int
 	if err := s.Reader().QueryRow(ctx, `SELECT COUNT(*) FROM contexts WHERE owner = ?`, "fence-marker").Scan(&markers); err != nil || markers != 0 {
 		t.Fatalf("the fence's markers outlived the refused writes: %d, %v; the fence ran outside their transactions", markers, err)

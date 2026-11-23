@@ -45,8 +45,9 @@ type DB struct {
 
 	// fence, when set, runs first in every write transaction, Write's and the add-on's own (Fence), and its error aborts
 	// the write. It is the one place a check that must hold for any write runs: a leader's lease epoch, on Postgres,
-	// where several replicas share the database.
-	fence func(ctx context.Context, q Querier) error
+	// where several replicas share the database. It is atomic because a test may replace it (SetFenceForTest) while
+	// writes run.
+	fence atomic.Pointer[fenceFunc]
 	// elects is true on Postgres, where replicas elect a leader through the leadership row (lease.go).
 	elects bool
 	// epoch is the lease epoch this database took, 0 for none.
@@ -56,6 +57,9 @@ type DB struct {
 	closeOnce sync.Once
 	closeErr  error
 }
+
+// fenceFunc is a fence: it runs in a write's transaction, through q, and its error aborts the write.
+type fenceFunc func(ctx context.Context, q Querier) error
 
 func newDB(c conn, opts Options) *DB {
 	db := &DB{conn: c, noun: opts.Noun, log: opts.Log, onDeposed: opts.OnDeposed}
@@ -96,8 +100,8 @@ func (db *DB) Reader() Querier { return db.conn.reader() }
 // the add-on's tables goes through it, or runs Fence in its own transaction.
 func (db *DB) Write(ctx context.Context, fn func(q Querier) error) error {
 	return db.conn.inTx(ctx, func(q Querier) error {
-		if db.fence != nil {
-			if err := db.fence(ctx, q); err != nil {
+		if fence := db.loadFence(); fence != nil {
+			if err := fence(ctx, q); err != nil {
 				return err
 			}
 		}
@@ -109,16 +113,34 @@ func (db *DB) Write(ctx context.Context, fn func(q Querier) error) error {
 // the transaction's first write: its error must roll the transaction back, as it does a Write. It returns nil where
 // there is no fence (SQLite).
 func (db *DB) Fence(ctx context.Context, tx SQLDB) error {
-	if db.fence == nil {
+	fence := db.loadFence()
+	if fence == nil {
 		return nil
 	}
-	return db.fence(ctx, db.conn.over(tx))
+	return fence(ctx, db.conn.over(tx))
 }
 
-// SetFence replaces the fence that Write and Fence run: nil runs none. Only tests call it, to see that every write of
-// an add-on runs the fence in its transaction; OpenPostgres sets the lease's epoch check, and it must not be changed
-// while the database is in use.
-func (db *DB) SetFence(fence func(ctx context.Context, q Querier) error) { db.fence = fence }
+func (db *DB) setFence(fence fenceFunc) {
+	if fence == nil {
+		db.fence.Store(nil)
+		return
+	}
+	db.fence.Store(&fence)
+}
+
+func (db *DB) loadFence() fenceFunc {
+	if p := db.fence.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+// SetFenceForTest replaces the fence that db's writes run, Write's and Fence's: nil runs none, which on Postgres turns
+// the lease's epoch check off. It is for tests alone, which use it to see that every write of an add-on runs the fence
+// in its transaction; a function rather than a method, so that a store that embeds DB does not offer it, and a lint
+// rule (forbidigo, in .golangci.yml) refuses a call outside _test.go files and the kit's sqlitetest. Writes may run
+// while it is called: each runs the fence that was set when it began, or none.
+func SetFenceForTest(db *DB, fence func(ctx context.Context, q Querier) error) { db.setFence(fence) }
 
 // SQL is the write connections as a database/sql DB, for a library that keeps its tables in the add-on's database
 // (ADK's sessions, through gorm): on SQLite the one write connection, which its transactions share with Write's, on

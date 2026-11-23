@@ -11,6 +11,7 @@ linters:
     - depguard      # test fakes must not leak into production code
     - errcheck
     - errorlint     # enforce %w and errors.Is/As over ==/type assertions
+    - forbidigo     # test-only functions (the add-ons' SetFenceForTest) stay out of production code
     - gocritic
     - gosec
     - govet
@@ -69,6 +70,10 @@ linters:
               desc: "the webhook platform is built from its own Go Config, which the broker maps the ChatConnection onto: it reads no API type"
             - pkg: github.com/agentkourier/agent-kourier/internal/telemetry
               desc: "the webhook platform counts through the Recorder of its Config, which the broker builds: it does not reach the broker's instruments itself"
+    forbidigo:
+      forbid:
+        - pattern: ^(\w+\.)?SetFenceForTest$
+          msg: "SetFenceForTest replaces a store's fence (on Postgres, the lease's epoch check); only tests and the kit's sqlitetest call it"
     nolintlint:
       require-explanation: true
       require-specific: true
@@ -86,6 +91,9 @@ linters:
       - path: _test\.go
         linters:
           - gosec  # test fixtures use fake credentials and loose file modes
+      - path: _test\.go|(^|/)addons/kit/store/sqlitetest/
+        linters:
+          - forbidigo  # tests, and the kit's SQLite conformance suite, may replace a store's fence
 
 formatters:
   enable:
