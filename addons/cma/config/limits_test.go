@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/agentkourier/agent-kourier/addons/kit/limitsdoc"
+	"github.com/agentkourier/agent-kourier/addons/kit/settings"
 )
 
 // TestLimitsPage holds the defaults that Parse fills in to docs/reference/limits.md. It parses the Postgres store, whose
@@ -23,5 +24,5 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Duration(t, "cma.lease-duration", c.Lease.Duration)
 	limitsdoc.Duration(t, "cma.lease-renew-deadline", c.Lease.RenewDeadline)
 	limitsdoc.Duration(t, "cma.lease-retry-period", c.Lease.RetryPeriod)
-	limitsdoc.Text(t, "cma.lease-jitter", strconv.FormatFloat(jitterFactor, 'f', -1, 64))
+	limitsdoc.Text(t, "cma.lease-jitter", strconv.FormatFloat(settings.LeaseJitter, 'f', -1, 64))
 }

@@ -36,6 +36,7 @@ import (
 	"github.com/agentkourier/agent-kourier/addons/kit/auth"
 	"github.com/agentkourier/agent-kourier/addons/kit/auth/oidc"
 	"github.com/agentkourier/agent-kourier/addons/kit/cluster"
+	"github.com/agentkourier/agent-kourier/addons/kit/settings"
 	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
@@ -121,7 +122,7 @@ func Run(ctx context.Context, cfg config.Config, m model.LLM, opts Options) erro
 	}
 
 	var elector *cluster.Elector
-	if cfg.Store == config.StorePostgres {
+	if cfg.Store == settings.StorePostgres {
 		elector = &cluster.Elector{Lease: st, Holder: cfg.PodName, Address: cfg.AdvertiseURL, LeaseDuration: cfg.Lease.Duration,
 			RenewDeadline: cfg.Lease.RenewDeadline, RetryPeriod: cfg.Lease.RetryPeriod, Status: status, Telemetry: tel, Log: log}
 		router.Leaders = elector
@@ -308,7 +309,7 @@ func authMode(cfg config.Config) string {
 
 // openStore opens the store the configuration names.
 func openStore(ctx context.Context, cfg config.Config, opts store.Options) (*store.Store, error) {
-	if cfg.Store == config.StorePostgres {
+	if cfg.Store == settings.StorePostgres {
 		return store.OpenPostgres(ctx, cfg.PostgresDSN, opts)
 	}
 	return store.OpenSQLite(ctx, cfg.SQLitePath, opts)
