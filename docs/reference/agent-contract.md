@@ -141,7 +141,10 @@ The text of a status message is not shown as the answer; a working update's text
   the last counts.
 - An answer to a paused task (a question or an approval) is about a task that goes on, whose snapshots hold the paused
   turn's calls and results too. Before it sends the answer, Agent Kourier reads the task with one `GetTask` and counts
-  every tool part in it as delivered, so the answer shows its own steps and not the paused turn's again. A task that
+  every tool part in it as delivered, so the answer shows its own steps and not the paused turn's again. It notes the text
+  of each of the task's artifacts too: a snapshot that repeats an artifact's text as the paused turn showed it adds nothing,
+  so the answer does not end with a line the paused turn already showed. A live chunk, or a snapshot that changes that
+  text, is delivered as usual. A task that
   cannot be read is answered without it. A follow after a restart has no such snapshot, so it reads only the history
   since the user's last message, and the artifacts of a task that went on from an earlier turn replay that turn's
   calls and results.
