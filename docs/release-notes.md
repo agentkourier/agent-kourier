@@ -34,7 +34,8 @@ the move of the AX example, and how to roll back.
 
 ### Add-ons (experimental)
 
-- **Turn one on** with `addons.<name>.enabled: true` and its settings: for `cma`, `agentId`, `environmentId` and the API key's Secret,
+- **Turn one on** with `addons.<name>.enabled: true`, the caller token's Secret in `addons.<name>.auth.tokenSecret`, and its
+  settings: for `cma`, `agentId`, `environmentId` and the API key's Secret,
   `anthropicApiKeySecret`; for `ax`, `model.name`, with `model.provider` `bedrock` (the default, which needs `model.region`) or
   `anthropic`. Each runs as the Deployment `<fullname>-<name>`, with a Service of its own on port 8090, and serves A2A at
   `http://<fullname>-<name>.<namespace>.svc:8090/a2a`, which the AgentBackend names. Its objects carry
@@ -44,8 +45,8 @@ the move of the AX example, and how to roll back.
   image. The release's chart pins each by digest. [RELEASING.md](https://github.com/agentkourier/agent-kourier/blob/main/RELEASING.md#verify-a-release)
   has the commands that verify them. The AX add-on's image for the route inside Google AX is not released: you build it.
 - **The caller check.** A request to an add-on's `/a2a` or to its agent card must carry a token of the Secret in
-  `addons.<name>.auth.tokenSecret`, as `Authorization: Bearer <token>`, which a Binding's `identity.tokenSecretRef` sends, or as the
-  whole value of the header `addons.<name>.auth.header`; any other request is answered 401. The add-on reads the token file again every
+  `addons.<name>.auth.tokenSecret`, as `Authorization: Bearer <token>`, which a Binding's `identity.tokenSecretRef` sends, or, with
+  `addons.<name>.auth.header` set, as that header's whole value instead; any other request is answered 401. The add-on reads the token file again every
   5 seconds, so a rotated Secret takes effect without a restart. `/healthz`, `/readyz` and `/metrics` need no token, and the chart never
   turns the check off. The AX add-on also takes OIDC, for the route inside Google AX.
 - **The store.** Each add-on keeps the A2A tasks, the message IDs that started them and when each context was last active, with the

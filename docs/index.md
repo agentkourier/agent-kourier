@@ -69,7 +69,7 @@ Without a broker, every agent that talks to chat needs its own code for threads,
 alerts. Agent Kourier does that work once for every agent you bind. It keeps a session per thread, queues replies that
 arrive while the agent works, streams the answer into one message, posts the agent's questions in the thread, recovers
 each conversation after a restart, and holds the thread while a suspended agent is not running. The agent keeps its
-tools and task logic. A webhook connection (experimental, new in 0.6.0) starts sessions from another service's signed
+tools and task logic. A webhook connection (experimental, since 0.6.0) starts sessions from another service's signed
 events instead of chat messages, and posts nothing: the agent answers on that service with its own tools. An
 [add-on](explanation/add-ons.md), an optional component released with Agent Kourier and run by its chart, is either an
 A2A front for an agent that has none or an agent of its own. Both add-ons are experimental. The

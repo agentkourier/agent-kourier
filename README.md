@@ -35,7 +35,7 @@ without breaking a Slack `Binding`. Agents speak only A2A, so a new platform nee
 
 > **Status: v0.7.0.** Install the published chart and image with
 > [Install with Helm](docs/how-to/install-with-helm.md). The `v1alpha1` resource format can change before 1.0. See
-> [Status](#status). Slack HTTP mode, new in 0.5.0, is experimental. Teams and webhooks, new in 0.6.0, are both
+> [Status](#status). Slack HTTP mode, new in 0.5.0, is experimental. Teams and webhooks, since 0.6.0, are both
 > experimental. The add-ons, new in 0.7.0, are experimental.
 
 <p align="center">
@@ -101,7 +101,7 @@ Without a broker, each of these is code in every agent that talks to chat:
   that thread, with the thread so far as untrusted data, within fixed limits. It is on by default; a
   Binding turns it off with `chat.botMentions: none`. See
   [Let another agent start yours](docs/how-to/any-bot-trigger.md#let-another-agent-start-yours).
-- **Webhooks from other services** (experimental, new in 0.6.0). A webhook connection takes the
+- **Webhooks from other services** (experimental, since 0.6.0). A webhook connection takes the
   signed JSON webhooks of a service, such as GitHub, Jira Cloud, Bitbucket Cloud or Linear, and starts a session of the agent
   for each pull request or issue; a later event of the same one, such as a comment, continues it.
   Agent Kourier posts nothing there: the agent replies on the service with its own tools. See
