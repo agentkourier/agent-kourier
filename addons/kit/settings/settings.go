@@ -20,6 +20,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -130,7 +131,7 @@ func Parse(getenv func(string) string, spec Spec) (Config, Values, error) {
 	}
 	var errs []error
 	fail := func(err error) { errs = append(errs, err) }
-	values := Values{m: map[string]any{}, declared: map[string]bool{}}
+	values := Values{m: map[string]any{}, declared: map[string]bool{}, undeclared: &sync.Map{}}
 	for _, v := range spec.Vars {
 		values.declared[v.Key()] = true
 		if err := v.read(getenv, values); err != nil {

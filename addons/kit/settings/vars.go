@@ -3,6 +3,8 @@ package settings
 import (
 	"errors"
 	"fmt"
+	"slices"
+	"sync"
 	"time"
 )
 
@@ -17,9 +19,23 @@ type Var interface {
 
 // Values are the add-on's own variables as Parse read them. A Var reads its own with From.
 type Values struct {
-	// m holds each Var's value by its key; declared, the keys of every Var in Spec.Vars, read or not.
-	m        map[string]any
-	declared map[string]bool
+	// m holds each Var's value by its key; declared, the keys of every Var in Spec.Vars, read or not; undeclared, the
+	// keys of the Vars From read while they were not declared.
+	m          map[string]any
+	declared   map[string]bool
+	undeclared *sync.Map // safe for From in any goroutine
+}
+
+// Undeclared returns, in key order, the keys of the Vars whose From read values while Spec.Vars did not declare them:
+// each got its zero value. A Var that a parse reads before Parse has come to it in Spec.Vars counts too. The kit's
+// runtime refuses to start an add-on whose backend read one.
+func (v Values) Undeclared() []string {
+	var keys []string
+	if v.undeclared != nil {
+		v.undeclared.Range(func(k, _ any) bool { keys = append(keys, k.(string)); return true })
+	}
+	slices.Sort(keys)
+	return keys
 }
 
 // Of is a Var whose value is a T.
@@ -62,8 +78,11 @@ func (o Of[T]) Key() string { return o.key }
 // From is the variable's value in values. It is the zero T, with no error, for a Var that was not in the Spec.Vars
 // of the Parse that returned values, and a zero value often means something: a TOOL_RESULT_TIMEOUT of 0 waits for
 // ever, where its default is 10m. A Var left out of Spec.Vars by mistake is not seen at start, so a test of the
-// add-on should check Declared for each Var it reads.
+// add-on should check Declared for each Var it reads; values records the read (Values.Undeclared).
 func (o Of[T]) From(values Values) T {
+	if values.undeclared != nil && !values.declared[o.key] {
+		values.undeclared.Store(o.key, true)
+	}
 	v, _ := values.m[o.key].(T)
 	return v
 }
