@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"iter"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -269,8 +272,15 @@ func TestAResendJoinsARunningTurnOnceItsFirstEventHasCome(t *testing.T) {
 func TestAResendAfterTheSenderHungUpBeforeTheFirstEventJoinsTheOneTurn(t *testing.T) {
 	st := newFakeStore()
 	b := &scripted{gate: make(chan struct{}), started: make(chan string, 2)}
-	s := serveHandler(t, st, b)
-	c := s.client(t, auth.Caller)
+	check := &auth.Check{Verifier: bearerIsCaller{}, Bearer: true, Log: slog.New(slog.DiscardHandler)}
+	endpoint := testAddon(st, b).Handler(b, st, check, "http://kit.test/a2a", newTel(t))
+	requests := make(chan context.Context, 8) // each request's context on the server, in order
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests <- r.Context()
+		endpoint.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	c := clientOf(t, srv.URL, auth.Caller)
 	held, hangUp := context.WithCancel(t.Context())
 	gone := make(chan struct{})
 	go func() {
@@ -286,7 +296,11 @@ func TestAResendAfterTheSenderHungUpBeforeTheFirstEventJoinsTheOneTurn(t *testin
 	}
 	hangUp()
 	<-gone
-	time.Sleep(100 * time.Millisecond) // the server sees the hang-up
+	select {
+	case <-(<-requests).Done(): // the server has seen the hang-up
+	case <-time.After(5 * time.Second):
+		t.Fatal("the server did not see the first sender hang up")
+	}
 	resent := make(chan sent, 1)
 	go func() { task, err := send(t, c, message("m1", "slow", "c1", "")); resent <- sent{task, err} }()
 	select {
