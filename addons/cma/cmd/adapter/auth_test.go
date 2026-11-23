@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"maps"
@@ -14,6 +15,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/agentkourier/agent-kourier/addons/cma/adapter"
 	"github.com/agentkourier/agent-kourier/addons/cma/config"
@@ -173,5 +176,47 @@ func TestCardWithTheCallerCheckOff(t *testing.T) {
 	base := startServing(t, map[string]string{"AUTH_DISABLED": "true"}, io.Discard)
 	if status, _, body := get(t, base+a2aPath+adapter.CardPath, nil); status != http.StatusOK || !strings.Contains(body, `"name":"claude-managed-agent"`) {
 		t.Fatalf("card = %d %q, want 200 and the card", status, body)
+	}
+}
+
+// call sends the JSON-RPC request method with params to the A2A endpoint at base, with no credentials, and returns the
+// code of the response's error, 0 for none. A response that is not JSON-RPC fails t.
+func call(t *testing.T, base, method string, params any) (code int) {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+a2aPath, bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := newProber().c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var answer struct {
+		Error *struct {
+			Code int `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&answer); err != nil {
+		t.Fatalf("%s answered %d with a body that is not JSON-RPC: %v", method, resp.StatusCode, err)
+	}
+	if answer.Error != nil {
+		return answer.Error.Code
+	}
+	return 0
+}
+
+// With the check off, an A2A call without credentials reaches the request handler: the kit's Interceptor refuses a call
+// that carries no caller, so the Open check, which makes it run as auth.Caller, is what keeps /a2a answering.
+func TestA2AWithTheCallerCheckOff(t *testing.T) {
+	base := startServing(t, map[string]string{"AUTH_DISABLED": "true"}, io.Discard)
+	// -32001 is A2A's TaskNotFoundError; a call the Interceptor refused would get -31401, unauthenticated.
+	if code := call(t, base, "GetTask", &a2a.GetTaskRequest{ID: "no-such-task"}); code != -32001 {
+		t.Fatalf("GetTask of an unknown task: error code %d, want -32001 (task not found)", code)
 	}
 }
