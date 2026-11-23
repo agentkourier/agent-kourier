@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agentkourier/agent-kourier/addons/ax/agent"
 	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
@@ -39,9 +38,15 @@ func standby(t *testing.T, leaders Leaders, tel *telemetry.Telemetry) *httptest.
 	return srv
 }
 
+// testSpec names the add-on's metrics as the add-on does, agentkourier_ax_*, without the backend's packages: the
+// router counts only what it forwards.
+func testSpec() telemetry.Spec {
+	return telemetry.Spec{Name: "ax", Calls: "backend", TurnsHelp: "Turns.", OperationHelp: "Calls.", AuthRefusedHelp: "Refusals."}
+}
+
 func newTelemetry(t *testing.T) *telemetry.Telemetry {
 	t.Helper()
-	tel, err := telemetry.New(agent.TelemetrySpec(), nil)
+	tel, err := telemetry.New(testSpec(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
