@@ -26,6 +26,7 @@ func Run(t *testing.T, noun string) {
 		{"OneProcessPerFile", oneProcessPerFile},
 		{"WALModeFullSyncBusyTimeout", walModeFullSyncBusyTimeout},
 		{"MigrationsApplyOnceKitsFirst", migrationsApplyOnceKitsFirst},
+		{"PrepareRunsBeforeTheMigrations", prepareRunsBeforeTheMigrations},
 		{"ElectsNoLeader", electsNoLeader},
 		{"NoFenceUnlessSet", noFenceUnlessSet},
 		{"WritesRunTheFenceInTheirTransaction", writesRunTheFenceInTheirTransaction},
@@ -142,6 +143,50 @@ func migrationsApplyOnceKitsFirst(t *testing.T, noun string) {
 	}
 	if n := count(t, db, `SELECT COUNT(*) FROM schema_migrations`); n != 1 {
 		t.Fatalf("schema_migrations has %d rows after a reopen, want 1", n)
+	}
+}
+
+// Prepare runs before the kit's migrations, in a transaction that commits its writes, and its error fails the open
+// before any migration has run.
+func prepareRunsBeforeTheMigrations(t *testing.T, noun string) {
+	path := filepath.Join(t.TempDir(), "addon.db")
+	ctx := context.Background()
+	refuse := errors.New("an earlier build's layout")
+	_, err := store.OpenSQLite(ctx, path, store.Options{Noun: noun, Prepare: func(ctx context.Context, q store.Querier) error {
+		if _, err := q.Exec(ctx, `CREATE TABLE prepared (id text PRIMARY KEY)`); err != nil {
+			return err
+		}
+		return refuse
+	}})
+	if !errors.Is(err, refuse) {
+		t.Fatalf("an open whose Prepare refuses: %v, want its error", err)
+	}
+	db := open(t, path, noun) // the refused open let the file go
+	if n := count(t, db, `SELECT COUNT(*) FROM sqlite_master WHERE name = 'prepared'`); n != 0 {
+		t.Fatalf("the refused Prepare's write was kept")
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	fresh := filepath.Join(t.TempDir(), "addon.db")
+	var kitTables int
+	db, err = store.OpenSQLite(ctx, fresh, store.Options{Noun: noun, Prepare: func(ctx context.Context, q store.Querier) error {
+		if err := q.QueryRow(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE name = 'kit_schema_migrations'`).Scan(&kitTables); err != nil {
+			return err
+		}
+		_, err := q.Exec(ctx, `CREATE TABLE prepared (id text PRIMARY KEY)`)
+		return err
+	}})
+	if err != nil {
+		t.Fatalf("OpenSQLite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if kitTables != 0 {
+		t.Fatal("Prepare ran after the kit's migrations")
+	}
+	if n := count(t, db, `SELECT COUNT(*) FROM sqlite_master WHERE name IN ('prepared', 'kit_schema_migrations')`); n != 2 {
+		t.Fatalf("after the open: %d of Prepare's table and the kit's version table, want both", n)
 	}
 }
 

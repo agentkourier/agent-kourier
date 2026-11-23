@@ -23,11 +23,11 @@ const (
 	PostgresStatementTimeout = 30 * time.Second
 )
 
-// OpenPostgres connects to the Postgres database at dsn and applies the kit's pending migrations; Migrate applies the
-// add-on's. Several replicas may open the same database, and they elect a leader through it (TryLead): every write
-// checks, in its transaction, that this database holds the current lease, and fails with ErrDeposed otherwise, so a
-// database that has not taken the lease writes nothing. Migrations write without the lease. An error never shows dsn,
-// which may hold a password.
+// OpenPostgres connects to the Postgres database at dsn, runs Prepare and applies the kit's pending migrations; Migrate
+// applies the add-on's. Several replicas may open the same database, and they elect a leader through it (TryLead):
+// every write checks, in its transaction, that this database holds the current lease, and fails with ErrDeposed
+// otherwise, so a database that has not taken the lease writes nothing. Prepare and the migrations write without the
+// lease. An error never shows dsn, which may hold a password.
 func OpenPostgres(ctx context.Context, dsn string, opts Options) (*DB, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
@@ -52,7 +52,7 @@ func OpenPostgres(ctx context.Context, dsn string, opts Options) (*DB, error) {
 	c := &pgConn{pool: pool, std: stdlib.OpenDBFromPool(pool), lockKey: opts.MigrationLockKey}
 	db := newDB(c, opts)
 	db.elects = true
-	if err := db.migrateKit(ctx, "migrations/postgres"); err != nil {
+	if err := db.migrateKit(ctx, "migrations/postgres", opts.Prepare); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("open postgres store: %w", err)
 	}

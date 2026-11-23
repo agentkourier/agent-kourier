@@ -194,7 +194,7 @@ func testEveryWriteIsFenced(t *testing.T, s *Store) {
 			_, err := s.Update(ctx, &taskstore.UpdateRequest{Task: seed, PrevVersion: 1})
 			return err
 		},
-		"SettleInterrupted":   func() error { _, err := s.SettleInterrupted(ctx); return err },
+		"SettleInterrupted":   func() error { _, err := s.SettleInterrupted(ctx, InterruptedMessage); return err },
 		"DeleteSettledBefore": func() error { _, err := s.DeleteSettledBefore(ctx, future); return err },
 		"DeleteIdleContexts":  func() error { _, err := s.DeleteIdleContexts(ctx, future); return err },
 		"TouchContext":        func() error { return s.TouchContext(ctx, "c1") },
@@ -246,6 +246,28 @@ func testEveryWriteIsFenced(t *testing.T, s *Store) {
 const legacyDDL = `CREATE TABLE a2a_tasks(id TEXT PRIMARY KEY, owner TEXT NOT NULL, version INTEGER NOT NULL, payload BLOB NOT NULL);
 CREATE TABLE a2a_messages(owner TEXT NOT NULL, message_id TEXT NOT NULL, task_id TEXT NOT NULL, PRIMARY KEY(owner,message_id))`
 
+// A first start cut short after the kit's migrations and before the agent's (a SIGKILL, say) leaves the kit's tables
+// with no schema_migrations. The next start keeps them: they are not the old layout, whose a2a_tasks has no context_id.
+func TestSQLiteKeepsTheTablesOfACutShortStart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent.db")
+	db, err := kitstore.OpenSQLite(context.Background(), path, kitstore.Options{Noun: noun})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s := openSQLite(t, path)
+	ctx := asCaller("agent-kourier")
+	if _, err := s.Create(ctx, &a2a.Task{ID: "t1", ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}}); err != nil {
+		t.Fatalf("a task after the open: %v", err)
+	}
+	var legacy int
+	if err := s.Reader().QueryRow(context.Background(), `SELECT COUNT(*) FROM sqlite_master WHERE name LIKE 'legacy_%'`).Scan(&legacy); err != nil || legacy != 0 {
+		t.Fatalf("legacy tables: %d, %v; want none", legacy, err)
+	}
+}
+
 // A file in the old layout keeps its tasks: a waiting question can still be answered after the upgrade, a resent
 // message still joins its task, and an interrupted turn is settled.
 func TestSQLiteImportsTheOldLayout(t *testing.T) {
@@ -279,8 +301,8 @@ func TestSQLiteImportsTheOldLayout(t *testing.T) {
 
 	s := openSQLite(t, path)
 	ctx := asCaller("service")
-	if n, err := s.SettleInterrupted(context.Background()); err != nil || n != 1 {
-		t.Fatalf("SettleInterrupted = %d, %v; want the cut-off task", n, err)
+	if settled, err := s.SettleInterrupted(context.Background(), InterruptedMessage); err != nil || len(settled.Failed) != 1 {
+		t.Fatalf("SettleInterrupted = %+v, %v; want the cut-off task", settled, err)
 	}
 	asked, err := s.Get(ctx, "asked")
 	if err != nil || asked.Version != 3 || asked.Task.Status.State != a2a.TaskStateInputRequired {

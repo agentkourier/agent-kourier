@@ -29,7 +29,7 @@ func newClockedExec(t *testing.T, fake *fakeBackend, ttl time.Duration) (*Execut
 	t.Helper()
 	c := &clock{t: time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)}
 	exec := &Executor{Backend: fake, Store: newStore(t, c.now), IdleTTL: ttl, now: c.now}
-	return exec, c, NewRequestHandler(exec)
+	return exec, c, NewRequestHandler(exec, asKourier{})
 }
 
 func TestIdleSessionIsArchivedAfterTTL(t *testing.T) {

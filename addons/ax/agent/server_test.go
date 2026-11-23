@@ -110,7 +110,7 @@ func startWith(t *testing.T, dir string, m model.LLM, check *auth.Check) *agentA
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.SettleInterrupted(t.Context()); err != nil {
+	if _, err := st.SettleInterrupted(t.Context(), store.InterruptedMessage); err != nil {
 		t.Fatal(err)
 	}
 	s, err := New(Config{Model: m, Store: st, Check: check, PublicURL: "http://ax.agents.svc:8090/a2a", Version: "1.2.3-test"})

@@ -24,6 +24,7 @@ import (
 	"github.com/agentkourier/agent-kourier/addons/ax/cluster"
 	"github.com/agentkourier/agent-kourier/addons/ax/config"
 	"github.com/agentkourier/agent-kourier/addons/ax/store"
+	kitstore "github.com/agentkourier/agent-kourier/addons/kit/store"
 	"github.com/agentkourier/agent-kourier/addons/kit/store/pgtest"
 )
 
@@ -192,7 +193,8 @@ func TestMetricsAreServed(t *testing.T) {
 	}
 }
 
-// On SQLite, the replica fails the turns a restart cut off before it serves, and counts them.
+// On SQLite, the replica fails the turns a restart cut off before it serves, and counts them: one whose stored record
+// does not decode, which the store fails by its state alone, too.
 func TestSQLiteSettlesTheCutOffTurnsBeforeServing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ax.db")
 	st, err := store.OpenSQLite(t.Context(), path, store.Options{})
@@ -200,6 +202,13 @@ func TestSQLiteSettlesTheCutOffTurnsBeforeServing(t *testing.T) {
 		t.Fatal(err)
 	}
 	cutOff(t, st, "t1")
+	cutOff(t, st, "t2")
+	if err := st.Write(t.Context(), func(q kitstore.Querier) error {
+		_, err := q.Exec(t.Context(), `UPDATE a2a_tasks SET payload = ? WHERE id = ?`, []byte(`[1]`), "t2")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +218,7 @@ func TestSQLiteSettlesTheCutOffTurnsBeforeServing(t *testing.T) {
 	if err != nil || got.Status.State != a2a.TaskStateFailed {
 		t.Fatalf("the cut-off task = %+v, %v; want failed", got, err)
 	}
-	for series, want := range map[string]string{"agentkourier_ax_tasks_interrupted_total": "1", `agentkourier_ax_turns_total{outcome="interrupted"}`: "1"} {
+	for series, want := range map[string]string{"agentkourier_ax_tasks_interrupted_total": "2", `agentkourier_ax_turns_total{outcome="interrupted"}`: "2"} {
 		if got := metric(r.base, series); got != want {
 			t.Errorf("%s = %q, want %q", series, got, want)
 		}

@@ -13,7 +13,7 @@ const permissionAllow = "allow"
 
 func newStallHandler(t *testing.T, fake *fakeBackend, timeout time.Duration) a2asrv.RequestHandler {
 	t.Helper()
-	return NewRequestHandler(&Executor{Backend: fake, Store: newStore(t, nil), Keepalive: time.Hour, ToolResultTimeout: timeout})
+	return NewRequestHandler(&Executor{Backend: fake, Store: newStore(t, nil), Keepalive: time.Hour, ToolResultTimeout: timeout}, asKourier{})
 }
 
 func statusText(task *a2a.Task) string {
