@@ -301,8 +301,8 @@ func TestSQLiteImportsTheOldLayout(t *testing.T) {
 
 	s := openSQLite(t, path)
 	ctx := asCaller("service")
-	if failed, err := s.SettleInterrupted(context.Background(), InterruptedMessage); err != nil || len(failed) != 1 {
-		t.Fatalf("SettleInterrupted = %d, %v; want the cut-off task", len(failed), err)
+	if settled, err := s.SettleInterrupted(context.Background(), InterruptedMessage); err != nil || len(settled.Failed) != 1 {
+		t.Fatalf("SettleInterrupted = %+v, %v; want the cut-off task", settled, err)
 	}
 	asked, err := s.Get(ctx, "asked")
 	if err != nil || asked.Version != 3 || asked.Task.Status.State != a2a.TaskStateInputRequired {

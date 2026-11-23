@@ -457,14 +457,15 @@ func testSettleInterrupted(t *testing.T, h Harness) {
 		t.Fatal(err)
 	}
 	clk.Advance(time.Minute)
-	failed, err := s.SettleInterrupted(context.Background(), interruptedText)
+	done, err := s.SettleInterrupted(context.Background(), interruptedText)
 	if err != nil {
 		t.Fatalf("SettleInterrupted: %v", err)
 	}
-	if got := ids(failed); !slices.Equal(got, []string{"other-work", "sub", "work"}) {
-		t.Fatalf("SettleInterrupted failed %v, want every caller's running tasks", got)
+	if got := ids(done.Failed); !slices.Equal(got, []string{"other-work", "sub", "work"}) || len(done.Unreadable) != 0 || done.Skipped != 0 ||
+		done.Interrupted() != 3 {
+		t.Fatalf("SettleInterrupted failed %v (%+v), want every caller's running tasks", got, done)
 	}
-	for _, tk := range failed {
+	for _, tk := range done.Failed {
 		if tk.Status.State != a2a.TaskStateFailed || tk.Status.Message == nil || tk.Status.Message.Parts[0].Text() != interruptedText {
 			t.Errorf("%s as returned: %+v, want failed with the message", tk.ID, tk.Status)
 		}
@@ -495,8 +496,8 @@ func testSettleInterrupted(t *testing.T, h Harness) {
 	if err != nil || len(resp.Tasks) != 2 {
 		t.Fatalf("failed tasks by state: %+v, %v", resp, err)
 	}
-	if failed, err := s.SettleInterrupted(context.Background(), interruptedText); err != nil || len(failed) != 0 {
-		t.Fatalf("a second SettleInterrupted = %v, %v; want none", ids(failed), err)
+	if again, err := s.SettleInterrupted(context.Background(), interruptedText); err != nil || again.Interrupted() != 0 || again.Skipped != 0 {
+		t.Fatalf("a second SettleInterrupted = %+v, %v; want none", again, err)
 	}
 }
 
@@ -523,10 +524,11 @@ func (w *warnings) Handle(_ context.Context, r slog.Record) error {
 	return nil
 }
 
-// A task that SettleInterrupted cannot fail for a reason of its own is logged and left; the others are failed.
+// A task whose stored record does not decode is failed by its columns alone, so that the retention deletes it, and
+// logged; a task that changed since it was read is logged and left; the others are failed.
 func testSettleInterruptedSkipsATask(t *testing.T, h Harness) {
 	log := &warnings{}
-	s, _ := openWith(t, h, store.TaskOptions{}, slog.New(log))
+	s, clk := openWith(t, h, store.TaskOptions{}, slog.New(log))
 	ctx := context.Background()
 	for _, id := range []string{"a-broken", "b-raced", "c-fine"} {
 		mustCreate(t, s, task(id, "c1", a2a.TaskStateWorking, nil))
@@ -538,11 +540,11 @@ func testSettleInterruptedSkipsATask(t *testing.T, h Harness) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// A task that changes between the read and its write: the fence of its write, the second fenced step after the
-	// search's (a-broken is left before a write), moves it on first.
+	// A task that changes between the read and its write: the fence of its write, the third fenced step after the
+	// search's and a-broken's, moves it on first.
 	fences := 0
 	store.SetFenceForTest(s.DB, func(ctx context.Context, q store.Querier) error {
-		if fences++; fences != 2 {
+		if fences++; fences != 3 {
 			return nil
 		}
 		_, err := q.Exec(ctx, `UPDATE a2a_tasks SET version = version + 1 WHERE id = ?`, "b-raced")
@@ -550,26 +552,54 @@ func testSettleInterruptedSkipsATask(t *testing.T, h Harness) {
 	})
 	defer store.SetFenceForTest(s.DB, nil)
 
-	failed, err := s.SettleInterrupted(ctx, interruptedText)
+	done, err := s.SettleInterrupted(ctx, interruptedText)
 	if err != nil {
 		t.Fatalf("SettleInterrupted: %v, want the store's failures alone to stop it", err)
 	}
-	if got := ids(failed); !slices.Equal(got, []string{"c-fine"}) {
-		t.Fatalf("SettleInterrupted failed %v, want c-fine alone", got)
+	if got := ids(done.Failed); !slices.Equal(got, []string{"c-fine"}) || done.Skipped != 1 ||
+		!slices.Equal(done.Unreadable, []a2a.TaskInfo{{TaskID: "a-broken", ContextID: "c1"}}) || done.Interrupted() != 2 {
+		t.Fatalf("SettleInterrupted = %+v, want c-fine failed, a-broken failed unread and b-raced skipped", done)
 	}
 	store.SetFenceForTest(s.DB, nil)
 	if got, err := s.Get(kourier, "b-raced"); err != nil || got.Task.Status.State != a2a.TaskStateWorking || got.Version != 2 {
 		t.Fatalf("the task that changed: %+v, %v; want it as the change left it", got, err)
 	}
-	log.mu.Lock()
-	defer log.mu.Unlock()
-	if len(log.msgs) != 2 {
-		t.Fatalf("WARN records %v, want one for each task left", log.msgs)
+	var state string
+	var version, statusAt, updatedAt int64
+	if err := s.Reader().QueryRow(ctx, `SELECT state, version, status_at, updated_at FROM a2a_tasks WHERE id = ?`, "a-broken").
+		Scan(&state, &version, &statusAt, &updatedAt); err != nil || state != string(a2a.TaskStateFailed) || version != 2 ||
+		statusAt != clk.Now().UnixNano() || updatedAt != clk.Now().UnixNano() {
+		t.Fatalf("the unreadable task: %s version %d status_at %d updated_at %d, %v; want failed now, version 2", state, version, statusAt, updatedAt, err)
 	}
-	for i, id := range []string{"a-broken", "b-raced"} {
-		if log.msgs[i] != "fail an interrupted task" || !strings.Contains(log.keys[i], "task="+id+" ") || !strings.Contains(log.keys[i], "error=") {
-			t.Errorf("WARN %d: %q %q, want the task %s and its error", i, log.msgs[i], log.keys[i], id)
+	func() {
+		log.mu.Lock()
+		defer log.mu.Unlock()
+		if len(log.msgs) != 2 {
+			t.Fatalf("WARN records %v, want one for each task not failed as read", log.msgs)
 		}
+		for i, want := range []struct{ id, msg string }{
+			{"a-broken", "fail an unreadable interrupted task by its state alone"}, {"b-raced", "fail an interrupted task"},
+		} {
+			if log.msgs[i] != want.msg || !strings.Contains(log.keys[i], "task="+want.id+" ") || !strings.Contains(log.keys[i], "error=") {
+				t.Errorf("WARN %d: %q %q, want %q with the task %s and its error", i, log.msgs[i], log.keys[i], want.msg, want.id)
+			}
+		}
+	}()
+	// The retention deletes the unreadable task as a settled one; a running task is no settled one.
+	clk.Advance(time.Minute)
+	if n, err := s.DeleteSettledBefore(ctx, clk.Now()); err != nil || n != 2 {
+		t.Fatalf("DeleteSettledBefore = %d, %v; want a-broken and c-fine", n, err)
+	}
+	var left []string
+	if err := s.Reader().Query(ctx, `SELECT id FROM a2a_tasks ORDER BY id`, nil, func(scan func(...any) error) error {
+		var id string
+		if err := scan(&id); err != nil {
+			return err
+		}
+		left = append(left, id)
+		return nil
+	}); err != nil || !slices.Equal(left, []string{"b-raced"}) {
+		t.Fatalf("tasks left: %v, %v; want b-raced alone", left, err)
 	}
 }
 

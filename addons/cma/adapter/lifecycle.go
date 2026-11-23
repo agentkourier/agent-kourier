@@ -130,16 +130,19 @@ func (e *Executor) Restore(ctx context.Context) error {
 // Settle fails the tasks a restart left submitted or working, with the agent message InterruptedMessage, and sends
 // their sessions an interrupt (best effort: a failure is logged). A task paused on an approval (input-required)
 // survives, and its answer reaches the paused calls. Call it after Restore and before serving. The store fails each
-// task in a write of its own, and logs and leaves one it cannot fail for a reason of its own; Settle fails when the
-// store cannot be read or written.
+// task in a write of its own: one whose record does not decode by its state alone, and one that changed since it was
+// read it logs and leaves. Settle fails when the store cannot be read or written.
 func (e *Executor) Settle(ctx context.Context) error {
-	tasks, err := e.Store.SettleInterrupted(ctx, InterruptedMessage)
-	e.Telemetry.TasksInterrupted(len(tasks))
+	settled, err := e.Store.SettleInterrupted(ctx, InterruptedMessage)
+	e.Telemetry.TasksInterrupted(settled.Interrupted())
 	if err != nil {
 		return err
 	}
 	contexts := map[string]bool{}
-	for _, task := range tasks {
+	for _, task := range settled.Failed {
+		contexts[task.ContextID] = true
+	}
+	for _, task := range settled.Unreadable {
 		contexts[task.ContextID] = true
 	}
 	for contextID := range contexts {
@@ -153,8 +156,9 @@ func (e *Executor) Settle(ctx context.Context) error {
 			e.logger().Warn("interrupt the session of an interrupted task", "context", contextID, "session", cs.id, "error", err)
 		}
 	}
-	if len(tasks) > 0 {
-		e.logger().Info("failed the tasks a restart interrupted", "tasks", len(tasks))
+	if settled.Interrupted() > 0 || settled.Skipped > 0 {
+		e.logger().Info("failed the tasks a restart interrupted", "tasks", settled.Interrupted(),
+			"unreadable", len(settled.Unreadable), "skipped", settled.Skipped)
 	}
 	return nil
 }

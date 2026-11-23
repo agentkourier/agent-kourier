@@ -100,9 +100,10 @@ the ADK sessions with their events, so a restart loses none of them. At start th
 2. Leads: at once on SQLite, and on Postgres once it holds the lease ([Replicas](#replicas)).
 3. As the leader, fails each task left `submitted` or `working` with the agent message "Interrupted by an agent
    restart.", starts the upkeep, and only then serves A2A requests. Until then `/readyz` answers 503, and an A2A request
-   is answered 503 with `Retry-After`. Each task is failed in a write of its own: a task the store cannot fail (its
-   stored record does not decode, or it changed since it was read) is logged at WARN and left as it is, and the others
-   are still failed; a store that cannot be read or written stops the takeover with an error.
+   is answered 503 with `Retry-After`. Each task is failed in a write of its own. A task whose stored record does not
+   decode is failed by its state alone, so that `TASK_RETENTION` deletes it, and is logged at WARN; a task that changed
+   since it was read is logged at WARN and left as it is. A store that cannot be read or written stops the takeover
+   with an error.
 
 | Survives a restart | Is interrupted |
 |---|---|

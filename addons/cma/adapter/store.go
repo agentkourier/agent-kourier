@@ -8,6 +8,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2asrv/taskstore"
 
 	"github.com/agentkourier/agent-kourier/addons/cma/store"
+	kitstore "github.com/agentkourier/agent-kourier/addons/kit/store"
 )
 
 // Store is the state the adapter keeps across a restart: the A2A tasks, the message IDs that started or joined them,
@@ -15,8 +16,9 @@ import (
 type Store interface {
 	taskstore.Store
 	// SettleInterrupted fails every task a restart left submitted or working, with an agent message of text, and
-	// returns the tasks it failed. A task it cannot fail for a reason of its own is logged and left.
-	SettleInterrupted(ctx context.Context, text string) ([]*a2a.Task, error)
+	// says which it failed: one whose record does not decode by its state alone, and one that changed since it was
+	// read it logs and leaves.
+	SettleInterrupted(ctx context.Context, text string) (kitstore.Settlement, error)
 	// DeleteSettledBefore deletes the settled tasks last updated before cutoff, with their message IDs.
 	DeleteSettledBefore(ctx context.Context, cutoff time.Time) (int64, error)
 	// MessageTask returns the call's caller's task that a message ID started or joined, or nil when none is recorded.

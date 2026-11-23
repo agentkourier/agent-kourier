@@ -107,9 +107,10 @@ At start, before it serves, the add-on:
     - A stored session that is no longer listed (archived, terminated, or in another environment) is forgotten with
       its context's tasks, and the context's next message starts a new session.
 2. Fails each task left `submitted` or `working` with the agent message "Interrupted by an adapter restart." and sends
-   its session `user.interrupt` (a failed interrupt is logged). Each task is failed in a write of its own: a task the
-   store cannot fail (its stored record does not decode, or it changed since it was read) is logged at WARN and left
-   as it is, and the others are still failed. It does not start if the store cannot be read or written.
+   its session `user.interrupt` (a failed interrupt is logged). Each task is failed in a write of its own. A task whose
+   stored record does not decode is failed by its state alone, so that `TASK_RETENTION` deletes it, and is logged at
+   WARN; a task that changed since it was read is logged at WARN and left as it is. It does not start if the store
+   cannot be read or written.
 
 | Survives a restart | Is interrupted |
 |---|---|
