@@ -689,11 +689,11 @@ func (s *Sweeper) replace(ctx context.Context, row store.Interaction) error {
 	if row.MessageRef == "" {
 		return nil
 	}
-	var in dialect.Interaction // zero if the stored request cannot be read: the ending still says that it timed out
-	if err := json.Unmarshal(row.Request, &in); err != nil {
+	var req storedRequest // zero if the stored request cannot be read: the ending still says that it timed out
+	if err := json.Unmarshal(row.Request, &req); err != nil {
 		s.cfg.Logger.WarnContext(ctx, "interact: the stored request cannot be read", "interaction", row.ID)
 	}
-	e, err := endingOf(chat.TimedOut, "", row.Deadline, in, nil)
+	e, err := endingOf(chat.TimedOut, "", row.Deadline, req, nil)
 	if err != nil {
 		return fmt.Errorf("interact: the ending of %s: %w", row.ID, err)
 	}

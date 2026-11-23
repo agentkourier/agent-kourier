@@ -303,7 +303,8 @@ func (b *cardBuilder) who(by, words, alone string) {
 
 // ending is the card that replaces a prompt once it has ended: how it ended and who decided, what was asked, and for each question
 // its answer, or for each tool one line, as a status line shows a call: its name (numbered if there are several), the summary of its
-// arguments (chat.Tool.Summary) in parentheses and what was decided of it, as in "2. kubectl(ns="prod") — Denied". The arguments
+// arguments (chat.Tool.Summary) in parentheses and what was decided of it, as in "2. kubectl(ns="prod") — Denied", or with no
+// arguments for a tool whose call the thread shows on its card already (chat.Tool.OnCard), as in "2. kubectl — Denied". The arguments
 // whole are the prompt's, which the person read before deciding. It has no controls, and its fallbackText is the outcome.
 func (b *cardBuilder) ending(e chat.Ending) map[string]any {
 	verb := "Answered"
@@ -339,11 +340,15 @@ func (b *cardBuilder) ending(e chat.Ending) map[string]any {
 }
 
 // endedTool is the line of tool i of the ended prompt e (ending), within the cap of a line that holds a tool's name and its
-// arguments: the summary cut to half of it at most, the verdict whole, and the name to what is left, each cut marked.
+// arguments: the summary cut to half of it at most, the verdict whole, and the name to what is left, each cut marked. A tool whose
+// call the thread shows on its card (chat.Tool.OnCard) has no summary, and its name the cap less the verdict.
 func (b *cardBuilder) endedTool(e chat.Ending, i int) string {
 	tools := e.Prompt.Tools
 	limit := min(b.limit(chat.WhereToolName), b.limit(chat.WhereToolArg))
-	rest := "(" + chat.Truncate(tools[i].Summary(), limit/2) + ")"
+	rest := ""
+	if !tools[i].OnCard {
+		rest = "(" + chat.Truncate(tools[i].Summary(), limit/2) + ")"
+	}
 	if i < len(e.Verdicts) {
 		rest += " — " + map[chat.ToolVerdict]string{chat.ToolApproved: "Approved", chat.ToolDenied: "Denied"}[e.Verdicts[i]]
 	}

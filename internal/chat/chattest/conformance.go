@@ -61,7 +61,8 @@ type Subject struct {
 	// than Caps.Limit of their place (WhereToolName, WhereToolArgs) gets chat.ErrTooLarge from Fits, Post and Update, and
 	// shows nothing of it. The ending of a prompt of tools shows each tool's name and the summary of its arguments
 	// (chat.Tool.Summary) on one line, cut and marked like any other text, since an ending cannot be refused without
-	// stranding the prompt with its controls.
+	// stranding the prompt with its controls; a tool whose call the thread shows on its card already (chat.Tool.OnCard) is
+	// named with no arguments.
 	ToolApprovals bool
 	// TooLargeTools, if set and ToolApprovals is, is a prompt of tools too large for the platform: Fits must refuse it
 	// with chat.ErrTooLarge.
@@ -375,6 +376,7 @@ func (c *checker) contract() {
 				c.add(RuleContract, chat.WhereToolName, "Fits", "too large prompt of tools", "the prompt of tools given as too large gave %v, want chat.ErrTooLarge", err)
 			}
 		}
+		c.toolOnCard()
 	}
 	for _, err := range []error{errors.New("boom"), context.Canceled, context.DeadlineExceeded} {
 		for _, op := range []chat.Op{chat.OpPost, chat.OpReact, chat.OpOther} {
@@ -646,6 +648,31 @@ func (c *checker) noToolApprovals() {
 		if _, err := p.Post(c.ctx, c.target, o, "tag-tools"); !errors.Is(err, chat.ErrInvalid) {
 			c.add(RuleContract, chat.WhereToolName, "Post", "tools not declared", "a %s of tools gave %v, want an error wrapping chat.ErrInvalid: Subject.ToolApprovals is false", name, err)
 		}
+	}
+}
+
+// toolOnCard checks the ending of a prompt of two tools whose first the thread shows on its card already (chat.Tool.OnCard): the
+// ending names that tool and leaves its arguments out, which the card holds, and shows the second, which has no card, with the
+// summary of its arguments, as every ending does.
+func (c *checker) toolOnCard() {
+	e := chat.Ending{Outcome: chat.Answered, Prompt: chat.Prompt{ID: "ix-conformance", Tools: []chat.Tool{
+		{Name: canary + "card", Args: `{"k":"` + canary + `shown"}`, OnCard: true},
+		{Name: "other", Args: `{"k":"` + canary + `kept"}`},
+	}}, Verdicts: []chat.ToolVerdict{chat.ToolApproved, chat.ToolDenied}}
+	c.s.Sent()
+	_ = c.s.Inert()
+	if _, err := c.s.Platform.Post(c.ctx, c.target, chat.End(e), "tag-tool-on-card"); err != nil {
+		c.add(RuleContract, chat.WhereToolArg, "Post", "tool on its card", "the ending of a prompt of tools was refused: %v", err)
+		return
+	}
+	var name, again, kept bool
+	for _, s := range c.s.Sent() {
+		name = name || strings.Contains(s.Displayed, canary+"card")
+		again = again || strings.Contains(s.Displayed, canary+"shown")
+		kept = kept || strings.Contains(s.Displayed, canary+"kept")
+	}
+	if !name || again || !kept {
+		c.add(RuleContract, chat.WhereToolArg, "Post", "tool on its card", "the ending showed the name of the tool on its card: %t, its arguments: %t, and the arguments of the tool with no card: %t; want true, false, true", name, again, kept)
 	}
 }
 
