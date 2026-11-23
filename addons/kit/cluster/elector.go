@@ -1,7 +1,8 @@
-// Package cluster runs several replicas of the agent on one Postgres store as one: they elect a leader through the
-// store's lease row (store.TryLead), the leader alone runs turns, settles the turns a restart cut off and runs the
-// store's upkeep, and a standby forwards each A2A request, and each request for the card, to the leader. With SQLite
-// there is one replica, which always leads.
+// Package cluster runs several replicas of an add-on on one Postgres store as one: they elect a leader through the
+// store's lease row (store.DB.TryLead), the leader alone runs turns, settles the turns a restart cut off and runs the
+// store's upkeep, and a standby forwards each A2A request, and each request for the card, to the leader (Router). A
+// replica that stops leading while it runs ends at once (FailStop). With SQLite there is one replica, which always
+// leads.
 package cluster
 
 import (
@@ -18,15 +19,6 @@ import (
 	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
-// ExitLeadershipLost is the exit code of a replica that led and no longer does: its lease could not be renewed within
-// the renew deadline, or a write or a renewal found that another replica has taken it since. The process ends at once,
-// without a drain, and Kubernetes restarts it as a standby. It is the broker's code for the same end.
-const ExitLeadershipLost = 5
-
-// ErrLeadershipLost is what Run returns when this replica stops leading: the caller ends the process with
-// ExitLeadershipLost.
-var ErrLeadershipLost = errors.New("leadership lost: the lease was taken or could not be renewed")
-
 // Lease is the store's side of the election. *store.DB implements it on Postgres, and so does the add-on's store,
 // which embeds it.
 type Lease interface {
@@ -41,8 +33,9 @@ type Lease interface {
 	CurrentLeader(ctx context.Context) (store.Lease, error)
 }
 
-// Status is what this replica is doing: leading or not, and, when it leads, whether it has finished taking over
-// (failed the turns a restart or a takeover cut off) and serves A2A requests.
+// Status is what this replica is doing: leading or not, and, when it leads, whether it has finished taking over (the
+// add-on's start-up work as the leader, such as failing the turns a restart or a takeover cut off) and serves A2A
+// requests.
 type Status struct {
 	leading, serving atomic.Bool
 }
@@ -90,10 +83,9 @@ type cachedLease struct {
 
 // Run campaigns until this replica takes the lease or ctx ends, trying every RetryPeriod. Once it leads, it runs lead in
 // a goroutine of its own, with a context that ends when Run is done, and renews the lease every RetryPeriod; Run returns
-// only once lead has. It
-// returns ErrLeadershipLost when a renewal finds the lease taken, or no renewal has succeeded for RenewDeadline; the
-// error of lead, if lead fails; and nil when ctx ends. It never releases the lease: the caller does that (Release)
-// once it has stopped serving, so that a standby does not take over while this replica still writes.
+// only once lead has. It returns ErrLeadershipLost when a renewal finds the lease taken, or no renewal has succeeded for
+// RenewDeadline; the error of lead, if lead fails; and nil when ctx ends. It never releases the lease: the caller does
+// that (Release) once it has stopped serving, so that a standby does not take over while this replica still writes.
 //
 // After TryLeadOnce has taken the lease, Run leads at once, without campaigning.
 func (e *Elector) Run(ctx context.Context, lead func(ctx context.Context) error) error {

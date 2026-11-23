@@ -8,6 +8,7 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,9 +22,9 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/agentkourier/agent-kourier/addons/ax/cluster"
 	"github.com/agentkourier/agent-kourier/addons/ax/config"
 	"github.com/agentkourier/agent-kourier/addons/ax/store"
+	"github.com/agentkourier/agent-kourier/addons/kit/cluster"
 	kitstore "github.com/agentkourier/agent-kourier/addons/kit/store"
 	"github.com/agentkourier/agent-kourier/addons/kit/store/pgtest"
 )
@@ -344,6 +345,9 @@ func TestPostgresLeaderSettlesBeforeItServes(t *testing.T) {
 	if c, retry := post(t, a.base+"/a2a"); c != http.StatusServiceUnavailable || retry == "" {
 		t.Fatalf("an A2A request while the leader settles = %d, Retry-After %q; want 503 with Retry-After", c, retry)
 	}
+	if c, body := probe(http.MethodPost, a.base+"/a2a", token); c != http.StatusServiceUnavailable || body != "the agent is taking over as the leader\n" {
+		t.Fatalf("an A2A request while the leader settles = %d %q, want 503 and the agent's words", c, body)
+	}
 	if got := metric(a.base, "agentkourier_ax_leader"); got != "1" {
 		t.Fatalf("leader = %q: the replica took the lease before it listened", got)
 	}
@@ -356,6 +360,50 @@ func TestPostgresLeaderSettlesBeforeItServes(t *testing.T) {
 	turn(t, a.client(t), "after the settlement")
 	if got := metric(a.base, "agentkourier_ax_tasks_interrupted_total"); got != "1" {
 		t.Errorf("tasks interrupted = %q, want 1", got)
+	}
+}
+
+// A standby forwards an A2A request to the leader with the agent's hop header, X-Agent-Kourier-Ax-Forwarded: 1, and
+// answers 503 to a request that already carries it instead of forwarding it again.
+func TestPostgresStandbyForwardsWithTheAgentsHopHeader(t *testing.T) {
+	dsn := pgtest.DSN(t)
+	const hop = "X-Agent-Kourier-Ax-Forwarded"
+	hops := make(chan []string, 2)
+	leader := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { hops <- r.Header.Values(hop) }))
+	t.Cleanup(leader.Close)
+	seed, err := store.OpenPostgres(t.Context(), dsn, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = seed.Close() })
+	if _, ok, err := seed.TryLead(t.Context(), "seed", leader.URL, time.Hour); err != nil || !ok {
+		t.Fatalf("TryLead: %v, %v", ok, err)
+	}
+	addr := freeAddr(t)
+	b := startReplica(t, addr, postgresEnv(dsn, "ax-b", addr))
+	waitFor(t, "the standby to be ready", b.ready)
+	if c, retry := post(t, b.base+"/a2a"); c != http.StatusOK {
+		t.Fatalf("an A2A request through the standby = %d (Retry-After %q), want the leader's 200", c, retry)
+	}
+	if got := <-hops; len(got) != 1 || got[0] != "1" {
+		t.Fatalf("%s at the leader = %q, want [1]", hop, got)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, b.base+"/a2a", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set(hop, "1")
+	resp, err := prober.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("a request another standby forwarded = %d, want 503", resp.StatusCode)
+	}
+	if len(hops) != 0 {
+		t.Fatal("the standby forwarded a request that another standby had forwarded")
 	}
 }
 

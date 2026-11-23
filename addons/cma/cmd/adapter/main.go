@@ -33,10 +33,10 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/v2"
 
 	"github.com/agentkourier/agent-kourier/addons/cma/adapter"
-	"github.com/agentkourier/agent-kourier/addons/cma/cluster"
 	"github.com/agentkourier/agent-kourier/addons/cma/config"
 	"github.com/agentkourier/agent-kourier/addons/cma/store"
 	"github.com/agentkourier/agent-kourier/addons/kit/auth"
+	"github.com/agentkourier/agent-kourier/addons/kit/cluster"
 	"github.com/agentkourier/agent-kourier/addons/kit/telemetry"
 )
 
@@ -134,8 +134,8 @@ func serve(ctx context.Context, cfg config.Config, traces telemetry.Config, log 
 		}
 	}
 
-	lost := &failStop{log: log, exit: os.Exit}
-	st, err := openStore(ctx, cfg, store.Options{Log: log, OnDeposed: func() { lost.now("a write found that another replica has taken the lease") }})
+	lost := &cluster.FailStop{Log: log, Exit: os.Exit}
+	st, err := openStore(ctx, cfg, store.Options{Log: log, OnDeposed: lost.Deposed})
 	if err != nil {
 		return err
 	}
@@ -172,7 +172,7 @@ func serve(ctx context.Context, cfg config.Config, traces telemetry.Config, log 
 	card := adapter.Card("claude-managed-agent", "A Claude Managed Agents agent served over A2A", cfg.PublicURL, version)
 	status := &cluster.Status{}
 	router := &cluster.Router{Local: telemetry.Extract(adapter.Mux(a2aPath, card, rpc, check)), Status: status,
-		RetryAfter: cfg.Lease.RetryPeriod, Telemetry: tel, Log: log}
+		Addon: adapter.TelemetrySpec().Name, Noun: "adapter", RetryAfter: cfg.Lease.RetryPeriod, Telemetry: tel, Log: log}
 	var elector *cluster.Elector
 	if cfg.Store == config.StorePostgres {
 		elector = &cluster.Elector{Lease: st, Holder: cfg.PodName, Address: cfg.AdvertiseURL, LeaseDuration: cfg.Lease.Duration,
@@ -235,7 +235,7 @@ func serve(ctx context.Context, cfg config.Config, traces telemetry.Config, log 
 	case err := <-led:
 		ledDone = true
 		if errors.Is(err, cluster.ErrLeadershipLost) {
-			lost.now("the lease was lost or could not be renewed")
+			lost.LeaseLost()
 		}
 		failure = err
 	}
@@ -310,21 +310,6 @@ func mux(router http.Handler, ready func() bool, tel *telemetry.Telemetry) *http
 	})
 	m.Handle("/metrics", tel.Handler())
 	return m
-}
-
-// failStop ends the process at once, once, with a line that says why: the answer to a lost lease and to a write the
-// store refused as deposed. A drain would let a replica that no longer leads keep running turns.
-type failStop struct {
-	log  *slog.Logger
-	exit func(code int)
-	once sync.Once
-}
-
-func (f *failStop) now(reason string) {
-	f.once.Do(func() {
-		f.log.Error("leadership lost: stopping at once, without a drain", "reason", reason)
-		f.exit(cluster.ExitLeadershipLost)
-	})
 }
 
 // openStore opens the store the configuration names.
