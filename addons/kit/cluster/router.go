@@ -29,9 +29,9 @@ func HopHeader(addon string) string {
 const ForwardDialTimeout = 5 * time.Second
 
 // forwardKeepAlive is how long a connection to the leader goes with nothing received before the standby's kernel starts
-// to probe it (TCP_KEEPIDLE). Go then probes every 15 seconds and gives up after 9 unanswered probes (its defaults, on
-// Linux), so a forward to a leader lost without closing its connection fails after about 165 seconds instead of
-// waiting for ever: nothing else bounds the wait for the leader's answer.
+// to probe it (TCP_KEEPIDLE). The kernel then probes every 15 seconds and gives up after 9 unanswered probes (Go's
+// defaults, on Linux), so a forward to a leader lost without closing its connection fails after about 165 seconds
+// instead of waiting until the caller goes away: nothing on the standby bounds the wait for the leader's answer.
 const forwardKeepAlive = 30 * time.Second
 
 // Leaders finds the replica to forward to. *Elector implements it.
