@@ -175,6 +175,13 @@ line's newest and perhaps as latest.
   platforms and each add-on's the same way.
 - Builds, checks and scans every platform of every image before the first push, so an agent or add-on image that fails
   leaves nothing pushed.
+- Runs a build that fails again, four times in all, after 15, 30 and 60 seconds (`BUILD_ATTEMPTS` and
+  `BUILD_RETRY_WAIT` change them), because the registries and package repositories a build fetches from fail for a
+  moment: Chainguard's registry has answered the HEAD of the agents' pinned Wolfi base with 500 on GitHub's runners, and
+  its package repository has failed `apk`'s downloads. BuildKit keeps the steps that finished, so a retry runs again
+  the step that failed and those after it. A check, a scan or a comparison of a pushed image that fails is not retried,
+  and a build that fails every attempt stops the release as before. A push run again after it failed part way leaves
+  the tag on what the attempt that succeeded pushed, and that attempt's digest is the one signed and released.
 - Pushes one multi-platform image tagged `vX.Y.Z` with the workflow's `GITHUB_TOKEN` (`packages: write`),
   with an SBOM and a max-mode provenance attestation attached, and the OCI labels source, revision, version
   and created (the commit's time). Pushes each agent image and each add-on's the same way, tagged `vX.Y.Z`, to Agent
