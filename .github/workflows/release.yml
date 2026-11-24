@@ -1,10 +1,10 @@
 # A pushed tag v* first proves that the exact tagged commit passed the push-to-main CI, security and CodeQL workflows.
 # It then builds the multi-arch image, refuses it if any platform's binary carries a test hook, builds the recipes'
-# agent images (prompt-agent, echo-agent) and the add-ons' images (cma, ax) the same way, scans every platform image
-# before the first push, pushes them
-# to GHCR with the workflow's own token, attaches SBOM and provenance attestations, packages the Helm chart with
-# Agent Kourier's digest as its default image (and each add-on's as the add-on's) and pushes it, and then signs and
-# verifies every digest with cosign keyless. Only the verified artifacts get a GitHub Release.
+# agent images (prompt-agent, echo-agent) and the add-ons' images (each of hack/addons.txt) the same way, scans every
+# platform image before the first push, pushes them to GHCR with the workflow's own token, attaches SBOM and provenance
+# attestations, packages the Helm chart with Agent Kourier's digest as its default image (and each add-on's as the
+# add-on's) and pushes it, and then signs and verifies every digest with cosign keyless. Only the verified artifacts get
+# a GitHub Release.
 # The build, the checks and the pushes are hack/release/release.sh, the script `make release-image` runs, so a
 # human builds the same artifacts. RELEASING.md describes the whole path and the repository settings that
 # decide who can start it.
@@ -64,14 +64,15 @@ jobs:
     permissions:
       contents: read # checkout
       packages: write # push to GHCR with GITHUB_TOKEN
-    # Each add-on of hack/addons.txt has an output here, its reference in sign, verify and publish, and its line in the
-    # release notes: hack/ci/addonlist's test fails when they and the list differ.
+    # A job's outputs are fixed in the workflow, so the add-ons share one: addons, a JSON object of each add-on of
+    # hack/addons.txt, in its order, to its image's reference, which the digests step builds from the list. sign, verify
+    # and publish go over it as ADDON_REFS, so a line in the list is all the release needs. hack/ci/addonlist's test
+    # runs those steps for a list of its own.
     outputs:
       image: ${{ steps.digests.outputs.image }}
       prompt-agent: ${{ steps.digests.outputs.prompt-agent }}
       echo-agent: ${{ steps.digests.outputs.echo-agent }}
-      cma: ${{ steps.digests.outputs.cma }}
-      ax: ${{ steps.digests.outputs.ax }}
+      addons: ${{ steps.digests.outputs.addons }}
       chart: ${{ steps.digests.outputs.chart }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -124,15 +125,19 @@ jobs:
           image="${IMAGE}@$(cat bin/release/digest)"
           prompt_agent="${IMAGE}-prompt-agent@$(cat bin/release/prompt-agent-digest)"
           echo_agent="${IMAGE}-echo-agent@$(cat bin/release/echo-agent-digest)"
-          cma="${IMAGE}-cma@$(cat bin/release/cma-digest)"
-          ax="${IMAGE}-ax@$(cat bin/release/ax-digest)"
           chart="${CHARTS#oci://}/agent-kourier@$(cat bin/release/chart-digest)"
+          # Each add-on's image is ${IMAGE}-<name>, and release.sh writes its digest to bin/release/<name>-digest.
+          list=$(hack/addons.sh)
+          addons='{}'
+          while IFS= read -r a; do
+            ref="${IMAGE}-${a}@$(cat "bin/release/${a}-digest")"
+            addons=$(jq -c --arg name "${a}" --arg ref "${ref}" '. + {($name): $ref}' <<<"${addons}")
+          done <<<"${list}"
           {
             echo "image=${image}"
             echo "prompt-agent=${prompt_agent}"
             echo "echo-agent=${echo_agent}"
-            echo "cma=${cma}"
-            echo "ax=${ax}"
+            echo "addons=${addons}"
             echo "chart=${chart}"
           } >>"${GITHUB_OUTPUT}"
           {
@@ -146,10 +151,9 @@ jobs:
             echo
             echo "Echo agent image: \`${echo_agent}\` (linux/amd64, linux/arm64)"
             echo
-            echo "CMA add-on image: \`${cma}\` (linux/amd64, linux/arm64)"
-            echo
-            echo "AX add-on image: \`${ax}\` (linux/amd64, linux/arm64)"
-            echo
+            # Each add-on's line, its name upper-cased, then an empty line.
+            # shellcheck disable=SC2016
+            jq -r 'to_entries[] | "\(.key | ascii_upcase) add-on image: `\(.value)` (linux/amd64, linux/arm64)\n"' <<<"${addons}"
             echo "Pin the digests in manifests. RELEASING.md says how to verify them."
           } >>"${GITHUB_STEP_SUMMARY}"
 
@@ -173,12 +177,20 @@ jobs:
           IMAGE_REF: ${{ needs.build.outputs.image }}
           PROMPT_AGENT_REF: ${{ needs.build.outputs.prompt-agent }}
           ECHO_AGENT_REF: ${{ needs.build.outputs.echo-agent }}
-          CMA_REF: ${{ needs.build.outputs.cma }}
-          AX_REF: ${{ needs.build.outputs.ax }}
+          ADDON_REFS: ${{ needs.build.outputs.addons }}
           CHART_REF: ${{ needs.build.outputs.chart }}
         run: |
+          # ADDON_REFS is the build's object of each add-on's name to its image's reference by digest; one that holds
+          # none stops the job.
+          addons=$(jq -er '
+            if type == "object" and length > 0 and all(.[]; type == "string" and test("@sha256:[0-9a-f]{64}$"))
+            then .[] else error("no add-on image") end' <<<"${ADDON_REFS}") ||
+            { echo "error: ADDON_REFS holds no add-on image reference by digest" >&2; exit 1; }
+          refs=("${IMAGE_REF}" "${PROMPT_AGENT_REF}" "${ECHO_AGENT_REF}")
+          while IFS= read -r ref; do refs+=("${ref}"); done <<<"${addons}"
+          refs+=("${CHART_REF}")
           printf '%s' "${GITHUB_TOKEN}" | cosign login ghcr.io --username "${ACTOR}" --password-stdin
-          for ref in "${IMAGE_REF}" "${PROMPT_AGENT_REF}" "${ECHO_AGENT_REF}" "${CMA_REF}" "${AX_REF}" "${CHART_REF}"; do
+          for ref in "${refs[@]}"; do
             cosign sign --yes "${ref}"
           done
 
@@ -201,14 +213,22 @@ jobs:
           IMAGE_REF: ${{ needs.build.outputs.image }}
           PROMPT_AGENT_REF: ${{ needs.build.outputs.prompt-agent }}
           ECHO_AGENT_REF: ${{ needs.build.outputs.echo-agent }}
-          CMA_REF: ${{ needs.build.outputs.cma }}
-          AX_REF: ${{ needs.build.outputs.ax }}
+          ADDON_REFS: ${{ needs.build.outputs.addons }}
           CHART_REF: ${{ needs.build.outputs.chart }}
           ISSUER: https://token.actions.githubusercontent.com
           IDENTITY: https://github.com/agentkourier/agent-kourier/.github/workflows/release.yml@refs/tags/${{ github.ref_name }}
         run: |
+          # ADDON_REFS is the build's object of each add-on's name to its image's reference by digest; one that holds
+          # none stops the job.
+          addons=$(jq -er '
+            if type == "object" and length > 0 and all(.[]; type == "string" and test("@sha256:[0-9a-f]{64}$"))
+            then .[] else error("no add-on image") end' <<<"${ADDON_REFS}") ||
+            { echo "error: ADDON_REFS holds no add-on image reference by digest" >&2; exit 1; }
+          refs=("${IMAGE_REF}" "${PROMPT_AGENT_REF}" "${ECHO_AGENT_REF}")
+          while IFS= read -r ref; do refs+=("${ref}"); done <<<"${addons}"
+          refs+=("${CHART_REF}")
           printf '%s' "${GITHUB_TOKEN}" | cosign login ghcr.io --username "${ACTOR}" --password-stdin
-          for ref in "${IMAGE_REF}" "${PROMPT_AGENT_REF}" "${ECHO_AGENT_REF}" "${CMA_REF}" "${AX_REF}" "${CHART_REF}"; do
+          for ref in "${refs[@]}"; do
             cosign verify "${ref}" \
               --certificate-oidc-issuer "${ISSUER}" \
               --certificate-identity "${IDENTITY}"
@@ -230,14 +250,21 @@ jobs:
       IMAGE_REF: ${{ needs.build.outputs.image }}
       PROMPT_AGENT_REF: ${{ needs.build.outputs.prompt-agent }}
       ECHO_AGENT_REF: ${{ needs.build.outputs.echo-agent }}
-      CMA_REF: ${{ needs.build.outputs.cma }}
-      AX_REF: ${{ needs.build.outputs.ax }}
+      ADDON_REFS: ${{ needs.build.outputs.addons }}
       CHART_REF: ${{ needs.build.outputs.chart }}
     steps:
       - name: Create or confirm the immutable release record
         shell: bash
         run: |
           set -euo pipefail
+          # Each add-on's line of the notes, "- <NAME> add-on image: `<reference>`" in hack/addons.txt's order, from the
+          # build's object of each add-on's name to its image's reference by digest; one that holds none stops the job.
+          # The released-image rescan (hack/security/select-release-images.sh) selects an add-on's image by this shape.
+          # shellcheck disable=SC2016
+          addon_lines=$(jq -er '
+            if type == "object" and length > 0 and all(.[]; type == "string" and test("@sha256:[0-9a-f]{64}$"))
+            then to_entries[] | "- \(.key | ascii_upcase) add-on image: `\(.value)`" else error("no add-on image") end' \
+            <<<"${ADDON_REFS}") || { echo "error: ADDON_REFS holds no add-on image reference by digest" >&2; exit 1; }
           release_api="repos/${REPOSITORY}/releases/tags/${TAG}"
           existing="${RUNNER_TEMP}/release.json"
           error="${RUNNER_TEMP}/release-error"
@@ -251,18 +278,17 @@ jobs:
             # The jq program intentionally uses jq variables, not shell variables.
             # shellcheck disable=SC2016
             if jq -e --arg tag "${TAG}" --arg image "${IMAGE_REF}" --arg chart "${CHART_REF}" \
-              --arg prompt_agent "${PROMPT_AGENT_REF}" --arg echo_agent "${ECHO_AGENT_REF}" --arg cma "${CMA_REF}" \
-              --arg ax "${AX_REF}" \
-              --argjson prerelease "${prerelease}" '
-                .tag_name == $tag
+              --arg prompt_agent "${PROMPT_AGENT_REF}" --arg echo_agent "${ECHO_AGENT_REF}" \
+              --arg addon_lines "${addon_lines}" --argjson prerelease "${prerelease}" '
+                (.body // "") as $body
+                | .tag_name == $tag
                 and (.draft // false) == false
                 and (.prerelease // false) == $prerelease
-                and ((.body // "") | contains("Image: `" + $image + "`"))
-                and ((.body // "") | contains("Chart: `" + $chart + "`"))
-                and ((.body // "") | contains("Prompt agent image: `" + $prompt_agent + "`"))
-                and ((.body // "") | contains("Echo agent image: `" + $echo_agent + "`"))
-                and ((.body // "") | contains("CMA add-on image: `" + $cma + "`"))
-                and ((.body // "") | contains("AX add-on image: `" + $ax + "`"))
+                and ($body | contains("Image: `" + $image + "`"))
+                and ($body | contains("Chart: `" + $chart + "`"))
+                and ($body | contains("Prompt agent image: `" + $prompt_agent + "`"))
+                and ($body | contains("Echo agent image: `" + $echo_agent + "`"))
+                and all($addon_lines | split("\n")[]; . as $line | $body | contains($line))
               ' "${existing}" >/dev/null; then
               echo "release ${TAG} already contains the verified image and chart digests; leaving it unchanged"
               exit 0
@@ -281,8 +307,8 @@ jobs:
           # shellcheck disable=SC2016
           body=$(jq -r '.body // empty' <<<"${generated}")
           [ -n "${body}" ] || { echo "error: GitHub generated no release notes" >&2; exit 1; }
-          body=$(printf "%s\n\n## Verified artifacts\n\n- Image: \`%s\`\n- Chart: \`%s\`\n- Prompt agent image: \`%s\`\n- Echo agent image: \`%s\`\n- CMA add-on image: \`%s\`\n- AX add-on image: \`%s\`\n" \
-            "${body}" "${IMAGE_REF}" "${CHART_REF}" "${PROMPT_AGENT_REF}" "${ECHO_AGENT_REF}" "${CMA_REF}" "${AX_REF}")
+          body=$(printf "%s\n\n## Verified artifacts\n\n- Image: \`%s\`\n- Chart: \`%s\`\n- Prompt agent image: \`%s\`\n- Echo agent image: \`%s\`\n%s\n" \
+            "${body}" "${IMAGE_REF}" "${CHART_REF}" "${PROMPT_AGENT_REF}" "${ECHO_AGENT_REF}" "${addon_lines}")
           payload="${RUNNER_TEMP}/release-payload.json"
           # shellcheck disable=SC2016
           jq -n --arg tag "${TAG}" --arg name "${TAG}" --arg body "${body}" \

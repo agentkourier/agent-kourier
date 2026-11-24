@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Prints the add-ons that hack/addons.txt lists, one name per line, in its order. Run as `hack/addons.sh`; ADDONS_FILE
-# names another list (the tests use it). The Makefile, hack/release/release.sh, package-chart.sh and check-ci.sh read
-# the list through it.
+# names another list (the tests use it). The Makefile, hack/release/release.sh, package-chart.sh, check-ci.sh and
+# release.yml's digests step read the list through it.
 #
 # A line holds one name, or nothing; # starts a comment, and space around a name is dropped. A name is lower-case
 # letters and digits, starting with a letter, in parts joined by single hyphens: it becomes a make target, a directory,
@@ -18,14 +18,15 @@ FILE=${ADDONS_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/addons.txt}
   exit 1
 }
 
-# The names an add-on cannot take, as its leg's check, its govulncheck and trivy checks, its caches, its image and its
-# release.yml output would then be another job's: the workflows' job IDs and check names, govulncheck's modules,
-# trivy's images, the caches' names and release.yml's outputs. test and test-*, and govulncheck-*, are taken as
-# families: the test jobs' caches are go-test-<leg>- and go-test-testhooks-<leg>-, and govulncheck's are
-# go-govulncheck-<module>-, which an add-on's cache, go-<name>-, would match.
-TAKEN='addon analyze build cache-prune chart codeql-go crd-corpus deploy-preview deploy-production docs docs-agent
-docs-build echo-agent gate gitleaks govulncheck image label links lint prompt-agent publish released-image-rescan root
-secrets sign verify'
+# The names an add-on cannot take, as its leg's check, its govulncheck and trivy checks, its caches or its image would
+# then be another job's: the workflows' job IDs and check names, govulncheck's modules, trivy's images and the caches'
+# names; and release.yml's outputs, which name the release's other artifacts and addons, the add-ons' images. test
+# and test-*, and govulncheck-*, are taken as families: the test jobs' caches are go-test-<leg>- and
+# go-test-testhooks-<leg>-, and govulncheck's are go-govulncheck-<module>-, which an add-on's cache, go-<name>-, would
+# match.
+TAKEN='addon addons analyze build cache-prune chart codeql-go crd-corpus deploy-preview deploy-production docs
+docs-agent docs-build echo-agent gate gitleaks govulncheck image label links lint prompt-agent publish
+released-image-rescan root secrets sign verify'
 
 awk -v file="${FILE}" -v taken="${TAKEN//$'\n'/ }" '
   function refuse(msg) { printf "addons.sh: %s line %d: %s\n", file, FNR, msg >"/dev/stderr"; bad = 1 }
