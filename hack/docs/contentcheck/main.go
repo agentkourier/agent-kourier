@@ -3,22 +3,23 @@
 // the site and the repository publish, and nothing would have noticed them coming back.
 //
 // It reads the public sources: README.md, charts/agent-kourier/README.md, the generated CRDs under
-// charts/agent-kourier/files/crds, charts/agent-kourier/values.yaml (all of it,
-// not only its comments: the comments feed docs/reference/helm-values.md and the values are the defaults the page
-// shows), every README.md and every YAML file under examples/recipes (the recipes' pages and their resources and evals,
-// at any depth; their code is not scanned yet), every text file under docs/ except the directories that mkdocs.yml's exclude_docs names (the brand kit and the
-// spike notes), and the site theme overrides under hack/docs/overrides. Text files are Markdown, HTML, CSS, JavaScript,
-// YAML, JSON, SVG, WebVTT, the web manifest, plain text and the Cloudflare _headers file; images and video are skipped.
-// Two kinds of check run:
+// charts/agent-kourier/files/crds, charts/agent-kourier/values.yaml (all of it, not only its comments: the comments
+// feed docs/reference/helm-values.md and the values are the defaults the page shows), every README.md and every YAML
+// file under examples/recipes (the recipes' pages and their resources and evals, at any depth; their code is not
+// scanned yet), every text file under examples/helm, every README.md under addons/ (the pages of the add-ons, of their
+// shared kit and of their nested modules, at any depth; the rest of addons/ is code), every text file under docs/
+// except the directories that mkdocs.yml's exclude_docs names (the brand kit and the spike notes), and the site theme
+// overrides under hack/docs/overrides. Text files are Markdown, HTML, CSS, JavaScript, YAML, JSON, SVG, WebVTT, the web
+// manifest, plain text and the Cloudflare _headers file; images and video are skipped. Three kinds of check run:
 //
 //   - Release rules: every release version a page names is the chart's (release.go), no page says there is no
 //     release, and no install command takes the chart from a checkout.
 //   - Content rules (the table in this file): internal work-package, decision and risk IDs and tasks/ paths, names that
 //     were removed from the product or the docs, fields the API types do not have yet, and, when CONTENTCHECK_WORKSPACE is
 //     set, identifiers of the owner's workspace. They apply to every line, code fences and inline code included: a leak in an example is still a leak.
-//   - Link hygiene, for the two READMEs and the recipes' READMEs only (mkdocs --strict already checks docs/): a relative link must name a file
-//     or directory that exists in the repository, and an anchor into a Markdown page must name one of its headings as
-//     GitHub slugs it, because GitHub renders the READMEs.
+//   - Link hygiene, for the two READMEs, the recipes' READMEs and the add-ons' READMEs only (mkdocs --strict already
+//     checks docs/): a relative link must name a file or directory that exists in the repository, and an anchor into a
+//     Markdown page must name one of its headings as GitHub slugs it, because GitHub renders the READMEs.
 //
 // A deliberate exception goes in hack/docs/contentcheck/allowlist.txt, one line each, with a reason. An entry that no
 // longer matches anything is itself a finding, so the list cannot rot.
@@ -212,9 +213,29 @@ var linkChecked = []string{"README.md", "charts/agent-kourier/README.md"}
 // resources of a recipe, and its evals, which an author fills with messages copied from a real channel) are public too.
 const recipesDir = "examples/recipes"
 
+// addonsDir holds the add-ons and their shared kit, each a Go module, some with nested modules. Its README.md files are
+// public pages, and GitHub renders them. They are found by walking the directory rather than from hack/addons.txt, which
+// names neither the kit nor a nested module, so a new add-on's page is checked without a second list to keep.
+const addonsDir = "addons"
+
 // isLinkChecked reports whether the links of the public source p (a slash-separated path from the root) are checked.
 func isLinkChecked(p string) bool {
-	return slices.Contains(linkChecked, p) || isRecipeREADME(p)
+	return slices.Contains(linkChecked, p) || isRecipeREADME(p) || isAddonREADME(p)
+}
+
+// isAddonREADME reports whether p is a README.md at any depth under addonsDir.
+func isAddonREADME(p string) bool {
+	return strings.HasPrefix(p, addonsDir+"/") && path.Base(p) == "README.md"
+}
+
+// addonREADMEs returns the README.md files under addonsDir in root, as slash-separated paths relative to it. The
+// directory may be absent.
+func addonREADMEs(root string) ([]string, error) {
+	all, err := textFiles(root, addonsDir, nil)
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(all, func(p string) bool { return !isAddonREADME(p) }), nil
 }
 
 // isRecipeREADME reports whether p is a README.md at any depth under recipesDir.
@@ -338,6 +359,10 @@ func publicFiles(root string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	addons, err := addonREADMEs(root)
+	if err != nil {
+		return nil, err
+	}
 	helmExamples, err := textFiles(root, "examples/helm", nil)
 	if err != nil {
 		return nil, err
@@ -347,7 +372,7 @@ func publicFiles(root string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return slices.Concat(files, recipes, helmExamples, crds, docs, overrides), nil
+	return slices.Concat(files, addons, recipes, helmExamples, crds, docs, overrides), nil
 }
 
 // allowEntry is one deliberate exception: a line of path that matches rule and holds text.
