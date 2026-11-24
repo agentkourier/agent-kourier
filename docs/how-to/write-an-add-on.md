@@ -196,8 +196,10 @@ make addon-lint-<name>
 ## 7. Wire it into the repository
 
 - **The list.** Add the name to `hack/addons.txt`. The Makefile's `addon-test-<name>`, `addon-lint-<name>` and
-  `addon-image-<name>` targets, the release scripts and the workflows' add-on legs follow the list, and a test holds the
-  workflows to it. The image builds from `addons/<name>/Dockerfile` with the context `addons/`, which holds every
+  `addon-image-<name>` targets, with their aliases `<name>-test`, `<name>-lint` and `<name>-image`, the release scripts
+  and the workflows' add-on legs follow the list, and a test holds the workflows to it. A name whose alias the Makefile
+  already gives to a rule of its own, such as `release` (`release-image`), fails `hack/addons_test.sh`, which
+  `make test-scripts` runs. The image builds from `addons/<name>/Dockerfile` with the context `addons/`, which holds every
   add-on; `addons/<name>/Dockerfile.dockerignore`, which BuildKit reads in place of the context's own, lets in only the
   kit and the add-on.
 - **The chart.** An add-on has:
