@@ -21,7 +21,8 @@ func (e inUseError) Error() string { return "another " + e.noun + " has the SQLi
 // Is makes errors.Is(err, ErrInUse) hold.
 func (e inUseError) Is(target error) bool { return target == ErrInUse }
 
-// sqliteReadConns is the size of the read pool.
+// sqliteReadConns is the size of the read pool. A read past it waits in database/sql for a connection, for as long as
+// its context lasts.
 const sqliteReadConns = 4
 
 // SQLiteBusyTimeout is how long a connection waits for a lock on the file before its statement fails with SQLITE_BUSY.
