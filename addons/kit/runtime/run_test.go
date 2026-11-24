@@ -51,9 +51,34 @@ func tokenFile(t *testing.T) string {
 	return path
 }
 
-// startRun runs a on a free loopback port with the token file and the settings in env over SQLite's, and returns once it
-// listens.
+// startRun runs a as startListening does, and returns once it serves A2A requests as the leader. It listens before its
+// takeover is done, and until then the router answers 503: a request sent as startListening returns can fail.
 func startRun[S Store](t *testing.T, a Addon[S], env map[string]string, opts Options) *running {
+	t.Helper()
+	r := startListening(t, a, env, opts)
+	waitUntil(t, "the leader to serve", func() bool { return cardStatus(r.base) == http.StatusOK })
+	return r
+}
+
+// cardStatus is what an authenticated GET of the card at base answers, or 0 when it cannot be reached: 200 once the
+// leader serves, 503 while it takes over.
+func cardStatus(base string) int {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, base+A2APath+CardPath, nil)
+	if err != nil {
+		return 0
+	}
+	req.Header.Set("Authorization", "Bearer "+fakeToken)
+	resp, err := probeClient.Do(req)
+	if err != nil {
+		return 0
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode
+}
+
+// startListening runs a on a free loopback port with the token file and the settings in env over SQLite's, and returns
+// once it listens, which may be before it serves.
+func startListening[S Store](t *testing.T, a Addon[S], env map[string]string, opts Options) *running {
 	t.Helper()
 	all := map[string]string{"LISTEN_ADDR": "127.0.0.1:0", "PUBLIC_URL": "http://kit.test/a2a", "AUTH_TOKEN_FILE": tokenFile(t),
 		"SQLITE_PATH": "/unused/by/the/fake.db"}
@@ -306,17 +331,31 @@ func TestAStopCutsTheRunningTurnsShortBeforeTheStoreCloses(t *testing.T) {
 	c := clientOf(t, r.base, fakeToken)
 	ctx, hangUp := context.WithCancel(t.Context())
 	ids := make(chan a2a.TaskID, 1)
+	ended := make(chan error, 1)
 	go func() {
+		var last error
 		for ev, err := range c.SendStreamingMessage(ctx, &a2a.SendMessageRequest{Message: message("m1", "hold", "c1", "")}) {
-			if err == nil && taskOf(ev) != "" {
+			if err != nil {
+				last = err
+				continue
+			}
+			if taskOf(ev) != "" {
 				select {
 				case ids <- taskOf(ev):
 				default:
 				}
+			} else {
+				last = fmt.Errorf("an event without a task: %T %+v", ev, ev)
 			}
 		}
+		ended <- last
 	}()
-	id := <-ids
+	var id a2a.TaskID
+	select {
+	case id = <-ids:
+	case err := <-ended:
+		t.Fatalf("the stream ended before a task event; its last error: %v", err)
+	}
 	<-b.started
 	hangUp() // the turn runs on: a2a-go runs it detached from its request
 	if err := r.stop(t); err != nil {
@@ -418,7 +457,7 @@ func TestAStandbyForwardsInFullDuplexThroughItsMux(t *testing.T) {
 	t.Cleanup(leader.Close)
 	st := newFakeStore()
 	st.other = &store.Lease{Holder: "kit-a", Address: leader.URL, Live: true}
-	r := startRun(t, testAddon(st, &scripted{}), map[string]string{"STORE": "postgres", "POSTGRES_DSN": "postgres://u:fake-password@db/kit",
+	r := startListening(t, testAddon(st, &scripted{}), map[string]string{"STORE": "postgres", "POSTGRES_DSN": "postgres://u:fake-password@db/kit",
 		"ADVERTISE_URL": "http://127.0.0.1:1", "POD_NAME": "kit-b", "SQLITE_PATH": ""}, Options{})
 	waitUntil(t, "the standby to be ready", func() bool { return status(r.base+"/readyz") == http.StatusOK })
 
@@ -534,7 +573,7 @@ func TestARestoreThatFailsStopsTheTakeover(t *testing.T) {
 	st.settle = func(context.Context) error { st.note("settle"); return nil }
 	errRestore := errors.New("the backend's sessions cannot be read")
 	b := &hooks{scripted: &scripted{}, st: st, told: make(chan store.Settlement, 1), proceed: make(chan struct{}), restoreErr: errRestore}
-	r := startRun(t, testAddon(st, b), nil, Options{})
+	r := startListening(t, testAddon(st, b), nil, Options{})
 	if got := status(r.base + "/readyz"); got != http.StatusServiceUnavailable {
 		t.Fatalf("/readyz during the restore = %d, want 503", got)
 	}
