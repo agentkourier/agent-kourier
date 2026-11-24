@@ -96,13 +96,13 @@ done
 echo "ok: the Makefile's add-on aliases"
 
 # The repository's list: each name has its directory under addons/, with a Dockerfile, and each directory there with a
-# Dockerfile is listed (the kit has none). No rule the Makefile writes by hand has the name of a listed add-on's alias
-# (an add-on named release would make release-image one too): make would merge the two rules without a word.
+# Dockerfile is listed (the kit has none). No rule the Makefile writes by hand has a listed add-on's alias among its
+# targets (an add-on named release would make release-image one too): make would merge the two rules without a word.
 names=$("${SCRIPT}") || fail "the repository's list is refused"
 [ -n "${names}" ] || fail "the repository's list is empty"
 while IFS= read -r a; do
   [ -f "${HERE}/../addons/${a}/Dockerfile" ] || fail "hack/addons.txt lists ${a}, which has no addons/${a}/Dockerfile"
-  if rule=$(grep -E -- "^${a}-(test|lint|image):" "${HERE}/../Makefile"); then
+  if rule=$(grep -E -- "^([^#[:space:]:=][^:=]* )?${a}-(test|lint|image)( [^:=]*)?:([^=]|$)" "${HERE}/../Makefile"); then
     fail "hack/addons.txt lists ${a}, whose alias the Makefile also writes by hand: [${rule}]"
   fi
 done <<<"${names}"
