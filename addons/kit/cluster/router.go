@@ -28,6 +28,12 @@ func HopHeader(addon string) string {
 // it, not after the operating system's much longer connect timeout.
 const ForwardDialTimeout = 5 * time.Second
 
+// forwardKeepAlive is how long a connection to the leader goes with nothing received before the standby's kernel starts
+// to probe it (TCP_KEEPIDLE). Go then probes every 15 seconds and gives up after 9 unanswered probes (its defaults, on
+// Linux), so a forward to a leader lost without closing its connection fails after about 165 seconds instead of
+// waiting for ever: nothing else bounds the wait for the leader's answer.
+const forwardKeepAlive = 30 * time.Second
+
 // Leaders finds the replica to forward to. *Elector implements it.
 type Leaders interface {
 	// Leader returns the base URL of the replica that leads, when it is another one and its lease is live.
@@ -101,7 +107,7 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // build makes the proxy. It flushes each write of the leader's answer at once (FlushInterval -1), so a stream of
 // server-sent events reaches the caller event by event.
 func (rt *Router) build() {
-	dialer := &net.Dialer{Timeout: ForwardDialTimeout, KeepAlive: 30 * time.Second}
+	dialer := &net.Dialer{Timeout: ForwardDialTimeout, KeepAlive: forwardKeepAlive}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.DialContext = dialer.DialContext
 	hop := HopHeader(rt.Addon)
