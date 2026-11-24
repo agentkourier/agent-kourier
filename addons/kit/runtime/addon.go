@@ -48,6 +48,11 @@ const (
 	ReleaseTimeout  = 3 * time.Second
 )
 
+// ContextReleaseTimeout bounds a backend's release of an idle context (ContextReleaser.ReleaseContext), during which
+// the messages for the context wait. Past it the release's context ends, and the context is left for the next sweep.
+// It is not ReleaseTimeout, the hand-over of the lease.
+const ContextReleaseTimeout = 30 * time.Second
+
 // ReadHeaderTimeout bounds how long a caller may take to send a request's headers before the server closes the
 // connection.
 const ReadHeaderTimeout = 10 * time.Second
@@ -173,8 +178,9 @@ type MessageValidator interface {
 // past SESSION_IDLE_TTL with no turn running, the upkeep calls ReleaseContext, then forgets the context and its tasks
 // (store.Store.ForgetContext). It does both under a lock of the context that the accept of a message for it takes too,
 // once it has checked that the store still shows the context as it listed it (store.Store.StillIdle): a message
-// accepted after the listing keeps the context, and one that arrives during the release waits for it to end. An error
-// leaves the context for the next sweep, and is logged at WARN unless it wraps ErrContextBusy. Without it, the upkeep
+// accepted after the listing keeps the context, and every message for the context that arrives during the release
+// waits for it to end, which ContextReleaseTimeout bounds, and for the forget after it. An error leaves the context for
+// the next sweep, and is logged at WARN unless it wraps ErrContextBusy. Without it, the upkeep
 // deletes idle contexts in the store's own transaction (store.Store.DeleteIdleContexts, with
 // store.TaskOptions.ReleaseContext).
 type ContextReleaser interface {

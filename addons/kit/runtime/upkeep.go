@@ -91,7 +91,10 @@ func (u *upkeep) release(ctx context.Context, cutoff time.Time) {
 // releaseOne releases c and forgets it, under the context's lock, which the accept of a message for the context takes
 // for its touch, so that no message is accepted for it from the check to the forget. A message accepted since the
 // listing moved the context's last activity, and the check (StillIdle) leaves the context for a later sweep; one that
-// arrives during the release waits for it, and its touch records the context anew.
+// arrives during the release waits for it, and its touch records the context anew. The release is cut off after
+// ContextReleaseTimeout, so that it holds such a message back no longer than that. The forget is not: it is one write
+// of the store, which the store's own timeouts bound, and cutting it after a release that succeeded would leave the
+// store naming what the backend let go of.
 func (u *upkeep) releaseOne(ctx context.Context, c store.Context) {
 	unlock, err := u.contexts.lock(ctx, c.ContextID)
 	if err != nil {
@@ -108,7 +111,9 @@ func (u *upkeep) releaseOne(ctx context.Context, c store.Context) {
 		return
 	}
 	at := u.now()
-	if err := u.releaser.ReleaseContext(ctx, c); err != nil {
+	releaseCtx, cancel := context.WithTimeout(ctx, ContextReleaseTimeout)
+	defer cancel()
+	if err := u.releaser.ReleaseContext(releaseCtx, c); err != nil {
 		if errors.Is(err, ErrContextBusy) {
 			u.log.Debug("an idle context's turn has begun; left for a later sweep", "context", c.ContextID)
 			return

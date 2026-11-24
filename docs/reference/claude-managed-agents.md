@@ -141,8 +141,11 @@ at the next check.
 Each check first reads every context's last activity, then archives the idle contexts one at a time. It leaves a session
 for a later check if, when it comes to that context, a message for the context has been accepted since the read, a turn
 is running in the session or creating it, or a turn of it started or ended after the read. A message for the context
-that arrives while its session is being archived waits for the archive to end: once the session is archived, and the
-tasks from before deleted, the message starts a new session; if the archive failed, the message continues the session.
+that arrives while its session is being archived waits for the archive to end, which the add-on cuts off after
+`30s`<!--addon-limit:kit.context-release-timeout-->, and for the deletion of the tasks that follows it. Once the session
+is archived and those tasks deleted, a new message starts a new session, and an answer to a task paused in the archived
+session is refused as task not found. If the archive failed, or was cut off, the session stays the context's, and the
+message is sent to it.
 
 Set it to the Binding's `session.threadTTL`, whose default, `2160h`<!--addon-limit:kit.session-idle-ttl-->, is the
 add-on's default too. Past that, Agent Kourier gives the thread a new context and never uses the old session again. A
