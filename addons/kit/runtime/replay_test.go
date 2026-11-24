@@ -347,7 +347,7 @@ func TestAStreamThatOutlivesItsRequestEndsWithTheAddOnsStop(t *testing.T) {
 	inner := blockingInner{started: make(chan struct{}), ended: make(chan struct{})}
 	life, stop := context.WithCancel(context.Background())
 	defer stop()
-	h := &replayHandler{RequestHandler: inner, store: newFakeStore(), tel: newTel(t), life: life}
+	h := &replayHandler{RequestHandler: inner, store: newFakeStore(), tel: newTel(t), life: life, contexts: &keyLock[string]{}}
 	req, hangUp := context.WithCancel(asCaller(t.Context(), auth.Caller))
 	defer hangUp()
 	done := make(chan struct{})
@@ -398,7 +398,7 @@ func (b firstThenBlock) SendStreamingMessage(ctx context.Context, req *a2a.SendM
 // would otherwise follow the turn to its end after its caller has gone.
 func TestTheRequestsEndEndsTheStreamOnceTheFirstEventHasCome(t *testing.T) {
 	inner := firstThenBlock{yielded: make(chan struct{}), ended: make(chan struct{})}
-	h := &replayHandler{RequestHandler: inner, store: newFakeStore(), tel: newTel(t), life: context.Background()}
+	h := &replayHandler{RequestHandler: inner, store: newFakeStore(), tel: newTel(t), life: context.Background(), contexts: &keyLock[string]{}}
 	req, hangUp := context.WithCancel(asCaller(t.Context(), auth.Caller))
 	defer hangUp()
 	go func() { _, _ = h.SendMessage(req, &a2a.SendMessageRequest{Message: message("m1", "x", "c1", "")}) }()

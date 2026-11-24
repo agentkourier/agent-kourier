@@ -5,16 +5,19 @@ import (
 	"errors"
 	"log/slog"
 	"time"
+
+	"github.com/agentkourier/agent-kourier/addons/kit/store"
 )
 
 // upkeep keeps the leader's store from growing without bound: it releases the contexts idle past SESSION_IDLE_TTL, and
 // deletes the settled tasks older than TASK_RETENTION.
 type upkeep struct {
 	store     Store
-	releaser  ContextReleaser // nil: the store deletes idle contexts in its own transaction
-	reporter  IdleReporter    // nil: told nothing
-	retention time.Duration   // zero keeps settled tasks
-	idle      time.Duration   // zero keeps contexts
+	releaser  ContextReleaser  // nil: the store deletes idle contexts in its own transaction
+	contexts  *keyLock[string] // by context ID: held while a context is released, and by the accept of a message (touch)
+	reporter  IdleReporter     // nil: told nothing
+	retention time.Duration    // zero keeps settled tasks
+	idle      time.Duration    // zero keeps contexts
 	every     time.Duration
 	now       func() time.Time
 	log       *slog.Logger
@@ -68,8 +71,9 @@ func (u *upkeep) sweep(ctx context.Context) {
 }
 
 // release has the backend let go of each idle context with no turn running, then forgets the context and its tasks
-// from before the release: they belong to what the backend let go of and can never run again. A context the backend
-// could not release, or whose turn has begun since it was listed (ErrContextBusy), is left for the next sweep.
+// from before the release: they belong to what the backend let go of and can never run again. A context active since
+// it was listed, one whose turn the backend found begun (ErrContextBusy), and one the backend could not release are
+// left for the next sweep.
 func (u *upkeep) release(ctx context.Context, cutoff time.Time) {
 	idle, err := u.store.IdleContexts(ctx, cutoff)
 	if err != nil {
@@ -80,17 +84,39 @@ func (u *upkeep) release(ctx context.Context, cutoff time.Time) {
 		if ctx.Err() != nil {
 			return
 		}
-		at := u.now()
-		if err := u.releaser.ReleaseContext(ctx, c); err != nil {
-			if errors.Is(err, ErrContextBusy) {
-				u.log.Debug("an idle context's turn has begun; left for a later sweep", "context", c.ContextID)
-				continue
-			}
-			u.log.Warn("release an idle context; will retry", "context", c.ContextID, "error", err)
-			continue
+		u.releaseOne(ctx, c)
+	}
+}
+
+// releaseOne releases c and forgets it, under the context's lock, which the accept of a message for the context takes
+// for its touch, so that no message is accepted for it from the check to the forget. A message accepted since the
+// listing moved the context's last activity, and the check (StillIdle) leaves the context for a later sweep; one that
+// arrives during the release waits for it, and its touch records the context anew.
+func (u *upkeep) releaseOne(ctx context.Context, c store.Context) {
+	unlock, err := u.contexts.lock(ctx, c.ContextID)
+	if err != nil {
+		return // the upkeep is stopping
+	}
+	defer unlock()
+	still, err := u.store.StillIdle(ctx, c)
+	switch {
+	case err != nil:
+		u.log.Warn("check an idle context; will retry", "context", c.ContextID, "error", err)
+		return
+	case !still:
+		u.log.Debug("an idle context has been active since the sweep listed it; left for a later sweep", "context", c.ContextID)
+		return
+	}
+	at := u.now()
+	if err := u.releaser.ReleaseContext(ctx, c); err != nil {
+		if errors.Is(err, ErrContextBusy) {
+			u.log.Debug("an idle context's turn has begun; left for a later sweep", "context", c.ContextID)
+			return
 		}
-		if err := u.store.ForgetContext(ctx, c.Owner, c.ContextID, c.Ref, at); err != nil {
-			u.log.Warn("forget a released context", "context", c.ContextID, "error", err)
-		}
+		u.log.Warn("release an idle context; will retry", "context", c.ContextID, "error", err)
+		return
+	}
+	if err := u.store.ForgetContext(ctx, c.Owner, c.ContextID, c.Ref, at); err != nil {
+		u.log.Warn("forget a released context", "context", c.ContextID, "error", err)
 	}
 }

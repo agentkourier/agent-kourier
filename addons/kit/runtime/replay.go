@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"iter"
-	"sync"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
@@ -30,38 +29,15 @@ type replayHandler struct {
 	tel       *telemetry.Telemetry
 	validator MessageValidator // nil: every message reaches the backend
 	life      context.Context  // ends with the add-on's stop, which ends a stream that outlived its request
+	contexts  *keyLock[string] // by context ID: held for a touch, and by the upkeep while it releases the context
 
-	mu      sync.Mutex
-	sending map[string]chan struct{} // by message ID: a send between its lookup and its first event, closed at its end
+	sending keyLock[string] // by message ID: held by a send between its lookup and its first event
 }
 
 // claim waits until no other send of the message ID is between its lookup and its first event, then makes this send
 // that one. The returned func ends the claim; it may be called more than once.
 func (h *replayHandler) claim(ctx context.Context, messageID string) (func(), error) {
-	for {
-		h.mu.Lock()
-		pending, ok := h.sending[messageID]
-		if !ok {
-			done := make(chan struct{})
-			if h.sending == nil {
-				h.sending = map[string]chan struct{}{}
-			}
-			h.sending[messageID] = done
-			h.mu.Unlock()
-			return sync.OnceFunc(func() {
-				h.mu.Lock()
-				delete(h.sending, messageID)
-				h.mu.Unlock()
-				close(done)
-			}), nil
-		}
-		h.mu.Unlock()
-		select {
-		case <-pending:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
+	return h.sending.lock(ctx, messageID)
 }
 
 // SendStreamingMessage implements a2asrv.RequestHandler.
@@ -181,10 +157,13 @@ func (h *replayHandler) checkMessage(ctx context.Context, msg *a2a.Message) erro
 
 // touch marks the context a message is for active, in a transaction that commits before the message reaches the
 // turn: the message's context, or else its task's; a message for neither starts a new context, which has nothing to
-// keep. DeleteIdleContexts deletes a context only if it is still idle when its delete runs, in its own transaction, so
-// a sweep whose delete comes after the touch keeps the context. One window remains: a sweep whose delete came first.
-// The touch waits for it to commit and records the context anew, and the turn finds what the backend kept gone and
-// starts afresh (a message naming a deleted task gets task not found), as it would have had it come a moment later.
+// keep. A sweep whose release of the context comes after the touch keeps the context: DeleteIdleContexts deletes a
+// context only if it is still idle when its delete runs, in its own transaction, and the upkeep releases a context
+// through the backend (ContextReleaser) only if the store still shows it as it listed it (StillIdle), a check it makes
+// under the context's lock, which the touch holds too, and keeps until the context is forgotten. A sweep whose release
+// came first, or is under way, is the one window: the touch waits for it to end. If it released the context, the touch
+// records the context anew, and the turn finds what the backend kept gone and starts afresh (a message naming a deleted
+// task gets task not found), as it would have had it come a moment later.
 func (h *replayHandler) touch(ctx context.Context, msg *a2a.Message) error {
 	contextID := msg.ContextID
 	if contextID == "" && msg.TaskID != "" {
@@ -200,6 +179,11 @@ func (h *replayHandler) touch(ctx context.Context, msg *a2a.Message) error {
 	if contextID == "" {
 		return nil
 	}
+	unlock, err := h.contexts.lock(ctx, contextID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	return h.store.TouchContext(ctx, contextID)
 }
 
