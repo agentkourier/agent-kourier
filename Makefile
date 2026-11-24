@@ -219,7 +219,7 @@ $(ADDON_IMAGE): addon-image-%:
 
 # The aliases: <name>-test runs addon-test-<name>, and so on, for each add-on in the list (make cma-test, make ax-lint).
 # make help prints each line's text once per add-on (the help target says how).
-$(addsuffix -test,$(ADDONS)): %-test: addon-test-% ## Test add-on <name>'s module (addons/<name>) with the race detector, every test on every run, the kit's packages under its module graph, and the offline tests of a module nested in its directory; its Postgres tests run with AGENTKOURIER_POSTGRES_DSN set (hack/postgres/run.sh make <name>-test)
+$(addsuffix -test,$(ADDONS)): %-test: addon-test-% ## Test add-on <name>'s module (addons/<name>) with the race detector, every test on every run, the kit's packages under its module graph, and every test of any module nested in its directory (without the race detector); its Postgres tests run with AGENTKOURIER_POSTGRES_DSN set (hack/postgres/run.sh make <name>-test)
 $(addsuffix -lint,$(ADDONS)): %-lint: addon-lint-% ## Lint add-on <name>'s module (addons/<name>) with the repository's golangci-lint and config
 $(addsuffix -image,$(ADDONS)): %-image: addon-image-% ## Build add-on <name>'s image, agent-kourier-<name>:dev, on Agent Kourier's pinned bases (hack/kind/lib.sh; Docker)
 
