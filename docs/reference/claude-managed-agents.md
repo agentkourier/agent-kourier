@@ -139,9 +139,10 @@ message starts a new session without the old history. A session that fails to ar
 at the next check.
 
 Each check first reads every context's last activity, then archives the idle contexts one at a time. It leaves a session
-for a later check if, when it comes to that context, a turn is running in the session or creating it, or a turn of it
-started or ended after the read. It does not see a message accepted after the read whose turn has not started yet: that
-turn can start a new session, or fail.
+for a later check if, when it comes to that context, a message for the context has been accepted since the read, a turn
+is running in the session or creating it, or a turn of it started or ended after the read. A message for the context
+that arrives while its session is being archived waits for the archive to end: once the session is archived, and the
+tasks from before deleted, the message starts a new session; if the archive failed, the message continues the session.
 
 Set it to the Binding's `session.threadTTL`, whose default, `2160h`<!--addon-limit:kit.session-idle-ttl-->, is the
 add-on's default too. Past that, Agent Kourier gives the thread a new context and never uses the old session again. A

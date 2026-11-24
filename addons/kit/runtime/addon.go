@@ -118,6 +118,9 @@ type Store interface {
 	DeleteIdleContexts(ctx context.Context, cutoff time.Time) (int, error)
 	// IdleContexts lists the contexts idle since before cutoff, with no turn running.
 	IdleContexts(ctx context.Context, cutoff time.Time) ([]store.Context, error)
+	// StillIdle reports whether a context IdleContexts listed is still as listed: the same last activity and ref, and
+	// no turn running.
+	StillIdle(ctx context.Context, c store.Context) (bool, error)
 	// ForgetContext removes an owner's context whose ref the add-on let go of, with its tasks from before cutoff.
 	ForgetContext(ctx context.Context, owner, contextID, ref string, cutoff time.Time) error
 	// Close closes the store.
@@ -168,16 +171,20 @@ type MessageValidator interface {
 
 // ContextReleaser is a backend that keeps a context outside the store (cma: a session in CMA). For each context idle
 // past SESSION_IDLE_TTL with no turn running, the upkeep calls ReleaseContext, then forgets the context and its tasks
-// (store.Store.ForgetContext). An error leaves the context for the next sweep, and is logged at WARN unless it wraps
-// ErrContextBusy. Without it, the upkeep deletes idle contexts in the store's own transaction
-// (store.Store.DeleteIdleContexts, with store.TaskOptions.ReleaseContext).
+// (store.Store.ForgetContext). It does both under a lock of the context that the accept of a message for it takes too,
+// once it has checked that the store still shows the context as it listed it (store.Store.StillIdle): a message
+// accepted after the listing keeps the context, and one that arrives during the release waits for it to end. An error
+// leaves the context for the next sweep, and is logged at WARN unless it wraps ErrContextBusy. Without it, the upkeep
+// deletes idle contexts in the store's own transaction (store.Store.DeleteIdleContexts, with
+// store.TaskOptions.ReleaseContext).
 type ContextReleaser interface {
 	ReleaseContext(ctx context.Context, c store.Context) error
 }
 
-// ErrContextBusy is what a ContextReleaser's error wraps when a turn of the context has begun since the store listed
-// it as idle: the store shows a turn only once a2a-go has stored its task, and a message that arrives during a sweep
-// can start one in between. The upkeep leaves the context, which the message made active, and logs it at DEBUG.
+// ErrContextBusy is what a ContextReleaser's error wraps when the backend knows of a turn of the context that the store
+// did not show when the upkeep checked it: one running, or one that started or ended since the listing and whose
+// activity the store missed (cma: a write of it that failed). The upkeep leaves the context for a later sweep, and logs
+// it at DEBUG.
 var ErrContextBusy = errors.New("a turn of the context has begun")
 
 // IdleReporter is a backend that is told, after each sweep without a ContextReleaser, how many idle contexts the store
