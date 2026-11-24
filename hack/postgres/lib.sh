@@ -9,7 +9,7 @@
 
 # postgres:19 on Debian, by digest of its multi-arch index. To move to another major or a newer build:
 # docker pull postgres:<major>, then docker image inspect it for the digest.
-POSTGRES_IMAGE="postgres:19@sha256:766ddae4967301b9802b341bb596905f11dd5c558149690a7a4d80c2f61bbcf9"
+POSTGRES_IMAGE="postgres:19@sha256:908d19593a1444b2d4e85783f718b16e0d40f1baf7518420475df9e5f5ac67a2"
 
 pg_name="agent-kourier-pg-test-$$-$RANDOM"
 pg_envfile=""
