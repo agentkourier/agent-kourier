@@ -34,6 +34,7 @@ type fakeStore struct {
 	messages  map[string]a2a.TaskID           // the task each message ID started or joined
 	other     *store.Lease                    // a live lease another replica holds: TryLead fails and CurrentLeader returns it
 	idle      []store.Context                 // what IdleContexts returns
+	listed    func()                          // runs once IdleContexts has read its list, before it returns
 	forgotten []string                        // the contexts ForgetContext removed
 	touched   []string                        // the contexts TouchContext marked active, in order
 	deleted   int                             // what DeleteIdleContexts returns
@@ -151,8 +152,19 @@ func (s *fakeStore) DeleteIdleContexts(context.Context, time.Time) (int, error) 
 
 func (s *fakeStore) IdleContexts(context.Context, time.Time) ([]store.Context, error) {
 	s.mu.Lock()
+	idle := slices.Clone(s.idle)
+	s.mu.Unlock()
+	if s.listed != nil {
+		s.listed()
+	}
+	return idle, nil
+}
+
+// StillIdle reports a listed context still idle until it is marked active: a touch moves its last activity.
+func (s *fakeStore) StillIdle(_ context.Context, c store.Context) (bool, error) {
+	s.mu.Lock()
 	defer s.mu.Unlock()
-	return slices.Clone(s.idle), nil
+	return !slices.Contains(s.touched, c.ContextID), nil
 }
 
 func (s *fakeStore) ForgetContext(_ context.Context, _, contextID, _ string, _ time.Time) error {
