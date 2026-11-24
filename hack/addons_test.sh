@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Tests for addons.sh. Offline: each case writes a list of its own and points ADDONS_FILE at it; the last reads the
-# repository's. Run as `hack/addons_test.sh`.
+# Tests for addons.sh and the Makefile's add-on aliases. Offline: each case writes a list of its own and points
+# ADDONS_FILE at it; the last reads the repository's. Run as `hack/addons_test.sh`.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -75,12 +75,36 @@ fi
 grep -q 'cannot read' "${TMP}/stderr" || fail "missing: stderr [$(cat "${TMP}/stderr")]"
 echo "ok: missing"
 
+# The Makefile: each add-on <name> in a list has the aliases <name>-test, <name>-lint and <name>-image, which run what
+# addon-test-<name>, addon-lint-<name> and addon-image-<name> run, and make help prints a line for each. The probe list
+# adds probe-x1, which has no directory, so that only the list can give it its targets. make -n prints the commands
+# without running them; MAKEFLAGS is emptied so that a make running this test passes none of its flags on.
+command -v make >/dev/null || fail "make: not found"
+printf '%s\n' cma ax probe-x1 >"${TMP}/probe.txt"
+probe_make() { MAKEFLAGS='' ADDONS_FILE="${TMP}/probe.txt" make --no-print-directory -C "${HERE}/.." "$@"; }
+help=$(probe_make help) || fail "make help failed with the probe list"
+for a in cma ax probe-x1; do
+  for kind in test lint image; do
+    want=$(probe_make -n "addon-${kind}-${a}" 2>&1) || fail "make -n addon-${kind}-${a}: ${want}"
+    got=$(probe_make -n "${a}-${kind}" 2>&1) || fail "make -n ${a}-${kind}: ${got}"
+    [ -n "${got}" ] && [ "${got}" = "${want}" ] ||
+      fail "make -n ${a}-${kind} printed [${got}], want what addon-${kind}-${a} prints [${want}]"
+    line=$(grep -E -- "^  ${a}-${kind} +[^ ]" <<<"${help}") || fail "make help has no line for ${a}-${kind}"
+    case ${line} in *'<name>'*) fail "make help left <name> in [${line}]" ;; esac
+  done
+done
+echo "ok: the Makefile's add-on aliases"
+
 # The repository's list: each name has its directory under addons/, with a Dockerfile, and each directory there with a
-# Dockerfile is listed (the kit has none).
+# Dockerfile is listed (the kit has none). No rule the Makefile writes by hand has the name of a listed add-on's alias
+# (an add-on named release would make release-image one too): make would merge the two rules without a word.
 names=$("${SCRIPT}") || fail "the repository's list is refused"
 [ -n "${names}" ] || fail "the repository's list is empty"
 while IFS= read -r a; do
   [ -f "${HERE}/../addons/${a}/Dockerfile" ] || fail "hack/addons.txt lists ${a}, which has no addons/${a}/Dockerfile"
+  if rule=$(grep -E -- "^${a}-(test|lint|image):" "${HERE}/../Makefile"); then
+    fail "hack/addons.txt lists ${a}, whose alias the Makefile also writes by hand: [${rule}]"
+  fi
 done <<<"${names}"
 for dockerfile in "${HERE}"/../addons/*/Dockerfile; do
   a=$(basename "$(dirname "${dockerfile}")")
