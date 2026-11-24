@@ -59,6 +59,21 @@ func (s *Store) IdleContexts(ctx context.Context, cutoff time.Time) ([]Context, 
 	return found, nil
 }
 
+// StillIdle reports whether c is still as IdleContexts listed it: its owner's context has the same last activity and
+// ref, and no turn running. The runtime's upkeep checks it again just before the add-on lets go of the context, so that
+// a context whose message was accepted since the listing (TouchContext), or that the add-on has recorded activity of
+// (PutContext, TouchContextRef), is kept.
+func (s *Store) StillIdle(ctx context.Context, c Context) (bool, error) {
+	var n int64
+	err := s.Reader().QueryRow(ctx, `SELECT COUNT(*) FROM contexts c WHERE c.owner = ? AND c.context_id = ? AND c.last_active = ? AND c.ref = ?
+		AND NOT EXISTS (SELECT 1 FROM a2a_tasks t WHERE t.owner = c.owner AND t.context_id = c.context_id AND t.state IN (`+marks(len(running))+`))`,
+		append([]any{c.Owner, c.ContextID, nanos(c.LastActive), c.Ref}, running...)...).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("check idle context %s: %w", c.ContextID, err)
+	}
+	return n > 0, nil
+}
+
 // DeleteIdleContexts deletes each context last active before cutoff, with no turn running: what the add-on keeps of it
 // (TaskOptions.ReleaseContext), its tasks (a question it paused on included) and their message IDs. The context's next
 // message starts it afresh. It returns how many contexts it deleted. Each context goes in a transaction of its own,
