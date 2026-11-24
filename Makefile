@@ -182,8 +182,12 @@ define newline
 endef
 
 .PHONY: kit-test kit-lint addons-tidy $(ADDON_TEST) $(ADDON_LINT) $(ADDON_IMAGE)
+# ADDON_TEST_TIMEOUT: go test's limit for the kit's, an add-on's and the docs-agent's tests, which take about a minute.
+# It stays under their CI jobs' timeout-minutes (15 and 20), so a test that hangs makes go test panic and name it
+# before GitHub cancels the job, which prints nothing about it.
+ADDON_TEST_TIMEOUT ?= 10m
 kit-test: ## Test the add-ons' shared kit module with the race detector, every test on every run
-	cd addons/kit && go test -race -count=1 -timeout 20m ./...
+	cd addons/kit && go test -race -count=1 -timeout $(ADDON_TEST_TIMEOUT) ./...
 	cd addons/kit && go vet ./...
 
 kit-lint: ## Lint the add-ons' shared kit module with the repository's golangci-lint and config
@@ -197,8 +201,8 @@ addons-tidy: ## Run go mod tidy in the kit and in each add-on's modules (hack/ad
 # say nothing about it. They read AGENTKOURIER_POSTGRES_DSN and skip when it is unset; hack/postgres/run.sh starts a
 # throwaway Postgres and sets it for one command (hack/postgres/run.sh make addon-test-cma).
 $(ADDON_TEST): addon-test-%:
-	cd addons/$* && go test -race -count=1 -timeout 20m ./...
-	cd addons/$* && go test -race -count=1 -timeout 20m $(KIT_PACKAGES)
+	cd addons/$* && go test -race -count=1 -timeout $(ADDON_TEST_TIMEOUT) ./...
+	cd addons/$* && go test -race -count=1 -timeout $(ADDON_TEST_TIMEOUT) $(KIT_PACKAGES)
 	cd addons/$* && go vet ./...
 	$(foreach m,$(call addon_nested,$*),cd $(m) && go test -count=1 ./...$(newline))
 
@@ -229,7 +233,7 @@ ax-smoke: ## Run the real A2A smoke on Bedrock or the Anthropic API (the sandbox
 # -count=1: the smoke test reads docs/, outside the module, which go test's result cache never checks, so a reused result
 # would not see a change to the docs.
 docs-agent-test: ## Test the docs-agent recipe's separate module with the race detector, every test on every run
-	cd examples/recipes/docs-agent/agent && go test -race -count=1 -timeout 20m ./...
+	cd examples/recipes/docs-agent/agent && go test -race -count=1 -timeout $(ADDON_TEST_TIMEOUT) ./...
 	cd examples/recipes/docs-agent/agent && go vet ./...
 
 docs-agent-lint: ## Lint the docs-agent recipe's separate module with the repository's golangci-lint and config

@@ -4,7 +4,8 @@
 # without -f), and to FAKE_ARGS_LOG, if set, the same Dockerfile followed by the build's --build-arg values in order,
 # writes a digest to a build's metadata file, and answers image inspect for what it "built": no labels, the build's
 # platform, and user 65532:65532, or 0:0 for an image whose reference ends with FAKE_ROOT_IMAGE. For check-pushed.sh it
-# prints FAKE_PUSHED_IMAGE as a pushed reference's .Image and FAKE_LAYERS as a local image's layers.
+# prints FAKE_PUSHED_IMAGE as a pushed reference's .Image and FAKE_LAYERS as a local image's layers. FAKE_BUILD_FAIL,
+# TAG=N, fails the first N builds tagged TAG, as a registry that answers 500 would, and logs each to FAKE_STATE.failed.
 set -euo pipefail
 
 case "${1:-} ${2:-}" in
@@ -32,6 +33,13 @@ case "${1:-} ${2:-}" in
       esac
     done
     [ "${context}" = "${FAKE_ROOT}" ] && context=. || context=${context#"${FAKE_ROOT}"/}
+    failed=0
+    [ ! -f "${FAKE_STATE}.failed" ] || failed=$(grep -c -x -F -- "${tag}" "${FAKE_STATE}.failed" || true)
+    if [ -n "${FAKE_BUILD_FAIL:-}" ] && [ "${tag}" = "${FAKE_BUILD_FAIL%=*}" ] && [ "${failed}" -lt "${FAKE_BUILD_FAIL##*=}" ]; then
+      echo "${tag}" >>"${FAKE_STATE}.failed"
+      echo "ERROR: failed to solve: unexpected status from HEAD request: 500 Internal Server Error" >&2
+      exit 1
+    fi
     echo "build ${mode} ${platform} ${tag} ${context} ${dockerfile}" >>"${FAKE_LOG}"
     [ -z "${FAKE_ARGS_LOG:-}" ] || echo "${dockerfile}${args}" >>"${FAKE_ARGS_LOG}"
     echo "${tag} ${platform}" >>"${FAKE_STATE}"
