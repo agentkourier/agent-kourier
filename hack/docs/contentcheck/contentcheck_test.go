@@ -332,7 +332,12 @@ func TestPublicFiles(t *testing.T) {
 		"examples/recipes/sre/evals/triggers.yaml":  "WP-1\n",
 		"examples/recipes/sre/notes.md":             "WP-1\n",
 		"examples/recipes/sre/agent/main.go":        "package x // WP-1\n",
-		"addons/ax/README.md":                       "WP-1\n",
+		// The add-ons' READMEs, the kit's and a nested module's included, are public; their other files are not.
+		"addons/ax/README.md":            "x\n",
+		"addons/kit/README.md":           "x\n",
+		"addons/cma/livecheck/README.md": "x\n",
+		"addons/cma/notes.md":            "WP-1\n",
+		"addons/cma/kind/values.yaml":    "WP-1\n",
 		// The generated CRDs are public; other files under the chart's files/ are not.
 		"charts/agent-kourier/files/crds/agentkourier.dev_bindings.yaml": "x: 1\n",
 		"charts/agent-kourier/files/other.txt":                           "WP-1\n",
@@ -347,7 +352,8 @@ func TestPublicFiles(t *testing.T) {
 	}
 	slices.Sort(got)
 	want := []string{
-		"README.md", "charts/agent-kourier/README.md", "charts/agent-kourier/files/crds/agentkourier.dev_bindings.yaml",
+		"README.md", "addons/ax/README.md", "addons/cma/livecheck/README.md", "addons/kit/README.md",
+		"charts/agent-kourier/README.md", "charts/agent-kourier/files/crds/agentkourier.dev_bindings.yaml",
 		"charts/agent-kourier/values.yaml",
 		"docs/_headers", "docs/assets/diagrams/map.svg", "docs/assets/film/captions.vtt", "docs/data.json",
 		"docs/how-to/a.md", "docs/how-to/brand/kept.md", "docs/index.md", "docs/notes.txt", "docs/page.html",
@@ -667,6 +673,42 @@ func TestRunChecksTheRecipeREADMEs(t *testing.T) {
 	run(root, testWorkspace, &out)
 	if strings.Contains(out.String(), "recipes/README.md:2") || !strings.Contains(out.String(), "matches nothing") {
 		t.Errorf("allowlist handling for a recipe README:\n%s", out.String())
+	}
+}
+
+func TestRunChecksTheAddonREADMEs(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"mkdocs.yml":                       testMkdocs,
+		"api/v1alpha1/types.go":            apiTypes,
+		"README.md":                        "Fine.\n",
+		"charts/agent-kourier/README.md":   "Fine.\n",
+		"charts/agent-kourier/values.yaml": "# fine\n",
+		"docs/index.md":                    "# Home\n",
+		"docs/reference/limits.md":         "# Limits\n## Every add-on\n",
+		// GitHub renders every README under addons/: an add-on's, the kit's and a nested module's.
+		"addons/cma/README.md":           "# CMA\n[limits](../../docs/reference/limits.md#every-add-on) [gone](../../docs/how-to/gone.md)\n",
+		"addons/ax/README.md":            "[limits](../../docs/reference/limits.md#ax-add-on)\n",
+		"addons/kit/README.md":           "Tracked in WP-1.\n[up](../cma/README.md#cma)\n",
+		"addons/cma/livecheck/README.md": "[up](../README.md#nope)\n",
+		"addons/cma/notes.md":            "WP-1 [gone](gone.md)\n", // not a README: not a public page
+	})
+	var out bytes.Buffer
+	if code := run(root, testWorkspace, &out); code != 1 {
+		t.Fatalf("run = %d, want 1; output:\n%s", code, out.String())
+	}
+	for _, want := range []string{
+		"addons/cma/README.md:2: dead-link", "addons/ax/README.md:1: dead-anchor", "addons/kit/README.md:1: planning-id",
+		"addons/cma/livecheck/README.md:1: dead-anchor",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+	for _, not := range []string{"notes.md", "every-add-on", "addons/kit/README.md:2"} {
+		if strings.Contains(out.String(), not) {
+			t.Errorf("output names %q, which is clean or not public:\n%s", not, out.String())
+		}
 	}
 }
 
