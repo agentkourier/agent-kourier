@@ -20,8 +20,9 @@ type TextExecutor struct {
 }
 
 var (
-	_ a2asrv.AgentExecutor     = (*TextExecutor)(nil)
-	_ runtime.MessageValidator = (*TextExecutor)(nil)
+	_ a2asrv.AgentExecutor         = (*TextExecutor)(nil)
+	_ a2asrv.AgentExecutionCleaner = (*TextExecutor)(nil)
+	_ runtime.MessageValidator     = (*TextExecutor)(nil)
 )
 
 // Execute bridges only ask_user; it never treats plain text as tool authorization. The kit's runtime counts and traces
@@ -160,4 +161,13 @@ func pendingCall(task *a2a.Task) (*genai.FunctionCall, error) {
 // Cancel delegates task cancellation to ADK.
 func (e *TextExecutor) Cancel(ctx context.Context, req *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
 	return e.Inner.Cancel(ctx, req)
+}
+
+// Cleanup runs Inner's Cleanup, if it has one, with what a2a-go passed after an execution's or a cancel's last event.
+// ADK's executor logs the cause of a failed execution or cancel at WARN, and cancels the input-required tasks of remote
+// subagents, which this agent has none of.
+func (e *TextExecutor) Cleanup(ctx context.Context, req *a2asrv.ExecutorContext, result a2a.SendMessageResult, err error) {
+	if c, ok := e.Inner.(a2asrv.AgentExecutionCleaner); ok {
+		c.Cleanup(ctx, req, result, err)
+	}
 }
