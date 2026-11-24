@@ -8,14 +8,22 @@ SLACK_API=https://slack.com/api
 # What the chat listener answers, with 503, for a connection that does not run on the replica (internal/broker/chatlistener.go).
 NOT_HERE='the connection does not run on this replica'
 METRIC=agentkourier_slack_http_requests_total
+TURNS=agentkourier_turn_outcomes_total
+# What ends the final message of a turn that had something to show (internal/render/live/sink.go footerOf): the feedback
+# buttons, whose action IDs begin with this (internal/feedback/feedback.go), on every investigation; and, on every
+# thread a bot's mention began, this line (FollowUpHint). TestHTTPProbeKnowsTheFooter (internal/render/live) holds both
+# to the code.
+FEEDBACK_ACTION=feedback-
+FOLLOW_UP_HINT='Mention me in this thread to ask a follow-up.'
 
 usage() {
   cat <<'EOF'
 Usage: hack/slack/http-probe.sh --url URL --channel ID --probe-env FILE --poster-env FILE --mention-env FILE
-                                [--alert-prefix TEXT] [--timeout SECONDS] [--metrics-url URL]
+                                [--alert-prefix TEXT] [--timeout SECONDS] [--settle SECONDS] [--metrics-url URL]
+                                [--binding NAMESPACE/NAME]
 
 Checks a ChatConnection in Slack's HTTP mode against Slack itself: what it answers to requests that Slack did not sign,
-and that real Slack events reach it and get a reply. It posts two messages in the channel.
+and that real Slack events reach it and that the agent answers them. It posts two messages in the channel.
 
   --url URL            the connection's public request URL, https://<host>/chat/slack/<namespace>/<name>
   --channel ID         the channel ID (C... or G...) the connection's Binding answers in
@@ -23,8 +31,10 @@ and that real Slack events reach it and get a reply. It posts two messages in th
   --poster-env FILE    a second app, which posts the alert: a mode-600 file with SLACK_BOT_TOKEN=
   --mention-env FILE   a third app, which posts the mention: a mode-600 file with SLACK_BOT_TOKEN=
   --alert-prefix TEXT  what the Binding's botMessage trigger matches at the start of the alert (default "FIRING: ")
-  --timeout SECONDS    how long to wait for each reply (default 120)
+  --timeout SECONDS    how long to wait for each answer (default 120)
+  --settle SECONDS     how long to keep reading a thread after its answer, for a notice that follows it (default 10)
   --metrics-url URL    the leading replica's metrics endpoint, port-forwarded; adds the metrics check
+  --binding NS/NAME    the Binding of --channel; with --metrics-url, adds the turn outcomes check
   -h, --help           this help
 
 The checks, each printed as PASS or FAIL with one line of evidence:
@@ -34,12 +44,29 @@ The checks, each printed as PASS or FAIL with one line of evidence:
                     POSTs to --url with its last segment replaced by a random name: 503, "the connection does not
                     run on this replica".
   bot identity      auth.test of the three tokens: they must be three different apps.
-  alert trigger     the poster posts "<prefix>KourierProbe<random>"; the probe's bot must reply in its thread.
-  bot mention       the mention poster posts "<@probe> live probe <random>: ..."; the probe's bot must reply in its
+  alert trigger     the poster posts "<prefix>KourierProbe<random>"; the agent's answer must reach its thread.
+  bot mention       the mention poster posts "<@probe> live probe <random>: ..."; the agent's answer must reach its
                     thread.
   metrics           with --metrics-url, agentkourier_slack_http_requests_total for the connection, read before the
                     first check and after the last: bad_signature +2, stale +1, acknowledged at least +2.
+  turn outcomes     with --metrics-url and --binding, agentkourier_turn_outcomes_total for the Binding, read the same
+                    way: completed at least +2, and every other outcome +0.
 It exits 0 when every check passes, 1 when one fails, and 2 when it refuses its inputs (before any request).
+
+How the alert trigger and bot mention checks tell the agent's answer from a failed turn: every message Agent Kourier
+posts carries metadata (event_type agentkourier_message; a streamed reply once its stream stops) whose outbox_id ends
+in /reply for the turn's output and in /notice for a notice of its own, which conversations.replies returns with
+include_all_metadata. A failed turn can
+still post a reply, "(no output)" or the text it had, beside a notice such as "The agent's task failed. ...
+Troubleshooting reference: AK-...". So the check:
+  - fails as soon as the probe's bot posts any notice in the thread, and prints what the notice says;
+  - takes as the answer a reply that ends with the footer of a turn that ended with something to show: the feedback
+    buttons, which every investigation has, or the line "Mention me in this thread to ask a follow-up.", which every
+    thread a bot's mention began has. A reply with neither is a turn still running, or one that ended with nothing;
+  - passes once a read --settle seconds after that answer still finds no notice, since a turn that fails after it
+    showed some text gets its footer too, and its notice can be posted after the footer.
+A notice that is no failure, such as "I can't reach the agent right now, and I'm trying again.", fails the check too:
+the turn did not go cleanly, so run the probe again.
 
 What the Binding of --channel must have:
   - a botMessage trigger whose from.id is the poster's bot ID and that matches the alert's text, with any extract
@@ -52,7 +79,7 @@ What the Binding of --channel must have:
     runs.
 The poster and the mention poster need chat:write and chat:write.public (or membership of the channel). The probe's
 token reads the threads with conversations.replies (channels:history, or groups:history for a private channel).
-With more than one replica, --metrics-url must reach the leader, which serves the connection.
+With more than one replica, --metrics-url must reach the leader, which serves the connection and runs the turns.
 
 Left to be done by hand:
   - a button press: Slack checks no Interactivity URL, so press a button on a reply (the feedback buttons) and see it
@@ -72,16 +99,17 @@ die() {
   exit 2
 }
 
-url='' channel='' probe_env='' poster_env='' mention_env='' metrics_url=''
+url='' channel='' probe_env='' poster_env='' mention_env='' metrics_url='' binding=''
 prefix='FIRING: '
 timeout=120
+settle=10
 while [ $# -gt 0 ]; do
   case "$1" in
     -h | --help)
       usage
       exit 0
       ;;
-    --url | --channel | --probe-env | --poster-env | --mention-env | --alert-prefix | --timeout | --metrics-url)
+    --url | --channel | --probe-env | --poster-env | --mention-env | --alert-prefix | --timeout | --settle | --metrics-url | --binding)
       [ $# -ge 2 ] || die "$1 needs a value"
       case "$1" in
         --url) url=$2 ;;
@@ -91,7 +119,9 @@ while [ $# -gt 0 ]; do
         --mention-env) mention_env=$2 ;;
         --alert-prefix) prefix=$2 ;;
         --timeout) timeout=$2 ;;
+        --settle) settle=$2 ;;
         --metrics-url) metrics_url=$2 ;;
+        --binding) binding=$2 ;;
       esac
       shift 2
       ;;
@@ -110,8 +140,12 @@ segment='[^/?#[:space:]]+'
 [[ ${channel} =~ ^[CG][A-Z0-9]+$ ]] || die "--channel must be a channel ID (C... or G...), not a name"
 [[ ${timeout} =~ ^[1-9][0-9]*s?$ ]] || die "--timeout must be a whole number of seconds above 0, such as 120 or 120s"
 timeout=${timeout%s}
+[[ ${settle} =~ ^(0|[1-9][0-9]*)s?$ ]] || die "--settle must be a whole number of seconds, such as 10 or 10s"
+settle=${settle%s}
 [ -n "${prefix}" ] || die "--alert-prefix must not be empty"
 [ -z "${metrics_url}" ] || [[ ${metrics_url} =~ ^https?:// ]] || die "--metrics-url must be an http(s) URL"
+[ -z "${binding}" ] || [[ ${binding} =~ ^[^/[:space:]\"]+/[^/[:space:]\"]+$ ]] || die "--binding must be namespace/name"
+[ -z "${binding}" ] || [ -n "${metrics_url}" ] || die "--binding needs --metrics-url: it names the Binding of the turn outcomes check"
 
 # The connection's namespace/name, the value of the metric's connection label: the URL's last two segments.
 name=${url##*/}
@@ -182,11 +216,19 @@ read_metrics() {
   curl -fsS -m 20 -o "$1" "${metrics_url}" 2>/dev/null
 }
 
-# series FILE OUTCOME: the value of the metric for the connection and OUTCOME in FILE, 0 when it has no such series.
+# series FILE METRIC LABEL OUTCOME: the sum of METRIC's series in FILE that have the label LABEL (name="value") and the
+# outcome OUTCOME, 0 when it has none.
 series() {
-  awk -v metric="${METRIC}{" -v conn="connection=\"${connection}\"" -v outcome="outcome=\"$2\"" '
-    index($0, metric) == 1 && index($0, conn) && index($0, outcome) { sub(/^[^}]*\} /, ""); sum += $1 }
+  awk -v metric="$2{" -v label="$3" -v outcome="outcome=\"$4\"" '
+    index($0, metric) == 1 && index($0, label) && index($0, outcome) { sub(/^[^}]*\} /, ""); sum += $1 }
     END { printf "%d\n", sum }' "$1"
+}
+
+# outcomes FILE...: every outcome of the turn outcomes series of the Binding in the FILEs, one per line.
+outcomes() {
+  awk -v metric="${TURNS}{" -v label="binding=\"${binding}\"" '
+    index($0, metric) == 1 && index($0, label) && match($0, /outcome="[^"]*"/) { print substr($0, RSTART + 9, RLENGTH - 10) }' "$@" |
+    sort -u
 }
 
 metrics_before=
@@ -304,39 +346,88 @@ post() {
   field "${out}" .ts
 }
 
-# wait_reply TS: poll the thread of TS with the probe's token until a message of the probe's bot is in it, and print
-# that message's ts; or print why not, and fail, once the timeout has passed or Slack refused the read.
-wait_reply() {
-  local ts=$1 out=${TMP}/replies.json deadline=$((SECONDS + timeout)) interval=3 reply err last=
-  [ "${timeout}" -ge "${interval}" ] || interval=${timeout}
+# thread_state TS: what the thread of TS, read into ${TMP}/replies.json, holds from the probe's bot, as one line:
+#   notice<TAB>ts<TAB>text  a notice of Agent Kourier (outbox_id .../notice), its text on one line, cut at 200 characters;
+#   answer<TAB>ts           a reply (outbox_id .../reply) that ends with a turn's footer: the agent answered;
+#   reply<TAB>ts            a reply with no footer yet: a turn still running, or one that ended with nothing to show;
+#   none                    nothing yet.
+thread_state() {
+  jq -r --arg bot "${probe_bot}" --arg parent "$1" --arg action "${FEEDBACK_ACTION}" --arg hint "${FOLLOW_UP_HINT}" '
+    def role: .metadata.event_payload.outbox_id | strings | split("/") | last;
+    def footer: (.blocks // []) | any(
+      (.type == "actions" and ((.elements // []) | any(.action_id | strings | startswith($action))))
+      or (.type == "context" and ((.elements // []) | any(.text == $hint))));
+    [.messages[]? | select(.bot_id == $bot and .ts != $parent and .metadata.event_type == "agentkourier_message")] as $own
+    | ([$own[] | select(role == "notice")] | first) as $notice
+    | ([$own[] | select(role == "reply" and footer)] | first) as $answer
+    | ([$own[] | select(role == "reply")] | first) as $reply
+    | if $notice then "notice\t\($notice.ts)\t\($notice.text // "" | gsub("[[:cntrl:]]+"; " ") | .[0:200])"
+      elif $answer then "answer\t\($answer.ts)"
+      elif $reply then "reply\t\($reply.ts)"
+      else "none" end' "${TMP}/replies.json" 2>/dev/null || echo none
+}
+
+# wait_answer TS: poll the thread of TS with the probe's token until the probe's bot has answered in it and a read made
+# --settle seconds or more after the answer still finds no notice there, and print the answer's ts. Print why not, and
+# fail, as soon as the bot posts a notice there or Slack refuses a read, or once the timeout has passed with no answer
+# (or, after the answer, with no good read since the settle).
+wait_answer() {
+  local ts=$1 out=${TMP}/replies.json deadline=$((SECONDS + timeout)) interval=3 wait state kind at text err last='' reply=''
+  local answer='' answered=0
   while :; do
-    if ! slack conversations.replies "${PROBE_AUTH}" "${out}" -G --data-urlencode "channel=${channel}" --data-urlencode "ts=${ts}"; then
+    if ! slack conversations.replies "${PROBE_AUTH}" "${out}" -G --data-urlencode "channel=${channel}" --data-urlencode "ts=${ts}" \
+      --data-urlencode include_all_metadata=true; then
       last="conversations.replies: curl failed"
-    else
+    elif [ "$(field "${out}" .ok)" = true ]; then
       last=
-      if [ "$(field "${out}" .ok)" = true ]; then
-        reply=$(jq -r --arg bot "${probe_bot}" --arg parent "${ts}" \
-          '[.messages[]? | select(.bot_id == $bot and .ts != $parent)][0].ts | values' "${out}" 2>/dev/null || true)
-        if [ -n "${reply}" ]; then
-          printf '%s\n' "${reply}"
-          return 0
-        fi
-      else
-        err=$(field "${out}" .error)
-        if [ "${err}" != ratelimited ]; then
-          echo "conversations.replies of thread ${ts}: ok=false error=${err}"
+      state=$(thread_state "${ts}")
+      IFS=$'\t' read -r kind at text <<<"${state}"
+      case "${kind}" in
+        notice)
+          echo "${probe_bot} posted a notice at ${at} in thread ${ts}: ${text}"
           return 1
-        fi
+          ;;
+        answer)
+          if [ -z "${answer}" ]; then
+            answer=${at} answered=${SECONDS}
+            # The timeout bounds the wait for the answer; after it, the settle, and then a good read within the timeout.
+            deadline=$((SECONDS + settle + timeout))
+          fi
+          if [ $((SECONDS - answered)) -ge "${settle}" ]; then
+            printf '%s\n' "${answer}"
+            return 0
+          fi
+          ;;
+        reply) reply=${at} ;;
+      esac
+    else
+      err=$(field "${out}" .error)
+      if [ "${err}" != ratelimited ]; then
+        echo "conversations.replies of thread ${ts}: ok=false error=${err}"
+        return 1
       fi
+      last="conversations.replies: ratelimited"
     fi
     [ "${SECONDS}" -lt "${deadline}" ] || break
-    sleep "${interval}"
+    wait=$((deadline - SECONDS))
+    [ "${wait}" -le "${interval}" ] || wait=${interval}
+    if [ -n "${answer}" ] && [ $((answered + settle - SECONDS)) -lt "${wait}" ]; then
+      wait=$((answered + settle - SECONDS))
+    fi
+    [ "${wait}" -ge 1 ] || wait=1
+    sleep "${wait}"
   done
-  echo "no reply from ${probe_bot} in thread ${ts} within ${timeout} s${last:+ (the last read: ${last})}"
+  if [ -n "${answer}" ]; then
+    echo "${probe_bot} answered at ${answer} in thread ${ts}, but no read of the thread succeeded in the ${timeout} s after the ${settle} s settle${last:+ (the last read: ${last})}"
+  elif [ -n "${reply}" ]; then
+    echo "no answer from ${probe_bot} in thread ${ts} within ${timeout} s: its reply at ${reply} has no footer, so the turn had not ended, or ended with nothing to show${last:+ (the last read: ${last})}"
+  else
+    echo "no reply from ${probe_bot} in thread ${ts} within ${timeout} s${last:+ (the last read: ${last})}"
+  fi
   return 1
 }
 
-# turn CHECK AUTH TEXT: the check that TEXT, posted with AUTH, gets a reply from the probe's bot in its thread.
+# turn CHECK AUTH TEXT: the check that TEXT, posted with AUTH, gets the agent's answer in its thread.
 turn() {
   local check=$1 ts reply
   if ! ${identified}; then
@@ -347,8 +438,8 @@ turn() {
     fail "${check}: ${ts}"
     return 0
   fi
-  if reply=$(wait_reply "${ts}"); then
-    pass "${check}: ${probe_bot} replied at ${reply} in thread ${ts}"
+  if reply=$(wait_answer "${ts}"); then
+    pass "${check}: ${probe_bot} answered at ${reply} in thread ${ts}, and posted no notice there"
   else
     fail "${check}: ${reply}"
   fi
@@ -360,13 +451,16 @@ if [ -n "${metrics_url}" ]; then
   echo "== metrics, ${METRIC}{connection=\"${connection}\"}"
   if [ -z "${metrics_before}" ]; then
     fail "metrics: could not read ${metrics_url} before the checks"
+    [ -z "${binding}" ] || echo "SKIP turn outcomes: the metrics could not be read"
   elif ! read_metrics "${TMP}/metrics.after"; then
     fail "metrics: could not read ${metrics_url} after the checks"
+    [ -z "${binding}" ] || echo "SKIP turn outcomes: the metrics could not be read"
   else
     ok=true evidence=
     # delta OUTCOME WANT EXACT: append OUTCOME's increment to the evidence; ok=false unless it is WANT (EXACT true) or at least WANT.
     delta() {
-      local d=$(($(series "${TMP}/metrics.after" "$1") - $(series "${metrics_before}" "$1")))
+      local d=$(($(series "${TMP}/metrics.after" "${METRIC}" "connection=\"${connection}\"" "$1") -
+        $(series "${metrics_before}" "${METRIC}" "connection=\"${connection}\"" "$1")))
       evidence+="${evidence:+, }$1 +${d}"
       if ${3} && [ "${d}" -ne "$2" ]; then
         evidence+=" (want +$2)"
@@ -380,6 +474,41 @@ if [ -n "${metrics_url}" ]; then
     delta stale 1 true
     delta acknowledged 2 false
     if ${ok}; then pass "metrics: ${connection}: ${evidence}"; else fail "metrics: ${connection}: ${evidence}"; fi
+    if [ -n "${binding}" ]; then
+      echo "== turn outcomes, ${TURNS}{binding=\"${binding}\"}"
+      ok=true evidence=
+      completed=false
+      while read -r outcome; do
+        [ "${outcome}" != completed ] || completed=true
+      done < <(outcomes "${metrics_before}" "${TMP}/metrics.after")
+      # turned OUTCOME WANT AT_LEAST: append OUTCOME's increment to the evidence; ok=false unless it is WANT, or at
+      # least WANT when AT_LEAST is true.
+      turned() {
+        local d=$(($(series "${TMP}/metrics.after" "${TURNS}" "binding=\"${binding}\"" "$1") -
+          $(series "${metrics_before}" "${TURNS}" "binding=\"${binding}\"" "$1")))
+        if ${3} && [ "${d}" -lt "$2" ]; then
+          evidence+="${evidence:+, }$1 +${d} (want at least +$2)"
+          ok=false
+        elif ! ${3} && [ "${d}" -ne "$2" ]; then
+          evidence+="${evidence:+, }$1 +${d} (want +$2)"
+          ok=false
+        elif ${3}; then
+          evidence+="${evidence:+, }$1 +${d}"
+        fi
+      }
+      turned completed 2 true
+      while read -r outcome; do
+        [ "${outcome}" = completed ] || turned "${outcome}" 0 false
+      done < <(outcomes "${metrics_before}" "${TMP}/metrics.after")
+      ${completed} || evidence+=" (no series: is ${binding} the Binding of ${channel}?)"
+      if ${ok}; then
+        pass "turn outcomes: ${binding}: ${evidence}, no other outcome"
+      else
+        fail "turn outcomes: ${binding}: ${evidence}"
+      fi
+    else
+      echo "SKIP turn outcomes: no --binding"
+    fi
   fi
 else
   echo "SKIP metrics: no --metrics-url"
