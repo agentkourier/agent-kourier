@@ -164,8 +164,8 @@ func (e *TextExecutor) Cancel(ctx context.Context, req *a2asrv.ExecutorContext) 
 }
 
 // Cleanup runs Inner's Cleanup, if it has one, with what a2a-go passed after an execution's or a cancel's last event.
-// ADK's executor logs the cause of a failed execution or cancel at WARN, and cancels the input-required tasks of remote
-// subagents, which this agent has none of.
+// ADK's executor cancels the input-required tasks of remote subagents, which this agent has none of, then calls its
+// cleanup callback (NewTextExecutor's does nothing).
 func (e *TextExecutor) Cleanup(ctx context.Context, req *a2asrv.ExecutorContext, result a2a.SendMessageResult, err error) {
 	if c, ok := e.Inner.(a2asrv.AgentExecutionCleaner); ok {
 		c.Cleanup(ctx, req, result, err)

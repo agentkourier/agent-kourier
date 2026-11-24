@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	adkagent "google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
@@ -111,8 +112,14 @@ func newBackend(ctx context.Context, cfg config.Config, env runtime.Env[*store.S
 }
 
 // NewTextExecutor builds the ADK agent on m, with its sessions in sessions, and its ask_user tool, as the executor of
-// its turns.
+// its turns. Its cleanup callback does nothing: without one, ADK logs the cause of a failed execution or cancel at WARN,
+// which a2a-go has logged already.
 func NewTextExecutor(m model.LLM, sessions session.Service) (*TextExecutor, error) {
+	return newTextExecutor(m, sessions, func(context.Context, *a2asrv.ExecutorContext, []*a2a.AgentCard, a2a.SendMessageResult, error) {})
+}
+
+// newTextExecutor is NewTextExecutor with cleaned as the ADK executor's cleanup callback.
+func newTextExecutor(m model.LLM, sessions session.Service, cleaned adka2a.A2AExecutionCleanupCallback) (*TextExecutor, error) {
 	if m == nil || sessions == nil {
 		return nil, errors.New("the model and the sessions are required")
 	}
@@ -128,7 +135,7 @@ func NewTextExecutor(m model.LLM, sessions session.Service) (*TextExecutor, erro
 	if err != nil {
 		return nil, fmt.Errorf("the agent: %w", err)
 	}
-	return &TextExecutor{Inner: adka2a.NewExecutor(adka2a.ExecutorConfig{RunnerConfig: runner.Config{AppName: store.AppName, Agent: root, SessionService: sessions}, RunConfig: adkagent.RunConfig{StreamingMode: adkagent.StreamingModeSSE}, OutputMode: adka2a.OutputArtifactPerEvent})}, nil
+	return &TextExecutor{Inner: adka2a.NewExecutor(adka2a.ExecutorConfig{RunnerConfig: runner.Config{AppName: store.AppName, Agent: root, SessionService: sessions}, RunConfig: adkagent.RunConfig{StreamingMode: adkagent.StreamingModeSSE}, OutputMode: adka2a.OutputArtifactPerEvent, A2AExecutionCleanupCallback: cleaned})}, nil
 }
 
 // IdleContextsDeleted counts the ADK sessions a sweep deleted with their idle contexts, and logs them.

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"iter"
 	"log/slog"
-	"strings"
 	"testing"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -80,7 +79,8 @@ func TestCleanupReachesTheInnerExecutor(t *testing.T) {
 	}
 }
 
-// TestCleanupWithoutAnInnerCleanupDoesNothing: an inner executor with no Cleanup leaves Cleanup a no-op.
+// TestCleanupWithoutAnInnerCleanupDoesNothing: an inner executor with no Cleanup leaves Cleanup a no-op; it asserts only
+// that the call returns without a panic.
 func TestCleanupWithoutAnInnerCleanupDoesNothing(t *testing.T) {
 	cleaner, ok := runtime.Backend(&TextExecutor{Inner: plainInner{}}).(a2asrv.AgentExecutionCleaner)
 	if !ok {
@@ -89,9 +89,39 @@ func TestCleanupWithoutAnInnerCleanupDoesNothing(t *testing.T) {
 	cleaner.Cleanup(t.Context(), &a2asrv.ExecutorContext{TaskID: "task-1"}, nil, errors.New("failed"))
 }
 
-// TestTheADKExecutorsCleanupRuns runs the agent's own ADK executor's Cleanup through the executor: ADK logs the cause of
-// a failed execution at WARN, to the logger in the context.
+// failedTurn is the ExecutorContext of an execution (it has a message) that a2a-go cleans up.
+func failedTurn() *a2asrv.ExecutorContext {
+	return &a2asrv.ExecutorContext{TaskID: "task-1", ContextID: "ctx-1", Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hi"))}
+}
+
+// TestTheADKExecutorsCleanupRuns runs the agent's own ADK executor's Cleanup through the executor: ADK ends its cleanup
+// in its cleanup callback, which it is given the execution and its cause in.
 func TestTheADKExecutorsCleanupRuns(t *testing.T) {
+	var calls int
+	var gotEC *a2asrv.ExecutorContext
+	var gotCause error
+	exec, err := newTextExecutor(&fakeModel{}, session.InMemoryService(),
+		func(_ context.Context, ec *a2asrv.ExecutorContext, _ []*a2a.AgentCard, _ a2a.SendMessageResult, cause error) {
+			calls++
+			gotEC, gotCause = ec, cause
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleaner, ok := runtime.Backend(exec).(a2asrv.AgentExecutionCleaner)
+	if !ok {
+		t.Fatal("the executor has no Cleanup")
+	}
+	ec, cause := failedTurn(), errors.New("the cause of the failure")
+	cleaner.Cleanup(t.Context(), ec, nil, cause)
+	if calls != 1 || gotEC != ec || gotCause != cause { //nolint:errorlint // the caller's error itself, not one that wraps it
+		t.Errorf("ADK's cleanup callback ran %d times with (%p, %v), want once with (%p, %v)", calls, gotEC, gotCause, ec, cause)
+	}
+}
+
+// TestTheADKExecutorsCleanupLogsNothing: a2a-go logs a failed execution's cause at WARN before it cleans up, so the
+// agent's ADK executor does not log it again.
+func TestTheADKExecutorsCleanupLogsNothing(t *testing.T) {
 	exec, err := NewTextExecutor(&fakeModel{}, session.InMemoryService())
 	if err != nil {
 		t.Fatal(err)
@@ -101,10 +131,9 @@ func TestTheADKExecutorsCleanupRuns(t *testing.T) {
 		t.Fatal("the executor has no Cleanup")
 	}
 	var logs bytes.Buffer
-	ctx := a2alog.AttachLogger(t.Context(), slog.New(slog.NewTextHandler(&logs, nil)))
-	ec := &a2asrv.ExecutorContext{TaskID: "task-1", ContextID: "ctx-1", Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hi"))}
-	cleaner.Cleanup(ctx, ec, nil, errors.New("the cause of the failure"))
-	if out := logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "the cause of the failure") {
-		t.Errorf("ADK's Cleanup did not log the cause at WARN; logs: %q", out)
+	ctx := a2alog.AttachLogger(t.Context(), slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	cleaner.Cleanup(ctx, failedTurn(), nil, errors.New("the cause of the failure"))
+	if logs.Len() != 0 {
+		t.Errorf("ADK's Cleanup logged %q, want nothing", logs.String())
 	}
 }
