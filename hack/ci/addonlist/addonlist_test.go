@@ -20,9 +20,10 @@ import (
 var repoRoot = filepath.Join("..", "..", "..")
 
 type step struct {
-	ID  string            `json:"id"`
-	Env map[string]string `json:"env"`
-	Run string            `json:"run"`
+	ID    string            `json:"id"`
+	Env   map[string]string `json:"env"`
+	Run   string            `json:"run"`
+	Shell string            `json:"shell"`
 }
 
 // needs is a job's needs, which a workflow writes as one job's ID or as a list of them.
@@ -56,7 +57,8 @@ type job struct {
 }
 
 type workflow struct {
-	Jobs map[string]job `json:"jobs"`
+	Env  map[string]string `json:"env"`
+	Jobs map[string]job    `json:"jobs"`
 }
 
 // The add-on job of ci.yml, and what its legs are named: each leg's check is its add-on's name.
@@ -126,7 +128,7 @@ func include(j job) []map[string]string {
 // per add-on in the list's order, named after it, none cancelling the others, each cache pruned; security.yml's
 // govulncheck of each add-on's module and trivy scan of each add-on's image on each platform, each cache pruned, with
 // no row for an add-on the list lacks; and release.yml's outputs, signatures and notes (checkRelease).
-func check(list []string, workflows map[string][]byte) ([]string, error) {
+func check(t testing.TB, list []string, workflows map[string][]byte) ([]string, error) {
 	var ci, security, release workflow
 	for file, wf := range map[string]*workflow{"ci.yml": &ci, "security.yml": &security, "release.yml": &release} {
 		if err := yaml.Unmarshal(workflows[file], wf); err != nil {
@@ -218,138 +220,425 @@ func check(list []string, workflows map[string][]byte) ([]string, error) {
 			add("security.yml: trivy scans the image of %s for %q, want %q", a, got, platforms)
 		}
 	}
-	return append(problems, checkRelease(list, release)...), nil
+	return append(problems, checkRelease(t, list, release)...), nil
 }
 
-// The outputs of release.yml's build job that are not an add-on's: Agent Kourier's image, the agents' and the chart.
-var releaseOutputs = []string{"image", "prompt-agent", "echo-agent", "chart"}
+// The outputs of release.yml's build job: Agent Kourier's image, the agents', addons and the chart. addons is a JSON
+// object of each add-on's name to its image's reference, in hack/addons.txt's order, which sign, verify and publish go
+// over; an add-on has no output of its own.
+var releaseOutputs = []string{"image", "prompt-agent", "echo-agent", "addons", "chart"}
 
-// releaseNames returns what release.yml calls an add-on: its shell and jq variable, its environment variable and the
-// label of its line in the release notes. The publish job writes that line, and hack/security/select-release-images.sh
-// selects it for the released-image rescan.
-func releaseNames(a string) (variable, env, label string) {
-	variable = strings.ReplaceAll(a, "-", "_")
-	return variable, strings.ToUpper(variable) + "_REF", strings.ToUpper(a) + " add-on image"
-}
-
-// The env entries that take a build output, and the release notes' body: its format and its arguments.
-var (
-	buildOutputRef = regexp.MustCompile(`^\$\{\{ needs\.build\.outputs\.([a-z0-9-]+) \}\}$`)
-	notesPrintf    = regexp.MustCompile(`body=\$\(printf "([^"]*)" \\\n\s*([^)]*)\)`)
-	notesLine      = regexp.MustCompile("\\\\n- ([^:\\\\]+): \\\\`%s\\\\`")
-	notesArg       = regexp.MustCompile(`"\$\{([A-Za-z_]+)\}"`)
+// The tag checkRelease runs release.yml's steps for, and the token they are given.
+const (
+	releaseTag = "v9.9.9"
+	fakeToken  = "fake-token-not-a-secret"
 )
 
-// loopStep returns the step of a job whose run goes over the references, `for ref in ...`, and that loop's line.
-func loopStep(j job) (step, string) {
-	for _, s := range j.Steps {
-		for line := range strings.Lines(s.Run) {
-			if strings.HasPrefix(strings.TrimSpace(line), "for ref in ") {
-				return s, strings.TrimSpace(line)
-			}
+// The fakes of the commands that release.yml's sign, verify and publish run besides jq. cosign logs its arguments to
+// FAKE_LOG. gh answers the Releases API: the release of the tag is FAKE_RELEASE (a 404 when there is no such file), the
+// generated notes are one line, and a created release's payload is kept in FAKE_PAYLOAD.
+const (
+	fakeCosign = `#!/bin/sh
+[ "$1" = login ] && cat >/dev/null
+printf '%s\n' "$*" >>"${FAKE_LOG}"
+`
+	fakeGH = `#!/bin/sh
+case "$*" in
+"api repos/"*"/releases/tags/"*)
+  [ -f "${FAKE_RELEASE}" ] || { echo 'gh: Not Found (HTTP 404)' >&2; exit 1; }
+  cat "${FAKE_RELEASE}" ;;
+"api --method POST repos/"*"/releases/generate-notes "*)
+  printf '%s\n' '{"body":"## Changes\n\n* a change"}' ;;
+"api --method POST repos/"*"/releases --input "*)
+  for last; do :; done
+  cp "${last}" "${FAKE_PAYLOAD}" ;;
+*)
+  echo "fake gh: unexpected arguments: $*" >&2
+  exit 1 ;;
+esac
+`
+)
+
+// expression is a workflow expression, ${{ ... }}.
+var expression = regexp.MustCompile(`\$\{\{\s*(.*?)\s*\}\}`)
+
+// evaluate replaces each expression in value with its value in ctx, and fails on one that ctx lacks.
+func evaluate(value string, ctx map[string]string) (string, error) {
+	var missing []string
+	out := expression.ReplaceAllStringFunc(value, func(e string) string {
+		name := expression.FindStringSubmatch(e)[1]
+		v, ok := ctx[name]
+		if !ok {
+			missing = append(missing, name)
 		}
+		return v
+	})
+	if len(missing) > 0 {
+		return "", fmt.Errorf("%q: no value for %q", value, missing)
 	}
-	return step{}, ""
+	return out, nil
 }
 
-// checkRelease returns where release.yml does not carry each add-on of list from its build to its release: the build
-// job's output and the digest it reports, the reference that sign, verify and publish each take and that the first two
-// go over, the publish job's check of an existing release and the line it writes in the notes; and an output, or a
-// reference taken from one, of an add-on the list lacks.
-func checkRelease(list []string, release workflow) []string {
+// stepWithRun returns the first step of j that runs a script and, when id is not empty, has that ID.
+func stepWithRun(j job, id string) step {
+	for _, s := range j.Steps {
+		if s.Run != "" && (id == "" || s.ID == id) {
+			return s
+		}
+	}
+	return step{}
+}
+
+// writeFile writes a file for a test, or fails it.
+func writeFile(t testing.TB, path, content string, mode os.FileMode) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), mode); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// readIfAny returns a file's content, or "" when there is no such file.
+func readIfAny(path string) string {
+	b, _ := os.ReadFile(path)
+	return string(b)
+}
+
+// stepResult is what a step of release.yml did: its output and error, the outputs and summary it wrote, what the fake
+// cosign logged and the payload of the release the fake gh created.
+type stepResult struct {
+	out, summary, log, payload string
+	outputs                    map[string]string
+	err                        error
+}
+
+// releaseRun runs steps of release.yml as a runner does, with bash, in a checkout of its own: hack is the repository's,
+// ADDONS_FILE (list) holds the add-ons it is run for, bin/release has a digest for each image release.sh reports, and
+// PATH starts with the fakes.
+type releaseRun struct {
+	t        testing.TB
+	wf       workflow
+	checkout string
+	fakes    string
+	list     string
+	// digest is each image's digest, by name: "" is Agent Kourier's, then the chart, the agents and the add-ons.
+	digest map[string]string
+}
+
+// newReleaseRun returns a releaseRun of the workflow wf for the add-ons addons.
+func newReleaseRun(t testing.TB, wf workflow, addons []string) *releaseRun {
+	t.Helper()
+	r := &releaseRun{t: t, wf: wf, checkout: t.TempDir(), fakes: t.TempDir(), digest: map[string]string{}}
+	hack, err := filepath.Abs(filepath.Join(repoRoot, "hack"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(hack, filepath.Join(r.checkout, "hack")); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(r.checkout, "bin", "release")
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for i, name := range slices.Concat([]string{"", "chart", "prompt-agent", "echo-agent"}, addons) {
+		file := "digest"
+		if name != "" {
+			file = name + "-digest"
+		}
+		r.digest[name] = fmt.Sprintf("sha256:%064x", i+1)
+		writeFile(t, filepath.Join(out, file), r.digest[name]+"\n", 0o644)
+	}
+	r.list = filepath.Join(r.fakes, "addons.txt")
+	writeFile(t, r.list, strings.Join(addons, "\n")+"\n", 0o644)
+	writeFile(t, filepath.Join(r.fakes, "cosign"), fakeCosign, 0o755)
+	writeFile(t, filepath.Join(r.fakes, "gh"), fakeGH, 0o755)
+	return r
+}
+
+// run runs the step s of the job jobName with the build's outputs (nil for the build's own step) and, when release is
+// not nil, that GitHub Release of the tag already published. The environment is the workflow's, the job's and the
+// step's, their expressions evaluated against the build's outputs and fixed values of the github context.
+func (r *releaseRun) run(jobName string, s step, outputs map[string]string, release []byte) stepResult {
+	t := r.t
+	t.Helper()
+	tmp := t.TempDir()
+	ctx := map[string]string{
+		"github.ref_name": releaseTag, "github.repository": "agentkourier/agent-kourier", "github.sha": strings.Repeat("a", 40),
+		"github.actor": "release-bot", "github.token": fakeToken, "secrets.GITHUB_TOKEN": fakeToken,
+	}
+	for k, v := range r.wf.Env {
+		ctx["env."+k] = v
+	}
+	for k, v := range outputs {
+		ctx["needs.build.outputs."+k] = v
+	}
+	var env []string
+	for _, m := range []map[string]string{r.wf.Env, r.wf.Jobs[jobName].Env, s.Env} {
+		for k, v := range m {
+			value, err := evaluate(v, ctx)
+			if err != nil {
+				return stepResult{err: fmt.Errorf("%s: env %s: %w", jobName, k, err)}
+			}
+			env = append(env, k+"="+value)
+		}
+	}
+	files := map[string]string{}
+	for _, f := range []string{"GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY", "FAKE_LOG", "FAKE_PAYLOAD", "FAKE_RELEASE"} {
+		files[f] = filepath.Join(tmp, strings.ToLower(f))
+		env = append(env, f+"="+files[f])
+	}
+	if release != nil {
+		writeFile(t, files["FAKE_RELEASE"], string(release), 0o644)
+	}
+	env = append(env, "PATH="+r.fakes+string(os.PathListSeparator)+os.Getenv("PATH"), "HOME="+tmp, "TMPDIR="+tmp,
+		"RUNNER_TEMP="+tmp, "ADDONS_FILE="+r.list)
+	script := filepath.Join(tmp, "step.sh")
+	writeFile(t, script, s.Run, 0o644)
+	// A step without a shell runs as bash -e {0}; one with shell: bash as bash --noprofile --norc -eo pipefail {0}.
+	args := []string{"-e", script}
+	switch s.Shell {
+	case "":
+	case "bash":
+		args = []string{"--noprofile", "--norc", "-eo", "pipefail", script}
+	default:
+		return stepResult{err: fmt.Errorf("%s: shell %q, which the test does not run", jobName, s.Shell)}
+	}
+	cmd := exec.CommandContext(t.Context(), "bash", args...)
+	cmd.Dir = r.checkout
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	res := stepResult{
+		out: string(out), err: err, outputs: map[string]string{}, summary: readIfAny(files["GITHUB_STEP_SUMMARY"]),
+		log: readIfAny(files["FAKE_LOG"]), payload: readIfAny(files["FAKE_PAYLOAD"]),
+	}
+	for line := range strings.Lines(readIfAny(files["GITHUB_OUTPUT"])) {
+		if k, v, ok := strings.Cut(strings.TrimSuffix(line, "\n"), "="); ok {
+			res.outputs[k] = v
+		}
+	}
+	return res
+}
+
+// withOutput returns outputs with name set to value.
+func withOutput(outputs map[string]string, name, value string) map[string]string {
+	out := maps.Clone(outputs)
+	out[name] = value
+	return out
+}
+
+// orderedObject decodes a JSON object of strings into its pairs of name and value, in the object's order.
+func orderedObject(s string) ([][2]string, error) {
+	dec := json.NewDecoder(strings.NewReader(s))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return nil, fmt.Errorf("not a JSON object: %q", s)
+	}
+	var out [][2]string
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		var v string
+		if err := dec.Decode(&v); err != nil {
+			return nil, err
+		}
+		out = append(out, [2]string{fmt.Sprint(tok), v})
+	}
+	if _, err := dec.Token(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// probeList returns the add-ons checkRelease runs release.yml for: one more than list's, then list's in reverse order.
+// A workflow that names the add-ons itself, rather than reading hack/addons.txt through hack/addons.sh, or that does
+// not keep the list's order, then fails.
+func probeList(list []string) []string {
+	extra := "probe"
+	for i := 2; slices.Contains(list, extra); i++ {
+		extra = fmt.Sprintf("probe-%d", i)
+	}
+	probe := slices.Clone(list)
+	slices.Reverse(probe)
+	return append([]string{extra}, probe...)
+}
+
+// addonLabel is the label of an add-on's line in the release notes and the build's summary: its name upper-cased, as
+// hack/security/select-release-images.sh selects it.
+func addonLabel(name string) string { return strings.ToUpper(name) + " add-on image" }
+
+// checkRelease returns where release.yml does not carry the add-ons of hack/addons.txt from its build to its release.
+// It runs the build's digests step, sign, verify and publish with fakes of cosign and gh, for the add-ons of
+// probeList(list). The build must report addons, each add-on's name to its image's reference in the list's order, and
+// a line of the summary for each. sign and verify must go over every reference the build reports, and stop when addons
+// holds none. publish must write each add-on's line in the notes, in the list's order and in the shape that
+// hack/security/select-release-images.sh selects; accept, run again, the release it created and refuse one whose notes
+// lack an add-on's line; and stop when addons holds none.
+func checkRelease(t testing.TB, list []string, release workflow) []string {
+	t.Helper()
 	var problems []string
 	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
 
 	build := release.Jobs["build"]
-	for name := range build.Outputs {
-		if !slices.Contains(releaseOutputs, name) && !slices.Contains(list, name) {
-			add("release.yml: build has an output %s, which hack/addons.txt does not list", name)
-		}
+	if got, want := slices.Sorted(maps.Keys(build.Outputs)), slices.Sorted(slices.Values(releaseOutputs)); !slices.Equal(got, want) {
+		add("release.yml: build's outputs are %q, want %q: an add-on's image is in addons, not an output of its own", got, want)
 	}
-	var digests string
-	for _, s := range build.Steps {
-		if s.ID == "digests" {
-			digests = s.Run
-		}
+	addons := probeList(list)
+	r := newReleaseRun(t, release, addons)
+	res := r.run("build", stepWithRun(build, "digests"), nil, nil)
+	if res.err != nil {
+		add("release.yml: build's step digests fails for the add-ons %q: %v\n%s", addons, res.err, res.out)
+		return problems
 	}
-	for _, a := range list {
-		v, _, label := releaseNames(a)
-		if got, want := build.Outputs[a], "${{ steps.digests.outputs."+a+" }}"; got != want {
-			add("release.yml: build's output %s is %q, want %q", a, got, want)
-		}
-		for _, want := range []string{
-			v + `="${IMAGE}-` + a + `@$(cat bin/release/` + a + `-digest)"`,
-			`echo "` + a + `=${` + v + `}"`,
-			`echo "` + label + `: \` + "`${" + v + `}\` + "`",
-		} {
-			if !strings.Contains(digests, want) {
-				add("release.yml: build's step digests does not have %s, which reports the digest of %s", want, a)
-			}
-		}
+	steps := map[string]string{}
+	for k, v := range res.outputs {
+		steps["steps.digests.outputs."+k] = v
 	}
-
-	for _, name := range []string{"sign", "verify", "publish"} {
-		j := release.Jobs[name]
-		s, loop := loopStep(j)
-		env := j.Env
-		if name != "publish" {
-			env = s.Env
+	outputs := map[string]string{}
+	for name, v := range build.Outputs {
+		value, err := evaluate(v, steps)
+		if err != nil {
+			add("release.yml: build's output %s: %v", name, err)
 		}
-		for key, value := range env {
-			if m := buildOutputRef.FindStringSubmatch(value); m != nil && !slices.Contains(releaseOutputs, m[1]) && !slices.Contains(list, m[1]) {
-				add("release.yml: %s's %s takes the build output %s, which hack/addons.txt does not list", name, key, m[1])
-			}
-		}
-		for _, a := range list {
-			_, ref, _ := releaseNames(a)
-			if got, want := env[ref], "${{ needs.build.outputs."+a+" }}"; got != want {
-				add("release.yml: %s's %s is %q, want %q", name, ref, got, want)
-			}
-			if name != "publish" && !strings.Contains(loop, `"${`+ref+`}"`) {
-				add("release.yml: %s's loop %q does not go over ${%s}, the image of %s", name, loop, ref, a)
-			}
+		outputs[name] = value
+	}
+	var want [][2]string
+	for _, a := range addons {
+		want = append(want, [2]string{a, release.Env["IMAGE"] + "-" + a + "@" + r.digest[a]})
+	}
+	if got, err := orderedObject(outputs["addons"]); err != nil || !slices.Equal(got, want) {
+		add("release.yml: build's output addons is %q, want each add-on of the list (here %q) to its image's reference, in "+
+			"the list's order: the digests step reads the list with hack/addons.sh", outputs["addons"], addons)
+	}
+	summary := strings.Split(res.summary, "\n")
+	for _, p := range want {
+		if line := addonLabel(p[0]) + ": `" + p[1] + "` (linux/amd64, linux/arm64)"; !slices.Contains(summary, line) {
+			add("release.yml: build's step summary has no line %q", line)
 		}
 	}
 
-	var publish string
-	if steps := release.Jobs["publish"].Steps; len(steps) > 0 {
-		publish = steps[0].Run
+	// sign and verify go over every reference the build reports, the add-ons' among them.
+	var refs []string
+	for _, name := range releaseOutputs {
+		if name != "addons" {
+			refs = append(refs, outputs[name])
+		}
 	}
-	notes := map[string]string{}
-	if m := notesPrintf.FindStringSubmatch(publish); m == nil {
-		add("release.yml: publish writes no release notes with printf")
-	} else {
-		labels := notesLine.FindAllStringSubmatch(m[1], -1)
-		args := notesArg.FindAllStringSubmatch(m[2], -1)
-		if len(args) != len(labels)+1 {
-			add("release.yml: publish's notes have %d lines with a reference and %d references after the body", len(labels), len(args)-1)
-		} else {
-			for i, l := range labels {
-				notes[l[1]] = args[i+1][1]
+	for _, p := range want {
+		refs = append(refs, p[1])
+	}
+	for _, c := range []struct{ job, command string }{{"sign", "sign --yes "}, {"verify", "verify "}} {
+		s := stepWithRun(release.Jobs[c.job], "")
+		res := r.run(c.job, s, outputs, nil)
+		if res.err != nil {
+			add("release.yml: %s fails: %v\n%s", c.job, res.err, res.out)
+			continue
+		}
+		logged := strings.Split(res.log, "\n")
+		for _, ref := range refs {
+			if !slices.ContainsFunc(logged, func(l string) bool { return strings.HasPrefix(l+" ", c.command+ref+" ") }) {
+				add("release.yml: %s does not run cosign %s%s", c.job, c.command, ref)
+			}
+		}
+		for _, none := range []string{"", "{}"} {
+			if res := r.run(c.job, s, withOutput(outputs, "addons", none), nil); res.err == nil || strings.Contains(res.log, c.command) {
+				add("release.yml: %s goes on when addons is %q, which holds no add-on's image", c.job, none)
 			}
 		}
 	}
-	for _, a := range list {
-		v, ref, label := releaseNames(a)
-		if got := notes[label]; got != ref {
-			add("release.yml: publish's notes have no line %q with ${%s} (it has %q)", "- "+label+": `...`", ref, got)
+	return append(problems, checkPublish(r, release, outputs, want)...)
+}
+
+// checkPublish returns where release.yml's publish job, run with the build's outputs, does not write the line of each
+// add-on of want (its name and reference, in the list's order) in the notes of the release it creates, or does not
+// check that line in a release that exists.
+func checkPublish(r *releaseRun, release workflow, outputs map[string]string, want [][2]string) []string {
+	var problems []string
+	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
+
+	s := stepWithRun(release.Jobs["publish"], "")
+	res := r.run("publish", s, outputs, nil)
+	if res.err != nil || res.payload == "" {
+		return []string{fmt.Sprintf("release.yml: publish creates no release: %v\n%s", res.err, res.out)}
+	}
+	payload := res.payload
+	var created map[string]any
+	if err := json.Unmarshal([]byte(payload), &created); err != nil {
+		return []string{fmt.Sprintf("release.yml: publish posts a payload that is not JSON: %v", err)}
+	}
+	body, _ := created["body"].(string)
+	notes := strings.Split(body, "\n")
+	var lines []string
+	last := -1
+	for _, p := range want {
+		line := "- " + addonLabel(p[0]) + ": `" + p[1] + "`"
+		lines = append(lines, line)
+		switch i := slices.Index(notes, line); {
+		case i < 0:
+			add("release.yml: publish's notes have no line %q", line)
+		case i < last:
+			add("release.yml: publish's notes have %q before the add-on that the list has before it", line)
+		default:
+			last = i
 		}
-		for _, want := range []string{
-			`--arg ` + v + ` "${` + ref + `}"`,
-			`contains("` + label + ": `\" + $" + v + ` + "` + "`" + `")`,
-		} {
-			if !strings.Contains(publish, want) {
-				add("release.yml: publish's check of an existing release does not have %s, for %s", want, a)
-			}
+	}
+
+	// The released-image rescan selects each add-on's image from those notes.
+	selected, err := selectReleaseImages(r.t, body)
+	if err != nil {
+		add("%v", err)
+	}
+	for _, p := range want {
+		if !slices.Contains(selected, p[1]) {
+			add("hack/security/select-release-images.sh does not select %s from the notes that publish writes", p[1])
+		}
+	}
+
+	// Run again, publish accepts the release it created and creates none; it refuses one whose notes lack an add-on.
+	if res := r.run("publish", s, outputs, []byte(payload)); res.err != nil || res.payload != "" {
+		add("release.yml: publish does not accept the release it created: %v\n%s", res.err, res.out)
+	}
+	for _, line := range lines {
+		lacking := maps.Clone(created)
+		lacking["body"] = strings.Join(slices.DeleteFunc(slices.Clone(notes), func(l string) bool { return l == line }), "\n")
+		b, err := json.Marshal(lacking)
+		if err != nil {
+			add("%v", err)
+			continue
+		}
+		if res := r.run("publish", s, outputs, b); res.err == nil {
+			add("release.yml: publish accepts an existing release whose notes lack %q", line)
+		}
+	}
+	for _, none := range []string{"", "{}"} {
+		if res := r.run("publish", s, withOutput(outputs, "addons", none), nil); res.err == nil || res.payload != "" {
+			add("release.yml: publish goes on when addons is %q, which holds no add-on's image", none)
 		}
 	}
 	return problems
 }
 
+// selectReleaseImages returns the references that hack/security/select-release-images.sh selects from a final
+// release of releaseTag whose notes are body.
+func selectReleaseImages(t testing.TB, body string) ([]string, error) {
+	t.Helper()
+	dir := t.TempDir()
+	b, err := json.Marshal([]map[string]any{{"tag_name": releaseTag, "draft": false, "prerelease": false, "body": body}})
+	if err != nil {
+		return nil, err
+	}
+	releases, out := filepath.Join(dir, "releases.json"), filepath.Join(dir, "selected")
+	writeFile(t, releases, string(b), 0o644)
+	cmd := exec.CommandContext(t.Context(), filepath.Join(repoRoot, "hack", "security", "select-release-images.sh"), releases, out)
+	if msg, err := cmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("hack/security/select-release-images.sh on the notes that publish writes: %w: %s", err, msg)
+	}
+	return strings.Fields(readIfAny(out)), nil
+}
+
 // checkProblems runs check and fails the test on an error.
 func checkProblems(t *testing.T, list []string, workflows map[string][]byte) []string {
 	t.Helper()
-	problems, err := check(list, workflows)
+	problems, err := check(t, list, workflows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,8 +660,7 @@ func TestWorkflowsHoldEveryAddon(t *testing.T) {
 func TestCheckFindsDrift(t *testing.T) {
 	list := readList(t)
 	repo := readWorkflows(t)
-	first, last := list[0], list[len(list)-1]
-	lastVar, lastRef, lastLabel := releaseNames(last)
+	first := list[0]
 	// The legs as ci.yml lists them, which the reordering case below moves (it skips with fewer than two); it holds
 	// whatever the list says.
 	var ci workflow
@@ -388,12 +676,14 @@ func TestCheckFindsDrift(t *testing.T) {
 		for _, want := range []string{
 			"matrix.addon is", `cache-prune does not prune "go-third-${RUNNER_OS}-"`, "govulncheck has no row for addons/third",
 			`cache-prune does not prune "go-govulncheck-third-${RUNNER_OS}-"`, "trivy scans the image of third for []",
-			"build's output third is", `bin/release/third-digest`, "sign's THIRD_REF is", "verify's loop", "publish's THIRD_REF is",
-			"publish's notes have no line \"- THIRD add-on image", `--arg third "${THIRD_REF}"`,
 		} {
 			if !slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, want) }) {
 				t.Errorf("problems = %q, want one with %q", problems, want)
 			}
+		}
+		// release.yml reads the list, so the line is all it needs.
+		if i := slices.IndexFunc(problems, func(p string) bool { return strings.Contains(p, "release.yml") }); i >= 0 {
+			t.Errorf("problems = %q, want none of release.yml, which reads the list", problems[i])
 		}
 	})
 	t.Run("an add-on dropped from the list alone", func(t *testing.T) {
@@ -421,20 +711,6 @@ func TestCheckFindsDrift(t *testing.T) {
 			t.Errorf("problems = %q, want one with %q", problems, "in its order")
 		}
 	})
-	t.Run("the notes' lines in another order", func(t *testing.T) {
-		if first == last {
-			t.Skip("the list has one add-on, so there is no other order")
-		}
-		_, _, firstLabel := releaseNames(first)
-		wfs := maps.Clone(repo)
-		text := string(wfs["release.yml"])
-		at := strings.Index(text, "body=$(printf")
-		swap := strings.NewReplacer(`\n- `+firstLabel+": ", `\n- `+lastLabel+": ", `\n- `+lastLabel+": ", `\n- `+firstLabel+": ")
-		wfs["release.yml"] = []byte(text[:at] + swap.Replace(text[at:]))
-		if problems := checkProblems(t, list, wfs); !slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, "publish's notes have no line") }) {
-			t.Errorf("problems = %q, want the notes' lines and references paired", problems)
-		}
-	})
 	for _, tt := range []struct {
 		name, file, old, new, want, after string
 	}{
@@ -446,16 +722,19 @@ func TestCheckFindsDrift(t *testing.T) {
 		{"a trivy row of another platform", "security.yml", "- name: " + first + "-linux-arm64\n            platform: linux/arm64", "- name: " + first + "-linux-arm64\n            platform: linux/amd64", "trivy's row", ""},
 		{"a govulncheck cache not pruned", "security.yml", `"go-govulncheck-` + first + `-${RUNNER_OS}-"`, `"go-govulncheck-other-${RUNNER_OS}-"`, `does not prune "go-govulncheck-` + first + `-`, ""},
 		// release.yml: after, when set, is where the change starts, for text that more than one job has.
-		{"an add-on's image not signed", "release.yml", `"${` + lastRef + `}" `, "", "sign's loop", "  sign:"},
-		{"an add-on's image not verified", "release.yml", `"${` + lastRef + `}" `, "", "verify's loop", "  verify:"},
-		{"an add-on's reference not in sign's env", "release.yml", "          " + lastRef + ": ", "          OTHER_REF: ", "sign's " + lastRef + " is", "  sign:"},
-		{"an output of an unlisted add-on", "release.yml", "      chart: ${{ steps.digests.outputs.chart }}\n", "      third: ${{ steps.digests.outputs.third }}\n      chart: ${{ steps.digests.outputs.chart }}\n", "build has an output third, which hack/addons.txt does not list", ""},
-		{"a reference of an unlisted add-on", "release.yml", "      CHART_REF: ", "      THIRD_REF: ${{ needs.build.outputs.third }}\n      CHART_REF: ", "publish's THIRD_REF takes the build output third", "  publish:"},
-		{"an add-on's line not in the notes", "release.yml", "\\n- " + lastLabel + ": ", "\\n- Other image: ", "publish's notes have no line \"- " + lastLabel, "body=$(printf"},
-		{"an add-on not checked in an existing release", "release.yml", "contains(\"" + lastLabel + ": ", "contains(\"Other image: ", "publish's check of an existing release does not have", "  publish:"},
-		{"an add-on's digest not reported", "release.yml", `echo "` + last + `=${` + lastVar + `}"`, `echo "` + last + `="`, "build's step digests does not have", ""},
+		{"the add-ons named in the workflow", "release.yml", "list=$(hack/addons.sh)", `list=$(printf '%s\n' ` + strings.Join(list, " ") + ")", "build's output addons is", ""},
+		{"the add-ons out of the list's order", "release.yml", `'. + {($name): $ref}'`, `'{($name): $ref} + .'`, "build's output addons is", ""},
+		{"the add-ons not reported", "release.yml", `echo "addons=${addons}"`, `echo "addons={}"`, "build's output addons is", ""},
+		{"an output of an add-on", "release.yml", "      chart: ${{ steps.digests.outputs.chart }}\n", "      third: ${{ steps.digests.outputs.third }}\n      chart: ${{ steps.digests.outputs.chart }}\n", "build's outputs are", ""},
+		{"the add-ons not in the summary", "release.yml", "(linux/amd64, linux/arm64)\\n\"'", "\"'", "build's step summary has no line", ""},
+		{"the add-ons' images not signed", "release.yml", `refs+=("${ref}")`, `:`, "sign does not run cosign sign --yes", "  sign:"},
+		{"the add-ons' images not verified", "release.yml", `refs+=("${ref}")`, `:`, "verify does not run cosign verify", "  verify:"},
+		{"no ADDON_REFS in sign's env", "release.yml", "          ADDON_REFS: ${{ needs.build.outputs.addons }}\n", "", "release.yml: sign fails", "  sign:"},
+		{"the add-ons not in the notes", "release.yml", `"${ECHO_AGENT_REF}" "${addon_lines}")`, `"${ECHO_AGENT_REF}" "")`, "publish's notes have no line", "  publish:"},
+		{"the add-ons not checked in an existing release", "release.yml", `and all($addon_lines | split("\n")[]; . as $line | $body | contains($line))`, "and true", "publish accepts an existing release whose notes lack", "  publish:"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			wfs := maps.Clone(repo)
 			text := string(wfs[tt.file])
 			at := strings.Index(text, tt.after)
