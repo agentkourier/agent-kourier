@@ -88,11 +88,18 @@ tags their images with the same `vX.Y.Z`. The AX add-on's image for the route in
    adapter's HTTP handling, the chat listener, or the chart's chat Service and its values), also deploy that commit's image
    to an install with a ChatConnection in HTTP mode that Slack itself reaches, and run `hack/slack/http-probe.sh` against
    it. It sends requests that Slack did not sign (each must be answered 401) and one to an unknown connection (503), then
-   posts an alert and a bot's mention in the channel, and waits for the connection's bot to reply to each. It needs three
+   posts an alert and a bot's mention in the channel, and waits in each thread for the agent's answer: a reply of the
+   connection's bot that ends with the footer of a finished turn (the feedback buttons, or the follow-up hint of a
+   thread a bot's mention began). A failed turn can still post a reply, `(no output)` or its partial text, beside a
+   notice ("The agent's task failed. ... Troubleshooting reference: AK-..."); the probe tells the two apart by the
+   metadata on each of Agent Kourier's posts, and fails the check on any notice in the thread, which it prints. After
+   the answer it reads the thread again `--settle` seconds later (10 by default) for a notice that follows it. It needs three
    Slack apps: the connection's own, one whose bot the Binding's `botMessage` trigger names, and one that mentions the
    connection's bot, which no `botMessage` trigger of the Binding may name. `--help` says what the Binding must have, and
    names the two checks left to be done by hand: a button press, and a leader killed while a message is posted. With the
-   leader's metrics port forwarded, the probe also checks the increments of `agentkourier_slack_http_requests_total`:
+   leader's metrics port forwarded, the probe also checks the increments of `agentkourier_slack_http_requests_total`,
+   and, given the Binding of the channel with `--binding`, those of `agentkourier_turn_outcomes_total`: at least two
+   `completed`, and no other outcome:
 
    ```sh
    kubectl -n agent-kourier port-forward "$(kubectl -n agent-kourier get pod -l agentkourier.dev/role=leader -o name)" 8080 &
@@ -103,7 +110,8 @@ tags their images with the same `vX.Y.Z`. The AX add-on's image for the route in
      --probe-env ~/.config/agent-kourier/probe.env \
      --poster-env ~/.config/agent-kourier/poster.env \
      --mention-env ~/.config/agent-kourier/mention.env \
-     --metrics-url http://127.0.0.1:8080/metrics
+     --metrics-url http://127.0.0.1:8080/metrics \
+     --binding agent-kourier/probe
    kill %1
    ```
 
