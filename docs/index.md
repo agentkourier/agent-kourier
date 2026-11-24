@@ -50,9 +50,8 @@ which answers on that service with its own tools.</p>
 <p class="ak-strip__label">Agents</p>
 <span class="ak-strip__name">A2A</span>
 <span class="ak-strip__name">kagent</span>
-<span class="ak-strip__name">Google AX</span>
 <span class="ak-strip__name">Claude Managed Agents <small>(add-on)</small></span>
-<span class="ak-strip__name">AX agent <small>(add-on)</small></span>
+<span class="ak-strip__name">Google AX <small>(add-on)</small></span>
 </div>
 </div>
 

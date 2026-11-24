@@ -421,6 +421,54 @@ fi
 contains "root-user: says which image and why" "prompt-agent linux/amd64: the image does not run as 65532:65532" "${TMP}/root-user.out"
 check "root-user: no image built to keep" 0 "$(grep -c -v '^build load ' "${TMP}/root-user.builds" || true)"
 
+echo "== a build that fails is run again, and the release goes on once it succeeds"
+PROMPT_CHECK=agent-kourier-release-check:prompt-agent-linux-amd64
+if run_release_build retried FAKE_BUILD_FAIL="${PROMPT_CHECK}=2" BUILD_RETRY_WAIT=0; then
+  echo "ok: retried: exit status"
+else
+  cat "${TMP}/retried.out" >&2
+  echo "FAIL: retried: release.sh failed" >&2
+  exit 1
+fi
+check "retried: two attempts failed" 2 "$(grep -c -x -F -- "${PROMPT_CHECK}" "${TMP}/retried.state.failed")"
+contains "retried: says which build it runs again" "==> prompt-agent linux/amd64: build attempt 2 of 4 failed; trying again in 0s" "${TMP}/retried.out"
+check "retried: fifteen builds in all" 15 "$(wc -l <"${TMP}/retried.builds" | tr -d ' ')"
+check "retried: ten platform images scanned" 10 "$(wc -l <"${TMP}/retried.scans" | tr -d ' ')"
+check "retried: the agent's digest is written" 1 "$(grep -c -x -E 'sha256:[0-9a-f]{64}' "${TMP}/retried/prompt-agent-digest")"
+ECHO_KEPT=ghcr.io/example/agent-kourier-echo-agent:v1.2.3
+if run_release_build retried-kept FAKE_BUILD_FAIL="${ECHO_KEPT}=1" BUILD_RETRY_WAIT=0; then
+  echo "ok: retried-kept: exit status"
+else
+  cat "${TMP}/retried-kept.out" >&2
+  echo "FAIL: retried-kept: release.sh failed" >&2
+  exit 1
+fi
+contains "retried-kept: the multi-platform build is run again too" "==> ${ECHO_KEPT}: build attempt 1 of 4 failed" "${TMP}/retried-kept.out"
+check "retried-kept: the echo agent's digest is written" 1 "$(grep -c -x -E 'sha256:[0-9a-f]{64}' "${TMP}/retried-kept/echo-agent-digest")"
+
+echo "== a build that fails every attempt stops the release before any image is kept"
+if run_release_build retries-spent FAKE_BUILD_FAIL="${PROMPT_CHECK}=3" BUILD_ATTEMPTS=3 BUILD_RETRY_WAIT=0; then
+  echo "FAIL: retries-spent: release.sh succeeded" >&2
+  exit 1
+fi
+check "retries-spent: three attempts" 3 "$(grep -c -x -F -- "${PROMPT_CHECK}" "${TMP}/retries-spent.state.failed")"
+contains "retries-spent: says which build and how often" "error: prompt-agent linux/amd64: the build failed 3 time(s); giving up" "${TMP}/retries-spent.out"
+check "retries-spent: no image built to keep" 0 "$(grep -c -v '^build load ' "${TMP}/retries-spent.builds" || true)"
+check "retries-spent: no digest written" 0 "$(find "${TMP}/retries-spent" -name '*digest' | wc -l | tr -d ' ')"
+if run_release_build no-retry FAKE_BUILD_FAIL="${PROMPT_CHECK}=1" BUILD_ATTEMPTS=1; then
+  echo "FAIL: no-retry: release.sh succeeded" >&2
+  exit 1
+fi
+check "no-retry: BUILD_ATTEMPTS=1 runs a build once" 1 "$(grep -c -x -F -- "${PROMPT_CHECK}" "${TMP}/no-retry.state.failed")"
+for bad in BUILD_ATTEMPTS=0 BUILD_ATTEMPTS=x BUILD_RETRY_WAIT=-1; do
+  if run_release_build bad-setting "${bad}"; then
+    echo "FAIL: bad-setting: release.sh succeeded with ${bad}" >&2
+    exit 1
+  fi
+  contains "bad-setting: refuses ${bad}" "${bad%%=*} must be a whole number" "${TMP}/bad-setting.out"
+  check "bad-setting: ${bad} builds nothing" 0 "$(wc -l <"${TMP}/bad-setting.builds" | tr -d ' ')"
+done
+
 # run_pushed_case NAME WANT_STATUS PUSHED_IMAGE LAYERS: check-pushed.sh for linux/arm64 of a pushed reference whose .Image
 # is PUSHED_IMAGE, against a local image whose layers are LAYERS.
 run_pushed_case() {

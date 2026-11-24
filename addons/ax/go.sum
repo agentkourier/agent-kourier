@@ -14,6 +14,8 @@ github.com/agent-substrate/substrate v0.0.0-20260918201817-944abe3278b8 h1:C39j2
 github.com/agent-substrate/substrate v0.0.0-20260918201817-944abe3278b8/go.mod h1:pWnhZpFkHq9VjF2OxsqEbryLnnUYmohhC62bFoindCM=
 github.com/anthropics/anthropic-sdk-go/v2 v2.13.0 h1:IClHmLpdWZBOn8IrkDkQJuHinFlSa/URtkNECjXcgmE=
 github.com/anthropics/anthropic-sdk-go/v2 v2.13.0/go.mod h1:9MisVFnaVHMm4A8Pm1h75dsxyM3M8vv6NW9O5Tm2Q4k=
+github.com/anthropics/anthropic-sdk-go/v2 v2.14.0 h1:sLab39BpE/g3tbnP9LRasdocVnYhGOj9JhmoJaSIS7I=
+github.com/anthropics/anthropic-sdk-go/v2 v2.14.0/go.mod h1:9MisVFnaVHMm4A8Pm1h75dsxyM3M8vv6NW9O5Tm2Q4k=
 github.com/aws/aws-sdk-go-v2 v1.48.0 h1:tFU7EJVm7MfyaXLsXdYTZ0Vd6vwt9OljCyqq0gqk0Mc=
 github.com/aws/aws-sdk-go-v2 v1.48.0/go.mod h1:oeKU5p+TQBnpeLmU42WZLWvzv+ORLn+74n4QVLnm/Z0=
 github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.27 h1:3dMP9eEmHVosFN1QiD24IJBKVY8m6iUfVYXqRCT118Q=
