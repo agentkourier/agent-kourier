@@ -82,6 +82,7 @@ func Run(t *testing.T, h Harness) {
 		{"ForgetContext", testForgetContext},
 		{"DeleteIdleContexts", testDeleteIdleContexts},
 		{"IdleContexts", testIdleContexts},
+		{"StillIdle", testStillIdle},
 		{"ReleaseContext", testReleaseContext},
 		{"TouchContext", testTouchContext},
 		{"Reopen", testReopen},
@@ -891,6 +892,56 @@ func testIdleContexts(t *testing.T, h Harness) {
 	}
 	if got, err := s.IdleContexts(ctx, clk.Now().Add(-2*time.Hour)); err != nil || len(got) != 0 {
 		t.Fatalf("IdleContexts before every activity = %v, %v; want none", got, err)
+	}
+}
+
+// StillIdle holds a listed context to the listing: it is still idle until its activity or ref changes (a touch of the
+// owner's context, a put, a touch of its ref), a turn starts in it, or it is forgotten.
+func testStillIdle(t *testing.T, h Harness) {
+	s, clk := openWith(t, h, store.TaskOptions{}, discard())
+	ctx := context.Background()
+	ids := []string{"kept", "touched", "put", "ref-touched", "turn", "forgotten"}
+	for i, id := range ids {
+		if err := s.PutContext(ctx, store.Context{Owner: "agent-kourier", ContextID: id, Ref: "sesn_" + id, LastActive: clk.Now()}); err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 { // another owner's context of the same ID as one that is touched
+			if err := s.PutContext(ctx, store.Context{Owner: "someone-else", ContextID: "touched", Ref: "sesn_9", LastActive: clk.Now()}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	clk.Advance(time.Hour)
+	listed, err := s.IdleContexts(ctx, clk.Now())
+	if err != nil || len(listed) != len(ids)+1 {
+		t.Fatalf("IdleContexts = %v, %v; want %d", listed, err, len(ids)+1)
+	}
+	byKey := map[string]store.Context{}
+	for _, c := range listed {
+		byKey[c.Owner+"/"+c.ContextID] = c
+	}
+	clk.Advance(time.Minute)
+	if err := s.TouchContext(kourier, "touched"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutContext(ctx, store.Context{Owner: "agent-kourier", ContextID: "put", Ref: "sesn_new", LastActive: byKey["agent-kourier/put"].LastActive}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.TouchContextRef(ctx, "agent-kourier", "ref-touched", "sesn_ref-touched", clk.Now()); err != nil {
+		t.Fatal(err)
+	}
+	mustCreate(t, s, task("turn-working", "turn", a2a.TaskStateWorking, nil))
+	if err := s.ForgetContext(ctx, "agent-kourier", "forgotten", "sesn_forgotten", clk.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]bool{
+		"agent-kourier/kept": true, "someone-else/touched": true,
+		"agent-kourier/touched": false, "agent-kourier/put": false, "agent-kourier/ref-touched": false,
+		"agent-kourier/turn": false, "agent-kourier/forgotten": false,
+	} {
+		if got, err := s.StillIdle(ctx, byKey[key]); err != nil || got != want {
+			t.Errorf("StillIdle(%s) = %v, %v; want %v", key, got, err, want)
+		}
 	}
 }
 

@@ -122,7 +122,10 @@ func Run[S Store](ctx context.Context, a Addon[S], cfg settings.Config, own sett
 	defer stopTurns()
 	running := newTurns(life, backend, tel)
 	tasks := &guardedTasks{Store: st}
-	local := endpoint(a, backend, st, tasks, running, check, cfg.PublicURL, tel)
+	// The accept of a message and the upkeep's release of its context take the context's lock in turn. It is by context
+	// ID alone: two owners' contexts of one ID only wait on each other.
+	contexts := &keyLock[string]{}
+	local := endpoint(a, backend, st, tasks, running, contexts, check, cfg.PublicURL, tel)
 
 	status := &cluster.Status{}
 	router := &cluster.Router{Local: telemetry.Extract(local), Status: status, Addon: a.Name, Noun: a.Noun,
@@ -191,7 +194,8 @@ func Run[S Store](ctx context.Context, a Addon[S], cfg settings.Config, own sett
 	log.Info(a.Noun+" listening", append(attrs, "store", cfg.Store, "pod", cfg.PodName, "auth", authMode(cfg),
 		"auth_header", cfg.AuthHeader, "task_retention", cfg.TaskRetention, "session_idle_ttl", cfg.SessionIdleTTL)...)
 
-	up := &upkeep{store: st, retention: cfg.TaskRetention, idle: cfg.SessionIdleTTL, every: opts.UpkeepInterval, now: opts.Now, log: log}
+	up := &upkeep{store: st, retention: cfg.TaskRetention, idle: cfg.SessionIdleTTL, every: opts.UpkeepInterval, now: opts.Now, log: log,
+		contexts: contexts}
 	up.releaser, _ = backend.(ContextReleaser)
 	up.reporter, _ = backend.(IdleReporter)
 	if up.every <= 0 {
@@ -287,17 +291,18 @@ func Run[S Store](ctx context.Context, a Addon[S], cfg settings.Config, own sett
 // nothing else of Run: no election, takeover, upkeep or stop, and each turn runs until it ends. publicURL is the
 // endpoint the card names; tel may be nil. It serves a backend in a test or a smoke run.
 func (a Addon[S]) Handler(backend Backend, st Store, check *auth.Check, publicURL string, tel *telemetry.Telemetry) http.Handler {
-	return endpoint(a, backend, st, st, newTurns(context.Background(), backend, tel), check, publicURL, tel)
+	return endpoint(a, backend, st, st, newTurns(context.Background(), backend, tel), &keyLock[string]{}, check, publicURL, tel)
 }
 
-// endpoint is the A2A endpoint at A2APath and its card under it, behind check. The turns run through running, and
-// a2a-go writes the tasks through tasks.
-func endpoint[S Store](a Addon[S], backend Backend, st Store, tasks taskstore.Store, running *turns, check *auth.Check, publicURL string,
-	tel *telemetry.Telemetry) http.Handler {
+// endpoint is the A2A endpoint at A2APath and its card under it, behind check. The turns run through running, a2a-go
+// writes the tasks through tasks, and the accept of a message holds its context's lock in contexts while it marks the
+// context active.
+func endpoint[S Store](a Addon[S], backend Backend, st Store, tasks taskstore.Store, running *turns, contexts *keyLock[string],
+	check *auth.Check, publicURL string, tel *telemetry.Telemetry) http.Handler {
 	validator, _ := backend.(MessageValidator)
 	handler := &a2asrv.InterceptedHandler{
 		Handler: &replayHandler{RequestHandler: a2asrv.NewHandler(running, a2asrv.WithTaskStore(tasks)), store: st, tel: tel,
-			validator: validator, life: running.life},
+			validator: validator, life: running.life, contexts: contexts},
 		Interceptors: []a2asrv.CallInterceptor{auth.Interceptor{}},
 	}
 	mux := http.NewServeMux()
