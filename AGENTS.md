@@ -111,12 +111,13 @@ golangci-lint runs as `go tool golangci-lint`, never a global install.
   overrides, `docs/` except `brand` and `spikes` (of an SVG, the text and not the markup), and the files that pages of `docs/` include with `--8<--`, found under the
   snippets `base_path` in `mkdocs.yml`; an include it cannot find fails too, and `kourier/` as a path segment is not a misspelling) and, in the public sources (`README.md`, the chart
   README, all of `charts/agent-kourier/values.yaml`, the generated CRDs under `charts/agent-kourier/files/crds`, every text file under `docs/` except `brand` and `spikes`, the theme
-  overrides, and every `README.md` and YAML file under `examples/recipes`), on internal plan, decision and risk IDs and `tasks/` paths, removed field and page names, API fields the types do
+  overrides, every `README.md` and YAML file under `examples/recipes`, every text file under `examples/helm`, and every `README.md` under `addons/`, the kit's and
+  nested modules' included), on internal plan, decision and risk IDs and `tasks/` paths, removed field and page names, API fields the types do
   not have yet (a field stops being flagged once `api/v1alpha1` has it), a release version other than `charts/agent-kourier/Chart.yaml`'s, wording that says there is no release,
   a `helm` install of `./charts/agent-kourier` (the release gate refuses a tag that is not the chart's version, so a
   release starts with a pull request that bumps both), owner or workspace identifiers (from the private
   pattern in `CONTENTCHECK_WORKSPACE`, which CI sets from a secret; unset, that rule does not run and the check says so), and relative links or
-  anchors in the two READMEs and the recipe READMEs that do not resolve (`hack/docs/contentcheck`; a deliberate exception goes in its `allowlist.txt`
+  anchors in the two READMEs, the recipe READMEs and the add-on READMEs that do not resolve (`hack/docs/contentcheck`; a deliberate exception goes in its `allowlist.txt`
   with a reason, and a stale entry fails too).
 - `make release-image VERSION=vX.Y.Z` builds the release images (Agent Kourier and the recipes' prompt and echo agents) and the chart locally; see `RELEASING.md`.
 - Add tools with `go get -tool <module>/cmd/<tool>@<version>`.
