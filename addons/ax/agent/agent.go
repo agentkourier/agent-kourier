@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	adkagent "google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
 	"google.golang.org/adk/v2/model"
@@ -77,11 +78,12 @@ type Backend struct {
 }
 
 var (
-	_ runtime.MessageValidator = (*Backend)(nil)
-	_ runtime.IdleReporter     = (*Backend)(nil)
-	_ runtime.Readiness        = (*Backend)(nil)
-	_ runtime.Routes           = (*Backend)(nil)
-	_ runtime.Describer        = (*Backend)(nil)
+	_ a2asrv.AgentExecutionCleaner = (*Backend)(nil)
+	_ runtime.MessageValidator     = (*Backend)(nil)
+	_ runtime.IdleReporter         = (*Backend)(nil)
+	_ runtime.Readiness            = (*Backend)(nil)
+	_ runtime.Routes               = (*Backend)(nil)
+	_ runtime.Describer            = (*Backend)(nil)
 )
 
 func newBackend(ctx context.Context, cfg config.Config, env runtime.Env[*store.Store], newModel NewModel) (*Backend, error) {
