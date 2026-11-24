@@ -905,8 +905,8 @@ func testStillIdle(t *testing.T, h Harness) {
 		if err := s.PutContext(ctx, store.Context{Owner: "agent-kourier", ContextID: id, Ref: "sesn_" + id, LastActive: clk.Now()}); err != nil {
 			t.Fatal(err)
 		}
-		if i == 0 { // another owner's context of the same ID as one that is touched
-			if err := s.PutContext(ctx, store.Context{Owner: "someone-else", ContextID: "touched", Ref: "sesn_9", LastActive: clk.Now()}); err != nil {
+		if i == 0 { // another owner's context of the same ID, ref and activity as one that is touched
+			if err := s.PutContext(ctx, store.Context{Owner: "someone-else", ContextID: "touched", Ref: "sesn_touched", LastActive: clk.Now()}); err != nil {
 				t.Fatal(err)
 			}
 		}

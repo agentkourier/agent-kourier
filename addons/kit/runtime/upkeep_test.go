@@ -140,7 +140,8 @@ func TestAMessageAcceptedAfterTheListingKeepsItsContext(t *testing.T) {
 }
 
 // A message for a context that the sweep is releasing waits until the release is over, the context forgotten, and then
-// marks the context active anew: it never runs between the sweep's last check of the context and its forget.
+// marks the context active anew: it never runs between the sweep's last check of the context and its forget. The
+// forget gives the message time to run first, should the lock let it through after the release.
 func TestAMessageForAContextBeingReleasedWaitsForTheRelease(t *testing.T) {
 	st := newFakeStore()
 	st.idle = []store.Context{{Owner: auth.Caller, ContextID: "c1", Ref: "s1"}}
@@ -153,7 +154,18 @@ func TestAMessageForAContextBeingReleasedWaitsForTheRelease(t *testing.T) {
 	}()
 	<-r.entered
 	touched := make(chan error, 1)
-	go func() { touched <- h.touch(asCaller(t.Context(), auth.Caller), message("m1", "hi", "c1", "")) }()
+	accepted := make(chan struct{})
+	go func() {
+		err := h.touch(asCaller(t.Context(), auth.Caller), message("m1", "hi", "c1", ""))
+		close(accepted)
+		touched <- err
+	}()
+	st.forgets = func() {
+		select {
+		case <-accepted:
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 	select {
 	case err := <-touched:
 		close(r.proceed)
@@ -166,9 +178,36 @@ func TestAMessageForAContextBeingReleasedWaitsForTheRelease(t *testing.T) {
 	if err := <-touched; err != nil {
 		t.Fatalf("accept the message: %v", err)
 	}
-	if !slices.Equal(r.released, []string{"c1"}) || !slices.Equal(st.forgotten, []string{"c1"}) ||
-		!slices.Equal(st.touchedContexts(), []string{"c1"}) {
-		t.Fatalf("released %q, forgotten %q, touched %q; want c1 released and forgotten, then marked active",
-			r.released, st.forgotten, st.touchedContexts())
+	if !slices.Equal(r.released, []string{"c1"}) || !slices.Equal(st.contextEvents(), []string{"forget c1", "touch c1"}) {
+		t.Fatalf("released %q, then %q; want c1 released and forgotten, then marked active", r.released, st.contextEvents())
+	}
+}
+
+// deadlineReleaser records how long each release's context had left when the release began.
+type deadlineReleaser struct{ left []time.Duration }
+
+func (r *deadlineReleaser) ReleaseContext(ctx context.Context, _ store.Context) error {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		r.left = append(r.left, -1)
+		return nil
+	}
+	r.left = append(r.left, time.Until(deadline))
+	return nil
+}
+
+// A backend's release of an idle context, which holds back the messages for the context, is cut off after
+// ContextReleaseTimeout.
+func TestTheReleaseOfAnIdleContextIsBounded(t *testing.T) {
+	st := newFakeStore()
+	st.idle = []store.Context{{Owner: auth.Caller, ContextID: "c1", Ref: "s1"}}
+	r := &deadlineReleaser{}
+	u, _ := sweeper(st, r, slog.New(slog.DiscardHandler))
+	u.sweep(t.Context())
+	if len(r.left) != 1 || r.left[0] <= 0 || r.left[0] > ContextReleaseTimeout {
+		t.Fatalf("the release had %v left; want one release with at most %v", r.left, ContextReleaseTimeout)
+	}
+	if !slices.Equal(st.forgotten, []string{"c1"}) {
+		t.Fatalf("forgotten %q; want c1", st.forgotten)
 	}
 }

@@ -35,8 +35,10 @@ type fakeStore struct {
 	other     *store.Lease                    // a live lease another replica holds: TryLead fails and CurrentLeader returns it
 	idle      []store.Context                 // what IdleContexts returns
 	listed    func()                          // runs once IdleContexts has read its list, before it returns
+	forgets   func()                          // runs as ForgetContext begins, before it removes the context
 	forgotten []string                        // the contexts ForgetContext removed
 	touched   []string                        // the contexts TouchContext marked active, in order
+	contexts  []string                        // "touch <id>" and "forget <id>", in the order they ran
 	deleted   int                             // what DeleteIdleContexts returns
 	log       []string                        // the events in order: "close" and what the test adds
 	settle    func(ctx context.Context) error // runs in SettleInterrupted: its error is the settlement's
@@ -124,6 +126,7 @@ func (s *fakeStore) TouchContext(_ context.Context, contextID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.touched = append(s.touched, contextID)
+	s.contexts = append(s.contexts, "touch "+contextID)
 	return nil
 }
 
@@ -131,6 +134,13 @@ func (s *fakeStore) touchedContexts() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return slices.Clone(s.touched)
+}
+
+// contextEvents are the touches and forgets of contexts, in the order they ran.
+func (s *fakeStore) contextEvents() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.contexts)
 }
 
 func (s *fakeStore) SettleInterrupted(ctx context.Context, _ string) (store.Settlement, error) {
@@ -168,8 +178,12 @@ func (s *fakeStore) StillIdle(_ context.Context, c store.Context) (bool, error) 
 }
 
 func (s *fakeStore) ForgetContext(_ context.Context, _, contextID, _ string, _ time.Time) error {
+	if s.forgets != nil {
+		s.forgets()
+	}
 	s.mu.Lock()
 	s.forgotten = append(s.forgotten, contextID)
+	s.contexts = append(s.contexts, "forget "+contextID)
 	s.mu.Unlock()
 	return nil
 }
