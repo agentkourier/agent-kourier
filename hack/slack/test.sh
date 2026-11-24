@@ -30,9 +30,12 @@ CHANNEL=C0PROBE
 #   - auth.test: the identity of the token in the -H @file, by the table below;
 #   - chat.postMessage: ok with a new ts, and the text is appended to ${STUB_DIR}/posts (STUB_POST_ERROR: ok=false
 #     with that error);
-#   - conversations.replies: the parent and, unless STUB_NO_REPLY is set, a reply from the bot STUB_REPLY_BOT (B0PROBE);
-#     STUB_REPLIES_ERROR answers ok=false with that error, STUB_RATELIMITED_ONCE answers the first read ratelimited,
-#     and STUB_REPLIES_CURL_FAIL has curl fail;
+#   - conversations.replies: the parent and, unless STUB_NO_REPLY is set, a reply from the bot STUB_REPLY_BOT (B0PROBE),
+#     tagged as Agent Kourier tags its posts (outbox_id .../reply, unless STUB_NO_METADATA is set), that ends with the
+#     footer STUB_FOOTER: buttons (the feedback buttons, the default), hint (the follow-up hint) or none. From read
+#     STUB_NOTICE_FROM on, the thread also has a failed task's notice from that bot. STUB_REPLIES_ERROR answers ok=false
+#     with that error, STUB_RATELIMITED_ONCE answers the first read ratelimited, and STUB_REPLIES_CURL_FAIL has curl
+#     fail;
 #   - the metrics URL: ${STUB_DIR}/metrics.<n>, n counting the reads from 1.
 mkdir -p "${TMP}/bin"
 cat >"${TMP}/bin/curl" <<'FAKE'
@@ -108,11 +111,32 @@ case "${url}" in
       body=$(printf '{"ok":false,"error":"%s"}' "${STUB_REPLIES_ERROR}")
     elif [ -n "${STUB_RATELIMITED_ONCE:-}" ] && [ "${reads}" = 1 ]; then
       body='{"ok":false,"error":"ratelimited"}'
-    elif [ -n "${STUB_NO_REPLY:-}" ]; then
-      body=$(printf '{"ok":true,"messages":[{"ts":"%s","bot_id":"B0POSTER"}]}' "${parent}")
     else
-      body=$(printf '{"ok":true,"messages":[{"ts":"%s","bot_id":"B0POSTER"},{"ts":"1700000001.000001","bot_id":"%s","text":"a reply"}]}' \
-        "${parent}" "${STUB_REPLY_BOT:-B0PROBE}")
+      bot=${STUB_REPLY_BOT:-B0PROBE}
+      tag() {
+        if [ -n "${STUB_NO_METADATA:-}" ]; then echo null; else
+          jq -nc --arg id "$1" '{event_type: "agentkourier_message", event_payload: {outbox_id: $id}}'
+        fi
+      }
+      case "${STUB_FOOTER:-buttons}" in
+        buttons) footer='[{"type":"context","elements":[{"type":"plain_text","text":"Was this useful?"}]},{"type":"actions","elements":[{"type":"button","action_id":"feedback-useful"},{"type":"button","action_id":"feedback-not-useful"}]}]' ;;
+        hint) footer='[{"type":"context","elements":[{"type":"plain_text","text":"Mention me in this thread to ask a follow-up."}]}]' ;;
+        none) footer='[]' ;;
+      esac
+      messages=$(jq -nc --arg ts "${parent}" '[{ts: $ts, bot_id: "B0POSTER", text: "the parent"}]')
+      if [ -z "${STUB_NO_REPLY:-}" ]; then
+        messages=$(jq -c --arg bot "${bot}" --arg id "slack:agent-kourier/probe:C0PROBE:${parent}/reply" --argjson footer "${footer}" \
+          --argjson tag "$(tag "slack:agent-kourier/probe:C0PROBE:${parent}/reply")" \
+          '. + [{ts: "1700000001.000001", bot_id: $bot, text: "an answer", blocks: ([{type: "rich_text"}] + $footer)}
+            + (if $tag then {metadata: $tag} else {} end)]' <<<"${messages}")
+      fi
+      if [ -n "${STUB_NOTICE_FROM:-}" ] && [ "${reads}" -ge "${STUB_NOTICE_FROM}" ]; then
+        messages=$(jq -c --arg bot "${bot}" --argjson tag "$(tag "task:agent-kourier/probe:C0PROBE:${parent}:t1/task_failed/notice")" \
+          '. + [{ts: "1700000001.000002", bot_id: $bot,
+            text: "The agent\u0027s task failed.\nAn operator can investigate the agent. Troubleshooting reference: AK-0123456789abcdef01234567.",
+            blocks: [{type: "section"}]} + (if $tag then {metadata: $tag} else {} end)]' <<<"${messages}")
+      fi
+      body=$(jq -c '{ok: true, messages: .}' <<<"${messages}")
     fi
     ;;
   http://127.0.0.1:9090/metrics)
@@ -136,9 +160,18 @@ cred "${TMP}/probe.env" botToken "${PROBE_TOKEN}"
 cred "${TMP}/poster.env" SLACK_BOT_TOKEN "${POSTER_TOKEN}"
 cred "${TMP}/mention.env" SLACK_BOT_TOKEN "${MENTION_TOKEN}"
 
-# metrics N BAD STALE ACK: the series of read N, for the connection under test and, unchanged between reads, another.
+# metrics N BAD STALE ACK [COMPLETED FAILED]: the series of read N, for the connection under test and, unchanged between
+# reads, another; with COMPLETED and FAILED, the turn outcomes of the Binding agent-kourier/alerts too, and of another
+# Binding whose failures grow with N.
 metrics() {
-  cat >"${CASE}/metrics.$1" <<EOF
+  [ $# -lt 5 ] || cat >"${CASE}/metrics.$1" <<EOF
+# HELP agentkourier_turn_outcomes_total Turns that ended, by Binding and how.
+# TYPE agentkourier_turn_outcomes_total counter
+agentkourier_turn_outcomes_total{binding="agent-kourier/alerts",outcome="completed"} $5
+agentkourier_turn_outcomes_total{binding="agent-kourier/alerts",outcome="failed"} $6
+agentkourier_turn_outcomes_total{binding="agent-kourier/alerts-other",outcome="failed"} $((10 * $1))
+EOF
+  cat >>"${CASE}/metrics.$1" <<EOF
 # HELP agentkourier_slack_http_requests_total Requests Slack sent to a connection in HTTP mode.
 # TYPE agentkourier_slack_http_requests_total counter
 agentkourier_slack_http_requests_total{connection="agent-kourier/probe",outcome="acknowledged"} $4
@@ -156,8 +189,9 @@ new_case() {
 }
 
 # REQUIRED is every required flag, with the files above.
+# --settle 0 keeps the cases fast; the settle cases set it.
 REQUIRED=(--url "${URL}" --channel "${CHANNEL}" --probe-env "${TMP}/probe.env" --poster-env "${TMP}/poster.env"
-  --mention-env "${TMP}/mention.env")
+  --mention-env "${TMP}/mention.env" --settle 0)
 
 # probe [ENV=VALUE...] -- ARG...: run the probe in CASE with the fake curl first on PATH and the ENVs set for it, its
 # output in ${CASE}/out and its exit status in STATUS.
@@ -205,9 +239,13 @@ expect 0 '^PASS signatures: a timestamp 3600 s old: HTTP 401$' "an old timestamp
 expect 0 '^PASS unknown connection: .*/chat/slack/agent-kourier/kourier-probe-[0-9a-f]+: HTTP 503, the connection does not run on this replica$' \
   "an unknown connection is 503"
 expect 0 '^PASS bot identity: probe U0PROBE/B0PROBE, poster B0POSTER, mention poster B0MENTION$' "three apps"
-expect 0 '^PASS alert trigger: B0PROBE replied at 1700000001.000001 in thread 1700000000.000001$' "the alert is answered"
-expect 0 '^PASS bot mention: B0PROBE replied at 1700000001.000001 in thread 1700000000.000002$' "the mention is answered"
+expect 0 '^PASS alert trigger: B0PROBE answered at 1700000001.000001 in thread 1700000000.000001, and posted no notice there$' \
+  "the alert is answered"
+expect 0 '^PASS bot mention: B0PROBE answered at 1700000001.000001 in thread 1700000000.000002, and posted no notice there$' \
+  "the mention is answered"
 expect 0 '^SKIP metrics: no --metrics-url$' "no metrics check without --metrics-url"
+grep -q -- '--data-urlencode include_all_metadata=true' "${CASE}/calls" || fail "the threads were read without their metadata"
+echo "ok: the threads are read with their metadata"
 expect 0 '^all 7 checks passed$' "the summary"
 [[ $(nth 1) =~ ^FIRING:\ KourierProbe[0-9a-f]+$ ]] || fail "the alert text is $(nth 1)"
 [[ $(nth 2) =~ ^\<@U0PROBE\>\ live\ probe\ [0-9a-f]+:\ reply\ with\ one\ short\ sentence\ and\ call\ no\ tools\.$ ]] ||
@@ -228,6 +266,7 @@ metrics 1 3 0 10
 metrics 2 5 1 14
 probe -- "${REQUIRED[@]}" --metrics-url "${METRICS}"
 expect 0 '^PASS metrics: agent-kourier/probe: bad_signature \+2, stale \+1, acknowledged \+4$' "the increments pass"
+expect 0 '^SKIP turn outcomes: no --binding$' "no turn outcomes check without --binding"
 expect 0 '^all 8 checks passed$' "the summary counts the metrics check"
 [ "$(cat "${CASE}/metrics-reads")" = 2 ] || fail "the metrics were read $(cat "${CASE}/metrics-reads") times, want 2"
 new_case metrics-first-read
@@ -243,9 +282,38 @@ probe -- "${REQUIRED[@]}" --metrics-url "${METRICS}"
 expect 1 '^FAIL metrics: agent-kourier/probe: bad_signature \+1 \(want \+2\), stale \+1, acknowledged \+1 \(want at least \+2\)$' \
   "wrong increments fail"
 expect 1 '^1 of 8 checks failed$' "the summary counts the failure"
+new_case turns-pass
+metrics 1 3 0 10 5 1
+metrics 2 5 1 14 7 1
+probe -- "${REQUIRED[@]}" --metrics-url "${METRICS}" --binding agent-kourier/alerts
+expect 0 '^PASS turn outcomes: agent-kourier/alerts: completed \+2, no other outcome$' \
+  "two completed turns pass, whatever another Binding's turns did"
+expect 0 '^all 9 checks passed$' "the summary counts the turn outcomes check"
+new_case turns-failed
+metrics 1 3 0 10 5 1
+metrics 2 5 1 14 5 3
+probe -- "${REQUIRED[@]}" --metrics-url "${METRICS}" --binding agent-kourier/alerts
+expect 1 '^FAIL turn outcomes: agent-kourier/alerts: completed \+0 \(want at least \+2\), failed \+2 \(want \+0\)$' \
+  "failed turns fail the check"
+expect 1 '^1 of 9 checks failed$' "the summary counts the failure"
+new_case turns-new-outcome
+metrics 1 3 0 10 5 1
+metrics 2 5 1 14 7 1
+echo 'agentkourier_turn_outcomes_total{binding="agent-kourier/alerts",outcome="unreachable"} 1' >>"${CASE}/metrics.2"
+probe -- "${REQUIRED[@]}" --metrics-url "${METRICS}" --binding agent-kourier/alerts
+expect 1 '^FAIL turn outcomes: agent-kourier/alerts: completed \+2, unreachable \+1 \(want \+0\)$' \
+  "an outcome whose series is new fails the check"
+new_case turns-other-binding
+metrics 1 3 0 10 5 1
+metrics 2 5 1 14 7 1
+probe -- "${REQUIRED[@]}" --metrics-url "${METRICS}" --binding agent-kourier/alert
+expect 1 '^FAIL turn outcomes: agent-kourier/alert: completed \+0 \(want at least \+2\) \(no series: is agent-kourier/alert the Binding of C0PROBE\?\)$' \
+  "a Binding with no series fails and says so"
 new_case metrics-unreadable
 probe -- "${REQUIRED[@]}" --metrics-url "${METRICS}"
 expect 1 '^FAIL metrics: could not read' "metrics that cannot be read fail"
+probe -- "${REQUIRED[@]}" --metrics-url "${METRICS}" --binding agent-kourier/alerts
+expect 1 '^SKIP turn outcomes: the metrics could not be read$' "the turn outcomes check says why it did not run"
 
 echo "== failing checks"
 new_case signed-200
@@ -280,6 +348,44 @@ cred "${CASE}/bad.env" SLACK_BOT_TOKEN not-a-token
 probe -- --url "${URL}" --channel "${CHANNEL}" --probe-env "${TMP}/probe.env" --poster-env "${TMP}/poster.env" \
   --mention-env "${CASE}/bad.env"
 expect 1 '^FAIL bot identity: auth.test of the mention poster: ok=false error=invalid_auth$' "a token Slack refuses fails"
+echo "== failed turns"
+new_case failed-turn
+probe STUB_FOOTER=none STUB_NOTICE_FROM=1 -- "${REQUIRED[@]}" --timeout 30
+expect 1 "^FAIL alert trigger: B0PROBE posted a notice at 1700000001.000002 in thread 1700000000.000001: The agent's task failed. An operator can investigate the agent. Troubleshooting reference: AK-0123456789abcdef01234567.\$" \
+  "a failed turn's reply and notice fail the alert check, with the notice on one line"
+expect 1 '^FAIL bot mention: B0PROBE posted a notice at 1700000001.000002 in thread 1700000000.000002: ' \
+  "a failed turn's reply and notice fail the mention check"
+expect 1 '^2 of 7 checks failed$' "the summary counts both"
+[ "$(cat "${CASE}/replies-reads")" = 2 ] || fail "a notice did not end the wait at once: $(cat "${CASE}/replies-reads") reads"
+echo "ok: a notice ends the wait at once"
+new_case notice-only
+probe STUB_NO_REPLY=1 STUB_NOTICE_FROM=1 -- "${REQUIRED[@]}"
+expect 1 '^FAIL alert trigger: B0PROBE posted a notice at ' "a notice with no reply fails"
+new_case late-notice
+probe STUB_NOTICE_FROM=2 -- "${REQUIRED[@]}" --settle 1
+expect 1 '^FAIL alert trigger: B0PROBE posted a notice at 1700000001.000002 in thread 1700000000.000001: ' \
+  "a notice that follows the answer within the settle fails"
+new_case settle-pass
+probe -- "${REQUIRED[@]}" --settle 1s
+expect 0 '^all 7 checks passed$' "an answer with no notice through the settle passes"
+[ "$(cat "${CASE}/replies-reads")" = 4 ] || fail "the settle read each thread $(($(cat "${CASE}/replies-reads") / 2)) times, want 2"
+echo "ok: the settle reads each thread again"
+new_case hint-footer
+probe STUB_FOOTER=hint -- "${REQUIRED[@]}"
+expect 0 '^PASS bot mention: B0PROBE answered at ' "a reply that ends with the follow-up hint is an answer"
+new_case no-footer
+probe STUB_FOOTER=none -- "${REQUIRED[@]}" --timeout 1
+expect 1 '^FAIL alert trigger: no answer from B0PROBE in thread 1700000000.000001 within 1 s: its reply at 1700000001.000001 has no footer, so the turn had not ended, or ended with nothing to show$' \
+  "a reply with no footer is no answer"
+new_case untagged
+probe STUB_NO_METADATA=1 STUB_NOTICE_FROM=1 -- "${REQUIRED[@]}" --timeout 1
+expect 1 '^FAIL alert trigger: no reply from B0PROBE in thread 1700000000.000001 within 1 s$' \
+  "messages without Agent Kourier's metadata are neither an answer nor a notice"
+new_case other-bot-notice
+probe STUB_REPLY_BOT=B0MENTION STUB_NOTICE_FROM=1 -- "${REQUIRED[@]}" --timeout 1
+expect 1 '^FAIL alert trigger: no reply from B0PROBE' "another bot's notice is not the probe's"
+
+echo "== failing checks, continued"
 new_case no-reply
 probe STUB_NO_REPLY=1 -- "${REQUIRED[@]}" --timeout 1
 expect 1 '^FAIL alert trigger: no reply from B0PROBE in thread 1700000000.000001 within 1 s$' "no reply fails at the timeout"
@@ -295,7 +401,7 @@ expect 1 '^FAIL alert trigger: conversations.replies of thread 1700000000.000001
 [ "$(cat "${CASE}/replies-reads")" = 2 ] || fail "a refused thread read was retried: $(cat "${CASE}/replies-reads") reads"
 new_case replies-ratelimited
 probe STUB_RATELIMITED_ONCE=1 -- "${REQUIRED[@]}" --timeout 2
-expect 0 '^PASS alert trigger: B0PROBE replied' "a ratelimited thread read is read again"
+expect 0 '^PASS alert trigger: B0PROBE answered' "a ratelimited thread read is read again"
 expect 0 '^all 7 checks passed$' "a ratelimited read does not fail the run"
 new_case replies-no-answer
 probe STUB_REPLIES_CURL_FAIL=1 -- "${REQUIRED[@]}" --timeout 1
@@ -361,6 +467,10 @@ refuses "a timeout that is not a number" '^error: --timeout must be' "${REQUIRED
 refuses "a timeout of 0" '^error: --timeout must be' "${REQUIRED[@]}" --timeout 0
 refuses "an empty alert prefix" '^error: --alert-prefix must not be empty' "${REQUIRED[@]}" --alert-prefix ''
 refuses "a metrics URL that is not http" '^error: --metrics-url must be' "${REQUIRED[@]}" --metrics-url localhost:9090
+refuses "a settle that is not a number" '^error: --settle must be' "${REQUIRED[@]}" --settle soon
+refuses "a negative settle" '^error: --settle must be' "${REQUIRED[@]}" --settle -1
+refuses "a Binding with no namespace" '^error: --binding must be namespace/name' "${REQUIRED[@]}" --metrics-url "${METRICS}" --binding alerts
+refuses "a Binding with no metrics URL" '^error: --binding needs --metrics-url' "${REQUIRED[@]}" --binding agent-kourier/alerts
 refuses "an unknown flag" '^error: unknown argument --verbose' "${REQUIRED[@]}" --verbose
 refuses "a flag with no value" '^error: --channel needs a value' --channel
 
@@ -375,6 +485,8 @@ probe -- --help
 expect 0 'botMentions: none' "the help names botMentions: none"
 expect 0 'button press' "the help names the press, left manual"
 expect 0 'leader' "the help names the killed leader, left manual"
+expect 0 'in /reply for the turn' "the help says how an answer is told from a notice"
+expect 0 'Troubleshooting' "the help shows the failed turn's notice"
 [ ! -s "${CASE}/calls" ] || fail "--help called curl"
 
 echo "== shellcheck"

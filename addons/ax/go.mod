@@ -6,7 +6,7 @@ require (
 	github.com/a2aproject/a2a-go/v2 v2.9.0
 	github.com/agent-substrate/substrate v0.0.0-20260918201817-944abe3278b8
 	github.com/agentkourier/agent-kourier/addons/kit v0.0.0-00010101000000-000000000000
-	github.com/anthropics/anthropic-sdk-go/v2 v2.13.0
+	github.com/anthropics/anthropic-sdk-go/v2 v2.14.0
 	github.com/aws/aws-sdk-go-v2 v1.48.0
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.27
 	github.com/aws/aws-sdk-go-v2/config v1.33.21
