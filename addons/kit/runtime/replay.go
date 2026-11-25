@@ -132,8 +132,7 @@ func settledOrPaused(task *a2a.Task) bool {
 }
 
 // checkMessage refuses a new message, or an answer to a paused task, that the backend's MessageValidator does not
-// accept, with a2a.ErrInvalidParams. A message for a task the caller does not have, or one that is not paused, is the
-// inner handler's to answer.
+// accept. A message for a task the caller does not have, or one that is not paused, is the inner handler's to answer.
 func (h *replayHandler) checkMessage(ctx context.Context, msg *a2a.Message) error {
 	if h.validator == nil {
 		return nil
@@ -147,6 +146,10 @@ func (h *replayHandler) checkMessage(ctx context.Context, msg *a2a.Message) erro
 		paused = task
 	}
 	if err := h.validator.ValidateMessage(ctx, msg, paused); err != nil {
+		if errors.Is(err, ErrBusy) {
+			// The broker interprets A2A -32004 as a temporary refusal.
+			return a2a.ErrUnsupportedOperation
+		}
 		if !errors.Is(err, a2a.ErrInvalidParams) {
 			err = fmt.Errorf("%w: %w", a2a.ErrInvalidParams, err)
 		}

@@ -161,13 +161,17 @@ type Interrupter interface {
 }
 
 // MessageValidator is a backend that checks each message before a turn starts for it: a message that starts a new task
-// (paused nil), or an answer to paused, a task waiting for one (input-required). Its error refuses the request with
-// a2a.ErrInvalidParams before any turn, so the message is not counted as a turn, has no span and its ID is not
-// recorded, and a paused task stays paused (an executor's error would fail it). A message for a task the caller does not
-// have, or one that is neither new nor an answer, is a2a-go's to answer.
+// (paused nil), or an answer to paused, a task waiting for one (input-required). An error wrapping ErrBusy
+// returns A2A -32004 so the broker can retry. Other errors return a2a.ErrInvalidParams. Either response ends the
+// request before a turn starts, so the message has no turn or span, its ID is not recorded, and a paused task
+// stays paused. A message for a task the caller does not have, or one that is neither new nor an answer, is
+// a2a-go's to answer.
 type MessageValidator interface {
 	ValidateMessage(ctx context.Context, msg *a2a.Message, paused *a2a.Task) error
 }
+
+// ErrBusy tells the kit that a MessageValidator cannot accept a message until the backend has capacity.
+var ErrBusy = errors.New("backend is busy")
 
 // ContextReleaser is a backend that keeps a context outside the store (cma: a session in CMA). For each context idle
 // past SESSION_IDLE_TTL with no turn running, the upkeep calls ReleaseContext, then forgets the context and its tasks

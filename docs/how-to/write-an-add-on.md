@@ -143,7 +143,7 @@ inner one's hooks itself.
 
 | Hook | Implement it when | Used by |
 |---|---|---|
-| `MessageValidator` | The backend cannot take some messages. `ValidateMessage` checks a new message, or an answer to a paused task, before a turn starts; its error refuses the request as invalid parameters, the message is not counted as a turn, its ID is not recorded, and a paused task stays paused. | Echo, both add-ons |
+| `MessageValidator` | The backend cannot take some messages. `ValidateMessage` checks a new message, or an answer to a paused task, before a turn starts; An error wrapping `runtime.ErrBusy` returns A2A code `-32004`, which lets the broker keep a new message queued for retry. Other errors return invalid parameters. In either case, the kit starts no turn, records no message ID, and leaves a paused task paused. | Echo, both add-ons |
 | `Restorer` | The backend keeps something outside the store that the leader must reconcile when it takes over, before the interrupted turns are failed. Its error stops the takeover. | Claude Managed Agents (its sessions) |
 | `Interrupter` | The backend must act on the tasks a takeover failed, before the leader serves. | Claude Managed Agents (interrupts their sessions) |
 | `ContextReleaser` | The backend keeps a context outside the store. The upkeep calls `ReleaseContext` for each context idle past `SESSION_IDLE_TTL` with no turn running, then forgets the context and its tasks. An error leaves the context for the next sweep; wrap `runtime.ErrContextBusy` when a turn of it has begun since the store listed it. Without the hook, the store deletes idle contexts in its own transaction. | Claude Managed Agents (archives the session) |

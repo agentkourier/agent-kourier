@@ -3,11 +3,13 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"iter"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -163,6 +165,47 @@ func TestARefusedNewMessageStartsNoTurn(t *testing.T) {
 			}
 		})
 	}
+}
+
+type capacityValidator struct {
+	*scripted
+	busy atomic.Bool
+}
+
+func (b *capacityValidator) ValidateMessage(_ context.Context, _ *a2a.Message, _ *a2a.Task) error {
+	if b.busy.Load() {
+		return fmt.Errorf("at capacity: %w", ErrBusy)
+	}
+	return nil
+}
+
+func TestABusyMessageCanBeRetriedWithTheSameID(t *testing.T) {
+	st := newFakeStore()
+	b := &capacityValidator{scripted: &scripted{}}
+	b.busy.Store(true)
+	s := serveHandler(t, st, b)
+	c := s.client(t, auth.Caller)
+	msg := message("m1", "done", "c1", "")
+
+	if _, err := send(t, c, msg); !errors.Is(err, a2a.ErrUnsupportedOperation) {
+		t.Fatalf("busy send = %v, want A2A -32004", err)
+	}
+	if n := b.turnCount(); n != 0 {
+		t.Fatalf("backend ran %d turns while busy, want none", n)
+	}
+	if got := st.touchedContexts(); len(got) != 0 {
+		t.Fatalf("busy send marked contexts %v active, want none", got)
+	}
+
+	b.busy.Store(false)
+	done, err := send(t, c, msg)
+	if err != nil || done.Status.State != a2a.TaskStateCompleted {
+		t.Fatalf("retry = %+v, %v; want a completed task", done, err)
+	}
+	if n := b.turnCount(); n != 1 {
+		t.Fatalf("backend ran %d turns after retry, want 1", n)
+	}
+	wantMetric(t, s.tel, "agentkourier_kit_message_replays_total", "0")
 }
 
 // An answer the backend's MessageValidator refuses is refused with invalid params before the turn starts: the task stays
