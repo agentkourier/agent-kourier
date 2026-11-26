@@ -126,7 +126,7 @@ At start, before it serves, the add-on:
     A task whose stored record does not decode is failed by its state alone, so that `TASK_RETENTION` deletes it, and
     is logged at WARN. A task that changed since it was read is logged at WARN and left as it is.
 
-    It does not start if the store cannot be read or written.
+    The add-on does not start if the store cannot be read or written.
 
 | Survives a restart | Is interrupted |
 |---|---|

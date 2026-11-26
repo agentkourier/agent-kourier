@@ -85,7 +85,7 @@ kubectl apply --dry-run=server -f binding.yaml   # the schema and CEL rules of t
 kubectl apply -f binding.yaml
 ```
 
-It needs up to two things. The first is always yours. The second is whoever owns the resource it names.
+The Binding needs up to two things. The first is always yours. The second is whoever owns the resource it names.
 
 1. **You let the broker read the Secrets that your Binding, or an AgentBackend in your namespace, names.** Skip this
    only when neither names one (no `tokenSecretRef`, no header with a `valueSecretRef`). A ChatConnection of your own

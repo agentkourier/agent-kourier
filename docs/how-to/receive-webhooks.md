@@ -343,10 +343,10 @@ broker remembers the body ([What a taken event does](#what-a-taken-event-does)) 
 
 A `200` alone proves less than it seems. The connection answers `200` with an empty body alike for:
 
-- an event it took;
-- one it dropped as the agent's own (`self`);
-- one with no actor (`ignored`);
-- one it could not map (`unmapped`).
+- an event it took
+- one it dropped as the agent's own (`self`)
+- one with no actor (`ignored`)
+- one it could not map (`unmapped`)
 
 An event it took may also match no trigger. A service's delivery log that shows `200` does not say a turn started; the broker's log
 and its counters do ([Follow a delivery](#follow-a-delivery)).

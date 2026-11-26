@@ -190,12 +190,12 @@ func TestTheKitCases(t *testing.T) {
 
 The cases check that:
 
-- a resent message joins its task;
-- a refused answer keeps the task paused, and a refused message starts no turn;
-- a cancel ends the turn canceled;
-- a start fails the turns a restart cut off;
-- a stop leaves a running turn for the next start;
-- an idle context is released.
+- a resent message joins its task
+- a refused answer keeps the task paused, and a refused message starts no turn
+- a cancel ends the turn canceled
+- a start fails the turns a restart cut off
+- a stop leaves a running turn for the next start
+- an idle context is released
 
 On Postgres they add two replicas: a standby forwards with its hop header and takes over a paused task, a leader settles
 before it serves, and a leader whose write is deposed, or that loses the lease, exits.
@@ -220,14 +220,14 @@ make addon-lint-<name>
     and the add-on.
 
 - **The chart.** An add-on has:
-    - a values block, `addons.<name>`, with the keys every add-on has and its own;
+    - a values block, `addons.<name>`, with the keys every add-on has and its own
     - a block for it in `values.schema.json`, whose `addons` refuses any key it does not list, so Helm refuses a values
-      block that has no schema; the common keys take the same rules as the other add-ons';
-    - its name in the list that `templates/addons/_addon.tpl` keeps;
+      block that has no schema; the common keys take the same rules as the other add-ons'
+    - its name in the list that `templates/addons/_addon.tpl` keeps
     - a directory `templates/addons/<name>/`: `env.tpl` defines what is its own, `deployment.yaml` defines its startup
       probe and renders its Deployment, and `service.yaml`, `serviceaccount.yaml`, `pvc.yaml`,
       `poddisruptionbudget.yaml`, `networkpolicy.yaml` and `servicemonitor.yaml` are one line each that includes the
-      common template of that kind.
+      common template of that kind
 
     The comment at the top of `_addon.tpl` lists each define. The chart's tests in `test/chart` cover each add-on of
     their `addOns` list, and a test fails when that list, the chart's list, the template directories, the values blocks

@@ -17,7 +17,7 @@ is not taken within 2 seconds, or cannot be taken, is answered 503 ([Limits](../
 Slack treats that answer as a failed delivery (Slack's documentation; not checked here).
 
 The events of one channel are handled one at a time and in the order they arrive, and different channels at the same
-time. A Binding whose regular expressions are slow to try therefore holds up its own channel's events first. It does not
+time. So a Binding whose regular expressions are slow to try holds up its own channel's events first. It does not
 keep the CPU for the others: with many busy channels, the acknowledgments of healthy ones slow too.
 
 The broker holds a bounded number of events (see
@@ -42,8 +42,8 @@ post twice. Agent Kourier prevents that with an outbox:
 A queued post, such as a notice, is looked up the same way before it is posted. The exception is a post that the
 leader queued itself and has not tried to post yet: nothing can have posted it, so it is posted at once, with no lookup.
 
-Once an attempt has begun, the row is looked up before the next. A post that failed or timed out, and may have landed
-all the same, is therefore adopted if the lookup finds it rather than sent again. On Microsoft Teams a lookup can miss
+Once an attempt has begun, the row is looked up before the next. So a post that failed or timed out, and may have
+landed all the same, is adopted if the lookup finds it rather than sent again. On Microsoft Teams a lookup can miss
 a post, which is then sent and may show twice: see
 [Finding a post again on Microsoft Teams](../reference/platforms.md#finding-a-post-again-on-microsoft-teams).
 

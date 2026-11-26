@@ -63,9 +63,9 @@ How many values of `connection` each family can have:
   names is a value only while the leader serves that connection. A standby serves none, and counts every request under
   `unknown`.
 - `agentkourier_outbox_pending` and `agentkourier_outbox_oldest_age_seconds`:
-    - each connection served, which says 0 while it has no unposted row;
-    - the empty value, for rows written before the broker recorded connections;
-    - each connection that is no longer served but still has an unposted row, until retention abandons the row.
+    - each connection served, which says 0 while it has no unposted row
+    - the empty value, for rows written before the broker recorded connections
+    - each connection that is no longer served but still has an unposted row, until retention abandons the row
 
 What the broker does to the series:
 
@@ -298,7 +298,7 @@ while to reach a Binding when backends are slow to answer.
 The reason for a result is not a label. It is in the log line of the change.
 [Troubleshoot an install](../how-to/troubleshoot.md#a-binding-is-not-ready) lists each reason and what to do about it.
 
-- a WARN `a condition is false` for a condition that went false;
+- a WARN `a condition is false` for a condition that went false.
 - a WARN `a condition is unknown` for:
     - `ChatCredentialsChanged`: the chat credentials Secret holds other tokens than the ones in use. Restart Agent Kourier
       for the broker's own connection; a team connection restarts by itself.
@@ -306,7 +306,7 @@ The reason for a result is not a label. It is in the log line of the change.
       read. The connection keeps the tokens it read, and for the own connection a restart fails until the Secret is
       mended.
 - an INFO `a condition is unknown` for any other result that is not yet known:
-    - for the agent, a 408, 425 or 429;
+    - for the agent, a 408, 425 or 429.
     - for the chat platform, a rate limit, a deadline, a connection that is not running
       (`chat: no platform is running the connection`, naming it), or `the chat platform read failed`. Its cause is in the
       line's `cause` attribute: for Slack, its code such as `no_permission` when it answered, or the transport's error

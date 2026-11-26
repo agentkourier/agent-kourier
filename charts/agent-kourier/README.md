@@ -62,7 +62,7 @@ The install that [Install on custom resources](https://agentkourier.dev/how-to/i
 leads with is a broker with no Slack app of its own. Each team brings its own app and keeps all of it in its namespace (`team-a` here,
 which must exist).
 
-Its values set nothing, so the broker serves the ChatConnections of every namespace, which is a setting for a cluster with
+That install's values set nothing, so the broker serves the ChatConnections of every namespace, which is a setting for a cluster with
 one broker. To serve fewer, uncomment `config:` and the list, the selector, or both. A namespace is admitted if either admits it:
 
 ```yaml
@@ -187,7 +187,7 @@ NetworkPolicy in another namespace for instance, needs the real name, or you set
   - With `anthropic` it needs `anthropicApiKeySecret`, the Secret of an Anthropic API key, and the render refuses `model.region` and
     `bedrock.apiKeySecret`.
 
-  It has a store of its own (`addons.ax.store.type`, SQLite at one replica or Postgres at one or more). Agent Kourier reaches it through an AgentBackend with
+  The AX add-on has a store of its own (`addons.ax.store.type`, SQLite at one replica or Postgres at one or more). Agent Kourier reaches it through an AgentBackend with
   dialect `a2a` and the url `http://<fullname>-ax.<namespace>.svc:8090/a2a`.
 
 With the files route a config change rolls the pod (a `checksum/config` annotation). Turn the roll off with `config.rollOnChange: false`.
@@ -218,9 +218,9 @@ the ConfigMap was the default, and the route adds nothing to the pod's template 
 **An install of the ConfigMap route that upgrades with the values it had.** It gets the default route. The chart refuses it where it can tell, with a message that
 names the way out:
 
-- `config.existingConfigMap` with the default (set `config.source: files`, or move by the how-to below);
-- a cluster older than 1.33;
-- `config.*` resources that the cluster cannot yet map because their CRDs are not served.
+- `config.existingConfigMap` with the default (set `config.source: files`, or move by the how-to below)
+- a cluster older than 1.33
+- `config.*` resources that the cluster cannot yet map because their CRDs are not served
 
 A cluster that already serves the CRDs, with `config.*` resources, is not refused. The chart renders them as custom
 resources and the ConfigMap goes, which is the second step of the move below; check the objects first, as the how-to says.
@@ -388,11 +388,11 @@ The documentation has the same move as a how-to, with the checks to run and the 
 
 The Secret Roles change too: with `crds` each names the Secrets the chart can see (`resourceNames`) instead of the whole namespace. Those are:
 
-- the Secrets that `config.*` and the Postgres DSN refer to;
+- the Secrets that `config.*` and the Postgres DSN refer to
 - the one the broker's own `ChatConnection` reads, if it has one (`config.chatConnection`: the Secret of the same name, or
-  `config.chatConnectionSecret`, in the connection's namespace);
+  `config.chatConnectionSecret`, in the connection's namespace)
 - `rbac.secretNames` (a map of namespace to Secret names) for the ones it cannot
-  see, such as a Binding's token in the release namespace.
+  see, such as a Binding's token in the release namespace
 
 That works because Agent Kourier's informers ask for each Secret by name (a `metadata.name`
 field selector), and Kubernetes authorizes `list` and `watch` by `resourceNames` for such a request. A list without the selector, a Secret the Role
@@ -455,10 +455,10 @@ store:
 
 The render refuses:
 
-- `store.type: postgres` without the Secret;
-- a `dsnSecret` (or `timeouts`) with SQLite;
-- an `existingClaim` with Postgres;
-- a `postgres://` URL with a password anywhere in the values.
+- `store.type: postgres` without the Secret
+- a `dsnSecret` (or `timeouts`) with SQLite
+- an `existingClaim` with Postgres
+- a `postgres://` URL with a password anywhere in the values
 
 With Postgres no volume is mounted and no claim is made.
 Agent Kourier reads the Secret through the API, like its others, so the Role below covers it. It grants list and watch on that Secret by name with `config.source: crds`, and on every Secret of the
@@ -526,10 +526,10 @@ platform sends its requests to: `POST /chat/<platform>/<namespace>/<name>`. It i
 
 These ChatConnections need it:
 
-- a Slack one with `spec.slack.mode: http`;
+- a Slack one with `spec.slack.mode: http`
 - a Microsoft Teams one in `http` mode (`spec.teams.mode` unset or `http`), or with a `spec.teams.notificationURL` in either
-  mode, to which Microsoft Graph sends its notifications;
-- every webhook ChatConnection (`spec.platform: webhook`), to which its service sends its webhooks.
+  mode, to which Microsoft Graph sends its notifications
+- every webhook ChatConnection (`spec.platform: webhook`), to which its service sends its webhooks
 
 Without the listener such a connection is not run: the broker's own connection
 fails the start (exit code 2), and a team's is not started.
@@ -627,16 +627,16 @@ and the broker are from different releases.
 Nothing secret is in the values. The config names Secrets (`credentialsSecretRef`, `tokenSecretRef`, `valueSecretRef`) and you
 make them (by hand, Sealed Secrets, an external operator) before Agent Kourier starts:
 
-- the ChatConnection's Secret, with `botToken` and `appToken` in Socket Mode, or `botToken` and `signingSecret` with `spec.slack.mode: http`;
-- each Binding's `tokenSecretRef` Secret, with a `token` key (or the key the reference says);
-- with Postgres, the DSN Secret (`store.postgres.dsnSecret`), in the release namespace;
+- the ChatConnection's Secret, with `botToken` and `appToken` in Socket Mode, or `botToken` and `signingSecret` with `spec.slack.mode: http`.
+- each Binding's `tokenSecretRef` Secret, with a `token` key (or the key the reference says).
+- with Postgres, the DSN Secret (`store.postgres.dsnSecret`), in the release namespace.
 - the Dex credentials Secret for `tokenRefresh`, with `clientSecret`, `username` and `password`. The token-refresh Job reads it through its environment; Agent Kourier does not read it.
 
 Agent Kourier reads them through the Kubernetes API, never from its environment or a mounted file. The render refuses what would put
 a secret in the ConfigMap:
 
-- a Slack token (`xoxb-`, `xoxp-`, `xoxa-`, `xoxe-`, `xoxr-` or `xapp-`, followed by digits) anywhere in the values;
-- an AgentBackend header `value` whose name looks like a credential (key, token, secret, auth, cookie, password), which belongs in `valueSecretRef`.
+- a Slack token (`xoxb-`, `xoxp-`, `xoxa-`, `xoxe-`, `xoxr-` or `xapp-`, followed by digits) anywhere in the values
+- an AgentBackend header `value` whose name looks like a credential (key, token, secret, auth, cookie, password), which belongs in `valueSecretRef`
 
 ## Security posture
 
@@ -654,20 +654,20 @@ a secret in the ConfigMap:
   `watch` on named Secrets instead. The chart's Roles name no Secret, so each reads every Secret in its namespace. Agent
   Kourier, though, keeps in memory only:
 
-  - the Opaque Secrets that the config names, and of each only the keys that the config names (a Secret's other keys are not kept);
-  - with Postgres, the DSN's, with every key;
-  - until the next reload, any other Secret, or other key of one, that a turn begun under an earlier config still reads (internal/config/k8ssecrets documents it).
+  - the Opaque Secrets that the config names, and of each only the keys that the config names (a Secret's other keys are not kept)
+  - with Postgres, the DSN's, with every key
+  - until the next reload, any other Secret, or other key of one, that a turn begun under an earlier config still reads (internal/config/k8ssecrets documents it)
 
   The chart grants the Role only in namespaces that hold a Secret the config names. Give Agent Kourier's Secrets a
   namespace of their own when the namespace is shared. With Postgres the DSN's Secret is in the release namespace, which therefore gets this Role too.
 - `klogVerbosity` stays 0 (the schema caps it at 7): at 8 and above client-go logs response bodies, Secret lists included.
 - **NetworkPolicy** (`networkPolicy.enabled`, which needs a CNI that enforces it). Egress goes:
 
-  - to DNS;
-  - to the API server (you give its addresses in `kubeApiServer.cidrs`, since a policy cannot select it);
-  - to Slack on 443 (to anywhere outside the private, CGNAT and link-local ranges, since a policy cannot name a host);
-  - to what `extraEgress` adds (the agent backend's front door, an OTLP collector);
-  - to each enabled add-on's pods on its port (8090).
+  - to DNS
+  - to the API server (you give its addresses in `kubeApiServer.cidrs`, since a policy cannot select it)
+  - to Slack on 443 (to anywhere outside the private, CGNAT and link-local ranges, since a policy cannot name a host)
+  - to what `extraEgress` adds (the agent backend's front door, an OTLP collector)
+  - to each enabled add-on's pods on its port (8090)
 
   Ingress comes only from `metricsFrom` on the metrics port and, with `chatListener.enabled`, from
   `chatFrom` on the chat port. Agent Kourier calls the verifying
@@ -782,14 +782,14 @@ was the largest of them at 188 MiB.
 
 `go test ./test/chart` renders the chart with `helm template` and checks it:
 
-- golden files for thirteen of the `ci/` values files (`fast-postgres-ha` is an overlay, checked layered on `fast-postgres`);
-- the refusals (replicas above 1 with SQLite, Postgres without its Secret, a monitor without a Service, a NetworkPolicy without the API server, and the rest);
-- the security properties above;
+- golden files for thirteen of the `ci/` values files (`fast-postgres-ha` is an overlay, checked layered on `fast-postgres`)
+- the refusals (replicas above 1 with SQLite, Postgres without its Secret, a monitor without a Service, a NetworkPolicy without the API server, and the rest)
+- the security properties above
 - what the kind tiers' values render (the object names, labels, image and volume that `hack/kind`'s scripts and the E2E tests rely
-  on);
-- the fast and AX tiers' config, which is loaded through Agent Kourier's own loader.
+  on)
+- the fast and AX tiers' config, which is loaded through Agent Kourier's own loader
 
-It needs `helm` on PATH and skips without it, so that `make test` runs on a machine with only Go.
+The tests need `helm` on PATH and skip without it, so that `make test` runs on a machine with only Go.
 Set `AGENTKOURIER_REQUIRE_HELM=1` (as a pipeline should) to fail instead of skipping. After a deliberate chart change, run
 `go test ./test/chart -update` and read the diff.
 

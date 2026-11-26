@@ -18,10 +18,10 @@ session of its own, and the agent comments on Linear as the application's own us
 
     Not run:
 
-    - the delivery header `Linear-Delivery`;
-    - step 2's token request as written;
-    - a personal API key in place of the application;
-    - a retried delivery's timestamp.
+    - the delivery header `Linear-Delivery`
+    - step 2's token request as written
+    - a personal API key in place of the application
+    - a retried delivery's timestamp
 
 ## What you end with
 
@@ -219,11 +219,11 @@ fetch of the agent's card succeeds, with a card that advertises streaming (`Back
 If the wait times out, `kubectl -n acme-webhooks get akbinding linear-plans` shows the condition that holds it back in the `Reason`
 column, such as:
 
-- `ChannelJoined:ChatCredentialsUnusable`: the Secret is missing, or a key of it;
+- `ChannelJoined:ChatCredentialsUnusable`: the Secret is missing, or a key of it
 - `ChannelJoined:ChatUnavailable`: the connection does not run for another reason, such as a Secret the broker is not granted (the
-  leader's log says why);
-- `BackendReachable:Unreachable`;
-- `BackendReachable:StreamingUnsupported`.
+  leader's log says why)
+- `BackendReachable:Unreachable`
+- `BackendReachable:StreamingUnsupported`
 
 `webhook: taking requests`, with `"connection":"acme-webhooks/linear"`, says the connection runs on the leader: from then on its URL
 checks the signature of every request. It does not wait for the agent. Check the URL from outside with a request that has no

@@ -18,10 +18,10 @@ agent comments on Bitbucket with a repository access token.
 
     Not run:
 
-    - the delivery header `X-Request-UUID`;
-    - the draft field `/pullrequest/draft`;
-    - step 2's check on a pull request comment;
-    - a mention picked from Bitbucket's mention list.
+    - the delivery header `X-Request-UUID`
+    - the draft field `/pullrequest/draft`
+    - step 2's check on a pull request comment
+    - a mention picked from Bitbucket's mention list
 
 ## What you end with
 
@@ -187,11 +187,11 @@ fetch of the agent's card succeeds, with a card that advertises streaming (`Back
 If the wait times out, `kubectl -n acme-webhooks get akbinding bitbucket-reviews` shows the condition that holds it back in the
 `Reason` column, such as:
 
-- `ChannelJoined:ChatCredentialsUnusable`: the Secret is missing, or a key of it;
+- `ChannelJoined:ChatCredentialsUnusable`: the Secret is missing, or a key of it
 - `ChannelJoined:ChatUnavailable`: the connection does not run for another reason, such as a Secret the broker is not granted (the
-  leader's log says why);
-- `BackendReachable:Unreachable`;
-- `BackendReachable:StreamingUnsupported`.
+  leader's log says why)
+- `BackendReachable:Unreachable`
+- `BackendReachable:StreamingUnsupported`
 
 `webhook: taking requests`, with `"connection":"acme-webhooks/bitbucket"`, says the connection runs on the leader: from then on its
 URL checks the signature of every request. It does not wait for the agent. Check the URL from outside with a request that has no
@@ -330,13 +330,13 @@ match: {event: '^pullrequest:(created|updated)$', commit: '.', target: '^main$'}
 `spec.webhook.identity`. So each repository takes its own token (step 1), and its own connection: a copy of the recipe's
 ChatConnection and Binding under other names, such as `bitbucket-gadgets`, with
 
-- that token's `account_id` (step 2) as `spec.webhook.identity`, so that its own comments count as `self`;
+- that token's `account_id` (step 2) as `spec.webhook.identity`, so that its own comments count as `self`
 - its own Secret, such as `bitbucket-gadgets-webhook`, made as in step 3 from a new secret, named in the copy's
-  `spec.credentialsSecretRef.name`, and added to the chart's `rbac.secretNames` for `acme-webhooks`;
+  `spec.credentialsSecretRef.name`, and added to the chart's `rbac.secretNames` for `acme-webhooks`
 - the Binding's `spec.chat.channel` set to the repository and `connectionRef` to the new connection, and the reply trigger's regex set
-  to `@` and that token's name;
+  to `@` and that token's name
 - a webhook on that repository (step 6) with the URL `https://<host>/chat/webhook/acme-webhooks/bitbucket-gadgets` and the new
-  secret.
+  secret
 
 A broker serves at most 16 ChatConnections ([Limits](../../reference/limits.md#run-the-broker)). Atlassian's documentation says
 a workspace access token, one for every repository of a workspace, needs Bitbucket Cloud Premium, and that the web interface makes

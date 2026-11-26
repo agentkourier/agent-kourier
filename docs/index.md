@@ -20,12 +20,11 @@ hide:
 <p class="ak-hero__headline">Write the agent, not the chat integration.</p>
 
 <p class="ak-hero__pitch">Agent Kourier carries messages between your team's chat and your agents, one session per
-thread. A mention, a reply in the thread, or a message a trigger matches, such as an alert, goes to the agent. Its
-streamed replies and its questions to people come back in the same thread, and the session survives a restart or
-failover. A Binding connects the channel to any agent that serves streaming A2A, and an add-on reaches one that does
-not, such as an agent in Claude Managed Agents. Slack is supported today. Since 0.6.0, both experimental: Microsoft Teams as a
-second chat platform, and webhooks from services such as GitHub, Jira Cloud, Bitbucket Cloud or Linear that start a session of your agent,
-which answers on that service with its own tools.</p>
+thread. A mention, a thread reply, or a message a trigger matches, such as an alert, goes to the agent, and its
+replies and questions come back in the same thread. The session survives a restart or failover. A signed webhook from
+a service such as GitHub, Jira Cloud, Bitbucket Cloud or Linear starts a session too, one per pull request or issue
+in the recipes, and the agent answers on that service with its own tools. Slack is supported. Microsoft Teams and webhooks are
+experimental.</p>
 
 <div class="ak-hero__actions">
 <a class="md-button md-button--primary" href="tutorials/first-agent-in-slack/">Try it in a kind sandbox</a>
@@ -66,16 +65,16 @@ which answers on that service with its own tools.</p>
 ## What Agent Kourier handles
 
 Without a broker, every agent that talks to chat needs its own code for threads, streaming, questions, restarts and
-alerts. Agent Kourier does that work once for every agent you bind:
+alerts. Agent Kourier does that work once for every agent you bind. It:
 
-- It keeps a session per thread.
-- It queues replies that arrive while the agent works.
-- It streams the answer into one message.
-- It posts the agent's questions in the thread.
-- It recovers each conversation after a restart.
-- It holds the thread while a suspended agent is not running.
+- keeps a session per thread
+- queues replies that arrive while the agent works
+- streams the answer into one message
+- posts the agent's questions in the thread
+- recovers each conversation after a restart
+- holds the thread while a suspended agent is not running
 
-The agent keeps its tools and task logic.
+The agent keeps its tools and task logic. A Binding connects a channel to any agent that serves streaming A2A.
 
 A webhook connection (experimental, since 0.6.0) starts sessions from another service's signed events instead of chat
 messages, and posts nothing. The agent answers on that service with its own tools.

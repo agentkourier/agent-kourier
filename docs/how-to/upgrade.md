@@ -69,9 +69,9 @@ with an empty database: there is no fallback in the code.
 **Postgres.** Nothing is stored in the chart's volume. Migration 0024 drops the old purge function and setting, and
 renames the stored system user and the auto-deny decider.
 
-The Deployment rolls with `maxSurge: 1` and `maxUnavailable: 0` at any replica count, so the new pod runs 0024 while
-the old leader is still working. The new version then reads an alert's turn that the old leader enqueues or runs until
-it stops as a person's turn. Scaling to one replica does not avoid that; stopping every old pod first does.
+With Postgres the Deployment rolls with `maxSurge: 1` and `maxUnavailable: 0` at any replica count, so the new pod runs
+0024 while the old leader is still working. The new version then reads as a person's turn each alert's turn that the
+old leader enqueues or runs before it stops. Scaling to one replica does not avoid that; stopping every old pod first does.
 
 1. Upgrade once with `replicaCount: 0` (the kill switch). If `podDisruptionBudget` is enabled, switch it off or to
    `maxUnavailable` before scaling to zero (see the chart's values).
@@ -113,9 +113,9 @@ Binding with only `mention` triggers loads as before.
 
 A `botMessage` trigger is written in full in this release:
 
-- nothing fills it in from a preset;
-- it names its sender and the message fields it reads in terms that do not belong to one chat platform;
-- it must set its limits.
+- nothing fills it in from a preset
+- it names its sender and the message fields it reads in terms that do not belong to one chat platform
+- it must set its limits
 
 A build from before these changes took a shorter trigger, so a trigger written for it meets them all together.
 
@@ -234,10 +234,10 @@ Binding fails to load for it.
 - **A chat thread gains `Working…` cards.** When 3 seconds pass with no new text and no tool call under way, a card titled
   `Working…` begins in the stream. What happens to the card next:
 
-    - the next tool call takes it over, so it carries the tool's name;
-    - if text comes first, it is retitled `Wrote the answer`, and `Wrote an update` if a tool call follows that text;
+    - the next tool call takes it over, so it carries the tool's name
+    - if text comes first, it is retitled `Wrote the answer`, and `Wrote an update` if a tool call follows that text
     - a card still open when the turn ends becomes `Finished`, or `Stopped` (an error) if the task failed or was
-      cancelled.
+      cancelled
 
     A thread that used to show one card for each tool call can now show one more. Each gap longer than 3 seconds costs at
     most three more writes to Slack: the card's begin; its end, when no tool call takes it over; and its retitle, when text
@@ -293,8 +293,8 @@ This release reads tool calls and results the same way on every dialect. No Bind
 A data part is a tool part, in an artifact or in a message from the agent, when both hold:
 
 - its metadata holds exactly one of `adk_type` (Google ADK's A2A converter), `kagent_type` (kagent 0.9.x) or
-  `kagent.dev/a2a/part-type` (kagent 1.0), set to `function_call` or `function_response`;
-- its data has a non-empty `name`.
+  `kagent.dev/a2a/part-type` (kagent 1.0), set to `function_call` or `function_response`
+- its data has a non-empty `name`
 
 [Tool calls and results](../reference/agent-contract.md#tool-calls-and-results) lists where. Before, only the
 `kagent-v1` dialect read tool parts, only those marked `kagent.dev/a2a/part-type`, and only in artifacts.
@@ -414,8 +414,8 @@ A config over a bound is an invalid config. The broker treats it as it treats th
 [the release that writes triggers in full](#upgrade-to-the-release-that-writes-triggers-in-full):
 
 - at start-up it exits with [code 2](../reference/cli.md#exit-codes) and names the field, so the upgraded pod never
-  becomes Ready;
-- on a reload it keeps its last good config.
+  becomes Ready
+- on a reload it keeps its last good config
 
 To find one before you upgrade, run `agent-kourier dry-run` of the new release against your config, as in
 [Check the values before you install](install-with-helm.md#check-the-values-before-you-install). It loads the files
@@ -444,8 +444,8 @@ template. (A release that also sets `GOMEMLIMIT` moves the template for that rea
   Secret the config names with an informer of its own, so a new namespace works as long as its Role grants `list` and
   `watch` on the Secret. A Secret it may not read:
 
-    - with the files route, fails the reload, and the last good config stays, as before;
-    - with custom resources, makes that Binding's `BackendReachable` say `CredentialsUnreadable` and stops nothing.
+    - with the files route, fails the reload, and the last good config stays, as before
+    - with custom resources, makes that Binding's `BackendReachable` say `CredentialsUnreadable` and stops nothing
 
 - **New bounds on triggers, extract entries and headers** apply on both routes: see
   [the release that bounds them](#upgrade-to-the-release-that-bounds-triggers-extract-entries-and-headers), which also shows the check to run before you upgrade.
@@ -518,9 +518,9 @@ since a values file from before names no route.
 On the route of custom resources an Application of the chart renders the CRDs. With prune, these may delete them and
 every team's Binding, AgentBackend and ChatConnection:
 
-- turning `crds.install` off later;
-- moving it to `files`, which stops rendering them unless `crds.install` says true;
-- deleting the Application.
+- turning `crds.install` off later
+- moving it to `files`, which stops rendering them unless `crds.install` says true
+- deleting the Application
 
 The chart sets `argocd.argoproj.io/sync-options: Prune=false,Delete=false` on each CRD, which Argo CD's documentation
 says stops that. It is unverified, since Argo CD has not been run against this chart.
@@ -558,11 +558,11 @@ and `.Fields.<name>`. The current values are on [Limits](../reference/limits.md#
 
 **What a template may use.** Only these; a template with anything else fails to load, whatever the route:
 
-- text and comments;
-- `if` (with `else if` and `else`) and `with`;
-- the view's fields (`.Channel`, `.State`, `.Key`, `.Link`, `.Source`);
-- `.Fields.<name>` or `index .Fields "<name>"`;
-- the functions `and`, `eq`, `ge`, `gt`, `index`, `le`, `len`, `lt`, `ne`, `not`, `or` and `slice`.
+- text and comments
+- `if` (with `else if` and `else`) and `with`
+- the view's fields (`.Channel`, `.State`, `.Key`, `.Link`, `.Source`)
+- `.Fields.<name>` or `index .Fields "<name>"`
+- the functions `and`, `eq`, `ge`, `gt`, `index`, `le`, `len`, `lt`, `ne`, `not`, `or` and `slice`
 
 | Refused | Example | Rewrite |
 |---|---|---|
@@ -584,9 +584,9 @@ The broker refuses the template before it runs it, so a template that would neve
 runs it over the message's values, through a buffer of 262144 bytes. A template that writes more fails, where before its
 output was built and then cut:
 
-- at load, the Binding is invalid;
+- at load, the Binding is invalid
 - at render, the trigger starts no turn, posts a note in the alert's thread, and is audited and counted in
-  `agentkourier_trigger_refused_total` with the reason `render_error`.
+  `agentkourier_trigger_refused_total` with the reason `render_error`
 
 The prompt keeps only the first 4000 UTF-16 units of the template's output, so a template near the bound writes mostly
 what is thrown away.
@@ -692,11 +692,11 @@ current values, and what else the broker bounds, are on [Limits](../reference/li
 - **An answer over 4 MiB** is not read either. The answer to `GetTask` carries the task with its whole history, so a
   long task with large tool results can pass it. The turn ends in the same way wherever it reads its task:
 
-    - after a lost stream;
-    - after a stream that ended with the task settled and no final task;
-    - when it follows a task again after a restart;
-    - when a person's answer or text reply to a paused task reads the task;
-    - when the read after an answer of unknown outcome meets it.
+    - after a lost stream
+    - after a stream that ended with the task settled and no final task
+    - when it follows a task again after a restart
+    - when a person's answer or text reply to a paused task reads the task
+    - when the read after an answer of unknown outcome meets it
 
     The task is read once and not tried again, since the same answer would come again. A person's answer to a paused
     task also reads the task first, to tell what is new in the reply: when that read is too large, the answer is sent
@@ -745,10 +745,10 @@ current values, and what else the broker bounds, are on [Limits](../reference/li
 - **An agent card over 1 MiB** is no answer. It is read when a connection is opened, so a call that had to open one (a
   lookup, a cancel, a follow) can meet it, with nothing sent and nothing read of any task.
 
-    It is not counted as an answer past a bound:
+    A card over 1 MiB is not counted as an answer past a bound:
 
-    - a cancel that met it is not done;
-    - a lookup that met it is retried like any lookup that could not reach the agent;
+    - a cancel that met it is not done
+    - a lookup that met it is retried like any lookup that could not reach the agent
     - a follow that met it tells the thread `Agent Kourier could not connect to the agent: its agent card is too large to read, so the turn stopped. The task stays at the agent. Once the card is fixed, restart Agent Kourier.`
 
     The task stays recorded and nothing follows it again by itself, and no control of the thread takes it up. Once the
@@ -780,8 +780,8 @@ sentence of these to that.
 **What to do.** Make the agent send less in one piece:
 
 - have its tools trim what they return to what the model needs (a result of 2 MiB is on the order of half a million
-  tokens, an estimate that is past the context of most models);
-- keep a reply to what a person will read.
+  tokens, an estimate that is past the context of most models)
+- keep a reply to what a person will read
 
 Keep a thread's tasks small if the lookup notice appears.
 
@@ -789,9 +789,9 @@ There is no counter of replies that are between the old bounds and the new ones 
 signals say what happened, and
 [Troubleshoot](troubleshoot.md#the-thread-says-the-agent-sent-more-than-agent-kourier-can-read-or-hold) reads them:
 
-- the turn outcome `response_too_large` (a turn that stopped) and `lookup_incomplete` (a message not sent, since the list of tasks could not be read in full), in `agentkourier_turn_outcomes_total`, which you can alert on;
-- the log lines of the turn, with the `error` that names the bound; and
-- the audit row of the call that failed with `response_too_large`.
+- the turn outcome `response_too_large` (a turn that stopped) and `lookup_incomplete` (a message not sent, since the list of tasks could not be read in full), in `agentkourier_turn_outcomes_total`, which you can alert on
+- the log lines of the turn, with the `error` that names the bound
+- the audit row of the call that failed with `response_too_large`
 
 ### What the lower bounds buy, and what they do not
 
@@ -1016,11 +1016,11 @@ allows, and every broker keeps each object in memory.
 
 No example, recipe, kind tier config or test fixture in this repository comes near one:
 
-- the longest URL is under 100 characters;
-- a header value is under 20;
-- an `allowedNamespaces` list has one namespace;
-- a channel, a sender and a user group ID are 11 characters;
-- a duration is written in at most 5 (`2160h`).
+- the longest URL is under 100 characters
+- a header value is under 20
+- an `allowedNamespaces` list has one namespace
+- a channel, a sender and a user group ID are 11 characters
+- a duration is written in at most 5 (`2160h`)
 
 [Limits](../reference/limits.md) lists every limit you can run into, and
 [Security](../explanation/security.md#what-the-people-who-write-these-objects-can-do) says what the bounds do and do not
@@ -1070,10 +1070,10 @@ A config over a bound is an invalid config, and the broker treats it as it treat
 
 The broker judges it one object at a time, as [What a bad object does](../explanation/config-routes.md#what-a-bad-object-does) says:
 
-- a Binding over a bound that the broker has no earlier generation of is not served (`Accepted=False`, `InvalidSpec`);
+- a Binding over a bound that the broker has no earlier generation of is not served (`Accepted=False`, `InvalidSpec`)
 - a Binding that names an AgentBackend over a bound is dropped with `BackendRejected` unless the broker holds that
-  AgentBackend's last good generation;
-- the broker's own ChatConnection over a bound stops the start with exit code 2.
+  AgentBackend's last good generation
+- the broker's own ChatConnection over a bound stops the start with exit code 2
 
 Edit such an object before you upgrade. Whether the API server lets you change another field of a stored object that
 breaks a rule depends on its version (see
@@ -1199,10 +1199,10 @@ every namespace. Some changes below apply to every install, list or not.
 - **Bring the CRDs to this release with the image.** All three CRDs changed, and each has a new schema hash:
 
     - the AgentBackend CRD gains `spec.agents`
-      ([the release that limits the agents a Binding may name](#upgrade-to-the-release-that-limits-the-agents-a-binding-may-name));
+      ([the release that limits the agents a Binding may name](#upgrade-to-the-release-that-limits-the-agents-a-binding-may-name))
     - the Binding CRD's trigger `type` enum gains `personMessage`, with rules (CEL) that say which fields that trigger
-      takes ([A person's message](../reference/chat-triggers.md#a-persons-message));
-    - the ChatConnection CRD's description changed (its fields did not).
+      takes ([A person's message](../reference/chat-triggers.md#a-persons-message))
+    - the ChatConnection CRD's description changed (its fields did not)
 
     The chart applies them with the release when `crds.install` is true, or unset on `config.source: crds`. If you
     apply the CRDs yourself, apply `charts/agent-kourier/files/crds` first. Until all three match,
@@ -1238,11 +1238,11 @@ every namespace. Some changes below apply to every install, list or not.
 
 - **A database migration, 0029, runs at the first start.** On SQLite and on Postgres it:
 
-    - adds a `connection` column to `outbox` and to `interaction_presses`, `NOT NULL DEFAULT ''`;
-    - replaces the index on the outbox's channel and thread with one that starts at the connection;
-    - makes the table `served_connections`.
+    - adds a `connection` column to `outbox` and to `interaction_presses`, `NOT NULL DEFAULT ''`
+    - replaces the index on the outbox's channel and thread with one that starts at the connection
+    - makes the table `served_connections`
 
-    It adds columns and a table, replaces one index, and rewrites no row. A row written before it, or by an older image
+    The migration adds columns and a table, replaces one index, and rewrites no row. A row written before it, or by an older image
     after a rollback, has the empty connection. The leader gives such rows to the broker's own connection each time it
     starts.
 
@@ -1281,13 +1281,13 @@ every namespace. Some changes below apply to every install, list or not.
 - **Changing the broker's own connection tells the old one's Bindings.** This applies when you change
   `config.chatConnection` to another ChatConnection, or empty it, and all of these hold:
 
-    - the broker served the old one before;
-    - the old one still exists;
+    - the broker served the old one before
+    - the old one still exists
     - its namespace is not admitted (on `config.connectionNamespaces`, or, from
       [the release that admits namespaces by label](#upgrade-to-the-release-that-admits-namespaces-by-label), matched by
-      the selector or every namespace).
+      the selector or every namespace)
 
-    Its Bindings then say `Accepted` `False` with `ConnectionNotServed`, and the leader counts them in
+    The old connection's Bindings then say `Accepted` `False` with `ConnectionNotServed`, and the leader counts them in
     `agentkourier_config_binding_rejections{reason="ConnectionNotServed"}`. So
     `sum(agentkourier_config_binding_rejections) > 0` fires until that ChatConnection is deleted or this broker serves it
     again, even when another release serves it.
@@ -1321,10 +1321,10 @@ Before you set the list:
 - **Know how to see a Binding that is not served.** These connections have Bindings that say `Accepted` `False` with
   `ConnectionNotServed`:
 
-    - a connection that is past the 16;
-    - one whose namespace was taken off the list after this broker served it;
-    - one that was the broker's own and is not now (and whose namespace is not on the list);
-    - a second connection of a Slack app the broker already serves.
+    - a connection that is past the 16
+    - one whose namespace was taken off the list after this broker served it
+    - one that was the broker's own and is not now (and whose namespace is not on the list)
+    - a second connection of a Slack app the broker already serves
 
     The leader counts those Bindings in `agentkourier_config_binding_rejections{reason="ConnectionNotServed"}` (a
     standby reads 0 for it, so sum over the replicas), which `sum(agentkourier_config_binding_rejections) > 0` includes
@@ -1530,9 +1530,9 @@ These apply whether or not any connection moves to HTTP mode.
 - **Upgrade first, then set the mode.** Upgrade the chart, with the broker and the CRDs, before any ChatConnection sets
   `spec.slack.mode`. A broker of an earlier release does not know the field:
 
-    - on the ConfigMap route it refuses it (`spec.slack: unknown field`, exit code 2);
+    - on the ConfigMap route it refuses it (`spec.slack: unknown field`, exit code 2)
     - on custom resources, once the later release's CRDs are installed, it ignores it and runs the connection in Socket
-      Mode, which needs `appToken` ([Troubleshoot](troubleshoot.md#the-pod-exits-with-code-2)).
+      Mode, which needs `appToken` ([Troubleshoot](troubleshoot.md#the-pod-exits-with-code-2))
 
     CRDs of an earlier release do not have the field either, so the API server refuses it there (or drops it, for a
     client that does not ask for strict field validation).
@@ -1626,9 +1626,9 @@ What changes for every install:
     `none`:
 
     - on the ConfigMap route it does not load a config that holds them and exits with
-      [code 2](troubleshoot.md#the-pod-exits-with-code-2);
+      [code 2](troubleshoot.md#the-pod-exits-with-code-2)
     - on custom resources it refuses the connection and the Bindings that name it, and the refused connection still
-      takes one of the 16 places (read in the source of 0.5.0, not run).
+      takes one of the 16 places (read in the source of 0.5.0, not run)
 
 - **Then roll back the broker and the CRDs.** The CRDs of 0.5.0 do not have the platform `webhook`, so the API server
   refuses a webhook ChatConnection written after they are applied. What it does with one that is still stored is
@@ -1647,12 +1647,12 @@ The platform is experimental. What changes:
 
 - **A Teams ChatConnection runs in `http` or `socket` mode.** Its fields:
 
-    - `spec.teams.tenantID` and `spec.teams.appID` are required, each a GUID in lowercase hex;
-    - `spec.teams.mode` is `http` or `socket`, and `http` when left out;
+    - `spec.teams.tenantID` and `spec.teams.appID` are required, each a GUID in lowercase hex
+    - `spec.teams.mode` is `http` or `socket`, and `http` when left out
     - `spec.teams.notificationURL` is optional, an `https` URL whose path is the connection's own route,
-      `/chat/teams/<namespace>/<name>`.
+      `/chat/teams/<namespace>/<name>`
 
-    Its Secret needs the key `clientSecret`, in either mode. `spec.teams` on a Slack connection, and `spec.slack` on a
+    A Teams ChatConnection's Secret needs the key `clientSecret`, in either mode. `spec.teams` on a Slack connection, and `spec.slack` on a
     Teams one, are refused.
 
     A Teams ChatConnection in `http` mode needs the chat listener (`AGENTKOURIER_CHAT_LISTEN`); with none it is not run.
@@ -1666,9 +1666,9 @@ The platform is experimental. What changes:
   connection reads the bound channels' posts from Microsoft Graph, in either mode:
 
     - by Graph's notifications at `spec.teams.notificationURL` when it is set, which needs the chat listener and a
-      public HTTPS route to it;
+      public HTTPS route to it
     - by polling the channels when it is not
-      ([Alerts on Microsoft Teams](../reference/platforms.md#alerts-on-microsoft-teams)).
+      ([Alerts on Microsoft Teams](../reference/platforms.md#alerts-on-microsoft-teams))
 
     That is how an alert that Alertmanager posts through a Workflows webhook reaches a `botMessage` trigger. Graph reads
     under the resource-specific permission `ChannelMessage.Read.Group`, which the Teams app's manifest asks for and its
@@ -1690,9 +1690,9 @@ The platform is experimental. What changes:
 - **The broker holds each Binding to its own platform.** When the broker reads the Binding with its ChatConnection, it
   refuses these with `InvalidPlatformID`:
 
-    - a Microsoft Teams ID on a Slack connection;
-    - a Slack ID on a Teams connection;
-    - a Slack channel or sender ID of 33 to 140 bytes (36 for a sender), which the schema now takes.
+    - a Microsoft Teams ID on a Slack connection
+    - a Slack ID on a Teams connection
+    - a Slack channel or sender ID of 33 to 140 bytes (36 for a sender), which the schema now takes
 
     `approverGroups` on a Teams connection is refused with `UnsupportedOnPlatform`
     ([What each platform supports](../reference/platforms.md)).

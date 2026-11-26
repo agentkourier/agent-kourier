@@ -6,14 +6,14 @@
 
 Agent Kourier runs in your cluster between your team's chat and your agents. A `Binding`
 connects a channel to an agent that serves streaming A2A, and Agent Kourier carries the
-messages both ways. Each of these goes to the agent as a turn of that thread's session:
+messages both ways. These messages go to the agent, each as a turn of its thread's session:
 
 - a mention of Agent Kourier
 - a reply in its thread
 - a message that one of the Binding's triggers matches, such as an alert another app posts
 
 The agent's streamed replies, and its questions to people, come back in the same thread.
-Each session is recovered after a restart or failover. The agent needs no chat code: it keeps
+Each session is recovered after a restart or failover. The agent needs no chat code. It keeps
 its tools and task logic.
 
 An [add-on](docs/explanation/add-ons.md) is an optional component released with Agent Kourier
@@ -311,9 +311,8 @@ The current release is v0.7.0:
 - a signed image for `linux/amd64` and `linux/arm64`, `ghcr.io/agentkourier/agent-kourier:v0.7.0`
 - the Helm chart `oci://ghcr.io/agentkourier/charts/agent-kourier` version `0.7.0`, which pins that image by digest
 
-It runs as one
-replica with a SQLite store, or as two replicas on Postgres with a leader election
-and fencing, installed with the [Helm chart](charts/agent-kourier/README.md). Agent Kourier writes
+Agent Kourier runs as one replica with a SQLite store, or as two replicas on Postgres with a
+leader election and fencing, installed with the [Helm chart](charts/agent-kourier/README.md). It writes
 an audit log, exports Prometheus metrics and can export OpenTelemetry traces. See
 [observability](docs/reference/logs-and-traces.md), and [stored data](docs/reference/stored-data.md) for what
 Agent Kourier keeps and for how long.

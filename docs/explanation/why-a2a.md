@@ -79,8 +79,8 @@ gives it nothing to ask about after a restart.
   [Why approvals use one extension](#why-approvals-use-one-extension). A Binding enables its Slack approval prompts with
   `interactions.toolApprovals`. Tool steps do not need a dialect: every dialect shows them as cards for an agent that
   marks its tool calls the way Google ADK or kagent does. From an agent that does not speak the extension, the `a2a`
-  dialect accepts only text-only input-required questions, and cancels the task at a pause it cannot use. The AX
-  add-on therefore cannot use Slack tool approvals through this broker. A pinned kagent 1.0.0-alpha5 runtime check
+  dialect accepts only text-only input-required questions, and cancels the task at a pause it cannot use. So the AX
+  add-on cannot use Slack tool approvals through this broker. A pinned kagent 1.0.0-alpha5 runtime check
   approved `add_numbers` and denied `check_status` in one two-tool pause, and only `add_numbers` executed. The broker's end-to-end suite verifies this
   with fake Slack and pinned kagent 1.0.0-alpha5.
 - **The agent must stream.** Agent Kourier rejects an agent whose card does not advertise streaming, and one that

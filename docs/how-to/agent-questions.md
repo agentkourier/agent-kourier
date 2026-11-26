@@ -123,14 +123,14 @@ that write ([Limits](../reference/limits.md#what-a-thread-shows)).
 
 The ending keeps the arguments when the thread has no such card:
 
-- with `output: final` or `progress: activity`;
-- for an approval that a sub-agent raised;
-- when the platform refused the reply's cards or its stream;
-- when the reply's last write failed or had not finished within that wait;
+- with `output: final` or `progress: activity`
+- for an approval that a sub-agent raised
+- when the platform refused the reply's cards or its stream
+- when the reply's last write failed or had not finished within that wait
 - for a call whose card the reply no longer shows: past the latest 20 steps of a reply that is one updated message (an alert
-  thread's reply on Slack, every reply on Microsoft Teams), or past the first 50 steps of a streamed reply.
+  thread's reply on Slack, every reply on Microsoft Teams), or past the first 50 steps of a streamed reply
 
-It keeps them too for a tool with no arguments, and for one whose summary was cut.
+The ending keeps them too for a tool with no arguments, and for one whose summary was cut.
 A timed-out or cancelled ending shows the same lines without a verdict.
 
 The audit records the Binding, Slack user, time, counts and cleaned tool names. It never records arguments or rejection

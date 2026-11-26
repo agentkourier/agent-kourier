@@ -48,10 +48,10 @@ fragments. Both the general and the trace-specific endpoint are checked, whichev
 The OTLP exporter also reads some variables of its own from the environment, which Agent Kourier does not validate and passes
 through unchanged, each also with the `_TRACES_` infix:
 
-- `OTEL_EXPORTER_OTLP_CERTIFICATE` (a CA bundle file for an `https://` collector);
-- `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` with `OTEL_EXPORTER_OTLP_CLIENT_KEY` (mutual TLS);
-- `OTEL_EXPORTER_OTLP_COMPRESSION` (`gzip` or none);
-- `OTEL_EXPORTER_OTLP_TIMEOUT` (milliseconds).
+- `OTEL_EXPORTER_OTLP_CERTIFICATE` (a CA bundle file for an `https://` collector)
+- `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` with `OTEL_EXPORTER_OTLP_CLIENT_KEY` (mutual TLS)
+- `OTEL_EXPORTER_OTLP_COMPRESSION` (`gzip` or none)
+- `OTEL_EXPORTER_OTLP_TIMEOUT` (milliseconds)
 
 `OTEL_EXPORTER_OTLP_INSECURE` is overridden: the endpoint's scheme decides whether TLS is used. A value among these that the
 exporter cannot use is reported as a warning (below), without the value.

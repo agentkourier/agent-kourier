@@ -145,7 +145,7 @@ For `Stopped`, the failure notice is a message of its own, and the reply's strea
 A lost connection to the agent, or a restart of Agent Kourier, is not such a failure. The task is followed again, and
 the reply it had is taken over and updated, to `(no output)` if the task has nothing to show.
 
-Slack refuses an update with no text on a reply that holds only text. A turn that takes such a reply over therefore
+Slack refuses an update with no text on a reply that holds only text. So a turn that takes such a reply over
 stops it if it still streams, keeps its text, and shows no card or `Working…` on it until the turn has text. If the
 turn ends with no text, the reply keeps what it says.
 

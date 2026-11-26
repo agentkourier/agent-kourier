@@ -121,9 +121,9 @@ The grace is **25 hours**, from what reads the two after a decision:
 
 The request is stored through `redact`, so that what is stored is never more than what is shown:
 
-- the agent's hint and each question's text pass through `redact.FreeText`, and a tool's name likewise;
+- the agent's hint and each question's text pass through `redact.FreeText`, and a tool's name likewise
 - a tool's arguments pass through the redaction that the Slack status line uses (`render.RedactArgs`: values under a secret name,
-  `name`/`value` pairs, tokens, URL credentials, private keys).
+  `name`/`value` pairs, tokens, URL credentials, private keys)
 
 The agent still receives what it always did: the answer is built from request and tool IDs and the chosen choice, none of which
 changes.
@@ -132,16 +132,16 @@ changes.
 Before it matches anything, `internal/redact` deletes the invisible characters, and writes every kind of line break (CR, CRLF, NEL,
 U+2028, U+2029) as `\n`. The invisible characters are:
 
-- control characters except line breaks and tab;
-- format characters such as the zero-width space and the bidirectional overrides;
-- private-use and surrogate code points;
-- invalid UTF-8;
-- the blank fillers U+3164, U+2800, U+115F, U+1160 and U+FFA0;
-- the combining grapheme joiner U+034F;
-- the Khmer inherent vowels U+17B4 and U+17B5;
-- every variation selector (U+180B to U+180D, U+180F, U+FE00 to U+FE0F, U+E0100 to U+E01EF);
+- control characters except line breaks and tab
+- format characters such as the zero-width space and the bidirectional overrides
+- private-use and surrogate code points
+- invalid UTF-8
+- the blank fillers U+3164, U+2800, U+115F, U+1160 and U+FFA0
+- the combining grapheme joiner U+034F
+- the Khmer inherent vowels U+17B4 and U+17B5
+- every variation selector (U+180B to U+180D, U+180F, U+FE00 to U+FE0F, U+E0100 to U+E01EF)
 - the reserved code points that Unicode's Default_Ignorable_Code_Point property keeps invisible for characters yet to come:
-  U+2065, U+FFF0 to U+FFF8, U+E0000 to U+E0FFF.
+  U+2065, U+FFF0 to U+FFF8, U+E0000 to U+E0FFF
 
 So no such character can split a secret's name past the redaction, and none is stored, logged or sent to the agent in the alert and
 thread blocks. What a reader sees stays, an emoji with its glyph and without its presentation selector.
@@ -149,9 +149,9 @@ thread blocks. What a reader sees stays, an emoji with its glyph and without its
 There are two shapes:
 
 - **free text** (a pause's hint and questions, an error in a log line, an alert field, and what a thread reply says) keeps its
-  line breaks and is cut at 4 KiB at a white space;
+  line breaks and is cut at 4 KiB at a white space
 - an **identifier** (an audit row's identifier fields, a Binding's name, the name that the chat platform's user cache keeps) is one
-  line, every run of white space a single space, and is read for tokens only.
+  line, every run of white space a single space, and is read for tokens only
 
 A person's display name is not identifier text where it reaches the agent: it is theirs to choose and may say anything. So the
 thread block cleans it again as free text and shows it in an element of its own (`<from>`), apart from the platform's user ID
@@ -214,15 +214,15 @@ continuation mark (`mysql --password \`, PowerShell's backtick, cmd's caret) is 
 A token that has a prefix of its own is redacted with no name before it (and by identifier text too), in the shape of the real
 token:
 
-- GitHub's `ghp_`, `gho_`, `ghu_`, `ghs_` and `ghr_` and their at least 36 letters and digits;
-- the fine-grained `github_pat_` with its at least 22, an underscore and at least 59;
-- GitLab's `glpat-`;
+- GitHub's `ghp_`, `gho_`, `ghu_`, `ghs_` and `ghr_` and their at least 36 letters and digits
+- the fine-grained `github_pat_` with its at least 22, an underscore and at least 59
+- GitLab's `glpat-`
 - the `sk-` keys of OpenAI and Anthropic (`sk-proj-`, `sk-svcacct-`, `sk-admin-` and `sk-ant-` from 20 characters with a digit or
   a capital among them; a bare `sk-` from 20 characters with a capital, or with a digit and a run of 20 lower-case letters and
-  digits, so a Title-Case slug is taken too and `sk-learn-tutorial-for-beginners-2024` is not);
-- Google's `AIza` (and at least 35 characters);
-- Stripe's `sk_live_`, `rk_live_` and their `_test_` kind (at least 24 letters and digits);
-- the `sig=` value of an Azure SAS URL.
+  digits, so a Title-Case slug is taken too and `sk-learn-tutorial-for-beginners-2024` is not)
+- Google's `AIza` (and at least 35 characters)
+- Stripe's `sk_live_`, `rk_live_` and their `_test_` kind (at least 24 letters and digits)
+- the `sig=` value of an Azure SAS URL
 
 So "sk-learn", "AIzawhatever", a pod called `sk-payments-api-7c9d8f6b5-x2k4p`, a namespace called
 `sk-platform-observability-prod` and `network_test_connectivityToService` stay.
@@ -234,13 +234,13 @@ on one line.
 What the free-text rules do not catch, and what they take that is no secret, is deliberate and pinned by tests
 (`TestFreeTextKnownLimits`). The rules read a value as a run up to white space, so a few shapes leave it:
 
-- a list (`password:\n- x`) or a mapping of keys that are no secret names (`secret:\n  db: x`) under a secret name;
-- a fenced block after a name (`password:\n\n` and three backticks: the fence is the value);
-- Terraform's separate `name = "auth.password"` and `value = "x"` lines;
-- a tag with its value on the next line (`password: !!str\n  x`, left by the one-line entries too);
-- a plain scalar that goes on over several lines;
-- a short flag (`-p x`);
-- a name with no separator (`passwd x`).
+- a list (`password:\n- x`) or a mapping of keys that are no secret names (`secret:\n  db: x`) under a secret name
+- a fenced block after a name (`password:\n\n` and three backticks: the fence is the value)
+- Terraform's separate `name = "auth.password"` and `value = "x"` lines
+- a tag with its value on the next line (`password: !!str\n  x`, left by the one-line entries too)
+- a plain scalar that goes on over several lines
+- a short flag (`-p x`)
+- a name with no separator (`passwd x`)
 
 A secret written where a nested key would be, on the line under a secret name (`token:\n  SECRET : x`,
 `Password:\n    'SECRET': rotated`), is shown as the key it looks like by the entries that keep lines. The one-line entries take
@@ -308,9 +308,9 @@ the retention sweep remove it.
 Agent Kourier queues the removal in the outbox, and then clears the emoji from the delivered reply row, when the reaction is no
 longer wanted:
 
-- when a turn ends or pauses on a question;
-- when an answer fails and its question waits again;
-- when a typed answer is consumed without continuing the task.
+- when a turn ends or pauses on a question
+- when an answer fails and its question waits again
+- when a typed answer is consumed without continuing the task
 
 The retention sweep takes every delivered reply that still has an emoji, except the one that its session's recorded task holds the
 emoji for: a reply dropped because it was never delivered, one whose removal or clear failed, and one left by a crash. It queues
@@ -337,8 +337,8 @@ A typed answer to a question that takes text replies needs no mention: it is que
 
 A bot's mention reads the thread on any Binding, whatever `chat.threadReplies` says:
 
-- on the first bot's mention in the thread, what opened it and every author's messages up to the mention;
-- on a later one, every author's messages since the previous bot's mention.
+- on the first bot's mention in the thread, what opened it and every author's messages up to the mention
+- on a later one, every author's messages since the previous bot's mention
 
 So what people wrote in a thread reaches the agent, and so its model provider, once a bot mentions Agent Kourier there, without
 anyone having mentioned it themselves. Set `chat.botMentions: none` to stop that. Those messages are cleaned, redacted, cut and not
@@ -358,8 +358,8 @@ a courtesy to a person who comes back, and it is not owed for ever.
 **A session is deleted 90 days after its `threadTTL` has run out**: when its last activity is older than `threadTTL` plus 90 days.
 It is deleted with every row that belongs to it, in one transaction:
 
-- its **reply queue**: the delivered replies, which stay as tombstones so that a replayed chat event is not queued twice;
-- its **interactions**, settled by then, and the **presses** on them;
+- its **reply queue**: the delivered replies, which stay as tombstones so that a replayed chat event is not queued twice.
+- its **interactions**, settled by then, and the **presses** on them.
 - its **outbox rows**, posted or abandoned: those made for the thread (a reply, a notice), and those made for one of its replies,
   which have no thread and are found by their source: the acknowledgment reaction and its removal use the source
   `<reply ID>/acknowledgment`, and older queued reactions use `<reply ID>/queued`. A row whose source starts with a reply's
@@ -393,10 +393,10 @@ The holds below apply as to any session. Nothing is deleted before a config has 
 **Never deleted, whatever its age**, while any of these holds, so that a session is not deleted from under work that still reads it:
 
 - an **active or paused task** on the session (its `task_id` is set; recovery follows it), unless the task is older than the
-  horizon, which the sweep ends first (below);
-- a **pending interaction**;
-- a **reply that was never delivered** (one that is stranded is dropped after 30 days, see above, and then no longer holds the session);
-- an **outbox row that was neither posted nor abandoned**.
+  horizon, which the sweep ends first (below)
+- a **pending interaction**
+- a **reply that was never delivered** (one that is stranded is dropped after 30 days, see above, and then no longer holds the session)
+- an **outbox row that was neither posted nor abandoned**
 
 Whatever held a session back, once it is resolved, the next sweep takes the session.
 

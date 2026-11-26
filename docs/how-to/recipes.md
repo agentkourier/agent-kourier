@@ -6,12 +6,12 @@ resources, and its agent if the recipe has one, and know which checks come with 
 
 There are nine recipes. Five put an agent in a chat channel, and are on this page:
 
-- one for Alertmanager alerts, with an agent;
-- one for another bot's posts, which holds the Agent Kourier resources only;
-- one that answers questions from documentation, with an agent that runs on any cluster;
-- one whose agent you define in a YAML file: a prompt, a model and the MCP tools it may call;
+- one for Alertmanager alerts, with an agent
+- one for another bot's posts, which holds the Agent Kourier resources only
+- one that answers questions from documentation, with an agent that runs on any cluster
+- one whose agent you define in a YAML file: a prompt, a model and the MCP tools it may call
 - one that puts that agent in a Microsoft Teams channel instead, with Alertmanager's alerts, which is experimental and
-  needs Agent Kourier 0.6.0 or later.
+  needs Agent Kourier 0.6.0 or later
 
 A team that is new to Agent Kourier should start with the documentation agent. A team that wants its own agent without
 writing one should start with the fourth.
@@ -43,10 +43,10 @@ The `sre-triage` recipe starts an investigation in the thread of each alert that
 agent reads the cluster with read-only tools, says what it found and what it checked, and can ask the thread a
 question. Its trigger is a `botMessage` trigger written in full, so:
 
-- each alert group gets one thread;
-- a repeat inside the cooldown or the thread's 24-hour idle limit adds a note;
-- a resolve closes the thread;
-- the trigger's limits apply.
+- each alert group gets one thread
+- a repeat inside the cooldown or the thread's 24-hour idle limit adds a note
+- a resolve closes the thread
+- the trigger's limits apply
 
 See [Investigate Alertmanager alerts](investigate-alertmanager-alerts.md), which shows the same trigger.
 
@@ -152,16 +152,16 @@ The `custom-bot-trigger` recipe is for any bot whose posts you want to act on: i
 Alertmanager trigger is. A CI system posts a message to a channel when a pipeline fails, and the recipe starts an
 investigation in a thread of its own for each pipeline and branch.
 
-It holds Agent Kourier's resources only and ships no agent, so the backend's `url` has to point at an A2A agent you
+The recipe holds Agent Kourier's resources only and ships no agent, so the backend's `url` has to point at an A2A agent you
 run.
 
 The trigger is written in full, as in [Start investigations from any bot's messages](any-bot-trigger.md):
 
-- `match` and `exclude` pick out the bot's failure posts;
-- `extract` pulls out a state, a pipeline and a key;
-- `thread` gives one thread to each key and closes it when the state is `PASSED`;
-- `limits` bounds how many investigations start;
-- `promptTemplate` writes the first prompt.
+- `match` and `exclude` pick out the bot's failure posts
+- `extract` pulls out a state, a pipeline and a key
+- `thread` gives one thread to each key and closes it when the state is `PASSED`
+- `limits` bounds how many investigations start
+- `promptTemplate` writes the first prompt
 
 !!! warning "The message shape is made up"
 
@@ -322,7 +322,7 @@ Chat and alert text is untrusted, so the agent refuses to start on anything in t
 file does not list: any capability but MCP, an MCP entry without `allowed_tools`, a provider-specific model setting, a
 model that searches the web, and more.
 
-It can then call the listed MCP tools and one tool of its own, `ask_user`, which
+The agent can then call the listed MCP tools and one tool of its own, `ask_user`, which
 asks the thread a question. The tool list is enforced; what the model says it did is not.
 
 ### Before you start

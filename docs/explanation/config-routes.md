@@ -22,7 +22,7 @@ that you can choose.
 | A change is read | At the next check of the files, every 10 seconds, and the chart rolls the pod when its ConfigMap changes | At the next check, every 10 seconds |
 
 A change that is read is not always applied then. The broker builds the platform of its own ChatConnection when it
-starts and when a replica takes the lead. An edit to that connection's `spec.teams` or `spec.webhook` therefore applies
+starts and when a replica takes the lead. So an edit to that connection's `spec.teams` or `spec.webhook` applies
 when Agent Kourier restarts:
 
 - on files, that is the chart's roll (unless `config.existingConfigMap` is set or `config.rollOnChange` is `false`)
@@ -153,8 +153,8 @@ count over a cap, and most of the rules between the fields of one object.
   channel, that a Secret has its key, and that each chat ID has the shape of the IDs of the ChatConnection's platform
   and the platform serves what the Binding asks for
 
-The schema takes the shape of either platform's ID, Slack's or Microsoft Teams'. A channel's name such as `general`, or
-a bot's name such as `alertmanager` as a sender, is therefore refused at apply and never stored. A Slack connection's
+The schema takes the shape of either platform's ID, Slack's or Microsoft Teams'. So a channel's name such as `general`,
+or a bot's name such as `alertmanager` as a sender, is refused at apply and never stored. A Slack connection's
 Binding with a Microsoft Teams channel is stored and then refused by the broker: a new one is not served, and an edit of
 a served one does not take ([What each platform supports](../reference/platforms.md)).
 

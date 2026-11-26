@@ -6,9 +6,9 @@ answer through the team's app, served by the platform's broker, and the team's t
 The team owns a `ChatConnection` in its namespace, as it owns its Bindings. The platform team decides in the chart's values which
 namespaces may do this. The broker serves the ChatConnections of those namespaces besides its own, if it has one:
 
-- the namespaces on a list;
-- the namespaces whose labels match a selector;
-- or, for a broker with no connection of its own and neither set, every namespace.
+- the namespaces on a list
+- the namespaces whose labels match a selector
+- for a broker with no connection of its own and neither set, every namespace
 
 A ChatConnection in a namespace the broker does not admit is not served: the broker does not run it and does not read its Secret.
 A broker may have no connection of its own and serve only the teams': see
@@ -316,10 +316,10 @@ at which its Secret reads and the app is free. If the Secret holds new tokens, S
 The broker asks whose bot the tokens are (`auth.test`, then `bots.info`) after the ChatConnection or its Secret changed. A failure that may pass
 leaves the connection as it was, and not started. These are the failures that may pass:
 
-- either call timing out (each is given 10 seconds);
-- the request failing before an answer;
-- Slack answering with an HTTP status other than 200 (a 5xx, or a 429);
-- Slack answering with one of the codes `ratelimited`, `internal_error`, `service_unavailable`, `request_timeout` or `fatal_error`.
+- either call timing out (each is given 10 seconds)
+- the request failing before an answer
+- Slack answering with an HTTP status other than 200 (a 5xx, or a 429)
+- Slack answering with one of the codes `ratelimited`, `internal_error`, `service_unavailable`, `request_timeout` or `fatal_error`
 
 The broker asks again at its next look, every 5 seconds, and there is no other bound. This goes on for as long as the calls fail this way, and
 ends when Slack answers.
@@ -372,14 +372,14 @@ Slack rejects a token for good when it is invalid, revoked or expired (`invalid_
 `token_expired`, `account_inactive`). For a team connection this stops that connection only:
 
 - the process keeps running, and so does every other connection; the broker's own connection, if it has one, is the exception, since its
-  rejected token exits the process (code 1);
-- the leader logs one WARN that names the connection and Slack's code, and never a token;
-- `agentkourier_chat_connected` is 0 for that connection;
-- its Bindings read `ChannelJoined` `False` with `ChatCredentialsRejected`, and the probe makes no call to Slack;
+  rejected token exits the process (code 1)
+- the leader logs one WARN that names the connection and Slack's code, and never a token
+- `agentkourier_chat_connected` is 0 for that connection
+- its Bindings read `ChannelJoined` `False` with `ChatCredentialsRejected`, and the probe makes no call to Slack
 - the posts waiting for it stay in the outbox until it runs, or until the outbox abandons them after 7 days
-  ([Limits](../reference/limits.md#what-the-broker-keeps-and-logs));
+  ([Limits](../reference/limits.md#what-the-broker-keeps-and-logs))
 - it starts again when its Secret or its ChatConnection changes, and not before: the broker does not ask Slack again for the same
-  tokens.
+  tokens
 
 Mend it by writing valid tokens into the Secret.
 
@@ -551,9 +551,9 @@ kubectl -n team-a get akbinding
 
 In one upgrade:
 
-- set `config.chatConnection` to empty;
-- remove `config.chatConnectionSecret` if it is set (the chart refuses it);
-- admit the connection's namespace: put it on `config.connectionNamespaces`, or give it the labels that `config.connectionNamespaceSelector` matches.
+- set `config.chatConnection` to empty
+- remove `config.chatConnectionSecret` if it is set (the chart refuses it)
+- admit the connection's namespace: put it on `config.connectionNamespaces`, or give it the labels that `config.connectionNamespaceSelector` matches
 
 With neither a list nor a selector set, the broker serves every namespace, the connection's included, but only if `config.chatConnections`
 has no entry. With one entry and nothing else set, the chart reads that entry as the own connection again.
@@ -566,10 +566,10 @@ Until the Secret can be read the connection is not started, and its Bindings rea
 
 The connection is then a team connection, so it loses what only an own connection has:
 
-- a token that Slack rejects stops that connection and no longer exits the process;
-- the hold on its Bindings, when its ChatConnection is deleted;
-- the first of the 16 places, which it now has by age like the others;
-- the first claim of its Slack app: an older ChatConnection of the same app now wins.
+- a token that Slack rejects stops that connection and no longer exits the process
+- the hold on its Bindings, when its ChatConnection is deleted
+- the first of the 16 places, which it now has by age like the others
+- the first claim of its Slack app: an older ChatConnection of the same app now wins
 
 For one you applied yourself: if its namespace is not admitted, the broker no longer serves it, and its Bindings are told `ConnectionNotServed` once.
 
@@ -615,7 +615,7 @@ To move back, set `config.chatConnection` again.
   interactions and the button presses of 0.3.0 record the connection they belong to. 0.2.1 has one chat platform, and read from its
   code (not run) it does not filter by connection in two places that matter:
   - it selects its unposted outbox rows with no regard to a connection and posts them through its one platform, so a post waiting
-    for a team's connection would go out through the platform's app;
+    for a team's connection would go out through the platform's app.
   - its sweep lists every pending interaction that is past its deadline (`ListDueInteractions`). For one on a team's thread, the
     step that ends the pause (`Session.Cancel`) looks up the thread's Binding, which 0.2.1 does not have, and fails; the sweep never
     gives that step up, so in the usual case nothing is edited or posted, and 0.2.1 logs the failed timeout at every sweep. It goes on to

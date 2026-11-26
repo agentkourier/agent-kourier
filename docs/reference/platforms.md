@@ -19,10 +19,10 @@ spec is back to the one it runs on. The messages are:
 
 - for `spec.webhook`, the WARN
   `chat connection: its spec.webhook was edited, and the running connection still uses the spec.webhook it started with; a restart of the broker applies the edit`
-  and the INFO `chat connection: its spec.webhook is the one the running connection started with again`;
+  and the INFO `chat connection: its spec.webhook is the one the running connection started with again`
 - for `spec.teams`, the WARN
   `chat connection: its spec.teams was edited, and the running connection still uses the spec.teams it started with; a restart of the broker applies the edit`
-  and the INFO `chat connection: its spec.teams is the one the running connection started with again`.
+  and the INFO `chat connection: its spec.teams is the one the running connection started with again`
 
 A `spec.teams.mode` of `http` written out where it was unset, or taken out where it was written, is the same mode and logs nothing.
 A team connection restarts by itself when its ChatConnection changes. [Start agents from webhooks](../how-to/receive-webhooks.md)
@@ -108,8 +108,8 @@ The API server refuses it too, with a message that also says what a Binding of `
 
 The broker checks the Binding against its platform once more when it reads the Binding with its ChatConnection. That check refuses:
 
-- a chat ID that does not have the shape of the platform's IDs, or has it and is longer than the platform's cap (`InvalidPlatformID`);
-- a feature, trigger type or output that the platform does not serve (`UnsupportedOnPlatform`).
+- a chat ID that does not have the shape of the platform's IDs, or has it and is longer than the platform's cap (`InvalidPlatformID`)
+- a feature, trigger type or output that the platform does not serve (`UnsupportedOnPlatform`)
 
 For example, a Microsoft Teams channel on a Slack connection, a Slack channel on a Microsoft Teams connection, and a Binding of
 `webhookEvent` triggers with the channel `acme/widgets` on either pass the API server and are refused then. With Slack, which serves
@@ -118,7 +118,7 @@ refused as a Binding that fails validation is:
 
 - with custom resources its `Accepted` condition is `False` with that reason ([Binding status](binding-status.md#accepted)). A Binding
   that had a good generation keeps serving it, and the message says which (`serving generation 1`), so an edit with an ID of the
-  wrong platform does not take. A new Binding is not served, and the other Bindings keep running;
+  wrong platform does not take. A new Binding is not served, and the other Bindings keep running.
 - on the files route the whole config fails, with the same message: at start the broker exits with code 2, and on a reload it keeps
   its last good config.
 
@@ -145,10 +145,10 @@ with a status line for the latest tool call, such as `Calling get_pods(ns="prod"
 
 Each edit after it shows the text so far and then, under it, the tool calls as a list in a quote, one line a call:
 
-- `Calling name(arguments)` while it runs;
-- `Ran name(arguments)` once its result came;
-- `name(arguments) failed` when the result says so;
-- `name(arguments) ended with no result` for one with no result when the turn ended.
+- `Calling name(arguments)` while it runs
+- `Ran name(arguments)` once its result came
+- `name(arguments) failed` when the result says so
+- `name(arguments) ended with no result` for one with no result when the turn ended
 
 The list holds the latest 20 steps, its `Working…` lines among them, under a line such as `5 earlier steps are not shown.` With
 `chat.progress: steps-and-activity`, the default, a gap with nothing new also adds a line, `Working…`. The next tool call takes that
@@ -312,8 +312,8 @@ Microsoft Teams sends a bot no post of another app, in either mode. So an alert'
 channel never comes to the broker as an activity (measured on a test tenant in 2026-11). The broker reads such posts from Microsoft
 Graph instead, in either mode:
 
-- by Graph's notifications when the ChatConnection has a `spec.teams.notificationURL`;
-- by polling Graph when it has none ([Polling](#polling-without-a-notificationurl), below).
+- by Graph's notifications when the ChatConnection has a `spec.teams.notificationURL`
+- by polling Graph when it has none ([Polling](#polling-without-a-notificationurl), below)
 
 The `notificationURL` is the public HTTPS URL at which Microsoft Graph reaches the connection's route on the leader's chat listener,
 `https://<host>/chat/teams/<namespace>/<name>`. With the chart that is the chat Service, which selects the leader alone, behind your
@@ -358,8 +358,8 @@ with 409 fails, the subscriptions the leader holds are still renewed, and no sub
 bounds are on [Limits](limits.md#run-the-broker).
 
 **Changing the `notificationURL`.** Microsoft Graph lets an app have one subscription to a channel's messages, and refuses a second
-with 409 (Microsoft's documentation). A subscription that the app made for the old URL, or that another broker of the same app holds
-for its own URL, therefore holds the channel. The broker cannot subscribe the channel for the new URL, and leaves the other
+with 409 (Microsoft's documentation). So a subscription that the app made for the old URL, or that another broker of the same app holds
+for its own URL, holds the channel. The broker cannot subscribe the channel for the new URL, and leaves the other
 subscription as it is, since it cannot tell whether another broker still reads it.
 
 The broker logs that once at WARN for each channel, with the other subscription's URL (its scheme, host and path, never its query),
@@ -380,9 +380,9 @@ from Graph on its channel's lane, in order with the channel's activities:
 - a post of another app, such as an alert's card that Workflows posted, is a bot's message from the app's Microsoft Entra
   application ID (`358f0194-6b0e-4dd3-af35-c24fe8a9ec87` for Workflows, measured). Its body is the text of its cards: each
   `TextBlock`, and each fact of a `FactSet` as a line `title: value`. It starts a turn when a `botMessage` trigger of the channel
-  names that ID, as on Slack ([Triggers](chat-triggers.md)), and is a bot's mention when it mentions Agent Kourier;
+  names that ID, as on Slack ([Triggers](chat-triggers.md)), and is a bot's mention when it mentions Agent Kourier.
 - a person's post is the person's, as if Teams had sent it. A post that comes both as an activity and through Graph, such as a
-  mention of the bot, is handed on once, whichever comes first;
+  mention of the bot, is handed on once, whichever comes first.
 - Agent Kourier's own posts, edits and deletions, system events and deleted messages are dropped: an edit of an alert's card does
   not start a turn again. An edit or a deletion is dropped without a read, and so is a post that the replica that leads made (a
   reply, or the card of its buttons).
@@ -392,10 +392,10 @@ from Graph on its channel's lane, in order with the channel's activities:
 
 Microsoft Graph's lifecycle notifications come to the same URL:
 
-- `reauthorizationRequired` renews the subscription at once;
-- `subscriptionRemoved` makes it anew;
+- `reauthorizationRequired` renews the subscription at once
+- `subscriptionRemoved` makes it anew
 - `missed`, which says that Graph did not deliver some notifications of the channel, is logged at WARN and starts a catch-up read
-  of the channel ([Catch-up reads](#catch-up-reads)).
+  of the channel ([Catch-up reads](#catch-up-reads))
 
 What Graph sends of these is Microsoft's documentation: none has yet been seen from Graph.
 
@@ -505,10 +505,10 @@ in progress ends.
   delta (one page), and one read of the replies of each of the channel's 3 newest threads that began within the last hour, with
   those of the threads it read at the poll before. So one connection polls every 10 seconds up to:
 
-    - 40 bound channels in which no thread began within the last hour (1 read each);
-    - 10 in which three did and none begins now (4 reads);
-    - 8 when one begins in each at every poll (5 reads: the 3 newest and the one it pushed out);
-    - 5 when three or more do (7 reads).
+    - 40 bound channels in which no thread began within the last hour (1 read each)
+    - 10 in which three did and none begins now (4 reads)
+    - 8 when one begins in each at every poll (5 reads: the 3 newest and the one it pushed out)
+    - 5 when three or more do (7 reads)
 
     Past that, nothing is skipped and no read is dropped: the reads wait their turn. So each channel's polls come later than every
     10 seconds, the more so the more channels are bound, and a new post is found that much later. A delta read still finds every new
@@ -550,11 +550,11 @@ while writes fail).
 
 The broker keeps in its store what such a post did, and drops it there:
 
-- a trigger that threads by key finds the thread the message already opened;
+- a trigger that threads by key finds the thread the message already opened
 - a trigger that starts a turn of its own finds that turn, which is named by the message, queued already, and starts no second
-  investigation;
-- a start that a trigger's limits stopped is not counted or told again;
-- a trigger's note is one row whatever asks for it.
+  investigation
+- a start that a trigger's limits stopped is not counted or told again
+- a trigger's note is one row whatever asks for it
 
 The intake's metrics count the post again: `agentkourier_trigger_matched_total` and `agentkourier_trigger_decisions_total`, and,
 for a turn, `agentkourier_intake_total` with `source="reply_queue",disposition="duplicate"`.
@@ -617,9 +617,9 @@ that this leader queued and has not tried is sent with no lookup.
 
 On Slack the tag is in the message's metadata. On Microsoft Teams it is in a part of the post that people do not see:
 
-- in a text, an empty `<span>` whose `title` is the tag's carrier, in a paragraph of its own at the end of the text;
+- in a text, an empty `<span>` whose `title` is the tag's carrier, in a paragraph of its own at the end of the text
 - in a card that is the whole post (a question's or an approval's card, and the card that ends one), the `id` of the first element
-  of the card's body.
+  of the card's body
 
 A reply with buttons, such as the useful and not-useful buttons, carries the tag in its text, and the card of its buttons, a post of
 its own, carries none. An edit of a post does not carry the tag: the outbox looks for a post only until it has recorded where the
@@ -649,12 +649,12 @@ only if the reply is edited with them after.
 
 The broker takes these as not found, logs why at WARN and sends the post, which may then show twice:
 
-- a post that the pages read do not hold;
-- a channel whose team the broker does not know yet;
-- a read that runs out of time after Graph gave a page;
-- a page that Graph names that is not Graph's or that the read already took;
-- an answer longer than 8 MiB;
-- a refusal of Graph that no retry mends (a 400, 401, 403 or 404, or Microsoft Entra's refusal of the token for Graph).
+- a post that the pages read do not hold
+- a channel whose team the broker does not know yet
+- a read that runs out of time after Graph gave a page
+- a page that Graph names that is not Graph's or that the read already took
+- an answer longer than 8 MiB
+- a refusal of Graph that no retry mends (a 400, 401, 403 or 404, or Microsoft Entra's refusal of the token for Graph)
 
 A 429, a 5xx, an answer that is not JSON and a lookup that runs out of time before any page came back are tried again later.
 

@@ -42,8 +42,8 @@ Run every command below from this directory.
 !!! warning "One running Agent Kourier per Slack app"
 
     Make a new app for this tutorial rather than reusing the tokens of an Agent Kourier you already run. Slack sends
-    each Socket Mode event to one of the connections open on the app-level token. Two processes on the same tokens
-    therefore each receive only some of the messages, and both seem to ignore the rest.
+    each Socket Mode event to one of the connections open on the app-level token, so two processes on the same tokens
+    each receive only some of the messages, and both seem to ignore the rest.
 
     If you must reuse an app, stop the other Agent Kourier first.
 

@@ -18,10 +18,10 @@ on the issue as an Atlassian service account.
 
     Not run:
 
-    - the delivery header `X-Atlassian-Webhook-Identifier`;
-    - a person's comment (the run saw only the agent's own);
-    - **Exclude body** checked;
-    - the token as a bearer token.
+    - the delivery header `X-Atlassian-Webhook-Identifier`
+    - a person's comment (the run saw only the agent's own)
+    - **Exclude body** checked
+    - the token as a bearer token
 
 ## What you end with
 
@@ -200,11 +200,11 @@ fetch of the agent's card succeeds, with a card that advertises streaming (`Back
 If the wait times out, `kubectl -n acme-webhooks get akbinding jira-plans` shows the condition that holds it back in the `Reason`
 column, such as:
 
-- `ChannelJoined:ChatCredentialsUnusable`: the Secret is missing, or a key of it;
+- `ChannelJoined:ChatCredentialsUnusable`: the Secret is missing, or a key of it
 - `ChannelJoined:ChatUnavailable`: the connection does not run for another reason, such as a Secret the broker is not granted (the
-  leader's log says why);
-- `BackendReachable:Unreachable`;
-- `BackendReachable:StreamingUnsupported`.
+  leader's log says why)
+- `BackendReachable:Unreachable`
+- `BackendReachable:StreamingUnsupported`
 
 `webhook: taking requests`, with `"connection":"acme-webhooks/jira"`, says the connection runs on the leader: from then on its URL
 checks the signature of every request. It does not wait for the agent. Check the URL from outside with a request that has no

@@ -87,19 +87,19 @@ this kind, with its AgentBackend, ChatConnection and checks.
 
 The Binding is validated when it loads. Any of these rejects it:
 
-- a regex that does not compile;
-- an extract without its named group;
-- a `thread.by: key` without a `key` extract;
-- a template that reads a field the trigger does not extract.
+- a regex that does not compile
+- an extract without its named group
+- a `thread.by: key` without a `key` extract
+- a template that reads a field the trigger does not extract
 
 ## Check it before going live
 
 Replay the channel's history through the trigger with a [dry run](tune-triggers.md). Each of the bot's messages should
 come out as one of:
 
-- `matched`, with the state, alert name and key you expect;
-- `excluded`, when an `exclude` regex turned it away;
-- `unmatched`, with the step that turned it away (a `match` regex, an `extract`, or the sender's kind).
+- `matched`, with the state, alert name and key you expect
+- `excluded`, when an `exclude` regex turned it away
+- `unmatched`, with the step that turned it away (a `match` regex, an `extract`, or the sender's kind)
 
 Tune the regexes until the lines read right, then load the Binding.
 

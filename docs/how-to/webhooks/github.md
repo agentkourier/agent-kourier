@@ -19,11 +19,11 @@ GitHub as a machine user (a GitHub account kept for the agent), with that user's
 
     Not run:
 
-    - the machine user, its token and the recipe's agent against GitHub or a live model;
-    - a repository's webhook;
-    - the delivery header `X-GitHub-Delivery`;
-    - a comment on a line of the diff (`pull_request_review_comment`);
-    - every change marked *not run* below.
+    - the machine user, its token and the recipe's agent against GitHub or a live model
+    - a repository's webhook
+    - the delivery header `X-GitHub-Delivery`
+    - a comment on a line of the diff (`pull_request_review_comment`)
+    - every change marked *not run* below
 
 ## What you end with
 
@@ -275,13 +275,13 @@ fetch of the agent's card succeeds, with a card that advertises streaming (`Back
 If the wait times out, `kubectl -n acme-webhooks get akbinding github-reviews` shows the condition that holds it back in the `Reason`
 column, such as:
 
-- `ChannelJoined:ChatCredentialsUnusable`: the Secret is missing, or a key of it;
+- `ChannelJoined:ChatCredentialsUnusable`: the Secret is missing, or a key of it
 - `ChannelJoined:ChatUnavailable`: the connection does not run for another reason, such as a Secret the broker is not granted (the
-  leader's log says why);
-- `BackendReachable:CredentialsUnreadable`: the bearer Secret in `acme-webhooks` is missing or not granted;
-- `BackendReachable:CredentialsRejected`: the two bearer copies differ;
-- `BackendReachable:Unreachable`: the agent is not running, or a NetworkPolicy stops the broker;
-- `BackendReachable:StreamingUnsupported`.
+  leader's log says why)
+- `BackendReachable:CredentialsUnreadable`: the bearer Secret in `acme-webhooks` is missing or not granted
+- `BackendReachable:CredentialsRejected`: the two bearer copies differ
+- `BackendReachable:Unreachable`: the agent is not running, or a NetworkPolicy stops the broker
+- `BackendReachable:StreamingUnsupported`
 
 `webhook: taking requests`, with `"connection":"acme-webhooks/github"`, says the connection runs on the leader: from then on its URL
 checks the signature of every request. It does not wait for the agent. Check the URL from outside with a request that has no
@@ -424,9 +424,9 @@ match: {event: '^pull_request$', action: '^labeled$', prNumber: '.', label: '^ai
 **Several repositories** (*not run*). Write one Binding for each repository, with its `owner/repo` as the channel, all naming the
 same connection. Send each repository's events to the connection's URL, with either:
 
-- a webhook on each repository, as in step 6;
+- a webhook on each repository, as in step 6
 - one webhook of the organization, which GitHub's documentation says subscribes to the organization's events and only an
-  organization owner can create.
+  organization owner can create
 
 The machine user's token must reach each repository: add each to its **Repository access** (all of one resource owner, since a
 fine-grained token has one). An event of a repository that no Binding names starts nothing.

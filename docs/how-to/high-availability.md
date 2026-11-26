@@ -79,9 +79,9 @@ priorityClassName: agent-kourier # (3)!
 **The budget.** Set `minAvailable` or `maxUnavailable`, not both. The render refuses a budget that would block every
 voluntary eviction, a node drain included:
 
-- `maxUnavailable: 0`;
-- a `minAvailable` of every replica (`2` at two replicas);
-- a percentage that rounds up to every replica (`100%`, or `50%` at one replica).
+- `maxUnavailable: 0`
+- a `minAvailable` of every replica (`2` at two replicas)
+- a percentage that rounds up to every replica (`100%`, or `50%` at one replica)
 
 At one replica the useful budget is `maxUnavailable: 1`. Before you scale to zero with `minAvailable: 1`, switch the
 budget off or to `maxUnavailable`: the zero renders, and the scale back to one is refused.
@@ -160,7 +160,7 @@ never the standby:
 kubectl -n agent-kourier get pods -l agentkourier.dev/role=leader
 ```
 
-It lists the Lease's holder once it has started to lead, and a leader that is stopping until its shutdown takes the label off. During a takeover no Ready pod has the label for a while, and Slack's
+The command lists the Lease's holder once it has started to lead, and a leader that is stopping until its shutdown takes the label off. During a takeover no Ready pod has the label for a while, and Slack's
 requests fail until the new leader puts it on ([High availability and failover](../explanation/high-availability.md#slack-in-http-mode)).
 
 HTTP mode is why a second replica matters most: with SQLite, each rollout leaves Slack with no one to answer it until the new pod leads.

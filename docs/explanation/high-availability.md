@@ -126,7 +126,7 @@ config the leader has. Only the leader writes `Binding.status`, so with no leade
 written, and are not marked stale.
 
 A new leader starts every probed condition at `Pending` and does not write that over a good status of the generation it
-serves. A failover therefore does not blank what `kubectl get akbinding` shows.
+serves, so a failover does not blank what `kubectl get akbinding` shows.
 
 Each replica holds the last good generation of an invalid object in memory. That is why a replica that starts during an
 invalid generation serves nothing for that object: see
@@ -231,8 +231,8 @@ and it is what the failover end-to-end test measures.
 because nothing has changed the epoch yet. What stops it from sending then is the Lease clock, which refuses the send,
 the answer and the cancel as it refuses a chat write.
 
-The check runs when the call starts, and connecting to the agent sits between the check and the request. A leader that
-is frozen after the check can therefore still send when it is resumed, whether or not a standby has taken the Lease by
+The check runs when the call starts, and connecting to the agent sits between the check and the request. So a leader that
+is frozen after the check can still send when it is resumed, whether or not a standby has taken the Lease by
 then: nothing checks the Lease again before the request. The fence does not cut a call that has already begun.
 
 What the stream's events cause is stopped where it is written. The process ends at the first chat write, at the first

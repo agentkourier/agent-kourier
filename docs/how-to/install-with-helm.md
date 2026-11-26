@@ -6,10 +6,10 @@ answers a mention in a Slack thread.
 On Microsoft Teams, or for webhooks (both experimental, 0.6.0 or later), this guide gives the chart, and
 [Configure Microsoft Teams](configure-teams.md) or [Start agents from webhooks](receive-webhooks.md) the connection. Take:
 
-- [Choose the route](#choose-the-route) and [The release](#the-release);
-- the CRDs and the two-step install of [Install on custom resources](#install-on-custom-resources);
-- the Binding's token Secret in [Create the Secrets](#create-the-secrets);
-- [Install behind an egress proxy](#install-behind-an-egress-proxy), if your cluster needs one.
+- [Choose the route](#choose-the-route) and [The release](#the-release)
+- the CRDs and the two-step install of [Install on custom resources](#install-on-custom-resources)
+- the Binding's token Secret in [Create the Secrets](#create-the-secrets)
+- [Install behind an egress proxy](#install-behind-an-egress-proxy), if your cluster needs one
 
 Skip what is Slack's: the Slack app in [Before you start](#before-you-start), the Slack ChatConnection that `init`, the
 team's file and the starter file write, the Secret `slack`, and [Check it](#check-it), which mentions the bot in Slack.
@@ -38,7 +38,7 @@ Agent Kourier reads its `ChatConnection`, `AgentBackend` and `Binding` resources
 - **Custom resources** (`config.source: crds`, the default) are the route to run on Kubernetes. The chart installs the CRDs and the broker, and you apply the
   three resources with `kubectl` or a GitOps tool. Each team can then own its Bindings and see what became of them in `kubectl get akbinding`.
 
-    It needs Kubernetes 1.33 or later.
+    This route needs Kubernetes 1.33 or later.
     `agent-kourier init` writes the files of this route for a broker with no Slack app of its own, which serves the team's.
 
 - **A ConfigMap** (`config.source: files`) is the quick route for a proof of concept. The chart writes the resources of your values file into a ConfigMap, which needs
@@ -173,8 +173,8 @@ resources of them fails in its first apply (Helm cannot map a kind that is not y
 So the chart refuses to render `config.chatConnections`, `config.agentBackends` or `config.bindings` as custom resources into a release that is installing their CRDs.
 A release with none of them renders no custom resource, and installs the CRDs itself.
 
-This install is a broker with no Slack app of its own. A team brings its own app and keeps everything of it in its namespace, `team-a` here,
-which must exist. Everything of it is the app's Secret, the ChatConnection that reads it, the AgentBackend and the Binding.
+This install is a broker with no Slack app of its own. A team brings its own app and keeps everything of it in its own namespace:
+the app's Secret, the ChatConnection that reads it, the AgentBackend and the Binding. The namespace is `team-a` here, and it must exist.
 [Let a team bring its own Slack app](team-slack-app.md) says what that gives the team and the platform.
 
 The commands run as a cluster
@@ -589,11 +589,11 @@ With `crds` and an own connection it also has a `connection` field, the namespac
 
 With `crds` it also has a `connection_admission` field, which says whose ChatConnections the broker serves besides its own:
 
-- `all`: every namespace (no own connection, no list and no selector, or a selector of `{}`);
-- `list`: `AGENTKOURIER_CONNECTION_NAMESPACES`;
-- `selector`: `AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR`;
-- `list+selector`;
-- `own`: none, its own connection alone.
+- `all`: every namespace (no own connection, no list and no selector, or a selector of `{}`)
+- `list`: `AGENTKOURIER_CONNECTION_NAMESPACES`
+- `selector`: `AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR`
+- `list+selector`
+- `own`: none, its own connection alone
 
 With a list there is a `connection_namespaces` field with the namespace names,
 comma-joined. With a selector other than `{}` there is a `connection_namespace_selector` field with the selector in Kubernetes' text form, such as

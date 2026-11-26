@@ -278,8 +278,8 @@ For an agent whose card lists kagent's human-in-the-loop extension, the generic 
 reads its structured questions and tool approvals as the kagent dialect does. Any other pause with a part that is not
 text is unusable on that dialect and cancels the task.
 
-A kagent approval pause made without the extension arrives as text alone (recorded with kagent 1.0.0-alpha5). It is
-therefore handled as a question, and its reply is sent as plain text, never as an approval.
+A kagent approval pause made without the extension arrives as text alone (recorded with kagent 1.0.0-alpha5), so it is
+handled as a question, and its reply is sent as plain text, never as an approval.
 
 The kagent dialect always understands structured questions. Tool step cards do not depend on the dialect: every dialect
 shows the tool calls and results that an agent marks as Google ADK or kagent does.
@@ -297,7 +297,7 @@ The `AgentBackend` points at ax's `atenet-router` and selects the actor with a s
 `spec.headers`. The agent is an A2A server running as an AX Task, which you run (AX does not ship one; the AX add-on is
 one).
 
-No front door sits in this path. The agent must therefore verify the Binding's bearer ID token itself, as the AX add-on
+No front door sits in this path, so the agent must verify the Binding's bearer ID token itself, as the AX add-on
 does (issuer, audience and subject), or an OIDC-verifying proxy must sit in front of a TLS gateway to the router.
 
 Chat, queued replies, restart recovery, actor suspend and resume, and in-thread text answers are tested in the AX kind

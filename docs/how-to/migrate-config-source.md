@@ -123,7 +123,7 @@ helm template agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --ve
   kubectl apply --dry-run=server --server-side --force-conflicts -f -
 ```
 
-It prints one `serverside-applied (server dry run)` line for each object the API server takes. For one it refuses, it
+The command prints one `serverside-applied (server dry run)` line for each object the API server takes. For one it refuses, it
 names the object and the field and exits 1, for instance `.spec.chat.bogusField: field not declared in schema` or
 `spec.chat.channel: Invalid value: "general"`, or `namespaces "team-a" not found` for a Binding in a namespace that does
 not exist.
@@ -143,12 +143,12 @@ did not report an unknown field or a channel the schema refuses (measured, Helm 
 The check reads the objects as the schema and the CEL rules do, and no more. It does not find what only the broker
 decides:
 
-- a `match` regex that does not compile;
-- a `promptTemplate` that does not parse;
-- an AgentBackend or ChatConnection that the Binding names and that does not exist or does not allow its namespace;
-- an agent namespace that the AgentBackend's `agents` field does not allow;
-- a channel that another Binding holds;
-- a Secret that is missing or not granted.
+- a `match` regex that does not compile
+- a `promptTemplate` that does not parse
+- an AgentBackend or ChatConnection that the Binding names and that does not exist or does not allow its namespace
+- an agent namespace that the AgentBackend's `agents` field does not allow
+- a channel that another Binding holds
+- a Secret that is missing or not granted
 
 Those leave the Binding `Accepted=False` or `BackendReachable=False` after the upgrade and stop nothing else: see
 [Check that it worked](#check-that-it-worked). The check also does not see a refusal that only the installer's own right
@@ -192,9 +192,9 @@ The ConfigMap itself is not deleted: the chart did not make it, and it is the wa
 With the ConfigMap route the chart grants `list` and `watch` on every Secret of each namespace that holds one its config
 names. With `config.source: crds` it names the Secrets instead (`resourceNames`):
 
-- the ones in your `config.*` values;
-- the Postgres DSN's;
-- when you set `config.chatConnection`, the one Secret that connection reads.
+- the ones in your `config.*` values
+- the Postgres DSN's
+- when you set `config.chatConnection`, the one Secret that connection reads
 
 The chart cannot read a ChatConnection you apply yourself, so it takes that Secret's name from the connection's: the
 Secret `slack` for `config.chatConnection: agent-kourier/slack`, in the connection's namespace. If the ChatConnection's
@@ -249,8 +249,8 @@ kubectl -n agent-kourier wait --for=condition=Ready akbinding/<name> --timeout=1
 
 **Never type `kubectl get bindings`.** That is the core Kubernetes `bindings` resource, which is something else, and fails:
 
-- `kubectl get bindings -n <namespace>` answers `MethodNotAllowed`, and with `-A` it answers `NotFound`;
-- a named `get`, `patch`, `edit` or `delete` of `binding/<name>` answers `NotFound`.
+- `kubectl get bindings -n <namespace>` answers `MethodNotAllowed`, and with `-A` it answers `NotFound`
+- a named `get`, `patch`, `edit` or `delete` of `binding/<name>` answers `NotFound`
 
 Use `akbinding` or `bindings.agentkourier.dev`.
 
@@ -328,7 +328,7 @@ the platform team's to do, and one is the team's.
     `kubectl -n <release namespace> get deploy -l app.kubernetes.io/instance=<release> -o jsonpath='{.items[0].spec.template.spec.serviceAccountName}'`
     prints it.
 
-    It needs no change to the platform's release or values:
+    The grant needs no change to the platform's release or values:
 
     ```sh
     kubectl -n team-a create role agent-kourier-secrets-team-a --verb=list,watch --resource=secrets --resource-name=team-a-agent-token
@@ -366,7 +366,7 @@ the platform team's to do, and one is the team's.
     needs `list` and `watch` on it
     (`kubectl -n team-a get akbinding <name> -o jsonpath='{.status.conditions[?(@.type=="BackendReachable")].message}'`).
 
-    It recovers on its own, with no restart, once the Role is applied. The broker asks for a denied Secret again at its
+    The Binding recovers on its own, with no restart, once the Role is applied. The broker asks for a denied Secret again at its
     next recheck of the config, which comes about once a minute ([Limits](../reference/limits.md)).
 
 The team then applies its resources, for example the Binding of [Write a Binding](write-a-binding.md) and an

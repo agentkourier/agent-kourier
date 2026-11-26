@@ -23,8 +23,8 @@ so you can read and change each one. For alerts another tool's bot posts, see
 The trigger below matches one message shape. It needs:
 
 - a title that reads `FIRING (<n>) - <alertname>` or `RESOLVED - <alertname>`, optionally behind a bracketed tag of up
-  to 32 characters such as `[kind] `;
-- Alertmanager's default fallback text, which begins `[FIRING:<n>]` (`[FIRING]` and `[RESOLVED]` also match).
+  to 32 characters such as `[kind] `
+- Alertmanager's default fallback text, which begins `[FIRING:<n>]` (`[FIRING]` and `[RESOLVED]` also match)
 
 Alertmanager's default Slack title also begins `[FIRING:<n>]`, so a receiver that keeps the default title does not
 match. Set the receiver's title to the shape above, or change the `match` and `extract` regexes for your own template.

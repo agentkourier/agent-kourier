@@ -85,18 +85,18 @@ resource status. A Secret's value is held in a type whose every formatting path 
 The chart grants list and watch on Secrets in these namespaces:
 
 - each namespace that holds a Secret its config values name (a ChatConnection's credentials, a Binding's token, an AgentBackend's header
-  value);
-- the release namespace with `store.type: postgres` (the DSN's Secret);
-- each namespace of `rbac.secretNamespaces`;
-- with `config.source: files` and none of these, the release namespace.
+  value)
+- the release namespace with `store.type: postgres` (the DSN's Secret)
+- each namespace of `rbac.secretNamespaces`
+- with `config.source: files` and none of these, the release namespace
 
 With `config.source: files` such a Role covers every Secret of its namespace. With `config.source: crds` it names the Secrets
 (`resourceNames`):
 
-- the ones the config values and the DSN name;
+- the ones the config values and the DSN name
 - the one Secret that the broker's own ChatConnection reads, if it has one (the chart derives it from
-  `config.chatConnection`: the Secret of the connection's name, or `config.chatConnectionSecret`, in the connection's namespace);
-- the ones that `rbac.secretNames` lists for that namespace.
+  `config.chatConnection`: the Secret of the connection's name, or `config.chatConnectionSecret`, in the connection's namespace)
+- the ones that `rbac.secretNames` lists for that namespace
 
 A namespace that only `config.chatConnection` or `rbac.secretNames` names gets a Role for those names. A team's Secrets, which the chart cannot see, are granted by the team, with a Role in its own namespace.
 A namespace of `rbac.secretNamespaces` stays namespace-wide there, whatever `rbac.secretNames` says of it (read from
@@ -291,9 +291,9 @@ A pod patch reaches more than labels: a container's image, for one,
 or the token-refresh CronJob's pod, whose ServiceAccount may patch a Binding's token Secret. So with the Role the chart installs a
 ValidatingAdmissionPolicy and its binding, `<fullname>-<namespace>-leader-label`. They hold the broker's ServiceAccount to:
 
-- the label `agentkourier.dev/role`;
-- the value `leader` or its removal;
-- the pod its token is bound to (the pod name the API server reads from the token).
+- the label `agentkourier.dev/role`
+- the value `leader` or its removal
+- the pod its token is bound to (the pod name the API server reads from the token)
 
 They refuse any change to the pod's spec, annotations, finalizers or owners.
 
@@ -525,11 +525,11 @@ What bounds this is what the broker can read, and where it can connect:
 
 What a writer of a Binding and an AgentBackend sees of your conversations. The agent of a Binding receives:
 
-- each mention of the bot in the channel;
+- each mention of the bot in the channel
 - each reply in a thread the Binding owns
-  (with `chat.threadReplies: all`, the default, every reply in the thread, not only the ones that mention the bot);
-- with a `botMessage` trigger, the messages of the bot that the trigger names;
-- with a `personMessage` trigger, every message a person posts outside a thread that the trigger takes.
+  (with `chat.threadReplies: all`, the default, every reply in the thread, not only the ones that mention the bot)
+- with a `botMessage` trigger, the messages of the bot that the trigger names
+- with a `personMessage` trigger, every message a person posts outside a thread that the trigger takes
 
 What a person wrote, a mention, a reply or such a message, comes with their name, ID and email, where the chat platform gives them; a bot's message comes with none. That holds for any channel the bot is in, private channels too.
 
@@ -602,11 +602,11 @@ spec:
     until it ends, across reconnects, with the backend it started with, and the broker's own cancel of a stuck task uses that backend too. The steps that look the Binding
     up find it gone:
 
-    - its next turn, one already queued included, is not sent;
+    - its next turn, one already queued included, is not sent
     - a pause for an approval or a question is not posted, and nothing ends that task on the agent,
-      which stays waiting, while the timeout cancel of a prompt posted earlier fails at every sweep;
-    - a button press is not decided;
-    - after a restart the broker does not follow the turn.
+      which stays waiting, while the timeout cancel of a prompt posted earlier fails at every sweep
+    - a button press is not decided
+    - after a restart the broker does not follow the turn
 
     **On the files route** the whole config fails to resolve, so nothing is dropped:
 

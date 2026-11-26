@@ -329,9 +329,9 @@ trailing newline in the Binding's.
 
 A turn that fails can be the provider refusing the credentials or the model. Check:
 
-- on Bedrock, the model's access in the region;
-- on the Anthropic API, the key and the model's ID;
-- with a NetworkPolicy, the egress above.
+- on Bedrock, the model's access in the region
+- on the Anthropic API, the key and the model's ID
+- with a NetworkPolicy, the egress above
 
 The add-on's `agentkourier_ax_operation_duration_seconds` metric counts each call by the HTTP status the provider
 answered, such as `401` for a key it refused.
@@ -382,7 +382,7 @@ there to the revision in `addons/ax/go.mod`. Follow that revision's AX setup.
 make ax-runner-image
 ```
 
-It builds `agent-kourier-ax-runner:dev`. No release builds or publishes it. Push it to a registry your Substrate workers
+The target builds `agent-kourier-ax-runner:dev`. No release builds or publishes it. Push it to a registry your Substrate workers
 pull from, and put its digest in `task.yaml`'s `image`.
 
 The Task runs `/usr/local/bin/agent-kourier-ax-agent`. AX starts the task runner at its fixed path,
