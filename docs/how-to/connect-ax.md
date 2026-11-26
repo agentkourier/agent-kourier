@@ -1,9 +1,10 @@
 # Connect the AX add-on
 
 For a platform team that wants an agent on Amazon Bedrock or the Anthropic API behind a Binding: at the end, the chart
-runs the AX add-on, an ADK agent whose model runs on one of the two, and a Binding sends its threads to it. Each thread
-is one ADK session, and a question the agent asks with its `ask_user` tool waits for a reply in the thread. The add-on
-is experimental.
+runs the AX add-on, an ADK agent whose model runs on one of the two, and a Binding sends its threads to it.
+
+Each thread is one ADK session, and a question the agent asks with its `ask_user` tool waits for a reply in the thread.
+The add-on is experimental.
 
 The chart is the first route, and this page starts with it. The second route runs the same agent inside Google AX, as a
 Task behind AX's router: [Run it inside Google AX](#run-it-inside-google-ax).
@@ -14,9 +15,11 @@ add-on maps A2A to ADK, every setting, and what a restart keeps.
 ## What the agent is
 
 The add-on is an agent built with Google's Agent Development Kit (ADK), with a model on Bedrock's Converse API or the
-Anthropic Messages API and one tool, `ask_user`. It answers chat messages and investigates the alert text it is given, from what the thread's messages
-carry: it has no tool that reaches another system, so it reads nothing and changes nothing outside the thread. When
-something is missing, it asks in the thread, and a person's reply is its answer.
+Anthropic Messages API and one tool, `ask_user`. It answers chat messages and investigates the alert text it is given,
+from what the thread's messages carry. It has no tool that reaches another system, so it reads nothing and changes
+nothing outside the thread.
+
+When something is missing, it asks in the thread, and a person's reply is its answer.
 
 It serves A2A itself, so Agent Kourier reaches it with the `a2a` dialect and no change. Its store keeps each thread's
 ADK session and its tasks, so a question survives a restart of the add-on, and a thread continues its session.
@@ -25,9 +28,9 @@ ADK session and its tasks, so a question survives a restart of the add-on, and a
 
 - **A model**, on one of two providers:
     - **Amazon Bedrock**: access to a Bedrock model in a region, such as a Claude Haiku inference profile, for the AWS
-      account the add-on calls Bedrock as, and AWS credentials for that account: a Bedrock API key, which the chart
-      passes from a Secret, or an IAM role for the add-on's ServiceAccount (IRSA) or an EKS Pod Identity association.
-      Neither IAM route has been tested on EKS yet.
+      account the add-on calls Bedrock as. It also needs AWS credentials for that account: a Bedrock API key, which the
+      chart passes from a Secret, or an IAM role for the add-on's ServiceAccount (IRSA) or an EKS Pod Identity
+      association. Neither IAM route has been tested on EKS yet.
     - **The Anthropic API**: an Anthropic API key, which the chart passes from a Secret
       ([Or run it on the Anthropic API](#or-run-it-on-the-anthropic-api)).
 - **Agent Kourier installed with the Helm chart** ([Install with Helm](install-with-helm.md)), from a release whose
@@ -36,7 +39,7 @@ ADK session and its tasks, so a question survives a restart of the add-on, and a
 - **For more than one replica of the add-on, a Postgres database of its own**, apart from Agent Kourier's.
 
 The commands below use the release `agent-kourier` in the namespace `agent-kourier`. The add-on's Service is then
-`agent-kourier-ax`; in general it is `<fullname>-ax`.
+`agent-kourier-ax`. In general it is `<fullname>-ax`.
 
 ## 1. Create the Secrets
 
@@ -121,7 +124,7 @@ addons:
    starts: after a change to the Secret, restart the add-on. The render refuses `model.region` and
    `bedrock.apiKeySecret` with `anthropic`, and `anthropicApiKeySecret` with `bedrock`.
 
-The Anthropic Go SDK reads its other `ANTHROPIC_*` variables too; `ANTHROPIC_BASE_URL`, through
+The Anthropic Go SDK reads its other `ANTHROPIC_*` variables too. `ANTHROPIC_BASE_URL`, through
 `addons.ax.extraEnv`, sends the calls to another address, such as a gateway's. [The model](../reference/ax.md#the-model)
 says how the add-on uses the API.
 
@@ -162,10 +165,14 @@ replaces the pod with the Recreate strategy.
 ### With a NetworkPolicy
 
 With `networkPolicy.enabled`, the add-on gets a NetworkPolicy of its own. Its ingress is port 8090 from Agent Kourier's
-pods, from `networkPolicy.metricsFrom` and, on Postgres, from the add-on's other replicas. Its egress is DNS, port 443
-to anywhere outside the private and link-local ranges (`addons.ax.networkPolicy.model`, which covers Bedrock and AWS STS
-for IRSA, or the Anthropic API), the add-on's other replicas and its database on Postgres, and
-`addons.ax.networkPolicy.extraEgress`.
+pods, from `networkPolicy.metricsFrom` and, on Postgres, from the add-on's other replicas. Its egress is:
+
+- DNS.
+- Port 443 to anywhere outside the private and link-local ranges (`addons.ax.networkPolicy.model`, which covers Bedrock
+  and AWS STS for IRSA, or the Anthropic API).
+- The add-on's other replicas and its database, on Postgres.
+- `addons.ax.networkPolicy.extraEgress`.
+
 Postgres needs `addons.ax.networkPolicy.postgres.to`.
 
 The rule to 443 leaves out `169.254.0.0/16`. Per AWS's documentation, the EKS Pod Identity agent listens on
@@ -197,8 +204,8 @@ kubectl -n agent-kourier rollout status deployment/agent-kourier-ax
 kubectl -n agent-kourier logs deployment/agent-kourier-ax | grep 'agent listening'
 ```
 
-The add-on opens and migrates its store before it listens, then fails the turns a restart cut off and starts its upkeep;
-until that is done, `/readyz` answers 503 and so do A2A requests. A setting it cannot use stops it at start, with an
+The add-on opens and migrates its store before it listens, then fails the turns a restart cut off and starts its upkeep.
+Until that is done, `/readyz` answers 503, and so do A2A requests. A setting it cannot use stops it at start, with an
 error that names the variable.
 
 ## 3. Declare the backend and the Binding
@@ -282,16 +289,21 @@ spec:
 
 The header's value is then the whole token, with no `Bearer`. The header cannot be one that carries the Binding's
 identity: `Authorization`, `Proxy-Authorization`, `Cookie`, `X-User-Id`, `X-Agent-Name`, `X-Share-Token` or
-`X-Kagent-Insecure-Runtime-Identity`. The Secret is read in the AgentBackend's namespace, and the Binding's `identity`
+`X-Kagent-Insecure-Runtime-Identity`.
+
+The Secret is read in the AgentBackend's namespace, and the Binding's `identity`
 still needs a `userId` or a `tokenSecretRef`.
 
 ## 4. Match the session lifetimes
 
 Agent Kourier gives a thread a new A2A context once it has had no activity for the Binding's `session.threadTTL`
 (default `2160h`). The add-on deletes a context's ADK session and its tasks, a question the context waits on
-included, once the context has had no activity (a message accepted for it, or a create or an update of one of its tasks,
-which a turn makes as it starts and as it ends), with no turn running, for `sessionIdleTTL` (`SESSION_IDLE_TTL`, the same
-default).
+included, once the context has had no activity, with no turn running, for `sessionIdleTTL` (`SESSION_IDLE_TTL`, the
+same default).
+
+For the add-on, activity is a message accepted for the context, or a create or an update of one of its tasks, which a
+turn makes as it starts and as it ends.
+
 Keep the two equal:
 
 - Shorter than `threadTTL`, the add-on deletes sessions that a thread can still continue, and the thread's next turn
@@ -312,11 +324,17 @@ kubectl -n agent-kourier logs deployment/agent-kourier-ax
 ```
 
 `refused an A2A request` in the add-on's log, with the reason `missing` or `invalid`, means Agent Kourier sent no
-token, or one the add-on does not hold: check that the Binding's Secret and the add-on's hold the same value, with no
-trailing newline in the Binding's. A turn that fails can be the provider refusing the credentials or the model: on
-Bedrock, check the model's access in the region; on the Anthropic API, the key and the model's ID; and, with a
-NetworkPolicy, the egress above. The add-on's `agentkourier_ax_operation_duration_seconds` metric counts each call by
-the HTTP status the provider answered, such as `401` for a key it refused.
+token, or one the add-on does not hold. Check that the Binding's Secret and the add-on's hold the same value, with no
+trailing newline in the Binding's.
+
+A turn that fails can be the provider refusing the credentials or the model. Check:
+
+- on Bedrock, the model's access in the region;
+- on the Anthropic API, the key and the model's ID;
+- with a NetworkPolicy, the egress above.
+
+The add-on's `agentkourier_ax_operation_duration_seconds` metric counts each call by the HTTP status the provider
+answered, such as `401` for a key it refused.
 
 ## Rotate the token
 
@@ -333,12 +351,14 @@ If a read fails or finds no token, the add-on keeps the tokens it had.
 ## Turn it off
 
 `addons.ax.replicaCount: 0` stops the add-on and keeps its volume or database. `addons.ax.enabled: false` removes its
-objects; the SQLite volume's claim is kept unless `addons.ax.persistence.retainOnUninstall` is `false`.
+objects. The SQLite volume's claim is kept unless `addons.ax.persistence.retainOnUninstall` is `false`.
 
 ## Run it inside Google AX
 
 Google AX runs sandboxed Tasks on Substrate. The same agent runs there as a Task, and Agent Kourier reaches it through
-AX's router with the `a2a` dialect. Agent Kourier does not call AX's own API: it creates, pauses and resumes no Task,
+AX's router with the `a2a` dialect.
+
+Agent Kourier does not call AX's own API: it creates, pauses and resumes no Task,
 and that lifecycle stays with you. This route has more parts than the chart's, and is checked by the AX kind tier and
 the procedure below, not yet by a production deployment.
 
@@ -354,7 +374,7 @@ What differs from the chart:
 | Store | SQLite on a volume, or Postgres | SQLite on the Task's durable workspace, `/workspace/agent-kourier-state/agent.db` |
 
 The files are in `addons/ax` in the repository. AX is pinned
-there to the revision in `addons/ax/go.mod`; follow that revision's AX setup.
+there to the revision in `addons/ax/go.mod`. Follow that revision's AX setup.
 
 ### 1. Build the image
 
@@ -363,10 +383,11 @@ make ax-runner-image
 ```
 
 It builds `agent-kourier-ax-runner:dev`. No release builds or publishes it. Push it to a registry your Substrate workers
-pull from, and put its digest in `task.yaml`'s `image`. The Task runs `/usr/local/bin/agent-kourier-ax-agent`; AX starts
-the task runner at its fixed path, `/usr/local/bin/ax-task-runner`, which the image replaces with the runner built from
-the pinned AX module (on port 80 during the golden-template build, which runs no command, and on 8081 for running
-Tasks).
+pull from, and put its digest in `task.yaml`'s `image`.
+
+The Task runs `/usr/local/bin/agent-kourier-ax-agent`. AX starts the task runner at its fixed path,
+`/usr/local/bin/ax-task-runner`, which the image replaces with the runner built from the pinned AX module. The runner is
+on port 80 during the golden-template build, which runs no command, and on 8081 for running Tasks.
 
 ### 2. Provision the atespace and the egress
 
@@ -375,15 +396,19 @@ Tasks).
    API key in its Kubernetes Secret, never in the Task or the image. The Task's `AWS_BEARER_TOKEN_BEDROCK` is a
    placeholder: the SDK sends it, and the gateway replaces the `Authorization` header with the real key.
 3. Once the actor exists, apply `egress-policy.json` with `ateapi.Control/CreateActorEgressPolicy`, after you replace the
-   provider URI and the issuer's host (`UpdateActorEgressPolicy`, with the fetched UID and version, if a policy is there
-   already). It allows Bedrock's runtime host in the region, with the injected key, and the issuer. Destinations it does
-   not list stay denied: allow the issuer's key set host too if it is another one, with no credential.
+   provider URI and the issuer's host. If a policy is there already, use `UpdateActorEgressPolicy`, with the fetched UID
+   and version.
+
+    The policy allows Bedrock's runtime host in the region, with the injected key, and the issuer. Destinations it does
+    not list stay denied: allow the issuer's key set host too if it is another one, with no credential.
 
 ### 3. Merge the template overlay
 
 Merge `template-overlay.yaml` into the ActorTemplate that AX generates, through the Substrate API, before the agent runs
 or its golden snapshot is built. Keep the generated storage location, the durable `/workspace` volume and the other
-fields, and use the container name of the generated template. The overlay mounts the egress gateway's CA at `/run/ate`
+fields, and use the container name of the generated template.
+
+The overlay mounts the egress gateway's CA at `/run/ate`
 (the Task points `SSL_CERT_FILE` there) and takes DATA snapshots with a COLD_BOOT resume, so that a resumed actor starts
 a fresh agent process on its restored SQLite file. AX's default templates do not mount the CA, and applying the Task
 alone gives the agent neither its Bedrock key nor a CA it trusts.
@@ -399,16 +424,19 @@ ax apply -f task.yaml
 
 AX reconciles a Task at once, so provision the template and the egress policy while the actor is paused. `OIDC_ISSUER`,
 `OIDC_AUDIENCE` and `OIDC_SUBJECT` are the issuer of Agent Kourier's service identity, the audience its ID token is for,
-and its subject. The agent reads the issuer only at the first request that carries a token, so the golden snapshot needs
-no egress to it; a request that comes while the issuer cannot be reached is answered 503, and Agent Kourier tries again.
+and its subject.
+
+The agent reads the issuer only at the first request that carries a token, so the golden snapshot needs no egress to it.
+A request that comes while the issuer cannot be reached is answered 503, and Agent Kourier tries again.
 
 ### 5. Put a gateway in front of the router
 
 `gateway.conf` is an nginx fragment that forwards only the A2A endpoint and the card to AX's router, sets the
 `ate-target-actor` header to the one actor whatever the request says, and turns off buffering for the stream. Terminate
-TLS in front of it, and let only Agent Kourier reach it, with a NetworkPolicy. The agent checks the ID token itself and
-refuses another subject; to refuse a caller before the actor wakes up, put an OIDC-verifying front door in front of the
-gateway as well.
+TLS in front of it, and let only Agent Kourier reach it, with a NetworkPolicy.
+
+The agent checks the ID token itself and refuses another subject. To refuse a caller before the actor wakes up, put an
+OIDC-verifying front door in front of the gateway as well.
 
 ### 6. Declare the backend and the Binding
 
@@ -446,7 +474,7 @@ An agent that ran before the add-on took `STATE_DIR`, which the add-on refuses: 
 `/agent.db`, as `task.yaml` does, and unset `STATE_DIR`. The first start imports the tasks of the old layout, so a
 question that waited across the upgrade can still be answered.
 
-A turn that was running when the actor paused fails at the next start; the model call is not made again. A question that
+A turn that was running when the actor paused fails at the next start, and the model call is not made again. A question that
 waited survives. A stream does not survive a pause: recovery rests on the task in the store.
 
 ### Check it before a real channel

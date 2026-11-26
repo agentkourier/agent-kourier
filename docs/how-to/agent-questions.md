@@ -24,22 +24,25 @@ Without `askUser: true`, Agent Kourier cancels the agent's task and says so in t
 
     The `kagent-v1` dialect reads kagent's structured questions. A question with choices is shown as radio buttons, or
     checkboxes where the agent allows several (a select or multi-select above 10 choices, and a numbered list with a
-    text box for the numbers above 100). A question with no choices is a text input. Every prompt has a **Submit**
-    button. A question raised by a sub-agent is labelled with that sub-agent.
+    text box for the numbers above 100).
+
+    A question with no choices is a text input. Every prompt has a **Submit** button. A question raised by a sub-agent
+    is labelled with that sub-agent.
 
 === "Generic A2A"
 
     The `a2a` dialect shows an agent's text-only `input-required` pause as one text question, which you can
-    answer with **Submit** or with a typed reply in the thread; its prompt says so. A pause with a part that is
-    not text cannot be used, so the task is cancelled and the thread is told. In a Binding with
-    `chat.threadReplies: mention`, that reply needs no mention. An agent whose card lists kagent's human-in-the-loop
+    answer with **Submit** or with a typed reply in the thread. Its prompt says so. A pause with a part that is
+    not text cannot be used, so the task is cancelled and the thread is told.
+
+    In a Binding with `chat.threadReplies: mention`, that reply needs no mention. An agent whose card lists kagent's human-in-the-loop
     extension gets the structured questions of the `kagent-v1` tab instead, answered with the prompt's controls only
     (see [Connect a generic A2A agent](connect-a2a-agent.md#what-works-on-this-dialect)).
 
 ## How an answer is taken
 
 - Only a member of the channel can answer, and never a bot. An incomplete answer is turned away with a message only
-  the person sees; nothing reaches the agent.
+  the person sees, and nothing reaches the agent.
 - The first complete answer wins. The prompt is updated to show who answered and when, and its controls are removed.
 - The answer goes to the agent under the Binding's identity. The audit log records who answered, when and the
   answer's shape, never its text.
@@ -52,8 +55,9 @@ Without `askUser: true`, Agent Kourier cancels the agent's task and says so in t
 Tool approvals are available for a Binding that uses the `kagent-v1` dialect, and for an `a2a` Binding whose agent card
 lists kagent's human-in-the-loop extension. Any other `a2a` agent can pause for an approval only with text, which Agent
 Kourier handles as a question whose reply is sent as plain text, never as an approval (see
-[Connect a generic A2A agent](connect-a2a-agent.md#what-works-on-this-dialect)). Approvals are disabled by default.
-Enable them with a separate policy from questions:
+[Connect a generic A2A agent](connect-a2a-agent.md#what-works-on-this-dialect)).
+
+Approvals are disabled by default. Enable them with a separate policy from questions:
 
 ```yaml
 spec:
@@ -64,43 +68,59 @@ spec:
     timeout: 30m
 ```
 
-`approverGroups` is optional; a nonempty list requires `toolApprovals: true`. When it is omitted or empty, any non-bot member of
-the Binding's channel may decide an approval; the config loader warns and names the Binding. When groups are listed, a
-press must come from a member of at least one listed group, a member of the channel, and a non-bot user. Groups gate tool
-approvals only, so they do not restrict ask-user answers. The list accepts at most 10 Slack user group IDs, and rejects
-empty or duplicate entries. Membership is read on each press in the order the groups are listed and is not cached. A
-permanent group-read failure, such as an unknown group or missing Slack permission, ends that press with a fixed
-ephemeral message, makes no decision and writes no audit row, and leaves the approval pending. The error log names the
-Binding and interaction. A timeout, server error or rate limit keeps the press for retry; the first group-read error
-stops the check even if a later group would contain the person, while a member found in an earlier group may decide.
+`approverGroups` is optional, and a nonempty list requires `toolApprovals: true`. When it is omitted or empty, any
+non-bot member of the Binding's channel may decide an approval, and the config loader warns and names the Binding.
+
+When groups are listed, a press must come from a member of at least one listed group, a member of the channel, and a
+non-bot user. Groups gate tool approvals only, so they do not restrict ask-user answers. The list accepts at most 10
+Slack user group IDs, and rejects empty or duplicate entries.
+
+Membership is read on each press in the order the groups are listed and is not cached.
+
+A permanent group-read failure, such as an unknown group or missing Slack permission, ends that press with a fixed
+ephemeral message. It makes no decision, writes no audit row, and leaves the approval pending. The error log names the
+Binding and interaction.
+
+A timeout, server error or rate limit keeps the press for retry. The first group-read error stops the check even if a
+later group would contain the person, while a member found in an earlier group may decide.
 
 When approvals are enabled, a one-tool prompt shows the tool name, its redacted arguments, and **Approve** and **Deny**.
 A prompt with several tools shows each tool and its arguments with an Approve/Deny choice, plus **Submit**, **Approve
-all**, and **Deny all**. The prompt refuses a tool name or argument that cannot be shown exactly, contains an unsupported
-value, or does not fit in one message; Agent Kourier does not truncate an approval prompt. Secrets are replaced with
-`[redacted]` before the prompt is stored and shown.
+all**, and **Deny all**.
 
-In a chat thread, the reply that the agent paused in ends at the pause, and its card for each call the approval is about
-ends complete and titled `Approval requested: name`, not as an error: the call is waiting, not failed. The cards of an
-approval that a sub-agent raised are not retitled. The reply after the decision shows the call again with how it ended,
-an error when it was denied.
+The prompt refuses a tool name or argument that cannot be shown exactly, contains an unsupported value, or does not fit
+in one message. Agent Kourier does not truncate an approval prompt. Secrets are replaced with `[redacted]` before the
+prompt is stored and shown.
+
+In a chat thread, the reply that the agent paused in ends at the pause. Its card for each call the approval is about
+ends complete and titled `Approval requested: name`, not as an error: the call is waiting, not failed.
+
+The cards of an approval that a sub-agent raised are not retitled. The reply after the decision shows the call again
+with how it ended, an error when it was denied.
 
 The first complete, authorized decision wins. An incomplete press is rejected with an ephemeral message and does not reach
-the agent. A press that Slack sends again, because the answer to its first delivery was lost, is recorded once, by the
-`action_ts` that Slack gives the press and repeats when it sends it again (Slack's behaviour, not checked here): its
-person is told the outcome once, and a winning press is decided and sent to the agent once. The broker knows the press
-for at least an hour after it was recorded ([Limits](../reference/limits.md#what-the-broker-keeps-and-logs)). Pressing
-the button again is a new press. A new press by the person who already decided decides nothing: the decision that was
-recorded, while the broker keeps it, is sent again, and the task takes it only while it is still paused on that same
-approval. A task that has gone on, to its end or to a later question or approval, gets nothing, and nobody is told.
-Agent Kourier audits the decision before sending it under the Binding's service identity, then replaces the
-prompt with an ending that shows who decided and removes the controls. The ending shows each tool on one line, in the
-form of a tool's status line: its name, a summary of its redacted arguments, cut and marked when it is longer than the
-limit ([Limits](../reference/limits.md#what-a-thread-shows); only the prompt shows the arguments whole), and its verdict,
-such as `bash(command="kubectl get pods -n shop") — Approved`, numbered when there are several. A tool whose call the paused reply shows on its card, with
-the same name and summary of its arguments, is named without them, such as `bash — Approved`: the card says them already.
-That takes a reply with `output: live` and `progress` set to `steps` or `steps-and-activity` whose last write showed the
-card; the prompt waits up to 5 seconds after the pause for that write ([Limits](../reference/limits.md#what-a-thread-shows)).
+the agent.
+
+A press that Slack sends again, because the answer to its first delivery was lost, is recorded once, by the `action_ts`
+that Slack gives the press and repeats when it sends it again (Slack's behaviour, not checked here). Its person is told
+the outcome once, and a winning press is decided and sent to the agent once. The broker knows the press for at least an
+hour after it was recorded ([Limits](../reference/limits.md#what-the-broker-keeps-and-logs)).
+
+Pressing the button again is a new press. A new press by the person who already decided decides nothing: the decision
+that was recorded, while the broker keeps it, is sent again, and the task takes it only while it is still paused on that
+same approval. A task that has gone on, to its end or to a later question or approval, gets nothing, and nobody is told.
+
+Agent Kourier audits the decision before sending it under the Binding's service identity, then replaces the prompt with
+an ending that shows who decided and removes the controls. The ending shows each tool on one line, in the form of a
+tool's status line: its name, a summary of its redacted arguments, cut and marked when it is longer than the limit
+([Limits](../reference/limits.md#what-a-thread-shows); only the prompt shows the arguments whole), and its verdict, such
+as `bash(command="kubectl get pods -n shop") — Approved`, numbered when there are several.
+
+A tool whose call the paused reply shows on its card, with the same name and summary of its arguments, is named without
+them, such as `bash — Approved`: the card says them already. That takes a reply with `output: live` and `progress` set
+to `steps` or `steps-and-activity` whose last write showed the card. The prompt waits up to 5 seconds after the pause for
+that write ([Limits](../reference/limits.md#what-a-thread-shows)).
+
 The ending keeps the arguments when the thread has no such card:
 
 - with `output: final` or `progress: activity`;
@@ -111,18 +131,23 @@ The ending keeps the arguments when the thread has no such card:
   thread's reply on Slack, every reply on Microsoft Teams), or past the first 50 steps of a streamed reply.
 
 It keeps them too for a tool with no arguments, and for one whose summary was cut.
-A timed-out or cancelled ending shows the same lines without a verdict. The audit records the
-Binding, Slack user, time, counts and cleaned tool names; it never records arguments or rejection text. A denial uses the
-dialect's fixed reason.
+A timed-out or cancelled ending shows the same lines without a verdict.
+
+The audit records the Binding, Slack user, time, counts and cleaned tool names. It never records arguments or rejection
+text. A denial uses the dialect's fixed reason.
 
 At the deadline (30 minutes by default), the sweeper audits `timed_out` before denying every tool through the kagent
-dialect, then updates the posted prompt with a timed-out ending and queues a fixed notice. Recovery reuses that timeout audit; if it is missing, recovery writes it
-before retrying the denial. A denial that the agent does not take causes the task to be cancelled on a later sweep.
-If a person's recorded decision wins a race with the sweep after its timeout audit, the sweep appends a `superseded`
-audit for that timeout. A failure to write the compensation is logged.
+dialect, then updates the posted prompt with a timed-out ending and queues a fixed notice. Recovery reuses that timeout
+audit. If it is missing, recovery writes it before retrying the denial.
+
+A denial that the agent does not take causes the task to be cancelled on a later sweep. If a person's recorded decision
+wins a race with the sweep after its timeout audit, the sweep appends a `superseded` audit for that timeout. A failure
+to write the compensation is logged.
 
 A permanently abandoned approval prompt is refused as unusable, and so is any prompt the chat platform cannot show: one
-too large for one message, or one the platform cannot display at all. Agent Kourier queues the fixed refusal
+too large for one message, or one the platform cannot display at all.
+
+Agent Kourier queues the fixed refusal
 notice and closes the interaction before cancelling the task, so a restart can retry the cancellation without reporting
 another timeout. A transient posting failure remains retryable.
 

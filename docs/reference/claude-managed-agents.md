@@ -1,11 +1,15 @@
 # Claude Managed Agents add-on
 
 The Claude Managed Agents add-on is an A2A server in front of one agent in Claude Managed Agents. Agent Kourier reaches
-it through an AgentBackend with the `a2a` dialect, and it turns each A2A turn into a turn of a session of the agent,
-through the Anthropic API. It is experimental: it was tested against a self-hosted environment with a Haiku agent, and,
-on a build before the release (22 and 23 November 2026), on Postgres with two replicas, where a leader killed during
-an approval left the standby to take over and complete the same task. Cloud environments are untested. [Connect Claude Managed Agents](../how-to/connect-claude-managed-agents.md) installs
-it; [Add-ons](../explanation/add-ons.md) says what an add-on is.
+it through an AgentBackend with the `a2a` dialect. The add-on turns each A2A turn into a turn of a session of the agent,
+through the Anthropic API.
+
+It is experimental: it was tested against a self-hosted environment with a Haiku agent. On a build before the release
+(22 and 23 November 2026) it was also tested on Postgres with two replicas, where a leader killed during an approval left
+the standby to take over and complete the same task. Cloud environments are untested.
+
+[Connect Claude Managed Agents](../how-to/connect-claude-managed-agents.md) installs it.
+[Add-ons](../explanation/add-ons.md) says what an add-on is.
 
 ```mermaid
 flowchart LR
@@ -34,8 +38,8 @@ translates. Claude Managed Agents owns the agent: the model loop, its tools and 
 | `completed` | The session idles with the stop reason `end_turn`. |
 | `failed` | The session terminates; idles with any other stop reason; idles on a call the turn cannot answer (below); its event stream ends before the turn does; or a sandbox tool gets no event in time. |
 
-The agent card, at `/a2a/.well-known/agent-card.json`, names the endpoint `PUBLIC_URL`, advertises streaming over
-JSON-RPC and text input and output, and lists the human-in-the-loop extension, `https://kagent.dev/extensions/hitl/v1`,
+The agent card, at `/a2a/.well-known/agent-card.json`, names the endpoint `PUBLIC_URL` and advertises streaming over
+JSON-RPC and text input and output. It lists the human-in-the-loop extension, `https://kagent.dev/extensions/hitl/v1`,
 which is how Agent Kourier's `a2a` dialect knows to read the add-on's pauses as tool approvals.
 
 ## A turn with an approval
@@ -67,23 +71,28 @@ that happen after it opens.
 
 An answer to a paused task must decide every call the pause named, once each, in a `tool_approval_response`. The add-on
 refuses any other answer as invalid before the turn runs, a typed reply in the thread included, and the task stays
-paused. Agent Kourier sends one from the Approve and Deny buttons; if nobody decides before the Binding's
+paused.
+
+Agent Kourier sends one from the Approve and Deny buttons. If nobody decides before the Binding's
 `interactions.timeout`, it denies the calls ([Agent contract](agent-contract.md#structured-questions-and-tool-approvals)).
 
-On a self-hosted environment, a built-in tool's result comes from the worker as `user.tool_result`, and a call the agent
-may run without asking also idles the session with `requires_action` until that result arrives. The add-on treats both
-as waits, not as questions: a pause asks only about the calls whose permission was `ask`. A pause on anything else, such
-as a custom tool, or a call the turn did not see ask for approval, fails the turn with "The agent is waiting on an
-action this adapter cannot answer."
+On a self-hosted environment, a built-in tool's result comes from the worker as `user.tool_result`. A call the agent may
+run without asking also idles the session with `requires_action` until that result arrives. The add-on treats both as
+waits, not as questions: a pause asks only about the calls whose permission was `ask`.
+
+A pause on anything else, such as a custom tool, or a call the turn did not see ask for approval, fails the turn with
+"The agent is waiting on an action this adapter cannot answer."
 
 ## A sandbox that never starts
 
-A self-hosted sandbox that cannot be scheduled sends no event at all, and the session waits. When a turn waits on a
-built-in tool that the sandbox runs (one the agent may run, or one a person approved) and no session event arrives for
-`TOOL_RESULT_TIMEOUT`, the add-on sends the session `user.interrupt` and fails the task with the status metadata
-`code: timeout`, which selects Agent Kourier's timeout notice in the thread. A tool that runs silently for longer is
-cut off the same way. MCP tools do not run in the sandbox, and a model that is thinking is not waiting on a tool, so
-neither is timed.
+A self-hosted sandbox that cannot be scheduled sends no event at all, and the session waits.
+
+When a turn waits on a built-in tool that the sandbox runs (one the agent may run, or one a person approved) and no
+session event arrives for `TOOL_RESULT_TIMEOUT`, the add-on sends the session `user.interrupt`. It fails the task with
+the status metadata `code: timeout`, which selects Agent Kourier's timeout notice in the thread. A tool that runs
+silently for longer is cut off the same way.
+
+MCP tools do not run in the sandbox, and a model that is thinking is not waiting on a tool, so neither is timed.
 
 The add-on also sends a `working` update after each `60s`<!--addon-limit:cma.keepalive--> without a session event, so
 that Agent Kourier, which cuts a stream silent for 5 minutes, keeps a slow turn's stream open.
@@ -94,7 +103,8 @@ The store keeps the A2A tasks, the message ID that started or joined each task, 
 restart loses none of them. Its migrations are applied at start.
 
 A store that an earlier version of the add-on wrote, which kept each context's session in a table of its own, is
-refused: the add-on logs that the store holds an earlier layout and exits with code 1, before it writes to the store.
+refused. The add-on logs that the store holds an earlier layout and exits with code 1, before it writes to the store.
+
 Start the add-on on a new store: a new SQLite file, or an empty Postgres database or schema. The chart reuses the claim
 `<fullname>-cma-data` while it exists, so for SQLite set `addons.cma.persistence.existingClaim` to a new claim of your
 own, or delete that claim so that the chart makes a new one.
@@ -111,10 +121,12 @@ At start, before it serves, the add-on:
       several; the others are archived) and keeps its tasks. When none is, the context is forgotten with its tasks,
       and its next message starts a new session.
 2. Fails each task left `submitted` or `working` with the agent message "Interrupted by an adapter restart." and sends
-   its session `user.interrupt` (a failed interrupt is logged). Each task is failed in a write of its own. A task whose
-   stored record does not decode is failed by its state alone, so that `TASK_RETENTION` deletes it, and is logged at
-   WARN; a task that changed since it was read is logged at WARN and left as it is. It does not start if the store
-   cannot be read or written.
+   its session `user.interrupt` (a failed interrupt is logged). Each task is failed in a write of its own.
+
+    A task whose stored record does not decode is failed by its state alone, so that `TASK_RETENTION` deletes it, and
+    is logged at WARN. A task that changed since it was read is logged at WARN and left as it is.
+
+    It does not start if the store cannot be read or written.
 
 | Survives a restart | Is interrupted |
 |---|---|
@@ -123,31 +135,42 @@ At start, before it serves, the add-on:
 | The record of message IDs: a resend joins its first send's task | |
 
 Agent Kourier sends a message again, with the same ID, when it cannot tell whether the first send arrived. A message
-whose ID the store has recorded joins that message's task instead of starting a second turn: it gets the task as it
-stands if the task has settled or paused, and the rest of its stream otherwise. A resend that arrives before the first
-send's turn has answered anything waits for it, even when the first sender has hung up, so the message reaches the
-session once. A resend that names another context or another task than its first send's is refused as invalid.
+whose ID the store has recorded joins that message's task instead of starting a second turn. It gets the task as it
+stands if the task has settled or paused, and the rest of its stream otherwise.
+
+A resend that arrives before the first send's turn has answered anything waits for it, even when the first sender has
+hung up, so the message reaches the session once. A resend that names another context or another task than its first
+send's is refused as invalid.
 
 ## Sessions and their lifetime
 
 A session holds its sandbox until it is archived. `SESSION_IDLE_TTL` archives a context's session once the context has
-been inactive for that long with no turn running, checked every `1m`<!--addon-limit:kit.upkeep-interval-->, and deletes
-the context's tasks from before the archive with their message IDs. The store keeps when each context was last active (a
-message for it was accepted, which a message refused as invalid or a resend of one already accepted is not, or a turn of
-it started or ended), so the clock survives a restart and a takeover. Archiving cannot be undone: the context's next
-message starts a new session without the old history. A session that fails to archive is logged at WARN and tried again
-at the next check.
+been inactive for that long with no turn running, checked every `1m`<!--addon-limit:kit.upkeep-interval-->. It also
+deletes the context's tasks from before the archive with their message IDs.
+
+The store keeps when each context was last active, so the clock survives a restart and a takeover. A context is active
+when a message for it was accepted, or a turn of it started or ended. A message refused as invalid, or a resend of one
+already accepted, does not count.
+
+Archiving cannot be undone: the context's next message starts a new session without the old history. A session that
+fails to archive is logged at WARN and tried again at the next check.
 
 Each check first reads every context's last activity, then archives the idle contexts one at a time. It leaves a session
-for a later check if, when it comes to that context, a message for the context has been accepted since the read, a turn
-is running in the session or creating it, or a turn of it started or ended after the read. A message for the context
-that arrives while its session is being archived waits for the archive to end: once the session is archived, and the
-tasks from before deleted, the message starts a new session; if the archive failed, the message continues the session.
+for a later check if, when it comes to that context:
 
-Set it to the Binding's `session.threadTTL`, whose default, `2160h`<!--addon-limit:kit.session-idle-ttl-->, is the
-add-on's default too. Past that, Agent Kourier gives the thread a new context and never uses the old session again. A
-shorter value archives sessions a thread can still continue. `SESSION_IDLE_TTL` does not free an idle sandbox's memory;
-the environment's own idle timeout does.
+- a message for the context has been accepted since the read,
+- a turn is running in the session or creating it, or
+- a turn of it started or ended after the read.
+
+A message for the context that arrives while its session is being archived waits for the archive to end. Once the
+session is archived, and the tasks from before deleted, the message starts a new session. If the archive failed, the
+message continues the session.
+
+Set `SESSION_IDLE_TTL` to the Binding's `session.threadTTL`, whose default,
+`2160h`<!--addon-limit:kit.session-idle-ttl-->, is the add-on's default too. Past that, Agent Kourier gives the thread a
+new context and never uses the old session again. A shorter value archives sessions a thread can still continue.
+
+`SESSION_IDLE_TTL` does not free an idle sandbox's memory. The environment's own idle timeout does.
 
 `TASK_RETENTION` deletes a settled task (completed, failed, canceled or rejected), with its message IDs, once its last
 update is older than that, checked every `1m`<!--addon-limit:kit.upkeep-interval-->.
@@ -155,8 +178,10 @@ update is older than that, checked every `1m`<!--addon-limit:kit.upkeep-interval
 ## Replicas
 
 **SQLite** (the default) is one replica. The add-on holds an exclusive lock on the file `SQLITE_PATH` plus `.lock` while
-it runs, so a second add-on on the same file stops at start ("another adapter has the SQLite file open"); the lock is the
-kernel's, so it goes with a process that dies. The chart refuses `addons.cma.replicaCount` above 1 with SQLite, puts the
+it runs, so a second add-on on the same file stops at start ("another adapter has the SQLite file open"). The lock is the
+kernel's, so it goes with a process that dies.
+
+The chart refuses `addons.cma.replicaCount` above 1 with SQLite, puts the
 file on a ReadWriteOnce volume, and replaces the pod with the Recreate strategy, so the old pod has released the volume
 before the new one starts. The add-on refuses `LEASE_DURATION`, `LEASE_RENEW_DEADLINE` and `LEASE_RETRY_PERIOD` with
 SQLite.
@@ -171,24 +196,37 @@ PodDisruptionBudget with `maxUnavailable: 1`.
 
 The replicas elect a leader through a lease row in the add-on's database, not a Kubernetes Lease, so the add-on needs no
 RBAC. The leader serves A2A, and every write it makes checks the lease's epoch in the same transaction, so a leader that
-has lost the lease cannot write. A standby forwards each A2A request and the agent card to the leader's `ADVERTISE_URL`,
-streaming the answer through unbuffered; the caller check runs on the leader. The add-on answers 503 with `Retry-After`
-(the election's retry period, at least 1 second) on a leader that has not finished taking over, on a standby that knows
-of no leader or cannot reach it, and on a replica that is not serving when the request was already forwarded once: a
-request is forwarded once at most. A leader that cannot renew the lease for `LEASE_RENEW_DEADLINE`, or whose renewal or
-write finds that another replica has taken it, exits at once with code 5, without a drain, and Kubernetes restarts it.
-One that stops on SIGTERM drains its requests for at most `5s`<!--addon-limit:kit.shutdown-timeout-->, then cancels the
-turns still running and waits at most `5s`<!--addon-limit:kit.turn-stop-timeout--> for them, leaving their tasks for the
-next leader to fail, then hands the lease over, for at most `3s`<!--addon-limit:kit.release-timeout-->; past that, a
-standby takes over once the lease has run out. A replica that takes over runs the same start-up work as a restart, so a
-turn that was running on the old leader fails, and a paused approval survives.
+has lost the lease cannot write.
+
+A standby forwards each A2A request and the agent card to the leader's `ADVERTISE_URL`, streaming the answer through
+unbuffered. The caller check runs on the leader.
+
+The add-on answers 503 with `Retry-After` (the election's retry period, at least 1 second):
+
+- On a leader that has not finished taking over.
+- On a standby that knows of no leader or cannot reach it.
+- On a replica that is not serving when the request was already forwarded once: a request is forwarded once at most.
+
+A leader that cannot renew the lease for `LEASE_RENEW_DEADLINE`, or whose renewal or write finds that another replica
+has taken it, exits at once with code 5, without a drain, and Kubernetes restarts it. A leader that stops on SIGTERM:
+
+1. Drains its requests for at most `5s`<!--addon-limit:kit.shutdown-timeout-->.
+2. Cancels the turns still running and waits at most `5s`<!--addon-limit:kit.turn-stop-timeout--> for them, leaving
+   their tasks for the next leader to fail.
+3. Hands the lease over, for at most `3s`<!--addon-limit:kit.release-timeout-->. Past that, a standby takes over once
+   the lease has run out.
+
+A replica that takes over runs the same start-up work as a restart, so a turn that was running on the old leader fails,
+and a paused approval survives.
 
 ## Caller check
 
-A request to `/a2a` or to the agent card must carry one of the tokens in `AUTH_TOKEN_FILE`, or the add-on answers 401
-(with `WWW-Authenticate: Bearer` when the header is `Authorization`) and logs `refused an A2A request` with the reason
-`missing` or `invalid`, never the value it was given. Agent Kourier sends the token when it fetches the card, as with
-every request to the endpoint. `/healthz`, `/readyz` and `/metrics` need no token.
+A request to `/a2a` or to the agent card must carry one of the tokens in `AUTH_TOKEN_FILE`. Otherwise the add-on
+answers 401 (with `WWW-Authenticate: Bearer` when the header is `Authorization`) and logs `refused an A2A request` with
+the reason `missing` or `invalid`, never the value it was given.
+
+Agent Kourier sends the token when it fetches the card, as with every request to the endpoint. `/healthz`, `/readyz` and
+`/metrics` need no token.
 
 - **The header.** With `AUTH_HEADER` unset, the token comes as `Authorization: Bearer <token>` (the scheme in any case),
   which is what a Binding's `identity.tokenSecretRef` sends. With another header name, the header's whole value is the
@@ -198,13 +236,13 @@ every request to the endpoint. `/healthz`, `/readyz` and `/metrics` need no toke
   or `X-Kagent-Insecure-Runtime-Identity`. An AgentBackend may not set them, so none of them would ever carry the token.
 - **The file.** One token per line. Lines that are blank or start with `#` are skipped, and trailing whitespace (a CR
   included) is stripped. The add-on does not start with a file it cannot read or that holds no token. It reads the file
-  again every `5s`<!--addon-limit:kit.token-reload-->, because a mounted Secret changes by swapping a symlink; a read
+  again every `5s`<!--addon-limit:kit.token-reload-->, because a mounted Secret changes by swapping a symlink. A read
   that fails or finds no token keeps the last good tokens, and is logged once until the failure changes.
 - **The comparison.** The add-on keeps only each token's SHA-256 and compares the digest of the presented token with
   every one in constant time.
 - **One caller.** Tasks are kept apart by caller: the caller a request passes as owns the tasks it creates, and every
   read and write made for a request is limited to its caller's tasks. The add-on has no check but the token file, and
-  every accepted token is the same caller, Agent Kourier, so any accepted token reaches every task: the tokens exist to
+  every accepted token is the same caller, Agent Kourier. So any accepted token reaches every task: the tokens exist to
   be rotated, not to tell callers apart.
 - **Off.** `AUTH_DISABLED=true` turns the check off, and is refused unless `LISTEN_ADDR` is a loopback address
   (`127.0.0.0/8`, `::1` or `localhost`) and `AUTH_TOKEN_FILE` is unset. The chart has the add-on listen on every
@@ -219,7 +257,7 @@ All on one port, 8090 in the chart, named `http` on the Service:
 | `/a2a` | A2A JSON-RPC, behind the caller check |
 | `/a2a/.well-known/agent-card.json` | The agent card, behind the caller check |
 | `/healthz` | 200 once the add-on listens: the process is alive. The chart's liveness probe asks it. |
-| `/readyz` | 200 once the add-on serves, which on a leader is only after its start-up work, until it starts to stop; 503 before then, and once it stops a request that was already read gets 503 while a new one is refused (the listener has closed). The chart's startup and readiness probes ask it. |
+| `/readyz` | 200 once the add-on serves, which on a leader is only after its start-up work, until it starts to stop. 503 before then. Once it stops, a request that was already read gets 503 while a new one is refused (the listener has closed). The chart's startup and readiness probes ask it. |
 | `/metrics` | Prometheus metrics |
 
 On Postgres, `/readyz` answers 200 on a standby too, since a standby forwards to the leader, so every replica is behind
@@ -234,7 +272,8 @@ setting it cannot use stops it with exit code 2. It exits with 1 for a failure o
 ## Settings
 
 The add-on reads its settings from its environment, and an empty value is an unset one. A setting it cannot use stops it
-at start with an error that names the variable; the error never shows the value of `POSTGRES_DSN` or `AUTH_HEADER`.
+at start with an error that names the variable. The error never shows the value of `POSTGRES_DSN` or `AUTH_HEADER`.
+
 Every duration is a Go duration, such as `90s` or `720h`, of zero or more unless the row says otherwise.
 
 ### The add-on's own

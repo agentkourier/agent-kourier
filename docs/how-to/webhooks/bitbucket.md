@@ -7,16 +7,25 @@ agent comments on Bitbucket with a repository access token.
 !!! warning "Experimental"
 
     Needs Agent Kourier 0.6.0 or later: 0.5.x refuses `platform: webhook`. The `webhook` platform is new, and its fields may change
-    in a later version. This setup was run end to end against Bitbucket Cloud on 2026-11-17, with this mapping, on a pre-0.6.0 build
-    of the broker. What this page says Bitbucket sends was seen in that run's deliveries, and Atlassian can change it. Bitbucket's
-    behaviour and labels that the run did not see come from Atlassian's documentation, and say so where they appear. The steps on
-    Bitbucket's side follow that documentation, which can change: if a menu or field has moved, Atlassian's documentation is the
-    reference. Not run: the delivery header `X-Request-UUID`, the draft field `/pullrequest/draft`, step 2's check on a pull request
-    comment, and a mention picked from Bitbucket's mention list.
+    in a later version.
+
+    This setup was run end to end against Bitbucket Cloud on 2026-11-17, with this mapping, on a pre-0.6.0 build of the broker.
+    What this page says Bitbucket sends was seen in that run's deliveries, and Atlassian can change it.
+
+    Bitbucket's behaviour and labels that the run did not see come from Atlassian's documentation, and say so where they appear.
+    The steps on Bitbucket's side follow that documentation, which can change: if a menu or field has moved, Atlassian's
+    documentation is the reference.
+
+    Not run:
+
+    - the delivery header `X-Request-UUID`;
+    - the draft field `/pullrequest/draft`;
+    - step 2's check on a pull request comment;
+    - a mention picked from Bitbucket's mention list.
 
 ## What you end with
 
-- A pull request that is created or updated starts a review: a turn of the session `pr-<id>`, in which the agent reads the pull
+- A pull request that is created or updated starts a review: a turn of the session `pr-<id>`. In that turn the agent reads the pull
   request and its diff and posts one comment with its review. The recipe skips a draft by `/pullrequest/draft`, a field that is from
   Bitbucket's API reference and was *not run*: if Bitbucket does not send it, a draft is reviewed too.
 - A comment on that pull request that mentions the token's name, typed as `@acme-agent`, starts a reply: a turn of the same session,
@@ -65,8 +74,10 @@ access tokens.
 
 The connection's `spec.webhook.identity` is the token's bot user's `account_id`, such as `712020:…`. In the run the token was refused
 on `GET /2.0/user` (403), so learn the ID from something the token writes: post one comment on an open pull request, read its author
-from the response, and delete it. **Pull requests: Write** covers both calls. Open a pull request for the check if the repository has
-none; the webhook is not on yet (step 6), so nothing reaches the broker. The token is read from the header file of step 1:
+from the response, and delete it.
+
+**Pull requests: Write** covers both calls. Open a pull request for the check if the repository has none; the webhook is not on yet
+(step 6), so nothing reaches the broker. The token is read from the header file of step 1:
 
 ```sh
 H=~/.config/webhooks/bitbucket.header
@@ -101,15 +112,19 @@ helm -n agent-kourier get values agent-kourier -o json \
   | jq '{namespaces: .config.connectionNamespaces, secrets: .rbac.secretNames["acme-webhooks"]}'
 ```
 
-`namespaces` must hold `acme-webhooks` (unless you admit it another way, such as by a label) and `secrets` must hold `bitbucket-webhook`
-([Before you start](../receive-webhooks.md#before-you-start)); the command takes the release to be called `agent-kourier`. The
-access token is not in this Secret, and the broker never reads it: it belongs to the agent's tools (step 4).
+`namespaces` must hold `acme-webhooks` (unless you admit it another way, such as by a label) and `secrets` must hold
+`bitbucket-webhook` ([Before you start](../receive-webhooks.md#before-you-start)). The command takes the release to be called
+`agent-kourier`.
+
+The access token is not in this Secret, and the broker never reads it: it belongs to the agent's tools (step 4).
 
 ## 4. Run the agent and its tools
 
 The recipe ships no agent. Run an A2A agent whose agent card advertises streaming, with tools that do the operations below with the
-access token; [The agent](../receive-webhooks.md#the-agent) says what it must be and do, and the quickest way to one. Note its A2A
-endpoint: step 5 puts it in the AgentBackend, and the Binding turns `Ready` only once the broker can fetch the agent's card from it.
+access token. [The agent](../receive-webhooks.md#the-agent) says what it must be and do, and the quickest way to one.
+
+Note its A2A endpoint: step 5 puts it in the AgentBackend, and the Binding turns `Ready` only once the broker can fetch the agent's
+card from it.
 
 The recipe's prompts ask the agent to do these, with the token as `Authorization: Bearer <token>`:
 
@@ -119,8 +134,10 @@ The recipe's prompts ask the agent to do these, with the token as `Authorization
 | Read its diff | The review | `GET /repositories/{workspace}/{repo}/pullrequests/{id}/diff`, which Bitbucket's API reference says redirects: follow it |
 | Post a comment on the pull request | Both triggers | `POST /repositories/{workspace}/{repo}/pullrequests/{id}/comments` |
 
-The token expires on the date set in step 1; the tools stop working then. When this setup was run, no Bitbucket MCP server took a
-repository access token over HTTP (the projects' state then), so the run used a small MCP server of its own.
+The token expires on the date set in step 1. The tools stop working then.
+
+When this setup was run, no Bitbucket MCP server took a repository access token over HTTP (the projects' state then), so the run
+used a small MCP server of its own.
 
 ## 5. Apply the manifests
 
@@ -165,11 +182,16 @@ kubectl -n agent-kourier logs "$LEADER" | grep '"webhook: taking requests"' | gr
 ```
 
 `Ready` waits on the connection and on the agent of step 4: it turns `True` once the connection runs (`ChannelJoined`) and a fresh
-fetch of the agent's card succeeds, with a card that advertises streaming (`BackendReachable`). If the wait times out,
-`kubectl -n acme-webhooks get akbinding bitbucket-reviews` shows the condition that holds it back in the `Reason` column, such as
-`ChannelJoined:ChatCredentialsUnusable` (the Secret is missing, or a key of it), `ChannelJoined:ChatUnavailable` (the connection
-does not run for another reason, such as a Secret the broker is not granted; the leader's log says why),
-`BackendReachable:Unreachable` or `BackendReachable:StreamingUnsupported`.
+fetch of the agent's card succeeds, with a card that advertises streaming (`BackendReachable`).
+
+If the wait times out, `kubectl -n acme-webhooks get akbinding bitbucket-reviews` shows the condition that holds it back in the
+`Reason` column, such as:
+
+- `ChannelJoined:ChatCredentialsUnusable`: the Secret is missing, or a key of it;
+- `ChannelJoined:ChatUnavailable`: the connection does not run for another reason, such as a Secret the broker is not granted (the
+  leader's log says why);
+- `BackendReachable:Unreachable`;
+- `BackendReachable:StreamingUnsupported`.
 
 `webhook: taking requests`, with `"connection":"acme-webhooks/bitbucket"`, says the connection runs on the leader: from then on its
 URL checks the signature of every request. It does not wait for the agent. Check the URL from outside with a request that has no
@@ -203,10 +225,11 @@ Save, then look at the webhook in the list and check that it is active. In the r
 
 No test delivery from Bitbucket is known to this page (not verified), so nothing arrives until a pull request event does. To check
 the route and the secret before that, send a signed test request yourself
-([Test the route](../receive-webhooks.md#test-the-route)), or make step 7's pull request the first delivery. A `200` to a delivery
-says only that the connection took it, not that a trigger matched: the connection answers `200`, with an empty body, to an event it
-accepted, to the agent's own (`self`) and to one it could not map (`unmapped`) alike. Each has its `webhook: delivery answered` line
-on the leader, with its `outcome`.
+([Test the route](../receive-webhooks.md#test-the-route)), or make step 7's pull request the first delivery.
+
+A `200` to a delivery says only that the connection took it, not that a trigger matched: the connection answers `200`, with an
+empty body, to an event it accepted, to the agent's own (`self`) and to one it could not map (`unmapped`) alike. Each has its
+`webhook: delivery answered` line on the leader, with its `outcome`.
 
 ## 7. Test it
 
@@ -227,9 +250,11 @@ kubectl -n agent-kourier logs "$LEADER" | grep 'acme-webhooks/bitbucket' | grep 
 ```
 
 `trigger` is the trigger's index in the Binding: `0` is the review, `1` the reply. `"decision":"started"` is a turn that started.
+
 The agent's review shows as a comment on the pull request. In the run the review was started by an edit of the description
-(`pullrequest:updated`): the `pullrequest:created` event never left Bitbucket, because the webhook had been saved inactive. Then
-comment `@acme-agent why this approach?`, typing the name: the log shows the same lines with `"trigger":1` and the same
+(`pullrequest:updated`): the `pullrequest:created` event never left Bitbucket, because the webhook had been saved inactive.
+
+Then comment `@acme-agent why this approach?`, typing the name: the log shows the same lines with `"trigger":1` and the same
 `"thread":"pr-3"`, and the agent replies.
 
 Read the counts on the leader's `/metrics`. Every series of the connection exists at 0, so leave those out:
@@ -260,7 +285,9 @@ least, not exactly:
 
 Each change is to the recipe's ChatConnection fields or Binding triggers. A field that a trigger matches must be in the connection's
 `fields` (at most 32), and a `text` field can be matched but not read by `promptTemplate`. A trigger has at most 6 `match` and 6
-`exclude` entries. The ChatConnection is a team connection, so the broker restarts it by itself when you apply the edit.
+`exclude` entries.
+
+The ChatConnection is a team connection, so the broker restarts it by itself when you apply the edit.
 
 **Review once, not on every edit.** Bitbucket sends `pullrequest:updated` for every edit of the title or the description, and does not
 say what changed, so the recipe reviews again on each, within its limits. To review only new pull requests:
@@ -270,7 +297,9 @@ match: {event: '^pullrequest:created$', commit: '.'}
 ```
 
 **Match a mention picked from the list too** (*not run*). The recipe's reply trigger matches only the name as typed, `@acme-agent`:
-that is what the run's comment held in `/comment/content/raw`. A mention picked from Bitbucket's mention list may be stored there
+that is what the run's comment held in `/comment/content/raw`.
+
+A mention picked from Bitbucket's mention list may be stored there
 as the account ID in braces, `@{712020:…}`, instead of the name (not verified; the bot user may not be offered in the list at all).
 To match either form, put the token's `account_id` from step 2 beside the name:
 
@@ -279,13 +308,15 @@ match: {event: '^pullrequest:comment_created$', comment: '(?i)(^|[^\w./-])@(acme
 ```
 
 **Keep `comment: '.'` in the review trigger's `exclude`.** The event key is in the `X-Event-Key` header, which the signature does not
-cover, and a comment event carries the pull request's commit too. Without the exclude, a signed comment body sent again under a pull
-request event's key would start a review; with it, the body must agree that it is not a comment. A trigger you add that matches
-pull request events needs the same exclude. The exclude covers comments alone: if the webhook also sends other pull request events,
-such as **Approved**, **Merged** or **Declined** (`pullrequest:approved`, `pullrequest:fulfilled`, `pullrequest:rejected`), their bodies
-carry the pull request's source commit and no comment (Atlassian's documentation; not run), so one sent again under
-`pullrequest:updated` would start a review. Subscribe the webhook to the recipe's three events alone (step 6), or add a field that
-tells those events apart and exclude on it.
+cover, and a comment event carries the pull request's commit too.
+
+Without the exclude, a signed comment body sent again under a pull request event's key would start a review; with it, the body
+must agree that it is not a comment. A trigger you add that matches pull request events needs the same exclude.
+
+The exclude covers comments alone. If the webhook also sends other pull request events, such as **Approved**, **Merged** or
+**Declined** (`pullrequest:approved`, `pullrequest:fulfilled`, `pullrequest:rejected`), their bodies carry the pull request's source
+commit and no comment (Atlassian's documentation; not run), so one sent again under `pullrequest:updated` would start a review.
+Subscribe the webhook to the recipe's three events alone (step 6), or add a field that tells those events apart and exclude on it.
 
 **Only pull requests into one branch** (*not run*; Bitbucket's API schema has
 `pullrequest.destination.branch.name`). Add a field, and match it:
@@ -321,7 +352,7 @@ webhooks only on a repository. One connection for a whole workspace was not trie
 | `unverified`, `bad_signature`, on every delivery | The webhook's secret is not the Secret's `webhookSecret`. Set it on the webhook again from the file of step 3. |
 | A review on every edit of the description | `pullrequest:updated` ([above](#change-what-starts-a-turn)). |
 | A comment that mentions the agent starts nothing | The regex matches `@` and the token's name as typed. A mention picked from Bitbucket's list may be stored in another form (not verified): type the name, or match the account ID too ([above](#change-what-starts-a-turn)). |
-| `accepted`, and no review | The pull request is a draft, or `agentkourier_trigger_limited_total{binding="acme-webhooks/bitbucket-reviews"}` rose: with `maxConcurrent: 1`, a second pull request while a review runs is stopped, and the broker's response was `200`, so Bitbucket does not send it again, and the event is lost; the WARN line names its delivery. Raise `maxConcurrent`. |
+| `accepted`, and no review | The pull request is a draft, or `agentkourier_trigger_limited_total{binding="acme-webhooks/bitbucket-reviews"}` rose: with `maxConcurrent: 1`, a second pull request while a review runs is stopped. The broker's response was `200`, so Bitbucket does not send it again, and the event is lost; the WARN line names its delivery. Raise `maxConcurrent`. |
 | A delivery failed | Atlassian's documentation says Bitbucket waits 10 seconds for a response, and tries a delivery that got a `5xx`, such as the broker's `503`, up to two more times. |
 | A turn, and nothing on Bitbucket | The agent's tools: an expired token, or one without **Pull requests: Write**. |
 

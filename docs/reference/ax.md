@@ -1,10 +1,13 @@
 # AX add-on
 
 The AX add-on is an agent: an ADK agent on Amazon Bedrock or the Anthropic API that serves A2A, with one tool, `ask_user`, whose question a
-person answers in the thread. Agent Kourier reaches it through an AgentBackend with the `a2a` dialect. The chart runs it
-beside Agent Kourier; it can also run inside Google AX as a Task, which is where its name comes from. It is
-experimental. [Connect the AX add-on](../how-to/connect-ax.md) installs it either way; [Add-ons](../explanation/add-ons.md)
-says what an add-on is.
+person answers in the thread. Agent Kourier reaches it through an AgentBackend with the `a2a` dialect.
+
+The chart runs it beside Agent Kourier. It can also run inside Google AX as a Task, which is where its name comes from.
+It is experimental.
+
+[Connect the AX add-on](../how-to/connect-ax.md) installs it either way. [Add-ons](../explanation/add-ons.md) says what
+an add-on is.
 
 ```mermaid
 flowchart LR
@@ -29,20 +32,23 @@ for an agent of your own as much as an agent to run.
 | A context (one thread) | One ADK session, whose ID is the context ID and whose user is the caller ([Caller check](#caller-check)), created on the context's first message. |
 | A task | One turn of the ADK runner on that session. ADK's A2A executor streams the agent's output as artifacts. |
 | `input-required`, with the question as the status message's text | The agent calls `ask_user`, a long-running tool. The add-on puts the call's `question` in the status message as text, and keeps the call in the task's metadata, `agentkourier.dev/ask-user`, so that a restart does not lose it. |
-| The next message on the paused task | The answer: the message's text parts joined with newlines, sent to ADK as `ask_user`'s result, `{"answer": "<text>"}`. A message with a part that is not text, or with no text, is refused as invalid before the turn starts, and the task stays paused; its ID is not recorded, so a resend of it is refused again. |
+| The next message on the paused task | The answer: the message's text parts joined with newlines, sent to ADK as `ask_user`'s result, `{"answer": "<text>"}`. A message with a part that is not text, or with no text, is refused as invalid before the turn starts, and the task stays paused. Its ID is not recorded, so a resend of it is refused again. |
 | Cancel | ADK cancels the turn, and the task is canceled. |
 | `completed` | The turn ended. |
 | `failed` | The model call failed; the agent paused on two `ask_user` calls at once; or a restart cut the turn off ([Restarts](#restarts)). |
 
 The question reaches Agent Kourier as plain text, which the `a2a` dialect reads as a question when the Binding has
-`interactions.askUser: true`; without it, Agent Kourier cancels the task and says so in the thread
-([Let the agent ask questions](../how-to/agent-questions.md)). A person answers by replying in the thread or with the
-answer form. The `ask_user` call shows no step card: the add-on replaces the call in the status message with its text.
+`interactions.askUser: true`. Without it, Agent Kourier cancels the task and says so in the thread
+([Let the agent ask questions](../how-to/agent-questions.md)).
+
+A person answers by replying in the thread or with the answer form. The `ask_user` call shows no step card: the add-on
+replaces the call in the status message with its text.
 
 The agent card, at `/a2a/.well-known/agent-card.json`, names the endpoint `PUBLIC_URL` and the add-on's version, and
 advertises streaming over JSON-RPC and text input and output. It lists no extension, so Agent Kourier never reads a pause
-of the add-on as a tool approval. The card is behind the caller check, as every add-on's is: Agent Kourier fetches it
-with the Binding's token.
+of the add-on as a tool approval.
+
+The card is behind the caller check, as every add-on's is: Agent Kourier fetches it with the Binding's token.
 
 ## A turn with a question
 
@@ -80,16 +86,19 @@ answers before the Binding's `interactions.timeout`, Agent Kourier ends the paus
 
 On the Anthropic API every call streams, and a reply has at most `8192`<!--addon-limit:ax.anthropic-max-tokens-->
 tokens, its thinking included ([Limits](limits.md#ax-add-on)). A reply cut there in its text completes the turn with
-what was written; one cut in an `ask_user` call, or with nothing written, fails the turn, as does a refusal with nothing
-written. The SDK sends a request again, `2`<!--addon-limit:ax.anthropic-retries--> times at most, after a connection
-error or a status of 408, 409, 429 or 5xx, unless the API's `x-should-retry` header says otherwise; after that the turn
-fails, with an error that names the HTTP status and the API's error type but not the API's message. The SDK waits 10
-minutes at most for each request's response headers (its own default); a stream that stalls after it opens waits until
-the turn ends.
+what was written. One cut in an `ask_user` call, or with nothing written, fails the turn, as does a refusal with nothing
+written.
+
+The SDK sends a request again, `2`<!--addon-limit:ax.anthropic-retries--> times at most, after a connection error or a
+status of 408, 409, 429 or 5xx, unless the API's `x-should-retry` header says otherwise. After that the turn fails, with
+an error that names the HTTP status and the API's error type but not the API's message.
+
+The SDK waits 10 minutes at most for each request's response headers (its own default). A stream that stalls after it
+opens waits until the turn ends.
 
 The add-on does not ask the model to think. If a reply carries thinking blocks anyway, the add-on keeps them in the ADK
 session and sends them back unchanged with the rest of the turn, which the API needs when the turn goes on after a tool
-call; a question that waits across a restart keeps them too.
+call. A question that waits across a restart keeps them too.
 
 ## Restarts
 
@@ -101,10 +110,13 @@ the ADK sessions with their events, so a restart loses none of them. At start th
 2. Leads: at once on SQLite, and on Postgres once it holds the lease ([Replicas](#replicas)).
 3. As the leader, fails each task left `submitted` or `working` with the agent message "Interrupted by an agent
    restart.", starts the upkeep, and only then serves A2A requests. Until then `/readyz` answers 503, and an A2A request
-   is answered 503 with `Retry-After`. Each task is failed in a write of its own. A task whose stored record does not
-   decode is failed by its state alone, so that `TASK_RETENTION` deletes it, and is logged at WARN; a task that changed
-   since it was read is logged at WARN and left as it is. A store that cannot be read or written stops the takeover
-   with an error.
+   is answered 503 with `Retry-After`.
+
+    Each task is failed in a write of its own. A task whose stored record does not decode is failed by its state alone,
+    so that `TASK_RETENTION` deletes it, and is logged at WARN. A task that changed since it was read is logged at WARN
+    and left as it is.
+
+    A store that cannot be read or written stops the takeover with an error.
 
 | Survives a restart | Is interrupted |
 |---|---|
@@ -113,17 +125,20 @@ the ADK sessions with their events, so a restart loses none of them. At start th
 | The record of message IDs: a resend joins its first send's task | |
 
 Agent Kourier sends a message again, with the same ID, when it cannot tell whether the first send arrived. A message
-whose ID the store has recorded for the same caller joins that message's task instead of starting a second turn: it gets
-the task as it stands if the task has settled or paused, and the rest of its stream otherwise. A resend that names
-another context or task than the first send's is refused as invalid.
+whose ID the store has recorded for the same caller joins that message's task instead of starting a second turn. It gets
+the task as it stands if the task has settled or paused, and the rest of its stream otherwise.
+
+A resend that names another context or task than the first send's is refused as invalid.
 
 ## Sessions and their lifetime
 
-A context is active when one of its tasks is created or updated, which a turn does as it starts and as it ends, and when
-a message for it is accepted, before its turn starts: a message refused as invalid, or a resend of one already accepted,
-does not count. `SESSION_IDLE_TTL` deletes a context once it has been inactive for that long with no turn running,
-checked every `1m`<!--addon-limit:kit.upkeep-interval-->: its ADK session and the session's events, its tasks, a
-question it waits on included, and their message IDs. The context's next message starts a new session without the old
+A context is active when one of its tasks is created or updated, which a turn does as it starts and as it ends. It is
+also active when a message for it is accepted, before its turn starts. A message refused as invalid, or a resend of one
+already accepted, does not count.
+
+`SESSION_IDLE_TTL` deletes a context once it has been inactive for that long with no turn running, checked every
+`1m`<!--addon-limit:kit.upkeep-interval-->. It deletes the context's ADK session and the session's events, its tasks (a
+question it waits on included) and their message IDs. The context's next message starts a new session without the old
 history.
 
 Set it to the Binding's `session.threadTTL`, whose default, `2160h`<!--addon-limit:kit.session-idle-ttl-->, is the
@@ -138,18 +153,24 @@ tried again at the next one.
 
 **SQLite** (`STORE=sqlite`, the default) is one file, `SQLITE_PATH`, whose directory the add-on creates if it is
 missing. The add-on holds an exclusive lock on the file `SQLITE_PATH` plus `.lock` while it runs, so a second agent on
-the same file stops at start ("another agent has the SQLite file open"); the lock is the kernel's, so it goes with a
-process that dies. The file is in WAL mode, with FULL synchronous commits and a busy timeout of
+the same file stops at start ("another agent has the SQLite file open"). The lock is the kernel's, so it goes with a
+process that dies.
+
+The file is in WAL mode, with FULL synchronous commits and a busy timeout of
 `5s`<!--addon-limit:kit.sqlite-busy-timeout-->. The add-on's writes and ADK's go through one connection, and its reads
 through a pool of four beside it. Copy the file with its `-wal` file, which holds commits not yet written into it.
 
 Before it was an add-on, the agent took a directory, `STATE_DIR`, and kept its tasks in a layout of its own beside ADK's
 tables. The add-on does not start while `STATE_DIR` is set: set `SQLITE_PATH` to the file in it (`STATE_DIR` plus
-`/agent.db`) instead. At the first start on such a file, it imports the old tasks and their message IDs, so a question
-that waited across the upgrade can still be answered; ADK's tables carry over as they are.
+`/agent.db`) instead.
+
+At the first start on such a file, it imports the old tasks and their message IDs, so a question that waited across the
+upgrade can still be answered. ADK's tables carry over as they are.
 
 **Postgres** (`STORE=postgres`) is shared by the replicas ([Replicas](#replicas)). Replicas that start together apply
-each migration, and ADK's, once, under an advisory lock of the add-on's own. Each connection starts with
+each migration, and ADK's, once, under an advisory lock of the add-on's own.
+
+Each connection starts with
 `idle_in_transaction_session_timeout` of `10s`<!--addon-limit:kit.pg-idle-in-transaction--> and `statement_timeout` of
 `30s`<!--addon-limit:kit.pg-statement-timeout-->, unless the DSN sets them. Give the add-on a database of its own, apart
 from Agent Kourier's and other add-ons'.
@@ -167,20 +188,31 @@ new one starts. The add-on refuses `LEASE_DURATION`, `LEASE_RENEW_DEADLINE` and 
 one away, and at 2 replicas and more a PodDisruptionBudget with `maxUnavailable: 1`.
 
 The replicas elect a leader through a lease row in the add-on's database, not a Kubernetes Lease, so the add-on needs no
-RBAC. The leader serves A2A, and every write it makes checks the lease's epoch in the same transaction. A standby
-forwards each A2A request and the agent card to the leader's `ADVERTISE_URL`, streaming the answer through unbuffered;
-the caller check runs on the leader. The add-on answers 503 with `Retry-After` (the election's retry period, at least 1
-second) on a leader that has not finished taking over, on a standby that knows of no leader or cannot reach it, and on a
-replica that is not serving when the request was already forwarded once: a request is forwarded once at most. A standby
-gives up on connecting to the leader after `5s`<!--addon-limit:kit.forward-dial-timeout-->. A leader that cannot renew
-the lease for `LEASE_RENEW_DEADLINE`, or whose renewal or write finds that another replica has taken it, exits at once
-with code 5, without a drain, and Kubernetes restarts it. One that stops on SIGTERM drains its requests for at most
-`5s`<!--addon-limit:kit.shutdown-timeout-->, then cancels the turns still running and waits at most
-`5s`<!--addon-limit:kit.turn-stop-timeout--> for them, leaving their tasks for the next leader to fail, then hands the
-lease over, for at most `3s`<!--addon-limit:kit.release-timeout-->; past that, a standby takes over once the lease has
-run out. A replica fails the turns a restart cut off only once it holds the lease, so two replicas never fail each
-other's turns, and a replica that takes over runs the same start-up work as a restart: a turn that was running on the
-old leader fails, and a paused question survives.
+RBAC. The leader serves A2A, and every write it makes checks the lease's epoch in the same transaction.
+
+A standby forwards each A2A request and the agent card to the leader's `ADVERTISE_URL`, streaming the answer through
+unbuffered. The caller check runs on the leader.
+
+The add-on answers 503 with `Retry-After` (the election's retry period, at least 1 second):
+
+- On a leader that has not finished taking over.
+- On a standby that knows of no leader or cannot reach it.
+- On a replica that is not serving when the request was already forwarded once: a request is forwarded once at most.
+
+A standby gives up on connecting to the leader after `5s`<!--addon-limit:kit.forward-dial-timeout-->.
+
+A leader that cannot renew the lease for `LEASE_RENEW_DEADLINE`, or whose renewal or write finds that another replica
+has taken it, exits at once with code 5, without a drain, and Kubernetes restarts it. A leader that stops on SIGTERM:
+
+1. Drains its requests for at most `5s`<!--addon-limit:kit.shutdown-timeout-->.
+2. Cancels the turns still running and waits at most `5s`<!--addon-limit:kit.turn-stop-timeout--> for them, leaving
+   their tasks for the next leader to fail.
+3. Hands the lease over, for at most `3s`<!--addon-limit:kit.release-timeout-->. Past that, a standby takes over once
+   the lease has run out.
+
+A replica fails the turns a restart cut off only once it holds the lease, so two replicas never fail each other's turns.
+A replica that takes over runs the same start-up work as a restart: a turn that was running on the old leader fails, and
+a paused question survives.
 
 ## Caller check
 
@@ -197,7 +229,7 @@ check is set: the token file, OIDC, or none with `AUTH_DISABLED=true` on a loopb
     - **The file.** One token per line. Lines that are blank or start with `#` are skipped, and trailing whitespace (a
       CR included) is stripped. The add-on does not start with a file it cannot read or that holds no token. It reads
       the file again every `5s`<!--addon-limit:kit.token-reload-->, because a mounted Secret changes by swapping a
-      symlink; a read that fails or finds no token keeps the last good tokens, and is logged once until the failure
+      symlink. A read that fails or finds no token keeps the last good tokens, and is logged once until the failure
       changes.
     - **The comparison.** The add-on keeps only each token's SHA-256 and compares the digest of the presented token
       with every one in constant time.
@@ -216,9 +248,11 @@ A request the check refuses gets 401 (with `WWW-Authenticate: Bearer` when the t
 value it was given. `/healthz`, `/readyz` and `/metrics` need no token.
 
 **Tasks are kept apart by caller.** The caller a request passes as owns the tasks it creates and is the user of their
-ADK sessions, and every read and write made for a request is limited to its caller's tasks: another caller's task is not
-found, and cannot be followed while it runs. With the token file every accepted token is the same caller, so the tokens
-exist to be rotated, not to tell callers apart. With OIDC the caller is the token's subject.
+ADK sessions. Every read and write made for a request is limited to its caller's tasks: another caller's task is not
+found, and cannot be followed while it runs.
+
+With the token file every accepted token is the same caller, so the tokens exist to be rotated, not to tell callers
+apart. With OIDC the caller is the token's subject.
 
 ## Endpoints
 
@@ -229,7 +263,7 @@ All on one port: 8090 in the chart, named `http` on the Service, and 80 in the r
 | `/a2a` | A2A JSON-RPC, behind the caller check |
 | `/a2a/.well-known/agent-card.json` | The agent card, behind the caller check |
 | `/healthz` | 200 once the add-on listens: the process is alive. The chart's liveness probe asks it. |
-| `/readyz` | With `RUNNER_URL` unset: 200 on a standby, and on a leader once its takeover is done (the turns a restart cut off failed, the upkeep started), until it starts to stop; 503 before then, and once it stops a request that was already read gets 503 while a new one is refused (the listener has closed). The chart's startup and readiness probes ask it. With `RUNNER_URL` set, the AX task runner's, proxied to it. |
+| `/readyz` | With `RUNNER_URL` unset: 200 on a standby, and on a leader once its takeover is done (the turns a restart cut off failed, the upkeep started), until it starts to stop. 503 before then. Once it stops, a request that was already read gets 503 while a new one is refused (the listener has closed). The chart's startup and readiness probes ask it. With `RUNNER_URL` set, the AX task runner's, proxied to it. |
 | `/metadata/` | With `RUNNER_URL` set only: the AX task runner's metadata server, proxied to it |
 | `/metrics` | Prometheus metrics |
 
@@ -245,9 +279,10 @@ setting it cannot use stops it with exit code 2. It exits with 1 for a failure o
 ## Settings
 
 The add-on reads its settings from its environment, and an empty value is an unset one. A setting it cannot use stops it
-at start with an error that names the variable; the error never shows the value of `POSTGRES_DSN`, `AUTH_HEADER`,
-`OIDC_ISSUER` or `RUNNER_URL`. Every duration is a Go duration, such as `90s` or `720h`, of zero or more unless the row
-says otherwise.
+at start with an error that names the variable. The error never shows the value of `POSTGRES_DSN`, `AUTH_HEADER`,
+`OIDC_ISSUER` or `RUNNER_URL`.
+
+Every duration is a Go duration, such as `90s` or `720h`, of zero or more unless the row says otherwise.
 
 ### The add-on's own
 
@@ -272,10 +307,14 @@ The OpenTelemetry variables are the ones Agent Kourier reads (`OTEL_SERVICE_NAME
 `OTEL_EXPORTER_OTLP_ENDPOINT` and the rest; see [Logs and traces](logs-and-traces.md)), with the service name
 `agent-kourier-ax` by default. The chart passes them, and the AWS SDK's other variables, through `addons.ax.extraEnv`.
 
-In the route inside Google AX, `addons/ax/task.yaml` sets `LISTEN_ADDR=:80`, `PUBLIC_URL` to the gateway's A2A URL,
-`RUNNER_URL=http://127.0.0.1:8081`,
-`SQLITE_PATH=/workspace/agent-kourier-state/agent.db`, the three `OIDC_*` variables, and a placeholder
-`AWS_BEARER_TOKEN_BEDROCK` that the egress gateway replaces with the real key.
+In the route inside Google AX, `addons/ax/task.yaml` sets:
+
+- `LISTEN_ADDR=:80`.
+- `PUBLIC_URL` to the gateway's A2A URL.
+- `RUNNER_URL=http://127.0.0.1:8081`.
+- `SQLITE_PATH=/workspace/agent-kourier-state/agent.db`.
+- The three `OIDC_*` variables.
+- A placeholder `AWS_BEARER_TOKEN_BEDROCK` that the egress gateway replaces with the real key.
 
 ## Telemetry
 

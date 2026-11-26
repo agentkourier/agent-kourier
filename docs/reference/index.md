@@ -5,9 +5,10 @@ and without instructions. The resource and Helm value pages are generated from t
 
 ## Resources
 
-API group `agentkourier.dev/v1alpha1`. All three kinds are namespaced. The Helm chart installs them as custom resources by default
-(`config.source: crds`) and the broker reads them from the cluster; with `config.source: files` it reads them from YAML files, usually a mounted ConfigMap,
-for a proof of concept.
+API group `agentkourier.dev/v1alpha1`. All three kinds are namespaced.
+
+The Helm chart installs them as custom resources by default (`config.source: crds`), and the broker reads them from the cluster.
+With `config.source: files` it reads them from YAML files, usually a mounted ConfigMap, for a proof of concept.
 
 | Kind | Configures | Typical owner |
 |---|---|---|

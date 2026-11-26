@@ -22,11 +22,19 @@ flowchart TB
 
 ## One leader, one standby
 
-High availability is active/passive. Two replicas of one Deployment share a Postgres database. One is the **leader**:
-it holds a Kubernetes Lease and runs all of Agent Kourier's work, which is the connection to Slack of each ChatConnection it serves (its Socket Mode
-connection, or in HTTP mode its route on the chat listener), the session
-runners, the outbox, the sweeps, the digests and the verification of Bindings. The other is the **standby**: it serves health and metrics and waits
-for the Lease.
+High availability is active/passive. Two replicas of one Deployment share a Postgres database.
+
+One is the **leader**. It holds a Kubernetes Lease and runs all of Agent Kourier's work:
+
+- the connection to Slack of each ChatConnection it serves (its Socket Mode connection, or in HTTP mode its route on the
+  chat listener)
+- the session runners
+- the outbox
+- the sweeps
+- the digests
+- the verification of Bindings
+
+The other is the **standby**: it serves health and metrics and waits for the Lease.
 
 Active/active, with workers on every replica, is deferred until one replica's throughput is not enough. With one
 writer there is one place where turns are ordered, one replica that takes each Slack app's events, and one outbox, so every recovery rule
@@ -63,39 +71,49 @@ one starts. The timings must satisfy `leaseDuration > renewDeadline > 1.2 × ret
 ## Fencing: when the timing is not enough
 
 A leader can be paused rather than dead: a long garbage-collection pause, a frozen node, or a partition from the API
-server but not from Postgres or Slack. Its Lease passes to the standby while it still runs. Three defences stop it from
-writing to the store and the chat, and from sending to the agent, as a second leader. A call that was already in flight
-when the pause began is out of their reach; see [the duplicate that can still happen](#the-duplicate-that-can-still-happen).
+server but not from Postgres or Slack. Its Lease passes to the standby while it still runs.
+
+Three defences stop it from writing to the store and the chat, and from sending to the agent, as a second leader. A
+call that was already in flight when the pause began is out of their reach: see [the duplicate that can still happen](#the-duplicate-that-can-still-happen).
 
 **Epoch fencing in Postgres.** The database holds one row, `leadership(epoch, holder, since)`. A replica that takes the
 Lease increments the epoch and keeps the number. Every write transaction of the Postgres store first checks the
-epoch against its own, and a mismatch aborts the transaction. A deposed leader's next write to the store therefore
-fails, and the process exits at once with code 5, with no graceful drain, since a drain would post. Kubernetes restarts
+epoch against its own, and a mismatch aborts the transaction.
+
+A deposed leader's next write to the store therefore fails, and the process exits at once with code 5, with no graceful drain, since a drain would post. Kubernetes restarts
 it, and it comes back as the standby.
 
 **Chat writes fenced on the replica.** A paused leader can resume with a Slack stream open, and a stream is many calls.
 So every write to the chat (a post, an edit, a stream's start, append and stop, an ephemeral, a reaction) is refused,
 and the process stopped, once the monotonic clock is past the last accepted renewal of the Lease plus the renew
-deadline. The monotonic clock keeps counting through a pause, so the first call after one sees a stale Lease. Reads
+deadline.
+
+The monotonic clock keeps counting through a pause, so the first call after one sees a stale Lease. Reads
 pass. With SQLite there is no Lease, and this fence is not installed.
 
 **Calls to the agent fenced on the replica.** The same check on the Lease clock guards the calls that change what the
 agent holds: sending a turn, answering a pause (a question or a tool approval) and cancelling a task. A leader that
 resumes after a pause with a reply already queued, or an answer already recorded, would otherwise read it and send it
-before its first write to the store or the chat. Past the renew deadline the call is refused, it never reaches the
-agent, and the process is stopped with exit code 5. The refused turn is not lost: it is still queued, because the
-refusal ends the process before anything marks it delivered (a sent turn leaves the queue when the agent names its task), and
-the new leader's recovery sends it. As after any
-restart, a turn of a session that already has a context is looked up on the agent first. A recorded answer stays recorded as answered, and the new leader sends it again when it
-finds the task paused on that same question; a task paused on a later question does not take it. Calls that only read
-pass: getting a task, looking up a turn by its message ID, and following a task.
+before its first write to the store or the chat.
+
+Past the renew deadline the call is refused, it never reaches the agent, and the process is stopped with exit code 5.
+The refused turn is not lost: it is still queued, because the refusal ends the process before anything marks it
+delivered (a sent turn leaves the queue when the agent names its task). The new leader's recovery sends it.
+
+As after any restart, a turn of a session that already has a context is looked up on the agent first. A recorded
+answer stays recorded as answered, and the new leader sends it again when it finds the task paused on that same
+question. A task paused on a later question does not take it.
+
+Calls that only read pass: getting a task, looking up a turn by its message ID, and following a task.
 
 ## What the standby does
 
 The standby is Ready: readiness never depends on the Lease, because a standby is healthy, and no Service that sends it
 traffic needs it to lead. In Socket Mode nothing routes traffic to Agent Kourier at all. In HTTP mode Slack's requests
 reach the leader alone, through a Service that selects the leader's pod by a label
-([below](#slack-in-http-mode)). The standby serves `/healthz`, `/readyz` and `/metrics`, keeps its configuration and
+([below](#slack-in-http-mode)).
+
+The standby serves `/healthz`, `/readyz` and `/metrics`, keeps its configuration and
 Secret caches fresh, and does no work. It opens no Socket Mode connection: Slack sends each event to one of an app's
 open connections, so a second connection would send a share of them to a replica that does nothing. With a chat
 listener it answers 503 to every chat route, since it runs no connection.
@@ -104,17 +122,21 @@ listener it answers 503 to every chat route, since it runs no connection.
 a replica took the leadership.
 
 **With custom resources** (`config.source: crds`) both replicas read the three kinds from the cluster, so the standby can take over with the
-config the leader has. Only the leader writes `Binding.status`, so with no leader the statuses stay as they were last written, and are
-not marked stale. A new leader starts every probed condition at `Pending` and does not write that over a good status of the generation it serves, so a
-failover does not blank what `kubectl get akbinding` shows. The last good generation of an invalid object is held in memory by each replica, which
-is why a replica that starts during an invalid generation serves nothing for that object: see
+config the leader has. Only the leader writes `Binding.status`, so with no leader the statuses stay as they were last
+written, and are not marked stale.
+
+A new leader starts every probed condition at `Pending` and does not write that over a good status of the generation it
+serves. A failover therefore does not blank what `kubectl get akbinding` shows.
+
+Each replica holds the last good generation of an invalid object in memory. That is why a replica that starts during an
+invalid generation serves nothing for that object: see
 [What the custom resource route does not promise](config-routes.md#what-the-custom-resource-route-does-not-promise). With SQLite there is one replica,
 no election, and it writes the status itself.
 
 ## A takeover is a restart
 
 On taking the Lease, a replica runs the leader's half of the start-up exactly as a start-up after a crash runs it. The
-new leader takes the next epoch, reconciles the outbox, recovers the sessions' tasks and connects to Slack, and every
+new leader takes the next epoch, reconciles the outbox, recovers the sessions' tasks and connects to Slack. Every
 recovery rule of a single replica applies: posts are adopted by their tag rather than repeated, a task is looked up
 before a turn is resent, and a recovered stream escapes everything.
 
@@ -130,13 +152,15 @@ before a turn is resent, and a recovered stream escapes everything.
 
 A ChatConnection with `spec.slack.mode: http` takes Slack's events and presses as HTTPS requests on the chat listener, and
 Slack sends them to one URL. Only the leader runs the connection, so only the leader can answer: a standby that is sent a
-request answers 503, which Slack treats as a failure. The chart's chat Service, `<fullname>-chat`, therefore selects the
+request answers 503, which Slack treats as a failure.
+
+The chart's chat Service, `<fullname>-chat`, therefore selects the
 Deployment's pods that carry the label `agentkourier.dev/role: leader`, and the broker keeps that label on the leader's pod
 alone:
 
 - Every replica takes the label off its own pod as it starts, and is not Ready until a write of the label has succeeded:
-  that removal, or the label put on if the replica leads first. A pod that kept the label from an earlier container, a
-  leader that exited and was restarted in the same pod, is so in no Service until the write.
+  that removal, or the label put on if the replica leads first. A pod that kept the label from an earlier container (a
+  leader that exited and was restarted in the same pod) is so in no Service until the write.
 - The leader puts the label on once it has started to lead, and takes it off at shutdown, in the last step, just before it
   hands the Lease over.
 - A leader that loses its Lease exits at once, with the label still on. Its pod is not Ready from the moment the container
@@ -148,22 +172,32 @@ alone:
 
 **Nothing answers during a takeover.** The chat listener is the first thing a leader's ordered shutdown closes, and a leader
 that crashed answers nothing. Until the new leader has started to lead and put the label on, the chat Service has no
-endpoint and Slack's requests fail: after a crash, about a lease duration (15 s) plus the new leader's start-up; after a
-signal, the old leader's ordered shutdown (up to 25 s) plus the new leader's start-up. Slack sends an event again when it
-gets no 200 (Slack's documentation says a few times over several minutes; in one test against Slack a retry reached the new leader
-within a second of the message being posted), and Agent Kourier answers 200
-only once the event's turn is queued, so an event the old leader did not answer is taken by the new one. A message that the
-old leader took and whose 200 never reached Slack comes again, and is one turn, because turns are queued by message ID.
-Whether Slack sends a button press again is Slack's to decide; a press it does not send again is lost, and the person
-presses again. If Slack sends again a press that the old leader recorded and whose 200 never reached Slack, it is recorded
-once, by who pressed, the button and the `action_ts` Slack gave it, provided Slack sends the same `action_ts` again (not
-checked here): its person is told the outcome once. The failover end-to-end test runs in both modes against the tests' fake Slack, whose retries copy what
-Slack's documentation says at a faster pace; Slack's own retries are not tested.
+endpoint and Slack's requests fail:
+
+- after a crash, for about a lease duration (15 s) plus the new leader's start-up
+- after a signal, for the old leader's ordered shutdown (up to 25 s) plus the new leader's start-up
+
+Slack sends an event again when it gets no 200 (Slack's documentation says a few times over several minutes; in one
+test against Slack a retry reached the new leader within a second of the message being posted). Agent Kourier answers
+200 only once the event's turn is queued, so an event the old leader did not answer is taken by the new one. A message
+that the old leader took and whose 200 never reached Slack comes again, and is one turn, because turns are queued by
+message ID.
+
+Whether Slack sends a button press again is Slack's to decide. A press it does not send again is lost, and the person
+presses again.
+
+If Slack sends again a press that the old leader recorded and whose 200 never reached Slack, it is recorded once, by
+who pressed, the button and the `action_ts` Slack gave it, provided Slack sends the same `action_ts` again (not checked
+here). Its person is told the outcome once.
+
+The failover end-to-end test runs in both modes against the tests' fake Slack, whose retries copy what Slack's
+documentation says at a faster pace. Slack's own retries are not tested.
 
 **HTTP mode wants Postgres.** With SQLite there is one replica and the Deployment's strategy is `Recreate`, so every rollout,
 and every restart of the pod, leaves Slack with nothing to answer it from when the old pod stops until the new one has
-started and leads. Slack's retries may cover a short gap; nothing in Agent Kourier does. With Postgres and two replicas the
-gap is a takeover, above.
+started and leads. Slack's retries may cover a short gap, and nothing in Agent Kourier does.
+
+With Postgres and two replicas the gap is a takeover, above.
 
 ## Drains, upgrades and placement
 
@@ -178,7 +212,7 @@ or an upgrade, are where they could.
   return before it takes the other. The chart refuses a budget that would block every voluntary eviction, since a
   drain that can never finish is its own outage.
 - **Placement.** Two replicas on one node fail together. The chart takes a free-form `affinity`, `nodeSelector`,
-  `tolerations` and a `priorityClassName`; it sets no anti-affinity or spread of its own, so keeping the replicas
+  `tolerations` and a `priorityClassName`. It sets no anti-affinity or spread of its own, so keeping the replicas
   apart is the operator's setting.
 - **More replicas.** A third replica is one more standby. One leader does all the work, so it adds no throughput.
 
@@ -186,31 +220,41 @@ or an upgrade, are where they could.
 
 Fencing stops a deposed leader's next write. It cannot recall one already sent. Each Slack call or agent send that was
 already in flight when the pause began, one for each concurrent writer (the outbox, each turn's renderer, the
-interactions), can still happen once more. For a stream's append or stop that is harmless as far as the test doubles
-show, since Slack refuses a write to a message that is not in the streaming state; a post or an edit in flight is the residual
-duplicate. This is accepted, and it is what the failover end-to-end test measures.
+interactions), can still happen once more.
+
+For a stream's append or stop that is harmless as far as the test doubles show, since Slack refuses a write to a
+message that is not in the streaming state. A post or an edit in flight is the residual duplicate. This is accepted,
+and it is what the failover end-to-end test measures.
 
 **A send that starts after the pause is refused.** Between the renew deadline and the moment a standby takes the Lease
-(a lease duration after the last renewal it saw) the old leader's writes to the database still pass the epoch check,
-because nothing has changed the epoch yet. What stops it from sending then is the Lease clock, which refuses the send, the
-answer and the cancel as it refuses a chat write. The check runs when the call starts, and
-connecting to the agent sits between the check and the request, so a leader that is frozen after the check can still send
-when it is resumed, whether or not a standby has taken the Lease by then: nothing checks the Lease again before the
-request. The fence does not cut a call that has already begun. What the stream's events cause is stopped where it is
-written: the process ends at the first chat write, at the first call that changes the agent, or at the first store write
-once a standby has taken the Lease; until then a store write passes. An answer that the agent rejects is followed by the cancel
-of the task it wedged, which belongs to that answer and is not checked again.
+(a lease duration after the last renewal it saw), the old leader's writes to the database still pass the epoch check,
+because nothing has changed the epoch yet. What stops it from sending then is the Lease clock, which refuses the send,
+the answer and the cancel as it refuses a chat write.
 
-The failover test runs in the fast end-to-end tier with two replicas on Postgres. It kills the leader mid-turn, mid-post and
-mid-storm, and freezes it past its Lease and then resumes it. In each case another process must take the leadership, and
-the fake Slack's record must show every reply once. The stalled-leader case is the one that found a leader finishing its
-open stream on resume, which is why chat writes are fenced on the replica. The failover test does not cover a send that a
-resumed leader starts; that a leader past its renew deadline sends nothing to the agent is shown by the broker's unit tests.
+The check runs when the call starts, and connecting to the agent sits between the check and the request. A leader that
+is frozen after the check can therefore still send when it is resumed, whether or not a standby has taken the Lease by
+then: nothing checks the Lease again before the request. The fence does not cut a call that has already begun.
+
+What the stream's events cause is stopped where it is written. The process ends at the first chat write, at the first
+call that changes the agent, or at the first store write once a standby has taken the Lease. Until then a store write
+passes.
+
+An answer that the agent rejects is followed by the cancel of the task it wedged, which belongs to that answer and is
+not checked again.
+
+The failover test runs in the fast end-to-end tier with two replicas on Postgres. It kills the leader mid-turn, mid-post
+and mid-storm, and freezes it past its Lease and then resumes it. In each case another process must take the
+leadership, and the fake Slack's record must show every reply once.
+
+The stalled-leader case is the one that found a leader finishing its open stream on resume, which is why chat writes are
+fenced on the replica. The failover test does not cover a send that a resumed leader starts. The broker's unit tests
+show that a leader past its renew deadline sends nothing to the agent.
 
 ## Stopping everything
 
 `replicaCount: 0` is the kill switch: Agent Kourier stops, and the database and the configuration stay. With both
-replicas down, nothing runs and the alerts your alerting tool posts still reach people; recovery runs on the next start.
+replicas down, nothing runs and the alerts your alerting tool posts still reach people. Recovery runs on the next
+start.
 
 ## A frozen pod
 

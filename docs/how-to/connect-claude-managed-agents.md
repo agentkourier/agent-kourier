@@ -1,8 +1,10 @@
 # Connect Claude Managed Agents
 
 For a platform team with an agent in Claude Managed Agents: at the end, the chart runs the Claude Managed Agents
-add-on, and a Binding sends its threads to that agent. Each thread is one session of the agent, and a tool call whose
-permission policy asks first waits on Approve and Deny in the thread. The add-on is experimental.
+add-on, and a Binding sends its threads to that agent.
+
+Each thread is one session of the agent, and a tool call whose permission policy asks first waits on Approve and Deny in
+the thread. The add-on is experimental.
 
 [Add-ons](../explanation/add-ons.md) says what an add-on is. The
 [Claude Managed Agents add-on](../reference/claude-managed-agents.md) reference has how the add-on maps A2A to sessions,
@@ -12,14 +14,20 @@ every setting, and what a restart keeps.
 
 Claude Managed Agents runs the agent: Anthropic runs the model loop, and an agent is a stored, versioned object with its
 own tools, permission policies and skills. Each session gets a sandbox, which a self-hosted environment runs in your own
-cluster, next to the systems it works on. What it does not have is a way into chat: putting such an agent in a channel
-means writing a chat app, with its threads, approval buttons and audit.
+cluster, next to the systems it works on.
+
+What it does not have is a way into chat: putting such an agent in a channel means writing a chat app, with its
+threads, approval buttons and audit.
 
 Agent Kourier is that way into chat. A Binding gives the agent a session per thread, audit, metrics and traces, and
-triggers such as the alerts another app posts. It runs on Slack, and on Microsoft Teams and webhooks (both
-experimental); on Slack and Teams, tool approvals are buttons. The add-on sits between the two: an A2A server in front
-of one agent, so the broker needs no change. A tool set to `always_ask` in the agent's permission policy becomes Approve and Deny in the
-thread, so a command in your cluster runs only after a person approves it.
+triggers such as the alerts another app posts.
+
+It runs on Slack, and on Microsoft Teams and webhooks (both experimental). On Slack and Teams, tool approvals are
+buttons.
+
+The add-on sits between the two: an A2A server in front of one agent, so the broker needs no change. A tool set to
+`always_ask` in the agent's permission policy becomes Approve and Deny in the thread, so a command in your cluster runs
+only after a person approves it.
 
 ## Before you start
 
@@ -34,7 +42,7 @@ thread, so a command in your cluster runs only after a person approves it.
 - **For more than one replica of the add-on, a Postgres database of its own**, apart from Agent Kourier's.
 
 The commands below use the release `agent-kourier` in the namespace `agent-kourier`. The add-on's Service is then
-`agent-kourier-cma`; in general it is `<fullname>-cma`.
+`agent-kourier-cma`. In general it is `<fullname>-cma`.
 
 ## 1. Create the Secrets
 
@@ -100,7 +108,9 @@ addons:
 ```
 
 With SQLite, the default, the chart refuses `replicaCount` above 1, keeps the database on a ReadWriteOnce volume, and
-replaces the pod with the Recreate strategy. With `networkPolicy.enabled`, the add-on gets a NetworkPolicy of its own,
+replaces the pod with the Recreate strategy.
+
+With `networkPolicy.enabled`, the add-on gets a NetworkPolicy of its own,
 and Postgres needs `addons.cma.networkPolicy.postgres.to`. [Helm values](../reference/helm-values.md#addons) has every
 value of the block.
 
@@ -161,7 +171,7 @@ spec:
 3. The same Secret the add-on reads. A Binding in another namespace reads a Secret in its own namespace, so that
    namespace needs a copy of the token, and the add-on's Secret must hold it.
 4. Without it, Agent Kourier denies every tool call that asks for approval, with the reason that the Binding does
-   not allow tool approvals. `approverGroups` limits who may decide; see [Let the agent ask questions](agent-questions.md).
+   not allow tool approvals. `approverGroups` limits who may decide. See [Let the agent ask questions](agent-questions.md).
 
 ```sh
 kubectl apply --dry-run=server -f cma.yaml
@@ -196,15 +206,21 @@ spec:
 
 The header's value is then the whole token, with no `Bearer`. The header cannot be one that carries the Binding's
 identity: `Authorization`, `Proxy-Authorization`, `Cookie`, `X-User-Id`, `X-Agent-Name`, `X-Share-Token` or
-`X-Kagent-Insecure-Runtime-Identity`. The Secret is read in the AgentBackend's namespace, and the Binding's `identity`
+`X-Kagent-Insecure-Runtime-Identity`.
+
+The Secret is read in the AgentBackend's namespace, and the Binding's `identity`
 still needs a `userId` or a `tokenSecretRef`.
 
 ## 4. Match the session lifetimes
 
 Agent Kourier gives a thread a new A2A context once it has had no activity for the Binding's `session.threadTTL`
-(default `2160h`). The add-on archives a context's session once the context has had no activity (a message
-accepted for it, or a turn of it starting or ending), with no turn running, for `sessionIdleTTL` (`SESSION_IDLE_TTL`, the
-same default), and an archived session cannot be used again. Keep the two equal:
+(default `2160h`).
+
+The add-on archives a context's session once the context has had no activity, with no turn running, for
+`sessionIdleTTL` (`SESSION_IDLE_TTL`, the same default). For the add-on, activity is a message accepted for the context,
+or a turn of it starting or ending. An archived session cannot be used again.
+
+Keep the two equal:
 
 - Shorter than `threadTTL`, the add-on archives sessions that a thread can still continue, and the thread's next turn
   starts a new session without the old history.
@@ -214,7 +230,7 @@ same default), and an archived session cannot be used again. Keep the two equal:
 stays resumable.
 
 Set `toolResultTimeout` above your slowest command. A turn that waits on a tool the sandbox runs, with no event from the
-session for that long, is interrupted and fails with Agent Kourier's timeout notice: that is how a sandbox that cannot be
+session for that long, is interrupted and fails with Agent Kourier's timeout notice. That is how a sandbox that cannot be
 scheduled shows up, and a command that runs silently for longer is cut off the same way.
 
 ## Check it
@@ -231,7 +247,7 @@ kubectl -n agent-kourier logs deployment/agent-kourier-cma
 ```
 
 `refused an A2A request` in the add-on's log, with the reason `missing` or `invalid`, means Agent Kourier sent no
-token, or one the add-on does not hold: check that the Binding's Secret and the add-on's hold the same value, with no
+token, or one the add-on does not hold. Check that the Binding's Secret and the add-on's hold the same value, with no
 trailing newline in the Binding's.
 
 ## Rotate the token
@@ -249,5 +265,5 @@ If a read fails or finds no token, the add-on keeps the tokens it had.
 ## Turn it off
 
 `addons.cma.replicaCount: 0` stops the add-on and keeps its volume or database. `addons.cma.enabled: false` removes its
-objects; the SQLite volume's claim is kept unless `addons.cma.persistence.retainOnUninstall` is `false`, and the
+objects. The SQLite volume's claim is kept unless `addons.cma.persistence.retainOnUninstall` is `false`, and the
 sessions in Claude Managed Agents stay until they are archived there.

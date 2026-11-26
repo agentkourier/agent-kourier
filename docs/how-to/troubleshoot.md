@@ -1,8 +1,9 @@
 # Troubleshoot an install
 
-For an operator whose install does not answer: each entry starts from something you can see, in the pod log or in Slack, and gives the
-cause and the fix. They are the problems a new
-install is likely to meet. For the install itself, see [Install with Helm](install-with-helm.md).
+This page is for an operator whose install does not answer. Each entry starts from something you can see, in the pod log or in Slack, and gives
+the cause and the fix. The entries are the problems a new install is likely to meet.
+
+For the install itself, see [Install with Helm](install-with-helm.md).
 
 ## Where to look
 
@@ -36,8 +37,10 @@ or arbitrary metadata into Slack or its own logs.
 
 Copy the `AK-` troubleshooting reference from the Slack notice and search the Agent Kourier pod log for that exact
 `failure_ref`. The matching `session turn ended` entry includes the bounded `failure_category`, full `task` ID and
-`session` context ID when one is available. Use those IDs to find the corresponding agent or controller log entries;
-the backend's own logs may have details Agent Kourier deliberately leaves out.
+`session` context ID when one is available.
+
+Use those IDs to find the corresponding agent or controller log entries. The backend's own logs may have details Agent
+Kourier deliberately leaves out.
 
 ## The thread says the agent sent more than Agent Kourier can read or hold
 
@@ -46,17 +49,24 @@ the agent sent more than Agent Kourier can read or hold, so the turn stopped
 ```
 
 Agent Kourier reads a bounded amount of what an agent sends: 2 MiB of one event, 4 MiB of the answer to a call such as `GetTask`, and 341 KiB of the reply it holds for a
-turn. The agent sent more than one of them, so the turn stopped, and no setting raises any of them. The sentence is the same whichever bound it was, and whatever the reply's size:
-it names no host and no size. What the thread had shown stays, and Agent Kourier cancels the task at the agent, once, when the reply named a task. A reply that is one message and no task, or a send whose
-first event was too large, names none, and nothing is cancelled. The turn of a person's answer to a paused task says it with a sentence of its own, `what the agent sent after the answer was more than Agent Kourier can read or hold, so the turn stopped and its task is being cancelled. The agent may have acted on the answer.`: Agent Kourier
-cancels the task that was answered, and cannot tell whether the agent took the answer, as what it sent after it was not read.
+turn. The agent sent more than one of them, so the turn stopped, and no setting raises any of them.
 
-What it leaves in the log, the audit log and the metrics. The lines below name the `binding` and the thread's `key`, except the ERROR `session turn failed` of the runner, which has the `key` and the `error`:
+**What to do.** Have the agent's tools return what the model needs: filter, summarise or page a result, and cap it in the tool. Keep a task's tool output well under 2 MiB in all.
+If the `error` says `more than 4194304 bytes` after a restart, the task's history has grown past what is read, so trim the tools the same way. Agent Kourier cannot read that task, so it cancels it.
+
+The sentence in the thread is the same whichever bound it was, and whatever the reply's size: it names no host and no size. What the thread had shown stays.
+
+When the reply named a task, Agent Kourier cancels the task at the agent, once. A reply that is one message and no task, or a send whose first event was too large, names no task, and nothing is cancelled.
+
+The turn of a person's answer to a paused task has a sentence of its own: `what the agent sent after the answer was more than Agent Kourier can read or hold, so the turn stopped and its task is being cancelled. The agent may have acted on the answer.`
+Agent Kourier cancels the task that was answered. It cannot tell whether the agent took the answer, as what the agent sent after it was not read.
+
+What it leaves in the log, the audit log and the metrics. The log lines below name the `binding` and the thread's `key`. The exception is the runner's ERROR `session turn failed`, which has the `key` and the `error`:
 
 - WARN `session turn stopped: what the agent sent was more than Agent Kourier can read or hold`, with `task`, `turn` and an `error` that names the bound. When the cancel did not
   take, it is ERROR `session turn failed` with the same `error`, and WARN `session: could not cancel a task whose reply was too large; it stays recorded`.
 - INFO `session turn ended` with `outcome=response_too_large`, and the counter `agentkourier_turn_outcomes_total{outcome="response_too_large"}`, which you can alert on.
-- An audit row `cancel: failed response_too_large` when the cancel's own answer was too large to read. Agent Kourier counts that cancel as done and clears the task's record, **without verifying it**: a real a2a-go
+- An audit row `cancel: failed response_too_large` when the cancel's own answer was too large to read. Agent Kourier counts that cancel as done and clears the task's record, **without verifying it**. A real a2a-go
   server answers every cancel with the whole task (shown in a test, not confirmed on kagent), but an error with a large body reads the same. A WARN says so: `session: the answer to a cancel was too large to read, so the cancel is counted as done without being verified`.
 
 Read the `error` to find which bound it was:
@@ -68,17 +78,28 @@ Read the `error` to find which bound it was:
 | `more than 4194304 bytes` | The answer to a call: the task read back with its history after a lost stream or a restart, the answer to a cancel, or a page of the list of tasks. |
 | `a reply of more than 349184 bytes` | The text the turn holds: the artifacts' text, tool results that wait for their call, and the bookkeeping of each tool part. |
 
-**Few words shown, many tool steps before them, and `an event of more than 2097152 bytes`: the tool output added up.** On kagent 1.0 the final task holds every tool call and result of the turn
-again in its artifacts (read in `test/fixtures/kagent/approval/02-approve.response.sse`), and it arrives as one event. No single result has to be large: in a test with results of 300 KiB,
-results adding up to 1800 KiB passed, and eight of them, 2400 KiB, ended the turn at the final event with a reply of a few bytes. Add up what the agent's tools returned in the turn (its own log has it).
+**Few words shown, many tool steps before them, and `an event of more than 2097152 bytes`: the tool output added up.** Add up what the agent's tools returned in the turn (its own log has it).
 
-A card that is too large is told apart from these: a follow, or the read of a task that comes before it, that meets it says `Agent Kourier could not connect to the agent: its agent card is too large to read, so the turn stopped. The task stays at the agent. Once the card is fixed, restart Agent Kourier.`, cancels nothing, and leaves
-the task recorded and followed by no one (the turn outcome is `refused`, as for any connection that fails on a follow). A lookup or a send that meets it is retried like any that could not reach the agent. After a restart, recovery looks up the queued reply of a thread that has a recorded task before it follows that task, and a card that is too large fails that lookup: it is asked again after each backoff, with no limit, and the task is not followed meanwhile. It logs one WARN, `recover: the agent's card is too large to read, so the queued head cannot be looked up; it is asked again until the card is fixed`, with the `head`, `task` and `binding`: once for each thread in a run of recovery, whenever the card is first met, so again after each restart and each time a process becomes the leader, and not for each try. The Binding's `BackendReachable` condition names the card.
-Trim the card. A task that a follow met the card on is followed by no one, nothing follows it again by itself, and no control of the thread takes it up: once the card is fixed, **restart Agent Kourier**. Recovery then reads the recorded task and follows it, and a reply that waited behind it goes out
-when the task ends. A restart interrupts every turn of every tenant on that broker while it runs. Until then the reply stays queued. The lookup that recovery makes before it follows a task (above) is the exception: it is asked again until it answers, so once the card is fixed it does, and the task is followed without another restart.
+On kagent 1.0 the final task holds every tool call and result of the turn again in its artifacts (read in `test/fixtures/kagent/approval/02-approve.response.sse`),
+and it arrives as one event. No single result has to be large. In a test with results of 300 KiB, results adding up to 1800 KiB passed, and eight of them, 2400 KiB,
+ended the turn at the final event with a reply of a few bytes.
 
-**What to do.** Have the agent's tools return what the model needs: filter, summarise or page a result, and cap it in the tool. Keep a task's tool output well under 2 MiB in all.
-If the `error` says `more than 4194304 bytes` after a restart, the task's history has grown past what is read; trim the tools the same way. Agent Kourier cannot read it, so it cancels it.
+A card that is too large is told apart from these. A follow that meets it, or the read of a task that comes before a follow, says `Agent Kourier could not connect to the agent: its agent card is too large to read, so the turn stopped. The task stays at the agent. Once the card is fixed, restart Agent Kourier.`
+It cancels nothing, and leaves the task recorded and followed by no one (the turn outcome is `refused`, as for any connection that fails on a follow).
+
+Trim the card. A task that a follow met the card on is followed by no one: nothing follows it again by itself, and no control of the thread takes it up. So once the card is fixed, **restart Agent Kourier**.
+
+Recovery then reads the recorded task and follows it, and a reply that waited behind it goes out when the task ends. Until the restart, the reply stays queued.
+A restart interrupts every turn of every tenant on that broker while it runs.
+
+A lookup or a send that meets the card is retried like any that could not reach the agent.
+
+After a restart, recovery looks up the queued reply of a thread that has a recorded task before it follows that task, and a card that is too large fails that lookup.
+The lookup is asked again after each backoff, with no limit, and the task is not followed meanwhile. This lookup needs no restart: once the card is fixed it answers, and the task is followed without another restart.
+
+Recovery logs one WARN, `recover: the agent's card is too large to read, so the queued head cannot be looked up; it is asked again until the card is fixed`, with the `head`, `task` and `binding`.
+It logs it once for each thread in a run of recovery, whenever the card is first met: so again after each restart and each time a process becomes the leader, and not for each try.
+The Binding's `BackendReachable` condition names the card.
 
 ## The thread says Agent Kourier could not tell if the agent already started this message
 
@@ -86,13 +107,24 @@ If the `error` says `more than 4194304 bytes` after a restart, the task's histor
 Agent Kourier could not tell if the agent already started this message, as its task list could not be read in full, so it did not send it. The agent may be running it. To run it, post it again.
 ```
 
+**What to do.** Look at the agent for a task for that message (for kagent, its task list for the context). If there is one, it is running or has ended and the thread needs nothing more. If there is not, post the message again.
+
+Then keep the thread's tasks small: trim the tools' output, or start a new thread for a new investigation. Their histories are what made the list large.
+
 Before it sends a message again (after a restart, or when the outcome of the first send was unknown), Agent Kourier lists the tasks of the thread's context and looks
-for one that holds the message. Each task in a page of that list carries its history, and a page of more than 4 MiB is not read: Agent Kourier asks again at half the size, down to
-three tasks. The walk is bounded as a whole: **five minutes**, **200 pages**, and a page token that comes again ends it. A server that does not answer at the size the walk lowered it to
-ends it too, since whether a page token can be continued at another size is not known. If the list cannot be read in full, and no page before it held the message, Agent Kourier does not know whether the agent has it, and it does not send it, because a message sent again
-into a context is not deduplicated and the agent could run it twice. The agent may be running it. The same sentence is shown whichever of these it was; the log's `error` says which.
-A reply that Agent Kourier queued itself, and that the agent refused as busy or not ready or that was held behind a task and never sent, is not failed: the agent does not have it, so it is sent when the agent is
-free (a WARN says the list could not be read and the agent has not taken the turn).
+for one that holds the message. Each task in a page of that list carries its history. A page of more than 4 MiB is not read: Agent Kourier asks again at half the size, down to
+three tasks.
+
+The walk is bounded as a whole: **five minutes**, **200 pages**, and a page token that comes again ends it. A server that does not answer at the size the walk lowered it to
+ends it too, since whether a page token can be continued at another size is not known.
+
+If the list cannot be read in full, and no page before it held the message, Agent Kourier does not know whether the agent has the message, so it does not send it.
+A message sent again into a context is not deduplicated, and the agent could run it twice. The agent may be running it.
+
+The same sentence is shown whichever of these it was, and the log's `error` says which.
+
+A reply that Agent Kourier queued itself, and that the agent refused as busy or not ready, or that was held behind a task and never sent, is not failed. The agent does not have it,
+so it is sent when the agent is free (a WARN says the list could not be read and the agent has not taken the turn).
 
 What it leaves:
 
@@ -102,10 +134,10 @@ What it leaves:
 - An audit row `find_task: failed lookup_incomplete`, with `response_too_large` or `deadline_exceeded` after it when that was the cause, and the context and message IDs as its subject.
 - The turn outcome `lookup_incomplete`: `agentkourier_turn_outcomes_total{outcome="lookup_incomplete"}`. Any increase means a message was not sent for this reason, which is worth an alert.
 
-**What to do.** Look at the agent for a task for that message (for kagent, its task list for the context). If there is one, it is running or has ended and the thread needs nothing more. If there is not, post the message again.
-Then keep the thread's tasks small, since their histories are what made the list large: trim the tools' output, or start a new thread for a new investigation. An agent that cannot list tasks
-(A2A 0.3, kagent 0.9.x) does not give this notice: Agent Kourier sends the turn without asking, and it may run twice (see [below](#an-agent-on-kagent-09x-answers-but-the-answer-can-appear-twice)).
-The five minutes and the 200 pages are constants of the binary (`agent.DefaultLookupTimeout` and `maxListPages`), as the other bounds are; no setting changes them.
+An agent that cannot list tasks (A2A 0.3, kagent 0.9.x) does not give this notice. Agent Kourier sends the turn without asking, and it may run twice
+(see [below](#an-agent-on-kagent-09x-answers-but-the-answer-can-appear-twice)).
+
+The five minutes and the 200 pages are constants of the binary (`agent.DefaultLookupTimeout` and `maxListPages`), as the other bounds are. No setting changes them.
 
 ## The pod exits with code 1
 
@@ -114,10 +146,12 @@ agent-kourier: slack rejected the tokens: invalid_auth
 ```
 
 The chat platform (Slack; for a Teams connection, Microsoft Entra or the Bot Connector) refused the credentials of the broker's own
-connection for good, so Agent Kourier stops rather than retry. A broker with no own connection never ends this way: every connection
-it serves is a team connection. (A team ChatConnection whose credentials the platform refuses does not end the process: that
-connection stops, its `agentkourier_chat_connected` says 0, the log has a WARN that names it and the platform's code, and its Bindings
-show `ChatCredentialsRejected` on `ChannelJoined`. It starts again by itself when its Secret or ChatConnection changes.)
+connection for good, so Agent Kourier stops rather than retry. A broker with no own connection never ends this way, since every connection
+it serves is a team connection.
+
+A team ChatConnection whose credentials the platform refuses does not end the process. That connection stops, its
+`agentkourier_chat_connected` says 0, the log has a WARN that names it and the platform's code, and its Bindings show
+`ChatCredentialsRejected` on `ChannelJoined`. It starts again by itself when its Secret or ChatConnection changes.
 
 **Slack.** The word at the end is Slack's own code: `invalid_auth`, `not_authed`, `token_revoked`, `token_expired` or
 `account_inactive`. The usual cause is a token copied incompletely or from another Slack app, or one that has been revoked since.
@@ -127,7 +161,9 @@ requests answered 401 ([below](#slacks-requests-are-answered-401)), not as this 
 
 Agent Kourier checks the bot token before it opens the Socket Mode connection with the app token. At the default `info`
 log level, if the last `slack:` line before the error is not `slack: socket mode connecting` (or `slack: socket mode reconnecting`),
-Slack refused the bot token; if it is, look at the app token too. The dry run in [Check the values before you install](install-with-helm.md#check-the-values-before-you-install)
+Slack refused the bot token. If it is, look at the app token too.
+
+The dry run in [Check the values before you install](install-with-helm.md#check-the-values-before-you-install)
 tests the bot token on its own: it exits 1 when Slack refuses it.
 
 Replace the Secret with the right tokens, then restart rather than wait out the crash loop's back-off:
@@ -139,15 +175,20 @@ kubectl -n agent-kourier create secret generic slack \
 kubectl -n agent-kourier rollout restart deploy/agent-kourier
 ```
 
-**Microsoft Teams.** The line reads `agent-kourier: teams rejected the tokens: <code>`, with `(reported by a call)` after it when a
-post or another call found the refusal rather than the connection's start. The broker asks Microsoft Entra for the bot's token as the
-connection starts, so a client secret, `spec.teams.appID` or `spec.teams.tenantID` that Entra refuses (a 400 or a 401) ends the start;
-the code is Entra's OAuth error code. The same exit follows when the Bot Connector refuses the bot's token (401) or answers that an
-admin disabled the app (403 `BotDisabledByAdmin`), with the Bot Connector's code, and in socket mode when the socket's connect call is
-answered 401, with no code. Entra's refusal of the token for Microsoft Graph does not end the process. A client secret stored with a
-newline at its end is sent with it ([Store the client secret](configure-teams.md#2-store-the-client-secret)). The dry run reads only
-Slack, so it does not test these credentials. Replace the Secret `teams` as that step makes it, with the value pasted at a prompt
-that does not echo it, then restart:
+**Microsoft Teams.** The line reads `agent-kourier: teams rejected the tokens: <code>`. It has `(reported by a call)` after it when a
+post or another call found the refusal rather than the connection's start. This exit follows when:
+
+- Microsoft Entra refuses a client secret, `spec.teams.appID` or `spec.teams.tenantID` (a 400 or a 401). The broker asks Entra for the
+  bot's token as the connection starts, so this ends the start. The code is Entra's OAuth error code.
+- The Bot Connector refuses the bot's token (401), or answers that an admin disabled the app (403 `BotDisabledByAdmin`). The code is the
+  Bot Connector's.
+- In socket mode, the socket's connect call is answered 401. The line has no code.
+
+Entra's refusal of the token for Microsoft Graph does not end the process. A client secret stored with a newline at its end is sent with
+it ([Store the client secret](configure-teams.md#2-store-the-client-secret)). The dry run reads only Slack, so it does not test these
+credentials.
+
+Replace the Secret `teams` as that step makes it, with the value pasted at a prompt that does not echo it, then restart:
 
 ```sh
 read -rs TEAMS_CLIENT_SECRET   # paste the client secret's value and press Enter; nothing is echoed
@@ -168,8 +209,8 @@ it cannot use. A restart fails the same way. The text after `the broker cannot b
 
 - `v1 serves exactly one ChatConnection, and the config has` a count other than 1: this is the files route
   (`config.source: files`), whose directory must hold exactly one. Keep exactly one entry under `config.chatConnections`. With
-  `config.source: crds` a cluster may hold many, and the broker serves its own, if it has one, and those of the namespaces it admits, so this message does not occur.
-  A broker that is running does not exit for it: a reload whose directory holds other than the ChatConnection it started with is refused,
+  `config.source: crds` a cluster may hold many: the broker serves its own, if it has one, and those of the namespaces it admits, so this message does not occur.
+  A broker that is running does not exit for it. A reload whose directory holds other than the ChatConnection it started with is refused,
   and the log says `config reload failed; keeping the last good snapshot` with `the directory holds the ChatConnections [...], and the files route serves the ChatConnection it started with, ...`
   ([Which ChatConnections a broker serves](../explanation/config-routes.md#which-chatconnections-a-broker-serves)).
 - `ChatConnection agent-kourier/slack was not found: AGENTKOURIER_CHAT_CONNECTION names the one connection this broker serves, and it must exist`:
@@ -180,8 +221,8 @@ it cannot use. A restart fails the same way. The text after `the broker cannot b
   [Move the config between a ConfigMap and custom resources](migrate-config-source.md#1-install-the-crds-still-on-the-configmap-route).
 - `AGENTKOURIER_CONNECTION_NAMESPACES is set and names no namespace (only commas and spaces): unset it, or name the namespaces`: the admission list
   holds nothing but commas and spaces. Read as no list, it would make a broker with no own connection and no selector serve the ChatConnections of
-  every namespace, which is not what a list says, so the broker refuses it, with an own connection too. The chart does not render this (its values
-  schema refuses an empty item), so it comes from `extraEnv` or a Deployment of your own. Name the namespaces, or unset the variable: no list is
+  every namespace, which is not what a list says. So the broker refuses it, with an own connection too. The chart does not render this (its values
+  schema refuses an empty item), so it comes from `extraEnv` or a Deployment of your own. Name the namespaces, or unset the variable. No list is
   the broker's own connection alone, or, with no own connection and no selector, every namespace
   ([A broker with no connection of its own](team-slack-app.md#a-broker-with-no-connection-of-its-own)).
 - `AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR` followed by what is wrong with it, and `(its value is not shown)`: the selector is not a label selector the
@@ -203,7 +244,7 @@ it cannot use. A restart fails the same way. The text after `the broker cannot b
 - `N outbox rows and M button presses were written before connections were recorded, and this broker has no ChatConnection of its own to give them to: set config.chatConnection (AGENTKOURIER_CHAT_CONNECTION) to the ChatConnection that served them, let the broker start once, then unset it`:
   a broker with no own connection became the leader on a store that holds rows written before migration 0029 recorded connections, or by an older image after a rollback. They have no connection, and an own
   connection is what gives them one. Do what the message says: set `config.chatConnection` to the connection that served them, upgrade, wait for the leader to log `store: gave the rows written before connections were recorded to this broker's own connection`,
-  and unset it again. The message holds the two counts and no row. It ends the leader's start, so it comes after `ready` in the log; with Postgres, only a replica that has won the lease makes the check.
+  and unset it again. The message holds the two counts and no row. It ends the leader's start, so it comes after `ready` in the log. With Postgres, only a replica that has won the lease makes the check.
 - `AGENTKOURIER_CHAT_CONNECTION is not namespace/name (its value is not shown)`, `ChatConnection is not a namespace that is a DNS-1123 label and a name that is a DNS-1123 subdomain ...`,
   `is set with AGENTKOURIER_CONFIG_SOURCE=files, which serves the one ChatConnection of its directory: unset it`, and
   `AGENTKOURIER_CONFIG_SOURCE is "...", want files or crds`: the variables disagree. The chart sets them from `config.source` and
@@ -217,14 +258,14 @@ it cannot use. A restart fails the same way. The text after `the broker cannot b
   WARN, `the ChatConnection cannot be started`, that names it and gives the same reason.
 - `the leader label cannot be written on the pod agent-kourier/agent-kourier-6d9f-x2k4p: the broker needs patch on pods in its namespace, and
   AGENTKOURIER_POD_NAMESPACE and AGENTKOURIER_POD_NAME must name its own pod`: with the chat listener, the first write of the leader label
-  (its removal, as the replica starts) was refused as forbidden, or for a pod the API server does not have, which no retry mends. The ERROR line
-  `writing the leader label of the pod failed; trying again` just before has the API server's answer in full. Forbidden is the Role
-  `<fullname>-leader-label` missing (`rbac.create: false`, or a Role of your own without `patch` on `pods`), or the chart's admission policy
-  refusing the write: its message says which rule, such as the pod not being the one the broker's token is bound to, which is what
-  `AGENTKOURIER_POD_NAME` or `AGENTKOURIER_POD_NAMESPACE` set by hand to another existing pod meets. A pod not found is a name or
-  namespace of a pod that does not exist. The chart sets both from the downward API. Without the chart's policy (`rbac.create: false`,
-  with a Role of your own), a name set to another existing pod is not refused: that pod is labeled, and the chat Service sends it Slack's
-  requests.
+  (its removal, as the replica starts) was refused as forbidden, or for a pod the API server does not have. No retry mends either. The ERROR line
+  `writing the leader label of the pod failed; trying again` just before has the API server's answer in full.
+  Forbidden is the Role `<fullname>-leader-label` missing (`rbac.create: false`, or a Role of your own without `patch` on `pods`), or the chart's
+  admission policy refusing the write. The policy's message says which rule, such as the pod not being the one the broker's token is bound to.
+  That rule is what `AGENTKOURIER_POD_NAME` or `AGENTKOURIER_POD_NAMESPACE` set by hand to another existing pod meets.
+  A pod not found is a name or namespace of a pod that does not exist. The chart sets both from the downward API. Without the chart's policy
+  (`rbac.create: false`, with a Role of your own), a name set to another existing pod is not refused: that pod is labeled, and the chat Service
+  sends it Slack's requests.
 - `ChatConnection agent-kourier/slack: read botToken of Secret agent-kourier/slack:` (or `appToken`, or `signingSecret` in HTTP mode): the
   key is in the Secret but its value is empty. `kubectl create secret --from-literal=botToken="$SLACK_BOT_TOKEN"` stores an
   empty value when the variable is not set in that shell. Check that both variables are set, and replace the Secret as
@@ -234,9 +275,10 @@ it cannot use. A restart fails the same way. The text after `the broker cannot b
   variables from its values (`auditRetention` here) and from `extraEnv`: fix the value there.
 
 With the files route, a misspelt field, or a Secret that is missing or lacks a key, also exits 2, with `load config` after
-`the broker cannot be wired:`: see [The pod exits with code 2 and the error says `load config`](#the-pod-exits-with-code-2-and-the-error-says-load-config).
-With custom resources that never stops the broker: a bad object is left out and says so in its status (see
-[A Binding is not accepted](#a-binding-is-not-accepted)), except the broker's own ChatConnection, above, when it has one.
+`the broker cannot be wired:`. See [The pod exits with code 2 and the error says `load config`](#the-pod-exits-with-code-2-and-the-error-says-load-config).
+
+With custom resources neither stops the broker, except the broker's own ChatConnection (above) when it has one. A bad
+object is left out and says so in its status (see [A Binding is not accepted](#a-binding-is-not-accepted)).
 
 ## The pod exits with code 3
 
@@ -245,17 +287,21 @@ each Secret its config names through an informer of its own. What a refusal does
 
 - **Files (`config.source: files`).** A `forbidden` or `unauthorized` answer for any Secret the config names ends the start at
   once with `the API server denied access to Secrets` and exit code 3. The same answer for a Secret that a later config change names does not
-  stop the pod: that reload fails with the same message, the log says `config reload failed; keeping the last good snapshot`, and the last good
+  stop the pod. That reload fails with the same message, the log says `config reload failed; keeping the last good snapshot`, and the last good
   config stays in force.
-- **Custom resources (`config.source: crds`).** Only the Secrets the broker itself needs, the connection's tokens and the Postgres DSN's, end the
-  start with exit code 3, as does a refusal to list the custom resources, and, with a connection namespace selector that matches by label, a refusal to
-  list or watch namespaces (`namespaces: the ServiceAccount needs list and watch on namespaces, which the connection namespace selector reads`). The
-  chart grants that one with the selector; with `rbac.create: false`, add `list` and `watch` on `namespaces` to your ClusterRole. A Secret that a team's Binding or AgentBackend names, and that the
-  ServiceAccount may not read, stops nothing and fails no reload: the Binding stays served, and the log says its `BackendReachable` condition is
-  false with the reason `CredentialsUnreadable`. The condition's `message` names the Secret when it is in the Binding's namespace, and says that Agent Kourier's ServiceAccount needs `list`
-  and `watch` on it. The fix is a grant for that Secret: a Role and RoleBinding in the Secret's namespace for the ServiceAccount, which the team that owns the
-  Secret makes ([Let a team add its own Binding](migrate-config-source.md#let-a-team-add-its-own-binding) has the two commands), or `rbac.secretNames` in the
-  chart's values (namespace to Secret names), which the platform team sets.
+- **Custom resources (`config.source: crds`).** A refusal ends the start with exit code 3 only for the Secrets the broker itself needs (the
+  connection's tokens and the Postgres DSN's), for the list of the custom resources, and, with a connection namespace selector that matches by
+  label, for the list or watch of namespaces (`namespaces: the ServiceAccount needs list and watch on namespaces, which the connection namespace selector reads`).
+  The chart grants that last one with the selector. With `rbac.create: false`, add `list` and `watch` on `namespaces` to your ClusterRole.
+
+    A Secret that a team's Binding or AgentBackend names, and that the ServiceAccount may not read, stops nothing and fails no reload. The
+    Binding stays served, and the log says its `BackendReachable` condition is false with the reason `CredentialsUnreadable`. The
+    condition's `message` names the Secret when it is in the Binding's namespace, and says that Agent Kourier's ServiceAccount needs `list`
+    and `watch` on it.
+
+    The fix is a grant for that Secret. Either the team that owns the Secret makes a Role and RoleBinding in the Secret's namespace for the
+    ServiceAccount ([Let a team add its own Binding](migrate-config-source.md#let-a-team-add-its-own-binding) has the two commands), or the
+    platform team sets `rbac.secretNames` in the chart's values (namespace to Secret names).
 
 Check the grant as the pod's ServiceAccount:
 
@@ -272,9 +318,12 @@ kubectl auth can-i list secrets/<secret-name> -n agent-kourier --as system:servi
 kubectl auth can-i watch secrets/<secret-name> -n agent-kourier --as system:serviceaccount:agent-kourier:<serviceaccount>
 ```
 
-The chart grants `list` and `watch` in each namespace that holds a Secret the config names (for the Secrets named, with
-`config.source: crds`, which also names the broker's own ChatConnection's Secret, if it has one, and takes `rbac.secretNames` for the other ones the chart cannot see), and `rbac.secretNamespaces` adds more. A `config.existingConfigMap` whose Secrets are outside the release namespace needs `rbac.secretNamespaces`, because the chart cannot
-read the ConfigMap to find the namespaces and grants only the release namespace when it finds none.
+The chart grants `list` and `watch` in each namespace that holds a Secret the config names, and `rbac.secretNamespaces` adds more.
+With `config.source: crds` it grants them for the Secrets named. That grant also names the broker's own ChatConnection's Secret, if it
+has one, and takes `rbac.secretNames` for the other ones the chart cannot see.
+
+A `config.existingConfigMap` whose Secrets are outside the release namespace needs `rbac.secretNamespaces`. The chart cannot read the
+ConfigMap to find the namespaces, and grants only the release namespace when it finds none.
 
 ## The pod exits with code 2 and the error says `load config`
 
@@ -303,9 +352,10 @@ resource's kind and name. The usual problems:
 
 The line is cut after 300 bytes, so with several problems you may see only the first. For the problems in the files
 themselves, run `agent-kourier dry-run` against the rendered values, as in
-[Check the values before you install](install-with-helm.md#check-the-values-before-you-install): it prints every one
-in full and needs no cluster. It does not check references or Secrets, so for those, read the names in the error
-against `kubectl -n agent-kourier get secret`.
+[Check the values before you install](install-with-helm.md#check-the-values-before-you-install).
+
+The dry run prints every problem in full and needs no cluster. It does not check references or Secrets, so for those, read the
+names in the error against `kubectl -n agent-kourier get secret`.
 
 ## The pod exits with code 4 and never becomes ready
 
@@ -313,12 +363,13 @@ against `kubectl -n agent-kourier get secret`.
 agent-kourier: bootstrap: start the secret resolver: secret caches for [agent-kourier/slack-main] are not synced: context deadline exceeded ...
 ```
 
-The list names the Secrets whose caches did not sync. The pod cannot reach the Kubernetes API server, so the informers never sync and the wait ends
-at its deadline. A refused grant looks different. It exits 3.
+The pod cannot reach the Kubernetes API server, so the informers never sync and the wait ends at its deadline. The list names
+the Secrets whose caches did not sync. A refused grant looks different: it exits 3.
 
 The usual cause is the NetworkPolicy, on Cilium. The chart asks for the control plane's address
 in `networkPolicy.kubeApiServer.cidrs` and renders it as an `ipBlock`, which works on kind.
-By default Cilium does not match a node address that way. It treats the API server as the
+
+By default Cilium does not match a node address that way: it treats the API server as the
 `kube-apiserver` entity. The `policy-cidr-match-mode` setting in `cilium-config` changes that,
 and it can be empty on a new install. Add a policy that allows the entity:
 
@@ -342,7 +393,9 @@ It adds to the chart's policy, so DNS, Slack and the agent stay fenced as before
 To confirm before you change anything, run two throwaway pods in the namespace. Give one the
 pod labels of the Deployment, `app.kubernetes.io/name: agent-kourier` and
 `app.kubernetes.io/instance: <release>`, because the chart's policy selects on both. Give the
-other no labels. Both call `https://kubernetes.default.svc/version`. The labelled pod times out
+other no labels.
+
+Both call `https://kubernetes.default.svc/version`. The labelled pod times out
 and the unlabelled one gets a 200. Only a policy does that.
 
 ## The thread says "I can't reach the agent right now, and I'm trying again."
@@ -363,27 +416,34 @@ causes.
 
 ### `HTTP 307 Temporary Redirect`
 
-The agent's router redirects a POST to the same path with a trailing slash. The kagent 0.9.x installs this was
-written against did.
-Agent Kourier follows no redirects, because a redirect could carry the Binding's token
-somewhere else. Write the slash on the AgentBackend's `url`. The `a2a` dialect sends to the
-URL exactly as written.
+The agent's router redirects a POST to the same path with a trailing slash, as the kagent 0.9.x installs this was
+written against did. Write the slash on the AgentBackend's `url`: the `a2a` dialect sends to the URL exactly as written.
+
+Agent Kourier follows no redirects, because a redirect could carry the Binding's token somewhere else.
 
 ### `HTTP 401` at the card fetch
 
-The front door refused the Binding's token. A send is not retried: the thread gets "This request failed, and I won't
-try it again" with the detail that the agent's front door refused the Binding's credentials, the log's
-`session turn failed` line carries the reason, and `agentkourier_credential_rejections_total` counts it. Check the Secret named by `identity.tokenSecretRef`
-and the front door's own configuration. An HTTP 403 on an A2A call, after the card was fetched, is handled the same way.
+The front door refused the Binding's token. Check the Secret named by `identity.tokenSecretRef` and the front door's own
+configuration.
+
+A send is not retried. The thread gets "This request failed, and I won't try it again" with the detail that the agent's
+front door refused the Binding's credentials. The log's `session turn failed` line carries the reason, and
+`agentkourier_credential_rejections_total` counts it.
+
+An HTTP 403 on an A2A call, after the card was fetched, is handled the same way.
 
 A lookup before a resend goes differently: it is not counted, the Secret is not read again, and the lookup is retried. The
 thread says "I can't reach the agent right now, and I'm trying again", and the turn fails as unreachable after 15 minutes.
 
 ### `HTTP 403` at the card fetch
 
-The agent does not exist, or does not permit the Binding's identity. kagent 1.0.0-alpha5 answers both with 403, so a
-misspelt `agent.name` or `agent.namespace` in the Binding gets this status; kagent 0.9.x answers an unknown agent with 404.
-A send is not retried: the thread gets "This request failed, and I won't try it again" with the detail that the agent was
+The agent does not exist, or does not permit the Binding's identity. Check the Binding's `agent.name` and
+`agent.namespace`, then the rules that let the Binding's identity use the agent, in kagent and in the front door.
+
+kagent 1.0.0-alpha5 answers both with 403, so a misspelt `agent.name` or `agent.namespace` in the Binding gets this
+status. kagent 0.9.x answers an unknown agent with 404.
+
+A send is not retried. The thread gets "This request failed, and I won't try it again" with the detail that the agent was
 not found, or does not permit the Binding's identity, and the log's `session turn failed` line carries the reason. Other
 requests go differently:
 
@@ -395,8 +455,7 @@ requests go differently:
   right now, and I'm trying again", and the turn fails as unreachable after 15 minutes. A turn held behind a task of the
   session, or one this process knows the agent took and did not record, is retried with no limit.
 
-None of these is counted as a rejected credential. Check the Binding's `agent.name` and
-`agent.namespace`, then the rules that let the Binding's identity use the agent, in kagent and in the front door.
+None of these is counted as a rejected credential.
 
 ### The host does not resolve, or the connection times out
 
@@ -407,18 +466,27 @@ the chart's NetworkPolicy allows the agent only through `networkPolicy.extraEgre
 
 ## The log says `slack connection ended; connecting again`
 
-Agent Kourier lost its Socket Mode connection to Slack, or could not open one, and runs the connection again after a wait. The line's
-`after` is that wait (nanoseconds, in the JSON log) and `error` says why: `slack socket mode connection attempt failed: ...` is an
-attempt to open the connection that failed (Slack could not be reached, or refused the call), and `slack auth.test call: ...` is the check of the
-bot token at the start of the run. The line has a `connection` field, the ChatConnection as `namespace/name`, as do the
-`slack: socket mode` lines, so that the lines of two connections can be told apart. While this goes on, `agentkourier_chat_connected` is 0 for that connection and no event reaches
-Agent Kourier. Whether Slack sends an event again that it could not deliver in the meantime is Slack's, and this page cannot tell you.
+Agent Kourier lost its Socket Mode connection to Slack, or could not open one, and runs the connection again after a wait. While
+this goes on, `agentkourier_chat_connected` is 0 for that connection and no event reaches Agent Kourier. Whether Slack sends an
+event again that it could not deliver in the meantime is Slack's, and this page cannot tell you.
 
-The waits start at 1 second and double up to 60 seconds, each cut at random by up to half, and the broker does not stop trying:
-[Limits](../reference/limits.md#run-the-broker) has the numbers. So a connection comes back within about a minute of Slack
-being reachable again, or after the Retry-After that Slack names, up to 5 minutes, if its answer was a rate limit. If it does not, look for the cause in `error`: egress, DNS or a proxy between the pod and `slack.com`, or
-Slack itself. A refresh that Slack asks for is not this line: it logs `slack: socket mode reconnecting` at INFO and connects again
-at once. A token that Slack rejects is not this line either: the broker's own connection, if it has one, exits with code 1
+The line's fields:
+
+- `after` is that wait (nanoseconds, in the JSON log).
+- `error` says why. `slack socket mode connection attempt failed: ...` is an attempt to open the connection that failed (Slack could
+  not be reached, or refused the call). `slack auth.test call: ...` is the check of the bot token at the start of the run.
+- `connection` is the ChatConnection as `namespace/name`. The `slack: socket mode` lines have it too, so that the lines of two
+  connections can be told apart.
+
+The broker does not stop trying. A connection comes back within about a minute of Slack being reachable again, or, if Slack's
+answer was a rate limit, after the Retry-After that Slack names, up to 5 minutes. If it does not, look for the cause in `error`:
+egress, DNS or a proxy between the pod and `slack.com`, or Slack itself.
+
+The waits start at 1 second and double up to 60 seconds, each cut at random by up to half.
+[Limits](../reference/limits.md#run-the-broker) has the numbers.
+
+A refresh that Slack asks for is not this line: it logs `slack: socket mode reconnecting` at INFO and connects again at once. A token
+that Slack rejects is not this line either. The broker's own connection, if it has one, exits with code 1
 ([The pod exits with code 1](#the-pod-exits-with-code-1)), and a team connection stops.
 
 ## The mention gets no reply and the log shows no `session turn started`
@@ -458,7 +526,7 @@ signature holds, but only on the replica that leads, while it runs the connectio
 3. **The request reaches the chat listener.** On the leader, `agentkourier_chat_listener_requests_total` grows with each attempt. If it does
    not, the request stops before the pod: the host's DNS, the certificate, the Ingress (it sends only the prefix `/chat/`), or the
    NetworkPolicy, which admits only `networkPolicy.chatFrom` to the chat port. `not_found` is a path that is not
-   `/chat/<platform>/<namespace>/<name>`; `no_route` (503) is a connection that does not run on that replica. On the leader, the requests to
+   `/chat/<platform>/<namespace>/<name>`, and `no_route` (503) is a connection that does not run on that replica. On the leader, the requests to
    a connection it serves carry `connection="<namespace>/<name>"`, whether the connection runs or not. A request URL that names a connection
    the leader does not serve, such as one with a misspelt namespace, is counted under `connection="unknown"` with `platform="slack"`:
 
@@ -513,9 +581,12 @@ not ready: leader-label: the leader label of the pod has not been written yet; i
 
 With the chat listener, every replica takes the leader label off its own pod as it starts, and is not ready until a write of the label
 has succeeded. Until then it is in no Service, the health and metrics Service included, and a rolling update on Postgres waits for it.
+
 The log has an ERROR for each failed write, `writing the leader label of the pod failed; trying again`, with the API server's answer, and
 `agentkourier_leader_pod_label_writes_total{result="failed"}` grows. The writes are tried again, up to every 30 seconds, for as long as
-the broker runs. A patch that times out or gets a server error is the API server, or something in front of it, that answers reads and
+the broker runs.
+
+A patch that times out or gets a server error is the API server, or something in front of it, that answers reads and
 not this write. A write refused as forbidden, or for a pod that does not exist, fails the start instead ([exit code 2](#the-pod-exits-with-code-2)).
 
 ## A Binding is not accepted
@@ -529,17 +600,28 @@ kubectl -n team-a get akbinding team-a-chat -o yaml
 kubectl -n agent-kourier logs deploy/agent-kourier | grep 'config: '
 ```
 
-The log of the leader, which the operator reads, has `config: a Binding is not accepted as written` with the `reason` and the `problem`, and
-`config: an object is refused` for an AgentBackend or ChatConnection that is invalid. `agentkourier_config_binding_rejections{reason="..."}`
-counts the Bindings in each reason, `ConnectionNotServed` included (only the leader's series says it; a standby says 0, so read the leader's or sum over the replicas), and `agentkourier_config_invalid_objects{kind="..."}` counts the invalid objects. With the files route none of this
-applies: a problem in one resource stops the whole config, as in [The pod exits with code 2 and the error says `load config`](#the-pod-exits-with-code-2-and-the-error-says-load-config).
+The log of the leader, which the operator reads, has `config: a Binding is not accepted as written` with the `reason` and the `problem`.
+For an AgentBackend or ChatConnection that is invalid, it has `config: an object is refused`.
 
-A Binding with no status at all, and empty `READY` and `REASON` columns, is either new (the broker writes its status within about 10 seconds) or names a ChatConnection
-that exists and that no broker serves: nothing reads it. Point its `connectionRef` at a connection a broker serves: the one in that broker's
-`AGENTKOURIER_CHAT_CONNECTION` (a broker may have none), or one in a namespace the broker admits, on its `config.connectionNamespaces` or with labels that
-match its `config.connectionNamespaceSelector` (a broker with no own connection and neither of them admits every namespace). A team's own ChatConnection is in that state until the platform team admits its
-namespace ([Let a team bring its own Slack app](team-slack-app.md#3-the-platform-team-admits-the-namespace)); for a namespace that should match a selector, see
-[A team's connection is not served on a label selector](#a-teams-connection-is-not-served-on-a-label-selector). No metric counts such a Binding: this broker leaves it to the broker that serves its connection, and cannot tell whether one does.
+`agentkourier_config_binding_rejections{reason="..."}` counts the Bindings in each reason, `ConnectionNotServed` included. Only the
+leader's series says it: a standby says 0, so read the leader's or sum over the replicas. `agentkourier_config_invalid_objects{kind="..."}`
+counts the invalid objects.
+
+With the files route none of this applies: a problem in one resource stops the whole config, as in
+[The pod exits with code 2 and the error says `load config`](#the-pod-exits-with-code-2-and-the-error-says-load-config).
+
+A Binding with no status at all, and empty `READY` and `REASON` columns, is either new (the broker writes its status within about 10 seconds)
+or names a ChatConnection that exists and that no broker serves, so nothing reads it.
+
+Point its `connectionRef` at a connection a broker serves. That is the one in that broker's `AGENTKOURIER_CHAT_CONNECTION` (a broker may
+have none), or one in a namespace the broker admits: on its `config.connectionNamespaces`, or with labels that match its
+`config.connectionNamespaceSelector`. A broker with no own connection and neither of them admits every namespace.
+
+A team's own ChatConnection is in that state until the platform team admits its namespace
+([Let a team bring its own Slack app](team-slack-app.md#3-the-platform-team-admits-the-namespace)). For a namespace that should match a
+selector, see [A team's connection is not served on a label selector](#a-teams-connection-is-not-served-on-a-label-selector).
+
+No metric counts such a Binding: this broker leaves it to the broker that serves its connection, and cannot tell whether one does.
 
 A Binding that is refused after an edit keeps running as it was: `message` says `serving generation 1`, and the other conditions describe that
 generation, while `Ready` is `False` with `Accepted:InvalidSpec` (or `Accepted:InvalidPlatformID` or `Accepted:UnsupportedOnPlatform`, for a
@@ -555,7 +637,7 @@ generation that its ChatConnection's platform does not take). A Binding with no 
 | `ConnectionNotServed` | `spec.chat.connectionRef` names a ChatConnection that exists, and this broker does not serve it: it stopped serving it, it serves at most 16 chat connections and left this one out, or the connection is a second connection of a Slack or Microsoft Teams app that an older one uses. `message` says which. | Ask the platform team whether another broker serves the ChatConnection, or whether its namespace is meant to be served here. For a second connection of an app, see [Two connections of one Slack app](team-slack-app.md#two-connections-of-one-slack-app). A broker that does serve it writes its own status over this one. After a restart or a change of leader, this status can appear for up to about 10 seconds over a Binding that another broker serves, until that broker writes its own words again. |
 | `NamespaceNotAllowed` | The AgentBackend or ChatConnection is in another namespace and its `allowedNamespaces` does not list the Binding's. The answer is the same whether the object is valid or not. | Ask the owner to list your namespace, or use an object of your own. |
 | `AgentNamespaceNotAllowed` | The AgentBackend it names sets `agents`, and `spec.agent.namespace` is not a namespace it allows: `spec.agent.namespace: AgentBackend team-a/kagent does not allow agents in namespace kagent`. The Binding is not served. The limit applied is that of the AgentBackend generation being served, which is an older one if the latest is invalid, and `message` then says so. | Name an agent in a namespace the AgentBackend allows. If the agent is in the Binding's own namespace, ask the owner to set `agents.sameNamespace: true`; otherwise ask the owner to list the agent's namespace in `agents.namespaces`. |
-| `InvalidPlatformID` | A chat ID that the schema takes does not fit its ChatConnection's platform: it has the shape of another platform's ID and not this one's, or it has this platform's shape and is longer than this platform's cap (on Slack, a channel or a bot ID over 32 bytes: `spec.chat.channel: is 33 bytes, longer than the 32 byte limit of a channel ID on Slack, …`). For example, `spec.chat.channel: "19:a1b2c3d4e5f6@thread.tacv2" is not a channel ID on Slack, the platform of ChatConnection team-a/slack: use the channel's ID, such as C0123456789 (G… for an older private channel), not its name (see https://agentkourier.dev/reference/platforms/)`. The API server and the broker's load hold each chat ID to Slack's or Microsoft Teams' shape, but the channel of a Binding whose triggers are all `webhookEvent`, which they hold to a webhook channel's: a value with none of those shapes, such as a channel's name `general`, or one past the field's cap, is refused by the API server when it is applied, and by the load on the files route. A `webhookEvent` Binding with the channel `acme/widgets` on a Slack connection has this reason too. The last good generation, if there is one, stays served. | Write the ID that `message` asks for. [What each platform supports](../reference/platforms.md#chat-ids) has each platform's shapes. |
+| `InvalidPlatformID` | A chat ID that the schema takes does not fit its ChatConnection's platform: it has the shape of another platform's ID and not this one's, or it has this platform's shape and is longer than this platform's cap (on Slack, a channel or a bot ID over 32 bytes: `spec.chat.channel: is 33 bytes, longer than the 32 byte limit of a channel ID on Slack, …`). For example, `spec.chat.channel: "19:a1b2c3d4e5f6@thread.tacv2" is not a channel ID on Slack, the platform of ChatConnection team-a/slack: use the channel's ID, such as C0123456789 (G… for an older private channel), not its name (see https://agentkourier.dev/reference/platforms/)`. The API server and the broker's load hold each chat ID to Slack's or Microsoft Teams' shape. The exception is the channel of a Binding whose triggers are all `webhookEvent`, which they hold to a webhook channel's. A value with none of those shapes, such as a channel's name `general`, or one past the field's cap, is refused by the API server when it is applied, and by the load on the files route. A `webhookEvent` Binding with the channel `acme/widgets` on a Slack connection has this reason too. The last good generation, if there is one, stays served. | Write the ID that `message` asks for. [What each platform supports](../reference/platforms.md#chat-ids) has each platform's shapes. |
 | `UnsupportedOnPlatform` | The Binding asks for a feature, a trigger type or an output that the platform of its ChatConnection does not serve, and `message` names the field and what to change. Slack serves every feature that the broker checks, so a Binding of Slack's triggers on Slack never has it; on a teams connection `interactions.approverGroups` has it. On a webhook connection: `chat.output` left out or `live` (the default) or `final`, where only `none` is taken; a trigger that is not `webhookEvent` (with a webhook channel such as `acme/widgets`, the API server refuses that first); a `match` or `exclude` key that is not a field of the connection; a `promptTemplate` that reads a `text` field, or a name the connection does not have; and `interactions.askUser`, `toolApprovals` or `feedback.enabled` set. The last good generation, if there is one, stays served. | Change the field as `message` says, or use a ChatConnection of a platform that serves the feature ([What each platform supports](../reference/platforms.md#features)). For a webhook connection, see also [When nothing happens](receive-webhooks.md#when-nothing-happens) and [Triggers and output](../reference/platforms.md#triggers-and-output). |
 | `ChannelConflict` | Another Binding on the same ChatConnection holds the channel. The older one holds it, by `creationTimestamp`. If that Binding is in another namespace, `message` says only `a Binding in another namespace`. | Choose another channel. To find the holder, the operator reads the log line: it names it. [Who holds a channel](../explanation/config-routes.md#who-holds-a-channel) says how it is decided. |
 
@@ -589,8 +671,8 @@ kubectl get namespaces -l 'agentkourier.dev/serve=true'
   `all` the broker admits every namespace already, and the cause is below.
 - **The broker cannot read namespaces.** A selector that matches by label needs `list` and `watch` on namespaces, which the chart adds to its
   ClusterRole for such a selector (`{}` reads none and gets none). Without them at start the pod exits with [code 3](#the-pod-exits-with-code-3). If the
-  right is taken away while the broker runs, it keeps the labels it last read, so a namespace labelled since is not admitted and one whose label was
-  removed since stays admitted, and `agentkourier_config_stale` is 1. Check the right as the pod's ServiceAccount:
+  right is taken away while the broker runs, it keeps the labels it last read, and `agentkourier_config_stale` is 1. A namespace labelled since is
+  not admitted, and one whose label was removed since stays admitted. Check the right as the pod's ServiceAccount:
   `kubectl auth can-i watch namespaces --as system:serviceaccount:agent-kourier:<serviceaccount>`.
 - **The namespace is admitted, and the connection is still not served.** It is past the 16 the broker serves, or a second connection of a Slack or Microsoft Teams app
   that an older connection uses: its Bindings say `ConnectionNotServed`, and `message` says which. Or it is served and has not started, because its
@@ -609,9 +691,13 @@ curl -s localhost:8080/metrics | grep -E '^agentkourier_binding_condition.*statu
 kubectl -n agent-kourier logs <leader pod> | grep 'binding verification:'
 ```
 
-Port-forward to the leader's pod first, as in [Check the leader](high-availability.md#4-check-the-leader): a standby exports none of these series, and its log has none of these lines. A line has `binding`, `condition`, `status`, `reason` and `detail`, and `cause` when a request or read failed, and is written when the result changes, not at each probe. If it has left the log, a restart of the leader logs each result that is not true again.
+Port-forward to the leader's pod first, as in [Check the leader](high-availability.md#4-check-the-leader). A standby exports none of these series, and its log has none of these lines.
 
-If you own a Binding and cannot read the broker's log, its status says only that the request for the card or the read of the channel failed, and that "the operator's log has the cause". That is on purpose: the cause names hosts, addresses and ports, which can be another team's, so a status never carries it, and it does not say whether a name did not resolve, a connection was refused or a certificate was not trusted. Ask whoever runs Agent Kourier to read the `cause` of the line for your Binding.
+A line has `binding`, `condition`, `status`, `reason` and `detail`, and `cause` when a request or read failed. It is written when the result changes, not at each probe. If it has left the log, a restart of the leader logs each result that is not true again.
+
+If you own a Binding and cannot read the broker's log, ask whoever runs Agent Kourier to read the `cause` of the line for your Binding. The Binding's status says only that the request for the card or the read of the channel failed, and that "the operator's log has the cause".
+
+That is on purpose. The cause names hosts, addresses and ports, which can be another team's, so a status never carries it. The status does not say whether a name did not resolve, a connection was refused or a certificate was not trusted.
 
 One failed probe holds the Binding at 0 until the next pass, up to about 5.5 minutes later, so a result during an agent's rollout can clear by itself. A fixed Secret or config is checked again sooner: a change starts a pass, at most one every 30 seconds.
 
@@ -648,9 +734,17 @@ One failed probe holds the Binding at 0 until the next pass, up to about 5.5 min
 
 ### `ApproversReadable`
 
-Only a Binding with `interactions.toolApprovals: true` and a non-empty `interactions.approverGroups` has this condition. The leader reads the groups in order, one request each, and stops at the first it cannot read, so `GroupNotFound` and `GroupsUnreadable` name that group
-in the `message` by its place in the list and its ID (`spec.interactions.approverGroups[1] (S0123456789)`), and another bad group is named once this one is mended. (`MissingScope` names no group: the app cannot read any.) A press does not read this condition: it reads the groups itself, live, and when that read finds the cause behind `GroupNotFound`, `MissingScope` or `GroupsUnreadable`, a person's press on a tool approval of this Binding
-ends with a fixed message and decides nothing, unless they are in a group earlier in the list, which the check reaches first. So until the next pass a press can succeed while the status still shows the failure of a group fixed since, and a press can end while the status shows `True` for a group that broke since. A press whose read fails for another cause (a rate limit, a timeout, a token Slack rejects) is kept and tried again, for up to an hour after it was recorded; then it is given up and the person is told to press again.
+Only a Binding with `interactions.toolApprovals: true` and a non-empty `interactions.approverGroups` has this condition.
+
+The leader reads the groups in order, one request each, and stops at the first it cannot read. So `GroupNotFound` and `GroupsUnreadable` name that group
+in the `message` by its place in the list and its ID (`spec.interactions.approverGroups[1] (S0123456789)`), and another bad group is named once this one is mended. (`MissingScope` names no group: the app cannot read any.)
+
+A press does not read this condition: it reads the groups itself, live. When that read finds the cause behind `GroupNotFound`, `MissingScope` or `GroupsUnreadable`, a person's press on a tool approval of this Binding
+ends with a fixed message and decides nothing. The exception is a person in a group earlier in the list, which the check reaches first.
+
+So until the next pass, a press can succeed while the status still shows the failure of a group fixed since. A press can also end while the status shows `True` for a group that broke since.
+
+A press whose read fails for another cause (a rate limit, a timeout, a token Slack rejects) is kept and tried again, for up to an hour after it was recorded. Then it is given up, and the person is told to press again.
 
 | `reason` | Status | What happened | What to do |
 |---|---|---|---|
@@ -682,36 +776,47 @@ condition. It is never `True`: it is `False`, or `Unknown` with `Pending` after 
 
 With the config read from custom resources, the leader writes the status of each Binding it serves, and writes it back if it differs. If something else keeps changing it, the two go on at each other once each gap, and `agentkourier_binding_status_writes_total{result="put_back"}` climbs steadily. After three put-backs in a row, each within five gaps of the one before, the leader's log says, once for the Binding, `something else keeps changing the status of a Binding, and this broker keeps putting it back`, and names it.
 
-What else writes a Binding's status is either another Agent Kourier that serves the same Binding, or a controller of your own. The first happens when two installs name the same ChatConnection (`AGENTKOURIER_CHAT_CONNECTION`), or admit the same namespace (on both lists, or matched by both selectors, or one of each): each then serves that namespace's ChatConnections and writes the status of their Bindings, and each opens Socket Mode on the app of every one of them, so Slack gives each event of the app to one of the two brokers and the other misses it, as in the warning in [Configure Slack](configure-slack.md). A broker that serves every namespace (its `config route` line says `connection_admission` `all`) does this beside any other broker in the cluster, even one that serves its own connection alone, since it serves that connection too. Give each install its own connections and namespaces that no other install admits, and keep every namespace for a cluster with one broker, so that each serves its own Bindings. For the second, look at the `managedFields` of the Binding (`kubectl get akbinding <name> -n <namespace> -o yaml --show-managed-fields`): the manager `agent-kourier` owns the conditions of the types `Accepted`, `BackendReachable`, `ChannelJoined`, `ApproversReadable`, `AcknowledgmentShown` and `Ready`, and any other manager that writes them is the one to stop. A person's edit is put back once and is no fight. A controller that writes the status less often than once in five gaps stays below the three, and shows only in the metric. The numbers are on [Limits](../reference/limits.md#run-the-broker).
+What else writes a Binding's status is either another Agent Kourier that serves the same Binding, or a controller of your own.
+
+Another Agent Kourier writes it when two installs name the same ChatConnection (`AGENTKOURIER_CHAT_CONNECTION`), or admit the same namespace (on both lists, or matched by both selectors, or one of each). Each then serves that namespace's ChatConnections and writes the status of their Bindings. Each also opens Socket Mode on the app of every one of them, so Slack gives each event of the app to one of the two brokers and the other misses it, as in the warning in [Configure Slack](configure-slack.md).
+
+A broker that serves every namespace (its `config route` line says `connection_admission` `all`) does this beside any other broker in the cluster, even one that serves its own connection alone, since it serves that connection too. Give each install its own connections and namespaces that no other install admits, and keep every namespace for a cluster with one broker, so that each serves its own Bindings.
+
+For a controller of your own, look at the `managedFields` of the Binding (`kubectl get akbinding <name> -n <namespace> -o yaml --show-managed-fields`). The manager `agent-kourier` owns the conditions of the types `Accepted`, `BackendReachable`, `ChannelJoined`, `ApproversReadable`, `AcknowledgmentShown` and `Ready`, and any other manager that writes them is the one to stop.
+
+A person's edit is put back once and is no fight. A controller that writes the status less often than once in five gaps stays below the three put-backs, and shows only in the metric. The numbers are on [Limits](../reference/limits.md#run-the-broker).
 
 ## An agent on kagent 0.9.x answers, but the answer can appear twice
 
 A 0.3 agent has no task list, so Agent Kourier cannot ask whether the agent already has a turn
 before it sends the turn again. After a restart that interrupted a turn, or after a send
 whose outcome was unknown because the stream dropped before the first event, the turn may run
-a second time and post a second answer. For a read-only agent that wastes a model call and
-nothing else. An agent that changes things can do the change twice. Slack tool approvals need `kagent-v1`, or `a2a` with
-kagent's human-in-the-loop extension; for any other agent, its own tool list and the role behind its tools are the only
-fence on a write. See [Connect a generic A2A agent](connect-a2a-agent.md#what-works-on-this-dialect).
+a second time and post a second answer.
+
+For a read-only agent that wastes a model call and nothing else. An agent that changes things can do the change twice.
+
+Slack tool approvals need `kagent-v1`, or `a2a` with kagent's human-in-the-loop extension. For any other agent, its own tool
+list and the role behind its tools are the only fence on a write. See [Connect a generic A2A agent](connect-a2a-agent.md#what-works-on-this-dialect).
 
 ## `Multi-Attach error for volume` while the pod rolls
 
 The SQLite volume is `ReadWriteOnce` and the pod's strategy is `Recreate`. The event usually
 clears within a minute, while the storage driver detaches the volume from the old node. If it
-persists, the volume is still attached to the old node. Look at the `VolumeAttachment` for the
+persists, the volume is still attached to the old node: look at the `VolumeAttachment` for the
 claim's volume.
 
 ## The agent answers, but tool calls do not show as step cards
 
 Agent Kourier shows a tool call as a step card only when the agent marks the call as Google ADK or kagent does, on any
-dialect: a data part whose metadata has `adk_type`, `kagent_type` or `kagent.dev/a2a/part-type` set to `function_call` or
-`function_response`, and whose data has a `name`. An agent that reports its tool calls some other way, or in a part
-without a `name`, shows none; the answer text still renders. The marked part must be in an artifact, or in a status
-update's message from the agent while the task is `working`; see
-[Tool calls and results](../reference/agent-contract.md#tool-calls-and-results). With the default `chat.progress`
-(`steps-and-activity`), a `Working…` card (a line in an alert thread's first post) still appears when 3 seconds pass
-with no new text; see
-[Output](../explanation/threads-and-sessions.md#output).
+dialect. The mark is a data part whose metadata has `adk_type`, `kagent_type` or `kagent.dev/a2a/part-type` set to
+`function_call` or `function_response`, and whose data has a `name`. An agent that reports its tool calls some other way,
+or in a part without a `name`, shows none, and the answer text still renders.
+
+The marked part must be in an artifact, or in a status update's message from the agent while the task is `working`. See
+[Tool calls and results](../reference/agent-contract.md#tool-calls-and-results).
+
+With the default `chat.progress` (`steps-and-activity`), a `Working…` card (a line in an alert thread's first post) still
+appears when 3 seconds pass with no new text. See [Output](../explanation/threads-and-sessions.md#output).
 
 ## An alert thread shows no `is working…` status
 

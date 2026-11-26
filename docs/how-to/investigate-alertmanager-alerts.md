@@ -4,9 +4,11 @@ For a team whose Alertmanager already posts alerts to a Slack channel: at the en
 agent investigation in that alert's thread, with one thread per alert, a cooldown, a rate limit and a daily cap.
 
 Agent Kourier reads the message Alertmanager posts. Alertmanager's own receivers and routes are untouched, so the
-alert still reaches people if Agent Kourier is down. The trigger below is written in full: the regexes, the thread
-rules, the limits and the prompt are all in the Binding, so you can read and change each one. For alerts another tool's
-bot posts, see [Start investigations from any bot's messages](any-bot-trigger.md).
+alert still reaches people if Agent Kourier is down.
+
+The trigger below is written in full: the regexes, the thread rules, the limits and the prompt are all in the Binding,
+so you can read and change each one. For alerts another tool's bot posts, see
+[Start investigations from any bot's messages](any-bot-trigger.md).
 
 ## Before you start
 
@@ -104,9 +106,12 @@ In the Binding's `chat` block:
    list: without it, a mention starts nothing.
 2. The alert messages' `bot_id`. `from.kind` defaults to `bot`, the only value, so it is left out.
 3. Each entry's regex has a named group with the entry's name, which supplies the value. A message in which an extract
-   does not match does not match the trigger. The regexes of a Binding may compile to 5000 instructions together, and
-   this trigger's come to 346, so a Binding can hold 14 triggers of this size (the bounded repeat `{1,32}` of the bracket
-   tag is about half of the cost: [Limits](../reference/limits.md#write-a-binding-an-agentbackend-or-a-chatconnection)).
+   does not match does not match the trigger.
+
+    The regexes of a Binding may compile to 5000 instructions together. This trigger's come to 346, so a Binding can
+    hold 14 triggers of this size (the bounded repeat `{1,32}` of the bracket tag is about half of the cost:
+    [Limits](../reference/limits.md#write-a-binding-an-agentbackend-or-a-chatconnection)).
+
 4. Messages with the same `key` share a thread, anchored to the first.
 5. Required. A `botMessage` trigger without `limits.rateLimit` (all of `maxRuns`, `per` and `maxConcurrent`) or without
    `limits.maxRunsPerDay` does not load, and the error names the missing field. `maxRunsPerDay: 0` is no daily cap,
@@ -117,21 +122,21 @@ In the Binding's `chat` block:
 What the trigger does:
 
 - **One thread per alert group.** Messages with the same group label values share the first message's thread.
-- **A 4 hour cooldown.** Another fire of the alert while its thread is open (unless it has been idle for 24 hours,
-  `thread.maxIdle`, when a new investigation starts), or within 4 hours of the investigation's start, adds a "Fired
-  again" note to the thread and starts no new turn. `thread.maxIdle` must be longer than your Alertmanager's
+- **A 4 hour cooldown.** Another fire of the alert while its thread is open, or within 4 hours of the investigation's
+  start, adds a "Fired again" note to the thread and starts no new turn. The exception is a thread idle for 24 hours
+  (`thread.maxIdle`): there a new investigation starts. `thread.maxIdle` must be longer than your Alertmanager's
   `repeat_interval`.
 - **A resolve closes the thread** with a "Resolved at" note, and starts no turn.
 - **Limits.** At most 5 investigations in any 10 minutes, 2 running at once and 40 a day. An alert a limit stops gets
-  no investigation; one line per window in the channel counts them.
+  no investigation. One line per window in the channel counts them.
 
 Change a value in place, for example `cooldown: 2h` or `maxRunsPerDay: 20`. The fields are in
 [Chat triggers](../reference/chat-triggers.md).
 
 ## Check it
 
-Before going live, replay the channel's history through the trigger with a [dry run](tune-triggers.md), from the
-repository root, with the Binding saved in `./my-bindings`. The command reads the bot token from a file;
+Before going live, replay the channel's history through the trigger with a [dry run](tune-triggers.md). Run it from
+the repository root, with the Binding saved in `./my-bindings`. The command reads the bot token from a file, and
 [Make the token file](tune-triggers.md#make-the-token-file) shows how to write it:
 
 ```sh
@@ -143,8 +148,8 @@ Each Alertmanager message should come out `matched`, with its state, alert name 
 watch the next alert: a thread opens under it and the investigation streams in.
 
 In the pod log, `chat: bot message matched a trigger` and `chat: trigger decided` (with `decision=started`) appear
-around `session turn started`, which the turn's own worker logs, so the order is usual rather than guaranteed. The metrics `agentkourier_trigger_matched_total` and
-`agentkourier_trigger_decisions_total` count the same.
+around `session turn started`. The turn's own worker logs that line, so the order is usual rather than guaranteed. The
+metrics `agentkourier_trigger_matched_total` and `agentkourier_trigger_decisions_total` count the same.
 
 If an alert message raises `agentkourier_trigger_unmatched_total` and starts nothing, its title or link does not fit the
 trigger: dry-run it.

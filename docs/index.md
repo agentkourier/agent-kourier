@@ -20,7 +20,7 @@ hide:
 <p class="ak-hero__headline">Write the agent, not the chat integration.</p>
 
 <p class="ak-hero__pitch">Agent Kourier carries messages between your team's chat and your agents, one session per
-thread. A mention, a reply in the thread, or a message a trigger matches, such as an alert, goes to the agent; its
+thread. A mention, a reply in the thread, or a message a trigger matches, such as an alert, goes to the agent. Its
 streamed replies and its questions to people come back in the same thread, and the session survives a restart or
 failover. A Binding connects the channel to any agent that serves streaming A2A, and an add-on reaches one that does
 not, such as an agent in Claude Managed Agents. Slack is supported today. Since 0.6.0, both experimental: Microsoft Teams as a
@@ -58,6 +58,7 @@ which answers on that service with its own tools.</p>
 !!! note "Status: v0.7.0"
     The current release is `0.7.0`: install the published chart and image with [Install with Helm](how-to/install-with-helm.md).
     The `v1alpha1` resource format can change before 1.0. The [release notes](release-notes.md) say what changed in each release.
+
     New in 0.7.0, both experimental: the Claude Managed Agents and AX [add-ons](explanation/add-ons.md), released
     and signed with Agent Kourier and run by its chart. Microsoft Teams ([Configure Microsoft Teams](how-to/configure-teams.md))
     and webhooks ([Start agents from webhooks](how-to/receive-webhooks.md)) arrived in 0.6.0, both experimental.
@@ -65,21 +66,34 @@ which answers on that service with its own tools.</p>
 ## What Agent Kourier handles
 
 Without a broker, every agent that talks to chat needs its own code for threads, streaming, questions, restarts and
-alerts. Agent Kourier does that work once for every agent you bind. It keeps a session per thread, queues replies that
-arrive while the agent works, streams the answer into one message, posts the agent's questions in the thread, recovers
-each conversation after a restart, and holds the thread while a suspended agent is not running. The agent keeps its
-tools and task logic. A webhook connection (experimental, since 0.6.0) starts sessions from another service's signed
-events instead of chat messages, and posts nothing: the agent answers on that service with its own tools. An
-[add-on](explanation/add-ons.md), an optional component released with Agent Kourier and run by its chart, is either an
-A2A front for an agent that has none or an agent of its own. Both add-ons are experimental. The
-[Claude Managed Agents add-on](how-to/connect-claude-managed-agents.md) puts each thread in a session of an agent
-there, with its tool approvals as buttons in the thread. The [AX add-on](how-to/connect-ax.md) is an ADK agent on
-Amazon Bedrock or the Anthropic API, whose questions wait for a reply in the thread.
+alerts. Agent Kourier does that work once for every agent you bind:
 
-The platform team runs Agent Kourier and owns the agent backends and the broker's own chat app. Each application team connects its
-own agent to its own channel with a namespaced Binding, committed next to the agent's manifests, and with custom resources a team
-whose namespace the platform admits can bring its own chat app as well ([Let a team bring its own Slack app](how-to/team-slack-app.md)).
-[Why a broker](explanation/why-a-broker.md) explains the split.
+- It keeps a session per thread.
+- It queues replies that arrive while the agent works.
+- It streams the answer into one message.
+- It posts the agent's questions in the thread.
+- It recovers each conversation after a restart.
+- It holds the thread while a suspended agent is not running.
+
+The agent keeps its tools and task logic.
+
+A webhook connection (experimental, since 0.6.0) starts sessions from another service's signed events instead of chat
+messages, and posts nothing. The agent answers on that service with its own tools.
+
+An [add-on](explanation/add-ons.md) is an optional component released with Agent Kourier and run by its chart. It is
+either an A2A front for an agent that has none or an agent of its own. Both add-ons are experimental:
+
+- The [Claude Managed Agents add-on](how-to/connect-claude-managed-agents.md) puts each thread in a session of an agent
+  there, with its tool approvals as buttons in the thread.
+- The [AX add-on](how-to/connect-ax.md) is an ADK agent on Amazon Bedrock or the Anthropic API, whose questions wait
+  for a reply in the thread.
+
+The platform team runs Agent Kourier and owns the agent backends and the broker's own chat app. Each application team
+connects its own agent to its own channel with a namespaced Binding, committed next to the agent's manifests.
+
+With custom resources, a team whose namespace the platform admits can bring its own chat app as well
+([Let a team bring its own Slack app](how-to/team-slack-app.md)). [Why a broker](explanation/why-a-broker.md) explains
+the split.
 
 <figure class="ak-film">
 <video controls preload="none" playsinline poster="assets/film/agent-kourier-teaser-poster-16x9.jpg" aria-label="Agent Kourier teaser, 20 seconds, narrated">
@@ -163,5 +177,6 @@ Agent Kourier carries them.</p>
 
 A repeat of the same alert attaches to its thread, and its resolve posts a note there. Agent Kourier reads the alert
 your alerting tool already posts to the channel, on Slack or Teams, so your alerts arrive as before, whether or not Agent Kourier is running.
-The docs have a [worked trigger for Alertmanager](how-to/investigate-alertmanager-alerts.md);
-[another tool's bot](how-to/any-bot-trigger.md) needs a trigger of its own.
+
+The docs have a [worked trigger for Alertmanager](how-to/investigate-alertmanager-alerts.md).
+[Another tool's bot](how-to/any-bot-trigger.md) needs a trigger of its own.
