@@ -164,7 +164,7 @@ releases), one Binding that fails fails the whole config, so none of them is ser
 
     With SQLite (the default) the Deployment's strategy is `Recreate`, so the old pod is already gone when the new one
     fails. No broker runs, and no alert is investigated, until you fix the Binding or [roll back](#roll-back).
-    Alertmanager's own receivers still notify people.
+    Your alerting tool still notifies people on its own.
 
     With Postgres the strategy is a rolling update with `maxUnavailable: 0`. The new pod that never becomes Ready does not
     take the old pod away, and the old pod keeps its config.

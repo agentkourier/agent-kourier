@@ -62,10 +62,10 @@ oauth2-proxy in front of the agent. See [Security model](security.md).
 ## Why outside the paging path
 
 Agent Kourier is an additional reader of alerts, never a replacement. It reads the alert your alerting tool already posts
-to the channel: on Slack, or on Microsoft Teams, where Alertmanager posts through a Workflows webhook and Agent Kourier reads
+to the channel: on Slack, or on Microsoft Teams, where the alert is posted through a Workflows webhook and Agent Kourier reads
 the post through Microsoft Graph.
 
-Agent Kourier is not an Alertmanager receiver, so Alertmanager's routes are untouched. An Agent Kourier outage does not
+Agent Kourier is not a receiver of your alerting tool, so the tool's routing is untouched. An Agent Kourier outage does not
 stop an alert from reaching the channel, because the alert has already reached people through its own receiver.
 
 For the same reason, an alert that a rate limit or daily cap stops is not posted about one by one. It is counted in one

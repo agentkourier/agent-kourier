@@ -100,7 +100,7 @@ Without a broker, each of these is code in every agent that talks to chat:
   agent is suspended or scaled down, and calls the agent when the next turn arrives.
 - **Alert investigations.** A trigger reads the alerts a bot already posts to the channel
   and starts an investigation in each alert's thread, with a cooldown per alert, a rate
-  limit and a daily cap. Alertmanager sends Agent Kourier nothing. It posts to Slack, or to
+  limit and a daily cap. Your alerting tool sends Agent Kourier nothing. It posts to Slack, or to
   Teams through a Workflows webhook, as before, so alerts reach people whether or not
   Agent Kourier is running ([why](docs/explanation/why-a-broker.md#why-outside-the-paging-path)).
 - **Reports in a channel.** A `personMessage` trigger starts a turn of the person on each message they post at the
