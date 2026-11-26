@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io/fs"
 
-	"gorm.io/driver/postgres"
-
 	kitstore "github.com/agentkourier/agent-kourier/addons/kit/store"
 )
 
@@ -19,10 +17,8 @@ var postgresMigrations embed.FS
 // in a database they share.
 const migrateLockKey int64 = 0x61785f6d69677261 // "ax_migra"
 
-// OpenPostgres connects to the Postgres database at dsn and applies its pending migrations, the kit's, the agent's and
-// ADK's. Several replicas may open the same database, and elect a leader through it (kitstore.DB.TryLead): every
-// write, the store's and ADK's, fails with kitstore.ErrDeposed unless this store holds the lease. ADK's sessions go
-// through gorm on the same pool. An error never shows dsn, which may hold a password.
+// OpenPostgres applies migrations and opens a fenced AX store. The DSN
+// may contain a password and is excluded from errors.
 func OpenPostgres(ctx context.Context, dsn string, opts Options) (*Store, error) {
 	db, err := kitstore.OpenPostgres(ctx, dsn, kitstore.Options{Noun: noun, Log: opts.Log, OnDeposed: opts.OnDeposed, MigrationLockKey: migrateLockKey})
 	if err != nil {
@@ -32,9 +28,6 @@ func OpenPostgres(ctx context.Context, dsn string, opts Options) (*Store, error)
 	sub, err := fs.Sub(postgresMigrations, "migrations/postgres")
 	if err == nil {
 		err = s.Migrate(ctx, sub)
-	}
-	if err == nil {
-		err = s.openADK(ctx, postgres.New(postgres.Config{Conn: s.SQL()}))
 	}
 	if err != nil {
 		_ = s.Close()

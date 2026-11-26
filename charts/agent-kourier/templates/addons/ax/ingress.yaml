@@ -1,0 +1,33 @@
+{{- $addon := dict "ctx" . "name" "ax" -}}
+{{- if include "agentkourier.addon.enabled" $addon -}}
+{{- $route := .Values.addons.ax.resultCallback -}}
+{{- if $route.ingress.enabled -}}
+{{- $host := (urlParse $route.url).hostname -}}
+{{- $service := include "agentkourier.addon.fullname" $addon -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $service }}-results
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentkourier.addon.labels" $addon | nindent 4 }}
+spec:
+  ingressClassName: {{ required "AX callback ingress needs resultCallback.ingress.className" $route.ingress.className | quote }}
+  tls:
+    - hosts: [{{ $host | quote }}]
+      secretName: {{ required "AX callback ingress needs resultCallback.ingress.tlsSecretName" $route.ingress.tlsSecretName | quote }}
+  rules:
+    - host: {{ $host | quote }}
+      http:
+        paths:
+          {{- range list "/ax/results/v1" "/ax/results/v1/start" }}
+          - path: {{ . }}
+            pathType: Exact
+            backend:
+              service:
+                name: {{ $service }}
+                port:
+                  number: {{ include "agentkourier.addon.port" $addon }}
+          {{- end }}
+{{- end }}
+{{- end }}

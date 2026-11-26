@@ -405,21 +405,17 @@ dialect sends the header on every send, resend and answer, the `a2a` dialect doe
 for an agent whose card lists the URI (D46), and a pause re-read after a restart (WP-33) has
 its payload only if the turn that made it carried the header.
 
-**google/ax.** ax has no message model of its own, so Agent Kourier does not call its
-lifecycle API. It is a supported backend through the `a2a` dialect:
+**Google AX.** Agent Kourier sends turns over the generic `a2a` dialect. The broker does
+not call the AX control plane. The AX add-on uses that API to manage one Task per accepted
+turn from an operator-supplied template. The AX runner claims the command and reports its
+exit code and bounded output to a separate authenticated HTTPS route. The Gateway injects the
+callback credential without placing it in the Task. AX reports sandbox progress. The result
+determines the command outcome.
 
-1. **Supported:** an A2A-speaking agent packaged in an ax task image, reached through
-   `atenet-router` with a static `ate-target-actor` header from
-   `AgentBackend.spec.headers`. The card is served at the URL plus
-   `/.well-known/agent-card.json`. ax removed its own A2A agent (issue #128), so the
-   agent is ours to build and maintain; `addons/ax` is a reference (ADK on Bedrock
-   Haiku). Agent Kourier sends the Binding's bearer token and the agent verifies it; the
-   reference checks issuer, audience and service subject. The AX tier (12.1) covers S1
-   to S5, S12 and the question deadline: streaming, context across restarts and actor
-   suspend/resume, queued replies, plain-text questions answered in the thread,
-   crash-after-post adoption and safe failure notices.
-2. **Also supported:** a kagent agent that delegates sandboxed work to ax. Users have
-   demonstrated this pattern (ax issue #394).
+The launcher persists the A2A task, its AX association, and receipt before publishing a result.
+The leader fails unfinished turns on restart or takeover and reconciles cleanup. Each Task
+maintains its own runner identity. Agent Kourier can also reach an A2A agent deployed separately
+in AX, or a kagent agent that delegates work to AX.
 
 Structured tool approvals (S11) need kagent's HITL extension: `kagent-v1`, or `a2a`
 for an agent whose card lists it (D46). A generic A2A agent without it, on ax or
@@ -1832,7 +1828,7 @@ simulated alert messages and a simulated Slack, before it reaches the pilot.
 | Unit | Every change | Go tests, no cluster | Logic, parsing, state transitions |
 | E2E fast | Every change that touches a flow | kind; real Alertmanager (prometheus-operator); fake Slack; stub A2A agent; Agent Kourier; a sink receiver | Agent Kourier's flows, quickly and deterministically |
 | E2E full | Phase gates, and when the kagent pin changes | kind; Agent Substrate (gVisor); pinned kagent 1.0 alpha; `kagent-dev/mockllm` as the model; Dex for OIDC; fake Slack; Alertmanager; Agent Kourier | Real kagent behavior: session ownership, busy rejection, HITL payloads, OIDC service identity |
-| E2E AX | When AX/ADK or generic A2A changes | Separate kind cluster; pinned unmodified AX, Redis, Substrate (gVisor), persistent ADK/A2A server, deterministic model, Dex, fake Slack, Alertmanager, Agent Kourier | Shared streaming, queue, context and outbox scenarios; authorized plain-text question replies, restart recovery, actor suspend/resume and deadlines. Structured kagent tool approvals are explicitly excluded. |
+| E2E AX | When the AX launcher or generic A2A changes | Separate kind cluster with AX, Substrate, Gateway, two launcher replicas on Postgres, fake Slack and a deterministic runner | Slack round trip and history, capacity and cancellation, failure, deadline, cleanup and stream recovery. |
 | Live smoke | Pilot start, manually | Pilot environment, real Slack sandbox workspace | Things fakes cannot prove: Slack rate limits, real rendering |
 
 Components:
@@ -1857,10 +1853,10 @@ Components:
   OpenAI-compatible server kagent uses in its own E2E suite. It returns fixed text and
   tool calls, including ask-user calls, so full-tier runs cost nothing and are
   repeatable.
-- **AX fixture model.** The separate test agent runs deterministic ADK responses through the same
-  persistent server as the Bedrock reference. Its cluster-local controls release gates and call
-  AX task lifecycle RPCs. Tests check Substrate state as well as AX phase. `make ax-smoke`
-  exercises actual Bedrock/Haiku calls separately. See `hack/kind/ax/README.md`.
+- **AX fixture runner.** A deterministic command writes the AX goal to the output file, exits
+  with a nonzero status, or waits for the test to exercise cancellation, deadlines or reconnect.
+  The runtime uses the actual AX Gateway and TLS, with sandbox debug disabled and no model key.
+  See `hack/kind/ax/README.md`.
 - **Fault injection.** A build tag compiles hooks into test images only, for example
   crash-after-post for the outbox test (8.6). Production images do not contain them.
 

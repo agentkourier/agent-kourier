@@ -35,10 +35,8 @@ context ID: the agent creates one and Agent Kourier keeps it for the thread. See
 The alternative is a client per platform: one for kagent's controller API, one for AX's lifecycle API, another for the
 next runtime. Three reasons it was not built that way.
 
-- **For AX there was no other way in.** AX has no message model of its own: its API manages the lifecycle of sandboxed
-  tasks, not conversations. The only route to a conversation with an agent running there is the A2A endpoint the agent
-  itself serves. AX ships no A2A agent, so you run one as a Task, such as the AX add-on; the
-  [AX add-on's guide](../how-to/connect-ax.md#run-it-inside-google-ax) covers what that needs.
+- **For AX, the add-on translates turns into Tasks.** AX's API manages sandbox lifecycle. The
+  [AX add-on](../how-to/connect-ax.md) uses that API and translates runner results back to A2A.
 - **For kagent, nothing internal is needed.** kagent's A2A gateway creates a session when a message carries no context
   ID, so a client that speaks public A2A and one published extension is enough. That keeps Agent Kourier clear of
   kagent's internal APIs, which were changing quickly through the 1.0 alphas.

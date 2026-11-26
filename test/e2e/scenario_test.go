@@ -104,7 +104,11 @@ func (s *scenario) connected() {
 		// route answers url_verification before the connection's Run takes events, so the fake's count below does not show it, and an
 		// event sent in that gap waits for the fake's next retry.
 		err := Wait(s.ctx, 2*time.Minute, "Agent Kourier's chat connection to come up", func(ctx context.Context) (bool, error) {
-			up, err := s.agentKourier.Counter(ctx, "agentkourier_chat_connected", map[string]string{"connection": ConnPlatform})
+			connection := ConnPlatform
+			if s.env.Tier == "ax" {
+				connection = "agent-kourier/slack-main"
+			}
+			up, err := s.agentKourier.Counter(ctx, "agentkourier_chat_connected", map[string]string{"connection": connection})
 			if errors.Is(err, ErrNoSample) {
 				return false, nil
 			}

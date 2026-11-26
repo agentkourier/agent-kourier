@@ -170,6 +170,24 @@ type MessageValidator interface {
 	ValidateMessage(ctx context.Context, msg *a2a.Message, paused *a2a.Task) error
 }
 
+// MessageAdmission reserves capacity after message validation and replay lookup.
+// The kit releases the reservation on an early error or after execution cleanup.
+type MessageAdmission interface {
+	AdmitMessage(context.Context, *a2a.Message) (release func(), err error)
+}
+
+// CancelAdmission decides whether a caller can cancel a live task before the
+// SDK starts cancellation. A rejected cancellation leaves the execution intact.
+type CancelAdmission interface {
+	AdmitCancel(context.Context, *a2a.Task) error
+}
+
+// LeaderWorker runs background work only while this replica holds the lease.
+// The worker must return when its context ends.
+type LeaderWorker interface {
+	RunLeader(context.Context)
+}
+
 // ErrBusy tells the kit that a MessageValidator cannot accept a message until the backend has capacity.
 var ErrBusy = errors.New("backend is busy")
 
@@ -206,6 +224,12 @@ type TurnClassifier interface {
 // Routes is a backend that serves routes of its own beside the kit's (ax: /metadata/, proxied to the AX task runner).
 type Routes interface {
 	Routes(mux *http.ServeMux)
+}
+
+// LeaderRoutes registers routes whose handler runs only on the serving leader.
+// The backend is responsible for authentication on these paths.
+type LeaderRoutes interface {
+	LeaderRoutes(register func(pattern string, handler http.Handler))
 }
 
 // Readiness is a backend whose readiness is another server's (ax beside the AX task runner): a non-nil Readyz serves

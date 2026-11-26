@@ -1100,6 +1100,26 @@ have `spec.teams` and hold each chat ID to Slack's shape and caps, so the API se
 object depends on this release. On custom resources, a Teams ChatConnection deleted while this release still runs also takes its rows of
 `teams_conversations` and `teams_poll_positions` with it; on the ConfigMap route, and for one deleted after the rollback, the rows stay, and an earlier release does not read them.
 
+## Replace the experimental ADK add-on with the AX Task launcher
+
+Keep the `addons.ax` block, the A2A address, and the add-on's SQLite volume or Postgres database.
+Remove the old model-provider and model-credential settings before upgrading the chart. Set the
+AX control-plane address, Task template, and dedicated callback credential. The agent image now
+supplies its own model configuration. Set up the Gateway and HTTPS endpoint using
+[Connect the AX add-on](connect-ax.md) before switching over.
+
+The replacement removes `ask_user`, ADK session memory, and the route that ran without AX. It
+also retires the old image that served A2A from inside an AX Task. Point those Bindings to the new
+add-on Service. If you ran only the old in-AX image, the launcher does not move the database out
+of that sandbox. Keep a backup of the existing database before changing deployments.
+
+On the first startup or takeover, submitted and working turns fail as interrupted. Legacy
+questions waiting in `input-required` fail with a prompt to send a new message. Their task and
+message IDs remain replayable under the configured retention, and a stale answer starts no AX
+Task. Completed tasks and results stay readable under the same retention. The upgrade leaves
+the old ADK session and event tables on disk. With Postgres, stop the old add-on replicas before
+starting the replacement so the previous backend cannot take the same lease during the change.
+
 ## Upgrade to the release that ships the add-ons
 
 This release adds two add-ons, both experimental, which the chart runs beside Agent Kourier only when their blocks under `addons`
@@ -1117,22 +1137,8 @@ turn them on ([Add-ons](../explanation/add-ons.md)). For the broker it is an ord
 
 ### Move from the AX example of 0.6.0
 
-The agent of `examples/ax` is now the AX add-on, in `addons/ax`. The chart can run it ([Connect the AX add-on](connect-ax.md)). If you run
-it inside Google AX from 0.6.0's files, take `addons/ax/task.yaml` of this release, or make the same changes in your own:
-
-- **Replace `STATE_DIR` with `SQLITE_PATH`**, set to `STATE_DIR` plus `/agent.db` (`/workspace/agent-kourier-state/agent.db` in
-  `task.yaml`). The agent does not start while `STATE_DIR` is set, and says so. At its first start on that file it imports the tasks of
-  the old layout, so a question that waited across the upgrade can still be answered; ADK's tables carry over as they are.
-- **Set `LISTEN_ADDR=:80`, `PUBLIC_URL` and `RUNNER_URL`.** The agent now listens on `127.0.0.1:8090` by default, and its card names
-  `PUBLIC_URL`, which defaults to that address: set it to the gateway's A2A URL, the one the AgentBackend names. Without `RUNNER_URL`,
-  set to `http://127.0.0.1:8081`, the agent answers `/readyz` itself and does not serve `/metadata/`, where 0.6.0 proxied both to the
-  task runner.
-- **Build the image with `make ax-runner-image`**, which builds `agent-kourier-ax-runner:dev` from `addons/ax/Dockerfile.ax`: the agent,
-  AX's task runner and git, on Debian. `make ax-image` now builds the add-on's image, which has no task runner. No release publishes the
-  runner's image.
-- **Another A2A client must name the protocol version.** The agent is built with a2a-go v2.9.0, which reads a JSON-RPC request without
-  an `A2A-Version` header as A2A 0.3 and refuses it with `-32009`, version not supported; 0.6.0's agent, on v2.6.0, did not check it.
-  Agent Kourier sends the version that the agent card gives, so a Binding needs no change. The `OIDC_*` variables keep their names.
+For a new installation, use the [AX Task launcher](connect-ax.md). The old ADK example is retained
+in the source for its release tag.
 
 ### Roll back from the release that ships the add-ons
 

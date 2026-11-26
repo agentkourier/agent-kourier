@@ -70,7 +70,7 @@ the variable), 1 for a failure once it runs, and 5 when a replica on Postgres lo
 ## 3. Declare the add-on's own settings
 
 The kit reads the variables every add-on shares (each add-on's reference lists them:
-[Claude Managed Agents](../reference/claude-managed-agents.md#every-add-ons), [AX](../reference/ax.md#every-add-ons)). An add-on's
+[Claude Managed Agents](../reference/claude-managed-agents.md#every-add-ons), [AX](../reference/ax.md#settings)). An add-on's
 own are `settings.Var` values in `Addon.Settings`, read in order before the shared ones:
 
 ```go
@@ -107,13 +107,13 @@ a leader that has lost the lease cannot write. Echo's store is the kit's task st
   and the AX add-on do; without it, a context's activity is what the runtime marks when it accepts a message and what
   the add-on records itself, as the Claude Managed Agents add-on does when a turn starts or ends. `ReleaseContext` runs
   in the transaction that deletes an idle context, for what the add-on keeps of it in the same database (the AX
-  add-on's ADK session).
+  launcher's AX launch record).
 - **Tables of the add-on's own.** Embed `*store.Store` in a type of the add-on's, apply its migrations with
   `DB.Migrate` (files named `NNNN_name.sql`, after the kit's), and write them through `DB.Write`, which runs the lease's
   check first.
 - **The SQLite driver.** The kit opens the `database/sql` driver named `sqlite` and links none, since the two drivers
   the add-ons use both register that name and cannot be linked together. The add-on imports one: the Claude Managed
-  Agents add-on imports `modernc.org/sqlite`, and the AX add-on `github.com/glebarez/sqlite`, which ADK's sessions need.
+  Agents and AX add-ons import `modernc.org/sqlite`.
 
 ## 5. Write the backend
 

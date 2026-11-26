@@ -154,7 +154,7 @@ func values(name string) string { return filepath.Join(chartDir, "ci", name+"-va
 func TestLint(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
-	for _, name := range []string{"minimal", "fast", "fast-postgres", "postgres", "ax", "sandbox", "full", "crds", "cma", "cma-postgres", "ax-addon", "ax-addon-postgres", "ax-addon-anthropic"} {
+	for _, name := range []string{"minimal", "fast", "fast-postgres", "postgres", "ax", "sandbox", "full", "crds", "cma", "cma-postgres", "ax-addon", "ax-addon-postgres"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			if out, err := helm(t.Context(), t, "lint", "--strict", chartDir, "-f", values(name)); err != nil {
@@ -182,7 +182,6 @@ var goldenCases = []struct {
 	{"cma-postgres", "agent-kourier", "agent-kourier", nil},
 	{"ax-addon", "agent-kourier", "agent-kourier", nil},
 	{"ax-addon-postgres", "agent-kourier", "agent-kourier", nil},
-	{"ax-addon-anthropic", "agent-kourier", "agent-kourier", nil},
 }
 
 func TestGolden(t *testing.T) {
@@ -936,9 +935,12 @@ var tierCases = []struct {
 	{"fast", "fast", "agent-kourier", "agent-kourier-e2e/agent-kourier-testhooks:dev", "Never", "agent-kourier-config", "agent-kourier-data", "/data/agent-kourier.db", true, []string{
 		"Deployment/agent-kourier/agent-kourier", "PersistentVolumeClaim/agent-kourier/agent-kourier-data", "Role/agent-kourier/agent-kourier-secrets",
 		"RoleBinding/agent-kourier/agent-kourier-secrets", "Service/agent-kourier/agent-kourier", "ServiceAccount/agent-kourier/agent-kourier"}},
-	{"ax", "ax", "agent-kourier", "agent-kourier-e2e/agent-kourier-testhooks:dev", "Never", "agent-kourier-config", "agent-kourier-data", "/data/agent-kourier-ax.db", true, []string{
-		"Deployment/agent-kourier/agent-kourier", "PersistentVolumeClaim/agent-kourier/agent-kourier-data", "Role/agent-kourier/agent-kourier-secrets",
-		"RoleBinding/agent-kourier/agent-kourier-secrets", "Service/agent-kourier/agent-kourier", "ServiceAccount/agent-kourier/agent-kourier"}},
+	{"ax", "ax", "agent-kourier", "agent-kourier-e2e/agent-kourier-testhooks:dev", "Never", "", "agent-kourier-data", "/data/agent-kourier-ax-launcher.db", true, []string{
+		"ClusterRole//agent-kourier-agent-kourier-crs", "ClusterRoleBinding//agent-kourier-agent-kourier-crs",
+		"CustomResourceDefinition//agentbackends.agentkourier.dev", "CustomResourceDefinition//bindings.agentkourier.dev", "CustomResourceDefinition//chatconnections.agentkourier.dev",
+		"Deployment/agent-kourier/agent-kourier", "Deployment/agent-kourier/agent-kourier-ax", "PersistentVolumeClaim/agent-kourier/agent-kourier-data",
+		"PodDisruptionBudget/agent-kourier/agent-kourier-ax", "Role/agent-kourier/agent-kourier-secrets", "RoleBinding/agent-kourier/agent-kourier-secrets",
+		"Service/agent-kourier/agent-kourier", "Service/agent-kourier/agent-kourier-ax", "ServiceAccount/agent-kourier/agent-kourier", "ServiceAccount/agent-kourier/agent-kourier-ax"}},
 	{"sandbox", "sandbox", "agent-kourier-sandbox", "agent-kourier:dev", "Never", "agent-kourier-sandbox-config", "agent-kourier-sandbox-data", "/data/agent-kourier.db", false, []string{
 		"CronJob/agent-kourier/agent-kourier-sandbox-token-refresh", "Deployment/agent-kourier/agent-kourier-sandbox", "PersistentVolumeClaim/agent-kourier/agent-kourier-sandbox-data",
 		"Role/agent-kourier/agent-kourier-sandbox-secrets", "Role/agent-kourier/agent-kourier-sandbox-token-refresh", "RoleBinding/agent-kourier/agent-kourier-sandbox-secrets",
@@ -1018,7 +1020,10 @@ func TestTierValuesRenderWhatTheScriptsAndTestsRely(t *testing.T) {
 			for _, v := range pod.Volumes {
 				vols[v.Name] = v
 			}
-			if vols["config"].ConfigMap == nil || vols["config"].ConfigMap.Name != tc.configMap || vols["data"].PersistentVolumeClaim == nil || vols["data"].PersistentVolumeClaim.ClaimName != tc.claim {
+			cm := vols["config"].ConfigMap
+			if tc.configMap != "" && (cm == nil || cm.Name != tc.configMap) ||
+				tc.configMap == "" && (cm != nil || env["AGENTKOURIER_CHAT_CONNECTION"] != "agent-kourier/slack-main") ||
+				vols["data"].PersistentVolumeClaim == nil || vols["data"].PersistentVolumeClaim.ClaimName != tc.claim {
 				t.Errorf("volumes %+v; want the ConfigMap %s and the claim %s", vols, tc.configMap, tc.claim)
 			}
 			var pvc corev1.PersistentVolumeClaim
@@ -1076,7 +1081,7 @@ func diff(t *testing.T, want, got any) string {
 func TestRenderedConfigLoadsLikeTheTiers(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
-	for _, dir := range []string{"fast", "ax"} {
+	for _, dir := range []string{"fast"} {
 		t.Run(dir, func(t *testing.T) {
 			t.Parallel()
 			src := filepath.Join("../../hack/kind", dir, "agent-kourier", "config")

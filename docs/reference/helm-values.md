@@ -393,17 +393,10 @@ config:
 addons:
   ax:
     enabled: true
-    model: {region: us-east-1, name: us.anthropic.claude-haiku-4-5-20251001-v1:0}
-    serviceAccount:
-      annotations: {eks.amazonaws.com/role-arn: "arn:aws:iam::111122223333:role/agent-kourier-ax"}
-    auth: {tokenSecret: {name: ax-token}}
-```
-
-On the Anthropic API instead, the model and its key replace the region and the role:
-
-```yaml
-model: {provider: anthropic, name: claude-haiku-4-5}
-anthropicApiKeySecret: {name: anthropic, key: apiKey}
+    server: {address: ax-server.ax-system.svc:8080}
+    taskTemplate: {configMap: {name: ax-task}}
+    auth: {tokenSecret: {name: ax-a2a-auth}}
+    resultCallback: {url: "https://ax-results.example.test/ax/results/v1", tokenSecret: {name: ax-result-auth}}
 ```
 
 | Key | Default | Description |
@@ -472,34 +465,44 @@ anthropicApiKeySecret: {name: anthropic, key: apiKey}
 | `addons.cma.securityContext.capabilities` | `{drop: [ALL]}` |  |
 | `addons.ax` |  | The AX add-on, off by default. |
 | `addons.ax.enabled` | `false` |  |
-| `addons.ax.image` |  | The add-on's image: the agent alone, which runs standalone here (the AX route builds an image of its own, with AX's runner). Its pod uses imagePullSecrets above, as Agent Kourier's does. |
+| `addons.ax.image` |  | The AX launcher image. The pod uses imagePullSecrets above. |
 | `addons.ax.image.repository` | `ghcr.io/agentkourier/agent-kourier-ax` |  |
 | `addons.ax.image.tag` | `""` | A tag, which defaults to the chart's appVersion, as image.tag does: a released chart's appVersion is its release tag, and the add-on's image is published under the same tag. Ignored when digest is set. |
 | `addons.ax.image.digest` | `""` | Pin production to a digest (sha256:...), which wins over tag. |
 | `addons.ax.image.pullPolicy` | `IfNotPresent` |  |
 | `addons.ax.replicaCount` | `1` | 1, or 2 and more with addons.ax.store.type postgres (the render refuses more than 1 with sqlite: the add-on's SQLite file is on a ReadWriteOnce volume and may be open in one pod). With Postgres the replicas elect a leader (addons.ax.leaderElection), every replica is Ready and behind the Service, and the Deployment rolls one new pod in before it takes an old one away; at 2 and more the chart adds a PodDisruptionBudget, &lt;fullname&gt;-ax, with maxUnavailable 1, so that a node drain does not take every replica at once. 0 stops the add-on, and its volume or database stays. |
-| `addons.ax.model` |  | The model the agent runs on. |
-| `addons.ax.model.provider` | `bedrock` | bedrock (Amazon Bedrock) or anthropic (the Anthropic API) (MODEL_PROVIDER) |
-| `addons.ax.model.region` | `""` | The AWS region the add-on calls Bedrock in (MODEL_REGION), for example us-east-1: required with bedrock, and refused with anthropic, which has no region. |
-| `addons.ax.model.name` | `""` | Required. The model (MODEL_NAME). With bedrock, a Bedrock model ID or inference profile, for example us.anthropic.claude-haiku-4-5-20251001-v1:0, which the account must have access to in that region. With anthropic, an Anthropic model ID or alias, for example claude-haiku-4-5. |
-| `addons.ax.bedrock` |  | How the add-on authenticates to Bedrock, with addons.ax.model.provider bedrock only. With apiKeySecret set, the chart passes a Bedrock API key, a bearer token, into the container's environment (AWS_BEARER_TOKEN_BEDROCK, with valueFrom.secretKeyRef), which Kubernetes reads when the container starts: after a change to the Secret, restart the add-on (kubectl rollout restart deployment/&lt;fullname&gt;-ax). With apiKeySecret empty, the AWS SDK's default chain finds AWS credentials: give the ServiceAccount an IAM role through serviceAccount.annotations (IRSA) or an EKS Pod Identity association. Neither route has been tested on EKS yet. |
-| `addons.ax.bedrock.apiKeySecret` |  | The Secret, in the release namespace, and its key: both or neither (the render refuses one alone, and either with anthropic). |
-| `addons.ax.bedrock.apiKeySecret.name` | `""` |  |
-| `addons.ax.bedrock.apiKeySecret.key` | `""` |  |
-| `addons.ax.anthropicApiKeySecret` |  | The Secret, in the release namespace, and its key, that hold the Anthropic API key: required with addons.ax.model.provider anthropic, and refused with bedrock. The chart passes it into the container's environment (ANTHROPIC_API_KEY, with valueFrom.secretKeyRef), which Kubernetes reads when the container starts: after a change to the Secret, restart the add-on (kubectl rollout restart deployment/&lt;fullname&gt;-ax). |
-| `addons.ax.anthropicApiKeySecret.name` | `""` |  |
-| `addons.ax.anthropicApiKeySecret.key` | `""` |  |
+| `addons.ax.server` |  | Private AX gRPC endpoint (AX_ADDR). |
+| `addons.ax.server.address` | `""` |  |
+| `addons.ax.atespace` | `default` | AX_ATESPACE |
+| `addons.ax.launcherId` | `""` | Stable ownership scope (AX_LAUNCHER_ID). Empty uses the add-on's full name. |
+| `addons.ax.taskTemplate.configMap` |  | ConfigMap in the release namespace with one AX Task template (AX_TASK_TEMPLATE). |
+| `addons.ax.taskTemplate.configMap.name` | `""` |  |
+| `addons.ax.taskTemplate.configMap.key` | `task.yaml` |  |
+| `addons.ax.resultCallback.url` | `""` | HTTPS endpoint ending in /ax/results/v1 (AX_RESULT_URL). |
+| `addons.ax.resultCallback.tokenSecret` |  | Dedicated callback bearer mounted only in the add-on (AX_RESULT_TOKEN_FILE). |
+| `addons.ax.resultCallback.tokenSecret.name` | `""` |  |
+| `addons.ax.resultCallback.tokenSecret.key` | `token` |  |
+| `addons.ax.resultCallback.ingress` |  | Optional Ingress for the two exact callback paths. Use a private controller. |
+| `addons.ax.resultCallback.ingress.enabled` | `false` |  |
+| `addons.ax.resultCallback.ingress.className` | `""` |  |
+| `addons.ax.resultCallback.ingress.tlsSecretName` | `""` |  |
+| `addons.ax.promptKey` | `prompt` | AX_PROMPT_KEY |
+| `addons.ax.history` | `true` | AX_HISTORY |
+| `addons.ax.maxRunning` | `10` | AX_MAX_RUNNING |
+| `addons.ax.pollInterval` | `2s` | AX_POLL_INTERVAL |
+| `addons.ax.turnTimeout` | `30m` | AX_TURN_TIMEOUT |
+| `addons.ax.keepFailed` | `24h` | AX_KEEP_FAILED |
 | `addons.ax.serviceAccount` |  | The add-on's own ServiceAccount, &lt;fullname&gt;-ax, which the chart grants nothing. |
-| `addons.ax.serviceAccount.annotations` | `{}` | Added to it: for IRSA (not yet tested on EKS), eks.amazonaws.com/role-arn with the ARN of a role that may call Bedrock. |
-| `addons.ax.sessionIdleTTL` | `""` | How long a thread's context may go without activity (a message accepted for it, or a create or an update of one of its tasks, which a turn makes as it starts and as it ends), with no turn running, before the add-on deletes its ADK session and the context's tasks (SESSION_IDLE_TTL), a Go duration. Empty is the add-on's default, 2160h, which is Agent Kourier's default session.threadTTL: set it to the Binding's. "0" keeps them. |
+| `addons.ax.serviceAccount.annotations` | `{}` | Additional annotations. |
+| `addons.ax.sessionIdleTTL` | `""` | How long a thread's context may go without activity (a message accepted for it, or a create or an update of one of its tasks, which a turn makes as it starts and as it ends), with no turn running, before the add-on deletes the context's tasks (SESSION_IDLE_TTL), a Go duration. Empty is the add-on's default, 2160h, which is Agent Kourier's default session.threadTTL: set it to the Binding's. "0" keeps them. |
 | `addons.ax.taskRetention` | `""` | How long the add-on keeps a settled task, and its message IDs, before it deletes them (TASK_RETENTION), a Go duration. Empty is the add-on's default, 720h; "0" keeps them. |
 | `addons.ax.logLevel` | `info` | debug, info, warn or error (LOG_LEVEL) |
-| `addons.ax.auth` |  | Who may call the add-on. The chart has it listen on every interface of the pod (LISTEN_ADDR :8090), where the add-on refuses to start without a caller check, so the chart offers no way to turn the check off: a request without an accepted token is refused. The chart mounts tokenSecret's key as a file (AUTH_TOKEN_FILE) that holds the accepted tokens, one per line (blank lines, and lines that begin with #, are ignored). The add-on reads the file again every few seconds, and the kubelet updates a mounted Secret in place (after its own sync delay), so a change of the tokens needs no restart. The add-on's OIDC caller check is for the AX route and is not in the chart. Agent Kourier sends the token in one of two ways, which header below picks. With header empty, a Binding's identity.tokenSecretRef names a Secret with the token, which Agent Kourier sends as Authorization: Bearer &lt;token&gt;. With header set, the AgentBackend has an entry of headers with that name and a valueSecretRef that names a Secret with the token, which Agent Kourier sends as the header's whole value. The broker and the add-on may read one Secret and key while it holds a single token. To rotate without a refused turn, give the add-on a Secret of its own: add the new token to it on a line of its own, change the broker's Secret to the new token, then remove the old line. With config.source crds and a Binding or AgentBackend that config.\* does not render, grant the broker's Secret to Agent Kourier (rbac.secretNames, or the team's own Role). |
+| `addons.ax.auth` |  | Who may call the add-on. The chart has it listen on every interface of the pod (LISTEN_ADDR :8090), where the add-on refuses to start without a caller check, so the chart offers no way to turn the check off: a request without an accepted token is refused. The chart mounts tokenSecret's key as a file (AUTH_TOKEN_FILE) that holds the accepted tokens, one per line (blank lines, and lines that begin with #, are ignored). The add-on reads the file again every few seconds, and the kubelet updates a mounted Secret in place (after its own sync delay), so a change of the tokens needs no restart. Agent Kourier sends the token in one of two ways, which header below picks. With header empty, a Binding's identity.tokenSecretRef names a Secret with the token, which Agent Kourier sends as Authorization: Bearer &lt;token&gt;. With header set, the AgentBackend has an entry of headers with that name and a valueSecretRef that names a Secret with the token, which Agent Kourier sends as the header's whole value. The broker and the add-on may read one Secret and key while it holds a single token. To rotate without a refused turn, give the add-on a Secret of its own: add the new token to it on a line of its own, change the broker's Secret to the new token, then remove the old line. With config.source crds and a Binding or AgentBackend that config.\* does not render, grant the broker's Secret to Agent Kourier (rbac.secretNames, or the team's own Role). |
 | `addons.ax.auth.tokenSecret` |  | Required: the Secret, in the release namespace, and its key. The key defaults to token, the key that identity.tokenSecretRef and valueSecretRef read when they name none. |
 | `addons.ax.auth.tokenSecret.name` | `""` |  |
 | `addons.ax.auth.tokenSecret.key` | `token` |  |
 | `addons.ax.auth.header` | `""` | The header that carries the token (AUTH_HEADER). Empty is the add-on's default, Authorization, whose value is Bearer &lt;token&gt;; any other name carries the token as its whole value, which an AgentBackend header with a valueSecretRef sends. The values schema and the add-on refuse, in any case, the other names Agent Kourier reserves for the Binding's identity, which no AgentBackend header may set and Agent Kourier never fills with the token: Proxy-Authorization, Cookie, X-User-Id, X-Agent-Name, X-Share-Token and X-Kagent-Insecure-Runtime-Identity. |
-| `addons.ax.store` |  | Where the add-on keeps its tasks, the message IDs it has seen and its ADK sessions. This is the add-on's own setting, apart from Agent Kourier's store.type. |
+| `addons.ax.store` |  | Where the add-on keeps its tasks, the message IDs it has seen and its AX launch records. This is the add-on's own setting, apart from Agent Kourier's store.type. |
 | `addons.ax.store.type` | `sqlite` | sqlite or postgres (STORE) |
 | `addons.ax.store.postgres.dsnSecret` |  | The Secret, in the release namespace, and its key, that hold the DSN: required with addons.ax.store.type postgres, and refused with sqlite. The chart passes it into the container's environment (POSTGRES_DSN, with valueFrom.secretKeyRef). The DSN, password included, never goes in a values file (the render refuses a postgres:// URL with a password anywhere in them). Give the add-on a database of its own, apart from Agent Kourier's and the CMA add-on's. |
 | `addons.ax.store.postgres.dsnSecret.name` | `""` |  |
@@ -514,14 +517,14 @@ anthropicApiKeySecret: {name: anthropic, key: apiKey}
 | `addons.ax.persistence.storageClassName` | `""` | Empty is the cluster's default class; "-" is an explicitly empty one. |
 | `addons.ax.persistence.accessModes` | `[ReadWriteOnce]` |  |
 | `addons.ax.persistence.retainOnUninstall` | `true` | Keep the claim (helm.sh/resource-policy: keep) when the release is uninstalled. Delete it by hand when you mean to. |
-| `addons.ax.networkPolicy` |  | With networkPolicy.enabled, the add-on's NetworkPolicy. Ingress is port 8090 from Agent Kourier's pods, from networkPolicy.metricsFrom (the metrics share the port with A2A: /a2a and the agent card need a token, and /healthz, /readyz and /metrics do not) and, with Postgres, from the add-on's other replicas, which forward to the leader. Egress is DNS (networkPolicy.dns), the model's provider on 443, with Postgres the add-on's other replicas on 8090 and its database, and what addons.ax.networkPolicy.extraEgress adds. Agent Kourier's own policy then also allows egress to the add-on's pods on 8090. |
-| `addons.ax.networkPolicy.model` |  | The model's provider on 443: Amazon Bedrock, and AWS STS for IRSA, with bedrock; the Anthropic API with anthropic. A NetworkPolicy cannot name a host, so this is port 443 to anywhere outside the private and link-local ranges, as networkPolicy.slack is for Agent Kourier. Put an egress proxy's or a VPC endpoint's address in extraEgress and narrow this to [] to close it. Per AWS's EKS Pod Identity and EC2 instance metadata documentation, the Pod Identity agent and the instance metadata service listen on link-local addresses, which this rule leaves out: with Pod Identity add the agent's address and port to extraEgress. |
-| `addons.ax.networkPolicy.model.cidrs` | `["0.0.0.0/0"]` |  |
-| `addons.ax.networkPolicy.model.except` | `["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16"]` |  |
+| `addons.ax.networkPolicy` |  | When NetworkPolicy is enabled, specify the AX server and the controller that forwards HTTPS callbacks. |
+| `addons.ax.networkPolicy.server.to` | `[]` |  |
+| `addons.ax.networkPolicy.server.port` | `8080` |  |
+| `addons.ax.networkPolicy.callbackFrom` | `[]` |  |
 | `addons.ax.networkPolicy.postgres` |  | The add-on's database (addons.ax.store.type postgres), as NetworkPolicyPeers: required when the policy is enabled with Postgres, as networkPolicy.postgres.to is for Agent Kourier's. Egress is on port. |
 | `addons.ax.networkPolicy.postgres.to` | `[]` |  |
 | `addons.ax.networkPolicy.postgres.port` | `5432` |  |
-| `addons.ax.networkPolicy.extraEgress` | `[]` | More egress rules, in Kubernetes' own form: an OTLP collector, an egress proxy, EKS Pod Identity's agent. |
+| `addons.ax.networkPolicy.extraEgress` | `[]` | More egress rules, in Kubernetes' own form: for example an OTLP collector. |
 | `addons.ax.extraEnv` | `[]` | Extra container environment, in Kubernetes' own form. This is where the OpenTelemetry settings go (OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_TRACES_EXPORTER, OTEL_SERVICE_NAME, whose default is agent-kourier-ax, ...); take a header or other credential from a Secret with valueFrom.secretKeyRef, never as a value. |
 | `addons.ax.resources` |  | As resources does for Agent Kourier, a memory limit that is a plain quantity sets GOMEMLIMIT to 80% of it, unless extraEnv sets GOMEMLIMIT. |
 | `addons.ax.resources.requests` | `{cpu: 50m, memory: 128Mi}` |  |

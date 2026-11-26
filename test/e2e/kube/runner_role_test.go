@@ -84,13 +84,12 @@ func TestRunnerRoles(t *testing.T) {
 			}
 		}
 	}
-	// Patching a Deployment is limited to Agent Kourier's own: a runner that could patch any would be able to
-	// change the test doubles' images or arguments.
+	// The runner may patch the two Deployments exercised by restart tests.
 	for _, r := range roles["agent-kourier"] {
 		for _, rule := range r.Rules {
 			named := fmt.Sprint(rule.ResourceNames)
-			if isDeployments := slices.Contains(rule.Resources, "deployments"); isDeployments && named != "[agent-kourier]" || !isDeployments && named != "[]" {
-				t.Errorf("rule %v in agent-kourier has resourceNames %s; want deployments limited to [agent-kourier], and pods and their logs unlimited", rule.Resources, named)
+			if isDeployments := slices.Contains(rule.Resources, "deployments"); isDeployments && named != "[agent-kourier agent-kourier-ax]" || !isDeployments && named != "[]" {
+				t.Errorf("rule %v in agent-kourier has resourceNames %s; want deployments limited to the broker and AX add-on, and pods and their logs unlimited", rule.Resources, named)
 			}
 		}
 	}

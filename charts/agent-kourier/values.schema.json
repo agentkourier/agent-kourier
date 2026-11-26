@@ -333,7 +333,7 @@
         "ax": {
           "type": "object",
           "additionalProperties": false,
-          "description": "the AX add-on, an ADK agent on Amazon Bedrock that serves A2A; off by default",
+          "description": "the AX Task launcher; off by default",
           "properties": {
             "enabled": {"type": "boolean"},
             "image": {
@@ -347,26 +347,38 @@
               }
             },
             "replicaCount": {"type": "integer", "minimum": 0, "description": "0 stops the add-on, 1, or 2 or more with store.type postgres: the replicas elect a leader and the standbys forward to it; SQLite is one replica"},
-            "model": {
-              "type": "object",
-              "additionalProperties": false,
+            "server": {
+              "type": "object", "additionalProperties": false,
+              "properties": {"address": {"type": "string"}}
+            },
+            "atespace": {"type": "string", "minLength": 1, "maxLength": 63},
+            "launcherId": {"type": "string", "maxLength": 63},
+            "taskTemplate": {
+              "type": "object", "additionalProperties": false,
+              "properties": {"configMap": {"type": "object", "additionalProperties": false,
+                "properties": {"name": {"type": "string"}, "key": {"type": "string"}}
+              }}
+            },
+            "resultCallback": {
+              "type": "object", "additionalProperties": false,
               "properties": {
-                "provider": {"enum": ["bedrock", "anthropic"], "description": "bedrock (Amazon Bedrock) or anthropic (the Anthropic API)"},
-                "region": {"type": "string", "description": "the AWS region of Bedrock; required with bedrock, refused with anthropic"},
-                "name": {"type": "string", "description": "the Bedrock model ID or inference profile, or the Anthropic model ID; required"}
+                "url": {"type": "string"},
+                "tokenSecret": {"$ref": "#/definitions/secretKey"},
+                "ingress": {"type": "object", "additionalProperties": false,
+                  "properties": {"enabled": {"type": "boolean"}, "className": {"type": "string"}, "tlsSecretName": {"type": "string"}}
+                }
               }
             },
-            "bedrock": {
-              "type": "object",
-              "additionalProperties": false,
-              "description": "with bedrock, the Bedrock API key, apiKeySecret with both name and key or neither; neither takes AWS credentials from the SDK's default chain; refused with anthropic",
-              "properties": {"apiKeySecret": {"$ref": "#/definitions/secretKey"}}
-            },
-            "anthropicApiKeySecret": {"$ref": "#/definitions/secretKey"},
+            "promptKey": {"type": "string", "minLength": 1},
+            "history": {"type": "boolean"},
+            "maxRunning": {"type": "integer", "minimum": 1},
+            "pollInterval": {"$ref": "#/definitions/durationOrZero"},
+            "turnTimeout": {"$ref": "#/definitions/durationOrZero"},
+            "keepFailed": {"$ref": "#/definitions/durationOrZero"},
             "serviceAccount": {
               "type": "object",
               "additionalProperties": false,
-              "properties": {"annotations": {"type": "object", "description": "on the add-on's ServiceAccount: an IAM role for IRSA"}}
+              "properties": {"annotations": {"type": "object", "description": "on the add-on's ServiceAccount"}}
             },
             "sessionIdleTTL": {"$ref": "#/definitions/durationOrZero"},
             "taskRetention": {"$ref": "#/definitions/durationOrZero"},
@@ -416,12 +428,12 @@
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "model": {
+                "server": {
                   "type": "object",
                   "additionalProperties": false,
-                  "description": "egress to the model's provider on 443: Bedrock (and STS) or the Anthropic API",
-                  "properties": {"cidrs": {"type": "array", "items": {"type": "string"}}, "except": {"type": "array", "items": {"type": "string"}}}
+                  "properties": {"to": {"type": "array"}, "port": {"type": "integer", "minimum": 1, "maximum": 65535}}
                 },
+                "callbackFrom": {"type": "array"},
                 "postgres": {
                   "type": "object",
                   "additionalProperties": false,

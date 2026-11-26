@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
-	"google.golang.org/adk/v2/session"
 
 	kitstore "github.com/agentkourier/agent-kourier/addons/kit/store"
 	"github.com/agentkourier/agent-kourier/addons/kit/store/pgtest"
@@ -40,8 +39,8 @@ func createTask(s *Store, id string) error {
 	return err
 }
 
-func createSession(s *Store, id string) error {
-	_, err := s.Sessions().Create(asCaller("agent-kourier"), &session.CreateRequest{AppName: AppName, UserID: "agent-kourier", SessionID: id})
+func createLaunch(s *Store, id string) error {
+	_, err := s.Register(asCaller("agent-kourier"), Launch{TaskID: id, ResultID: id, Deadline: time.Now().Add(time.Minute).UnixNano()})
 	return err
 }
 
@@ -62,13 +61,13 @@ func TestSQLiteElectsNoLeader(t *testing.T) {
 	if err := createTask(s, "t1"); err != nil {
 		t.Fatalf("a SQLite write is never fenced: %v", err)
 	}
-	if err := createSession(s, "c1"); err != nil {
-		t.Fatalf("an ADK write on SQLite is never fenced: %v", err)
+	if err := createLaunch(s, "c1"); err != nil {
+		t.Fatalf("an launch write on SQLite is never fenced: %v", err)
 	}
 }
 
 // A standby takes the lease once it expires, by the database's clock; the epoch moves, and the old leader can neither
-// write, through the store or through ADK, nor renew.
+// write, through the store or through the launch table, nor renew.
 func TestPostgresTakeoverAfterExpiry(t *testing.T) {
 	dsn := pgtest.DSN(t)
 	var deposed atomic.Int32
@@ -79,8 +78,8 @@ func TestPostgresTakeoverAfterExpiry(t *testing.T) {
 	if err := createTask(a, "t1"); err != nil {
 		t.Fatalf("the leader's write: %v", err)
 	}
-	if err := createSession(a, "c1"); err != nil {
-		t.Fatalf("the leader's ADK write: %v", err)
+	if err := createLaunch(a, "c1"); err != nil {
+		t.Fatalf("the leader's launch write: %v", err)
 	}
 	if l, ok, err := b.TryLead(ctx, "b", "http://b:8090", time.Second); err != nil || ok || !l.Live || l.Holder != "a" {
 		t.Fatalf("TryLead while the lease is live = %+v, %v, %v; want a's live lease", l, ok, err)
@@ -93,8 +92,8 @@ func TestPostgresTakeoverAfterExpiry(t *testing.T) {
 	if err := createTask(a, "t2"); !errors.Is(err, kitstore.ErrDeposed) {
 		t.Fatalf("the old leader's write: %v, want ErrDeposed", err)
 	}
-	if err := createSession(a, "c2"); !errors.Is(err, kitstore.ErrDeposed) {
-		t.Fatalf("the old leader's ADK write: %v, want ErrDeposed", err)
+	if err := createLaunch(a, "c2"); !errors.Is(err, kitstore.ErrDeposed) {
+		t.Fatalf("the old leader's launch write: %v, want ErrDeposed", err)
 	}
 	if deposed.Load() != 2 {
 		t.Fatalf("OnDeposed ran %d times, want once for each refused write", deposed.Load())
@@ -105,12 +104,12 @@ func TestPostgresTakeoverAfterExpiry(t *testing.T) {
 	if err := createTask(b, "t2"); err != nil {
 		t.Fatalf("the new leader's write: %v", err)
 	}
-	if err := createSession(b, "c2"); err != nil {
-		t.Fatalf("the new leader's ADK write: %v", err)
+	if err := createLaunch(b, "c2"); err != nil {
+		t.Fatalf("the new leader's launch write: %v", err)
 	}
 }
 
-// A store that never led refuses every write, the store's and ADK's, without calling OnDeposed: a standby writes
+// A store that never led refuses every write, including launch receipt writes, without calling OnDeposed: a standby writes
 // nothing, so it can neither settle the leader's running turns nor delete its contexts.
 func TestPostgresStandbyWritesNothing(t *testing.T) {
 	var deposed atomic.Int32
@@ -121,8 +120,8 @@ func TestPostgresStandbyWritesNothing(t *testing.T) {
 	if _, err := s.SettleInterrupted(context.Background(), interruptedMessage); !errors.Is(err, kitstore.ErrDeposed) {
 		t.Fatalf("a standby's settlement: %v, want ErrDeposed", err)
 	}
-	if err := createSession(s, "c1"); !errors.Is(err, kitstore.ErrDeposed) {
-		t.Fatalf("a standby's ADK write: %v, want ErrDeposed", err)
+	if err := createLaunch(s, "c1"); !errors.Is(err, kitstore.ErrDeposed) {
+		t.Fatalf("a standby's launch write: %v, want ErrDeposed", err)
 	}
 	if deposed.Load() != 0 {
 		t.Fatal("OnDeposed ran for a store that never led")

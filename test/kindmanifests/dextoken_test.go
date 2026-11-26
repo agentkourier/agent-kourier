@@ -48,16 +48,15 @@ func TestDexTokenIsTheSentinelLine(t *testing.T) {
 }
 
 // TestARunInAnOIDCTierStartsFromAFreshToken: the Binding's Dex token lasts 24 hours, so e2e-run.sh makes a new one
-// for full and AX runs, after it has checked the context it will act on and before it starts the Job. A fast-tier
-// run, whose token is not Dex's, does not.
+// for full-tier runs, after checking the local context and before starting the Job.
 func TestARunInAnOIDCTierStartsFromAFreshToken(t *testing.T) {
 	raw, err := os.ReadFile("../../hack/kind/e2e-run.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
 	script := string(raw)
-	check, refresh, job := `assert_context "${tier}"`, `[ "${tier}" = fast ] || refresh_dex_token`, `echo "==> run the Job in`
-	i, j, k := strings.Index(script, check), strings.Index(script, refresh), strings.Index(script, job)
+	check, refresh, job := `assert_context "${tier}"`, `if [ "${tier}" = full ]; then refresh_dex_token; fi`, `echo "==> run the Job in`
+	i, j, k := strings.Index(script, check), strings.Index(script, "if [ \"${tier}\" = full ]; then\n  refresh_dex_token\nfi"), strings.Index(script, job)
 	if i < 0 || j < 0 || k < 0 || i >= j || j >= k {
 		t.Errorf("e2e-run.sh has the context check at %d, the OIDC-tier refresh at %d and the Job at %d; want that order, so the token is made on the checked context, before the run", i, j, k)
 	}
@@ -68,7 +67,7 @@ func TestARunInAnOIDCTierStartsFromAFreshToken(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if refreshed := strings.TrimSpace(string(out)) == "refreshed"; refreshed != (tier != "fast") {
+			if refreshed := strings.TrimSpace(string(out)) == "refreshed"; refreshed != (tier == "full") {
 				t.Errorf("tier %s refreshed = %v", tier, refreshed)
 			}
 		})

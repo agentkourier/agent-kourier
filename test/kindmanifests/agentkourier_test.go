@@ -727,8 +727,7 @@ func curlImage(t *testing.T) string {
 	return string(m[0][1])
 }
 
-// TestProbePodsShareTheCurlImage: the verify scripts, which do not source lib.sh, set the same CURL_IMAGE as lib.sh, and
-// the AX probe Pod takes lib.sh's through a placeholder, so a Renovate bump of the curl image reaches every probe pod.
+// TestProbePodsShareTheCurlImage: the verify scripts use the same CURL_IMAGE as lib.sh.
 func TestProbePodsShareTheCurlImage(t *testing.T) {
 	image := curlImage(t)
 	for _, f := range []string{"fast/verify.sh", "full/verify.sh"} {
@@ -740,20 +739,7 @@ func TestProbePodsShareTheCurlImage(t *testing.T) {
 			t.Errorf("%s does not set CURL_IMAGE=%s, lib.sh's", f, image)
 		}
 	}
-	probe, err := os.ReadFile("../../hack/kind/ax/probe.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if imgs := imageRef.FindAllSubmatch(probe, -1); len(imgs) != 1 || string(imgs[0][1]) != "'@CURL_IMAGE@'" {
-		t.Errorf("ax/probe.yaml names images %q; want only '@CURL_IMAGE@', which lib.sh fills in", imgs)
-	}
-	lib, err := os.ReadFile("../../hack/kind/lib.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(lib), `-e "s|@CURL_IMAGE@|${CURL_IMAGE}|g" "${HERE}/ax/probe.yaml"`) {
-		t.Error("lib.sh's probe_ax_agents does not fill ax/probe.yaml's @CURL_IMAGE@ with CURL_IMAGE")
-	}
+
 }
 
 // TestFullTierHasTheToolsScenarioAgent: S13 runs in both tiers, so the full tier's kagent has an agent of the name its
