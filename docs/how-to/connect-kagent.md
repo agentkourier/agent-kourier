@@ -11,10 +11,14 @@ Binding's turns reach one of its agents.
 
     **1. Check the cluster can run it.** kagent 1.0 runs every agent session on Agent Substrate, which needs the
     pod-certificate APIs: the `ClusterTrustBundle`, `ClusterTrustBundleProjection` and `PodCertificateRequest` feature
-    gates and `certificates.k8s.io/v1beta1`. They are off by default through Kubernetes 1.36, and managed EKS through 1.36 cannot
-    enable them. From 1.37 the APIs are GA, but `v1beta1` is still off by default, and the pinned Substrate needs it; EKS
-    1.37 serves the GA `v1` APIs but not `v1beta1`. The project's kind tiers turn them on, so a cluster that runs the kind
-    tiers' kagent may still not run it elsewhere. Check:
+    gates and `certificates.k8s.io/v1beta1`.
+
+    - Through Kubernetes 1.36 they are off by default, and managed EKS through 1.36 cannot enable them.
+    - From 1.37 the APIs are GA, but `v1beta1` is still off by default, and the pinned Substrate needs it.
+    - EKS 1.37 serves the GA `v1` APIs but not `v1beta1`.
+
+    The project's kind tiers turn them on, so a cluster that runs the kind tiers' kagent may still not run it elsewhere.
+    Check:
 
     ```sh
     kubectl api-resources --api-group=certificates.k8s.io   # lists clustertrustbundles and podcertificaterequests
@@ -40,39 +44,52 @@ Binding's turns reach one of its agents.
     ```
 
     When teams share the backend and each should name only the agents of its own namespace, add
-    `agents: {sameNamespace: true}` to the spec. Without `agents` a Binding may name an agent in any namespace of the kagent install. With
-    custom resources (`config.source: crds`, the chart's default) a Binding whose `agent.namespace` the field does not allow is not served
-    and says `AgentNamespaceNotAllowed`, and the others keep running. With `config.source: files` the config resolves all or nothing: one
-    such Binding stops the broker from starting (exit code 2), or keeps it on the last good config on a reload. See
+    `agents: {sameNamespace: true}` to the spec. Without `agents` a Binding may name an agent in any namespace of the
+    kagent install.
+
+    With custom resources (`config.source: crds`, the chart's default) a Binding whose `agent.namespace` the field does
+    not allow is not served and says `AgentNamespaceNotAllowed`, and the others keep running.
+
+    With `config.source: files` the config resolves all or nothing. One such Binding stops the broker from starting
+    (exit code 2), or keeps it on the last good config on a reload. See
     [Security](../explanation/security.md#what-the-people-who-write-these-objects-can-do) for what the field does and does not bound.
 
     **4. Give each Binding its own token.** A Binding's `identity.tokenSecretRef` names a Secret with an OIDC token the
     front door accepts. [Create the Binding identity](create-binding-identity.md) shows how to provision the account
-    and issue the first token with Dex. In the tested 1.0.0-alpha5 OIDC setup, kagent binds a session to the identity
-    that created it, so every turn of a Binding uses the
-    same token owner. A Binding with `tokenSecretRef` must target an OIDC-mode kagent: in insecure mode kagent ignores
-    the token and takes the user from `?user_id=` or `X-User-Id`; with neither, it runs every turn as `admin@kagent.dev`.
+    and issue the first token with Dex.
+
+    In the tested 1.0.0-alpha5 OIDC setup, kagent binds a session to the identity that created it, so every turn of a
+    Binding uses the same token owner.
+
+    A Binding with `tokenSecretRef` must target an OIDC-mode kagent. In insecure mode kagent ignores the token and takes
+    the user from `?user_id=` or `X-User-Id`. With neither, it runs every turn as `admin@kagent.dev`.
 
     **5. Configure interactions.** Set `interactions.askUser: true` when the agent should ask people questions. Set
     `interactions.toolApprovals: true` when a write-capable agent should pause for a Slack decision. Approvals are
-    disabled by default. Optionally set `interactions.approverGroups` to Slack user group IDs; without groups, every
-    non-bot channel member may decide and the config loader warns. With groups, the decider must belong to one of them,
-    belong to the channel, and not be a bot. The Slack app needs the `usergroups:read` bot scope when groups are used;
-    reinstall the app after adding that scope. See [Let the agent ask questions](agent-questions.md) for the controls,
-    timeout and audit behavior.
+    disabled by default.
+
+    Optionally set `interactions.approverGroups` to Slack user group IDs. Without groups, every non-bot channel member
+    may decide and the config loader warns. With groups, the decider must belong to one of them, belong to the channel,
+    and not be a bot.
+
+    The Slack app needs the `usergroups:read` bot scope when groups are used: reinstall the app after adding that scope.
+    See [Let the agent ask questions](agent-questions.md) for the controls, timeout and audit behavior.
 
     `toolApprovals` and `askUser` are independent. A tool approval on a Binding where `toolApprovals` is false is denied
     through kagent with a fixed reason and a notice in the thread. A prompt that cannot be shown exactly or cannot fit in
-    one message is refused and the task is cancelled. A pinned kagent 1.0.0-alpha5 runtime check approved `add_numbers`
-    and denied `check_status` in one two-tool pause; only `add_numbers` executed. The broker's end-to-end suite verifies this
-    with fake Slack and pinned kagent 1.0.0-alpha5.
+    one message is refused and the task is cancelled.
+
+    A pinned kagent 1.0.0-alpha5 runtime check approved `add_numbers` and denied `check_status` in one two-tool pause,
+    and only `add_numbers` executed. The broker's end-to-end suite verifies this with fake Slack and pinned kagent
+    1.0.0-alpha5.
 
 === "kagent 0.9.x"
 
     kagent 0.9.x speaks A2A 0.3, which the generic `a2a` dialect reads. It runs on a cluster without the
-    pod-certificate APIs. It is tested against kagent 0.9.4 on a real cluster. The `a2a` dialect shows its tool calls as
-    step cards: kagent 0.9.x sends them in the messages of its status updates, marked `kagent_type`, and Agent Kourier
-    reads them there. The tests replay a turn recorded from kagent 0.9.4.
+    pod-certificate APIs. It is tested against kagent 0.9.4 on a real cluster.
+
+    The `a2a` dialect shows its tool calls as step cards: kagent 0.9.x sends them in the messages of its status updates,
+    marked `kagent_type`, and Agent Kourier reads them there. The tests replay a turn recorded from kagent 0.9.4.
 
     **1. Find the controller's Service.** Its name depends on the Helm release name. Argo CD names the release after the
     Application, so an Application called `my-kagent` makes the Service
@@ -83,8 +100,8 @@ Binding's turns reach one of its agents.
     ```
 
     **2. Declare the backend** with the agent's A2A endpoint. Keep the trailing slash: a POST without it was answered
-    with a 307 in the 0.9.x installs this was written against (kagent's own router issues no redirect, so another hop
-    in front of it may be the source), and Agent Kourier follows no redirect.
+    with a 307 in the 0.9.x installs this was written against, and Agent Kourier follows no redirect. kagent's own
+    router issues no redirect, so another hop in front of it may be the source.
 
     ```yaml
     config:

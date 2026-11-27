@@ -13,9 +13,9 @@ the Binding that connect it; [Start from a recipe](recipes.md) has the others.
 The agent must:
 
 - serve an A2A 1.0 or 0.3 agent card whose capabilities advertise streaming. Agent Kourier rejects an agent whose card
-  does not;
-- offer a JSON-RPC interface. A card that lists only gRPC or REST is refused;
-- serve its card at the endpoint URL plus `/.well-known/agent-card.json`, with a trailing slash on the URL trimmed;
+  does not.
+- offer a JSON-RPC interface. A card that lists only gRPC or REST is refused.
+- serve its card at the endpoint URL plus `/.well-known/agent-card.json`, with a trailing slash on the URL trimmed.
 - answer with task events and put its answer in artifact text parts, or answer a new turn with one agent message that
   names no task. A message is the whole answer, and with no task there is nothing to follow after a dropped stream or to
   look up after a restart. An answer to a question must continue its task with task events.

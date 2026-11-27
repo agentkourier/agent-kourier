@@ -7,17 +7,26 @@ session of its own, and the agent comments on Linear as the application's own us
 !!! warning "Experimental"
 
     Needs Agent Kourier 0.6.0 or later: 0.5.x refuses `platform: webhook`. The `webhook` platform is new, and its fields may change
-    in a later version. This setup was run end to end against Linear on 2026-11-17, with this mapping, on a pre-0.6.0 build of the
-    broker. What this page says Linear sends was seen in that run's deliveries, and Linear can change it. Linear's behaviour and
-    labels that the run did not see come from Linear's documentation, and say so where they appear. The steps on Linear's side
-    follow that documentation, which can change: if a menu or field has moved, Linear's documentation is the reference. Not run: the
-    delivery header `Linear-Delivery`, step 2's token request as written, a personal API key in place of the application, and a
-    retried delivery's timestamp.
+    in a later version.
+
+    This setup was run end to end against Linear on 2026-11-17, with this mapping, on a pre-0.6.0 build of the broker. What this
+    page says Linear sends was seen in that run's deliveries, and Linear can change it.
+
+    Linear's behaviour and labels that the run did not see come from Linear's documentation, and say so where they appear. The steps
+    on Linear's side follow that documentation, which can change: if a menu or field has moved, Linear's documentation is the
+    reference.
+
+    Not run:
+
+    - the delivery header `Linear-Delivery`
+    - step 2's token request as written
+    - a personal API key in place of the application
+    - a retried delivery's timestamp
 
 ## What you end with
 
-- An issue created in the team starts a plan: a turn of the session named by the issue's identifier, such as `ENG-12`, in which the
-  agent reads the issue and adds one comment with a plan.
+- An issue created in the team starts a plan: a turn of the session named by the issue's identifier, such as `ENG-12`. In that turn
+  the agent reads the issue and adds one comment with a plan.
 - A change of the issue's description starts a revised plan in the same session, so the agent can see its first plan.
 - A comment on the issue that names the application (`acme-agent`) starts a reply in the same session.
 - The application's own comments, and the updates its comments cause, are dropped as the agent's own (`self`), so they start
@@ -40,8 +49,10 @@ session of its own, and the agent comments on Linear as the application's own us
 ## 1. Create the OAuth application
 
 In the run the agent worked as a Linear OAuth application with client credentials: a token that the application gets for itself,
-with no person signing in, and that acts as the application's own user. The recipe's comments also allow a personal API key, whose
-user is then the identity, with a webhook of the workspace; that setup was *not run*, and this page follows the run.
+with no person signing in, and that acts as the application's own user.
+
+The recipe's comments also allow a personal API key, whose user is then the identity, with a webhook of the workspace. That setup
+was *not run*, and this page follows the run.
 
 In Linear, open **Settings**, **Administration**, **API**, and create an OAuth application (menu path from Linear's documentation).
 Linear's documentation names the form's fields by what they hold, not by their labels:
@@ -64,13 +75,13 @@ printf 'data-urlencode = "client_id=%s"\ndata-urlencode = "client_secret=%s"\n' 
   "$(cat ~/.config/webhooks/linear-client-id)" "$(cat ~/.config/webhooks/linear-client-secret)" > ~/.config/webhooks/linear-client.curlrc
 ```
 
-The last line writes the two as form fields into a curl config file, which step 2 and the tools' token request read; Linear's
+The last line writes the two as form fields into a curl config file, which step 2 and the tools' token request read. Linear's
 documentation takes them in the request's body, or by HTTP Basic.
 
 ## 2. Find the identity
 
 The connection's `spec.webhook.identity` is the application user's ID. Get a token with the client credentials, then ask Linear's
-GraphQL API who it is; the credentials and the token are read from files, and the token is checked before it is written:
+GraphQL API who it is. The credentials and the token are read from files, and the token is checked before it is written:
 
 ```sh
 umask 077
@@ -95,8 +106,9 @@ not as the run sent it. In the run the identity was the ID that the webhooks put
 
 Linear makes the webhook's signing secret itself, and shows it only once the webhook is on, so you make the Secret `linear-webhook`
 in step 6, from the secret Linear shows. A team connection whose Secret does not exist yet does not fail: the broker starts it at its
-first look after the Secret is created ([Limits](../../reference/limits.md#run-the-broker)). What you do now is check that the broker
-will read the Secret once it exists, since a missing grant shows only then:
+first look after the Secret is created ([Limits](../../reference/limits.md#run-the-broker)).
+
+What you do now is check that the broker will read the Secret once it exists, since a missing grant shows only then:
 
 ```sh
 helm -n agent-kourier get values agent-kourier -o json \
@@ -104,14 +116,17 @@ helm -n agent-kourier get values agent-kourier -o json \
 ```
 
 `namespaces` must hold `acme-webhooks` (unless you admit it another way, such as by a label) and `secrets` must hold `linear-webhook`
-([Before you start](../receive-webhooks.md#before-you-start)); the command takes the release to be called `agent-kourier`. The client
-secret of step 1 is not in this Secret, and the broker never reads it: it belongs to the agent's tools (step 4).
+([Before you start](../receive-webhooks.md#before-you-start)). The command takes the release to be called `agent-kourier`.
+
+The client secret of step 1 is not in this Secret, and the broker never reads it: it belongs to the agent's tools (step 4).
 
 ## 4. Run the agent and its tools
 
 The recipe ships no agent. Run an A2A agent whose agent card advertises streaming, with tools that do the operations below as the
-application; [The agent](../receive-webhooks.md#the-agent) says what it must be and do, and the quickest way to one. Note its A2A
-endpoint: step 5 puts it in the AgentBackend, and the Binding turns `Ready` only once the broker can fetch the agent's card from it.
+application. [The agent](../receive-webhooks.md#the-agent) says what it must be and do, and the quickest way to one.
+
+Note its A2A endpoint: step 5 puts it in the AgentBackend, and the Binding turns `Ready` only once the broker can fetch the agent's
+card from it.
 
 The recipe's prompts ask the agent to do these, with a client-credentials token as `Authorization: Bearer <token>`, on
 `https://api.linear.app/graphql`:
@@ -122,9 +137,10 @@ The recipe's prompts ask the agent to do these, with a client-credentials token 
 | Create a comment on the issue | Every trigger | The `commentCreate` mutation, with `issueId` (the identifier works) and `body` in Markdown |
 
 The tools get their token as step 2 does, with the scopes they need: Linear's documentation lists `read`, and
-`comments:create` for creating comments (or `write`); the run did not record which it used. Linear's documentation says a
-client-credentials token is valid for 30 days and has no refresh token, and that Linear's API refuses an expired one: the tools must
-get a new token before then, or when Linear refuses it.
+`comments:create` for creating comments (or `write`). The run did not record which it used.
+
+Linear's documentation says a client-credentials token is valid for 30 days and has no refresh token, and that Linear's API
+refuses an expired one. The tools must get a new token before then, or when Linear refuses it.
 
 The run used a small MCP server of its own, with one tool for each operation, held to the test team.
 
@@ -198,11 +214,16 @@ kubectl -n agent-kourier logs "$LEADER" | grep '"webhook: taking requests"' | gr
 secret was ever shown where someone else could see it, such as a screenshot, make a new one before you go on.
 
 `Ready` waits on the connection and on the agent of step 4: it turns `True` once the connection runs (`ChannelJoined`) and a fresh
-fetch of the agent's card succeeds, with a card that advertises streaming (`BackendReachable`). If the wait times out,
-`kubectl -n acme-webhooks get akbinding linear-plans` shows the condition that holds it back in the `Reason` column, such as
-`ChannelJoined:ChatCredentialsUnusable` (the Secret is missing, or a key of it), `ChannelJoined:ChatUnavailable` (the connection
-does not run for another reason, such as a Secret the broker is not granted; the leader's log says why),
-`BackendReachable:Unreachable` or `BackendReachable:StreamingUnsupported`.
+fetch of the agent's card succeeds, with a card that advertises streaming (`BackendReachable`).
+
+If the wait times out, `kubectl -n acme-webhooks get akbinding linear-plans` shows the condition that holds it back in the `Reason`
+column, such as:
+
+- `ChannelJoined:ChatCredentialsUnusable`: the Secret is missing, or a key of it
+- `ChannelJoined:ChatUnavailable`: the connection does not run for another reason, such as a Secret the broker is not granted (the
+  leader's log says why)
+- `BackendReachable:Unreachable`
+- `BackendReachable:StreamingUnsupported`
 
 `webhook: taking requests`, with `"connection":"acme-webhooks/linear"`, says the connection runs on the leader: from then on its URL
 checks the signature of every request. It does not wait for the agent. Check the URL from outside with a request that has no
@@ -219,11 +240,13 @@ the leader yet: its Secret, or the namespace's admission. Anything else is the w
 ([Expose the chat listener](../receive-webhooks.md#expose-the-chat-listener)).
 
 No test delivery from Linear is known to this page (not verified), so nothing arrives until an issue or comment event does. To check
-the signing secret before that, send a signed test request yourself ([Test the route](../receive-webhooks.md#test-the-route)), with
-the hex signature in `Linear-Signature`, with no `sha256=` before it, and a `webhookTimestamp` in the body within a minute of now, in
-milliseconds (`$(($(date +%s) * 1000))`); or make step 7's issue the first delivery. A `200` to a delivery says only that the connection took it, not that a trigger matched: the
-connection answers `200`, with an empty body, to an event it accepted, to the agent's own (`self`) and to one it could not map
-(`unmapped`) alike. Each has its `webhook: delivery answered` line on the leader, with its `outcome`.
+the signing secret before that, send a signed test request yourself ([Test the route](../receive-webhooks.md#test-the-route)), or
+make step 7's issue the first delivery. The test request carries the hex signature in `Linear-Signature`, with no `sha256=` before
+it, and a `webhookTimestamp` in the body within a minute of now, in milliseconds (`$(($(date +%s) * 1000))`).
+
+A `200` to a delivery says only that the connection took it, not that a trigger matched: the connection answers `200`, with an
+empty body, to an event it accepted, to the agent's own (`self`) and to one it could not map (`unmapped`) alike. Each has its
+`webhook: delivery answered` line on the leader, with its `outcome`.
 
 ## 7. Test it
 
@@ -279,7 +302,9 @@ These are the run's counts for your three actions; yours depend on what else Lin
 
 Each change is to the recipe's ChatConnection fields or Binding triggers. A field that a trigger matches must be in the connection's
 `fields` (at most 32), and a `text` field can be matched but not read by `promptTemplate`. A trigger has at most 6 `match` and 6
-`exclude` entries. The ChatConnection is a team connection, so the broker restarts it by itself when you apply the edit.
+`exclude` entries.
+
+The ChatConnection is a team connection, so the broker restarts it by itself when you apply the edit.
 
 **Only issues that ask for it.** The recipe reads the title as the `text` field `title`. Add it to the first trigger's `match`:
 

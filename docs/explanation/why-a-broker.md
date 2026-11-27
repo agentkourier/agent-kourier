@@ -23,13 +23,15 @@ and hold it. Existing Slack bridges covered part of this, but none provided the 
 
 ## Separate responsibilities
 
-The agent owns its tools and task logic. Its runtime deploys and executes it. Agent Kourier owns the Slack connection,
+The agent owns its tools and task logic, and its runtime deploys and executes it. Agent Kourier owns the Slack connection,
 thread-to-session mapping, reply queue, output rendering, and delivery recovery. Multiple bindings share that handling
 while connecting channels to different agents.
 
 A2A is the boundary between the broker and the agent. An agent that already exposes a supported streaming A2A endpoint
-needs configuration to connect to Slack. An agent without that endpoint still needs an A2A implementation or adapter;
-Agent Kourier removes the need to implement Slack handling in the agent. See
+needs configuration to connect to Slack.
+
+An agent without that endpoint still needs an A2A implementation or adapter. Agent Kourier removes the need to
+implement Slack handling in the agent. See
 [Connect a generic A2A agent](../how-to/connect-a2a-agent.md) for the endpoint requirements.
 
 ## Why always on
@@ -44,9 +46,11 @@ posts go through a durable outbox, so after a restart Agent Kourier continues ea
 
 ## Why not a proxy
 
-A proxy forwards a request and forgets it. A conversation in a thread is not one request: it is a sequence of turns,
-some of which arrive while the agent is still working, some of which answer the agent's question, and some of which come
-from an alert rather than a person. Agent Kourier queues the reply that arrives while a task runs, renders the agent's
+A proxy forwards a request and forgets it. A conversation in a thread is a sequence of turns, not one request. Some
+turns arrive while the agent is still working, some answer the agent's question, and some come from an alert rather
+than a person.
+
+Agent Kourier queues the reply that arrives while a task runs, renders the agent's
 question and validates the answer, streams the output into one message, and recovers the task after a crash. None of
 that fits in a stateless hop.
 
@@ -58,13 +62,16 @@ oauth2-proxy in front of the agent. See [Security model](security.md).
 ## Why outside the paging path
 
 Agent Kourier is an additional reader of alerts, never a replacement. It reads the alert your alerting tool already posts
-to the channel: on Slack, or on Microsoft Teams, where Alertmanager posts through a Workflows webhook and Agent Kourier reads
-the post through Microsoft Graph. It is not an Alertmanager receiver, so Alertmanager's routes are untouched. An Agent
-Kourier outage does not stop an alert from reaching the channel, because the alert has already reached people through its own
-receiver. For the same reason, an alert that a rate limit or
-daily cap stops is not posted about one by one; it is counted in one digest line.
+to the channel: on Slack, or on Microsoft Teams, where a tool such as Alertmanager posts through a Workflows webhook and
+Agent Kourier reads the post through Microsoft Graph.
 
-The `webhook` platform (experimental) does not change this: it takes other services' events, Alertmanager is not a supported
+Your alerting tool sends Agent Kourier nothing, so the tool's routing is untouched. An Agent Kourier outage does not stop
+an alert from reaching the channel, because the alert gets there by your alerting tool's own route.
+
+For the same reason, an alert that a rate limit or daily cap stops is not posted about one by one. It is counted in one
+digest line.
+
+The `webhook` platform (experimental) does not change this. It takes other services' events, Alertmanager is not a supported
 source of it, and alerts enter only through `chat.triggers`.
 
 ## Why protocol first
@@ -76,11 +83,17 @@ platform's internal API changes. Backend-specific behaviour lives in a dialect.
 ## Why declarative and team-owned
 
 A team commits a namespaced `Binding` next to its agent's manifests, and GitOps deploys both. The platform team owns
-the shared `AgentBackend` and the broker's own `ChatConnection`, if it has one, and with custom resources decides which
-namespaces may bring a `ChatConnection` of their own: every namespace (the default when nothing is set, for a cluster with one
-broker), a list of namespaces, or the namespaces whose labels match a selector. An application team wires its own channel to
-its own agent, through the broker's app or, in a namespace the broker admits, its own, without touching platform configuration. Cross-namespace
-references work only where the owning resource allows the referring namespace.
+the shared `AgentBackend` and the broker's own `ChatConnection`, if it has one.
+
+With custom resources, the platform team also decides which namespaces may bring a `ChatConnection` of their own:
+
+- every namespace (the default when nothing is set, for a cluster with one broker)
+- a list of namespaces
+- the namespaces whose labels match a selector
+
+An application team wires its own channel to its own agent without touching platform configuration. It does so through
+the broker's app or, in a namespace the broker admits, its own app. Cross-namespace references work only where the
+owning resource allows the referring namespace.
 
 ## What it gives up
 

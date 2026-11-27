@@ -7,19 +7,30 @@ GitHub as a machine user (a GitHub account kept for the agent), with that user's
 !!! warning "Experimental"
 
     Needs Agent Kourier 0.6.0 or later: 0.5.x refuses `platform: webhook`. The `webhook` platform is new, and its fields may change
-    in a later version. This mapping was run end to end against GitHub on 2026-11-17, on a pre-0.6.0 build of the broker, with a
-    GitHub App's webhook and a small MCP server of the run's own, not with this page's machine user, repository webhook and agent.
-    What this page says GitHub sends was seen in that run's deliveries, from the App, and GitHub can change it. GitHub's behaviour
-    and labels that the run did not see come from GitHub's documentation, and say so where they appear. The steps on GitHub's side
-    follow that documentation, which can change: if a menu or field has moved, GitHub's documentation is the reference. Not run: the
-    machine user, its token and the recipe's agent against GitHub or a live model; a repository's webhook; the delivery header
-    `X-GitHub-Delivery`; a comment on a line of the diff (`pull_request_review_comment`); and every change marked *not run* below.
+    in a later version.
+
+    This mapping was run end to end against GitHub on 2026-11-17, on a pre-0.6.0 build of the broker, with a GitHub App's webhook
+    and a small MCP server of the run's own, not with this page's machine user, repository webhook and agent. What this page says
+    GitHub sends was seen in that run's deliveries, from the App, and GitHub can change it.
+
+    GitHub's behaviour and labels that the run did not see come from GitHub's documentation, and say so where they appear. The steps
+    on GitHub's side follow that documentation, which can change: if a menu or field has moved, GitHub's documentation is the
+    reference.
+
+    Not run:
+
+    - the machine user, its token and the recipe's agent against GitHub or a live model
+    - a repository's webhook
+    - the delivery header `X-GitHub-Delivery`
+    - a comment on a line of the diff (`pull_request_review_comment`)
+    - every change marked *not run* below
 
 ## What you end with
 
 - A pull request that is opened, reopened, pushed to or marked ready for review, and is not a draft, starts a review: a turn of the
-  session `pr-<number>`, in which the agent reads the pull request at its head commit and posts one review: of the event `REQUEST_CHANGES` when it finds a defect that must be
-  fixed before merging, and `COMMENT` otherwise. It never approves, and it cannot dismiss its own request (see the warning below).
+  session `pr-<number>`. In that turn the agent reads the pull request at its head commit and posts one review, of the event
+  `REQUEST_CHANGES` when it finds a defect that must be fixed before merging, and `COMMENT` otherwise. It never approves, and it
+  cannot dismiss its own request (see the warning below).
 - A comment on that pull request that mentions the machine user (`@<login>`) starts a reply: a turn of the same session, so the agent
   can see the review it posted. A comment in the pull request's conversation was run (with the App); a comment on a line of its diff
   (`pull_request_review_comment`) was *not run*.
@@ -50,21 +61,27 @@ and its rights are that user's. Sign it up, then give it the **Read** role on th
 !!! warning "Not Write: its approval would count"
 
     The model can be talked into an `APPROVE` by the text of the pull request it reviews: only `agent.yaml`'s instructions hold
-    the review to `REQUEST_CHANGES` or `COMMENT`. GitHub's [repository roles](https://docs.github.com/en/organizations/managing-user-access-to-your-organizations-repositories/managing-repository-roles/repository-roles-for-an-organization)
+    the review to `REQUEST_CHANGES` or `COMMENT`.
+
+    GitHub's [repository roles](https://docs.github.com/en/organizations/managing-user-access-to-your-organizations-repositories/managing-repository-roles/repository-roles-for-an-organization)
     let every role, Read included, submit reviews on pull requests, and only Write, Maintain and Admin approve or
-    request changes on a pull request with required reviews; its page on
+    request changes on a pull request with required reviews. Its page on
     [protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
     says required approvals come from people with write permissions or from a code owner. So with Write, the machine user's
     `APPROVE` counts toward a branch protection rule's required approvals, and a pull request could get itself approved.
 
     Its `REQUEST_CHANGES` is the other side. The agent cannot dismiss one, so a request stands until someone dismisses it, even
     after a push that the agent reviews again with a `COMMENT` (GitHub keeps the request as the agent's verdict: GitHub's
-    behaviour, *not run*). With Write, a standing request blocks a merge under a rule that requires reviews; with Read, by the
-    roles page above, it should not (*not run*).
+    behaviour, *not run*).
+
+    With Write, a standing request blocks a merge under a rule that requires reviews. With Read, by the roles page above, it
+    should not (*not run*).
 
     Known and not: the roles table has no row for commenting on a pull request, and this repository has not checked that a
     fine-grained token's **Pull requests: Read and write** lets a Read user post a review or a comment through the API (REST or
-    GraphQL). If the machine user must have Write, turn on **Require review from Code Owners** in the branch's rule, with a
+    GraphQL).
+
+    If the machine user must have Write, turn on **Require review from Code Owners** in the branch's rule, with a
     `CODEOWNERS` that owns every file and does not name the machine user: GitHub's
     [code owners page](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners)
     says a file with no owner can be approved by anyone with write access.
@@ -91,7 +108,7 @@ that list does not cover, and this repository has not checked the token against 
 
 Generate the token. GitHub's documentation says that an organization that requires approval of fine-grained
 tokens marks the token `pending` until an organization administrator reviews it, and that until then it reads only public
-resources: an agent with a pending token fails on a private repository, and posts nothing on any.
+resources. An agent with a pending token fails on a private repository, and posts nothing on any.
 
 GitHub shows the token once. Paste it into a file that only you can read, without echoing it
 ([why](../receive-webhooks.md#keep-the-secrets-out-of-sight)):
@@ -140,17 +157,20 @@ helm -n agent-kourier get values agent-kourier -o json \
 
 `namespaces` must hold `acme-webhooks` (unless you admit it another way, such as by a label) and `secrets` must hold `github-webhook`
 and `github-review-agent-bearer`, the agent's bearer token of step 4
-([Before you start](../receive-webhooks.md#before-you-start)); the command takes the release to be called `agent-kourier`. The
-machine user's token is not in these Secrets, and the broker never reads it: it belongs to the agent (step 4).
+([Before you start](../receive-webhooks.md#before-you-start)). The command takes the release to be called `agent-kourier`.
+
+The machine user's token is not in these Secrets, and the broker never reads it: it belongs to the agent (step 4).
 
 ## 4. Run the agent and its tools
 
 The recipe's agent is in
 [`agent/`](https://github.com/agentkourier/agent-kourier/blob/main/examples/recipes/webhook-github/agent/README.md): one pod in the
-namespace `github-agent` that runs the prompt-agent recipe's image with the recipe's `agent.yaml` (`PROMPT_AGENT_ASK_USER=0`: the
-model is not offered `ask_user`, since a webhook connection serves no questions), and GitHub's github-mcp-server v2.2.0 as a
-sidecar, in its `http` mode, listening on `127.0.0.1:8082` alone. The agent sends the machine user's token as the `Authorization`
-header of each request to the sidecar, and github-mcp-server calls GitHub's API with it; the sidecar holds no secret. Its Service,
+namespace `github-agent`. It runs the prompt-agent recipe's image with the recipe's `agent.yaml` (`PROMPT_AGENT_ASK_USER=0`: the
+model is not offered `ask_user`, since a webhook connection serves no questions). Beside it runs GitHub's github-mcp-server v2.2.0
+as a sidecar, in its `http` mode, listening on `127.0.0.1:8082` alone.
+
+The agent sends the machine user's token as the `Authorization` header of each request to the sidecar, and github-mcp-server calls
+GitHub's API with it; the sidecar holds no secret. The pod's Service,
 `http://github-review-agent.github-agent.svc.cluster.local:8080`, is the one the recipe's AgentBackend names.
 
 Follow the agent's [Apply it](https://github.com/agentkourier/agent-kourier/blob/main/examples/recipes/webhook-github/agent/README.md#apply-it)
@@ -180,7 +200,9 @@ The recipe's prompts ask the agent to do these on GitHub, as the machine user, w
 | Read the comments, and post a comment on the pull request | The reply | `pull_request_read`, method `get_comments`; `add_issue_comment` | `GET /repos/{owner}/{repo}/issues/{number}/comments`, `POST /repos/{owner}/{repo}/issues/{number}/comments` |
 
 The last column is what the repository's tests see the pinned github-mcp-server send to a fake GitHub for these calls (`get_diff`
-aside, which they do not make), not what live GitHub was sent. Only the instructions in `agent.yaml`
+aside, which they do not make), not what live GitHub was sent.
+
+Only the instructions in `agent.yaml`
 hold the review to `REQUEST_CHANGES` or `COMMENT`: `pull_request_review_write` can also approve, and `allowed_tools` bounds the tools'
 names, not their arguments. The agent README's
 [What the agent can and cannot do](https://github.com/agentkourier/agent-kourier/blob/main/examples/recipes/webhook-github/agent/README.md#what-the-agent-can-and-cannot-do)
@@ -192,15 +214,18 @@ its bearer token, or none, in the Binding's `identity` ([Create the Binding iden
 
 ### A GitHub App instead of a machine user
 
-The connection takes a GitHub App's events as well as a machine user's: the setup's run was made with an App, whose own reviews
-and comments carried `<app-slug>[bot]` in `/sender/login` (in the run, `acme-review-agent[bot]`), so with an App
-`spec.webhook.identity` is that login, `[bot]` included. The recipe's agent acts as an App only until its token expires. An App
-acts with installation tokens, which expire after an hour (GitHub's documentation). Given one in place of the personal access
-token, the recipe's agent posts as the App (seen in a run), and then no longer: github-mcp-server renews installation tokens by
-itself only in its `stdio` mode, and the prompt agent reaches MCP servers over HTTP only (github-mcp-server's
-`docs/github-app-auth.md` at v2.2.0; not verified here). To act as an App for good, run an agent of your own that renews the
-token: one that runs github-mcp-server in `stdio` mode, or that mints installation tokens itself. The recipe's reply trigger
-matches a mention of the machine user's login; with an App, change it to the mention your users write (not run).
+The connection takes a GitHub App's events as well as a machine user's. The setup's run was made with an App, whose own reviews
+and comments carried `<app-slug>[bot]` in `/sender/login` (in the run, `acme-review-agent[bot]`). So with an App,
+`spec.webhook.identity` is that login, `[bot]` included.
+
+The recipe's agent acts as an App only until its token expires. An App acts with installation tokens, which expire after an hour
+(GitHub's documentation). Given one in place of the personal access token, the recipe's agent posts as the App (seen in a run),
+and then no longer: github-mcp-server renews installation tokens by itself only in its `stdio` mode, and the prompt agent reaches
+MCP servers over HTTP only (github-mcp-server's `docs/github-app-auth.md` at v2.2.0; not verified here).
+
+To act as an App for good, run an agent of your own that renews the token: one that runs github-mcp-server in `stdio` mode, or
+that mints installation tokens itself. The recipe's reply trigger matches a mention of the machine user's login. With an App,
+change it to the mention your users write (not run).
 
 ## 5. Apply the manifests
 
@@ -245,13 +270,18 @@ kubectl -n agent-kourier logs "$LEADER" | grep '"webhook: taking requests"' | gr
 ```
 
 `Ready` waits on the connection and on the agent of step 4: it turns `True` once the connection runs (`ChannelJoined`) and a fresh
-fetch of the agent's card succeeds, with a card that advertises streaming (`BackendReachable`). If the wait times out,
-`kubectl -n acme-webhooks get akbinding github-reviews` shows the condition that holds it back in the `Reason` column, such as
-`ChannelJoined:ChatCredentialsUnusable` (the Secret is missing, or a key of it), `ChannelJoined:ChatUnavailable` (the connection
-does not run for another reason, such as a Secret the broker is not granted; the leader's log says why),
-`BackendReachable:CredentialsUnreadable` (the bearer Secret in `acme-webhooks` is missing or not granted),
-`BackendReachable:CredentialsRejected` (the two bearer copies differ), `BackendReachable:Unreachable` (the agent is not running, or
-a NetworkPolicy stops the broker) or `BackendReachable:StreamingUnsupported`.
+fetch of the agent's card succeeds, with a card that advertises streaming (`BackendReachable`).
+
+If the wait times out, `kubectl -n acme-webhooks get akbinding github-reviews` shows the condition that holds it back in the `Reason`
+column, such as:
+
+- `ChannelJoined:ChatCredentialsUnusable`: the Secret is missing, or a key of it
+- `ChannelJoined:ChatUnavailable`: the connection does not run for another reason, such as a Secret the broker is not granted (the
+  leader's log says why)
+- `BackendReachable:CredentialsUnreadable`: the bearer Secret in `acme-webhooks` is missing or not granted
+- `BackendReachable:CredentialsRejected`: the two bearer copies differ
+- `BackendReachable:Unreachable`: the agent is not running, or a NetworkPolicy stops the broker
+- `BackendReachable:StreamingUnsupported`
 
 `webhook: taking requests`, with `"connection":"acme-webhooks/github"`, says the connection runs on the leader: from then on its URL
 checks the signature of every request. It does not wait for the agent. Check the URL from outside with a request that has no
@@ -287,8 +317,10 @@ it shows with the response `200`, and the leader logs:
 kubectl -n agent-kourier logs "$LEADER" | grep '"webhook: delivery answered"' | grep 'acme-webhooks/github'
 ```
 
-The line says the signature checked out, and the ping starts nothing; its `outcome` and `reason` depend on what the ping carries
-(*not run* on a repository's webhook). GitHub's documentation lists only `hook`, `hook_id` and `zen` in a ping's
+The line says the signature checked out, and the ping starts nothing. Its `outcome` and `reason` depend on what the ping carries
+(*not run* on a repository's webhook).
+
+GitHub's documentation lists only `hook`, `hook_id` and `zen` in a ping's
 body: with no `repository`, the connection answers it `unmapped`, `no_channel`, as it did the App's ping in the run. A ping that
 carries the repository and a `sender` gets past the channel and the actor and has no pull request or issue number, so it is
 `unmapped`, `no_thread` (or `self`, if the machine user added the webhook):
@@ -320,8 +352,10 @@ kubectl -n agent-kourier logs "$LEADER" | grep 'acme-webhooks/github' | grep -E 
 ```
 
 `trigger` is the trigger's index in the Binding: `0` is the review, `1` the reply. `"decision":"started"` is a turn that started.
-`delivery` is the ID that GitHub's delivery log shows for the delivery. Then the machine user's review shows on the pull request. In
-the run, with the App and the run's own MCP server, a turn took 10 to 17 seconds.
+`delivery` is the ID that GitHub's delivery log shows for the delivery.
+
+Then the machine user's review shows on the pull request. In the run, with the App and the run's own MCP server, a turn took 10 to
+17 seconds.
 
 Comment `@acme-review-agent why this approach?` on the pull request. The log shows the same lines with `"trigger":1` and the same
 `"thread":"pr-7"`, and the machine user replies.
@@ -358,8 +392,10 @@ else GitHub sends, so read them as at least, not exactly:
 
 Each change is to the recipe's ChatConnection fields or Binding triggers. A field that a trigger matches must be in the connection's
 `fields` (at most 32), and a `text` field can be matched but not read by `promptTemplate`. A trigger has at most 6 `match` and 6
-`exclude` entries. A path marked *not run* was not in the run's deliveries; check it in your first delivery. The ChatConnection is a
-team connection, so the broker restarts it by itself when you apply the edit.
+`exclude` entries.
+
+A path marked *not run* was not in the run's deliveries; check it in your first delivery. The ChatConnection is a team connection, so
+the broker restarts it by itself when you apply the edit.
 
 **Review once, not on every push.** Drop `synchronize` from the first trigger's `action`:
 
@@ -385,11 +421,15 @@ only that a `labeled` action carries the label). The label's name would be `/lab
 match: {event: '^pull_request$', action: '^labeled$', prNumber: '.', label: '^ai-review$'}
 ```
 
-**Several repositories** (*not run*). Write one Binding for each repository, with its `owner/repo` as the channel, all naming the same
-connection, and send each repository's events to the connection's URL: a webhook on each repository, as in step 6, or one webhook of
-the organization, which GitHub's documentation says subscribes to the organization's events and only an
-organization owner can create. The machine user's token must reach each repository: add each to its **Repository access** (all of
-one resource owner, since a fine-grained token has one). An event of a repository that no Binding names starts nothing.
+**Several repositories** (*not run*). Write one Binding for each repository, with its `owner/repo` as the channel, all naming the
+same connection. Send each repository's events to the connection's URL, with either:
+
+- a webhook on each repository, as in step 6
+- one webhook of the organization, which GitHub's documentation says subscribes to the organization's events and only an
+  organization owner can create
+
+The machine user's token must reach each repository: add each to its **Repository access** (all of one resource owner, since a
+fine-grained token has one). An event of a repository that no Binding names starts nothing.
 
 ## Troubleshooting
 

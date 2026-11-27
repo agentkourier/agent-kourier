@@ -87,7 +87,7 @@ service or restart it. Watch `agentkourier_chat_connected` instead.
 
 For a [webhook connection](receive-webhooks.md), the sender sees the answer and Agent Kourier does not post anything, so these
 counts are where a failure shows. Each series of `agentkourier_webhook_requests_total` is at 0 from when the connection's run
-starts, on the replica that leads; the rules sum over the replicas, so that a change of leader does not read as a fall to 0:
+starts, on the replica that leads. The rules sum over the replicas, so that a change of leader does not read as a fall to 0:
 
 ```promql
 # Deliveries answered 503 by the connection: the sender sends them again on its own schedule, or gives up
@@ -120,13 +120,18 @@ time() - max by (connection) (max_over_time(agentkourier_webhook_last_accepted_t
 absent_over_time(agentkourier_webhook_last_accepted_timestamp_seconds{connection="acme-webhooks/github"}[2d])
 ```
 
-The last two rules are for a connection whose service sends events every day; name each such connection, and pick the threshold from
-how often its service sends them. `agentkourier_webhook_last_accepted_timestamp_seconds` is the time of the connection's last request
-answered `accepted`. Only the leader sets it, and a broker that has just started has no series of it until its first, so the rule
-reads it with `max_over_time` over a range longer than the threshold: the value from before a restart or a change of leader still
-counts. Use `max`, not `sum`: the value is a time. An event dropped as `self`, `ignored` or `unmapped` does not set it, as the
-broker never took it; the unmapped rule above, and `agentkourier_webhook_requests_total` by `outcome`, say which it was. Each answer is
-also a log line, `webhook: delivery answered`, with the delivery ID that the sender's own log shows
+The last two rules are for a connection whose service sends events every day. Name each such connection, and pick the
+threshold from how often its service sends them.
+
+`agentkourier_webhook_last_accepted_timestamp_seconds` is the time of the connection's last request answered `accepted`.
+Only the leader sets it, and a broker that has just started has no series of it until its first. So the rule reads it
+with `max_over_time` over a range longer than the threshold: the value from before a restart or a change of leader still
+counts.
+
+Use `max`, not `sum`: the value is a time. An event dropped as `self`, `ignored` or `unmapped` does not set it, as the
+broker never took it. The unmapped rule above, and `agentkourier_webhook_requests_total` by `outcome`, say which it was.
+
+Each answer is also a log line, `webhook: delivery answered`, with the delivery ID that the sender's own log shows
 ([Follow a delivery](receive-webhooks.md#follow-a-delivery)).
 
 ## Export traces
@@ -162,6 +167,8 @@ Without an endpoint, tracing is off and metrics still work. Every setting is in
 
 ## Read the logs
 
-Agent Kourier logs JSON lines to stderr. Set the level with the chart's `logLevel`. Every turn logs
+Agent Kourier logs JSON lines to stderr. Set the level with the chart's `logLevel`.
+
+Every turn logs
 `session turn started` and `session turn ended` with its `outcome`, so `grep 'session turn'` reads a session at a
 glance. What a line may and may not carry is in [Logs and traces](../reference/logs-and-traces.md#logs).
