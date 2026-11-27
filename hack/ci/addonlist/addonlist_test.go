@@ -259,6 +259,14 @@ esac
 `
 )
 
+// noAddonRefs are values of the build's addons output that hold no add-on's image reference by digest, which sign,
+// verify and publish must stop on: none at all, an empty object, a value with a line before the reference (which a read
+// loop would take as two references) and one with a newline after it.
+var noAddonRefs = []string{"", "{}", `{"x":"a\nb@` + sha256Zero + `"}`, `{"x":"b@` + sha256Zero + `\n"}`}
+
+// sha256Zero is a digest of the form release.sh reports.
+var sha256Zero = "sha256:" + strings.Repeat("0", 64)
+
 // expression is a workflow expression, ${{ ... }}.
 var expression = regexp.MustCompile(`\$\{\{\s*(.*?)\s*\}\}`)
 
@@ -539,9 +547,9 @@ func checkRelease(t testing.TB, list []string, release workflow) []string {
 				add("release.yml: %s does not run cosign %s%s", c.job, c.command, ref)
 			}
 		}
-		for _, none := range []string{"", "{}"} {
+		for _, none := range noAddonRefs {
 			if res := r.run(c.job, s, withOutput(outputs, "addons", none), nil); res.err == nil || strings.Contains(res.log, c.command) {
-				add("release.yml: %s goes on when addons is %q, which holds no add-on's image", c.job, none)
+				add("release.yml: %s goes on when addons is %q, which holds no add-on's image or one not a reference by digest", c.job, none)
 			}
 		}
 	}
@@ -609,9 +617,9 @@ func checkPublish(r *releaseRun, release workflow, outputs map[string]string, wa
 			add("release.yml: publish accepts an existing release whose notes lack %q", line)
 		}
 	}
-	for _, none := range []string{"", "{}"} {
+	for _, none := range noAddonRefs {
 		if res := r.run("publish", s, withOutput(outputs, "addons", none), nil); res.err == nil || res.payload != "" {
-			add("release.yml: publish goes on when addons is %q, which holds no add-on's image", none)
+			add("release.yml: publish goes on when addons is %q, which holds no add-on's image or one not a reference by digest", none)
 		}
 	}
 	return problems
