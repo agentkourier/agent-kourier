@@ -7,21 +7,25 @@ You configure that account once on the Binding.
 ## Why an identity is necessary
 
 Connecting to Slack gives Agent Kourier permission to read and post Slack messages. Calling an agent is a separate
-connection. The agent backend needs a caller name, and a backend that verifies credentials also needs proof that
-the caller may connect. A Slack bot token does not supply that backend credential.
+connection.
+
+The agent backend needs a caller name, and a backend that verifies credentials also needs proof that the caller may
+connect. A Slack bot token does not supply that backend credential.
 
 The Binding supplies it. With `tokenSecretRef`, Agent Kourier sends an issued bearer token that the agent or its
-front door verifies. With `userId`, it sends a name to a backend that trusts caller-supplied names. Every Binding
-must configure at least one of these, even when the backend does not verify tokens.
+front door verifies. With `userId`, it sends a name to a backend that trusts caller-supplied names.
+
+Every Binding must configure at least one of these, even when the backend does not verify tokens.
 
 The identity also matters after the first request. In the tested kagent 1.0.0-alpha5 OIDC setup, kagent ties a session
-to the identity that created it and refuses requests from another owner. A Slack thread can contain an alert,
-replies from several people, and answers to an agent's questions. Keeping the backend identity the same lets those
-requests continue the same session.
+to the identity that created it and refuses requests from another owner.
+
+A Slack thread can contain an alert, replies from several people, and answers to an agent's questions. Keeping the
+backend identity the same lets those requests continue the same session.
 
 ## What a shared Binding identity gives you
 
-- Automated investigations can start without anyone signing in. An alert has no person's backend credentials;
+- Automated investigations can start without anyone signing in. An alert has no person's backend credentials.
   Agent Kourier calls the agent using the Binding's credentials.
 - People can collaborate in one agent session. If one person starts an investigation and another replies, both
   requests use the same backend owner. On kagent, changing owners would prevent the second person from continuing
@@ -36,10 +40,14 @@ requests continue the same session.
 
 For example, an alert starts an investigation as `payments-assistant`. One channel member asks what changed;
 another asks the agent to check a deployment. All three turns use `payments-assistant`, so kagent sees the same
-session owner throughout. Agent Kourier records the Slack people as attribution in its audit log.
+session owner throughout.
+
+Agent Kourier records the Slack people as attribution in its audit log.
 
 This makes the channel an access boundary. Everyone allowed to use a Binding acts through the same backend
-account, so give it only the permissions they are all trusted with. The Binding identity does not grant each
+account, so give it only the permissions they are all trusted with.
+
+The Binding identity does not grant each
 person separate permissions, and it does not automatically configure the agent's tool credentials or Kubernetes
 RBAC. Set those permissions in the backend and tools you deploy. See the [security model](../explanation/security.md).
 
@@ -71,8 +79,9 @@ identity:
 ```
 
 There is no token to generate and no identity Secret to create. Agent Kourier sends `X-User-Id: payments-assistant`.
+
 Whether that name needs registration or permissions is determined by your backend. This header supplies a name
-without proving who sent it; use it only with a backend that deliberately trusts callers on its network.
+without proving who sent it. Use it only with a backend that deliberately trusts callers on its network.
 
 For kagent 1.0, use OIDC and a [verifying front door](front-door.md), with the token setup below.
 
@@ -103,12 +112,16 @@ override the token's owner.
 
 This example uses the local password connector, as the repository's Dex test deployment and the chart's refresh
 Job do. You need an existing Dex installation, a front door that accepts its ID tokens, and permission to change
-Dex configuration. The password grant requires account credentials; use your provider's approved flow when this
-grant is disabled. Dex describes the setup in its [local connector guide](https://dexidp.io/docs/connectors/local/)
+Dex configuration.
+
+The password grant requires account credentials. Use your provider's approved flow when this grant is disabled. Dex
+describes the setup in its [local connector guide](https://dexidp.io/docs/connectors/local/)
 and [OAuth2 configuration](https://dexidp.io/docs/configuration/oauth2/).
 
 Dex documents the password grant as deprecated and less secure. Prefer your provider's supported machine-to-machine
-flow when available, with a token type and stable owner claim your backend accepts. The chart's refresh Job supports
+flow when available, with a token type and stable owner claim your backend accepts.
+
+The chart's refresh Job supports
 only the password grant and needs the account password and client secret in a credentials Secret. For another flow,
 use an external token-renewal process to update the Binding's token Secret.
 
@@ -141,10 +154,13 @@ staticClients:
     redirectURIs: [https://localhost/unused]
 ```
 
-The account represents this Binding. The client identifies the application requesting tokens; its ID is the
-audience the front door must accept. The redirect URI is unused by this password-grant request. Enable the password
-grant explicitly by adding `password` to `oauth2.grantTypes` as shown above; preserve any other grants your deployment
-uses. The repository's reference deployment pins Dex v2.46.1, whose
+The account represents this Binding. The client identifies the application requesting tokens, and its ID is the
+audience the front door must accept. The redirect URI is unused by this password-grant request.
+
+Enable the password grant explicitly by adding `password` to `oauth2.grantTypes` as shown above. Preserve any other
+grants your deployment uses.
+
+The repository's reference deployment pins Dex v2.46.1, whose
 [configuration source](https://github.com/dexidp/dex/blob/v2.46.1/cmd/dex/config.go#L248-L251) defaults to all supported
 grants, while the current OAuth2 documentation linked above describes narrower defaults. Check the settings for
 your deployed version rather than relying on defaults. Keep the existing clients, users and OAuth2 settings when merging.
@@ -190,8 +206,10 @@ than placing their values in the command arguments. Use your Dex token endpoint 
 ```
 
 Create the `payments` namespace first if it does not exist. The command creates an `Opaque` Secret and stores the
-`id_token` without a trailing newline; Agent Kourier rejects control characters in credentials. It prints neither
-the token nor the response. If the Secret already exists, use the [rotation procedure](rotate-binding-token.md).
+`id_token` without a trailing newline. Agent Kourier rejects control characters in credentials.
+
+The command prints neither the token nor the response. If the Secret already exists, use the
+[rotation procedure](rotate-binding-token.md).
 
 Configure the front door for this issuer and the `agent-kourier-binding` audience, and keep the kagent UI's proxy
 from accepting that audience. Then add the `tokenSecretRef` above to your [Binding](write-a-binding.md).
@@ -199,11 +217,14 @@ from accepting that audience. Then add the `tokenSecretRef` above to your [Bindi
 For automatic renewal, the chart's [Dex refresh Job](rotate-binding-token.md#refresh-a-dex-token-on-a-schedule)
 needs a separate credentials Secret with `clientSecret`, `username` and `password`. Use the same client secret,
 account email and account password used here, and set `tokenRefresh.dex.clientId` to `agent-kourier-binding`.
-The credentials Secret lives in the Helm release namespace; the issued-token Secret lives in the Binding's
+
+The credentials Secret lives in the Helm release namespace, and the issued-token Secret lives in the Binding's
 namespace. They hold different credentials and serve different purposes.
 
 ## Check it
 
 Mention the bot in the bound channel. A successful agent reply checks that the configured identity can reach the
-backend. If the front door rejects the token, check the issuer, audience, expiry and account permissions; see
+backend.
+
+If the front door rejects the token, check the issuer, audience, expiry and account permissions. See
 [troubleshooting](troubleshoot.md#http-401-at-the-card-fetch).

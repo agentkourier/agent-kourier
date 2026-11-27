@@ -3,7 +3,7 @@
 For anyone new to Agent Kourier: each tutorial is a guided path you follow step by step, on your own machine, to a
 working result you can see in Slack.
 
-Tutorials teach by doing. They make the choices for you and do not stop to explain; the
+Tutorials teach by doing. They make the choices for you and do not stop to explain. The
 [explanation](../explanation/index.md) pages do that.
 
 <div class="grid cards" markdown>

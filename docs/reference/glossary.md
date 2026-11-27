@@ -1,10 +1,10 @@
 # Glossary
 
-This page defines the terms the documentation uses, each with one meaning.
+The terms the documentation uses, each with one meaning.
 
 A2A
 :   The Agent2Agent protocol. Agent Kourier speaks A2A 1.0 over JSON-RPC, and A2A 0.3 to an agent whose card is a 0.3
-    card, and needs an agent that streams.
+    card. It needs an agent that streams.
 
 Accepted
 :   The condition of a Binding's status that says the broker took the Binding as written. With custom resources it is
@@ -37,8 +37,9 @@ Binding identity
 
 Binding verification
 :   The leader's repeated check that a Binding can be served: that its agent's card can be fetched, that the bot is
-    in its channel and, for a Binding whose tool approvals name approver groups, that each group can be read. It reports through metrics and log lines and, with custom resources, in the Binding's status, and changes
-    nothing else. See [Metrics](metrics.md#binding-verification) and [Binding status](binding-status.md).
+    in its channel and, for a Binding whose tool approvals name approver groups, that each group can be read. It
+    reports through metrics and log lines and, with custom resources, in the Binding's status, and changes nothing
+    else. See [Metrics](metrics.md#binding-verification) and [Binding status](binding-status.md).
 
 Bot Connector
 :   Microsoft's service through which a Teams bot posts, replies and edits. A Microsoft Teams connection calls it with a token that
@@ -73,13 +74,13 @@ Cooldown
 
 Delivery
 :   One request that a service sends to a webhook connection. Its delivery ID is the service's own ID of it, read from the
-    header that `spec.webhook.delivery.header` names, such as `X-GitHub-Delivery`; each verified delivery's INFO line,
+    header that `spec.webhook.delivery.header` names, such as `X-GitHub-Delivery`. Each verified delivery's INFO line,
     `webhook: delivery answered`, shows it.
 
 Dialect
 :   The per-backend part of the A2A client: URL layout, card location, identity header and how a pause is read. Both
-    ask for kagent's human-in-the-loop extension when the agent card lists it; `kagent-v1` reads a pause only through
-    it, and `a2a` reads it through the extension or as a text question.
+    dialects ask for kagent's human-in-the-loop extension when the agent card lists it. `kagent-v1` reads a pause only
+    through it, and `a2a` reads it through the extension or as a text question.
 
 Digest line
 :   One line at the top level of a channel that counts the messages that limits stopped from starting an investigation
@@ -105,7 +106,8 @@ Identity (webhook)
 Interaction
 :   A pause in which the agent waits for a person: a question, when the Binding enables
     `interactions.askUser`, or a tool approval, when it enables `interactions.toolApprovals`. Both default to off, and a
-    pause the Binding does not allow is refused and its task cancelled. Structured pauses use kagent's human-in-the-loop extension.
+    pause the Binding does not allow is refused and its task cancelled. Structured pauses use kagent's human-in-the-loop
+    extension.
 
 Investigation
 :   A session that a `botMessage` or `personMessage` trigger started, such as an alert's, rather than a mention.
@@ -133,9 +135,9 @@ Microsoft Graph notifications and polling
     is not.
 
 Microsoft Teams connection
-:   A ChatConnection with `spec.platform: teams` (a Teams connection, for short): `spec.teams` names the bot's Microsoft Entra tenant and
-    application, its mode (`http` or `socket`) and an optional `notificationURL`, and its Secret holds `clientSecret`.
-    Experimental.
+:   A ChatConnection with `spec.platform: teams` (a Teams connection, for short). `spec.teams` names the bot's Microsoft
+    Entra tenant and application, its mode (`http` or `socket`) and an optional `notificationURL`, and its Secret holds
+    `clientSecret`. Experimental.
 
 Outbox
 :   The durable table of posts Agent Kourier means to make. A post is recorded before it is sent, so a crash between
@@ -143,8 +145,8 @@ Outbox
     be looked for is posted again, and may show twice.
 
 Output
-:   A Binding's `chat.output`, what Agent Kourier posts of the agent's work: `live` (the default), the reply as it is written;
-    `final`, the finished reply alone; or `none`, nothing, the only output a webhook connection takes.
+:   A Binding's `chat.output`, what Agent Kourier posts of the agent's work: `live` (the default), the reply as it is
+    written; `final`, the finished reply alone; or `none`, nothing. `none` is the only output a webhook connection takes.
 
 Platform
 :   A chat platform behind the `chat.Platform` interface, which a ChatConnection's `spec.platform` names. The API takes `slack`,
@@ -190,7 +192,7 @@ Thread
 Trigger
 :   A rule in a Binding's `chat.triggers` that decides what starts a turn: `mention`, `botMessage` for another bot's
     posts, `personMessage` for the messages people post at the top level of the channel, or `webhookEvent` for an event of
-    a webhook connection, the only type such a connection's Bindings take.
+    a webhook connection. `webhookEvent` is the only type a webhook connection's Bindings take.
 
 Turn
 :   One message to the agent and the task that answers it. A session's turns run one at a time, in order.
@@ -200,9 +202,9 @@ Untrusted block
     instructions.
 
 Webhook connection
-:   A ChatConnection with `spec.platform: webhook`: it takes one service's signed JSON webhooks at
-    `POST /chat/webhook/<namespace>/<name>` on the chat listener, verifies each on its raw bytes, maps it onto an event by JSON
-    Pointers, and posts nothing. Experimental ([Start agents from webhooks](../how-to/receive-webhooks.md)).
+:   A ChatConnection with `spec.platform: webhook`. It takes one service's signed JSON webhooks at
+    `POST /chat/webhook/<namespace>/<name>` on the chat listener, verifies each on its raw bytes, maps it onto an event by
+    JSON Pointers, and posts nothing. Experimental ([Start agents from webhooks](../how-to/receive-webhooks.md)).
 
 Workflows webhook
 :   A Microsoft Teams flow that posts what it is sent to one channel. Alertmanager's `msteamsv2` receiver posts its alerts

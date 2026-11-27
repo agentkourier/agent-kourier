@@ -8,10 +8,13 @@ description: >-
 
 # Demo
 
-An alert becomes an agent session in its Slack thread, a reply continues the same session, a mention starts a new one,
-and the agent asks for a decision and waits for the answer. An alert card in Microsoft Teams starts a session there, and a
-pull request starts one through a webhook, and the agent reviews it on GitHub; both are experimental. Then a
-team adds its agent with one Binding.
+An alert becomes an agent session in its Slack thread, and a reply continues the same session. A mention starts a new
+one, and the agent asks for a decision and waits for the answer.
+
+An alert card in Microsoft Teams starts a session there. A pull request starts one through a webhook, and the agent
+reviews it on GitHub. Both are experimental.
+
+Then a team adds its agent with one Binding.
 
 <figure class="ak-film">
 <video controls preload="none" playsinline poster="../assets/film/agent-kourier-demo-poster-16x9.jpg" aria-label="Agent Kourier demo, 116 seconds, narrated">
@@ -23,7 +26,7 @@ team adds its agent with one Binding.
 </figure>
 
 The Slack shots are screen recordings of a demo environment with seeded faults and real agent output, sped up in
-places; a note under each shot says so. To run a sandbox like it on your own machine, follow
+places. A note under each shot says so. To run a sandbox like it on your own machine, follow
 [Your first agent in Slack](../tutorials/first-agent-in-slack.md).
 
 ## A cross-team incident
@@ -50,12 +53,14 @@ What Agent Kourier does in it:
 - **Agents hand off through Slack.** The escalation to `#incidents` and the page to `#payments-ops` are posts by a
   pager bot, and each of those channels' Bindings starts its agent from that bot's posts with its own trigger. See
   [Start investigations from any bot's messages](../how-to/any-bot-trigger.md).
-- **The rollback waits for a person.** The payments agent's rollback tool requires approval in kagent; the payments
+- **The rollback waits for a person.** The payments agent's rollback tool requires approval in kagent. The payments
   Binding turns on tool approvals and lists the payments team's Slack user group in `approverGroups`, so a press from
   anyone outside that group is refused. See [Let the agent ask questions](../how-to/agent-questions.md).
 
 The pager bot, the service catalog, the escalation tool's evidence checks and the agents' prompts belong to the demo,
 not to Agent Kourier. The Slack shots are screen recordings of the demo on a kind cluster, with a seeded fault and
-real agent output, sped up in places; a note under each shot says so. The demo's agents, MCP servers, Bindings and
+real agent output, sped up in places. A note under each shot says so.
+
+The demo's agents, MCP servers, Bindings and
 Slack setup are in the [incident demo repository](https://github.com/agentkourier/kourier-incident-demo), whose README lists
 what it needs and how to run it.

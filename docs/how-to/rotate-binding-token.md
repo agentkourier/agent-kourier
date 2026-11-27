@@ -6,9 +6,11 @@ restart and no lost turn.
 For the first account and token, start with [Create the Binding identity](create-binding-identity.md).
 
 Agent Kourier reads the token from the Secret named by `identity.tokenSecretRef` on every call, from a watch of the
-Secret. The Secret watch and authenticated clients hold credentials in memory; Agent Kourier does not persist a
-separate token to disk, logs, audit records or resource status, and never mints one. Rotation happens outside Agent
-Kourier: write the new token into the Secret, and subsequent calls use it once the watch observes the update.
+Secret. Rotation happens outside Agent Kourier: write the new token into the Secret, and subsequent calls use it once
+the watch observes the update.
+
+The Secret watch and authenticated clients hold credentials in memory. Agent Kourier does not persist a separate token
+to disk, logs, audit records or resource status, and never mints one.
 
 ## Replace the token by hand
 
@@ -20,7 +22,9 @@ kubectl -n payments create secret generic payments-agent-token \
 Use the Binding's namespace and Secret name, and the key the reference names (`token` by default). Secrets that Agent
 Kourier reads must be type `Opaque`.
 
-A write to the Secret starts a pass of [Binding verification](../reference/metrics.md#binding-verification), within about 30 seconds or when a pass already running ends, which fetches the agent's card with the new token. `agentkourier_binding_ready` is 1 afterwards if the front door takes the token and the channel still reads true; if the front door refuses it, `BackendReachable` reads `False/CredentialsRejected`. A Secret refreshed on a schedule starts a pass each time too.
+A write to the Secret starts a pass of [Binding verification](../reference/metrics.md#binding-verification), within about 30 seconds or when a pass already running ends. The pass fetches the agent's card with the new token. A Secret refreshed on a schedule starts a pass each time too.
+
+`agentkourier_binding_ready` is 1 afterwards if the front door takes the token and the channel still reads true. If the front door refuses it, `BackendReachable` reads `False/CredentialsRejected`.
 
 ## Refresh a Dex token on a schedule
 
@@ -30,8 +34,10 @@ is `patch` on that Secret.
 
 This Job needs a Dex client and account with the password grant enabled, as described in
 [Create the Binding identity](create-binding-identity.md#example-issue-the-first-token-with-dex). Its credentials
-Secret holds the account password and client secret so it can request new tokens. The Job implements only that
-grant; for another authentication flow, arrange an external process to update the Binding's token Secret.
+Secret holds the account password and client secret so it can request new tokens.
+
+The Job implements only that grant. For another authentication flow, arrange an external process to update the
+Binding's token Secret.
 
 1. Create the Dex credentials Secret in the release namespace, with the keys `clientSecret`, `username` and
    `password`.
@@ -41,12 +47,14 @@ grant; for another authentication flow, arrange an external process to update th
     kubectl -n payments create secret generic payments-agent-token --from-literal=token=placeholder
     ```
 
-    Create the namespace first if needed. The refresh Job patches the Secret and does not create it. With
-    `config.source: files` the Secret must also exist before Agent Kourier starts, because a Secret the config names
+    Create the namespace first if needed. The refresh Job patches the Secret and does not create it.
+
+    With `config.source: files` the Secret must also exist before Agent Kourier starts, because a Secret the config names
     and the broker cannot find fails the load. With custom resources the broker starts without it, and the Binding's
-    `BackendReachable` condition reads `CredentialsUnreadable` until the Secret is there. A placeholder is not
-    a valid credential; wait for the first refresh to succeed before sending messages to the agent. If you already
-    stored the first token using the identity guide, keep that Secret and skip this step.
+    `BackendReachable` condition reads `CredentialsUnreadable` until the Secret is there.
+
+    A placeholder is not a valid credential: wait for the first refresh to succeed before sending messages to the agent.
+    If you already stored the first token using the identity guide, keep that Secret and skip this step.
 3. Enable the CronJob:
 
     ```yaml
@@ -79,11 +87,14 @@ the same on every mint: `email` when `userIdClaim: email`, otherwise the claim c
 
 ## When a token expires anyway
 
-The call fails with HTTP 401 at the front door, or with 403 on an A2A call after the card fetch. On a send or a followed
-task, Agent Kourier fails the turn, re-reads the Secret, writes an audit entry, and counts
+The call fails with HTTP 401 at the front door, or with 403 on an A2A call after the card fetch. Write a fresh token
+into the Secret, and the next message works.
+
+On a send or a followed task, Agent Kourier fails the turn, re-reads the Secret, writes an audit entry, and counts
 `agentkourier_credential_rejections_total{binding}`. The thread says the agent's front door refused the Binding's
-credentials. A lookup before a resend is [retried instead](troubleshoot.md#http-401-at-the-card-fetch) and not counted.
+credentials.
+
+A lookup before a resend is [retried instead](troubleshoot.md#http-401-at-the-card-fetch) and not counted.
 Agent Kourier never falls back to `userId`.
 
-Write a fresh token into the Secret; the next message works. Alert on any increase of
-`agentkourier_credential_rejections_total`.
+Alert on any increase of `agentkourier_credential_rejections_total`.

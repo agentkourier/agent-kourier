@@ -7,18 +7,27 @@ on the issue as an Atlassian service account.
 !!! warning "Experimental"
 
     Needs Agent Kourier 0.6.0 or later: 0.5.x refuses `platform: webhook`. The `webhook` platform is new, and its fields may change
-    in a later version. This setup was run end to end against Jira Cloud on 2026-11-17, with this mapping, on a pre-0.6.0 build of
-    the broker. What this page says Jira sends was seen in that run's deliveries, and Atlassian can change it. Jira's behaviour and
-    labels that the run did not see come from Atlassian's documentation, and say so where they appear. The steps on Jira's side
-    follow that documentation, which can change: if a menu or field has moved, Atlassian's documentation is the reference. Not run:
-    the delivery header `X-Atlassian-Webhook-Identifier`, a person's comment (the run saw only the agent's own), **Exclude body**
-    checked, and the token as a bearer token.
+    in a later version.
+
+    This setup was run end to end against Jira Cloud on 2026-11-17, with this mapping, on a pre-0.6.0 build of the broker. What
+    this page says Jira sends was seen in that run's deliveries, and Atlassian can change it.
+
+    Jira's behaviour and labels that the run did not see come from Atlassian's documentation, and say so where they appear. The
+    steps on Jira's side follow that documentation, which can change: if a menu or field has moved, Atlassian's documentation is
+    the reference.
+
+    Not run:
+
+    - the delivery header `X-Atlassian-Webhook-Identifier`
+    - a person's comment (the run saw only the agent's own)
+    - **Exclude body** checked
+    - the token as a bearer token
 
 ## What you end with
 
-- An issue created in the project starts a plan: a turn of the session named by the issue's key, such as `OPS-1`, in which the agent
-  reads the issue and, when it asks to change a codename, finds where the codename appears in a GitHub repository and adds one comment
-  with the plan.
+- An issue created in the project starts a plan: a turn of the session named by the issue's key, such as `OPS-1`. In that turn the
+  agent reads the issue and, when it asks to change a codename, finds where the codename appears in a GitHub repository and adds one
+  comment with the plan.
 - An edit of the issue's summary or description starts a revised plan in the same session, so the agent can see its first plan.
 - The service account's own comments are dropped as the agent's own (`self`), so they start nothing.
 
@@ -45,15 +54,17 @@ documentation says each organization can create five service accounts for free; 
 1. In Atlassian Administration (`admin.atlassian.com`), open **Directory**, **Service accounts**, **Create a service account** (menu
    path from Atlassian's documentation). Give it a name (Atlassian's documentation says 6 to 30 letters and digits),
    and, under the app roles, a role on Jira. In the run the account had the Jira role **Guest**, which took no paid seat and is held
-   to one space; a full user role takes a seat.
+   to one space. A full user role takes a seat.
 2. Add the account to the Jira project with a role that can browse the project and add comments, as you would add a person. In the
    run it was added to the project as a guest collaborator, which gave it Browse projects, Add comments, Create issues and Edit
    issues there. Step 2 checks what it has.
-3. Create its API token: select the account, then **Create credentials**, **API token**. Give the token a name and an expiry
-   (1 to 365 days), and the scopes `read:jira-work` (read issues), `write:jira-work` (add comments) and `read:jira-user` (step 2 reads
-   the account's own ID with it); the scopes and what each covers are from Atlassian's documentation, which also says
-   they cannot be changed afterwards. Choose **Create**, then **Copy to clipboard**, and save it where only you can read it, with the
-   account's email address (Atlassian gives it one at `serviceaccount.atlassian.com`, shown on the account):
+3. Create its API token: select the account, then **Create credentials**, **API token**. Give the token a name and an expiry (1 to
+   365 days), and the scopes `read:jira-work` (read issues), `write:jira-work` (add comments) and `read:jira-user` (step 2 reads the
+   account's own ID with it).
+
+    The scopes and what each covers are from Atlassian's documentation, which also says they cannot be changed afterwards. Choose
+    **Create**, then **Copy to clipboard**, and save it where only you can read it, with the account's email address (Atlassian
+    gives it one at `serviceaccount.atlassian.com`, shown on the account):
 
     ```sh
     umask 077; mkdir -p ~/.config/webhooks
@@ -115,14 +126,17 @@ helm -n agent-kourier get values agent-kourier -o json \
 ```
 
 `namespaces` must hold `acme-webhooks` (unless you admit it another way, such as by a label) and `secrets` must hold `jira-webhook`
-([Before you start](../receive-webhooks.md#before-you-start)); the command takes the release to be called `agent-kourier`. The
-service account's token is not in this Secret, and the broker never reads it: it belongs to the agent's tools (step 4).
+([Before you start](../receive-webhooks.md#before-you-start)). The command takes the release to be called `agent-kourier`.
+
+The service account's token is not in this Secret, and the broker never reads it: it belongs to the agent's tools (step 4).
 
 ## 4. Run the agent and its tools
 
 The recipe ships no agent. Run an A2A agent whose agent card advertises streaming, with tools that do the operations below as the
-service account; [The agent](../receive-webhooks.md#the-agent) says what it must be and do, and the quickest way to one. Note its A2A
-endpoint: step 5 puts it in the AgentBackend, and the Binding turns `Ready` only once the broker can fetch the agent's card from it.
+service account. [The agent](../receive-webhooks.md#the-agent) says what it must be and do, and the quickest way to one.
+
+Note its A2A endpoint: step 5 puts it in the AgentBackend, and the Binding turns `Ready` only once the broker can fetch the agent's
+card from it.
 
 The recipe's prompts ask the agent to do these, each through the gateway URL of step 2 with the service account's token:
 
@@ -132,7 +146,7 @@ The recipe's prompts ask the agent to do these, each through the gateway URL of 
 | Add a comment on the issue | Both triggers | `POST /rest/api/3/issue/{key}/comment`, whose body is in Atlassian Document Format; version 2 of the API, `/rest/api/2/issue/{key}/comment`, takes a plain string |
 | Search a GitHub repository's code and read its files | Both triggers' plans | GitHub tools with a token that reads the repository, such as github-mcp-server, which the [GitHub](github.md#4-run-the-agent-and-its-tools) page runs, with its `search_code` and `get_file_contents` tools (its README at v2.2.0); the GitHub page's agent registers `get_file_contents` and not `search_code` |
 
-The token expires on the date set in step 1; the tools stop working then, and Atlassian shows no warning to the agent. Put the date
+The token expires on the date set in step 1. The tools stop working then, and Atlassian shows no warning to the agent. Put the date
 in your calendar, or give the token the shortest expiry you will renew.
 
 When this setup was run, mcp-atlassian v0.24.6 reached the gateway URL only through the workaround in its issue #968 (that
@@ -181,11 +195,16 @@ kubectl -n agent-kourier logs "$LEADER" | grep '"webhook: taking requests"' | gr
 ```
 
 `Ready` waits on the connection and on the agent of step 4: it turns `True` once the connection runs (`ChannelJoined`) and a fresh
-fetch of the agent's card succeeds, with a card that advertises streaming (`BackendReachable`). If the wait times out,
-`kubectl -n acme-webhooks get akbinding jira-plans` shows the condition that holds it back in the `Reason` column, such as
-`ChannelJoined:ChatCredentialsUnusable` (the Secret is missing, or a key of it), `ChannelJoined:ChatUnavailable` (the connection
-does not run for another reason, such as a Secret the broker is not granted; the leader's log says why),
-`BackendReachable:Unreachable` or `BackendReachable:StreamingUnsupported`.
+fetch of the agent's card succeeds, with a card that advertises streaming (`BackendReachable`).
+
+If the wait times out, `kubectl -n acme-webhooks get akbinding jira-plans` shows the condition that holds it back in the `Reason`
+column, such as:
+
+- `ChannelJoined:ChatCredentialsUnusable`: the Secret is missing, or a key of it
+- `ChannelJoined:ChatUnavailable`: the connection does not run for another reason, such as a Secret the broker is not granted (the
+  leader's log says why)
+- `BackendReachable:Unreachable`
+- `BackendReachable:StreamingUnsupported`
 
 `webhook: taking requests`, with `"connection":"acme-webhooks/jira"`, says the connection runs on the leader: from then on its URL
 checks the signature of every request. It does not wait for the agent. Check the URL from outside with a request that has no
@@ -220,10 +239,11 @@ documentation). Atlassian's documentation does not name every field of the form,
 
 Create it. No test delivery from Jira is known to this page (not verified), so nothing arrives until an issue event does. To check
 the route and the secret before that, send a signed test request yourself
-([Test the route](../receive-webhooks.md#test-the-route)), or make step 7's issue the first delivery. A `200` to a delivery says
-only that the connection took it, not that a trigger matched: the connection answers `200`, with an empty body, to an event it
-accepted, to the agent's own (`self`) and to one it could not map (`unmapped`) alike. Each has its `webhook: delivery answered` line
-on the leader, with its `outcome`.
+([Test the route](../receive-webhooks.md#test-the-route)), or make step 7's issue the first delivery.
+
+A `200` to a delivery says only that the connection took it, not that a trigger matched: the connection answers `200`, with an
+empty body, to an event it accepted, to the agent's own (`self`) and to one it could not map (`unmapped`) alike. Each has its
+`webhook: delivery answered` line on the leader, with its `outcome`.
 
 ## 7. Test it
 
@@ -245,8 +265,10 @@ kubectl -n agent-kourier logs "$LEADER" | grep 'acme-webhooks/jira' | grep -E \
 ```
 
 `trigger` is the trigger's index in the Binding: `0` is the plan, `1` the revised plan. `"decision":"started"` is a turn that
-started. The agent's comment shows on the issue. Then edit the description, for example "also rename it in the README". The log
-shows the same lines with `"trigger":1` and the same `"thread":"OPS-1"`, and the agent comments a revised plan.
+started.
+
+The agent's comment shows on the issue. Then edit the description, for example "also rename it in the README". The log shows the
+same lines with `"trigger":1` and the same `"thread":"OPS-1"`, and the agent comments a revised plan.
 
 Read the counts on the leader's `/metrics`. Every series of the connection exists at 0, so leave those out:
 
@@ -276,10 +298,12 @@ at least, not exactly:
 
 Each change is to the recipe's ChatConnection fields or Binding triggers. A field that a trigger matches must be in the connection's
 `fields` (at most 32), and a `text` field can be matched but not read by `promptTemplate`. A trigger has at most 6 `match` and 6
-`exclude` entries. The ChatConnection is a team connection, so the broker restarts it by itself when you apply the edit.
+`exclude` entries.
+
+The ChatConnection is a team connection, so the broker restarts it by itself when you apply the edit.
 
 **Answer a command in a comment.** Add a trigger on comments that start with `/plan`. The recipe already reads `/comment/body` as the
-field `comment`; the run saw only the agent's own comments, so check a person's comment body in your first delivery:
+field `comment`. The run saw only the agent's own comments, so check a person's comment body in your first delivery:
 
 ```yaml
 - type: webhookEvent
@@ -297,8 +321,10 @@ match: {event: '^jira:issue_created$', type: '^(Task|Story)$'}
 ```
 
 **Several projects.** Widen the webhook's JQL, such as `project in (OPS, WEB)`, and write one Binding for each project key, all
-naming the same connection; an event of a project that no Binding names starts nothing. Add the service account to each project as
-in step 1. In the run the Guest role was held to one space, so a second project takes a role beyond Guest, which takes a paid seat.
+naming the same connection. An event of a project that no Binding names starts nothing.
+
+Add the service account to each project as in step 1. In the run the Guest role was held to one space, so a second project takes a
+role beyond Guest, which takes a paid seat.
 
 **React to another field's edit.** Add its name to the second trigger's `changed`, such as `'^(summary|description|priority)$'`. Only
 the first changed field is read: see [Troubleshooting](#troubleshooting).

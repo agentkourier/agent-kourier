@@ -1,10 +1,11 @@
 # Add-ons
 
 Agent Kourier talks to every agent in one way: streaming A2A, through an AgentBackend. Some agents people want behind a
-Binding do not serve A2A, and some teams want an agent to start from. An add-on is an optional component, kept and
-released in this repository, that does a job which does not belong in the broker. One add-on puts an A2A endpoint in
-front of an agent that has none; another is an agent of its own that serves A2A. A Binding reaches either like any other
-agent.
+Binding do not serve A2A, and some teams want an agent to start from.
+
+An add-on is an optional component, kept and released in this repository, that does a job which does not belong in the
+broker. One add-on puts an A2A endpoint in front of an agent that has none, and another is an agent of its own that
+serves A2A. A Binding reaches either like any other agent.
 
 ## What makes a component an add-on
 
@@ -50,9 +51,10 @@ the same limits ([Every add-on](../reference/limits.md#every-add-on)). What diff
 what a pause waits for, and what an idle context loses.
 
 The broker does not use the kit, and the kit does not use the broker. The broker's packages are internal to its module,
-which another module cannot import, and having the broker import the kit would put the add-ons' code and its
-dependencies in the broker's module. The kit's telemetry is built as the broker's is.
-[Write an add-on on the kit](../how-to/write-an-add-on.md) builds one, step by step.
+which another module cannot import. Having the broker import the kit would put the add-ons' code and its dependencies
+in the broker's module.
+
+The kit's telemetry is built as the broker's is. [Write an add-on on the kit](../how-to/write-an-add-on.md) builds one, step by step.
 
 ## Supported add-ons
 
@@ -68,9 +70,10 @@ The 0.6.0 chart has no `addons` block, and its values schema refuses one: use th
 
 The add-on for Claude Managed Agents could have been a backend type inside the broker, which would reuse the broker's
 store, sessions and leader election and save a network hop. It would also have put the Anthropic SDK in the broker's
-module and a second agent protocol beside A2A, for one vendor. As an add-on, the broker keeps one contract, A2A
-([Why A2A](why-a2a.md)), and the price is the hop and a store of the add-on's own, which keeps its tasks and sessions
-across a restart.
+module and a second agent protocol beside A2A, for one vendor.
+
+With an add-on, the broker keeps one contract, A2A ([Why A2A](why-a2a.md)). The price is the hop and a store of the
+add-on's own, which keeps its tasks and sessions across a restart.
 
 The AX add-on is an agent, so it was never a candidate for a backend type. It is an add-on, and not an example, so that
 it is released, scanned and deployed like the broker: the chart runs it, and a release pins its image.

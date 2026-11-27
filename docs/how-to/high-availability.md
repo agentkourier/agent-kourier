@@ -16,7 +16,7 @@ How the leader is chosen and what a failover can and cannot do is explained in
 
 ## 1. Store the DSN
 
-SQLite, the default, is one file on a volume that one pod may use, so it is one replica; the chart refuses
+SQLite, the default, is one file on a volume that one pod may use, so it is one replica. The chart refuses
 `replicaCount` above 1 with it. Postgres is the prerequisite for a second replica.
 
 In the release namespace, create a Secret with a `postgres://` URL or a key/value string:
@@ -77,15 +77,21 @@ priorityClassName: agent-kourier # (3)!
    cluster's default priority.
 
 **The budget.** Set `minAvailable` or `maxUnavailable`, not both. The render refuses a budget that would block every
-voluntary eviction, a node drain included: `maxUnavailable: 0`, a `minAvailable` of every replica (`2` at two
-replicas), and a percentage that rounds up to every replica (`100%`, or `50%` at one replica). At one replica the useful
-budget is `maxUnavailable: 1`. Before you scale to zero with `minAvailable: 1`, switch the budget off or to
-`maxUnavailable`: the zero renders, and the scale back to one is refused.
+voluntary eviction, a node drain included:
+
+- `maxUnavailable: 0`
+- a `minAvailable` of every replica (`2` at two replicas)
+- a percentage that rounds up to every replica (`100%`, or `50%` at one replica)
+
+At one replica the useful budget is `maxUnavailable: 1`. Before you scale to zero with `minAvailable: 1`, switch the
+budget off or to `maxUnavailable`: the zero renders, and the scale back to one is refused.
 
 **Required or preferred.** `required` never places two replicas on one node, and a replica that has nowhere to go
 stays Pending. An upgrade starts a new pod before it stops an old one (below), so with two replicas `required` needs
-three schedulable nodes; on a two-node cluster the new pod stays Pending and the upgrade does not progress. There, use
-`preferred`, which places them apart when it can:
+three schedulable nodes.
+
+On a two-node cluster the new pod stays Pending and the upgrade does not progress. There, use `preferred`, which places
+them apart when it can:
 
 ```yaml
 affinity:
@@ -111,13 +117,16 @@ description: Agent Kourier's replicas, so a busy node evicts other work before t
 ```
 
 `nodeSelector` and `tolerations` take Kubernetes' own form too, if the replicas must run on particular nodes.
-The chart has no `topologySpreadConstraints` value; spread the replicas with `affinity`, as above.
+The chart has no `topologySpreadConstraints` value. Spread the replicas with `affinity`, as above.
 
 **What an upgrade does.** With Postgres the Deployment's strategy is a rolling update with one surge and none
-unavailable: a new pod starts, as a standby, before an old one stops. When the old leader stops on its signal, it
-keeps renewing the Lease through its ordered shutdown (up to 25 s), then hands the Lease over, and a standby takes it at
-its next attempt a few seconds later (a retry period, 2 s, plus up to 120% jitter). If the Lease passes to the other old pod first, that pod hands it over again when it stops. (With SQLite the
-strategy is `Recreate`: the old pod releases the ReadWriteOnce volume before the new one starts.)
+unavailable: a new pod starts, as a standby, before an old one stops.
+
+When the old leader stops on its signal, it keeps renewing the Lease through its ordered shutdown (up to 25 s), then
+hands the Lease over. A standby takes it at its next attempt a few seconds later (a retry period, 2 s, plus up to 120%
+jitter). If the Lease passes to the other old pod first, that pod hands it over again when it stops.
+
+(With SQLite the strategy is `Recreate`: the old pod releases the ReadWriteOnce volume before the new one starts.)
 
 **A draining or frozen leader.** Kubernetes gives a stopping pod `terminationGracePeriodSeconds`, 40 seconds, and the
 ordered shutdown takes up to 25. A frozen process answers nothing: the liveness probe (`livenessProbe.periodSeconds`
@@ -134,23 +143,26 @@ kubectl -n agent-kourier get lease agent-kourier-leader -o jsonpath='{.spec.hold
 ```
 
 The holder is the leading pod's name, an underscore and a random suffix for the process: `agent-kourier-6d9f-x2k4p_1a2b3c4d`.
-The leader's log has a `leading` line with the `epoch` and the `holder`. Both pods are Ready: readiness never depends
-on the Lease. On each pod, the metric `agentkourier_leader` is 1 on the leader and 0 on the standby:
+The leader's log has a `leading` line with the `epoch` and the `holder`.
+
+Both pods are Ready: readiness never depends on the Lease. On each pod, the metric `agentkourier_leader` is 1 on the leader and 0 on the standby:
 
 ```sh
 kubectl -n agent-kourier port-forward pod/<pod> 8080:8080 &
 curl -s localhost:8080/metrics | grep -E '^agentkourier_leader'
 ```
 
-With the chat listener (`chatListener.enabled`, for a ChatConnection in Slack HTTP mode), the leader's pod alone also carries the label
-`agentkourier.dev/role=leader`, which the chat Service selects, so Slack's requests reach the leader and never the standby:
+With the chat listener (`chatListener.enabled`, for a ChatConnection in Slack HTTP mode), the leader's pod alone also
+carries the label `agentkourier.dev/role=leader`. The chat Service selects it, so Slack's requests reach the leader and
+never the standby:
 
 ```sh
 kubectl -n agent-kourier get pods -l agentkourier.dev/role=leader
 ```
 
-It lists the Lease's holder once it has started to lead, and a leader that is stopping until its shutdown takes the label off. During a takeover no Ready pod has the label for a while, and Slack's
+The command lists the Lease's holder once it has started to lead, and a leader that is stopping until its shutdown takes the label off. During a takeover no Ready pod has the label for a while, and Slack's
 requests fail until the new leader puts it on ([High availability and failover](../explanation/high-availability.md#slack-in-http-mode)).
+
 HTTP mode is why a second replica matters most: with SQLite, each rollout leaves Slack with no one to answer it until the new pod leads.
 
 ## 5. Drill a failover
@@ -175,15 +187,19 @@ Do this on a test install, with a bound channel you can use.
       -o custom-columns=HOLDER:.spec.holderIdentity,TRANSITIONS:.spec.leaseTransitions
     ```
 
-    The holder changes to the other pod, or to the new pod the Deployment starts. A deleted pod stops on its signal:
+    The holder changes to the other pod, or to the new pod the Deployment starts.
+
+    A deleted pod stops on its signal:
     after its ordered shutdown (up to 25 s, depending on what is in flight) it hands the Lease over, and a
     standby takes it at its next attempt a few seconds later (a retry period, 2 s, plus up to 120% jitter). A crashed or
     lost node's leader is replaced about a lease duration, 15 s, after its last renewal.
 
 4. Watch the thread. The new leader recovers the turn: the half-written message is replaced with the whole answer, and
-   the answer appears once. Reply in the thread: the same session continues. With the chat listener, the label
-   `agentkourier.dev/role=leader` is on the new leader's pod (`kubectl -n agent-kourier get pods -l agentkourier.dev/role=leader`), and the leader's
-   `agentkourier_slack_http_retries_total` counts the requests that Slack sent again and that reached it.
+   the answer appears once. Reply in the thread: the same session continues.
+
+    With the chat listener, the label `agentkourier.dev/role=leader` is on the new leader's pod
+    (`kubectl -n agent-kourier get pods -l agentkourier.dev/role=leader`), and the leader's
+    `agentkourier_slack_http_retries_total` counts the requests that Slack sent again and that reached it.
 
 5. Check the new leader counted its takeover. The earlier port-forward may point at the deleted pod, so
    port-forward to the new holder's pod, as in Check the leader, and read the counter:
@@ -197,8 +213,10 @@ past its Lease, and checks that every reply appears once.
 
 ## Behind a pooler in transaction mode
 
-Agent Kourier sends its idle-in-transaction and statement timeouts as startup parameters; they end a stalled
-leader's transaction and free its locks. A pooler in transaction mode (PgBouncer's `pool_mode = transaction`) refuses
+Agent Kourier sends its idle-in-transaction and statement timeouts as startup parameters. They end a stalled
+leader's transaction and free its locks.
+
+A pooler in transaction mode (PgBouncer's `pool_mode = transaction`) refuses
 startup parameters, and listing them in `ignore_startup_parameters` silently drops the protection. Set them on the role
 instead:
 
