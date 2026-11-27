@@ -14,7 +14,6 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	ax "github.com/google/ax/pkg/apis/v1alpha1"
-	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -31,6 +30,7 @@ type fakeAX struct {
 	get     func(context.Context, string) (*ax.Task, error)
 	resume  func(context.Context, string) (*ax.Task, error)
 	delete  func(context.Context, string) error
+	list    func(context.Context, *ax.ListTasksRequest) (*ax.ListTasksResponse, error)
 	suspend func(context.Context, string) (*ax.Task, error)
 }
 
@@ -46,6 +46,10 @@ func (f fakeAX) ResumeTask(ctx context.Context, r *ax.ResumeTaskRequest, _ ...gr
 func (f fakeAX) DeleteTask(ctx context.Context, r *ax.DeleteTaskRequest, _ ...grpc.CallOption) (*emptypb.Empty, error) {
 	return &emptypb.Empty{}, f.delete(ctx, r.Name)
 }
+func (f fakeAX) ListTasks(ctx context.Context, r *ax.ListTasksRequest, _ ...grpc.CallOption) (*ax.ListTasksResponse, error) {
+	return f.list(ctx, r)
+}
+
 func (f fakeAX) SuspendTask(ctx context.Context, r *ax.SuspendTaskRequest, _ ...grpc.CallOption) (*ax.Task, error) {
 	return f.suspend(ctx, r.Name)
 }
@@ -57,18 +61,14 @@ func testLauncher(t *testing.T) (*launcher, context.Context) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	e := &launcher{
-		cfg: config{atespace: "fixture", identity: "launcher", url: "https://callback.test" + result.Path, promptKey: "prompt",
-			history: true, running: 1, poll: time.Millisecond, timeout: time.Minute, keep: time.Minute},
-		template: &ax.Task{ApiVersion: "ax.io/v1alpha1", Kind: "Task", Spec: &ax.TaskSpec{
-			Profile: &ax.Profile{Image: "registry.test/agent@sha256:" + strings.Repeat("a", 64)}, Gateway: &ax.GatewayRef{Name: "gateway"},
-			Commands: []string{"/usr/local/bin/agent-kourier-ax-result", "--", "/usr/local/bin/agent"},
-		}},
-		st: s, log: slog.New(slog.DiscardHandler), now: time.Now, life: t.Context(),
-		rpc:     prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "test_rpc"}, []string{"method", "code"}),
-		trimmed: prometheus.NewCounter(prometheus.CounterOpts{Name: "test_trimmed"}),
-		cleanup: prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_cleanup"}),
-	}
+	e := newLauncher(config{atespace: "fixture", identity: "launcher", url: "https://callback.test" + result.Path,
+		promptKey: "prompt", history: true, running: 1, poll: time.Millisecond, timeout: time.Minute, keep: time.Minute},
+		s, slog.New(slog.DiscardHandler))
+	e.template = &ax.Task{ApiVersion: "ax.io/v1alpha1", Kind: "Task", Spec: &ax.TaskSpec{
+		Profile: &ax.Profile{Image: "registry.test/agent@sha256:" + strings.Repeat("a", 64)}, Gateway: &ax.GatewayRef{Name: "gateway"},
+		Commands: []string{"/usr/local/bin/agent-kourier-ax-result", "--", "/usr/local/bin/agent"},
+	}}
+	e.life = t.Context()
 	ctx, call := a2asrv.NewCallContext(t.Context(), nil)
 	call.User = a2asrv.NewAuthenticatedUser("owner", nil)
 	return e, ctx

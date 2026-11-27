@@ -7,16 +7,22 @@ import (
 
 	ax "github.com/google/ax/pkg/apis/v1alpha1"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/agentkourier/agent-kourier/addons/ax/store"
 	kit "github.com/agentkourier/agent-kourier/addons/kit/store"
 )
 
+const (
+	maxCleanupInterval  = 5 * time.Second
+	orphanSweepInterval = time.Minute
+)
+
 func (e *launcher) RunLeader(ctx context.Context) {
-	cleanup := time.NewTicker(min(e.cfg.poll, 5*time.Second))
+	cleanup := time.NewTicker(min(e.cfg.poll, maxCleanupInterval))
 	defer cleanup.Stop()
-	sweep := time.NewTicker(time.Minute)
+	sweep := time.NewTicker(orphanSweepInterval)
 	defer sweep.Stop()
 	e.cleanPending(ctx)
 	for {
@@ -45,7 +51,15 @@ func (e *launcher) cleanPending(ctx context.Context) {
 		}
 		return
 	}
-	e.cleanup.Set(float64(len(pending)))
+	now := e.now().UnixNano()
+	var retained int
+	for _, launch := range pending {
+		if launch.Suspended != 0 && launch.CleanupAt > now {
+			retained++
+		}
+	}
+	e.cleanup.Set(float64(len(pending) - retained))
+	e.retained.Set(float64(retained))
 	for _, l := range pending {
 		if ctx.Err() != nil {
 			return
@@ -68,7 +82,7 @@ func (e *launcher) cleanLaunch(ctx context.Context, l store.Launch, now int64) {
 		return
 	}
 	if err != nil {
-		e.diagnostic(ctx, l, "lookup_retry")
+		e.cleanupRetry(ctx, l, "lookup_retry", err)
 		return
 	}
 	if !e.owns(task, l) {
@@ -88,12 +102,12 @@ func (e *launcher) cleanLaunch(ctx context.Context, l store.Launch, now int64) {
 	if l.UID == "" {
 		l.UID, l.ActorUID = task.Metadata.Uid, task.GetStatus().GetActorUid()
 		if ok, err := e.st.Bind(ctx, l.TaskID, l.UID, l.ActorUID); !ok || err != nil {
-			e.diagnostic(ctx, l, "ownership_retry")
+			e.cleanupRetry(ctx, l, "ownership_retry", err)
 			return
 		}
 	}
 	if err := e.st.CheckFence(ctx); err != nil {
-		e.diagnostic(ctx, l, "fence_retry")
+		e.cleanupRetry(ctx, l, "fence_retry", err)
 		return
 	}
 	if l.CleanupAt > now {
@@ -106,7 +120,7 @@ func (e *launcher) cleanLaunch(ctx context.Context, l store.Launch, now int64) {
 		case codes.NotFound:
 			e.recordCleanup(ctx, l, "absent", e.st.MarkClean(ctx, l.TaskID))
 		default:
-			e.diagnostic(ctx, l, "suspend_retry")
+			e.cleanupRetry(ctx, l, "suspend_retry", err)
 		}
 		return
 	}
@@ -118,15 +132,26 @@ func (e *launcher) cleanLaunch(ctx context.Context, l store.Launch, now int64) {
 		// AX recorded a failed deletion, which the next sweep must retry.
 		e.diagnostic(ctx, l, "delete_requested")
 	default:
-		e.diagnostic(ctx, l, "delete_retry")
+		e.cleanupRetry(ctx, l, "delete_retry", err)
 	}
 }
 
 func (e *launcher) recordCleanup(ctx context.Context, l store.Launch, disposition string, err error) {
 	if err != nil {
-		disposition += "_record_retry"
+		e.cleanupRetry(ctx, l, disposition+"_record_retry", err)
+		return
 	}
 	e.diagnostic(ctx, l, disposition)
+}
+
+func (e *launcher) cleanupRetry(ctx context.Context, l store.Launch, disposition string, err error) {
+	// AX error details can come from the runner. Record the gRPC status
+	// without its message, which can contain Task data.
+	if _, ok := status.FromError(err); ok && err != nil {
+		err = errors.New(code(err).String())
+	}
+	e.log.WarnContext(ctx, "retry AX cleanup", "a2a_task", l.TaskID, "ax_task", l.Name,
+		"ax_uid", l.UID, "cleanup", disposition, "error", err)
 }
 
 func (e *launcher) diagnostic(ctx context.Context, l store.Launch, disposition string) {

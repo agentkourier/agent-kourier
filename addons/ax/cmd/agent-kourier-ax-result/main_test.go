@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -139,7 +141,9 @@ func TestCompletedInvocationKeepsFrozenResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	const marker = ".completed-result"
-	saveResult(workspace, marker, body)
+	if err := saveResult(workspace, marker, body); err != nil {
+		t.Fatal(err)
+	}
 	restarted := claim
 	restarted.InvocationID = result.NewID()
 	if got := savedResult(workspace, marker, restarted); !bytes.Equal(got, body) {
@@ -148,5 +152,98 @@ func TestCompletedInvocationKeepsFrozenResult(t *testing.T) {
 	restarted.TaskUID = "different"
 	if got := savedResult(workspace, marker, restarted); got != nil {
 		t.Fatal("receipt from a different Task was reused")
+	}
+}
+
+func TestRunReplaysAndRemovesTheDeliveredResult(t *testing.T) {
+	workspace := t.TempDir()
+	id := result.NewID()
+	marker := filepath.Join(workspace, ".agent-kourier-ax-result-"+id)
+	metadata := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "metadata:\n  uid: ax-task-uid\n")
+	}))
+	t.Cleanup(metadata.Close)
+	bodies := make(chan []byte, 2)
+	var starts, reports atomic.Int32
+	callback := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case result.StartPath:
+			if starts.Add(1) == 1 {
+				w.WriteHeader(http.StatusNoContent)
+			} else {
+				w.WriteHeader(http.StatusGone)
+			}
+		case result.Path:
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Error(err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			switch reports.Add(1) {
+			case 1:
+				bodies <- body
+				w.WriteHeader(http.StatusUnauthorized)
+			case 2:
+				bodies <- body
+				w.WriteHeader(http.StatusNoContent)
+			default:
+				w.WriteHeader(http.StatusConflict)
+			}
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(callback.Close)
+	now := time.Now()
+	env := map[string]string{result.URLEnv: callback.URL + result.Path, result.IDEnv: id,
+		result.DeadlineEnv: now.Add(10 * time.Second).Format(time.RFC3339), "AX_METADATA_URL": metadata.URL}
+	for _, key := range []string{result.URLEnv, result.IDEnv, result.DeadlineEnv} {
+		t.Setenv(key, env[key])
+	}
+	args := []string{"--", "/bin/sh", "-ec", `
+		[ -z "${AGENT_KOURIER_AX_RESULT_URL+x}${AGENT_KOURIER_AX_RESULT_ID+x}${AGENT_KOURIER_AX_RESULT_DEADLINE+x}" ]
+		printf x >> child-runs
+		printf 'result'
+	`}
+	invoke := func() error {
+		return runWith(t.Context(), args, func(key string) string { return env[key] },
+			callback.Client(), workspace, now, io.Discard)
+	}
+	if err := invoke(); err == nil || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("first report error = %v", err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("replay file = %v", err)
+	}
+	if err := invoke(); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if err := invoke(); err == nil || !strings.Contains(err.Error(), "410") {
+		t.Fatalf("restart after delivery error = %v", err)
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("delivered replay file was not removed: %v", err)
+	}
+	if starts.Load() != 2 || reports.Load() != 2 || !bytes.Equal(<-bodies, <-bodies) {
+		t.Fatal("restart did not replay the original result")
+	}
+	runs, err := os.ReadFile(filepath.Join(workspace, "child-runs"))
+	if err != nil || string(runs) != "x" {
+		t.Fatalf("child execution marker = %q, %v", runs, err)
+	}
+}
+
+func TestRetryAfter(t *testing.T) {
+	if got := retryAfter("5"); got != 5*time.Second {
+		t.Fatalf("seconds = %v", got)
+	}
+	if got := retryAfter("invalid"); got != 0 {
+		t.Fatalf("invalid header = %v", got)
+	}
+	target := time.Now().Add(time.Minute).UTC().Truncate(time.Second)
+	got := retryAfter(target.Format(http.TimeFormat))
+	if want := time.Until(target); got < want || got-want > time.Second {
+		t.Fatalf("HTTP date = %v, want near %v", got, want)
 	}
 }

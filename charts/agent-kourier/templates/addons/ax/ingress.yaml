@@ -11,6 +11,10 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "agentkourier.addon.labels" $addon | nindent 4 }}
+  {{- with $route.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   ingressClassName: {{ required "AX callback ingress needs resultCallback.ingress.className" $route.ingress.className | quote }}
   tls:

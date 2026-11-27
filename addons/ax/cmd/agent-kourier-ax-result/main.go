@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -26,6 +27,11 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/agentkourier/agent-kourier/addons/ax/internal/result"
+)
+
+const (
+	requestTimeout = 10 * time.Second
+	childWaitDelay = 2 * time.Second
 )
 
 func main() {
@@ -39,6 +45,14 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, getenv func(string) string) error {
+	workspace, err := os.Getwd()
+	if err != nil {
+		return errors.New("cannot find AX working directory")
+	}
+	return runWith(ctx, args, getenv, httpClient(), workspace, time.Now(), os.Stderr)
+}
+
+func runWith(ctx context.Context, args []string, getenv func(string) string, client *http.Client, workspace string, now time.Time, diagnostics io.Writer) error {
 	if len(args) < 2 || args[0] != "--" || args[1] == "" {
 		return errors.New("usage: agent-kourier-ax-result -- command [arguments...]")
 	}
@@ -47,22 +61,17 @@ func run(ctx context.Context, args []string, getenv func(string) string) error {
 		return err
 	}
 	deadline, err := time.Parse(time.RFC3339, getenv(result.DeadlineEnv))
-	if err != nil || !deadline.After(time.Now()) {
+	if err != nil || !deadline.After(now) {
 		return errors.New("missing or expired AX result deadline")
 	}
 	ctx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	claim := result.Claim{ResultID: getenv(result.IDEnv), InvocationID: result.NewID()}
-	claim.TaskUID, err = taskUID(ctx, getenv("AX_METADATA_URL"))
+	claim.TaskUID, err = taskUID(ctx, client, getenv("AX_METADATA_URL"))
 	if err != nil || !claim.Valid() {
 		return errors.New("invalid AX startup metadata")
 	}
 
-	client := httpClient()
-	workspace, err := os.Getwd()
-	if err != nil {
-		return errors.New("cannot find AX working directory")
-	}
 	marker := ".agent-kourier-ax-result-" + claim.ResultID
 	body := savedResult(workspace, marker, claim)
 	if body == nil {
@@ -78,24 +87,34 @@ func run(ctx context.Context, args []string, getenv func(string) string) error {
 		if err != nil {
 			return errors.New("could not encode result")
 		}
-		saveResult(workspace, marker, body)
+		if err := saveResult(workspace, marker, body); err != nil {
+			_, _ = fmt.Fprintf(diagnostics, "cannot save AX result for replay: %v\n", fileError(err))
+		}
 	}
 	if err := postBody(ctx, client, endpoint.String(), body); err != nil {
 		return fmt.Errorf("AX result report: %w", err)
+	}
+	root, err := os.OpenRoot(workspace)
+	if err != nil {
+		return fmt.Errorf("open workspace to remove delivered AX result: %w", fileError(err))
+	}
+	defer func() { _ = root.Close() }()
+	if err := root.Remove(marker); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove delivered AX result: %w", fileError(err))
 	}
 	return nil
 }
 
 func httpClient() *http.Client {
 	return &http.Client{
-		Timeout: 10 * time.Second,
+		Timeout: requestTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
 }
 
-func taskUID(ctx context.Context, raw string) (string, error) {
+func taskUID(ctx context.Context, client *http.Client, raw string) (string, error) {
 	invalid := errors.New("invalid AX task metadata")
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "http" || u.User != nil || u.Path != "" ||
@@ -107,7 +126,7 @@ func taskUID(ctx context.Context, raw string) (string, error) {
 	if err != nil {
 		return "", invalid
 	}
-	resp, err := httpClient().Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", invalid
 	}
@@ -187,6 +206,9 @@ func execute(ctx context.Context, args []string, workspace, outputFile string) r
 	var tail outputTail
 	child := exec.CommandContext(ctx, args[0], args[1:]...) //nolint:gosec // the operator supplies the argv in the Task template
 	child.Dir = workspace
+	child.Env = slices.DeleteFunc(os.Environ(), func(entry string) bool {
+		return strings.HasPrefix(entry, "AGENT_KOURIER_AX_RESULT_")
+	})
 	child.Stdout, child.Stderr = &tail, &tail
 	child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	child.Cancel = func() error {
@@ -196,7 +218,7 @@ func execute(ctx context.Context, args []string, workspace, outputFile string) r
 		}
 		return err
 	}
-	child.WaitDelay = 2 * time.Second
+	child.WaitDelay = childWaitDelay
 	var report result.Report
 	if err := child.Run(); err != nil {
 		report.ExitCode = 1
@@ -282,23 +304,36 @@ func savedResult(workspace, marker string, claim result.Claim) []byte {
 	return body
 }
 
-func saveResult(workspace, marker string, body []byte) {
+func fileError(err error) error {
+	var path *os.PathError
+	var link *os.LinkError
+	switch {
+	case errors.As(err, &path):
+		return path.Err
+	case errors.As(err, &link):
+		return link.Err
+	default:
+		return err
+	}
+}
+
+func saveResult(workspace, marker string, body []byte) error {
 	root, err := os.OpenRoot(workspace)
 	if err != nil {
-		return
+		return err
 	}
 	defer func() { _ = root.Close() }()
 	tmp := marker + "-" + result.NewID()
 	f, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return
+		return err
 	}
 	defer func() { _ = root.Remove(tmp) }()
 	_, writeErr := f.Write(body)
-	closeErr := f.Close()
-	if writeErr == nil && closeErr == nil {
-		_ = root.Rename(tmp, marker)
+	if err := errors.Join(writeErr, f.Close()); err != nil {
+		return err
 	}
+	return root.Rename(tmp, marker)
 }
 
 type outputTail struct {

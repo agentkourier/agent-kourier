@@ -34,20 +34,20 @@ The shared A2A task and context retention settings govern conversation history. 
 | `AX_TASK_TEMPLATE` | Required | `addons.ax.taskTemplate.configMap` |
 | `AX_PROMPT_KEY` | `prompt` | `addons.ax.promptKey` |
 | `AX_RESULT_URL` | Required HTTPS URL ending in `/ax/results/v1` | `addons.ax.resultCallback.url` |
-| `AX_RESULT_TOKEN_FILE` | Required, one dedicated bearer without whitespace or a trailing newline | `addons.ax.resultCallback.tokenSecret` |
+| `AX_RESULT_TOKEN_FILE` | Required, one or two distinct callback bearers, one per line | `addons.ax.resultCallback.tokenSecret` |
 | `AX_HISTORY` | `true` | `addons.ax.history` |
 | `AX_MAX_RUNNING` | `10` | `addons.ax.maxRunning` |
 | `AX_POLL_INTERVAL` | `2s` | `addons.ax.pollInterval` |
 | `AX_TURN_TIMEOUT` | `30m` | `addons.ax.turnTimeout` |
 | `AX_KEEP_FAILED` | `24h`, or `0` for deletion after settlement | `addons.ax.keepFailed` |
 
-The launcher reads the Task template and callback token at startup. Restart the add-on to pick up changes to either. Use the shared [add-on limits](limits.md#every-add-on) for A2A authentication, retention, and leader election.
+Restart the launcher to pick up a new Task template. Callback tokens reload from the mounted Secret every five seconds. Use the shared [add-on limits](limits.md#every-add-on) for A2A authentication, retention, and leader election.
 
 ## Runner callback protocol
 
 The wrapper reads the AX Task UID from the runner's local metadata endpoint. It posts `result_id`, `task_uid`, and `invocation_id` to `/ax/results/v1/start` before running the command. Only the granted invocation can report. It posts the same three fields plus `exit_code`, `output`, `output_source`, and `truncated` to `/ax/results/v1`. Output sources are `file`, `stdout_stderr`, or `none`. An empty regular output file counts as `file`. Both endpoints require JSON and the callback bearer.
 
-An identical result retry returns `204` while its receipt is retained. A conflicting result or a second invocation's start claim returns `409`. Unknown registrations and mismatches return `404`. Closed or expired registrations return `410`. The wrapper verifies TLS, follows no redirects, and retries the same request body on transport failures, HTTP `429`, and HTTP `5xx` within the deadline. The launcher treats the correlation ID as part of the registration. The Gateway bearer authenticates the request.
+An identical result retry returns `204` while its receipt is retained. A conflicting result or a second invocation's start claim returns `409`. Unknown registrations and mismatches return `404`. Closed or expired registrations return `410`. The wrapper verifies TLS, follows no redirects, and retries the same request body on transport failures, HTTP `429`, and HTTP `5xx` within the deadline. The launcher treats the correlation ID as part of the registration. The Gateway bearer authenticates the request. The wrapper removes its local replay file after the launcher acknowledges the result. An unacknowledged result can still leave a replay file, so keep persistent Workspaces within a single trust boundary.
 
 ## Metrics
 
@@ -55,5 +55,6 @@ An identical result retry returns `204` while its receipt is retained. A conflic
 - `agentkourier_ax_callback_total` counts callbacks by route and HTTP response.
 - `agentkourier_ax_result_latency_seconds` measures time from turn start to the first committed result.
 - `agentkourier_ax_history_trimmed_total` counts earlier turns discarded to fit the prompt.
-- `agentkourier_ax_cleanup_pending` counts launches with pending cleanup on the leader.
+- `agentkourier_ax_cleanup_pending` counts launches awaiting cleanup on the leader.
+- `agentkourier_ax_cleanup_retained` counts suspended Tasks within the failure inspection window.
 - `agentkourier_ax_turns_total` records the A2A turn outcome, including deadline expiry.

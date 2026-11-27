@@ -17,10 +17,7 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	ax "github.com/google/ax/pkg/apis/v1alpha1"
-	"github.com/prometheus/client_golang/prometheus"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
 	"github.com/agentkourier/agent-kourier/addons/ax/internal/result"
@@ -41,8 +38,6 @@ func TestA2AReplayAndBusyAdmission(t *testing.T) {
 	ctx, stop := context.WithTimeout(t.Context(), 12*time.Second)
 	defer stop()
 	e.cfg.timeout = 6 * time.Second
-	e.resultTime = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "test_result_time"})
-	e.callbacks = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_callback"}, []string{"route", "status"})
 	first := make(chan struct{})
 	release := make(chan struct{})
 	var createCount atomic.Int32
@@ -160,9 +155,7 @@ func testEndpoint(ctx context.Context, t *testing.T, e *launcher) string {
 	a.Open = func(context.Context, settings.Config, runtime.StoreOptions) (*store.Store, error) { return e.st, nil }
 	a.Build = func(ctx context.Context, _ runtime.Env[*store.Store]) (runtime.Backend, error) {
 		e.life, e.stop = context.WithCancel(ctx)
-		var err error
-		e.conn, err = grpc.NewClient("passthrough:///127.0.0.1:1", grpc.WithTransportCredentials(insecure.NewCredentials()))
-		return e, err
+		return e, nil
 	}
 	cfg, own, err := runtime.Parse(a, func(k string) string {
 		return map[string]string{"AUTH_DISABLED": "true", "LISTEN_ADDR": "127.0.0.1:0"}[k]

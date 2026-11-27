@@ -26,10 +26,10 @@ For this example, install the release as `agent-kourier` in namespace `agent-kou
 | --- | --- |
 | `slack-main` | `botToken` and `appToken` for the Slack app |
 | `ax-a2a-auth` | `token` for Agent Kourier's A2A requests |
-| `ax-result-auth` | `token` for the runner callback, distinct from the A2A token |
+| `ax-result-auth` | `token` for the launcher’s accepted callback tokens and `gateway-token` for the single bearer the Gateway sends |
 | `ax-results-tls` | TLS certificate and key for the private callback hostname |
 
-Store the callback token as a single value without whitespace or a trailing newline. To rotate it, pause intake, let current Tasks settle, update the Gateway credential and mounted token, then restart the launcher before resuming intake.
+Use a dedicated callback bearer distinct from the A2A token. Start with the same bearer in both callback keys. To rotate, add the new bearer to `token` on a second line. Wait for the Secret to propagate and verify that every launcher replica accepts it. Switch `gateway-token` to the new bearer, then remove the old line after all Gateway instances use the new credential. The launcher reads the mounted file every five seconds and retains the previous set if a reload is invalid.
 
 Grant the dedicated AX atespace access to `ax-result-auth` through the Substrate credential provider. Scope the grant to an explicit Secret label. The wrapper sends an Authorization placeholder and the Gateway replaces it outside the sandbox. Configure DNS and ensure the egress Gateway trusts the certificate on the callback's HTTPS origin. AX supplies the trust bundle the wrapper uses for intercepted HTTPS.
 
@@ -49,10 +49,10 @@ spec:
           replaceHeaders:
             - header: Authorization
               prefix: "Bearer "
-              credentialUri: "ate-secret://k8s.io/default/agent-kourier/ax-result-auth/token"
+              credentialUri: "ate-secret://k8s.io/default/agent-kourier/ax-result-auth/gateway-token"
 ```
 
-Set the launcher values below. The optional Ingress exposes exactly `/ax/results/v1` and `/ax/results/v1/start`. Use the class of your private controller. If your cluster applies NetworkPolicy, set `addons.ax.networkPolicy.server.to` and its port to allow AX gRPC, and `addons.ax.networkPolicy.callbackFrom` to allow traffic from that ingress controller. The callback Secret belongs to the add-on and stays out of the broker's Secret grants. When enabling the launcher on the files route, list the broker's release-namespace Secrets in `rbac.secretNames` if the chart cannot see them in `config.*`.
+Set the launcher values below. The optional Ingress exposes exactly `/ax/results/v1` and `/ax/results/v1/start`. Use the class of your private controller and set controller-specific annotations under `addons.ax.resultCallback.ingress.annotations`. The chart uses private plaintext HTTP for replica forwarding and private plaintext gRPC for the AX control plane. Keep both hops on trusted networks or protect them with a mesh that encrypts pod traffic. If your cluster applies NetworkPolicy, set `addons.ax.networkPolicy.server.to` and its port to allow AX gRPC, and `addons.ax.networkPolicy.callbackFrom` to allow traffic from that ingress controller. The callback Secret belongs to the add-on and stays out of the broker's Secret grants. When enabling the launcher on the files route, list the broker's release-namespace Secrets in `rbac.secretNames` if the chart cannot see them in `config.*`.
 
 ```yaml
 config:

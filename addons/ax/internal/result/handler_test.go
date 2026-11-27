@@ -54,7 +54,7 @@ func TestCallbackWireContract(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			f := &fakeReceipts{}
-			h := Handler{Token: func() [32]byte { return wantToken }, Receipts: f}
+			h := Handler{AcceptToken: func(bearer string) bool { return sha256.Sum256([]byte(bearer)) == wantToken }, Receipts: f}
 			r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, test.path, strings.NewReader(test.body))
 			if test.token != "" {
 				r.Header.Set("Authorization", test.token)

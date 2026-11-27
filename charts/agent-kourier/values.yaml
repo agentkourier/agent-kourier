@@ -683,6 +683,7 @@ addons:
       # Optional Ingress for the two exact callback paths. Use a private controller.
       ingress:
         enabled: false
+        annotations: {} # Additional annotations for the callback Ingress.
         className: ""
         tlsSecretName: ""
     promptKey: prompt # AX_PROMPT_KEY

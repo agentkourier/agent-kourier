@@ -136,7 +136,9 @@ type Env[S Store] struct {
 	Settings  settings.Values
 	Store     S
 	Telemetry *telemetry.Telemetry
-	Log       *slog.Logger
+	// CallerTokens is the live A2A credential set when token-file authentication is configured.
+	CallerTokens *auth.Tokens
+	Log          *slog.Logger
 }
 
 // Backend runs the turns. The kit wraps it: each Execute is one turn, which it counts and traces, and ends when the

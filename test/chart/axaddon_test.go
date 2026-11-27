@@ -23,7 +23,7 @@ var axRefusals = []refusal{
 func TestAXCallbackSecretAndRoutes(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
-	out := mustRender(t, "agent-kourier", "agent-kourier", "-f", values("ax-addon"))
+	out := mustRender(t, "agent-kourier", "agent-kourier", "-f", values("ax-addon"), "--set-string", "addons.ax.resultCallback.ingress.annotations.example=composed")
 	var ax, broker appsv1.Deployment
 	find(t, out, "Deployment", "agent-kourier-ax", &ax)
 	find(t, out, "Deployment", "agent-kourier", &broker)
@@ -50,6 +50,9 @@ func TestAXCallbackSecretAndRoutes(t *testing.T) {
 	}
 	var ingress networkingv1.Ingress
 	find(t, out, "Ingress", "agent-kourier-ax-results", &ingress)
+	if ingress.Annotations["example"] != "composed" {
+		t.Fatalf("callback annotations = %v", ingress.Annotations)
+	}
 	paths := ingress.Spec.Rules[0].HTTP.Paths
 	if len(paths) != 2 || paths[0].Path != "/ax/results/v1" || paths[1].Path != "/ax/results/v1/start" {
 		t.Fatalf("unexpected callback routes: %+v", paths)

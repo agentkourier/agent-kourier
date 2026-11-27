@@ -3,7 +3,6 @@ package result
 import (
 	"context"
 	"crypto/sha256"
-	"crypto/subtle"
 	"errors"
 	"io"
 	"mime"
@@ -19,9 +18,9 @@ type Receipts interface {
 
 // Handler authenticates both callback routes before decoding or looking up a turn.
 type Handler struct {
-	Token    func() [32]byte
-	Receipts Receipts
-	Observe  func(start bool, status int)
+	AcceptToken func(string) bool
+	Receipts    Receipts
+	Observe     func(start bool, status int)
 }
 
 func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -51,8 +50,7 @@ func (h Handler) receive(w http.ResponseWriter, r *http.Request, start bool) int
 	if !ok || !strings.EqualFold(kind, "Bearer") || bearer == "" || strings.ContainsAny(bearer, " \t,") {
 		return http.StatusUnauthorized
 	}
-	expected, received := h.Token(), sha256.Sum256([]byte(bearer))
-	if subtle.ConstantTimeCompare(expected[:], received[:]) != 1 {
+	if !h.AcceptToken(bearer) {
 		return http.StatusUnauthorized
 	}
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))

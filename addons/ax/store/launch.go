@@ -236,6 +236,9 @@ func (s *Store) AcceptResult(ctx context.Context, r result.Report, hash [32]byte
 	return status, accepted, nil
 }
 
+const cleanupSchedule = `CASE WHEN decision = ? AND EXISTS (SELECT 1 FROM a2a_tasks t
+	WHERE t.id = ax_launches.task_id AND t.state = ?) THEN CAST(? AS BIGINT) ELSE CAST(? AS BIGINT) END`
+
 // Recover closes unfinished launches and schedules cleanup for any terminal
 // snapshot committed before a previous leader could schedule it.
 func (s *Store) Recover(ctx context.Context, keep time.Duration) error {
@@ -244,8 +247,7 @@ func (s *Store) Recover(ctx context.Context, keep time.Duration) error {
 		_, err := q.Exec(ctx, `UPDATE ax_launches
 			SET decision = CASE WHEN EXISTS (SELECT 1 FROM a2a_tasks t WHERE t.id = ax_launches.task_id
 			   AND t.state NOT IN (?, ?, ?)) THEN COALESCE(NULLIF(decision, ''), ?) ELSE ? END,
-			    cleanup_at = CASE WHEN decision = ? AND EXISTS (SELECT 1 FROM a2a_tasks t
-			       WHERE t.id = ax_launches.task_id AND t.state = ?) THEN CAST(? AS BIGINT) ELSE CAST(? AS BIGINT) END,
+			    cleanup_at = `+cleanupSchedule+`,
 			    output = ''
 			WHERE clean = ? AND cleanup_at = 0`,
 			string(a2a.TaskStateSubmitted), string(a2a.TaskStateWorking), string(a2a.TaskStateInputRequired), Failed, Interrupted,
@@ -297,15 +299,20 @@ func (s *Store) PruneReceipts(ctx context.Context, before time.Time) error {
 // ScheduleSettled recovers a cleanup schedule if the SDK committed a terminal
 // snapshot but its cleanup hook could not record the schedule.
 func (s *Store) ScheduleSettled(ctx context.Context, keep time.Duration) error {
+	const eligible = `clean = ? AND cleanup_at = 0 AND EXISTS (SELECT 1 FROM a2a_tasks t
+		WHERE t.id = ax_launches.task_id AND t.state IN (?, ?, ?, ?))`
+	args := []any{CleanPending, string(a2a.TaskStateCompleted), string(a2a.TaskStateFailed),
+		string(a2a.TaskStateCanceled), string(a2a.TaskStateRejected)}
+	var pending bool
+	err := s.Reader().QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM ax_launches WHERE `+eligible+`)`, args...).Scan(&pending)
+	if err != nil || !pending {
+		return err
+	}
 	now := s.now()
-	_, err := s.change(ctx, `UPDATE ax_launches SET output = '',
+	_, err = s.change(ctx, `UPDATE ax_launches SET output = '',
 		decision = CASE WHEN decision = '' THEN ? ELSE decision END,
-		cleanup_at = CASE WHEN decision = ? AND EXISTS (SELECT 1 FROM a2a_tasks t WHERE
-		t.id = ax_launches.task_id AND t.state = ?) THEN CAST(? AS BIGINT) ELSE CAST(? AS BIGINT) END
-		WHERE clean = ? AND cleanup_at = 0 AND EXISTS (SELECT 1 FROM a2a_tasks t
-		WHERE t.id = ax_launches.task_id AND t.state IN (?, ?, ?, ?))`,
-		Failed, CommandFail, string(a2a.TaskStateFailed), now.Add(keep).UnixNano(), now.UnixNano(), CleanPending,
-		string(a2a.TaskStateCompleted), string(a2a.TaskStateFailed), string(a2a.TaskStateCanceled), string(a2a.TaskStateRejected))
+		cleanup_at = `+cleanupSchedule+` WHERE `+eligible,
+		append([]any{Failed, CommandFail, string(a2a.TaskStateFailed), now.Add(keep).UnixNano(), now.UnixNano()}, args...)...)
 	return err
 }
 

@@ -2,14 +2,12 @@ package launcher
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -56,26 +54,28 @@ type launcher struct {
 	cfg      config
 	st       *store.Store
 	client   ax.AXClient
-	conn     *grpc.ClientConn
+	conn     io.Closer
 	template *ax.Task
 	log      *slog.Logger
-	token    [32]byte
+	tokens   *callbackTokens
 	now      func() time.Time
 
 	life context.Context
 	stop context.CancelFunc
 
-	admitted atomic.Int64
-	active   sync.Map // task ID -> struct{} while an AX launch call can still run
-	waiters  sync.Map // task ID -> a wakeup channel while following the Task
-	launchMu sync.Mutex
-	launches sync.WaitGroup
+	admitted        atomic.Int64
+	active          sync.Map // task ID -> struct{} while an AX launch call can still run
+	waiters         sync.Map // task ID -> a wakeup channel while following the Task
+	launchMu        sync.Mutex
+	launches        sync.WaitGroup
+	credentialWatch sync.WaitGroup
 
 	rpc        *prometheus.HistogramVec
 	callbacks  *prometheus.CounterVec
 	resultTime prometheus.Histogram
 	trimmed    prometheus.Counter
 	cleanup    prometheus.Gauge
+	retained   prometheus.Gauge
 }
 
 var (
@@ -89,28 +89,60 @@ var (
 )
 
 func build(ctx context.Context, env runtime.Env[*store.Store]) (runtime.Backend, error) {
+	return buildWith(ctx, env, func(addr string) (ax.AXClient, io.Closer, error) {
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return nil, nil, err
+		}
+		return ax.NewAXClient(conn), conn, nil
+	})
+}
+
+func buildWith(ctx context.Context, env runtime.Env[*store.Store], connect func(string) (ax.AXClient, io.Closer, error)) (*launcher, error) {
 	cfg := readConfig(env.Settings)
-	token, err := os.ReadFile(cfg.tokenFile)
-	if err != nil || len(token) == 0 || len(token) > 4096 ||
-		strings.ContainsAny(string(token), " \t\r\n,") || string(token) == "ax-placeholder" {
-		return nil, errors.New("AX_RESULT_TOKEN_FILE must contain one dedicated bearer without whitespace")
-	}
-	if env.Config.AuthTokenFile != "" {
-		a2aTokens, err := auth.LoadTokens(env.Config.AuthTokenFile, env.Log)
+	a2aTokens := env.CallerTokens
+	if a2aTokens == nil && env.Config.AuthTokenFile != "" {
+		var err error
+		a2aTokens, err = auth.LoadTokens(env.Config.AuthTokenFile, env.Log)
 		if err != nil {
 			return nil, errors.New("cannot check A2A token file")
 		}
-		if a2aTokens.Accepts(string(token)) {
-			return nil, errors.New("AX callback and A2A credentials must differ")
-		}
 	}
-	conn, err := grpc.NewClient(cfg.addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	tokens := &callbackTokens{path: cfg.tokenFile, a2a: a2aTokens}
+	if err := tokens.reload(); err != nil {
+		return nil, err
+	}
+	client, conn, err := connect(cfg.addr)
 	if err != nil {
 		return nil, fmt.Errorf("open AX control plane client: %w", err)
 	}
-	e := &launcher{
-		cfg: cfg, client: ax.NewAXClient(conn), conn: conn, st: env.Store, log: env.Log,
-		now: time.Now, token: sha256.Sum256(token),
+	e := newLauncher(cfg, env.Store, env.Log)
+	e.client, e.conn, e.tokens = client, conn, tokens
+	e.template, err = readTemplate(ctx, cfg, e.client)
+	if err != nil {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		return nil, err
+	}
+	for _, collector := range []prometheus.Collector{e.rpc, e.callbacks, e.resultTime, e.trimmed, e.cleanup, e.retained} {
+		if err := env.Telemetry.Register(collector); err != nil {
+			if conn != nil {
+				_ = conn.Close()
+			}
+			return nil, err
+		}
+	}
+	// Run closes the backend after draining requests and turns. Keep launch
+	// work alive during that drain, then cancel and join it before lease release.
+	e.life, e.stop = context.WithCancel(context.WithoutCancel(ctx))
+	e.credentialWatch.Go(func() { tokens.watch(e.life, e.log) })
+	return e, nil
+}
+
+func newLauncher(cfg config, st *store.Store, log *slog.Logger) *launcher {
+	return &launcher{
+		cfg: cfg, st: st, log: log, now: time.Now,
 		rpc: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name: "agentkourier_ax_rpc_duration_seconds", Help: "AX RPC duration by method and gRPC status.",
 		}, []string{"method", "code"}),
@@ -124,38 +156,30 @@ func build(ctx context.Context, env runtime.Env[*store.Store]) (runtime.Backend,
 		trimmed: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "agentkourier_ax_history_trimmed_total", Help: "Earlier turns dropped from AX prompts.",
 		}),
+		retained: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "agentkourier_ax_cleanup_retained", Help: "Suspended AX Tasks kept for failure inspection.",
+		}),
 		cleanup: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "agentkourier_ax_cleanup_pending", Help: "AX Task launches with pending cleanup.",
 		}),
 	}
-	e.template, err = readTemplate(ctx, cfg, e.client)
-	if err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-	for _, collector := range []prometheus.Collector{e.rpc, e.callbacks, e.resultTime, e.trimmed, e.cleanup} {
-		if err := env.Telemetry.Register(collector); err != nil {
-			_ = conn.Close()
-			return nil, err
-		}
-	}
-	// Run closes the backend after draining requests and turns. Keep launch
-	// work alive during that drain, then cancel and join it before lease release.
-	e.life, e.stop = context.WithCancel(context.WithoutCancel(ctx))
-	return e, nil
 }
 
 func (e *launcher) Close() error {
 	e.launchMu.Lock()
 	e.stop()
 	e.launchMu.Unlock()
-	err := e.conn.Close()
+	var err error
+	if e.conn != nil {
+		err = e.conn.Close()
+	}
 	e.launches.Wait()
+	e.credentialWatch.Wait()
 	return err
 }
 
 func (e *launcher) LeaderRoutes(register func(string, http.Handler)) {
-	handler := result.Handler{Token: func() [32]byte { return e.token }, Receipts: e, Observe: func(start bool, status int) {
+	handler := result.Handler{AcceptToken: e.tokens.accepts, Receipts: e, Observe: func(start bool, status int) {
 		route := "result"
 		if start {
 			route = "start"
@@ -207,11 +231,13 @@ func (e *launcher) AdmitMessage(_ context.Context, msg *a2a.Message) (func(), er
 func (e *launcher) AdmitCancel(ctx context.Context, task *a2a.Task) error {
 	accepted, err := e.st.RequestCancel(ctx, string(task.ID))
 	if err != nil {
+		e.log.WarnContext(ctx, "could not record AX cancellation", "a2a_task", task.ID, "error", err)
 		return errors.New("could not record AX cancellation")
 	}
 	if !accepted {
 		return a2a.ErrTaskNotCancelable
 	}
+	e.wake(string(task.ID))
 	return nil
 }
 

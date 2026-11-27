@@ -365,7 +365,7 @@
                 "url": {"type": "string"},
                 "tokenSecret": {"$ref": "#/definitions/secretKey"},
                 "ingress": {"type": "object", "additionalProperties": false,
-                  "properties": {"enabled": {"type": "boolean"}, "className": {"type": "string"}, "tlsSecretName": {"type": "string"}}
+                  "properties": {"enabled": {"type": "boolean"}, "className": {"type": "string"}, "tlsSecretName": {"type": "string"}, "annotations": {"type": "object", "additionalProperties": {"type": "string"}}}
                 }
               }
             },

@@ -66,7 +66,18 @@ esac
 asset=ax_$(uname -s | tr '[:upper:]' '[:lower:]')_${host_arch}.tar.gz
 base="https://github.com/google/ax/releases/download/${AX_VERSION}"
 curl -fsSL "${base}/${asset}" -o "${scratch}/${asset}"
-curl -fsSL "${base}/checksums.txt" -o "${scratch}/checksums.txt"
+if [ "${AX_VERSION}" = v0.4.0-rc.2 ]; then
+  case "${asset}" in
+    ax_linux_amd64.tar.gz) checksum=9ec0357239ee49ec2ec471dce853983acc8ce2b73c862693b6689f1e6dd88839 ;;
+    ax_linux_arm64.tar.gz) checksum=5d8483e4ce7823706346e87ce93948238ab8d98ddc01b3593c79c1d9b362a5a6 ;;
+    ax_darwin_amd64.tar.gz) checksum=b1780ce556a1121340b045173cf4bf048dacaab808afd5ce31ed4bea16012372 ;;
+    ax_darwin_arm64.tar.gz) checksum=72a454ec6ff929a1c08b8169db1f7e349b2347147c1ac555ae8f2d433f671a95 ;;
+    *) die "unsupported AX release archive ${asset}" ;;
+  esac
+  printf '%s  %s\n' "${checksum}" "${asset}" >"${scratch}/checksums.txt"
+else
+  curl -fsSL "${base}/checksums.txt" -o "${scratch}/checksums.txt"
+fi
 (cd "${scratch}" && awk -v asset="${asset}" '$2 == asset { print }' checksums.txt | shasum -a 256 -c && tar xzf "${asset}")
 kind export kubeconfig --name "${CLUSTER}" --kubeconfig "${scratch}/bootstrap" >/dev/null
 KUBECONFIG="${scratch}/bootstrap" "${scratch}/ax" local start --name "${CLUSTER}" --runner-volume-image "${AX_RUNNER_VOLUME}"

@@ -155,9 +155,9 @@ func readTemplate(ctx context.Context, cfg config, client ax.AXClient) (*ax.Task
 		(!isLabel(ws.GetName()) || (ws.GetPath() != "" && !path.IsAbs(ws.GetPath()))) {
 		return nil, errors.New("invalid AX Workspace binding")
 	}
-	if len(spec.Commands) < 3 || path.Base(spec.Commands[0]) != "agent-kourier-ax-result" ||
+	if len(spec.Commands) < 3 || !path.IsAbs(spec.Commands[0]) || path.Base(spec.Commands[0]) != "agent-kourier-ax-result" ||
 		spec.Commands[1] != "--" || spec.Commands[2] == "" {
-		return nil, errors.New("AX Task command must begin with agent-kourier-ax-result -- followed by the agent command")
+		return nil, errors.New("AX Task command must begin with an absolute path to agent-kourier-ax-result and -- followed by the agent command")
 	}
 	for _, e := range spec.Env {
 		switch e.GetName() {

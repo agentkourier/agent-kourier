@@ -35,18 +35,21 @@ func (e *launcher) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 			TaskID: string(ec.TaskID), Name: task.Metadata.Name, Fingerprint: fingerprint(task.Spec),
 			ResultID: id, Deadline: deadline.UnixNano(),
 		}
-		waitCtx, stop := context.WithDeadline(ctx, deadline)
-		defer stop()
+		waitCtx, stop := context.WithDeadline(ctx, minTime(deadline, e.now().Add(registrationTimeout)))
 		registered, registerErr := e.register(waitCtx, record)
+		stop()
 		if !registered {
 			if ctx.Err() != nil {
 				return
 			}
 			if l, err := e.st.Launch(ctx, record.TaskID); err == nil && l.Decision == store.Canceled {
 				yield(terminalTask(submitted, l), nil)
-			} else if errors.Is(registerErr, context.DeadlineExceeded) || !e.now().Before(deadline) {
+			} else if !e.now().Before(deadline) {
 				yield(failedTask(submitted, "The AX Task deadline elapsed.", "DEADLINE_EXCEEDED"), nil)
 			} else {
+				if registerErr != nil {
+					e.log.WarnContext(ctx, "could not register AX Task", "a2a_task", record.TaskID, "error", registerErr)
+				}
 				yield(failedTask(submitted, "AX could not register the Task.", ""), nil)
 			}
 			return
@@ -76,10 +79,18 @@ func (e *launcher) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 	}
 }
 
+const (
+	registrationTimeout    = 3 * time.Second
+	registrationBackoff    = 10 * time.Millisecond
+	registrationMaxBackoff = 100 * time.Millisecond
+	pollTimeout            = 2 * time.Second
+	cleanupRecordTimeout   = 3 * time.Second
+)
+
 func (e *launcher) register(ctx context.Context, l store.Launch) (bool, error) {
 	// The SDK queues the submitted event before persisting it. The INSERT is
 	// conditional on that snapshot being present and still eligible.
-	for {
+	for backoff := registrationBackoff; ; backoff = min(backoff*2, registrationMaxBackoff) {
 		ok, err := e.st.Register(ctx, l)
 		if ok || err != nil {
 			return ok, err
@@ -89,7 +100,7 @@ func (e *launcher) register(ctx context.Context, l store.Launch) (bool, error) {
 		} else if !errors.Is(err, kit.ErrNoRows) {
 			return false, err
 		}
-		if !sleep(ctx, 10*time.Millisecond) {
+		if !sleep(ctx, backoff) {
 			return false, ctx.Err()
 		}
 	}
@@ -102,12 +113,14 @@ func (e *launcher) follow(ctx context.Context, task *a2a.Task, record store.Laun
 		now := e.now()
 		if !now.Before(deadline) {
 			if _, err := e.st.Decide(ctx, record.TaskID, store.TimedOut); err != nil {
+				e.log.WarnContext(ctx, "could not record AX deadline", "a2a_task", record.TaskID, "error", err)
 				yield(nil, errors.New("could not record AX deadline"))
 				return
 			}
 		}
 		l, err := e.st.Launch(ctx, record.TaskID)
 		if err != nil {
+			e.log.WarnContext(ctx, "could not read AX launch", "a2a_task", record.TaskID, "error", err)
 			yield(nil, errors.New("could not read AX launch"))
 			return
 		}
@@ -117,9 +130,12 @@ func (e *launcher) follow(ctx context.Context, task *a2a.Task, record store.Laun
 			}
 			return
 		}
-		if !now.Before(pollAt) && l.ResumeSent != 0 {
+		pollDue := !now.Before(pollAt)
+		if pollDue {
 			pollAt = now.Add(e.cfg.poll)
-			state, failed := e.pollTask(ctx, l, minTime(deadline, now.Add(2*time.Second)))
+		}
+		if pollDue && l.ResumeSent != 0 {
+			state, failed := e.pollTask(ctx, l, minTime(deadline, now.Add(pollTimeout)))
 			if failed {
 				_, _ = e.st.Decide(ctx, l.TaskID, store.Failed)
 				continue
@@ -138,7 +154,7 @@ func (e *launcher) follow(ctx context.Context, task *a2a.Task, record store.Laun
 				return
 			}
 		}
-		timer := time.NewTimer(min(100*time.Millisecond, e.cfg.poll))
+		timer := time.NewTimer(minTime(pollAt, deadline).Sub(e.now()))
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -182,7 +198,7 @@ func (e *launcher) Cleanup(ctx context.Context, ec *a2asrv.ExecutorContext, res 
 	if !ok || !task.Status.State.Terminal() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupRecordTimeout)
 	defer cancel()
 	l, err := e.st.Launch(ctx, string(ec.TaskID))
 	if err != nil || l.Clean != store.CleanPending {

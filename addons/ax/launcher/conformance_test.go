@@ -3,6 +3,7 @@ package launcher
 import (
 	"context"
 	"crypto/sha256"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -36,7 +37,7 @@ func launcherEnv(t *testing.T) map[string]string {
 kind: Task
 spec:
   gateway: {name: results}
-  commands: [agent-kourier-ax-result, --, agent-command]
+  commands: [/usr/local/bin/agent-kourier-ax-result, --, agent-command]
   profile: {image: registry.test/agent@sha256:` + strings.Repeat("a", 64) + `}
 `
 	for path, content := range map[string]string{template: body, token: "fake-ax-callback-token"} {
@@ -55,18 +56,14 @@ func launcherSubject(t *testing.T) kittest.Subject[*store.Store] {
 	addon := Addon("test")
 	var tasks sync.Map
 	addon.Build = func(ctx context.Context, env runtime.Env[*store.Store]) (runtime.Backend, error) {
-		backend, err := build(ctx, env)
-		if err != nil {
-			return nil, err
-		}
-		e := backend.(*launcher)
+		var e *launcher
 		get := func(_ context.Context, name string) (*ax.Task, error) {
 			if task, ok := tasks.Load(name); ok {
 				return task.(*ax.Task), nil
 			}
 			return nil, status.Error(codes.NotFound, "fake task absent")
 		}
-		e.client = fakeAX{
+		client := fakeAX{
 			create: func(_ context.Context, task *ax.Task) (*ax.Task, error) {
 				created := controlledTask(task)
 				created.Status.State = ax.TaskState_TASK_STATE_RUNNING
@@ -103,7 +100,9 @@ func launcherSubject(t *testing.T) kittest.Subject[*store.Store] {
 				return nil
 			},
 		}
-		return e, nil
+		var err error
+		e, err = buildWith(ctx, env, func(string) (ax.AXClient, io.Closer, error) { return client, nil, nil })
+		return e, err
 	}
 	return kittest.Subject[*store.Store]{Addon: addon, Env: launcherEnv(t),
 		Complete: "complete this turn", Hold: "hold this turn", BadMessage: []*a2a.Part{a2a.NewDataPart(map[string]any{"bad": true})}}

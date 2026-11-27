@@ -108,7 +108,8 @@ func Run[S Store](ctx context.Context, a Addon[S], cfg settings.Config, own sett
 		return err
 	}
 	defer func() { _ = st.Close() }()
-	backend, err := a.Build(ctx, Env[S]{Config: cfg, Settings: own, Store: st, Telemetry: tel, Log: log})
+	callerTokens, _ := check.Verifier.(auth.TokenVerifier)
+	backend, err := a.Build(ctx, Env[S]{Config: cfg, Settings: own, Store: st, Telemetry: tel, CallerTokens: callerTokens.Tokens, Log: log})
 	if err != nil {
 		return err
 	}

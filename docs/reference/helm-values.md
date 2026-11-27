@@ -484,6 +484,7 @@ addons:
 | `addons.ax.resultCallback.tokenSecret.key` | `token` |  |
 | `addons.ax.resultCallback.ingress` |  | Optional Ingress for the two exact callback paths. Use a private controller. |
 | `addons.ax.resultCallback.ingress.enabled` | `false` |  |
+| `addons.ax.resultCallback.ingress.annotations` | `{}` | Additional annotations for the callback Ingress. |
 | `addons.ax.resultCallback.ingress.className` | `""` |  |
 | `addons.ax.resultCallback.ingress.tlsSecretName` | `""` |  |
 | `addons.ax.promptKey` | `prompt` | AX_PROMPT_KEY |

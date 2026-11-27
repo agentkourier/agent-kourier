@@ -21,10 +21,16 @@ const (
 )
 
 func (e *launcher) launch(ctx context.Context, l store.Launch, task *ax.Task) {
-	if !e.create(ctx, l, task) || !e.resume(ctx, l) {
-		if ctx.Err() == nil {
-			_, _ = e.st.Decide(ctx, l.TaskID, store.Failed)
-		}
+	if e.create(ctx, l, task) && e.resume(ctx, l) {
+		return
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	if changed, err := e.st.Decide(ctx, l.TaskID, store.Failed); err != nil {
+		e.log.WarnContext(ctx, "could not record AX launch failure", "a2a_task", l.TaskID, "error", err)
+	} else if changed {
+		e.wake(l.TaskID)
 	}
 }
 
