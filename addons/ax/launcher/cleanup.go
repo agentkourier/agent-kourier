@@ -114,7 +114,8 @@ func (e *launcher) cleanLaunch(ctx context.Context, l store.Launch, now int64) {
 	case codes.NotFound:
 		e.recordCleanup(ctx, l, "absent", e.st.MarkClean(ctx, l.TaskID))
 	case codes.OK:
-		// AX Delete requests asynchronous actor deletion. Confirm with Get.
+		// Confirm task removal with Get. A delete_time alone can also mean
+		// AX recorded a failed deletion, which the next sweep must retry.
 		e.diagnostic(ctx, l, "delete_requested")
 	default:
 		e.diagnostic(ctx, l, "delete_retry")

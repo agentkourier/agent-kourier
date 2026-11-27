@@ -68,6 +68,7 @@ type launcher struct {
 	admitted atomic.Int64
 	active   sync.Map // task ID -> struct{} while an AX launch call can still run
 	waiters  sync.Map // task ID -> a wakeup channel while following the Task
+	launchMu sync.Mutex
 	launches sync.WaitGroup
 
 	rpc        *prometheus.HistogramVec
@@ -138,12 +139,16 @@ func build(ctx context.Context, env runtime.Env[*store.Store]) (runtime.Backend,
 			return nil, err
 		}
 	}
-	e.life, e.stop = context.WithCancel(ctx)
+	// Run closes the backend after draining requests and turns. Keep launch
+	// work alive during that drain, then cancel and join it before lease release.
+	e.life, e.stop = context.WithCancel(context.WithoutCancel(ctx))
 	return e, nil
 }
 
 func (e *launcher) Close() error {
+	e.launchMu.Lock()
 	e.stop()
+	e.launchMu.Unlock()
 	err := e.conn.Close()
 	e.launches.Wait()
 	return err
@@ -207,7 +212,6 @@ func (e *launcher) AdmitCancel(ctx context.Context, task *a2a.Task) error {
 	if !accepted {
 		return a2a.ErrTaskNotCancelable
 	}
-	e.wake(string(task.ID))
 	return nil
 }
 

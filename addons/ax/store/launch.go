@@ -152,7 +152,7 @@ func (s *Store) Claim(ctx context.Context, c result.Claim) (int, error) {
 			return err
 		}
 		switch {
-		case l.Decision != "" || s.now().UnixNano() >= l.Deadline:
+		case l.Decision != "" || l.CleanupAt != 0 || s.now().UnixNano() >= l.Deadline:
 			status = http.StatusGone
 		case l.Invocation == c.InvocationID:
 			status = http.StatusNoContent
@@ -186,7 +186,7 @@ func (s *Store) AcceptResult(ctx context.Context, r result.Report, hash [32]byte
 			status = http.StatusNoContent
 		case l.Receipt != "":
 			status = http.StatusConflict
-		case l.Decision != "" || s.now().UnixNano() >= l.Deadline:
+		case l.Decision != "" || l.CleanupAt != 0 || s.now().UnixNano() >= l.Deadline:
 			status = http.StatusGone
 		default:
 			decision, output := Succeeded, r.Output
@@ -219,12 +219,12 @@ func (s *Store) Recover(ctx context.Context, keep time.Duration) error {
 	return s.Write(ctx, func(q kit.Querier) error {
 		_, err := q.Exec(ctx, `UPDATE ax_launches
 			SET decision = CASE WHEN EXISTS (SELECT 1 FROM a2a_tasks t WHERE t.id = ax_launches.task_id
-			   AND t.state NOT IN (?, ?, ?)) THEN decision ELSE ? END,
+			   AND t.state NOT IN (?, ?, ?)) THEN COALESCE(NULLIF(decision, ''), ?) ELSE ? END,
 			    cleanup_at = CASE WHEN decision = ? AND EXISTS (SELECT 1 FROM a2a_tasks t
 			       WHERE t.id = ax_launches.task_id AND t.state = ?) THEN CAST(? AS BIGINT) ELSE CAST(? AS BIGINT) END,
 			    output = ''
 			WHERE clean = 0 AND cleanup_at = 0`,
-			string(a2a.TaskStateSubmitted), string(a2a.TaskStateWorking), string(a2a.TaskStateInputRequired), Interrupted,
+			string(a2a.TaskStateSubmitted), string(a2a.TaskStateWorking), string(a2a.TaskStateInputRequired), Failed, Interrupted,
 			CommandFail, string(a2a.TaskStateFailed), now.Add(keep).UnixNano(), now.UnixNano())
 		return err
 	})

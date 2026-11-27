@@ -210,7 +210,7 @@ type ContextReleaser interface {
 var ErrContextBusy = errors.New("a turn of the context has begun")
 
 // IdleReporter is a backend that is told, after each sweep without a ContextReleaser, how many idle contexts the store
-// deleted and the error that stopped the sweep, if any (ax: it counts the ADK sessions deleted).
+// deleted and the error that stopped the sweep, if any.
 type IdleReporter interface {
 	IdleContextsDeleted(n int, err error)
 }
@@ -221,7 +221,7 @@ type TurnClassifier interface {
 	FailedOutcome(status a2a.TaskStatus) telemetry.TurnOutcome
 }
 
-// Routes is a backend that serves routes of its own beside the kit's (ax: /metadata/, proxied to the AX task runner).
+// Routes is a backend that serves routes of its own beside the kit's.
 type Routes interface {
 	Routes(mux *http.ServeMux)
 }
@@ -232,7 +232,7 @@ type LeaderRoutes interface {
 	LeaderRoutes(register func(pattern string, handler http.Handler))
 }
 
-// Readiness is a backend whose readiness is another server's (ax beside the AX task runner): a non-nil Readyz serves
+// Readiness is a backend whose readiness is another server's: a non-nil Readyz serves
 // /readyz instead of the kit's.
 type Readiness interface {
 	Readyz() http.Handler

@@ -210,6 +210,7 @@ func (h *replayHandler) touch(ctx context.Context, msg *a2a.Message) error {
 // CancelTask checks the durable backend decision before the SDK can change
 // the task or attribute the execution outcome to a cancellation.
 func (h *replayHandler) CancelTask(ctx context.Context, req *a2a.CancelTaskRequest) (*a2a.Task, error) {
+	admitted := false
 	if h.cancelAdmission != nil && req != nil && req.ID != "" {
 		task, err := h.GetTask(ctx, &a2a.GetTaskRequest{ID: req.ID})
 		if err != nil {
@@ -219,9 +220,19 @@ func (h *replayHandler) CancelTask(ctx context.Context, req *a2a.CancelTaskReque
 			if err := h.cancelAdmission.AdmitCancel(ctx, task); err != nil {
 				return nil, err
 			}
+			admitted = true
 		}
 	}
-	return h.RequestHandler.CancelTask(ctx, req)
+	task, err := h.RequestHandler.CancelTask(ctx, req)
+	if admitted && errors.Is(err, a2a.ErrTaskNotCancelable) {
+		// The durable cancellation can reach the executor and settle before
+		// the SDK handles this request. Only the admitted request gets success.
+		current, readErr := h.GetTask(ctx, &a2a.GetTaskRequest{ID: req.ID})
+		if readErr == nil && current.Status.State == a2a.TaskStateCanceled {
+			return current, nil
+		}
+	}
+	return task, err
 }
 
 // SubscribeToTask follows a task of the call's caller. a2a-go finds a running execution by task ID alone, with no

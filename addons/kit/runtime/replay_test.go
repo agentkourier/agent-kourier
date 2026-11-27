@@ -453,3 +453,39 @@ func TestTheRequestsEndEndsTheStreamOnceTheFirstEventHasCome(t *testing.T) {
 		t.Fatal("the stream outlived its request after the first event")
 	}
 }
+
+type cancelAdmissionFunc func(context.Context, *a2a.Task) error
+
+func (f cancelAdmissionFunc) AdmitCancel(ctx context.Context, task *a2a.Task) error {
+	return f(ctx, task)
+}
+
+type settledCancelHandler struct {
+	a2asrv.RequestHandler
+	task a2a.Task
+}
+
+func (h *settledCancelHandler) GetTask(context.Context, *a2a.GetTaskRequest) (*a2a.Task, error) {
+	task := h.task
+	return &task, nil
+}
+
+func (h *settledCancelHandler) CancelTask(context.Context, *a2a.CancelTaskRequest) (*a2a.Task, error) {
+	return nil, a2a.ErrTaskNotCancelable
+}
+
+func TestAdmittedCancellationReturnsTheAlreadySettledTask(t *testing.T) {
+	inner := &settledCancelHandler{task: a2a.Task{ID: "task", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}}}
+	h := &replayHandler{RequestHandler: inner, cancelAdmission: cancelAdmissionFunc(func(context.Context, *a2a.Task) error {
+		inner.task.Status.State = a2a.TaskStateCanceled
+		return nil
+	})}
+	req := &a2a.CancelTaskRequest{ID: inner.task.ID}
+	task, err := h.CancelTask(t.Context(), req)
+	if err != nil || task == nil || task.Status.State != a2a.TaskStateCanceled {
+		t.Fatalf("admitted cancellation = %v, %v", task, err)
+	}
+	if _, err := h.CancelTask(t.Context(), req); !errors.Is(err, a2a.ErrTaskNotCancelable) {
+		t.Fatalf("later cancellation = %v, want task not cancelable", err)
+	}
+}

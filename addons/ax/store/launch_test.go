@@ -239,3 +239,29 @@ func TestUpgradeSettlesLegacyQuestionsAndKeepsHistory(t *testing.T) {
 		}
 	}
 }
+
+func TestRecoverClosesCallbacksForAnAlreadyTerminalTask(t *testing.T) {
+	s := openSQLite(t, filepath.Join(t.TempDir(), "terminal.db"))
+	ctx := t.Context()
+	l, claim := launchFixtures(t, s, "terminal-without-decision", time.Now())
+	owner := asCaller("agent-kourier")
+	stored, err := s.Get(owner, a2a.TaskID(l.TaskID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := *stored.Task
+	task.Status.State = a2a.TaskStateFailed
+	if _, err := s.Update(owner, &taskstore.UpdateRequest{Task: &task, PrevTask: stored.Task, PrevVersion: stored.Version}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Recover(ctx, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := s.Launch(ctx, l.TaskID)
+	if err != nil || recovered.Decision != Failed || recovered.CleanupAt == 0 {
+		t.Fatalf("recovery = %+v, %v", recovered, err)
+	}
+	if code, err := s.Claim(ctx, claim); code != 410 || err != nil {
+		t.Fatalf("late start = %d, %v", code, err)
+	}
+}

@@ -112,9 +112,14 @@ func Run[S Store](ctx context.Context, a Addon[S], cfg settings.Config, own sett
 	if err != nil {
 		return err
 	}
-	if closer, ok := backend.(io.Closer); ok {
-		defer func() { _ = closer.Close() }()
-	}
+	closeBackend := sync.OnceFunc(func() {
+		if closer, ok := backend.(io.Closer); ok {
+			if err := closer.Close(); err != nil {
+				log.Warn("close add-on backend", "error", err)
+			}
+		}
+	})
+	defer closeBackend()
 	if undeclared := own.Undeclared(); len(undeclared) > 0 {
 		return fmt.Errorf("the %s read settings it does not declare: %s", a.Noun, strings.Join(undeclared, ", "))
 	}
@@ -296,6 +301,7 @@ func Run[S Store](ctx context.Context, a Addon[S], cfg settings.Config, own sett
 			log.Info("stopped before the takeover was done", "error", err)
 		}
 	}
+	closeBackend()
 	release()
 	return failure
 }

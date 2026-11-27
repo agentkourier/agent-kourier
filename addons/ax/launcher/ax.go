@@ -17,6 +17,7 @@ const (
 	rpcTimeout        = 25 * time.Second
 	unknownRPCTime    = 2 * time.Minute
 	maxResumeAttempts = 5
+	maxCreateAttempts = 5
 )
 
 func (e *launcher) launch(ctx context.Context, l store.Launch, task *ax.Task) {
@@ -28,7 +29,7 @@ func (e *launcher) launch(ctx context.Context, l store.Launch, task *ax.Task) {
 }
 
 func (e *launcher) create(ctx context.Context, l store.Launch, task *ax.Task) bool {
-	for ctx.Err() == nil {
+	for attempt := 0; attempt < maxCreateAttempts && ctx.Err() == nil; attempt++ {
 		dispatched, err := e.st.Dispatch(ctx, l.TaskID, false, e.now().Add(rpcTimeout+unknownRPCTime))
 		if err != nil || !dispatched {
 			return false
@@ -76,7 +77,7 @@ func (e *launcher) resume(ctx context.Context, intent store.Launch) bool {
 			}
 			return false
 		}
-		if !e.owns(observed, l) || missingActor(observed) {
+		if !e.owns(observed, l) || missingActor(observed) || provisioningFailed(observed) {
 			return false
 		}
 		actor := observed.GetStatus().GetActorUid()
@@ -110,6 +111,20 @@ func (e *launcher) resume(ctx context.Context, intent store.Launch) bool {
 		}
 		if !unknown(err) || !sleep(ctx, min(e.cfg.poll, time.Second)) {
 			return false
+		}
+	}
+	return false
+}
+
+func provisioningFailed(task *ax.Task) bool {
+	for _, condition := range task.GetStatus().GetConditions() {
+		if condition.GetType() != ax.ConditionReady || condition.GetStatus() != "False" {
+			continue
+		}
+		switch condition.GetReason() {
+		case ax.ReasonAtespaceCreationFailed, ax.ReasonInvalidResources, ax.ReasonTemplateCreationFailed,
+			ax.ReasonActorCreationFailed, ax.ReasonGatewayBindingFailed, ax.ReasonActorResumeFailed:
+			return true
 		}
 	}
 	return false

@@ -57,6 +57,11 @@ func (e *launcher) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 		defer e.waiters.Delete(record.TaskID)
 		// A result can settle before Resume replies. Drain the bounded AX
 		// call independently so cleanup can use its definitive response.
+		e.launchMu.Lock()
+		if e.life.Err() != nil {
+			e.launchMu.Unlock()
+			return
+		}
 		launchCtx, cancelLaunch := context.WithDeadline(context.WithoutCancel(ctx), deadline)
 		stopLaunch := context.AfterFunc(e.life, cancelLaunch) //nolint:contextcheck // the add-on lifetime also bounds the detached RPC
 		e.active.Store(record.TaskID, struct{}{})
@@ -66,6 +71,7 @@ func (e *launcher) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 			defer e.active.Delete(record.TaskID)
 			e.launch(launchCtx, record, task)
 		})
+		e.launchMu.Unlock()
 		e.follow(ctx, submitted, record, deadline, wakeup, yield)
 	}
 }
@@ -121,7 +127,7 @@ func (e *launcher) follow(ctx context.Context, task *a2a.Task, record store.Laun
 				continue
 			}
 			if observed != nil && err == nil {
-				if missingActor(observed) {
+				if missingActor(observed) || provisioningFailed(observed) || stoppedWithoutResult(observed, l) {
 					_, _ = e.st.Decide(ctx, l.TaskID, store.Failed)
 					continue
 				}
@@ -160,6 +166,12 @@ func (e *launcher) follow(ctx context.Context, task *a2a.Task, record store.Laun
 		case <-timer.C:
 		}
 	}
+}
+
+func stoppedWithoutResult(task *ax.Task, launch store.Launch) bool {
+	// A suspended Task before Resume replies is expected. Decide rechecks
+	// the durable decision atomically if a result arrived during this Get.
+	return launch.ResumeSent != 0 && launch.DrainUntil == 0 && task.GetStatus().GetState() == ax.TaskState_TASK_STATE_SUSPENDED
 }
 
 func (e *launcher) Cancel(_ context.Context, ec *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {

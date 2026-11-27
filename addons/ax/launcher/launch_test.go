@@ -427,3 +427,98 @@ func TestCancelDuringResumeClosesClaimAndWaitsForRPC(t *testing.T) {
 		t.Fatalf("late Resume cleanup decision=%q clean=%d deletes=%d err=%v", settled.Decision, settled.Clean, deletes, err)
 	}
 }
+
+func TestLaunchFailsAfterBoundedCreateAttempts(t *testing.T) {
+	e, ctx := testLauncher(t)
+	launch, task := seedLaunch(ctx, t, e, "bounded-create")
+	calls := 0
+	e.client = fakeAX{
+		create: func(context.Context, *ax.Task) (*ax.Task, error) {
+			calls++
+			return nil, status.Error(codes.Unavailable, "lost create response")
+		},
+		get: func(context.Context, string) (*ax.Task, error) {
+			return nil, status.Error(codes.Unavailable, "lookup unavailable")
+		},
+	}
+	e.launch(ctx, launch, task)
+	got, err := e.st.Launch(ctx, launch.TaskID)
+	if err != nil || got.Decision != store.Failed || calls != maxCreateAttempts {
+		t.Fatalf("attempts=%d decision=%q err=%v", calls, got.Decision, err)
+	}
+}
+
+func TestProvisioningFailureDoesNotWaitForAnActor(t *testing.T) {
+	e, ctx := testLauncher(t)
+	intent, task := seedLaunch(ctx, t, e, "provisioning")
+	task = controlledTask(task)
+	task.Status.ActorUid = ""
+	task.Status.Conditions = []*ax.Condition{{Type: ax.ConditionReady, Status: "False", Reason: ax.ReasonTemplateCreationFailed}}
+	e.client = fakeAX{
+		create: func(context.Context, *ax.Task) (*ax.Task, error) { return task, nil },
+		get:    func(context.Context, string) (*ax.Task, error) { return task, nil },
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	e.launch(ctx, intent, task)
+	got, err := e.st.Launch(ctx, intent.TaskID)
+	if err != nil || got.Decision != store.Failed {
+		t.Fatalf("decision=%q err=%v", got.Decision, err)
+	}
+}
+
+func TestAcknowledgedSuspensionResolvesAgainstTheReceipt(t *testing.T) {
+	for _, withReceipt := range []bool{false, true} {
+		name := "no receipt"
+		want := a2a.TaskStateFailed
+		if withReceipt {
+			name, want = "receipt during last poll", a2a.TaskStateCompleted
+		}
+		t.Run(name, func(t *testing.T) {
+			e, ctx := testLauncher(t)
+			l, template := seedLaunch(ctx, t, e, "suspended")
+			suspended := controlledTask(template)
+			if ok, err := e.st.Bind(ctx, l.TaskID, suspended.GetMetadata().GetUid(), suspended.GetStatus().GetActorUid()); !ok || err != nil {
+				t.Fatalf("bind = %v, %v", ok, err)
+			}
+			if ok, err := e.st.Dispatch(ctx, l.TaskID, true, e.now().Add(time.Minute)); !ok || err != nil {
+				t.Fatalf("dispatch = %v, %v", ok, err)
+			}
+			if err := e.st.Drained(ctx, l.TaskID); err != nil {
+				t.Fatal(err)
+			}
+			claim := result.Claim{ResultID: l.ResultID, TaskUID: suspended.GetMetadata().GetUid(), InvocationID: result.NewID()}
+			if got, err := e.st.Claim(ctx, claim); got != 204 || err != nil {
+				t.Fatalf("claim = %d, %v", got, err)
+			}
+			e.client = fakeAX{get: func(ctx context.Context, _ string) (*ax.Task, error) {
+				if withReceipt {
+					r := result.Report{Claim: claim, Output: "done", OutputSource: "file"}
+					if got, _, err := e.st.AcceptResult(ctx, r, sha256.Sum256([]byte("done"))); got != 204 || err != nil {
+						t.Fatalf("report = %d, %v", got, err)
+					}
+				}
+				return suspended, nil
+			}}
+			started, err := e.st.Get(ctx, a2a.TaskID(l.TaskID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var state a2a.TaskState
+			bounded, cancel := context.WithTimeout(ctx, time.Second)
+			defer cancel()
+			e.follow(bounded, started.Task, l, e.now().Add(time.Minute), nil, func(ev a2a.Event, err error) bool {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if task, ok := ev.(*a2a.Task); ok {
+					state = task.Status.State
+				}
+				return true
+			})
+			if state != want {
+				t.Fatalf("state = %q, want %q", state, want)
+			}
+		})
+	}
+}
