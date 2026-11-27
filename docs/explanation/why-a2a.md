@@ -7,8 +7,10 @@ platform, and what that choice costs.
 
 Agent Kourier talks to every agent through the [Agent2Agent (A2A) protocol](https://a2a-protocol.org): JSON-RPC over
 HTTP, version 1.0 or 0.3, with streaming. To the broker, a kagent agent, an agent running in a Google AX Task and any
-other agent that serves A2A look the same. kagent adds one published extension, for structured questions and tool
-approvals, which both dialects read from an agent whose card lists it. Everything else is plain A2A.
+other agent that serves A2A look the same.
+
+kagent adds one published extension, for structured questions and tool approvals, which both dialects read from an
+agent whose card lists it. Everything else is plain A2A.
 
 kagent is the first backend we tested because it is the default way to provision agents, and it is Kubernetes-native by
 design. Agent Kourier does not depend on kagent: an AX agent or any other A2A agent connects through the same `Binding`.
@@ -26,8 +28,9 @@ A broker that turns a Slack thread into an agent session needs five things from 
 | To follow, resume or cancel a turn after a crash or a restart | Tasks with an ID and a lifecycle that can be read back |
 
 Those map onto the broker's own model without translation. A thread's session is an A2A context, a turn is a task, and
-a question the agent asks is a task paused in `input-required`, which the person's reply resumes. The first turn needs no
-context ID: the agent creates one and Agent Kourier keeps it for the thread. See
+a question the agent asks is a task paused in `input-required`, which the person's reply resumes.
+
+The first turn needs no context ID: the agent creates one and Agent Kourier keeps it for the thread. See
 [Threads and sessions](threads-and-sessions.md).
 
 ## Why not a client for each platform
@@ -37,66 +40,83 @@ next runtime. Three reasons it was not built that way.
 
 - **For AX there was no other way in.** AX has no message model of its own: its API manages the lifecycle of sandboxed
   tasks, not conversations. The only route to a conversation with an agent running there is the A2A endpoint the agent
-  itself serves. AX ships no A2A agent, so you run one as a Task, such as the AX add-on; the
+  itself serves. AX ships no A2A agent, so you run one as a Task, such as the AX add-on. The
   [AX add-on's guide](../how-to/connect-ax.md#run-it-inside-google-ax) covers what that needs.
 - **For kagent, nothing internal is needed.** kagent's A2A gateway creates a session when a message carries no context
   ID, so a client that speaks public A2A and one published extension is enough. That keeps Agent Kourier clear of
   kagent's internal APIs, which were changing quickly through the 1.0 alphas.
 - **A new runtime should not need new code.** A team picks its runtime for its own reasons: the model, the tools, the
   language, where it runs. With A2A, a team that changes or adds a runtime keeps the same `Binding` and the same Slack
-  channel. The `Binding` names a backend and an agent; nothing else about the wiring depends on what runs behind it.
+  channel. The `Binding` names a backend and an agent. Nothing else about the wiring depends on what runs behind it.
 
 ## Why not MCP
 
 MCP and A2A are built for different ends. MCP connects an agent to tools and data: it is how an agent reads a log or
 lists a Deployment. A2A connects a client to an agent: a conversation with a task lifecycle, streaming output and a pause
-for input. The practical point is where the agents are reachable: kagent agents and agents hosted on AX expose A2A
-endpoints and cards, not MCP servers a chat broker could converse with. The agents can use MCP for their own tools.
-Agent Kourier does not call those tools; at most it shows a tool step the agent reports.
+for input.
+
+The practical point is where the agents are reachable. kagent agents and agents hosted on AX expose A2A endpoints and
+cards, not MCP servers a chat broker could converse with.
+
+The agents can use MCP for their own tools. Agent Kourier does not call those tools: at most it shows a tool step the
+agent reports.
 
 ## Why not a plain HTTP API to the agent
 
-A single request and response cannot carry what a thread does. The agent's answer arrives over seconds or minutes, in
-pieces. The agent may stop and ask a question that a person answers an hour later. The broker may restart in the
-middle. A protocol with streaming, task state and a context ID gives the broker something to resume from; a bare HTTP
-call gives it nothing to ask about after a restart.
+A single request and response cannot carry what a thread does:
+
+- The agent's answer arrives over seconds or minutes, in pieces.
+- The agent may stop and ask a question that a person answers an hour later.
+- The broker may restart in the middle.
+
+A protocol with streaming, task state and a context ID gives the broker something to resume from. A bare HTTP call
+gives it nothing to ask about after a restart.
 
 ## What it costs
 
 - **A2A does not standardise everything the chat needs.** Structured questions with choices and tool approvals are
-  runtime extensions, and Agent Kourier reads one of them, on both dialects: see
+  runtime extensions. Agent Kourier reads one of them, on both dialects: see
   [Why approvals use one extension](#why-approvals-use-one-extension). A Binding enables its Slack approval prompts with
   `interactions.toolApprovals`. Tool steps do not need a dialect: every dialect shows them as cards for an agent that
   marks its tool calls the way Google ADK or kagent does. From an agent that does not speak the extension, the `a2a`
-  dialect accepts only text-only input-required questions and cancels the task at a pause it cannot use, so the AX
-  add-on cannot use Slack tool approvals through this broker. A pinned kagent 1.0.0-alpha5 runtime check approved `add_numbers` and
-  denied `check_status` in one two-tool pause; only `add_numbers` executed. The broker's end-to-end suite verifies this
+  dialect accepts only text-only input-required questions, and cancels the task at a pause it cannot use. So the AX
+  add-on cannot use Slack tool approvals through this broker. A pinned kagent 1.0.0-alpha5 runtime check
+  approved `add_numbers` and denied `check_status` in one two-tool pause, and only `add_numbers` executed. The broker's end-to-end suite verifies this
   with fake Slack and pinned kagent 1.0.0-alpha5.
 - **The agent must stream.** Agent Kourier rejects an agent whose card does not advertise streaming, and one that
   offers only gRPC or REST. Streaming lets the thread show partial output, and one transport means one code path to
   keep correct.
 - **The protocol is versioned, and two versions are in use.** A2A 1.0 and 0.3 differ in card shape and methods, and
   kagent 0.9.x still speaks 0.3. The client reads both. A 0.3 agent has no task list, so after a crash a turn may be
-  sent twice; see [Delivery guarantees](delivery.md).
-- **Verifying the caller is left to the deployment.** Agent Kourier sends the Binding's identity, a service token as a
-  bearer token or a user ID header, and the agent or a proxy in front of it has to verify it. kagent's controller port
+  sent twice. See [Delivery guarantees](delivery.md).
+- **Verifying the caller is left to the deployment.** Agent Kourier sends the Binding's identity (a service token as a
+  bearer token, or a user ID header). The agent or a proxy in front of it has to verify it. kagent's controller port
   trusts identity without verifying it, so it needs a verifying front door. See [Security model](security.md).
 
 ## Why approvals use one extension
 
-A tool approval needs more than a question. The person approving must see exactly which tool will run and with which
-arguments, Agent Kourier must be able to gate the press on `approverGroups` and audit it as an approval, and the agent
-must get back a decision for each call, not a sentence to interpret. A2A 1.0 has no such shape. Its `input-required`
-state says that the agent wants input and leaves what the input is to the agent
-([specification](https://a2a-protocol.org/latest/specification/)), and the A2A project has said that structured
-confirmation belongs in an extension rather than in the core protocol (in
+A tool approval needs more than a question:
+
+- The person approving must see exactly which tool will run and with which arguments.
+- Agent Kourier must be able to gate the press on `approverGroups` and audit it as an approval.
+- The agent must get back a decision for each call, not a sentence to interpret.
+
+A2A 1.0 has no such shape. Its `input-required` state says that the agent wants input and leaves what the input is to
+the agent ([specification](https://a2a-protocol.org/latest/specification/)).
+
+The A2A project has said that structured confirmation belongs in an extension rather than in the core protocol (in
 [a2aproject/a2a-python#412](https://github.com/a2aproject/a2a-python/issues/412) and
 [a2aproject/A2A#2149](https://github.com/a2aproject/A2A/pull/2149)). It has published no such extension yet.
 
-Agent frameworks that serve A2A fill that gap differently. As of October 2026, some put a pending approval on the wire in
-a shape of their own, each in a different place (a data part, an artifact, message metadata) and with a different
-reply; some send only text; and some complete the task without asking at all. None of those shapes is declared in the
-agent card, so nothing tells a client which one to expect, and each can change in a framework's next release.
+Agent frameworks that serve A2A fill that gap differently. As of October 2026:
+
+- some put a pending approval on the wire in a shape of their own, each in a different place (a data part, an
+  artifact, message metadata) and with a different reply
+- some send only text
+- some complete the task without asking at all
+
+None of those shapes is declared in the agent card, so nothing tells a client which one to expect. Each can change in a
+framework's next release.
 
 Agent Kourier therefore reads one approval contract and no framework's own format: kagent's human-in-the-loop
 extension, `https://kagent.dev/extensions/hitl/v1`. It is the extension that fits:
@@ -107,12 +127,13 @@ extension, `https://kagent.dev/extensions/hitl/v1`. It is the extension that fit
 - It is not tied to one framework. kagent describes it as framework-independent and uses it in front of more than one:
   its ADK runtime turns ADK's own confirmations into it, and its LangGraph sample speaks it.
 
-An agent built on another framework gets Slack approvals by speaking that extension, usually through a small adapter
-in the agent that turns its framework's approval into the extension's request and the reply back into its framework's
-decision, as kagent's runtime does for ADK. The shapes are in the
-[agent contract](../reference/agent-contract.md#structured-questions-and-tool-approvals). Without it, the agent can
-still ask a text question, which a person answers in the thread, but that is not an approval: it shows no tool call, is
-not gated by `approverGroups`, and is not audited as a decision.
+An agent built on another framework gets Slack approvals by speaking that extension. It usually does so through a small
+adapter in the agent that turns its framework's approval into the extension's request, and the reply back into its
+framework's decision, as kagent's runtime does for ADK. The shapes are in the
+[agent contract](../reference/agent-contract.md#structured-questions-and-tool-approvals).
+
+Without the extension, the agent can still ask a text question, which a person answers in the thread. That is not an
+approval: it shows no tool call, is not gated by `approverGroups`, and is not audited as a decision.
 
 The cost is a dependency on an extension kagent maintains. Agent Kourier holds to `v1` as the agent contract
 describes it. If A2A publishes a standard extension for approvals, Agent Kourier will read that one too.

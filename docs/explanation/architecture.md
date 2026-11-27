@@ -4,10 +4,12 @@ This page explains how Agent Kourier is put together: what it owns, what the age
 conversation takes through the broker.
 
 Agent Kourier connects declarative messaging bindings to agents deployed with a chosen runtime. The runtime hosts and
-executes the agents. The agents own their tools and task logic. Agent Kourier owns the messaging connection,
-conversation lifecycle, and delivery state. An agent that exposes a supported streaming A2A endpoint can connect through
-a `Binding` without adding Slack or Microsoft Teams event handlers or reply formatting to the agent. A webhook connection
-takes another service's signed webhooks instead, and posts nothing: the agent answers on that service with its own tools.
+executes the agents, and the agents own their tools and task logic. Agent Kourier owns the messaging connection,
+conversation lifecycle, and delivery state.
+
+An agent that exposes a supported streaming A2A endpoint can connect through a `Binding` without adding Slack or
+Microsoft Teams event handlers or reply formatting to the agent. A webhook connection takes another service's signed
+webhooks instead, and posts nothing: the agent answers on that service with its own tools.
 
 ```mermaid
 flowchart LR
@@ -59,7 +61,7 @@ flowchart TB
 
 ## The Google AX path
 
-The broker is the same; only the dialect and what sits in front of the agent differ. AX has no message model of its
+The broker is the same. Only the dialect and what sits in front of the agent differ. AX has no message model of its
 own, so the agent is an A2A server run as an AX Task, such as the [AX add-on](../reference/ax.md), and it verifies the
 Binding's token itself.
 
@@ -100,24 +102,35 @@ too large to read at page width: open it full size.
 </figure>
 
 In the full map, solid arrows show the configuration and conversation paths, and dotted arrows show configuration or
-credential inputs. The kagent and AX runtimes sit behind the same A2A client; they differ only in dialect and in what
-the backend exposes. Telemetry is shared across broker operations rather than a step in delivery. Audit records are
-durable in the store; traces are exported only when configured.
+credential inputs. The kagent and AX runtimes sit behind the same A2A client, and they differ only in dialect and in
+what the backend exposes.
+
+Telemetry is shared across broker operations rather than a step in delivery. Audit records are durable in the store,
+and traces are exported only when configured.
 
 ## Configuration and deployment
 
-Agent Kourier reads three kinds of resource, `ChatConnection`, `AgentBackend` and `Binding`, from one of two places, chosen when
-it starts. With the chart's `config.source: crds`, its default, it reads the three kinds from the cluster as custom resources, one object
-at a time, so that teams can own their Bindings; there is no reconciliation controller, since the broker watches them itself, and the elected
-leader writes each Binding's `status`. With `config.source: files`, the quick route for a proof of concept, it reads resource-shaped YAML files from `AGENTKOURIER_CONFIG_DIR`, which GitOps deploys as a ConfigMap alongside
-Secrets, the Agent Kourier Deployment and persistent storage; the reloader validates changes and, if a reload fails, keeps the last accepted
-configuration. The two routes are never merged. [Choose a config route](config-routes.md) says how they differ. Secret
-access uses Kubernetes RBAC; cross-namespace resource references use configured namespace allowlists.
+Agent Kourier reads three kinds of resource, `ChatConnection`, `AgentBackend` and `Binding`, from one of two places,
+chosen when it starts:
 
-A broker serves its own `ChatConnection`, and with custom resources the `ChatConnection`s of the namespaces the platform team admits, up to 16 in all: see [One ChatConnection](config-routes.md#which-chatconnections-a-broker-serves) for how the own one is chosen on each route, and [Let a team bring its own Slack app](../how-to/team-slack-app.md) for the others. Multiple bindings
-can route a connection's channels to different agents and backends. The store is SQLite with
-one replica, or Postgres with one or two replicas (two are active and passive) (see
-[High availability](high-availability.md)); the broker is never active-active.
+- With the chart's `config.source: crds`, its default, it reads the three kinds from the cluster as custom resources,
+  one object at a time, so that teams can own their Bindings. There is no reconciliation controller, since the broker
+  watches them itself, and the elected leader writes each Binding's `status`.
+- With `config.source: files`, the quick route for a proof of concept, it reads resource-shaped YAML files from
+  `AGENTKOURIER_CONFIG_DIR`. GitOps deploys them as a ConfigMap alongside Secrets, the Agent Kourier Deployment and
+  persistent storage. The reloader validates changes and, if a reload fails, keeps the last accepted configuration.
+
+The two routes are never merged. [Choose a config route](config-routes.md) says how they differ.
+
+Secret access uses Kubernetes RBAC. Cross-namespace resource references use configured namespace allowlists.
+
+A broker serves its own `ChatConnection`, and with custom resources the `ChatConnection`s of the namespaces the
+platform team admits, up to 16 in all. See [One ChatConnection](config-routes.md#which-chatconnections-a-broker-serves)
+for how the own one is chosen on each route, and [Let a team bring its own Slack app](../how-to/team-slack-app.md) for
+the others. Multiple bindings can route a connection's channels to different agents and backends.
+
+The store is SQLite with one replica, or Postgres with one or two replicas (two are active and passive; see
+[High availability](high-availability.md)). The broker is never active-active.
 
 Agent Kourier does not
 deploy an agent when it loads an `AgentBackend` or `Binding`: the runtime's own
@@ -125,13 +138,18 @@ manifests, operator, or deployment tooling handle that lifecycle.
 
 ## One conversation
 
-A turn crosses two protocols. Slack delivers events to Agent Kourier over a Socket Mode connection, or, in HTTP mode, as signed
-requests to its chat listener, and Agent Kourier
-writes to Slack through its Web API. Microsoft Teams sends its activities to the chat listener, or over the sockets of its
-`socket` mode, and Agent Kourier writes through the Bot Connector and reads other apps' posts through Microsoft Graph
-([What each platform supports](../reference/platforms.md)). Agent Kourier calls the agent over A2A and reads the reply as a
-stream. The diagrams below are drawn for Slack; a Microsoft Teams thread takes the same path through the session manager. The
-first follows one message in a chat thread; the second shows what happens when the agent pauses for an answer.
+A turn crosses two protocols. Slack delivers events to Agent Kourier over a Socket Mode connection, or, in HTTP mode,
+as signed requests to its chat listener. Agent Kourier writes to Slack through its Web API.
+
+Microsoft Teams sends its activities to the chat listener, or over the sockets of its `socket` mode. Agent Kourier
+writes through the Bot Connector and reads other apps' posts through Microsoft Graph
+([What each platform supports](../reference/platforms.md)).
+
+Agent Kourier calls the agent over A2A and reads the reply as a stream.
+
+The diagrams below are drawn for Slack. A Microsoft Teams thread takes the same path through the session manager. The
+first diagram follows one message in a chat thread, and the second shows what happens when the agent pauses for an
+answer.
 
 ```mermaid
 sequenceDiagram
@@ -206,9 +224,14 @@ posts a notice in the thread.
 
 ### A webhook event
 
-A webhook connection has no thread to write to. Its service sends each event to the chat listener, the connection checks it
-and reads it into named fields, a `webhookEvent` trigger of the Binding that names its channel decides whether it starts a
-turn, and the turn runs as any other. Nothing is posted: the agent acts on the service with its own tools
+A webhook connection has no thread to write to. An event takes this path:
+
+1. The service sends the event to the chat listener.
+2. The connection checks the event and reads it into named fields.
+3. A `webhookEvent` trigger of the Binding that names the event's channel decides whether the event starts a turn.
+4. The turn runs as any other.
+
+Nothing is posted: the agent acts on the service with its own tools
 ([Start agents from webhooks](../how-to/receive-webhooks.md)).
 
 ```mermaid
@@ -230,7 +253,9 @@ sequenceDiagram
 ```
 
 A question that takes a typed answer is answered by a reply in the thread instead of a button. The reply comes in as
-a message event and Submit queues it. A session waiting on the question reads the paused task and passes
+a message event and Submit queues it.
+
+A session waiting on the question reads the paused task and passes
 the reply to interactions, which check it as they check a press. A reply that is not taken as the answer stays queued
 as an ordinary turn, unless intake already tied it to the question.
 
@@ -245,36 +270,42 @@ as an ordinary turn, unless intake already tied it to the question.
 5. On restart, persisted sessions, pending interactions, and outbound rows allow
    recovery and reconciliation. Saved trace context connects asynchronous work.
 
-Structured questions and approvals depend on the backend's interaction contract.
-The generic A2A dialect supports text continuation: a plain-text `input-required`
-question is persisted and posted, and a thread reply is accepted under the same
-membership, audit and deadline checks as a button press before it is sent to the
-paused task. For an agent whose card lists kagent's human-in-the-loop extension, the
-generic dialect asks for that extension and reads its structured questions and tool
-approvals as the kagent dialect does. Any other pause with a part that is not text is
-unusable on that dialect and cancels the task, and a kagent approval pause made without
-the extension arrives as text alone (recorded with kagent 1.0.0-alpha5), so it is handled
-as a question and its reply is sent as plain text, never as an approval.
-The kagent dialect always understands structured questions. Tool step cards do
-not depend on the dialect: every dialect shows the tool calls and results that an
-agent marks as Google ADK or kagent does. A Binding enables its tool approval prompt with `interactions.toolApprovals`;
-optional `approverGroups` narrow the eligible Slack users, while ask-user answers
-remain independent. A disabled approval is denied through the dialect with a
-thread notice. A pinned kagent 1.0.0-alpha5 runtime check approved `add_numbers`
-and denied `check_status` in one two-tool pause; only `add_numbers` executed. The
-broker's end-to-end suite verifies this with fake Slack and pinned kagent 1.0.0-alpha5.
+Structured questions and approvals depend on the backend's interaction contract. The generic A2A dialect supports text
+continuation. A plain-text `input-required` question is persisted and posted, and a thread reply is accepted under the
+same membership, audit and deadline checks as a button press before it is sent to the paused task.
 
-Google AX is supported experimentally. AX speaks A2A, so it uses the `a2a` dialect with
-no ax-specific code. The `AgentBackend` points at ax's `atenet-router` and selects
-the actor with a static `ate-target-actor` header from `spec.headers`; the agent is
-an A2A server running as an AX Task, which you run (AX does not ship one; the AX add-on is
-one). No front door sits in this path, so the agent must verify the Binding's bearer ID token
-itself, as the AX add-on does (issuer, audience and subject), or an
-OIDC-verifying proxy must sit in front of a TLS gateway to the router. Chat, queued replies, restart recovery, actor suspend and resume, and
-in-thread text answers are tested in the AX kind tier. Structured tool approvals
-need kagent's human-in-the-loop extension, which the AX add-on does not serve, so a pause with a part that is not text cancels the task with a notice. The generic dialect shows tool steps for an agent
-that marks its tool parts as Google ADK or kagent does. AX's own
-lifecycle (task, template, egress policy) stays with the operator. See the
+For an agent whose card lists kagent's human-in-the-loop extension, the generic dialect asks for that extension and
+reads its structured questions and tool approvals as the kagent dialect does. Any other pause with a part that is not
+text is unusable on that dialect and cancels the task.
+
+A kagent approval pause made without the extension arrives as text alone (recorded with kagent 1.0.0-alpha5), so it is
+handled as a question, and its reply is sent as plain text, never as an approval.
+
+The kagent dialect always understands structured questions. Tool step cards do not depend on the dialect: every dialect
+shows the tool calls and results that an agent marks as Google ADK or kagent does.
+
+A Binding enables its tool approval prompt with `interactions.toolApprovals`. Optional `approverGroups` narrow the
+eligible Slack users, while ask-user answers remain independent. A disabled approval is denied through the dialect with
+a thread notice.
+
+A pinned kagent 1.0.0-alpha5 runtime check approved `add_numbers` and denied `check_status` in one two-tool pause, and
+only `add_numbers` executed. The broker's end-to-end suite verifies this with fake Slack and pinned kagent 1.0.0-alpha5.
+
+Google AX is supported experimentally. AX speaks A2A, so it uses the `a2a` dialect with no ax-specific code.
+
+The `AgentBackend` points at ax's `atenet-router` and selects the actor with a static `ate-target-actor` header from
+`spec.headers`. The agent is an A2A server running as an AX Task, which you run (AX does not ship one; the AX add-on is
+one).
+
+No front door sits in this path, so the agent must verify the Binding's bearer ID token itself, as the AX add-on
+does (issuer, audience and subject), or an OIDC-verifying proxy must sit in front of a TLS gateway to the router.
+
+Chat, queued replies, restart recovery, actor suspend and resume, and in-thread text answers are tested in the AX kind
+tier. Structured tool approvals need kagent's human-in-the-loop extension, which the AX add-on does not serve, so a
+pause with a part that is not text cancels the task with a notice. The generic dialect shows tool steps for an agent
+that marks its tool parts as Google ADK or kagent does.
+
+AX's own lifecycle (task, template, egress policy) stays with the operator. See the
 [AX add-on](../reference/ax.md), [Connect the AX add-on](../how-to/connect-ax.md#run-it-inside-google-ax) and the
 [AX kind tier](https://github.com/agentkourier/agent-kourier/blob/main/hack/kind/ax/README.md).
 

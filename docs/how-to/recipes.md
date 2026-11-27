@@ -4,17 +4,23 @@ For a team that would rather start from a working example than from a blank file
 Microsoft Teams channel or acts on another service's webhooks: at the end, you have applied a recipe's Agent Kourier
 resources, and its agent if the recipe has one, and know which checks come with it.
 
-There are nine recipes. Five put an agent in a chat channel, and are on this page: one for Alertmanager alerts, with an
-agent; one for another bot's posts, which holds the Agent Kourier resources only; one that answers questions from
-documentation, with an agent that runs on any cluster; one whose agent you define in a YAML file: a prompt, a model and
-the MCP tools it may call; and one that puts that agent in a Microsoft Teams channel instead, with Alertmanager's alerts,
-which is experimental and needs Agent Kourier 0.6.0 or later. A team that is new to Agent Kourier should start with the
-documentation agent; a team that wants its own agent without writing one, with the fourth.
+There are nine recipes. Five put an agent in a chat channel, and are on this page:
+
+- one for Alertmanager alerts, with an agent
+- one for another bot's posts, which holds the Agent Kourier resources only
+- one that answers questions from documentation, with an agent that runs on any cluster
+- one whose agent you define in a YAML file: a prompt, a model and the MCP tools it may call
+- one that puts that agent in a Microsoft Teams channel instead, with Alertmanager's alerts, which is experimental and
+  needs Agent Kourier 0.6.0 or later
+
+A team that is new to Agent Kourier should start with the documentation agent. A team that wants its own agent without
+writing one should start with the fourth.
 
 The other four, `webhook-github`, `webhook-jira`, `webhook-bitbucket` and `webhook-linear`, start an agent from another
-service's signed webhooks. They are experimental, and need Agent Kourier 0.6.0 or later. `webhook-github` ships an agent that
-posts on GitHub as a machine user; the other three hold the Agent Kourier resources only, for an A2A agent of yours that acts on
-the service with its own tools.
+service's signed webhooks. They are experimental, and need Agent Kourier 0.6.0 or later.
+
+`webhook-github` ships an agent that posts on GitHub as a machine user. The other three hold the Agent Kourier resources
+only, for an A2A agent of yours that acts on the service with its own tools.
 [Start agents from webhooks](receive-webhooks.md) and its page for each service walk through them.
 
 `examples/recipes/echo-agent` is not one of the nine: it is a plain A2A agent with no model, with Agent Kourier files for
@@ -35,16 +41,22 @@ repository, so what you read here is what the repository holds.
 
 The `sre-triage` recipe starts an investigation in the thread of each alert that Alertmanager posts to a channel. The
 agent reads the cluster with read-only tools, says what it found and what it checked, and can ask the thread a
-question. Its trigger is a `botMessage` trigger written in full, so each alert group gets one thread, a repeat inside the
-cooldown or the thread's 24-hour idle limit adds a note, a resolve closes the thread, and the trigger's limits apply: see
-[Investigate Alertmanager alerts](investigate-alertmanager-alerts.md), which shows the same trigger.
+question. Its trigger is a `botMessage` trigger written in full, so:
+
+- each alert group gets one thread
+- a repeat inside the cooldown or the thread's 24-hour idle limit adds a note
+- a resolve closes the thread
+- the trigger's limits apply
+
+See [Investigate Alertmanager alerts](investigate-alertmanager-alerts.md), which shows the same trigger.
 
 !!! warning "The agent half runs on the kind full tier"
 
     The agent is a kagent 1.0 `Agent` on Agent Substrate, and it names the kind full tier's worker pool. It does not
     carry over to a managed cluster such as EKS: see [Connect a kagent agent](connect-kagent.md) for why, and for what
-    to use there. The Agent Kourier resources do not depend on it; they work with any agent behind a backend you
-    point them at.
+    to use there.
+
+    The Agent Kourier resources do not depend on it. They work with any agent behind a backend you point them at.
 
 ### Before you start
 
@@ -75,23 +87,28 @@ narrowed to one receiver, and `askUser` on. Replace `CREPLACESRE` and `B0REPLACE
 ```
 
 Apply the directory as custom resources (`kubectl apply -f examples/recipes/sre-triage/kourier/`, into the namespace
-`agent-kourier`, which must exist): each resource sits in that namespace and names the others without one. Agent
-Kourier reads them from the cluster on the chart's default route, `config.source: crds`, with `config.chatConnection:
-agent-kourier/slack`. The chart grants the Secret `slack` from that name, and `rbac.secretNames` grants `sre-triage-token`, since the chart cannot
-see the other Secrets of resources you apply yourself. With `config.*` left empty, the release installs the CRDs itself, so
-they are served before you apply the resources. The recipe's README has the values and the commands, in order. The
-other recipes' resources work the same way.
+`agent-kourier`, which must exist). Each resource sits in that namespace and names the others without one.
+
+Agent Kourier reads them from the cluster on the chart's default route, `config.source: crds`, with
+`config.chatConnection: agent-kourier/slack`. The chart grants the Secret `slack` from that name, and
+`rbac.secretNames` grants `sre-triage-token`, since the chart cannot see the other Secrets of resources you apply
+yourself. With `config.*` left empty, the release installs the CRDs itself, so they are served before you apply the
+resources.
+
+The recipe's README has the values and the commands, in order. The other recipes' resources work the same way.
 
 This route needs a chart release that has custom resources, and Kubernetes 1.33 or later. Release 0.1.6 does not have
-it: `crds` and `config.source` are not among its values. On 0.1.6, or to stay on a ConfigMap, the same files load as
-one, with `config.existingConfigMap` and `rbac.secretNamespaces: [agent-kourier]`, plus `config.source: files` on a
-release that has custom resources (it refuses `config.existingConfigMap` without it, and 0.1.6 refuses the key);
+it: `crds` and `config.source` are not among its values.
+
+On 0.1.6, or to stay on a ConfigMap, the same files load as one, with `config.existingConfigMap` and
+`rbac.secretNamespaces: [agent-kourier]`. On a release that has custom resources, add `config.source: files` too: it
+refuses `config.existingConfigMap` without it, and 0.1.6 refuses the key.
 [Move the config between a ConfigMap and custom resources](migrate-config-source.md) moves an install from one to the
 other.
 
 ### The agent
 
-The agent and its prompt. The tools are listed by name and only read; the tool server also runs `--read-only`, and
+The agent and its prompt. The tools are listed by name and only read. The tool server also runs `--read-only`, and
 its ServiceAccount is bound to the built-in `view` ClusterRole.
 
 ```yaml title="agent/agent.yaml"
@@ -110,8 +127,9 @@ steps to apply the agent, in order, and what to change for your own cluster.
 ### Check it
 
 The recipe ships its checks. `go test ./test/recipes` loads the three resources with Agent Kourier's own loader and
-replays messages through the trigger. Each case is one message and what the Binding must make of it; the first two
-are:
+replays messages through the trigger.
+
+Each case is one message and what the Binding must make of it. The first two are:
 
 ```yaml title="evals/triggers.yaml (the first two cases)"
 --8<-- "sre-triage/evals/triggers.yaml:first-cases"
@@ -132,11 +150,18 @@ to read an agent's answer against. Nothing runs them yet, and their shape may ch
 
 The `custom-bot-trigger` recipe is for any bot whose posts you want to act on: its trigger is written by hand, as the
 Alertmanager trigger is. A CI system posts a message to a channel when a pipeline fails, and the recipe starts an
-investigation in a thread of its own for each pipeline and branch. It holds Agent Kourier's resources only and ships no agent, so the backend's `url`
-has to point at an A2A agent you run. The trigger is written in full, as in
-[Start investigations from any bot's messages](any-bot-trigger.md): `match` and `exclude` pick out the bot's failure
-posts, `extract` pulls out a state, a pipeline and a key, `thread` gives one thread to each key and closes it when the
-state is `PASSED`, `limits` bounds how many investigations start, and `promptTemplate` writes the first prompt.
+investigation in a thread of its own for each pipeline and branch.
+
+The recipe holds Agent Kourier's resources only and ships no agent, so the backend's `url` has to point at an A2A agent you
+run.
+
+The trigger is written in full, as in [Start investigations from any bot's messages](any-bot-trigger.md):
+
+- `match` and `exclude` pick out the bot's failure posts
+- `extract` pulls out a state, a pipeline and a key
+- `thread` gives one thread to each key and closes it when the state is `PASSED`
+- `limits` bounds how many investigations start
+- `promptTemplate` writes the first prompt
 
 !!! warning "The message shape is made up"
 
@@ -156,8 +181,10 @@ state is `PASSED`, `limits` bounds how many investigations start, and `promptTem
 ### Agent Kourier's resources
 
 The recipe has three files, in the namespace `agent-kourier`: the Binding below, an AgentBackend, and a
-ChatConnection that names the Secret `slack`, the same ChatConnection as the alert recipe's, so the two recipes share one
-Slack app. Replace three placeholders: `CREPLACECI` (the channel's ID) and `B0REPLACEME` (the CI bot's `bot_id`) in the
+ChatConnection that names the Secret `slack`. It is the same ChatConnection as the alert recipe's, so the two recipes
+share one Slack app.
+
+Replace three placeholders: `CREPLACECI` (the channel's ID) and `B0REPLACEME` (the CI bot's `bot_id`) in the
 Binding, and the host `REPLACE-ME` in the AgentBackend's `url`.
 
 ```yaml title="kourier/binding.yaml"
@@ -182,7 +209,9 @@ the trigger, each judged alone. The first is a failure that matches, with the va
 ```
 
 The pipeline and key regexes take only letters, digits and `_ . -`. A pipeline named `team/web-build` therefore passes
-`match`, fails an `extract`, and so matches no trigger. Nothing starts and nothing is posted in Slack: the miss shows
+`match`, fails an `extract`, and so matches no trigger.
+
+Nothing starts and nothing is posted in Slack: the miss shows
 in the metric `agentkourier_trigger_unmatched_total`, in a debug log line and in a [dry run](tune-triggers.md). A case
 pins it:
 
@@ -195,12 +224,15 @@ The cases do not evaluate the cooldown, thread keys across messages, `limits` or
 ## Answer questions from your documentation
 
 The `docs-agent` recipe turns a mention in a help channel into an answer drawn from a body of Markdown documentation.
-The agent searches the pages, reads the best ones, answers in the thread and lists the pages it used; when the pages do
-not cover the question, it is told to say so. Here the documentation is Agent Kourier's own, and the recipe's README
-says what to change for yours. The agent is an Agent Development Kit (ADK) program in a Go module of its own, served
-over A2A and reached through the generic `a2a` dialect, so it needs neither kagent nor Agent Substrate. It runs as a
-plain Deployment on any cluster that can reach a model provider. Its search is by keywords, served as an MCP tool, and
-the tool is written so that a search by embeddings can replace it.
+The agent searches the pages, reads the best ones, answers in the thread and lists the pages it used. When the pages do
+not cover the question, it is told to say so.
+
+Here the documentation is Agent Kourier's own, and the recipe's README says what to change for yours.
+
+The agent is an Agent Development Kit (ADK) program in a Go module of its own, served over A2A and reached through the
+generic `a2a` dialect, so it needs neither kagent nor Agent Substrate. It runs as a plain Deployment on any cluster that
+can reach a model provider. Its search is by keywords, served as an MCP tool, and the tool is written so that a search
+by embeddings can replace it.
 
 ### Before you start
 
@@ -230,21 +262,24 @@ at the provider.
 
 ### The agent
 
-The agent runs as one pod. The key comes from a Secret that you create; no credential is in the file.
+The agent runs as one pod. The key comes from a Secret that you create, and no credential is in the file.
 
 ```yaml title="agent/manifests/deployment.yaml"
 --8<-- "docs-agent/agent/manifests/deployment.yaml"
 ```
 
 The recipe's [README](https://github.com/agentkourier/agent-kourier/blob/main/examples/recipes/docs-agent/README.md) has
-the steps in order: build the image, make the Secrets, apply the manifests (which include a NetworkPolicy that lets only
-pods in the namespace `agent-kourier` reach the agent, where the network plugin enforces NetworkPolicy) and apply the Agent Kourier resources as custom resources.
+the steps in order: build the image, make the Secrets, apply the manifests and apply the Agent Kourier resources as
+custom resources. The manifests include a NetworkPolicy that lets only pods in the namespace `agent-kourier` reach the
+agent, where the network plugin enforces NetworkPolicy.
 
 ### Check it
 
 The module has its own tests and a smoke test that needs no credentials: `make docs-agent-test` and
 `make docs-agent-smoke`. The smoke test starts the real agent on loopback with a scripted stand-in for the language model
-and asks it fixed questions over A2A. The model's part is the stand-in's, so the run checks the wiring and the retrieval,
+and asks it fixed questions over A2A.
+
+The model's part is the stand-in's, so the run checks the wiring and the retrieval,
 not the quality of any model's answer. A run against a real model, `make docs-agent-smoke-live`, needs your credentials.
 
 `go test ./test/recipes` loads the three resources with Agent Kourier's loader. The trigger evals judge a `botMessage`
@@ -257,7 +292,9 @@ is not taken:
 
 The recipe also holds quality scenarios: questions the documentation answers, each with the page that answers it, and
 questions it does not answer, for which the answer must say so. The module's tests check that the page exists and that
-the search finds it, and that the missing topic is on no page. Whether a model then answers well is for a person to read
+the search finds it, and that the missing topic is on no page.
+
+Whether a model then answers well is for a person to read
 against the scenario. One of them:
 
 ```yaml title="evals/scenarios/connect-non-kagent-agent.yaml"
@@ -272,6 +309,7 @@ replica, and it checks no token, so it relies on the NetworkPolicy. The README l
 The `prompt-agent` recipe is an agent that a team writes as one `agent.yaml` in Pydantic AI's agent spec format: a
 prompt, a model, and the MCP tools it may call. A small Python server serves it over A2A, reached through the generic
 `a2a` dialect, so it runs as a plain Deployment on any cluster that can reach a model provider and the MCP server.
+
 Switching between providers (OpenRouter, Anthropic, OpenAI, an OpenAI-compatible endpoint, Ollama) is a change to the
 `model:` line and the key's variable. The README lists the ones that have been run, and how: Anthropic's and OpenAI's own
 APIs, and Bedrock, have not.
@@ -282,7 +320,9 @@ APIs, and Bedrock, have not.
 
 Chat and alert text is untrusted, so the agent refuses to start on anything in the file that could give it a tool the
 file does not list: any capability but MCP, an MCP entry without `allowed_tools`, a provider-specific model setting, a
-model that searches the web, and more. It can then call the listed MCP tools and one tool of its own, `ask_user`, which
+model that searches the web, and more.
+
+The agent can then call the listed MCP tools and one tool of its own, `ask_user`, which
 asks the thread a question. The tool list is enforced; what the model says it did is not.
 
 ### Before you start
@@ -313,10 +353,12 @@ A mention trigger takes no limits, so anyone who can mention the bot in the chan
 mention is held only to the broker's fixed limits. Bound the key at the provider.
 
 The agent refuses to start without the token's file, unless it is told to accept every caller, so the same value goes
-in a Secret in the agent's namespace too. The recipe's
-[README](https://github.com/agentkourier/agent-kourier/blob/main/examples/recipes/prompt-agent/README.md) has the steps
-in order (choose the image, write `agent.yaml`, make the Secrets, apply the agent and Agent Kourier's resources), each
-field of `agent.yaml`, the providers that have been run, everything the agent refuses and why, and its limits.
+in a Secret in the agent's namespace too.
+
+The recipe's [README](https://github.com/agentkourier/agent-kourier/blob/main/examples/recipes/prompt-agent/README.md)
+has the steps in order (choose the image, write `agent.yaml`, make the Secrets, apply the agent and Agent Kourier's
+resources). It also has each field of `agent.yaml`, the providers that have been run, everything the agent refuses and
+why, and its limits.
 
 ### Check it
 

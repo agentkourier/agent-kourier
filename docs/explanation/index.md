@@ -63,5 +63,6 @@ built that way, and what it deliberately does not do.
 
 Microsoft Teams and webhooks, both experimental and new in 0.6.0, have no page of their own here.
 [What each platform supports](../reference/platforms.md) says what Slack, Teams and the `webhook` platform each serve,
-and how a Teams connection reads alerts through Microsoft Graph; [Start agents from webhooks](../how-to/receive-webhooks.md)
-explains how a webhook connection turns a service's events into sessions while the agent answers on the service.
+and how a Teams connection reads alerts through Microsoft Graph.
+
+[Start agents from webhooks](../how-to/receive-webhooks.md) explains how a webhook connection turns a service's events into sessions while the agent answers on the service.
