@@ -253,6 +253,10 @@ spec:
             {{- if include "agentkourier.addon.sqlite" . }}
             - {name: data, mountPath: /data}
             {{- end }}
+            {{- if eq $name "ax" }}
+            - {name: result-auth, mountPath: /etc/agent-kourier-ax/result, readOnly: true}
+            - {name: task-template, mountPath: /etc/agent-kourier-ax/task, readOnly: true}
+            {{- end }}
             - {name: tmp, mountPath: /tmp}
       {{- with $a.nodeSelector }}
       nodeSelector:
@@ -277,6 +281,17 @@ spec:
         {{- if include "agentkourier.addon.sqlite" . }}
         - name: data
           persistentVolumeClaim: {claimName: {{ include "agentkourier.addon.pvcName" . }}}
+        {{- end }}
+        {{- if eq $name "ax" }}
+        - name: result-auth
+          secret:
+            secretName: {{ $a.resultCallback.tokenSecret.name | quote }}
+            items: [{key: {{ $a.resultCallback.tokenSecret.key | quote }}, path: token}]
+            defaultMode: 0440
+        - name: task-template
+          configMap:
+            name: {{ $a.taskTemplate.configMap.name | quote }}
+            items: [{key: {{ $a.taskTemplate.configMap.key | quote }}, path: task.yaml}]
         {{- end }}
         - name: tmp
           emptyDir: {}
@@ -417,6 +432,12 @@ spec:
       ports:
         - {port: {{ $port }}, protocol: TCP}
     {{- end }}
+    {{- if eq .name "ax" }}
+    - from:
+        {{- toYaml $a.networkPolicy.callbackFrom | nindent 8 }}
+      ports:
+        - {port: {{ $port }}, protocol: TCP}
+    {{- end }}
   egress:
     # DNS.
     - to:
@@ -427,6 +448,12 @@ spec:
       ports:
         - {port: 53, protocol: UDP}
         - {port: 53, protocol: TCP}
+    {{- if $egress.to }}
+    - to:
+        {{- toYaml $egress.to | nindent 8 }}
+      ports:
+        - {port: {{ int $egress.port }}, protocol: TCP}
+    {{- end }}
     {{- if $egress.cidrs }}
     # {{ $spec.egress.comment }}
     - to:

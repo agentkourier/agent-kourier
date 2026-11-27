@@ -37,7 +37,7 @@ func run(t *testing.T, bin string) (string, error) {
 	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
 	cmd := exec.CommandContext(t.Context(), bin)
 	cmd.Env = append(os.Environ(), "AGENTKOURIER_FAULT=crash-after-post", "AGENTKOURIER_SLACK_API_URL=http://fake.test",
-		"AGENTKOURIER_TEAMS_URL=https://faketeams.test", "AGENTKOURIER_TEAMS_CA="+string(ca))
+		"AGENTKOURIER_TEAMS_URL=https://faketeams.test", "AGENTKOURIER_TEAMS_CA="+string(ca), "AGENTKOURIER_TEST_AGENT_STREAM_TIMEOUT=5s")
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
@@ -57,6 +57,7 @@ func traces(t *testing.T, bin string) map[string]bool {
 	return map[string]bool{
 		"the send-gate function (symbol)":     strings.Contains(string(nm), "testhooks.holdBeforeSend"),
 		"the crash function (symbol)":         strings.Contains(string(nm), "testhooks.crashSelf"),
+		"the stream watchdog override":        bytes.Contains(raw, []byte("AGENTKOURIER_TEST_AGENT_STREAM_TIMEOUT")),
 		"the AGENTKOURIER_FAULT name":         bytes.Contains(raw, []byte("AGENTKOURIER_FAULT")),
 		"the AGENTKOURIER_SLACK_API_URL name": bytes.Contains(raw, []byte("AGENTKOURIER_SLACK_API_URL")),
 		"the fake Teams transport (symbol)":   strings.Contains(string(nm), "testhooks.onlyHost"),
@@ -86,10 +87,10 @@ func TestDefaultBuildHasNeitherHook(t *testing.T) {
 			crashed := errors.As(err, &exit) && exit.ExitCode() == 137
 			switch {
 			case tc.tagged && (!crashed || !strings.Contains(out, `slack="http://fake.test"`) ||
-				!strings.Contains(out, `teams="https://faketeams.test/v1.0" err=<nil>`)):
+				!strings.Contains(out, `teams="https://faketeams.test/v1.0" err=<nil>`) || !strings.Contains(out, "watchdog=5s")):
 				t.Errorf("tagged probe with every hook armed: err %v, output %q; want the overrides applied, then exit 137", err, out)
 			case !tc.tagged && (err != nil || !strings.Contains(out, `slack=""`) || !strings.Contains(out, `teams="" err=<nil>`) ||
-				!strings.Contains(out, "after-post-returned")):
+				!strings.Contains(out, "watchdog=0s") || !strings.Contains(out, "after-post-returned")):
 				t.Errorf("default probe with every hook armed: err %v, output %q; want no override and no crash", err, out)
 			}
 		})

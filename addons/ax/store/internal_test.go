@@ -18,9 +18,6 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/a2aproject/a2a-go/v2/a2asrv/taskstore"
-	"github.com/glebarez/sqlite"
-	"google.golang.org/adk/v2/session"
-	"google.golang.org/genai"
 
 	"github.com/agentkourier/agent-kourier/addons/kit/runtime"
 	kitstore "github.com/agentkourier/agent-kourier/addons/kit/store"
@@ -155,17 +152,13 @@ func TestPostgresWritesAreFenced(t *testing.T) {
 	testEveryWriteIsFenced(t, s)
 }
 
-// Every write, the store's and ADK's, runs the fence in its transaction: with a fence that refuses, every write fails
+// Every write, including launch writes, runs the fence in its transaction: with a fence that refuses, every write fails
 // and changes nothing. A leader's epoch check relies on this.
 func testEveryWriteIsFenced(t *testing.T, s *Store) {
 	t.Helper()
 	ctx := asCaller("agent-kourier")
 	seed := &a2a.Task{ID: "t1", ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}}
 	if _, err := s.Create(ctx, seed); err != nil {
-		t.Fatal(err)
-	}
-	created, err := s.Sessions().Create(ctx, &session.CreateRequest{AppName: AppName, UserID: "agent-kourier", SessionID: "c1"})
-	if err != nil {
 		t.Fatal(err)
 	}
 	var mu sync.Mutex
@@ -202,19 +195,10 @@ func testEveryWriteIsFenced(t *testing.T, s *Store) {
 		"DeleteSettledBefore": func() error { _, err := s.DeleteSettledBefore(ctx, future); return err },
 		"DeleteIdleContexts":  func() error { _, err := s.DeleteIdleContexts(ctx, future); return err },
 		"TouchContext":        func() error { return s.TouchContext(ctx, "c1") },
-		"ADK Create": func() error {
-			_, err := s.Sessions().Create(ctx, &session.CreateRequest{AppName: AppName, UserID: "agent-kourier", SessionID: "c2"})
-			return err
-		},
-		"ADK AppendEvent": func() error {
-			ev := session.NewEvent(ctx, "invocation")
-			ev.Author = "user"
-			ev.Content = genai.NewContentFromText("hello", genai.RoleUser)
-			return s.Sessions().AppendEvent(ctx, created.Session, ev)
-		},
-		"ADK Delete": func() error {
-			return s.Sessions().Delete(ctx, &session.DeleteRequest{AppName: AppName, UserID: "agent-kourier", SessionID: "c1"})
-		},
+		"Launch Register":     func() error { return createLaunch(s, "t1") },
+		"Launch Recover":      func() error { return s.Recover(ctx, time.Minute) },
+		"Launch Cleanup":      func() error { return s.MarkClean(ctx, "t1") },
+		"SettlePaused":        func() error { _, err := s.SettlePaused(ctx, "upgraded"); return err },
 	}
 	for name, write := range writes {
 		before := calls
@@ -237,12 +221,8 @@ func testEveryWriteIsFenced(t *testing.T, s *Store) {
 	if _, err := s.Get(ctx, "t2"); !errors.Is(err, a2a.ErrTaskNotFound) {
 		t.Fatalf("a fenced Create stored its task: %v", err)
 	}
-	sess, err := s.Sessions().Get(ctx, &session.GetRequest{AppName: AppName, UserID: "agent-kourier", SessionID: "c1"})
-	if err != nil || sess.Session.Events().Len() != 0 {
-		t.Fatalf("a fenced ADK write changed the session: %+v, %v", sess, err)
-	}
-	if _, err := s.Sessions().Get(ctx, &session.GetRequest{AppName: AppName, UserID: "agent-kourier", SessionID: "c2"}); !errors.Is(err, session.ErrNotFound) {
-		t.Fatalf("a fenced ADK Create stored its session: %v", err)
+	if _, err := s.Launch(ctx, "t1"); !errors.Is(err, kitstore.ErrNoRows) {
+		t.Fatalf("a fenced write stored a launch: %v", err)
 	}
 }
 
@@ -277,7 +257,7 @@ func TestSQLiteKeepsTheTablesOfACutShortStart(t *testing.T) {
 func TestSQLiteImportsTheOldLayout(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agent.db")
 	u := url.URL{Scheme: "file", Path: path}
-	old, err := sql.Open(sqlite.DriverName, u.String())
+	old, err := sql.Open("sqlite", u.String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +324,7 @@ func openPostgres(t *testing.T, dsn string) *Store {
 	return s
 }
 
-// Replicas that start together on an empty database each apply the migrations, the store's and ADK's, once between
+// Replicas that start together on an empty database each apply the migrations, including launch writes, once between
 // them.
 func TestPostgresReplicasMigrateTogether(t *testing.T) {
 	dsn := pgtest.DSN(t)
@@ -378,9 +358,6 @@ func TestPostgresReplicasMigrateTogether(t *testing.T) {
 	}
 	if n != len(ms) {
 		t.Fatalf("schema_migrations has %d rows, want %d", n, len(ms))
-	}
-	if _, err := s.Sessions().Create(context.Background(), &session.CreateRequest{AppName: AppName, UserID: "u", SessionID: "c"}); err != nil {
-		t.Fatalf("ADK's tables: %v", err)
 	}
 }
 

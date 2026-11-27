@@ -29,15 +29,15 @@ for tier in "${tiers[@]}"; do
   else
     echo "kind cluster ${CLUSTER} does not exist"
   fi
-  if [ "${tier}" = ax ] && docker inspect agent-kourier-ax-registry >/dev/null 2>&1; then
-    [ "$(docker inspect -f '{{index .Config.Labels "dev.agent-kourier.ax-registry"}}' agent-kourier-ax-registry)" = true ] || die "agent-kourier-ax-registry is not owned by this tooling"
-    docker rm -f agent-kourier-ax-registry >/dev/null
+  if [ "${tier}" = ax ] && docker inspect kind-registry >/dev/null 2>&1; then
+    [ "$(docker inspect -f '{{index .Config.Labels "dev.agent-kourier.ax-launcher-proof"}}' kind-registry)" = true ] || die "kind-registry is not owned by this tooling"
+    docker rm -f kind-registry >/dev/null
   fi
 
   # Both tiers build the test doubles and the runner; only the full tier builds mockllm.
   repos=(agent-kourier-e2e/fast-doubles agent-kourier-e2e/runner agent-kourier-e2e/agent-kourier-testhooks)
   [ "${tier}" = full ] && repos+=(agent-kourier-e2e/mockllm)
-  [ "${tier}" = ax ] && repos+=(agent-kourier-e2e/ax localhost:5002/agent-kourier-ax)
+  [ "${tier}" = ax ] && repos+=(agent-kourier-e2e/ax-launcher localhost:5003/ax-launcher-fixture)
   for repo in "${repos[@]}"; do
     for image in $(docker image ls --format '{{.Repository}}:{{.Tag}}' "${repo}" | sort -u); do
       docker image rm "${image}" >/dev/null 2>&1 || true

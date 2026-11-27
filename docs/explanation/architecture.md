@@ -291,23 +291,10 @@ a thread notice.
 A pinned kagent 1.0.0-alpha5 runtime check approved `add_numbers` and denied `check_status` in one two-tool pause, and
 only `add_numbers` executed. The broker's end-to-end suite verifies this with fake Slack and pinned kagent 1.0.0-alpha5.
 
-Google AX is supported experimentally. AX speaks A2A, so it uses the `a2a` dialect with no ax-specific code.
-
-The `AgentBackend` points at ax's `atenet-router` and selects the actor with a static `ate-target-actor` header from
-`spec.headers`. The agent is an A2A server running as an AX Task, which you run (AX does not ship one; the AX add-on is
-one).
-
-No front door sits in this path, so the agent must verify the Binding's bearer ID token itself, as the AX add-on
-does (issuer, audience and subject), or an OIDC-verifying proxy must sit in front of a TLS gateway to the router.
-
-Chat, queued replies, restart recovery, actor suspend and resume, and in-thread text answers are tested in the AX kind
-tier. Structured tool approvals need kagent's human-in-the-loop extension, which the AX add-on does not serve, so a
-pause with a part that is not text cancels the task with a notice. The generic dialect shows tool steps for an agent
-that marks its tool parts as Google ADK or kagent does.
-
-AX's own lifecycle (task, template, egress policy) stays with the operator. See the
-[AX add-on](../reference/ax.md), [Connect the AX add-on](../how-to/connect-ax.md#run-it-inside-google-ax) and the
-[AX kind tier](https://github.com/agentkourier/agent-kourier/blob/main/hack/kind/ax/README.md).
+Agent Kourier sends A2A turns to the [AX add-on](../reference/ax.md). The add-on creates, resumes,
+and monitors AX Tasks through the private control plane. The Task's runner calls the add-on through
+an HTTPS endpoint configured in its Gateway. The add-on returns the terminal state and result to
+Agent Kourier. See [Connect the AX add-on](../how-to/connect-ax.md).
 
 ## Source map
 

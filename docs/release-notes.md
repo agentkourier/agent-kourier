@@ -3,6 +3,14 @@
 What changed in each release, newest first, and what you must do about it. The steps for an upgrade are in
 [Upgrade](how-to/upgrade.md), which has a section for each change that needs one; this page says what changed and points to it.
 
+
+## AX Task launcher
+
+The experimental AX add-on now starts Tasks from an operator-supplied template. It receives command
+results over authenticated HTTPS and returns them in the original thread. It keeps the add-on name
+and chart block. Existing ADK installs require new launcher settings. See
+[Upgrade the AX add-on](how-to/upgrade.md#replace-the-experimental-adk-add-on-with-the-ax-task-launcher).
+
 ## Version 0.7.0
 
 Two add-ons arrive, both experimental: components that the chart runs beside Agent Kourier, each off until its block under

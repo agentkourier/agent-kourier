@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -107,10 +108,19 @@ func Run[S Store](ctx context.Context, a Addon[S], cfg settings.Config, own sett
 		return err
 	}
 	defer func() { _ = st.Close() }()
-	backend, err := a.Build(ctx, Env[S]{Config: cfg, Settings: own, Store: st, Telemetry: tel, Log: log})
+	callerTokens, _ := check.Verifier.(auth.TokenVerifier)
+	backend, err := a.Build(ctx, Env[S]{Config: cfg, Settings: own, Store: st, Telemetry: tel, CallerTokens: callerTokens.Tokens, Log: log})
 	if err != nil {
 		return err
 	}
+	closeBackend := sync.OnceFunc(func() {
+		if closer, ok := backend.(io.Closer); ok {
+			if err := closer.Close(); err != nil {
+				log.Warn("close add-on backend", "error", err)
+			}
+		}
+	})
+	defer closeBackend()
 	if undeclared := own.Undeclared(); len(undeclared) > 0 {
 		return fmt.Errorf("the %s read settings it does not declare: %s", a.Noun, strings.Join(undeclared, ", "))
 	}
@@ -139,6 +149,12 @@ func Run[S Store](ctx context.Context, a Addon[S], cfg settings.Config, own sett
 	mux.Handle("/metrics", tel.Handler())
 	if r, ok := backend.(Routes); ok {
 		r.Routes(mux)
+	}
+	if r, ok := backend.(LeaderRoutes); ok {
+		r.LeaderRoutes(func(pattern string, handler http.Handler) {
+			local.Handle(pattern, handler)
+			mux.Handle(pattern, router)
+		})
 	}
 	if opts.Routes != nil {
 		opts.Routes(mux)
@@ -231,6 +247,9 @@ func Run[S Store](ctx context.Context, a Addon[S], cfg settings.Config, own sett
 		}
 		var swept sync.WaitGroup
 		swept.Go(func() { up.run(ctx) })
+		if worker, ok := backend.(LeaderWorker); ok {
+			swept.Go(func() { worker.RunLeader(ctx) })
+		}
 		status.Serve()
 		log.Info("serving A2A requests as the leader")
 		<-ctx.Done()
@@ -283,6 +302,7 @@ func Run[S Store](ctx context.Context, a Addon[S], cfg settings.Config, own sett
 			log.Info("stopped before the takeover was done", "error", err)
 		}
 	}
+	closeBackend()
 	release()
 	return failure
 }
@@ -290,7 +310,7 @@ func Run[S Store](ctx context.Context, a Addon[S], cfg settings.Config, own sett
 // Handler is the A2A endpoint at A2APath and its card under it, behind check, as Run serves them on the leader, and
 // nothing else of Run: no election, takeover, upkeep or stop, and each turn runs until it ends. publicURL is the
 // endpoint the card names; tel may be nil. It serves a backend in a test or a smoke run.
-func (a Addon[S]) Handler(backend Backend, st Store, check *auth.Check, publicURL string, tel *telemetry.Telemetry) http.Handler {
+func (a Addon[S]) Handler(backend Backend, st Store, check *auth.Check, publicURL string, tel *telemetry.Telemetry) *http.ServeMux {
 	return endpoint(a, backend, st, st, newTurns(context.Background(), backend, tel), &keyLock[string]{}, check, publicURL, tel)
 }
 
@@ -298,11 +318,13 @@ func (a Addon[S]) Handler(backend Backend, st Store, check *auth.Check, publicUR
 // writes the tasks through tasks, and the accept of a message holds its context's lock in contexts while it marks the
 // context active.
 func endpoint[S Store](a Addon[S], backend Backend, st Store, tasks taskstore.Store, running *turns, contexts *keyLock[string],
-	check *auth.Check, publicURL string, tel *telemetry.Telemetry) http.Handler {
+	check *auth.Check, publicURL string, tel *telemetry.Telemetry) *http.ServeMux {
 	validator, _ := backend.(MessageValidator)
+	admission, _ := backend.(MessageAdmission)
+	cancelAdmission, _ := backend.(CancelAdmission)
 	handler := &a2asrv.InterceptedHandler{
 		Handler: &replayHandler{RequestHandler: a2asrv.NewHandler(running, a2asrv.WithTaskStore(tasks)), store: st, tel: tel,
-			validator: validator, life: running.life, contexts: contexts},
+			validator: validator, admission: admission, cancelAdmission: cancelAdmission, life: running.life, contexts: contexts},
 		Interceptors: []a2asrv.CallInterceptor{auth.Interceptor{}},
 	}
 	mux := http.NewServeMux()

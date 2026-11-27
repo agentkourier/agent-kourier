@@ -136,7 +136,9 @@ type Env[S Store] struct {
 	Settings  settings.Values
 	Store     S
 	Telemetry *telemetry.Telemetry
-	Log       *slog.Logger
+	// CallerTokens is the live A2A credential set when token-file authentication is configured.
+	CallerTokens *auth.Tokens
+	Log          *slog.Logger
 }
 
 // Backend runs the turns. The kit wraps it: each Execute is one turn, which it counts and traces, and ends when the
@@ -161,13 +163,35 @@ type Interrupter interface {
 }
 
 // MessageValidator is a backend that checks each message before a turn starts for it: a message that starts a new task
-// (paused nil), or an answer to paused, a task waiting for one (input-required). Its error refuses the request with
-// a2a.ErrInvalidParams before any turn, so the message is not counted as a turn, has no span and its ID is not
-// recorded, and a paused task stays paused (an executor's error would fail it). A message for a task the caller does not
-// have, or one that is neither new nor an answer, is a2a-go's to answer.
+// (paused nil), or an answer to paused, a task waiting for one (input-required). An error wrapping ErrBusy
+// returns A2A -32004 so the broker can retry. Other errors return a2a.ErrInvalidParams. Either response ends the
+// request before a turn starts, so the message has no turn or span, its ID is not recorded, and a paused task
+// stays paused. A message for a task the caller does not have, or one that is neither new nor an answer, is
+// a2a-go's to answer.
 type MessageValidator interface {
 	ValidateMessage(ctx context.Context, msg *a2a.Message, paused *a2a.Task) error
 }
+
+// MessageAdmission reserves capacity after message validation and replay lookup.
+// The kit releases the reservation on an early error or after execution cleanup.
+type MessageAdmission interface {
+	AdmitMessage(context.Context, *a2a.Message) (release func(), err error)
+}
+
+// CancelAdmission decides whether a caller can cancel a live task before the
+// SDK starts cancellation. A rejected cancellation leaves the execution intact.
+type CancelAdmission interface {
+	AdmitCancel(context.Context, *a2a.Task) error
+}
+
+// LeaderWorker runs background work only while this replica holds the lease.
+// The worker must return when its context ends.
+type LeaderWorker interface {
+	RunLeader(context.Context)
+}
+
+// ErrBusy tells the kit that a MessageValidator cannot accept a message until the backend has capacity.
+var ErrBusy = errors.New("backend is busy")
 
 // ContextReleaser is a backend that keeps a context outside the store (cma: a session in CMA). For each context idle
 // past SESSION_IDLE_TTL with no turn running, the upkeep calls ReleaseContext, then forgets the context and its tasks
@@ -188,7 +212,7 @@ type ContextReleaser interface {
 var ErrContextBusy = errors.New("a turn of the context has begun")
 
 // IdleReporter is a backend that is told, after each sweep without a ContextReleaser, how many idle contexts the store
-// deleted and the error that stopped the sweep, if any (ax: it counts the ADK sessions deleted).
+// deleted and the error that stopped the sweep, if any.
 type IdleReporter interface {
 	IdleContextsDeleted(n int, err error)
 }
@@ -199,12 +223,18 @@ type TurnClassifier interface {
 	FailedOutcome(status a2a.TaskStatus) telemetry.TurnOutcome
 }
 
-// Routes is a backend that serves routes of its own beside the kit's (ax: /metadata/, proxied to the AX task runner).
+// Routes is a backend that serves routes of its own beside the kit's.
 type Routes interface {
 	Routes(mux *http.ServeMux)
 }
 
-// Readiness is a backend whose readiness is another server's (ax beside the AX task runner): a non-nil Readyz serves
+// LeaderRoutes registers routes whose handler runs only on the serving leader.
+// The backend is responsible for authentication on these paths.
+type LeaderRoutes interface {
+	LeaderRoutes(register func(pattern string, handler http.Handler))
+}
+
+// Readiness is a backend whose readiness is another server's: a non-nil Readyz serves
 // /readyz instead of the kit's.
 type Readiness interface {
 	Readyz() http.Handler

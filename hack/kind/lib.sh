@@ -42,6 +42,7 @@ use_tier() {
   case "$1" in
     full | fast | ax)
       CLUSTER=agent-kourier-$1
+      [ "$1" != ax ] || CLUSTER=agent-kourier-ax-launcher
       OWNER_LABEL=agentkourier.agent-kourier.dev/owner=up-$1
       ;;
     *) die "unknown tier '$1' (want full, fast or ax)" ;;
@@ -73,16 +74,16 @@ assert_context() {
   esac
   name=$(kubectl config view --minify --context "${CTX}" -o 'jsonpath={.contexts[0].name}' 2>/dev/null) || name=
   server=$(kubectl config view --minify --context "${CTX}" -o 'jsonpath={.clusters[0].cluster.server}' 2>/dev/null) || server=
-  [ "${CTX}" = "kind-agent-kourier-${tier}" ] && [ "${name}" = "kind-agent-kourier-${tier}" ] ||
-    die "context '${name:-?}' is not kind-agent-kourier-${tier}; refusing to run kubectl or helm"
+  [ "${CTX}" = "kind-${CLUSTER}" ] && [ "${name}" = "kind-${CLUSTER}" ] ||
+    die "context '${name:-?}' is not kind-${CLUSTER}; refusing to run kubectl or helm"
   case "${server}" in
     https://127.0.0.1:* | https://localhost:*) ;;
     *) die "context ${CTX} points at a non-local API server; refusing to run kubectl or helm" ;;
   esac
-  kind_server=$(kubectl config view --kubeconfig <(kind get kubeconfig --name "agent-kourier-${tier}" 2>/dev/null) \
+  kind_server=$(kubectl config view --kubeconfig <(kind get kubeconfig --name "${CLUSTER}" 2>/dev/null) \
     -o 'jsonpath={.clusters[0].cluster.server}' 2>/dev/null) || kind_server=
   [ -n "${kind_server}" ] && [ "${server}" = "${kind_server}" ] ||
-    die "context ${CTX} points at ${server}, not at kind's agent-kourier-${tier} (${kind_server:-no such cluster}); refusing to run kubectl or helm"
+    die "context ${CTX} points at ${server}, not at kind's ${CLUSTER} (${kind_server:-no such cluster}); refusing to run kubectl or helm"
 }
 
 # assert_owned: die unless the existing agent-kourier-full cluster was created by this tooling.
@@ -1032,36 +1033,4 @@ require_network_policy() {
     *) die "cannot tell whether the network policy is live in ${CLUSTER}: ${line#*: }
   Look at: ${K[*]} -n kagent get pods; then run make sandbox-heal again" ;;
   esac
-}
-
-# probe_ax_agents: verify authenticated cards through Agent Kourier's actual cluster network path.
-# The token is read from a Secret volume and passed to curl's stdin config, never its argv or logs.
-probe_ax_agents() {
-  local pod=probe-ax-${RANDOM} phase deadline=$((SECONDS + 300))
-  sed -e "s/@NAME@/${pod}/g" -e "s|@CURL_IMAGE@|${CURL_IMAGE}|g" "${HERE}/ax/probe.yaml" | "${K[@]}" apply -f - >/dev/null
-  while :; do
-    phase=$("${K[@]}" -n agent-kourier get pod "${pod}" -o jsonpath='{.status.phase}') || phase=Failed
-    case "${phase}" in
-      Succeeded) delete_agentkourier_pod "${pod}"; return 0 ;;
-      Failed) break ;;
-    esac
-    [ "${SECONDS}" -lt "${deadline}" ] || break
-    sleep 2
-  done
-  "${K[@]}" -n agent-kourier logs "${pod}" --tail=5 >&2 || true
-  delete_agentkourier_pod "${pod}"
-  die "AX agents did not answer authenticated card requests through the router"
-}
-
-# settle_ax_tier: use the full tier's bounded kind-network recovery when ingress is not reachable.
-settle_ax_tier() {
-  local attempt
-  for attempt in 1 2 3; do
-    if (probe_ax_agents); then return 0; fi
-    [ "${attempt}" -lt 3 ] || break
-    echo "AX ingress did not settle (try ${attempt}); restarting kindnet" >&2
-    "${K[@]}" -n kube-system rollout restart ds/kindnet >/dev/null
-    "${K[@]}" -n kube-system rollout status ds/kindnet --timeout=120s >/dev/null
-  done
-  die "AX ingress never settled after kind network recovery"
 }

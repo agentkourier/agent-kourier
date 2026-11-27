@@ -1,70 +1,61 @@
-{{/*
-What is the AX add-on's own (addons.ax), an ADK agent on Amazon Bedrock or the Anthropic API that serves A2A: the model it runs on, and the
-provider's credentials. Everything else it renders is the add-ons' common templates, in templates/addons/_addon.tpl, which says what each
-define here is for.
-*/}}
-
 {{- define "agentkourier.addon.ax.spec" -}}
 description: |-
-  The AX add-on: an ADK agent on Amazon Bedrock or the Anthropic API that serves A2A, which Agent Kourier reaches through the Service of the
-  same name. It runs standalone (RUNNER_URL unset): the AX route's runner is not in this pod.
+  The AX add-on launches AX Tasks and receives command results over HTTPS callbacks.
 egress:
-  key: model
-  comment: "The model's provider over TLS: Amazon Bedrock (and, with IRSA, AWS STS), or the Anthropic API."
-  name: the rule for the model's provider
+  key: server
+  comment: The private AX control plane.
+  name: the AX control plane
 serviceAccount:
-  comment: Its annotations (addons.ax.serviceAccount.annotations) are where IRSA's role goes, for the AWS SDK's default chain.
+  comment: Optional annotations for the add-on's ServiceAccount.
 {{- end -}}
 
 {{- define "agentkourier.addon.ax.validate" -}}
-{{- $ax := .ctx.Values.addons.ax -}}
-{{- if not $ax.model.name -}}
-{{- fail "addons.ax.enabled needs addons.ax.model.name: the model the agent runs on (MODEL_NAME), a Bedrock model ID or inference profile with bedrock, an Anthropic model ID with anthropic" -}}
+{{- $ctx := .ctx -}}
+{{- $ax := $ctx.Values.addons.ax -}}
+{{- $_ := required "addons.ax.enabled needs addons.ax.server.address" $ax.server.address -}}
+{{- $_ := required "addons.ax.enabled needs addons.ax.taskTemplate.configMap.name" $ax.taskTemplate.configMap.name -}}
+{{- $_ := required "addons.ax.enabled needs addons.ax.taskTemplate.configMap.key" $ax.taskTemplate.configMap.key -}}
+{{- $_ := required "addons.ax.enabled needs addons.ax.resultCallback.tokenSecret.name" $ax.resultCallback.tokenSecret.name -}}
+{{- $_ := required "addons.ax.enabled needs addons.ax.resultCallback.tokenSecret.key" $ax.resultCallback.tokenSecret.key -}}
+{{- if eq $ax.auth.tokenSecret.name $ax.resultCallback.tokenSecret.name -}}
+{{- fail "addons.ax.resultCallback.tokenSecret must name a separate Secret from addons.ax.auth.tokenSecret" -}}
 {{- end -}}
-{{- if eq $ax.model.provider "anthropic" -}}
-{{- if $ax.model.region -}}
-{{- fail "addons.ax.model.region is for addons.ax.model.provider bedrock: the Anthropic API has no region, and the add-on refuses MODEL_REGION with anthropic" -}}
+{{- if $ctx.Values.rbac.create -}}
+{{- if has $ctx.Release.Namespace $ctx.Values.rbac.secretNamespaces -}}
+{{- fail "the AX callback Secret needs name-scoped broker Secret grants in the release namespace; use rbac.secretNames" -}}
 {{- end -}}
-{{- if or $ax.bedrock.apiKeySecret.name $ax.bedrock.apiKeySecret.key -}}
-{{- fail "addons.ax.bedrock.apiKeySecret is for addons.ax.model.provider bedrock: with anthropic the key is addons.ax.anthropicApiKeySecret" -}}
+{{- $grants := include "agentkourier.secretNames" $ctx | fromJson -}}
+{{- if has $ax.resultCallback.tokenSecret.name (default (list) (get $grants $ctx.Release.Namespace)) -}}
+{{- fail "the AX callback Secret must be omitted from broker Secret references and rbac.secretNames" -}}
 {{- end -}}
-{{- if not (and $ax.anthropicApiKeySecret.name $ax.anthropicApiKeySecret.key) -}}
-{{- fail "addons.ax.model.provider anthropic needs addons.ax.anthropicApiKeySecret.name and addons.ax.anthropicApiKeySecret.key: the Secret, in the release namespace, that holds the Anthropic API key" -}}
 {{- end -}}
-{{- else -}}
-{{- if not $ax.model.region -}}
-{{- fail "addons.ax.model.provider bedrock needs addons.ax.model.region: the AWS region the add-on calls Amazon Bedrock in (MODEL_REGION)" -}}
+{{- if not (regexMatch "^https://[^/?#@]+/ax/results/v1$" $ax.resultCallback.url) -}}
+{{- fail "addons.ax.resultCallback.url must be an HTTPS URL ending in /ax/results/v1" -}}
 {{- end -}}
-{{- if or $ax.anthropicApiKeySecret.name $ax.anthropicApiKeySecret.key -}}
-{{- fail "addons.ax.anthropicApiKeySecret is for addons.ax.model.provider anthropic: with bedrock the key, if any, is addons.ax.bedrock.apiKeySecret" -}}
+{{- if $ctx.Values.networkPolicy.enabled -}}
+{{- if not $ax.networkPolicy.server.to -}}
+{{- fail "networkPolicy.enabled needs addons.ax.networkPolicy.server.to when the AX add-on is enabled" -}}
 {{- end -}}
-{{- if ne (empty $ax.bedrock.apiKeySecret.name) (empty $ax.bedrock.apiKeySecret.key) -}}
-{{- fail "addons.ax.bedrock.apiKeySecret needs both name and key: the Secret, in the release namespace, and its key, that hold the Bedrock API key. Leave both empty to take AWS credentials from the SDK's default chain (addons.ax.serviceAccount.annotations for IRSA, or EKS Pod Identity)" -}}
+{{- if not $ax.networkPolicy.callbackFrom -}}
+{{- fail "networkPolicy.enabled needs addons.ax.networkPolicy.callbackFrom when the AX add-on is enabled" -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
 
 {{- define "agentkourier.addon.ax.env" -}}
 {{- $ax := .ctx.Values.addons.ax -}}
-{{- $anthropic := eq $ax.model.provider "anthropic" -}}
-- {name: MODEL_PROVIDER, value: {{ $ax.model.provider | quote }}}
-{{- if not $anthropic }}
-- {name: MODEL_REGION, value: {{ $ax.model.region | quote }}}
-{{- end }}
-- {name: MODEL_NAME, value: {{ $ax.model.name | quote }}}
-{{- if $anthropic }}
-{{- /* The Anthropic SDK reads the key from this variable. */}}
-- name: ANTHROPIC_API_KEY
-  valueFrom: {secretKeyRef: {name: {{ $ax.anthropicApiKeySecret.name | quote }}, key: {{ $ax.anthropicApiKeySecret.key | quote }}}}
-{{- else }}
-{{- /* Without a Bedrock API key the AWS SDK's default chain finds the credentials: IRSA or EKS Pod Identity, through the ServiceAccount. */}}
-{{- with $ax.bedrock.apiKeySecret }}
-{{- if .name }}
-- name: AWS_BEARER_TOKEN_BEDROCK
-  valueFrom: {secretKeyRef: {name: {{ .name | quote }}, key: {{ .key | quote }}}}
-{{- end }}
-{{- end }}
-{{- end }}
+- {name: AX_ADDR, value: {{ $ax.server.address | quote }}}
+- {name: AX_ATESPACE, value: {{ $ax.atespace | quote }}}
+- {name: AX_LAUNCHER_ID, value: {{ default (include "agentkourier.addon.fullname" .) $ax.launcherId | quote }}}
+- {name: AX_TASK_TEMPLATE, value: /etc/agent-kourier-ax/task/task.yaml}
+- {name: AX_RESULT_URL, value: {{ $ax.resultCallback.url | quote }}}
+- {name: AX_RESULT_TOKEN_FILE, value: /etc/agent-kourier-ax/result/token}
+- {name: AX_PROMPT_KEY, value: {{ $ax.promptKey | quote }}}
+- {name: AX_HISTORY, value: {{ $ax.history | quote }}}
+- {name: AX_MAX_RUNNING, value: {{ $ax.maxRunning | quote }}}
+- {name: AX_POLL_INTERVAL, value: {{ $ax.pollInterval | quote }}}
+- {name: AX_TURN_TIMEOUT, value: {{ $ax.turnTimeout | quote }}}
+- {name: AX_KEEP_FAILED, value: {{ $ax.keepFailed | quote }}}
 {{- end -}}
 
 {{- define "agentkourier.addon.ax.settingsEnv" -}}

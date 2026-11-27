@@ -25,11 +25,13 @@ import (
 // task, marks nothing.
 type replayHandler struct {
 	a2asrv.RequestHandler
-	store     Store
-	tel       *telemetry.Telemetry
-	validator MessageValidator // nil: every message reaches the backend
-	life      context.Context  // ends with the add-on's stop, which ends a stream that outlived its request
-	contexts  *keyLock[string] // by context ID: held for a touch, and by the upkeep while it releases the context
+	store           Store
+	tel             *telemetry.Telemetry
+	admission       MessageAdmission
+	cancelAdmission CancelAdmission
+	validator       MessageValidator // nil: every message reaches the backend
+	life            context.Context  // ends with the add-on's stop, which ends a stream that outlived its request
+	contexts        *keyLock[string] // by context ID: held for a touch, and by the upkeep while it releases the context
 
 	sending keyLock[string] // by message ID: held by a send between its lookup and its first event
 }
@@ -67,6 +69,21 @@ func (h *replayHandler) SendStreamingMessage(ctx context.Context, req *a2a.SendM
 		if err := h.checkMessage(ctx, req.Message); err != nil {
 			yield(nil, err)
 			return
+		}
+		if h.admission != nil {
+			release, err := h.admission.AdmitMessage(ctx, req.Message)
+			if err != nil {
+				if errors.Is(err, ErrBusy) {
+					err = a2a.ErrUnsupportedOperation
+				}
+				yield(nil, err)
+				return
+			}
+			if release != nil {
+				slot := &reservation{release: release}
+				defer slot.releaseUnclaimed()
+				ctx = context.WithValue(ctx, reservationKey{}, slot)
+			}
 		}
 		if err := h.touch(ctx, req.Message); err != nil {
 			yield(nil, err)
@@ -132,8 +149,7 @@ func settledOrPaused(task *a2a.Task) bool {
 }
 
 // checkMessage refuses a new message, or an answer to a paused task, that the backend's MessageValidator does not
-// accept, with a2a.ErrInvalidParams. A message for a task the caller does not have, or one that is not paused, is the
-// inner handler's to answer.
+// accept. A message for a task the caller does not have, or one that is not paused, is the inner handler's to answer.
 func (h *replayHandler) checkMessage(ctx context.Context, msg *a2a.Message) error {
 	if h.validator == nil {
 		return nil
@@ -147,6 +163,10 @@ func (h *replayHandler) checkMessage(ctx context.Context, msg *a2a.Message) erro
 		paused = task
 	}
 	if err := h.validator.ValidateMessage(ctx, msg, paused); err != nil {
+		if errors.Is(err, ErrBusy) {
+			// The broker interprets A2A -32004 as a temporary refusal.
+			return a2a.ErrUnsupportedOperation
+		}
 		if !errors.Is(err, a2a.ErrInvalidParams) {
 			err = fmt.Errorf("%w: %w", a2a.ErrInvalidParams, err)
 		}
@@ -185,6 +205,34 @@ func (h *replayHandler) touch(ctx context.Context, msg *a2a.Message) error {
 	}
 	defer unlock()
 	return h.store.TouchContext(ctx, contextID)
+}
+
+// CancelTask checks the durable backend decision before the SDK can change
+// the task or attribute the execution outcome to a cancellation.
+func (h *replayHandler) CancelTask(ctx context.Context, req *a2a.CancelTaskRequest) (*a2a.Task, error) {
+	admitted := false
+	if h.cancelAdmission != nil && req != nil && req.ID != "" {
+		task, err := h.GetTask(ctx, &a2a.GetTaskRequest{ID: req.ID})
+		if err != nil {
+			return nil, err
+		}
+		if !task.Status.State.Terminal() {
+			if err := h.cancelAdmission.AdmitCancel(ctx, task); err != nil {
+				return nil, err
+			}
+			admitted = true
+		}
+	}
+	task, err := h.RequestHandler.CancelTask(ctx, req)
+	if admitted && errors.Is(err, a2a.ErrTaskNotCancelable) {
+		// The durable cancellation can reach the executor and settle before
+		// the SDK handles this request. Only the admitted request gets success.
+		current, readErr := h.GetTask(ctx, &a2a.GetTaskRequest{ID: req.ID})
+		if readErr == nil && current.Status.State == a2a.TaskStateCanceled {
+			return current, nil
+		}
+	}
+	return task, err
 }
 
 // SubscribeToTask follows a task of the call's caller. a2a-go finds a running execution by task ID alone, with no

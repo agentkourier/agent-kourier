@@ -171,7 +171,7 @@ func TestExportFailureKeepsTheCollectorsText(t *testing.T) {
 	}
 }
 
-// A spec whose name or calls' name cannot be part of a metric and a span name, or that leaves a help text out, is
+// A spec whose name or calls' name cannot be part of a metric and a span name, or that leaves required help text out, is
 // refused.
 func TestNewRefusesABadSpec(t *testing.T) {
 	for name, change := range map[string]func(*Spec){
@@ -182,7 +182,6 @@ func TestNewRefusesABadSpec(t *testing.T) {
 		"no calls":          func(s *Spec) { s.Calls = "" },
 		"calls with a dash": func(s *Spec) { s.Calls = "back-end" },
 		"no turns help":     func(s *Spec) { s.TurnsHelp = "" },
-		"no operation help": func(s *Spec) { s.OperationHelp = "" },
 		"no auth help":      func(s *Spec) { s.AuthRefusedHelp = "" },
 	} {
 		s := spec()
@@ -191,6 +190,20 @@ func TestNewRefusesABadSpec(t *testing.T) {
 			t.Errorf("%s: New accepted %+v", name, s)
 		}
 	}
+}
+
+func TestOperationHistogramCanBeOmitted(t *testing.T) {
+	cfg := spec()
+	cfg.OperationHelp = ""
+	tel, err := New(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tel.duration != nil {
+		t.Fatal("operation histogram was allocated")
+	}
+	_, call := tel.StartCall(t.Context(), "query")
+	call.End("success")
 }
 
 // Every metric is registered under the spec's name, and each recorder moves it.

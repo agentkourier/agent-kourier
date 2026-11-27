@@ -3,11 +3,13 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"iter"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -163,6 +165,47 @@ func TestARefusedNewMessageStartsNoTurn(t *testing.T) {
 			}
 		})
 	}
+}
+
+type capacityValidator struct {
+	*scripted
+	busy atomic.Bool
+}
+
+func (b *capacityValidator) ValidateMessage(_ context.Context, _ *a2a.Message, _ *a2a.Task) error {
+	if b.busy.Load() {
+		return fmt.Errorf("at capacity: %w", ErrBusy)
+	}
+	return nil
+}
+
+func TestABusyMessageCanBeRetriedWithTheSameID(t *testing.T) {
+	st := newFakeStore()
+	b := &capacityValidator{scripted: &scripted{}}
+	b.busy.Store(true)
+	s := serveHandler(t, st, b)
+	c := s.client(t, auth.Caller)
+	msg := message("m1", "done", "c1", "")
+
+	if _, err := send(t, c, msg); !errors.Is(err, a2a.ErrUnsupportedOperation) {
+		t.Fatalf("busy send = %v, want A2A -32004", err)
+	}
+	if n := b.turnCount(); n != 0 {
+		t.Fatalf("backend ran %d turns while busy, want none", n)
+	}
+	if got := st.touchedContexts(); len(got) != 0 {
+		t.Fatalf("busy send marked contexts %v active, want none", got)
+	}
+
+	b.busy.Store(false)
+	done, err := send(t, c, msg)
+	if err != nil || done.Status.State != a2a.TaskStateCompleted {
+		t.Fatalf("retry = %+v, %v; want a completed task", done, err)
+	}
+	if n := b.turnCount(); n != 1 {
+		t.Fatalf("backend ran %d turns after retry, want 1", n)
+	}
+	wantMetric(t, s.tel, "agentkourier_kit_message_replays_total", "0")
 }
 
 // An answer the backend's MessageValidator refuses is refused with invalid params before the turn starts: the task stays
@@ -408,5 +451,41 @@ func TestTheRequestsEndEndsTheStreamOnceTheFirstEventHasCome(t *testing.T) {
 	case <-inner.ended:
 	case <-time.After(time.Second):
 		t.Fatal("the stream outlived its request after the first event")
+	}
+}
+
+type cancelAdmissionFunc func(context.Context, *a2a.Task) error
+
+func (f cancelAdmissionFunc) AdmitCancel(ctx context.Context, task *a2a.Task) error {
+	return f(ctx, task)
+}
+
+type settledCancelHandler struct {
+	a2asrv.RequestHandler
+	task a2a.Task
+}
+
+func (h *settledCancelHandler) GetTask(context.Context, *a2a.GetTaskRequest) (*a2a.Task, error) {
+	task := h.task
+	return &task, nil
+}
+
+func (h *settledCancelHandler) CancelTask(context.Context, *a2a.CancelTaskRequest) (*a2a.Task, error) {
+	return nil, a2a.ErrTaskNotCancelable
+}
+
+func TestAdmittedCancellationReturnsTheAlreadySettledTask(t *testing.T) {
+	inner := &settledCancelHandler{task: a2a.Task{ID: "task", Status: a2a.TaskStatus{State: a2a.TaskStateWorking}}}
+	h := &replayHandler{RequestHandler: inner, cancelAdmission: cancelAdmissionFunc(func(context.Context, *a2a.Task) error {
+		inner.task.Status.State = a2a.TaskStateCanceled
+		return nil
+	})}
+	req := &a2a.CancelTaskRequest{ID: inner.task.ID}
+	task, err := h.CancelTask(t.Context(), req)
+	if err != nil || task == nil || task.Status.State != a2a.TaskStateCanceled {
+		t.Fatalf("admitted cancellation = %v, %v", task, err)
+	}
+	if _, err := h.CancelTask(t.Context(), req); !errors.Is(err, a2a.ErrTaskNotCancelable) {
+		t.Fatalf("later cancellation = %v, want task not cancelable", err)
 	}
 }

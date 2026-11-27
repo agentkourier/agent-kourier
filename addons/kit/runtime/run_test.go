@@ -304,11 +304,18 @@ func TestAStopCutsTheRunningTurnsShortBeforeTheStoreCloses(t *testing.T) {
 	b := noting{scripted: &scripted{started: make(chan string, 1)}, st: st}
 	r := startRun(t, testAddon(st, b), nil, Options{})
 	c := clientOf(t, r.base, fakeToken)
+	waitUntil(t, "ready", func() bool { return status(r.base+"/readyz") == http.StatusOK })
 	ctx, hangUp := context.WithCancel(t.Context())
+	defer hangUp()
 	ids := make(chan a2a.TaskID, 1)
+	streamErr := make(chan error, 1)
 	go func() {
 		for ev, err := range c.SendStreamingMessage(ctx, &a2a.SendMessageRequest{Message: message("m1", "hold", "c1", "")}) {
-			if err == nil && taskOf(ev) != "" {
+			if err != nil {
+				streamErr <- err
+				return
+			}
+			if taskOf(ev) != "" {
 				select {
 				case ids <- taskOf(ev):
 				default:
@@ -316,8 +323,19 @@ func TestAStopCutsTheRunningTurnsShortBeforeTheStoreCloses(t *testing.T) {
 			}
 		}
 	}()
-	id := <-ids
-	<-b.started
+	var id a2a.TaskID
+	select {
+	case id = <-ids:
+	case err := <-streamErr:
+		t.Fatalf("stream ended before the turn started: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("stream did not report a task ID")
+	}
+	select {
+	case <-b.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("backend did not start the turn")
+	}
 	hangUp() // the turn runs on: a2a-go runs it detached from its request
 	if err := r.stop(t); err != nil {
 		t.Fatalf("Run = %v", err)
@@ -587,3 +605,29 @@ func (h *hooks) Restore(context.Context) error {
 }
 
 func (h *hooks) Interrupted(_ context.Context, settled store.Settlement) { h.told <- settled }
+
+type closingBackend struct {
+	*scripted
+	st *fakeStore
+}
+
+func (b closingBackend) Close() error {
+	b.st.note("close backend")
+	return nil
+}
+
+func TestTheBackendClosesBeforeLeaseRelease(t *testing.T) {
+	st := newFakeStore()
+	backend := closingBackend{scripted: &scripted{}, st: st}
+	r := startRun(t, testAddon(st, backend), map[string]string{
+		"STORE": "postgres", "POSTGRES_DSN": "postgres://u:fake-password@db/kit",
+		"ADVERTISE_URL": "http://127.0.0.1:1", "POD_NAME": "kit-a", "SQLITE_PATH": "",
+	}, Options{})
+	waitUntil(t, "ready", func() bool { return status(r.base+"/readyz") == http.StatusOK })
+	if err := r.stop(t); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.events(); !slices.Equal(got, []string{"close backend", "release", "close"}) {
+		t.Fatalf("shutdown order = %q", got)
+	}
+}

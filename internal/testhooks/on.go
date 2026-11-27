@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 )
 
 // armed is read once, at startup, and never changed.
@@ -52,6 +53,14 @@ type Overrides struct {
 // SlackAPIURL returns o.SlackAPIURL if it is set, and AGENTKOURIER_SLACK_API_URL otherwise, to point Agent Kourier at the
 // fake Slack.
 func SlackAPIURL(o Overrides) string { return cmp.Or(o.SlackAPIURL, os.Getenv(SlackAPIURLEnv)) }
+
+// AgentStreamTimeout shortens the stream watchdog in the AX kind tier.
+func AgentStreamTimeout() time.Duration {
+	if d, err := time.ParseDuration(os.Getenv("AGENTKOURIER_TEST_AGENT_STREAM_TIMEOUT")); err == nil && d > 0 {
+		return d
+	}
+	return 0
+}
 
 // Teams returns the fake Microsoft Teams service that AGENTKOURIER_TEAMS_URL names (o.TeamsURL in a unit test), and false when
 // neither is set, which leaves a Teams connection talking to Microsoft. The URL is the fake's https base, with no path: its

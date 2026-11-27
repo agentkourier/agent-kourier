@@ -57,10 +57,11 @@ case "${tier}" in
 esac
 # The full tier's agents are reached with the Binding's Dex ID token, which lasts 24 hours: make a fresh one for
 # the run, so that a tier that has been up a day does not fail on a token that expired.
-[ "${tier}" = fast ] || refresh_dex_token
+if [ "${tier}" = full ]; then
+  refresh_dex_token
+fi
 if [ "${tier}" = ax ]; then
-  "${K[@]}" -n e2e rollout status deploy/ax-gates --timeout=540s
-  settle_ax_tier
+  E2E_RUN=${E2E_RUN:-^TestAX_}
 fi
 
 BUILD=$(mktemp -d)
@@ -117,7 +118,7 @@ runner_admission "${BUILD}/admission"
 case "${tier}" in
   fast) gate_url=http://stubagent.e2e.svc.cluster.local:8080 ;;
   full) gate_url=http://scenariollm.kagent.svc.cluster.local:8080 ;;
-  ax) gate_url=http://ax-gates.e2e.svc.cluster.local:8080 ;;
+  ax) gate_url=http://stubagent.e2e.svc.cluster.local:8080 ;;
 esac
 sed -e "s/@TIER@/${tier}/" -e "s|@STUB_URL@|${gate_url}|" -e "s/@CONFIG_SOURCE@/${config_source}/" -e "s/@PHASE@/${E2E_PHASE:-}/" -e "s/@SLACK_MODE@/${slack_mode}/" "${HERE}/e2e/runner.yaml" |
   { if [ -n "${E2E_RUN:-}" ]; then sed -e "s#-test.run=[^\"]*#-test.run=${E2E_RUN}#"; else cat; fi; } |

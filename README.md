@@ -19,7 +19,7 @@ its tools and task logic.
 An [add-on](docs/explanation/add-ons.md) is an optional component released with Agent Kourier
 and run by its chart. It is either an A2A front for an agent that has none, or an agent of its
 own. Two ship today: the Claude Managed Agents add-on fronts an agent in Claude Managed Agents,
-and the AX add-on is an agent on Amazon Bedrock or the Anthropic API.
+and the AX add-on launches agent commands in Google AX Tasks.
 
 Slack is the supported platform. Two more arrived in 0.6.0, both experimental, and a broker of 0.5.x
 refuses either:
@@ -125,8 +125,7 @@ Without a broker, each of these is code in every agent that talks to chat:
   block of the chart. The Claude Managed Agents add-on (experimental) is an A2A server in front
   of an agent in Claude Managed Agents: each thread is a session of the agent, and a tool call
   whose permission policy asks first waits on Approve and Deny in the thread. The AX add-on
-  (experimental) is an ADK agent on Amazon Bedrock or the Anthropic API: a question it asks with
-  its one tool, `ask_user`, waits for a reply in the thread. See
+  (experimental) runs a Task for each accepted turn and reports its result in the thread. See
   [Add-ons](docs/explanation/add-ons.md),
   [Connect Claude Managed Agents](docs/how-to/connect-claude-managed-agents.md) and
   [Connect the AX add-on](docs/how-to/connect-ax.md).
@@ -288,7 +287,7 @@ other bots, and the [trigger reference](docs/reference/chat-triggers.md) has the
 | Agent backend | kagent 1.0, `kagent-v1` dialect, with structured questions and optional Slack tool approvals. Tested against 1.0.0-alpha5. Needs a cluster that serves the pod-certificate APIs, which managed EKS through 1.36 cannot; see [Connect a kagent agent](docs/how-to/connect-kagent.md) | Implemented |
 | Agent backend | Any A2A agent, 1.0 or 0.3, whose card advertises streaming and a JSON-RPC interface, `a2a` dialect. Questions arrive as text, or as kagent's structured questions and tool approvals when the card lists its human-in-the-loop extension | Implemented |
 | Agent backend | kagent 0.9.x, `a2a` dialect over A2A 0.3. Tested against 0.9.4 on a real cluster. It has no task list, so a resend can run a turn twice, and the dialect shows its tool calls as step cards. See [Connect a kagent agent](docs/how-to/connect-kagent.md) | Implemented |
-| Agent backend | The AX add-on, through the `a2a` dialect: an ADK agent on Amazon Bedrock or the Anthropic API, with one tool, `ask_user`, whose question the thread answers. The chart runs it beside Agent Kourier (`addons.ax`), or it runs inside Google AX as a Task. Tested on two Postgres replicas through a leader's failover on a build before the release (22 and 23 November 2026). Its routes to Bedrock through an IAM role (IRSA, EKS Pod Identity) have not been tested on EKS. See [Connect the AX add-on](docs/how-to/connect-ax.md) | Experimental |
+| Agent backend | The AX add-on launches Google AX Tasks from an operator-supplied template and receives their results over HTTPS. See [Connect the AX add-on](docs/how-to/connect-ax.md) | Experimental |
 | Agent backend | Claude Managed Agents, through the add-on the chart runs beside Agent Kourier (`addons.cma`) and the `a2a` dialect: a session per thread, tool calls as step cards, and `always_ask` tool calls as Approve and Deny. Tested against a self-hosted environment with a Haiku agent, and on two Postgres replicas through a leader's failover on a build before the release (22 and 23 November 2026); cloud environments are untested. See [Connect Claude Managed Agents](docs/how-to/connect-claude-managed-agents.md) | Experimental |
 | Alert source | Alertmanager, through the message it posts to Slack (`botMessage` trigger, written in full) | Implemented |
 | Alert source | Alertmanager on Microsoft Teams, through the card its `msteamsv2` receiver posts to a Workflows webhook, read through Microsoft Graph. Needs 0.6.0 or later. See [Configure Microsoft Teams](docs/how-to/configure-teams.md#send-alertmanager-alerts-to-a-channel) | Experimental |
@@ -343,15 +342,9 @@ works and what a failover can still repeat.
 
 ## Using Google AX
 
-Agent Kourier speaks A2A to an agent you run inside an AX Task, through AX's router, with
-the generic `a2a` dialect. It does not call AX's own API or manage the Task.
-
-The [AX add-on](addons/ax/README.md) is such an agent: an ADK agent on Amazon Bedrock or the
-Anthropic API. It runs in an AX Task, or beside Agent Kourier, run by the chart.
-
-[Connect the AX add-on](docs/how-to/connect-ax.md) covers both routes. For AX it covers the
-image, the egress and template, the token verification, the TLS gateway and an acceptance
-procedure. Support is experimental.
+Agent Kourier uses the generic `a2a` dialect to reach the [AX add-on](addons/ax/README.md).
+The add-on runs a command in Google AX from a Task template and returns the result to the
+same Slack thread. See [Connect the AX add-on](docs/how-to/connect-ax.md).
 
 ## Development
 
