@@ -143,25 +143,54 @@ jobs:
           if-no-files-found: error
 
   # External links in docs/.
+  #
+  # A link to a file or directory of this repository (github.com/agentkourier/agent-kourier/blob/main/... or
+  # .../tree/main/...) is checked in the checkout, not over HTTP: --remap turns it into a file:// path. So a pull
+  # request is checked against its own tree, and github.com is not asked for some forty pages at once, a few of which
+  # it used to answer with a 503.
+  #
+  # The check runs in up to two passes, because lychee 0.24.2 retries a timeout and a 429 (--max-retries) but not a
+  # 5xx response. The first pass does not fail the job. When it finds a failing link, the second pass runs a minute
+  # later and its result is the job's. --cache keeps the links that passed in .lycheecache between the two (lychee
+  # writes no failure to that file), so the second pass requests only the links that failed. A link that is broken
+  # fails both passes, and the job.
   links:
     runs-on: ubuntu-26.04
     timeout-minutes: 10
+    env:
+      LYCHEE_ARGS: >-
+        --no-progress
+        --cache
+        --max-retries 3
+        --fallback-extensions md
+        --remap '^https://github\.com/agentkourier/agent-kourier/(?:blob|tree)/main/(.*)$ file://${{ github.workspace }}/$1'
+        --exclude '\.svc\.cluster\.local'
+        --exclude-path docs/brand
+        --exclude-path docs/spikes
+        --exclude '^https://api\.slack\.com/apps'
+        'docs/**/*.md'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+      - id: first-pass
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          fail: false
+          args: ${{ env.LYCHEE_ARGS }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Wait before the second pass
+        if: steps.first-pass.outputs.exit_code != '0'
+        run: |
+          echo "::notice::The first pass found failing links (its report is in the job summary); checking them again in 60 seconds."
+          sleep 60
+      - name: Second pass
+        if: steps.first-pass.outputs.exit_code != '0'
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:
           fail: true
-          args: >-
-            --no-progress
-            --max-retries 3
-            --fallback-extensions md
-            --exclude '\.svc\.cluster\.local'
-            --exclude-path docs/brand
-            --exclude-path docs/spikes
-            --exclude '^https://api\.slack\.com/apps'
-            'docs/**/*.md'
+          args: ${{ env.LYCHEE_ARGS }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
