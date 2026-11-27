@@ -1,8 +1,10 @@
 # Choose a config route
 
 Agent Kourier reads its `ChatConnection`, `AgentBackend` and `Binding` resources from one of two places, chosen when the
-broker starts. This page says what each route does and how they differ when something is wrong, so that you can choose. Both are
-supported. [Move the config between a ConfigMap and custom resources](../how-to/migrate-config-source.md) is the how-to.
+broker starts. Both are supported. This page says what each route does and how they differ when something is wrong, so
+that you can choose.
+
+[Move the config between a ConfigMap and custom resources](../how-to/migrate-config-source.md) is the how-to.
 
 ## The two routes
 
@@ -19,26 +21,32 @@ supported. [Move the config between a ConfigMap and custom resources](../how-to/
 | Unknown fields | The loader refuses the file | The API server refuses them at apply, or drops them; the broker ignores one its own types lack (see below) |
 | A change is read | At the next check of the files, every 10 seconds, and the chart rolls the pod when its ConfigMap changes | At the next check, every 10 seconds |
 
-A change that is read is not always applied then. The broker builds the platform of its own ChatConnection when it starts and when a
-replica takes the lead, so an edit to that connection's `spec.teams` or `spec.webhook` applies when Agent Kourier
-restarts: on files that is the chart's roll (unless `config.existingConfigMap` is set or `config.rollOnChange` is `false`), and on
-custom resources a restart of the Deployment. Until then the leader logs, once for each edit of `spec.webhook` or `spec.teams` it
-reads that leaves the spec other than the one the connection runs on, a WARN that names the connection in its `connection` attribute:
-`chat connection: its spec.webhook was edited, and the running connection still uses the spec.webhook it started with; a restart of the broker applies the edit`
-for `spec.webhook`, and
-`chat connection: its spec.teams was edited, and the running connection still uses the spec.teams it started with; a restart of the broker applies the edit`
-for `spec.teams`, where `mode: http` written out or taken out is the same mode and no edit.
-A team connection restarts by itself when its ChatConnection changes.
+A change that is read is not always applied then. The broker builds the platform of its own ChatConnection when it
+starts and when a replica takes the lead. So an edit to that connection's `spec.teams` or `spec.webhook` applies
+when Agent Kourier restarts:
+
+- on files, that is the chart's roll (unless `config.existingConfigMap` is set or `config.rollOnChange` is `false`)
+- on custom resources, a restart of the Deployment
+
+Until then the leader logs a WARN that names the connection in its `connection` attribute. It logs it once for each edit
+of `spec.webhook` or `spec.teams` it reads that leaves the spec other than the one the connection runs on:
+
+- for `spec.webhook`: `chat connection: its spec.webhook was edited, and the running connection still uses the spec.webhook it started with; a restart of the broker applies the edit`
+- for `spec.teams`: `chat connection: its spec.teams was edited, and the running connection still uses the spec.teams it started with; a restart of the broker applies the edit`
+
+For `spec.teams`, `mode: http` written out or taken out is the same mode and no edit. A team connection restarts by
+itself when its ChatConnection changes.
 
 The two are never merged and there is no fallback. A broker on `files` ignores any custom resources in the cluster, and a broker on
 `crds` has no config directory. The route is chosen at start: a reload cannot change it, so moving is an upgrade of the release.
 
 ### Which to choose
 
-Use custom resources for an install that is meant to last on Kubernetes, and when several teams each write their own Bindings. This is the chart's default.
-One team's typo then leaves the others serving, each team can
-see what became of its Binding without the operator's log, and RBAC decides who may write what. The price is the grants above, a
-Kubernetes of 1.33 or later, and the need to think about who may write which object (see
+Use custom resources for an install that is meant to last on Kubernetes, and when several teams each write their own
+Bindings. This is the chart's default.
+
+One team's typo then leaves the others serving, each team can see what became of its Binding without the operator's
+log, and RBAC decides who may write what. The price is the grants above, a Kubernetes of 1.33 or later, and the need to think about who may write which object (see
 [What the people who write these objects can do](security.md#what-the-people-who-write-these-objects-can-do)).
 
 Use files for a proof of concept, or when one team writes all the config. One reviewed ConfigMap is one artifact, a mistake is caught before anything serves it,
@@ -50,8 +58,10 @@ Both routes run the same code on each object: the same defaults, the same valida
 (the files refuse it, the broker ignores it on custom resources: see [Unknown fields](#unknown-fields)), and in what
 they do with a failure.
 
-**Files are all or nothing.** One resource that does not load fails the config. At start the broker exits with code 2 and names the
-file and field. On a reload it keeps the last good config, logs `config reload failed; keeping the last good snapshot` and sets
+**Files are all or nothing.** One resource that does not load fails the config. At start the broker exits with code 2
+and names the file and field.
+
+On a reload it keeps the last good config, logs `config reload failed; keeping the last good snapshot` and sets
 `agentkourier_config_stale` to 1. A reload whose directory no longer holds just the ChatConnection the broker started with is refused in the
 same way ([Which ChatConnections a broker serves](#which-chatconnections-a-broker-serves)). One owner and one reviewed artifact make that an honest rule.
 
@@ -82,11 +92,16 @@ Only a Binding has a status. An invalid AgentBackend or ChatConnection shows in 
 
 ### Who holds a channel
 
-On both routes one channel of a ChatConnection takes one Binding. On files two claims fail the whole config: the broker will not start, or a
-reload is refused, and the error names the Binding that already holds the channel. On custom resources the older Binding, by `creationTimestamp` and then by
+On both routes one channel of a ChatConnection takes one Binding. On files two claims fail the whole config: the broker
+will not start, or a reload is refused, and the error names the Binding that already holds the channel.
+
+On custom resources the older Binding, by `creationTimestamp` and then by
 namespace and name, holds the channel, and the other is not served and says `ChannelConflict`. A later Binding cannot take a channel from an older one.
 
-**Age alone decides.** An older Binding that is edited onto a younger one's channel displaces it, and so does an older Binding whose broken reference heals. A reply in a thread that the displaced Binding started, or one already queued, gets "This thread's agent is no longer set up, so I can't pass your messages on." A new mention in the channel is answered by the Binding that holds it now.
+**Age alone decides.** An older Binding that is edited onto a younger one's channel displaces it, and so does an older
+Binding whose broken reference heals.
+
+A reply in a thread that the displaced Binding started, or one already queued, gets "This thread's agent is no longer set up, so I can't pass your messages on." A new mention in the channel is answered by the Binding that holds it now.
 
 ### What the custom resource route does not promise
 
@@ -94,22 +109,24 @@ namespace and name, holds the channel, and the other is not served and says `Cha
   out until it is fixed. With two replicas the replicas can then disagree: the one that has run since before the edit serves the last good generation,
   and the other serves nothing for it. A failover during such a time takes the Binding out of routing, and can change which Binding holds a channel.
 - **An AgentBackend has no status.** Its owner is not told when an edit is refused by the broker, only the Bindings that use it. An edit that narrows
-  `allowedNamespaces` and is refused leaves the old, wider list in force. A schema refusal comes back at apply; a refusal that only the
+  `allowedNamespaces` and is refused leaves the old, wider list in force. A schema refusal comes back at apply. A refusal that only the
   broker makes does not, so read the log or `agentkourier_config_invalid_objects` after changing an AgentBackend or a ChatConnection.
 - **A Binding that is not served keeps its sessions.** Retention skips the sessions of a Binding that exists and was refused, until it is served
   again or deleted, so a Binding left broken keeps its sessions indefinitely.
 - **Deleting a ChatConnection does not stop routing, if it is the broker's own.** A broker holds its own ChatConnection at its last good generation after it is deleted, and with it the
   Bindings of it that are gone and the AgentBackends they use, until the connection returns or the broker restarts. That is what lets a move back to the
   ConfigMap keep the old pods routing while they end ([the how-to](../how-to/migrate-config-source.md#move-back-to-the-configmap) has the details, and
-  `agentkourier_config_held_objects` says what is held). A Binding deleted alone, while its connection exists, stops in about 10 to 20 seconds, behind a stream of other deletions in about 80 at most; one deleted while
+  `agentkourier_config_held_objects` says what is held). A Binding deleted alone, while its connection exists, stops in about 10 to 20 seconds, behind a stream of other deletions in about 80 at most. A Binding deleted while
   its connection is held stays held, so bring the connection back first. A held Binding keeps its channel against a newer one, and a Binding that was just deleted keeps it for up to about 20 seconds, longer behind a stream of other deletions.
 - **Deleting a CRD deletes every object of the kind.** Deleting the Bindings CRD alone stops the Bindings within about 20 seconds (longer behind a stream of other deletions), and a new mention gets no answer. Deleting all
   three takes the own connection with them, and a broker that has one holds the rest and keeps routing. In both the broker sets `agentkourier_config_stale` to 1, and a restart exits with code 2.
 
 ## What is checked, and where
 
-A custom resource is checked twice: by the API server when it is applied, and by the broker when it reads it. The broker's check is the authority. The CRDs
-carry a copy of most of its rules, as OpenAPI schema (types, enums, patterns, lengths and counts) and CEL rules, so that `kubectl apply` fails fast, naming the
+A custom resource is checked twice: by the API server when it is applied, and by the broker when it reads it. The
+broker's check is the authority.
+
+The CRDs carry a copy of most of its rules, as OpenAPI schema (types, enums, patterns, lengths and counts) and CEL rules, so that `kubectl apply` fails fast, naming the
 field. A test holds the copy to the broker on a real API server: an object that the schema refuses is one that the broker refuses too, so
 nothing is accepted on the file route that the schema refuses.
 
@@ -123,15 +140,23 @@ The Binding "bad" is invalid:
 **Refused at apply** by the schema or a CEL rule: the wrong type, a value outside an enum, a pattern or a length, a missing required field, a
 count over a cap, and most of the rules between the fields of one object.
 
-**Left to the broker**, which reports them as `Accepted=False` after the object is stored: a regex in a trigger's `match`, `exclude` or `extract` that
-does not compile, or compiles to more than 2000 instructions, or takes the regexes of a Binding past 5000 instructions together; a trigger's `promptTemplate` that does not parse, names an extract the trigger lacks, or fails when it runs; a duplicate trigger; the
-parts of a URL that only Go's parser refuses (a bad percent escape, port or bracket); a `match` or `exclude` value of 512 characters or fewer that is
-over 512 bytes; and every rule that spans objects: that the AgentBackend and ChatConnection exist and allow the namespace, that the AgentBackend's `agents` field allows the agent namespace, that the dialect has an adapter, that
-one Binding holds the channel, that a Secret has its key, and that each chat ID has the shape of the IDs of the ChatConnection's platform
-and the platform serves what the Binding asks for. The schema takes the shape of either platform's ID, Slack's or Microsoft Teams', so a
-channel's name such as `general`, or a bot's name such as `alertmanager` as a sender, is refused at apply and never stored; a Slack
-connection's Binding with a Microsoft Teams channel is stored and then refused by the broker: a new one is not served, and an edit of a
-served one does not take ([What each platform supports](../reference/platforms.md)).
+**Left to the broker**, which reports them as `Accepted=False` after the object is stored:
+
+- a regex in a trigger's `match`, `exclude` or `extract` that does not compile, or compiles to more than 2000
+  instructions, or takes the regexes of a Binding past 5000 instructions together
+- a trigger's `promptTemplate` that does not parse, names an extract the trigger lacks, or fails when it runs
+- a duplicate trigger
+- the parts of a URL that only Go's parser refuses (a bad percent escape, port or bracket)
+- a `match` or `exclude` value of 512 characters or fewer that is over 512 bytes
+- every rule that spans objects: that the AgentBackend and ChatConnection exist and allow the namespace, that the
+  AgentBackend's `agents` field allows the agent namespace, that the dialect has an adapter, that one Binding holds the
+  channel, that a Secret has its key, and that each chat ID has the shape of the IDs of the ChatConnection's platform
+  and the platform serves what the Binding asks for
+
+The schema takes the shape of either platform's ID, Slack's or Microsoft Teams'. So a channel's name such as `general`,
+or a bot's name such as `alertmanager` as a sender, is refused at apply and never stored. A Slack connection's
+Binding with a Microsoft Teams channel is stored and then refused by the broker: a new one is not served, and an edit of
+a served one does not take ([What each platform supports](../reference/platforms.md)).
 
 The caps (50 triggers in a Binding, 32 `extract` entries in a trigger, 32 headers and 256 bytes of a header's name in an AgentBackend) apply on
 both routes, because the schema and the broker's own validation both have them. [Upgrade](../how-to/upgrade.md#upgrade-to-the-release-that-bounds-triggers-extract-entries-and-headers) says how to find a config over one before you upgrade.
@@ -149,38 +174,59 @@ For a Binding with `spec.chat.bogusField`, with kubectl 1.37.1 and Helm 4 (anoth
 | `kubectl apply --validate=false` | Stored without the field, and no message |
 | `helm upgrade`, with the field in a `config.*` value | Refused: `field not declared in schema`, and the release goes to `failed`, after Helm has applied the objects ahead of it: on the move to custom resources that includes the Deployment ([what to do](../how-to/migrate-config-source.md#when-it-does-not-work)) |
 
-On the files route the loader refuses a file with a field it does not know, and so the whole config. On the custom resource route the API server's schema decides what an
-object may hold, and a client that asks it to refuse unknown fields is refused (the table); one that does not, such as `--validate=false`, has the field dropped silently, and the
-object runs without it, so a field that a release removed is ignored without an error. What Argo CD does with an unknown field is not covered here.
+On the files route the loader refuses a file with a field it does not know, and so the whole config.
 
-**A broker older than its CRDs ignores a field it does not know.** The broker does not refuse an object on the custom resource route because of a field that its own types lack,
-in the `spec`, the `status` or the `metadata` of a Binding, an AgentBackend or a ChatConnection: the field is ignored and the object is read as the rest of it says. This is
-what lets an older broker keep serving under newer CRDs. The CRDs are applied before an upgrade, and rolling back only the image leaves them new; a later release can add a
-field with a default, and the API server then adds that field to every stored object it returns, without a change of the object's generation. If the broker refused such a
-field it would serve no Binding at all, and a broker that cannot read its own ChatConnection, if it has one, would not start. A field that the broker's types do have, with a value that they cannot
+On the custom resource route the API server's schema decides what an object may hold. A client that asks it to refuse
+unknown fields is refused (the table). One that does not, such as `--validate=false`, has the field dropped silently,
+and the object runs without it, so a field that a release removed is ignored without an error.
+
+What Argo CD does with an unknown field is not covered here.
+
+**A broker older than its CRDs ignores a field it does not know.** The broker does not refuse an object on the custom
+resource route because of a field that its own types lack, in the `spec`, the `status` or the `metadata` of a Binding,
+an AgentBackend or a ChatConnection. The field is ignored and the object is read as the rest of it says.
+
+This is what lets an older broker keep serving under newer CRDs. The CRDs are applied before an upgrade, and rolling
+back only the image leaves them new. A later release can add a field with a default, and the API server then adds that
+field to every stored object it returns, without a change of the object's generation.
+
+If the broker refused such a field it would serve no Binding at all, and a broker that cannot read its own
+ChatConnection, if it has one, would not start. A field that the broker's types do have, with a value that they cannot
 read or that fails validation, is still refused.
 
-The broker says what it ignored: one warning for each object, for each generation of it, `a custom resource has fields this broker does not know, and ignores them`, with the
-`kind`, `namespace`, `name` and `generation` of the object and the path of each field (`spec.chat.futureField`, at most ten of them, and their count as `unknown_fields`), and never
-a value. What tells an operator that the CRDs and the broker differ is `agentkourier_crd_schema_state`, which reads `mismatch` for a CRD whose annotation `agentkourier.dev/schema-sha256` is not the hash of the schema the broker was built
-with, as when the CRDs come from a newer chart release than the image. It cannot see every difference: a CRD that was edited by hand keeps its annotation and reads `match`, and one that has
-no annotation reads `unannotated`. To end the mismatch, bring the CRDs and the image to the same chart release.
+The broker says what it ignored: one warning for each object, for each generation of it,
+`a custom resource has fields this broker does not know, and ignores them`. The warning carries the `kind`,
+`namespace`, `name` and `generation` of the object and the path of each field (`spec.chat.futureField`, at most ten of
+them, and their count as `unknown_fields`), and never a value.
+
+What tells an operator that the CRDs and the broker differ is `agentkourier_crd_schema_state`. It reads `mismatch` for a
+CRD whose annotation `agentkourier.dev/schema-sha256` is not the hash of the schema the broker was built with, as when
+the CRDs come from a newer chart release than the image.
+
+The metric cannot see every difference: a CRD that was edited by hand keeps its annotation and reads `match`, and one
+that has no annotation reads `unannotated`. To end the mismatch, bring the CRDs and the image to the same chart
+release.
 
 ## Which ChatConnections a broker serves
 
 On files the directory holds exactly one `ChatConnection`: the broker refuses to start with none or with more, and `AGENTKOURIER_CHAT_CONNECTION`,
-`AGENTKOURIER_CONNECTION_NAMESPACES` and `AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR` are refused. While it runs it serves the connection it
-started with, by namespace and name, until it restarts: a reload whose directory renames that connection, adds a second or takes it away is
-refused, so the broker keeps the last good config, its Bindings included, sets `agentkourier_config_stale` to 1 and logs
+`AGENTKOURIER_CONNECTION_NAMESPACES` and `AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR` are refused. While it runs it
+serves the connection it started with, by namespace and name, until it restarts.
+
+A reload whose directory renames that connection, adds a second or takes it away is refused. The broker keeps the last
+good config, its Bindings included, sets `agentkourier_config_stale` to 1 and logs
 `config reload failed; keeping the last good snapshot` with the error
 `the directory holds the ChatConnections [acme-webhooks/github2], and the files route serves the ChatConnection it started with, acme-webhooks/github, until the broker restarts`.
+
 A restart reads the directory as it is then: the chart's roll does it when the ConfigMap changes (unless `config.existingConfigMap` is set or
 `config.rollOnChange` is `false`). An edit of the connection under the same name is taken, and applies at a restart, or when another replica takes the lead.
 
-On custom resources a cluster can hold many connections. A broker may have an own connection, named as `namespace/name` in
-`AGENTKOURIER_CHAT_CONNECTION`; if it has one, it always serves it. It also serves the ChatConnections of the namespaces it admits, except a second
-connection of a Slack or Microsoft Teams app that it already serves, which it refuses, so that a team can bring its own chat app without running a broker
-([Let a team bring its own Slack app](../how-to/team-slack-app.md)). It admits:
+On custom resources a cluster can hold many connections. A broker may have an own connection, named as
+`namespace/name` in `AGENTKOURIER_CHAT_CONNECTION`, and if it has one, it always serves it.
+
+It also serves the ChatConnections of the namespaces it admits, so that a team can bring its own chat app without
+running a broker ([Let a team bring its own Slack app](../how-to/team-slack-app.md)). The exception is a second
+connection of a Slack or Microsoft Teams app that it already serves, which it refuses. It admits:
 
 | `AGENTKOURIER_CHAT_CONNECTION` | `AGENTKOURIER_CONNECTION_NAMESPACES` | `AGENTKOURIER_CONNECTION_NAMESPACE_SELECTOR` | The broker serves the ChatConnections of |
 |---|---|---|---|
@@ -191,28 +237,60 @@ connection of a Slack or Microsoft Teams app that it already serves, which it re
 | any | a list | a selector | the listed namespaces and those whose labels match, and its own, if it has one |
 | set | unset | unset | none: its own alone |
 
-The list is read at start, so a change to it is a restart. The selector is read at start too, but the namespaces' labels are followed live, with an
-informer on namespaces: a namespace that gains a matching label is admitted at the next read, every 10 seconds, and one that loses it stops being
-admitted at the next read, with no restart. While the broker cannot reach the API server it keeps the labels it last read. Only a selector other than
-`{}` reads namespaces, and so needs `list` and `watch` on them; every namespace and a list read none. The first line of the log, `config route`, names
+The list is read at start, so a change to it is a restart. The selector is read at start too, but the namespaces'
+labels are followed live, with an informer on namespaces. A namespace that gains a matching label is admitted at the
+next read, every 10 seconds, and one that loses it stops being admitted at the next read, with no restart.
+
+While the broker cannot reach the API server it keeps the labels it last read. Only a selector other than `{}` reads
+namespaces, and so needs `list` and `watch` on them. Every namespace and a list read none.
+
+The first line of the log, `config route`, names
 the admission in `connection_admission` (`all`, `list`, `selector`, `list+selector`, or `own` for none besides the own connection), with
 `connection_namespaces` when there is a list and `connection_namespace_selector` when there is a selector other than `{}`.
 
-**Every namespace is a setting for a cluster with one broker.** A broker that admits every namespace serves a second broker's connections too, that
-broker's own included, and the two open Socket Mode on the same Slack apps, so each event goes to one of them and the other misses it. Both serve the
-same Bindings, and where their words differ each puts back the status the other writes: the leader logs `binding status: something else keeps changing the status of a Binding,
+**Every namespace is a setting for a cluster with one broker.** A broker that admits every namespace serves a second
+broker's connections too, that broker's own included. The two open Socket Mode on the same Slack apps, so each event
+goes to one of them and the other misses it.
+
+Both serve the same Bindings, and where their words differ each puts back the status the other writes. The leader logs
+`binding status: something else keeps changing the status of a Binding,
 and this broker keeps putting it back` once it has put one back three times in a row, and counts each in
-`agentkourier_binding_status_writes_total{result="put_back"}` ([Troubleshoot](../how-to/troubleshoot.md#the-status-of-a-binding-keeps-changing)). With two brokers in a cluster, give each its own connections and admit with a list or a selector
-that the other's do not overlap.
+`agentkourier_binding_status_writes_total{result="put_back"}` ([Troubleshoot](../how-to/troubleshoot.md#the-status-of-a-binding-keeps-changing)).
+
+With two brokers in a cluster, give each its own connections and admit with a list or a selector that the other's do
+not overlap.
 
 With no own connection the broker serves only the teams' connections
-([A broker with no connection of its own](../how-to/team-slack-app.md#a-broker-with-no-connection-of-its-own)). What an own connection has that a team connection does not: a token Slack rejects ends the process with code 1, where a team connection stops alone;
-its ChatConnection is held when it is deleted; and it takes the first of the 16 places and the first claim of its Slack app. A broker with no own connection stays up, and ready, when every
-token is rejected, and serves the 16 oldest connections, the oldest claiming a Slack app first.
-It serves at most 16 connections, its own included: the own one, if there is one, counts first, the others are taken oldest first (then by namespace and name), and a
-connection past the limit is not served. With every namespace admitted the 16 places are shared by every ChatConnection of the cluster. No setting changes the limit ([Limits](../reference/limits.md#run-the-broker)). A broker serves the Bindings
-whose `connectionRef` names a connection it serves, and no others, so two releases can share a cluster when neither admits the other's connections. A Binding whose `connectionRef` names a
-connection that does not exist is reported by the leader of every broker that sees it, as `ConnectionNotFound`, since none owns it. A Binding that names a connection that exists and that this broker does not serve is
-told `ConnectionNotServed` by its leader in three cases: the broker served the connection before (its namespace is no longer admitted: it was taken off the list, it lost the label the selector matches, the selector changed, or a broker that admitted every namespace was narrowed to a list, a selector or its own connection alone; or it was the broker's own and `AGENTKOURIER_CHAT_CONNECTION` now names another or is unset, and its namespace is not admitted),
-the connection is past the limit, or it is a second connection of a Slack or Microsoft Teams app. Only a Binding that the connection admits is told, and a connection in a namespace that was never admitted tells nobody
-([Binding status](../reference/binding-status.md#accepted)). A broker that does serve the connection writes its own status over it.
+([A broker with no connection of its own](../how-to/team-slack-app.md#a-broker-with-no-connection-of-its-own)).
+
+What an own connection has that a team connection does not:
+
+- A token Slack rejects ends the process with code 1, where a team connection stops alone.
+- Its ChatConnection is held when it is deleted.
+- It takes the first of the 16 places and the first claim of its Slack app.
+
+A broker with no own connection stays up, and ready, when every token is rejected, and serves the 16 oldest
+connections, the oldest claiming a Slack app first.
+
+A broker serves at most 16 connections, its own included, and no setting changes the limit
+([Limits](../reference/limits.md#run-the-broker)). The own one, if there is one, counts first, the others are taken
+oldest first (then by namespace and name), and a connection past the limit is not served. With every namespace admitted
+the 16 places are shared by every ChatConnection of the cluster.
+
+A broker serves the Bindings whose `connectionRef` names a connection it serves, and no others, so two releases can
+share a cluster when neither admits the other's connections. A Binding whose `connectionRef` names a connection that
+does not exist is reported by the leader of every broker that sees it, as `ConnectionNotFound`, since none owns it.
+
+A Binding that names a connection that exists and that this broker does not serve is told `ConnectionNotServed` by its
+leader in three cases:
+
+- The broker served the connection before. Its namespace is no longer admitted (it was taken off the list, it lost the
+  label the selector matches, the selector changed, or a broker that admitted every namespace was narrowed to a list, a
+  selector or its own connection alone), or it was the broker's own and `AGENTKOURIER_CHAT_CONNECTION` now names
+  another or is unset, and its namespace is not admitted.
+- The connection is past the limit.
+- It is a second connection of a Slack or Microsoft Teams app.
+
+Only a Binding that the connection admits is told, and a connection in a namespace that was never admitted tells nobody
+([Binding status](../reference/binding-status.md#accepted)). A broker that does serve the connection writes its own
+status over it.

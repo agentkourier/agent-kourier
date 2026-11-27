@@ -11,6 +11,16 @@
 {{- $named = include "agentkourier.secretNames" . | fromJson }}
 {{- $namespaces = concat (keys $named) .Values.rbac.secretNamespaces | uniq | sortAlpha }}
 {{- end }}
+{{- $ax := include "agentkourier.addon.enabled" (dict "ctx" . "name" "ax") }}
+{{- if and $ax (not (include "agentkourier.crMode" .)) }}
+{{- $explicit := include "agentkourier.secretNames" . | fromJson }}
+{{- $local := default (list) (get $explicit .Release.Namespace) }}
+{{- $namespaces = without $namespaces .Release.Namespace }}
+{{- if $local }}
+{{- $_ := set $named .Release.Namespace $local }}
+{{- $namespaces = append $namespaces .Release.Namespace | sortAlpha }}
+{{- end }}
+{{- end }}
 {{- range $ns := $namespaces }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1

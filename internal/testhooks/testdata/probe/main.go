@@ -13,6 +13,7 @@ func main() {
 	fmt.Printf("slack=%q\n", testhooks.SlackAPIURL(testhooks.Overrides{}))
 	teams, _, err := testhooks.Teams(testhooks.Overrides{})
 	fmt.Printf("teams=%q err=%v\n", teams.GraphURL, err)
+	fmt.Printf("watchdog=%s\n", testhooks.AgentStreamTimeout())
 	_ = testhooks.BeforeSend(context.Background(), "probe")
 	testhooks.AfterPost()
 	fmt.Println("after-post-returned")

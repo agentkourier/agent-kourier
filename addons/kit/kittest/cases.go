@@ -216,6 +216,9 @@ func aResentMessageJoinsItsTask[S runtime.Store](t *testing.T, s Subject[S], env
 
 // An answer the backend refuses is refused with invalid params and leaves the task paused for a good one.
 func aRefusedAnswerKeepsTheTaskPaused[S runtime.Store](t *testing.T, s Subject[S], env map[string]string) {
+	if s.Pause == "" {
+		t.Skip("backend does not pause")
+	}
 	in := Start(t, s, "kittest-a", env, runtime.Options{})
 	WaitFor(t, "the replica to be ready", in.Ready)
 	c := in.Client(t)
@@ -370,7 +373,10 @@ func aStandbyForwardsAndTakesOver[S runtime.Store](t *testing.T, s Subject[S], e
 	if got := b.Metric(metric(s, `forwarded_requests_total{outcome="forwarded"}`)); got == "" || got == "0" {
 		t.Errorf("the standby forwarded %q requests", got)
 	}
-	paused := want(t, b.Client(t), text(s.Pause), a2a.TaskStateInputRequired)
+	var paused *a2a.Task
+	if s.Pause != "" {
+		paused = want(t, b.Client(t), text(s.Pause), a2a.TaskStateInputRequired)
+	}
 
 	if err := a.Stop(t); err != nil {
 		t.Fatalf("the leader's Run after SIGTERM: %v", err)
@@ -380,8 +386,12 @@ func aStandbyForwardsAndTakesOver[S runtime.Store](t *testing.T, s Subject[S], e
 	if since := time.Since(stopped); since > 750*time.Millisecond { // half the lease: a take at expiry would be later
 		t.Errorf("b took over %s after a stopped: a released lease is taken on the next try, not when it expires", since)
 	}
-	if done := want(t, b.Client(t), goodAnswer(s, paused), a2a.TaskStateCompleted); done.ID != paused.ID {
-		t.Fatalf("the answer on the new leader completed %s, want %s", done.ID, paused.ID)
+	if paused != nil {
+		if done := want(t, b.Client(t), goodAnswer(s, paused), a2a.TaskStateCompleted); done.ID != paused.ID {
+			t.Fatalf("the answer on the new leader completed %s, want %s", done.ID, paused.ID)
+		}
+	} else {
+		want(t, b.Client(t), text(s.Complete), a2a.TaskStateCompleted)
 	}
 	if got := b.Metric(metric(s, "tasks_interrupted_total")); got != "0" {
 		t.Errorf("the new leader failed %q tasks; a's turns had ended", got)

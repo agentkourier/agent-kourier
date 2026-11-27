@@ -2,19 +2,24 @@
   <img src="docs/brand/assets/github/readme-banner-2560x640.png" alt="Agent Kourier: write the agent, not the chat integration." width="100%">
 </h1>
 
-<p align="center">A Kubernetes-native broker that carries messages between your team's chat and your streaming A2A agents, one agent session per thread. Slack is supported; Microsoft Teams, and sessions started by webhooks from GitHub, Jira, Bitbucket or Linear, are experimental.</p>
+<p align="center">A Kubernetes-native broker that carries messages between your team's chat and your streaming A2A agents, one agent session per thread. Slack is supported. Microsoft Teams, and sessions started by webhooks from GitHub, Jira, Bitbucket or Linear, are experimental.</p>
 
 Agent Kourier runs in your cluster between your team's chat and your agents. A `Binding`
 connects a channel to an agent that serves streaming A2A, and Agent Kourier carries the
-messages both ways. A mention of it, a reply in its thread, or a message that one of the
-Binding's triggers matches, such as an alert another app posts, goes to the agent as a turn
-of that thread's session. The agent's streamed replies, and its questions to people, come
-back in the same thread, and each session is recovered after a restart or failover. The
-agent needs no chat code. It keeps its tools and task logic. An [add-on](docs/explanation/add-ons.md),
-an optional component released with Agent Kourier and run by its chart, is either an A2A front
-for an agent that has none or an agent of its own. Two ship today: the Claude Managed Agents
-add-on fronts an agent in Claude Managed Agents, and the AX add-on is an agent on Amazon Bedrock
-or the Anthropic API.
+messages both ways. These messages go to the agent, each as a turn of its thread's session:
+
+- a mention of Agent Kourier
+- a reply in its thread
+- a message that one of the Binding's triggers matches, such as an alert another app posts
+
+The agent's streamed replies, and its questions to people, come back in the same thread.
+Each session is recovered after a restart or failover. The agent needs no chat code. It keeps
+its tools and task logic.
+
+An [add-on](docs/explanation/add-ons.md) is an optional component released with Agent Kourier
+and run by its chart. It is either an A2A front for an agent that has none, or an agent of its
+own. Two ship today: the Claude Managed Agents add-on fronts an agent in Claude Managed Agents,
+and the AX add-on launches agent commands in Google AX Tasks.
 
 Slack is the supported platform. Two more arrived in 0.6.0, both experimental, and a broker of 0.5.x
 refuses either:
@@ -22,12 +27,14 @@ refuses either:
 - **Microsoft Teams**, a second chat platform (`platform: teams`):
   [Configure Microsoft Teams](docs/how-to/configure-teams.md).
 - **Webhooks** (`platform: webhook`): a signed JSON webhook from a service, such as GitHub, Jira Cloud, Bitbucket
-  Cloud or Linear, starts a session of your agent, which answers on that service with its own tools:
-  [Start agents from webhooks](docs/how-to/receive-webhooks.md).
+  Cloud or Linear, starts a session of your agent. The agent answers on that service with its own tools.
+  See [Start agents from webhooks](docs/how-to/receive-webhooks.md).
 
-Each chat platform is an adapter behind one chat interface and its conformance suite; the
+Each chat platform is an adapter behind one chat interface and its conformance suite. The
 `webhook` platform sits behind the same interface and posts nothing. The resource API took both
-without breaking a Slack `Binding`. Agents speak only A2A, so a new platform needs no change to them.
+without breaking a Slack `Binding`.
+
+Agents speak only A2A, so a new platform needs no change to them.
 
 [Documentation](https://agentkourier.dev) · [Try it in a kind sandbox](docs/tutorials/first-agent-in-slack.md) ·
 [Install with Helm](docs/how-to/install-with-helm.md) · [Architecture](docs/explanation/architecture.md) ·
@@ -35,8 +42,9 @@ without breaking a Slack `Binding`. Agents speak only A2A, so a new platform nee
 
 > **Status: v0.7.0.** Install the published chart and image with
 > [Install with Helm](docs/how-to/install-with-helm.md). The `v1alpha1` resource format can change before 1.0. See
-> [Status](#status). Slack HTTP mode, new in 0.5.0, is experimental. Teams and webhooks, since 0.6.0, are both
-> experimental. The add-ons, new in 0.7.0, are experimental.
+> [Status](#status).
+>
+> Experimental: Slack HTTP mode (new in 0.5.0), Teams and webhooks (since 0.6.0), and the add-ons (new in 0.7.0).
 
 <p align="center">
   <img src="docs/assets/clip/team-app.gif" width="100%" alt="A terminal. The platform team creates the namespace agent-kourier and installs the agent-kourier chart with a values file of comments only, so the broker serves the ChatConnections of every namespace and starts with no Slack app of its own. The team then creates its Slack Secret in team-a from a file, a Role and RoleBinding that let the broker's ServiceAccount list and watch it, fills in the four lines marked yours in team-a.yaml (a ChatConnection, an AgentBackend and a Binding), applies it, and kubectl get akbinding shows the Binding become True OK. Then Slack: a mention of the team's bot, and the agent's answer in its thread.">
@@ -64,9 +72,10 @@ Alertmanager     FIRING (1) - PaymentsApiErrorRate
                  Nothing else in the Deployment differs from the previous revision.
 ```
 
-The answers come from the agent. The alert's thread is the agent session. People in the
-channel reply in it without a mention. A repeat of the same alert attaches to the thread,
-and its resolve posts a note there.
+The answers come from the agent. The alert's thread is the agent session, and people in the
+channel reply in it without a mention.
+
+A repeat of the same alert attaches to the thread, and its resolve posts a note there.
 
 ## What Agent Kourier handles
 
@@ -76,13 +85,13 @@ Without a broker, each of these is code in every agent that talks to chat:
   activity by default. A reply anywhere in the thread continues it.
 - **Replies during a turn.** Agent Kourier queues a reply sent while the agent works and
   sends it, in order, when the task ends. A reaction shows that it accepted the reply.
-- **Streamed output.** With `output: live`, the answer streams into one chat message, with
-  tool calls shown as step cards or status lines where the backend reports them, and a `Working…` sign of life while the agent is
-  silent (`chat.progress`).
+- **Streamed output.** With `output: live`, the answer streams into one chat message. In that mode tool
+  calls show as step cards or status lines where the backend reports them, and a `Working…` sign of life
+  shows while the agent is silent (`chat.progress`).
 - **Questions and approvals.** With `interactions.askUser`, the agent's question appears in
   the thread and the answer resumes the same task. With kagent, or an agent on the `a2a` dialect
-  whose card lists kagent's human-in-the-loop extension, a tool call can wait for an Approve or
-  Deny press, optionally limited to Slack user groups
+  whose card lists kagent's human-in-the-loop extension, a tool call can also wait for an Approve
+  or Deny press, optionally limited to Slack user groups
   ([Connect a generic A2A agent](docs/how-to/connect-a2a-agent.md#what-works-on-this-dialect)).
 - **Restart recovery.** Agent Kourier stores sessions, queued replies and pending questions,
   and posts through a durable outbox, so a crash does not repeat a post
@@ -91,19 +100,19 @@ Without a broker, each of these is code in every agent that talks to chat:
   agent is suspended or scaled down, and calls the agent when the next turn arrives.
 - **Alert investigations.** A trigger reads the alerts a bot already posts to the channel
   and starts an investigation in each alert's thread, with a cooldown per alert, a rate
-  limit and a daily cap. Alertmanager sends Agent Kourier nothing: it posts to Slack, or to
+  limit and a daily cap. Your alerting tool sends Agent Kourier nothing. It posts to Slack, or to
   Teams through a Workflows webhook, as before, so alerts reach people whether or not
   Agent Kourier is running ([why](docs/explanation/why-a-broker.md#why-outside-the-paging-path)).
 - **Reports in a channel.** A `personMessage` trigger starts a turn of the person on each message they post at the
-  top level of the channel, without a mention, held to the trigger's limits; replies under it need a mention. See
+  top level of the channel, without a mention, held to the trigger's limits. Replies under it need a mention. See
   [A person's message](docs/reference/chat-triggers.md#a-persons-message).
 - **Agents that call agents.** A mention of Agent Kourier by another bot starts a turn in
-  that thread, with the thread so far as untrusted data, within fixed limits. It is on by default; a
+  that thread, with the thread so far as untrusted data, within fixed limits. It is on by default, and a
   Binding turns it off with `chat.botMentions: none`. See
   [Let another agent start yours](docs/how-to/any-bot-trigger.md#let-another-agent-start-yours).
 - **Webhooks from other services** (experimental, since 0.6.0). A webhook connection takes the
   signed JSON webhooks of a service, such as GitHub, Jira Cloud, Bitbucket Cloud or Linear, and starts a session of the agent
-  for each pull request or issue; a later event of the same one, such as a comment, continues it.
+  for each pull request or issue. A later event of the same one, such as a comment, continues it.
   Agent Kourier posts nothing there: the agent replies on the service with its own tools. See
   [Start agents from webhooks](docs/how-to/receive-webhooks.md).
 - **Feedback.** An investigation's final message has useful and not-useful buttons, and
@@ -111,13 +120,12 @@ Without a broker, each of these is code in every agent that talks to chat:
 - **Backend choice.** kagent, an agent in Google AX, and any A2A 1.0 or 0.3 agent whose card
   advertises streaming use the same `Binding`. Changing the runtime leaves the chat
   configuration as it is.
-- **Add-ons.** Optional components in this repository, each a module of its own with its own
+- **Add-ons.** Optional components in this repository. Each is a module of its own with its own
   image, released and signed with Agent Kourier under the same version, and run by an opt-in
   block of the chart. The Claude Managed Agents add-on (experimental) is an A2A server in front
   of an agent in Claude Managed Agents: each thread is a session of the agent, and a tool call
   whose permission policy asks first waits on Approve and Deny in the thread. The AX add-on
-  (experimental) is an ADK agent on Amazon Bedrock or the Anthropic API: a question it asks with
-  its one tool, `ask_user`, waits for a reply in the thread. See
+  (experimental) runs a Task for each accepted turn and reports its result in the thread. See
   [Add-ons](docs/explanation/add-ons.md),
   [Connect Claude Managed Agents](docs/how-to/connect-claude-managed-agents.md) and
   [Connect the AX add-on](docs/how-to/connect-ax.md).
@@ -127,18 +135,20 @@ Without a broker, each of these is code in every agent that talks to chat:
 The platform team installs Agent Kourier and owns the shared resources: the agent backends
 (`AgentBackend`), the broker's own chat app (a `ChatConnection`), and the namespaces allowed
 to use each. Application teams connect their own agents to their own channels with a
-namespaced `Binding`, committed next to the agent's manifests. With custom resources a team
-can also bring its own chat app as a `ChatConnection` in a namespace the broker admits: every
-namespace when the platform sets nothing (for a cluster with one broker), or the namespaces on
-a list or whose labels match a selector. A broker can even have no app of its own and serve
-only the teams' ([Let a team bring its own Slack app](docs/how-to/team-slack-app.md)).
+namespaced `Binding`, committed next to the agent's manifests.
+
+With custom resources a team can also bring its own chat app as a `ChatConnection` in a
+namespace the broker admits. The broker admits every namespace when the platform sets nothing
+(for a cluster with one broker), or the namespaces on a list or whose labels match a selector.
+A broker can even have no app of its own and serve only the teams'
+([Let a team bring its own Slack app](docs/how-to/team-slack-app.md)).
 
 - **Chat credentials you choose.** When every Binding names the broker's own
   `ChatConnection`, there is one set of chat credentials (on Slack, one app's tokens; on
   Teams, one bot's client secret) to
-  review and rotate, not one per agent. The ChatConnections of each namespace the broker
-  admits are served too, and no others: at most 16 in all, the broker's own included, and
-  no setting raises that.
+  review and rotate, not one per agent. The broker also serves the ChatConnections of each
+  namespace it admits, and no others. It serves at most 16 in all, the broker's own included,
+  and no setting raises that.
 - **One audit log.** It records each agent call and approval decision with the person's user ID
   (Slack's, or the Microsoft Entra object ID on Teams), when a person started it, and the service
   identity it ran as. A turn that a webhook event starts names no person.
@@ -158,7 +168,9 @@ on the service.
 
 Commit the agent's deployment and its `Binding` together, and let GitOps deploy both.
 The runtime's own manifests or operator deploy and run the agent. Agent Kourier supplies
-the messaging wiring. See the [detailed architecture](docs/explanation/architecture.md) for the
+the messaging wiring.
+
+See the [detailed architecture](docs/explanation/architecture.md) for the
 configuration, execution, persistence, and interaction paths.
 
 ## Configuration model
@@ -175,12 +187,18 @@ A team adds a binding to connect an agent to a channel. Multiple bindings can sh
 a backend and messaging connection. Cross-namespace references require the owning
 resource to allow the referring namespace.
 
-The resources below are Kubernetes objects. On Kubernetes the Helm chart installs the CRDs and the broker reads the resources from the
-cluster as **custom resources** (`config.source: crds`, the chart's default, which needs Kubernetes 1.33 or later; see
-the [chart README](charts/agent-kourier/README.md)). There is no controller: the broker reads them with informers, and the leader writes each Binding's status.
-For a quick proof of concept the chart can instead write them into a ConfigMap, as **configuration files** loaded from
-`AGENTKOURIER_CONFIG_DIR` (`config.source: files`), which GitOps can manage with the Secrets and the Deployment; [how to move a running install](docs/how-to/migrate-config-source.md)
-goes from one to the other. The two routes are never merged.
+The resources below are Kubernetes objects. The broker reads them by one of two routes:
+
+- **Custom resources** (`config.source: crds`, the chart's default, which needs Kubernetes 1.33 or later; see
+  the [chart README](charts/agent-kourier/README.md)). On Kubernetes the Helm chart installs the CRDs and the broker
+  reads the resources from the cluster. There is no controller: the broker reads them with informers, and the leader
+  writes each Binding's status.
+- **Configuration files** (`config.source: files`), for a quick proof of concept. The chart can instead write the
+  resources into a ConfigMap, as files loaded from `AGENTKOURIER_CONFIG_DIR`, which GitOps can manage with the
+  Secrets and the Deployment.
+
+The two routes are never merged. [How to move a running install](docs/how-to/migrate-config-source.md) goes from
+one to the other.
 
 For example, this configuration connects a payments agent hosted by kagent to a
 Slack channel through shared infrastructure:
@@ -234,14 +252,16 @@ spec:
 ```
 
 This example assumes the agent and authenticated backend endpoint already exist.
-Replace the endpoint, agent reference, and channel ID for your deployment. The
-`slack` Secret belongs in `agent-kourier` with `botToken` and `appToken`
-keys (`botToken` and `signingSecret` for a connection in Slack HTTP mode); `payments-agent-token` belongs in `payments` with a `token` key. Each binding
-uses a service identity for agent calls; individual chat users do not supply the
-backend's authorization identity.
+Replace the endpoint, agent reference, and channel ID for your deployment.
 
-This lets an alert start an investigation and several channel members continue it
-under the same backend account, without each supplying a backend token.
+The `slack` Secret belongs in `agent-kourier` with `botToken` and `appToken` keys
+(`botToken` and `signingSecret` for a connection in Slack HTTP mode). `payments-agent-token`
+belongs in `payments` with a `token` key.
+
+Each binding uses a service identity for agent calls. Individual chat users do not supply the
+backend's authorization identity. This lets an alert start an investigation and several channel
+members continue it under the same backend account, without each supplying a backend token.
+
 [Create the Binding identity](docs/how-to/create-binding-identity.md) explains how to choose a user ID or obtain
 and store an issued token, and why the identity must not change while sessions are open.
 Agent Kourier does not create accounts or mint tokens.
@@ -249,8 +269,9 @@ Agent Kourier does not create accounts or mint tokens.
 To have the agent investigate the alerts a bot posts to that channel, add a
 `botMessage` trigger to the Binding's `chat` block. A trigger is written in full, with its
 own regexes, thread rules, limits and prompt.
+
 [Investigate Alertmanager alerts](docs/how-to/investigate-alertmanager-alerts.md) has a
-complete one for Alertmanager's Slack receiver, including the title it expects;
+complete one for Alertmanager's Slack receiver, including the title it expects.
 [Start investigations from any bot's messages](docs/how-to/any-bot-trigger.md) covers
 other bots, and the [trigger reference](docs/reference/chat-triggers.md) has the fields.
 
@@ -266,7 +287,7 @@ other bots, and the [trigger reference](docs/reference/chat-triggers.md) has the
 | Agent backend | kagent 1.0, `kagent-v1` dialect, with structured questions and optional Slack tool approvals. Tested against 1.0.0-alpha5. Needs a cluster that serves the pod-certificate APIs, which managed EKS through 1.36 cannot; see [Connect a kagent agent](docs/how-to/connect-kagent.md) | Implemented |
 | Agent backend | Any A2A agent, 1.0 or 0.3, whose card advertises streaming and a JSON-RPC interface, `a2a` dialect. Questions arrive as text, or as kagent's structured questions and tool approvals when the card lists its human-in-the-loop extension | Implemented |
 | Agent backend | kagent 0.9.x, `a2a` dialect over A2A 0.3. Tested against 0.9.4 on a real cluster. It has no task list, so a resend can run a turn twice, and the dialect shows its tool calls as step cards. See [Connect a kagent agent](docs/how-to/connect-kagent.md) | Implemented |
-| Agent backend | The AX add-on: an ADK agent on Amazon Bedrock or the Anthropic API, with one tool, `ask_user`, whose question the thread answers, that the chart runs beside Agent Kourier (`addons.ax`) or that runs inside Google AX as a Task, through the `a2a` dialect. Tested on two Postgres replicas through a leader's failover on a build before the release (22 and 23 November 2026). Its routes to Bedrock through an IAM role (IRSA, EKS Pod Identity) have not been tested on EKS. See [Connect the AX add-on](docs/how-to/connect-ax.md) | Experimental |
+| Agent backend | The AX add-on launches Google AX Tasks from an operator-supplied template and receives their results over HTTPS. See [Connect the AX add-on](docs/how-to/connect-ax.md) | Experimental |
 | Agent backend | Claude Managed Agents, through the add-on the chart runs beside Agent Kourier (`addons.cma`) and the `a2a` dialect: a session per thread, tool calls as step cards, and `always_ask` tool calls as Approve and Deny. Tested against a self-hosted environment with a Haiku agent, and on two Postgres replicas through a leader's failover on a build before the release (22 and 23 November 2026); cloud environments are untested. See [Connect Claude Managed Agents](docs/how-to/connect-claude-managed-agents.md) | Experimental |
 | Alert source | Alertmanager, through the message it posts to Slack (`botMessage` trigger, written in full) | Implemented |
 | Alert source | Alertmanager on Microsoft Teams, through the card its `msteamsv2` receiver posts to a Workflows webhook, read through Microsoft Graph. Needs 0.6.0 or later. See [Configure Microsoft Teams](docs/how-to/configure-teams.md#send-alertmanager-alerts-to-a-channel) | Experimental |
@@ -275,23 +296,28 @@ other bots, and the [trigger reference](docs/reference/chat-triggers.md) has the
 | Event source | Signed JSON webhooks from GitHub, Jira Cloud, Bitbucket Cloud, Linear or any service that signs its webhooks (HMAC-SHA256 of the body, or a token in a header), taken on the chat listener by a webhook connection (`platform: webhook`). One session per pull request or issue, as the recipes set it up. The agent answers on the service with its own tools; Agent Kourier posts nothing there. Four recipes; the GitHub one ships an agent, the other three none yet. Needs 0.6.0 or later. See [Start agents from webhooks](docs/how-to/receive-webhooks.md) | Experimental |
 | Operations | High availability: two replicas on Postgres, one leader elected by a Kubernetes Lease, fencing, and a standby that takes over. See [High availability and failover](docs/explanation/high-availability.md) | Implemented |
 
-The common interface to an agent is streaming A2A over JSON-RPC, version 1.0 or 0.3, and Agent Kourier
-rejects an agent whose card does not advertise streaming. A team can change or add
-a runtime and keep the same messaging configuration. What a thread can do still
-depends on what the backend exposes. See [backend reference](docs/reference/agentbackend.md) for
+The common interface to an agent is streaming A2A over JSON-RPC, version 1.0 or 0.3. Agent Kourier
+rejects an agent whose card does not advertise streaming.
+
+A team can change or add a runtime and keep the same messaging configuration. What a thread can do
+still depends on what the backend exposes. See [backend reference](docs/reference/agentbackend.md) for
 the contract.
 
 ## Status
 
-The current release is v0.7.0: a signed image for `linux/amd64` and `linux/arm64`,
-`ghcr.io/agentkourier/agent-kourier:v0.7.0`, and the Helm chart `oci://ghcr.io/agentkourier/charts/agent-kourier`
-version `0.7.0`, which pins that image by digest. It runs as one
-replica with a SQLite store, or as two replicas on Postgres with a leader election
-and fencing, installed with the [Helm chart](charts/agent-kourier/README.md). Agent Kourier writes
+The current release is v0.7.0:
+
+- a signed image for `linux/amd64` and `linux/arm64`, `ghcr.io/agentkourier/agent-kourier:v0.7.0`
+- the Helm chart `oci://ghcr.io/agentkourier/charts/agent-kourier` version `0.7.0`, which pins that image by digest
+
+Agent Kourier runs as one replica with a SQLite store, or as two replicas on Postgres with a
+leader election and fencing, installed with the [Helm chart](charts/agent-kourier/README.md). It writes
 an audit log, exports Prometheus metrics and can export OpenTelemetry traces. See
 [observability](docs/reference/logs-and-traces.md), and [stored data](docs/reference/stored-data.md) for what
-Agent Kourier keeps and for how long. Teams and the `webhook` platform are not in 0.5.0: they arrive in
-0.6.0, both experimental ([release notes](docs/release-notes.md)).
+Agent Kourier keeps and for how long.
+
+Teams and the `webhook` platform are not in 0.5.0: they arrive in 0.6.0, both experimental
+([release notes](docs/release-notes.md)).
 
 To try it first, follow [Your first agent in Slack](docs/tutorials/first-agent-in-slack.md), which runs
 Agent Kourier against a real Slack workspace and a kagent agent in kind. To run it on a
@@ -303,22 +329,22 @@ webhooks, install the chart the same way, then follow [Configure Microsoft Teams
 ### High availability
 
 On Postgres, Agent Kourier runs as two replicas, active/passive. With SQLite it is one
-replica, and the chart refuses more. The leader does all the work; the standby serves
-health and metrics, opens no chat connection, and takes over about 15 s after the
-leader's last renewal, with the same recovery as a restart. Every write to Postgres and
-to the chat platform is fenced, so a deposed leader's writes are refused.
+replica, and the chart refuses more.
+
+The leader does all the work. The standby serves health and metrics, opens no chat
+connection, and takes over about 15 s after the leader's last renewal, with the same
+recovery as a restart. Every write to Postgres and to the chat platform is fenced, so a
+deposed leader's writes are refused.
+
 [High availability and failover](docs/explanation/high-availability.md) explains how it
-works and what a failover can still repeat;
+works and what a failover can still repeat.
 [Run two replicas](docs/how-to/high-availability.md) sets it up and drills a failover.
 
 ## Using Google AX
 
-Agent Kourier speaks A2A to an agent you run inside an AX Task, through AX's router, with
-the generic `a2a` dialect; it does not call AX's own API or manage the Task. The
-[AX add-on](addons/ax/README.md) is such an agent: an ADK agent on Amazon Bedrock or the
-Anthropic API, which runs in an AX Task or beside Agent Kourier, run by the chart. [Connect the AX add-on](docs/how-to/connect-ax.md)
-covers both routes: for AX, the image, the egress and template, the token verification, the
-TLS gateway and an acceptance procedure. Support is experimental.
+Agent Kourier uses the generic `a2a` dialect to reach the [AX add-on](addons/ax/README.md).
+The add-on runs a command in Google AX from a Task template and returns the result to the
+same Slack thread. See [Connect the AX add-on](docs/how-to/connect-ax.md).
 
 ## Development
 
@@ -329,7 +355,7 @@ make fmt lint test build
 ```
 
 The build produces `bin/agent-kourier`. Kubernetes test environments and the real-Slack
-sandbox are available through the Makefile; run `make` to list the targets.
+sandbox are available through the Makefile. Run `make` to list the targets.
 
 A race build of the whole module puts several gigabytes in the Go build cache for each
 worktree, because package paths are part of the cache key. A checkout per

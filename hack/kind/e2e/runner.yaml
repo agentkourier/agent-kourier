@@ -2,7 +2,7 @@
 # ClusterIP Service names and nothing is published to the host (the fake Slack's /_control/ has no
 # authentication). Its service account may list and delete pods in e2e only, to restart a double. In
 # Agent Kourier's namespace it may only read pods and their logs (S16 reads the log of a replica that exited) and get and patch the
-# Deployment named agent-kourier, to set a fault through the environment (kube.Pods.SetFault) or restart it (kube.Pods.RolloutRestart);
+# broker and AX Deployments, to set a broker fault or test a restart;
 # never delete a pod there, which would bypass strategy: Recreate, and never patch another Deployment. S16 ends and freezes a
 # Agent Kourier replica through the container signaler (hack/kind/fast/signaler.yaml), not through this Role.
 # The pod must never carry the label app.kubernetes.io/name=agent-kourier: the full tier's NetworkPolicy
@@ -46,7 +46,7 @@ rules:
     verbs: [get]
   - apiGroups: [apps]
     resources: [deployments]
-    resourceNames: [agent-kourier]
+    resourceNames: [agent-kourier, agent-kourier-ax]
     verbs: [get, patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

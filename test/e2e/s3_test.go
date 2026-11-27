@@ -38,8 +38,7 @@ func promptOf(th []fakeslack.MessageView) (fakeslack.MessageView, bool) {
 func TestS3_AnAskUserPromptAcceptsOnlyACompleteAuthorizedAnswer(t *testing.T) {
 	s := newScenario(t)
 	if s.env.Tier == "ax" {
-		axTextQuestion(t, s)
-		return
+		t.Skip("the AX Task launcher has no input-required state")
 	}
 	const user = "US3"
 	// Only a member of the channel who is not a bot may answer: Agent Kourier asks Slack.

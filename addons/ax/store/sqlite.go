@@ -8,10 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	// The gorm dialector ADK's sessions go through. It registers the "sqlite" database/sql driver
-	// (github.com/glebarez/go-sqlite, a pure Go build of SQLite, so the agent stays CGO-free), which the kit's store
-	// opens too: one driver for both, since modernc.org/sqlite registers the same name and cannot be linked beside it.
-	"github.com/glebarez/sqlite"
+	_ "modernc.org/sqlite" // registers the SQLite driver
 
 	kitstore "github.com/agentkourier/agent-kourier/addons/kit/store"
 )
@@ -23,8 +20,8 @@ var sqliteMigrations embed.FS
 const noun = "agent"
 
 // OpenSQLite opens (creating it, and its directory, if needed) the SQLite store at path and applies its pending
-// migrations, the kit's, the agent's and ADK's. A second agent on the same file fails with kitstore.ErrInUse instead
-// of sharing it (kitstore.OpenSQLite). Writes, the store's and ADK's, go through the kit's one write connection. A file
+// migrations, the kit's and the launcher's. A second agent on the same file fails with kitstore.ErrInUse instead
+// of sharing it (kitstore.OpenSQLite). Writes, go through the kit's one write connection. A file
 // the agent wrote before it kept its tasks in this layout has them imported (legacy.go).
 func OpenSQLite(ctx context.Context, path string, opts Options) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -60,5 +57,5 @@ func (s *Store) openSQLite(ctx context.Context, legacy bool) error {
 			return err
 		}
 	}
-	return s.openADK(ctx, sqlite.Dialector{Conn: s.SQL()})
+	return nil
 }

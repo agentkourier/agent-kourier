@@ -4,7 +4,7 @@ For anyone who has finished [Your first agent in Slack](first-agent-in-slack.md)
 Slack channel, and the agent investigates it in that alert's thread without anyone typing a prompt.
 
 The alerts in this tutorial come from Alertmanager, because the sandbox runs one, and the docs have a worked trigger for
-its messages. Alertmanager is the example, not a requirement: Agent Kourier reads what a bot posts to the channel, and
+its messages. Alertmanager is the example, not a requirement. Agent Kourier reads what a bot posts to the channel, and
 another tool's bot needs a trigger of its own (see
 [Start investigations from any bot's messages](../how-to/any-bot-trigger.md)).
 
@@ -63,8 +63,9 @@ go run ./cmd/agent-kourier dry-run --config hack/kind/sandbox/dryrun --binding a
   --channel C0123456789 --token-file ~/.config/agent-kourier/sandbox.env
 ```
 
-Use your alert channel's ID for `--channel`. The line for `webhook test` has the outcome `other_bot`, and its
-`SENDER` column is the webhook's bot ID. It starts with `B`. Copy it.
+Use your alert channel's ID for `--channel`.
+
+The line for `webhook test` has the outcome `other_bot`, and its `SENDER` column is the webhook's bot ID. It starts with `B`. Copy it.
 
 ## 5. Name the bot in the alert Binding
 

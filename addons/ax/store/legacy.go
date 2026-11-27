@@ -13,7 +13,7 @@ import (
 // The agent kept its tasks, before it was an add-on, in a SQLite layout of its own beside ADK's tables: a2a_tasks(id,
 // owner, version, payload) and a2a_messages(owner, message_id, task_id), with no schema_migrations. A file in that
 // layout has those two tables renamed before the migrations run, the kit's included, and their rows imported after,
-// so that a question waiting across the upgrade can still be answered. ADK's tables are ADK's own, and carry over as
+// so that message replay still finds previously accepted tasks. ADK's tables are ADK's own, and carry over as
 // they are.
 
 // setLegacyAside renames the old layout's tables, when the file is in it, and reports whether there are renamed

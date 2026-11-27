@@ -208,7 +208,7 @@ func noticeText(kind session.NoticeKind) (string, bool) {
 	case session.NoticeRetrying:
 		return "I can't reach the agent right now, and I'm trying again.", true
 	case session.NoticeStillBusy:
-		return "The agent is still busy with an earlier task in this thread, so this message is waiting. I'll keep trying.", true
+		return "The agent is still busy with an earlier task, so this message is waiting. I'll keep trying.", true
 	case session.NoticeNotReady:
 		return "The agent isn't ready to take this message yet, so it is waiting. I'll keep trying.", true
 	case session.NoticeFailed:

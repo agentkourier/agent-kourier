@@ -131,49 +131,41 @@ var addOns = []addOn{
 	},
 	{
 		name: "ax",
-		// SQLite, one replica, AWS credentials from the SDK's default chain.
-		set: "addons.ax.enabled=true,addons.ax.model.region=us-east-1,addons.ax.model.name=us.anthropic.claude-haiku-4-5-20251001-v1:0," +
-			"addons.ax.auth.tokenSecret.name=ax-token",
+		set: "addons.ax.enabled=true,addons.ax.server.address=ax-server.ax-system.svc:8080," +
+			"addons.ax.taskTemplate.configMap.name=ax-task,addons.ax.resultCallback.url=https://ax-results.example.test/ax/results/v1," +
+			"addons.ax.resultCallback.tokenSecret.name=ax-result-token,addons.ax.auth.tokenSecret.name=ax-token",
 		postgres: "addons.ax.store.type=postgres,addons.ax.store.postgres.dsnSecret.name=ax-pg,addons.ax.store.postgres.dsnSecret.key=dsn",
-		// Its values files are ax-addon-*: ax-values.yaml is the AX kind tier's Agent Kourier, not this add-on.
-		sqlite: "ax-addon",
-		pg:     "ax-addon-postgres",
-		more:   [][]string{axAnthropicOn, {"-f", values("ax-addon-anthropic")}},
-		own:    []string{"model", "bedrock", "anthropicApiKeySecret", "serviceAccount", "networkPolicy.model"},
+		sqlite:   "ax-addon",
+		pg:       "ax-addon-postgres",
+		own: []string{"server", "atespace", "launcherId", "taskTemplate", "resultCallback", "history", "promptKey",
+			"maxRunning", "pollInterval", "turnTimeout", "keepFailed", "serviceAccount", "networkPolicy.server", "networkPolicy.callbackFrom"},
 		contract: []string{
-			"MODEL_PROVIDER", "MODEL_REGION", "MODEL_NAME", "AWS_BEARER_TOKEN_BEDROCK", "ANTHROPIC_API_KEY", "LISTEN_ADDR", "PUBLIC_URL", "AUTH_TOKEN_FILE",
-			"AUTH_HEADER", "STORE", "SQLITE_PATH", "POSTGRES_DSN", "TASK_RETENTION", "SESSION_IDLE_TTL", "LEASE_DURATION", "LEASE_RENEW_DEADLINE",
-			"LEASE_RETRY_PERIOD", "ADVERTISE_URL", "POD_NAME", "LOG_LEVEL",
-			"POD_IP",     // the downward API's pod address, which ADVERTISE_URL refers to
-			"GOMEMLIMIT", // the Go runtime's, from the memory limit
+			"AX_ADDR", "AX_ATESPACE", "AX_LAUNCHER_ID", "AX_TASK_TEMPLATE", "AX_RESULT_URL", "AX_RESULT_TOKEN_FILE",
+			"AX_PROMPT_KEY", "AX_HISTORY", "AX_MAX_RUNNING", "AX_POLL_INTERVAL", "AX_TURN_TIMEOUT", "AX_KEEP_FAILED",
+			"LISTEN_ADDR", "PUBLIC_URL", "AUTH_TOKEN_FILE", "AUTH_HEADER", "STORE", "SQLITE_PATH", "POSTGRES_DSN",
+			"TASK_RETENTION", "SESSION_IDLE_TTL", "LEASE_DURATION", "LEASE_RENEW_DEADLINE", "LEASE_RETRY_PERIOD",
+			"ADVERTISE_URL", "POD_NAME", "LOG_LEVEL", "POD_IP", "GOMEMLIMIT",
 		},
-		// RUNNER_URL and OIDC are the AX route's, STATE_DIR is gone (the add-on refuses it), and OTEL_SERVICE_NAME is left
-		// to the add-on's default.
-		never: []string{"RUNNER_URL", "OIDC_ISSUER", "OIDC_AUDIENCE", "OIDC_SUBJECT", "STATE_DIR", "OTEL_SERVICE_NAME"},
+		never: []string{"MODEL_PROVIDER", "MODEL_REGION", "MODEL_NAME", "RUNNER_URL", "OIDC_ISSUER", "STATE_DIR", "OTEL_SERVICE_NAME"},
 		onEnv: map[string]string{
-			"MODEL_PROVIDER": "bedrock", "MODEL_REGION": "us-east-1", "MODEL_NAME": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "LISTEN_ADDR": ":8090",
+			"AX_ADDR": "ax-server.ax-system.svc:8080", "AX_ATESPACE": "default", "AX_LAUNCHER_ID": "team-agent-kourier-ax",
+			"AX_TASK_TEMPLATE": "/etc/agent-kourier-ax/task/task.yaml", "AX_RESULT_TOKEN_FILE": "/etc/agent-kourier-ax/result/token",
+			"AX_RESULT_URL": "https://ax-results.example.test/ax/results/v1", "AX_HISTORY": "true", "LISTEN_ADDR": ":8090",
+			"AX_MAX_RUNNING": "10", "AX_KEEP_FAILED": "24h", "AX_POLL_INTERVAL": "2s", "AX_PROMPT_KEY": "prompt", "AX_TURN_TIMEOUT": "30m",
 			"PUBLIC_URL": "http://team-agent-kourier-ax.ops.svc:8090/a2a", "AUTH_TOKEN_FILE": "/etc/agent-kourier-ax/auth/tokens",
 			"STORE": "sqlite", "SQLITE_PATH": "/data/ax.db", "LOG_LEVEL": "info", "GOMEMLIMIT": "429496729",
 		},
 		pgEnv: map[string]string{
 			"STORE": "postgres", "AUTH_HEADER": "X-Ax-Token", "SESSION_IDLE_TTL": "720h", "TASK_RETENTION": "0",
-			"LEASE_DURATION": "20s", "LEASE_RENEW_DEADLINE": "12s", "LEASE_RETRY_PERIOD": "3s", "LOG_LEVEL": "debug", "ADVERTISE_URL": "http://$(POD_IP):8090",
-			"MODEL_REGION": "eu-west-1", "MODEL_NAME": "eu.anthropic.claude-haiku-4-5-20251001-v1:0", "OTEL_TRACES_EXPORTER": "otlp",
+			"LEASE_DURATION": "20s", "LEASE_RENEW_DEADLINE": "12s", "LEASE_RETRY_PERIOD": "3s", "LOG_LEVEL": "debug",
+			"ADVERTISE_URL": "http://$(POD_IP):8090", "AX_ATESPACE": "kourier-ax", "OTEL_TRACES_EXPORTER": "otlp",
 		},
-		// No Bedrock key in ax-addon-values.yaml: the AWS SDK's default chain finds the credentials.
-		sqliteFrom: map[string]secretRef{},
-		ownOff: [][]string{
-			{"--set", "addons.ax.bedrock.apiKeySecret.name=bedrock"},
-			{"--set", "addons.ax.model.provider=anthropic,addons.ax.model.region=us-east-1,addons.ax.anthropicApiKeySecret.key=apiKey"},
-		},
+		sqliteFrom:  map[string]secretRef{},
+		ownOff:      [][]string{{"--set", "addons.ax.server.address=ax:8080"}},
 		ownRefusals: axRefusals,
 		policies: []policyCase{
-			// Agent Kourier and the scrapers; DNS (two ports), Bedrock, and from extraEgress the EKS Pod Identity Agent.
-			{"ax-addon", 2, false, []int{53, 53, 443, 80}},
-			// Agent Kourier and the other replicas; DNS, Bedrock, the other replicas, the database, the collector.
-			{"ax-addon-postgres", 2, true, []int{53, 53, 443, 8090, 5432, 4318}},
-			// Agent Kourier alone (no metricsFrom); DNS and the Anthropic API.
-			{"ax-addon-anthropic", 1, false, []int{53, 53, 443}},
+			{"ax-addon", 3, false, []int{53, 53, 8080}},
+			{"ax-addon-postgres", 3, true, []int{53, 53, 8080, 8090, 5432, 4318}},
 		},
 	},
 }
@@ -437,6 +429,9 @@ func TestAddOnRefusals(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				t.Parallel()
 				args := a.with(tc.args...)
+				if a.name == "ax" && tc.name == "a NetworkPolicy with Postgres and no database" {
+					args = append(args, axPolicyValues...)
+				}
 				if tc.base != nil {
 					args = append(slices.Clone(tc.base), tc.args...)
 				}
@@ -810,7 +805,18 @@ func TestAddOnNetworkPolicies(t *testing.T) {
 				if got := ports(np.Spec.Egress); !slices.Equal(got, tc.egressPorts) {
 					t.Fatalf("egress ports %v; want %v", got, tc.egressPorts)
 				}
-				if b := np.Spec.Egress[1].To; len(b) != 1 || b[0].IPBlock == nil || b[0].IPBlock.CIDR != "0.0.0.0/0" || !slices.Contains(b[0].IPBlock.Except, "10.0.0.0/8") ||
+				b := np.Spec.Egress[1].To
+				if a.name == "ax" {
+					if len(b) != 1 || b[0].NamespaceSelector == nil || b[0].NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] != "ax-system" ||
+						b[0].PodSelector == nil || b[0].PodSelector.MatchLabels["app.kubernetes.io/name"] != "ax-server" {
+						t.Errorf("AX server peers: %+v", b)
+					}
+					last := np.Spec.Ingress[len(np.Spec.Ingress)-1].From
+					if len(last) != 1 || last[0].NamespaceSelector == nil || last[0].NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] != "ingress-system" ||
+						last[0].PodSelector == nil || last[0].PodSelector.MatchLabels["app"] != "internal-ingress" {
+						t.Errorf("AX callback ingress peers: %+v", last)
+					}
+				} else if len(b) != 1 || b[0].IPBlock == nil || b[0].IPBlock.CIDR != "0.0.0.0/0" || !slices.Contains(b[0].IPBlock.Except, "10.0.0.0/8") ||
 					!slices.Contains(b[0].IPBlock.Except, "169.254.0.0/16") {
 					t.Errorf("the rule for the add-on's backend %+v; want 443 to anywhere outside the private and link-local ranges", b)
 				}
@@ -827,6 +833,11 @@ func TestAddOnNetworkPolicies(t *testing.T) {
 	})
 }
 
+var axPolicyValues = []string{
+	"--set-json", `addons.ax.networkPolicy.server.to=[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"ax-system"}}}]`,
+	"--set-json", `addons.ax.networkPolicy.callbackFrom=[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"ingress-system"}}}]`,
+}
+
 // TestAddOnsSideBySide: every add-on in one release renders apart, each with its own objects, and Agent Kourier's policy reaches each.
 func TestAddOnsSideBySide(t *testing.T) {
 	t.Parallel()
@@ -835,6 +846,7 @@ func TestAddOnsSideBySide(t *testing.T) {
 	for _, a := range addOns {
 		args = append(args, "--set", a.set)
 	}
+	args = append(args, axPolicyValues...)
 	objs := mustRender(t, "agent-kourier", "agent-kourier", args...)
 	var broker networkingv1.NetworkPolicy
 	find(t, objs, "NetworkPolicy", "agent-kourier", &broker)

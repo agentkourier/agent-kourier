@@ -49,7 +49,7 @@ internal/testhooks      test-only hooks, compiled in under the testhooks build t
 internal/testutil       helpers only tests import: Eventually (poll until a condition holds), DiscardLogger; standard library only (a migrated SQLite store for a test: internal/store/sqlite/sqlitetest)
 charts/agent-kourier    Helm chart
 addons/cma              add-on: A2A server in front of a Claude Managed Agents agent, on the kit's runtime (separate module, released with the broker)
-addons/ax               add-on: ADK agent on Bedrock or the Anthropic API, on the kit's runtime, run by the chart or inside Google AX (separate module)
+addons/ax               add-on: AX Task launcher and result wrapper, on the kit's A2A runtime (separate module)
 addons/kit              the add-ons' shared Go module (each requires it through replace ../kit; released with them): limitsdoc (the guards of the add-ons' limits markers; the kit.* ones are guarded in the kit), telemetry (metrics, traces and the JSON log), store (connections, migrations, the lease and its fence; no SQLite driver), auth (the caller check), auth/oidc (its OIDC verifier, apart so that only AX links go-oidc), cluster (the leader election, a standby's forward to the leader, the leadership-lost exit), settings (the environment every add-on shares, and an add-on's own variables), runtime (Main and Run: an add-on's backend served over A2A with its optional hooks, the replay of a resent message, the check of a message before its turn, the turns' outcomes, the leader's takeover, the upkeep and the stop order), kittest (the cases every add-on runs under runtime.Run on each store; kittest/echo is its reference backend, whose marked sections docs/how-to/write-an-add-on.md includes; tests only). Add-on images build from addons/
 docs/                   the documentation site (mkdocs; docs/brand is the brand kit and is not published)
 test/{fakeslack,stubagent,e2e,fixtures,kindmanifests,chart,...}
@@ -96,7 +96,7 @@ golangci-lint runs as `go tool golangci-lint`, never a global install.
   Binding stored before a tightening of the schema, and `kubectl wait`. `make e2e-crs-migration` (`hack/kind/crs-migration.sh`) moves a release between the ConfigMap
   and the custom resources and back with Helm while a session is in flight, on a fresh Postgres tier with two replicas, and puts the tier back on the ConfigMap route after (the CRDs stay under the release, so a second run needs a fresh tier).
 - AX fixtures use the separate `addons/ax` module and unmodified pinned AX/Substrate APIs; see
-  `hack/kind/ax/README.md` for shared scenarios and capability differences. `make ax-smoke` exercises Bedrock/Haiku.
+  `hack/kind/ax/README.md` for the deterministic runner, Gateway and TLS fixture, and release compatibility gate.
 - `make image` builds `agent-kourier:dev`, the production image, from the `Dockerfile` (pinned Go and distroless
   images, in `hack/kind/lib.sh`); `make image-testhooks` builds `agent-kourier-e2e/agent-kourier-testhooks:dev`, the
   labelled test image the kind tiers run and nothing pushes; `make image-check` proves the production

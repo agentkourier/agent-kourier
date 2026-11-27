@@ -26,8 +26,8 @@ type turns struct {
 	life     context.Context
 
 	mu      sync.Mutex
-	running map[*a2asrv.ExecutorContext]bool // the turns Execute started that a2a-go has not cleaned up
-	byTask  map[a2a.TaskID]*outcome          // the outcome of each running turn, for Cancel to mark
+	running map[*a2asrv.ExecutorContext]func() // the turns Execute started that a2a-go has not cleaned up
+	byTask  map[a2a.TaskID]*outcome            // the outcome of each running turn, for Cancel to mark
 	wg      sync.WaitGroup
 }
 
@@ -37,7 +37,7 @@ var (
 )
 
 func newTurns(life context.Context, backend Backend, tel *telemetry.Telemetry) *turns {
-	t := &turns{backend: backend, tel: tel, life: life, running: map[*a2asrv.ExecutorContext]bool{}, byTask: map[a2a.TaskID]*outcome{}}
+	t := &turns{backend: backend, tel: tel, life: life, running: map[*a2asrv.ExecutorContext]func(){}, byTask: map[a2a.TaskID]*outcome{}}
 	t.classify, _ = backend.(TurnClassifier)
 	return t
 }
@@ -51,8 +51,16 @@ func (t *turns) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter.Se
 		t.mu.Unlock()
 		return func(yield func(a2a.Event, error) bool) { yield(nil, errStopping) }
 	}
-	if !t.running[ec] {
-		t.running[ec] = true
+	if _, held := t.running[ec]; !held {
+		var release func()
+		if slot, _ := ctx.Value(reservationKey{}).(*reservation); slot != nil {
+			if !slot.taken.CompareAndSwap(false, true) {
+				t.mu.Unlock()
+				return func(yield func(a2a.Event, error) bool) { yield(nil, errStopping) }
+			}
+			release = slot.release
+		}
+		t.running[ec] = release
 		t.wg.Add(1)
 	}
 	t.mu.Unlock()
@@ -94,10 +102,13 @@ func (t *turns) Cleanup(ctx context.Context, ec *a2asrv.ExecutorContext, result 
 		c.Cleanup(ctx, ec, result, err)
 	}
 	t.mu.Lock()
-	held := t.running[ec]
+	release, held := t.running[ec]
 	delete(t.running, ec)
 	t.mu.Unlock()
 	if held {
+		if release != nil {
+			release()
+		}
 		t.wg.Done()
 	}
 }
@@ -199,6 +210,19 @@ func (o *outcome) of(ctx context.Context, classify TurnClassifier) telemetry.Tur
 		return telemetry.TurnCanceled
 	}
 	return telemetry.TurnFailed
+}
+
+type reservationKey struct{}
+
+type reservation struct {
+	taken   atomic.Bool
+	release func()
+}
+
+func (r *reservation) releaseUnclaimed() {
+	if r.taken.CompareAndSwap(false, true) {
+		r.release()
+	}
 }
 
 // errStopping is a2a-go's write of a task refused, or a turn not started, once the add-on has begun to stop its turns:

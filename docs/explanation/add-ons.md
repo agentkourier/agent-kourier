@@ -1,10 +1,11 @@
 # Add-ons
 
 Agent Kourier talks to every agent in one way: streaming A2A, through an AgentBackend. Some agents people want behind a
-Binding do not serve A2A, and some teams want an agent to start from. An add-on is an optional component, kept and
-released in this repository, that does a job which does not belong in the broker. One add-on puts an A2A endpoint in
-front of an agent that has none; another is an agent of its own that serves A2A. A Binding reaches either like any other
-agent.
+Binding do not serve A2A, and some teams want an agent to start from.
+
+An add-on is an optional component, kept and released in this repository, that does a job which does not belong in the
+broker. One add-on puts an A2A endpoint in front of an agent that has none, and another is an agent of its own that
+serves A2A. A Binding reaches either like any other agent.
 
 ## What makes a component an add-on
 
@@ -50,16 +51,17 @@ the same limits ([Every add-on](../reference/limits.md#every-add-on)). What diff
 what a pause waits for, and what an idle context loses.
 
 The broker does not use the kit, and the kit does not use the broker. The broker's packages are internal to its module,
-which another module cannot import, and having the broker import the kit would put the add-ons' code and its
-dependencies in the broker's module. The kit's telemetry is built as the broker's is.
-[Write an add-on on the kit](../how-to/write-an-add-on.md) builds one, step by step.
+which another module cannot import. Having the broker import the kit would put the add-ons' code and its dependencies
+in the broker's module.
+
+The kit's telemetry is built as the broker's is. [Write an add-on on the kit](../how-to/write-an-add-on.md) builds one, step by step.
 
 ## Supported add-ons
 
 | Add-on | What it does | Chart block | Pages |
 |---|---|---|---|
-| Claude Managed Agents | An A2A server in front of one agent in Claude Managed Agents, Anthropic's hosted agent runtime. A thread is one session of the agent, and a tool call whose permission policy asks first waits on Approve and Deny in the thread. Experimental: tested against a self-hosted environment with a Haiku agent, and, on a build before the release (22 and 23 November 2026), on Postgres with two replicas, where a leader killed during an approval left the standby to take over and complete the same task; cloud environments are untested. | `addons.cma` | [Connect Claude Managed Agents](../how-to/connect-claude-managed-agents.md), [Claude Managed Agents add-on](../reference/claude-managed-agents.md) |
-| AX | An agent on Amazon Bedrock or the Anthropic API, built with Google's Agent Development Kit (ADK), that serves A2A. A thread is one ADK session, and a question the agent asks with its one tool, `ask_user`, waits for a reply in the thread. The chart runs it beside Agent Kourier, and it can run inside Google AX as a Task. Experimental: tested in kind through the chart with a Haiku model on the Anthropic API, on SQLite, and, on a build before the release (22 and 23 November 2026), on Postgres with two replicas, where a leader killed during a question left the standby to take over and complete the same task; Bedrock is tested against a mock of its API, and its routes through an IAM role (IRSA, EKS Pod Identity) have not been tested on EKS. | `addons.ax` | [Connect the AX add-on](../how-to/connect-ax.md), [AX add-on](../reference/ax.md) |
+| Claude Managed Agents | An A2A server in front of one agent in Claude Managed Agents, Anthropic's hosted agent runtime. A thread is one session of the agent, and a tool call whose permission policy asks first waits on Approve and Deny in the thread. Experimental: tested against a self-hosted environment with a Haiku agent, and, on a build before the release (22 and 23 November 2026), on Postgres with two replicas, where a leader killed during an approval left the standby to take over and complete the same task. Cloud environments are untested. | `addons.cma` | [Connect Claude Managed Agents](../how-to/connect-claude-managed-agents.md), [Claude Managed Agents add-on](../reference/claude-managed-agents.md) |
+| AX | Launches an AX Task for each accepted turn and returns the wrapped command's result over A2A. The Task template selects the image, Workspace, and Gateway. | `addons.ax` | [Connect the AX add-on](../how-to/connect-ax.md), [AX add-on](../reference/ax.md) |
 
 The 0.6.0 chart has no `addons` block, and its values schema refuses one: use the chart of a release whose
 [release notes](../release-notes.md) list the add-on.
@@ -68,9 +70,10 @@ The 0.6.0 chart has no `addons` block, and its values schema refuses one: use th
 
 The add-on for Claude Managed Agents could have been a backend type inside the broker, which would reuse the broker's
 store, sessions and leader election and save a network hop. It would also have put the Anthropic SDK in the broker's
-module and a second agent protocol beside A2A, for one vendor. As an add-on, the broker keeps one contract, A2A
-([Why A2A](why-a2a.md)), and the price is the hop and a store of the add-on's own, which keeps its tasks and sessions
-across a restart.
+module and a second agent protocol beside A2A, for one vendor.
+
+With an add-on, the broker keeps one contract, A2A ([Why A2A](why-a2a.md)). The price is the hop and a store of the
+add-on's own, which keeps its tasks and sessions across a restart.
 
 The AX add-on is an agent, so it was never a candidate for a backend type. It is an add-on, and not an example, so that
 it is released, scanned and deployed like the broker: the chart runs it, and a release pins its image.

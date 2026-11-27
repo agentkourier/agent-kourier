@@ -1,0 +1,38 @@
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: slack-main, namespace: agent-kourier}
+spec:
+  platform: slack
+  credentialsSecretRef: {name: slack-main}
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: ChatConnection
+metadata: {name: slack-second, namespace: agent-kourier}
+spec:
+  platform: slack
+  credentialsSecretRef: {name: slack-second}
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: AgentBackend
+metadata: {name: ax, namespace: agent-kourier}
+spec:
+  dialect: a2a
+  url: http://agent-kourier-ax.agent-kourier.svc:8090/a2a
+---
+apiVersion: agentkourier.dev/v1alpha1
+kind: Binding
+metadata: {name: ax-chat, namespace: agent-kourier}
+spec:
+  agent:
+    backendRef: {name: ax}
+    namespace: agent-kourier
+    name: ax-echo
+  identity:
+    tokenSecretRef: {name: ax-a2a-auth}
+  chat:
+    connectionRef: {name: slack-main}
+    channel: CAXLAUNCH
+    output: live
+    progress: steps-and-activity
+    triggers:
+      - type: mention
