@@ -14,13 +14,7 @@ import (
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
-	"github.com/glebarez/sqlite"
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver, for the fixture's connection
-	"google.golang.org/adk/v2/session"
-	"google.golang.org/adk/v2/session/database"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 
 	kitstore "github.com/agentkourier/agent-kourier/addons/kit/store"
 	"github.com/agentkourier/agent-kourier/addons/kit/store/pgtest"
@@ -34,7 +28,7 @@ import (
 // seedMain migrates raw as the agent did before the kit (each file of testdata/main/<engine> in its own statement, and
 // its version in schema_migrations, then ADK's migration) and writes the agent's rows in that layout: a task paused on
 // a question, the message that started it, its context and the context's ADK session.
-func seedMain(t *testing.T, raw *sql.DB, engine string, dialector gorm.Dialector) {
+func seedMain(t *testing.T, raw *sql.DB, engine string) {
 	t.Helper()
 	ctx := context.Background()
 	exec := func(query string, args ...any) {
@@ -68,20 +62,10 @@ func seedMain(t *testing.T, raw *sql.DB, engine string, dialector gorm.Dialector
 		"t1", "c1", "agent-kourier", 3, string(a2a.TaskStateInputRequired), nil, 42, string(payload))
 	exec(`INSERT INTO message_ids (owner, message_id, task_id, created_at) VALUES (?, ?, ?, ?)`, "agent-kourier", "m1", "t1", 42)
 	exec(`INSERT INTO contexts (owner, context_id, last_active) VALUES (?, ?, ?)`, "agent-kourier", "c1", 42)
-	db, err := gorm.Open(dialector, &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sessions, err := database.NewSessionServiceFromDB(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := database.AutoMigrate(sessions); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := sessions.Create(ctx, &session.CreateRequest{AppName: AppName, UserID: "agent-kourier", SessionID: "c1"}); err != nil {
-		t.Fatal(err)
-	}
+	exec(`CREATE TABLE sessions (app_name TEXT NOT NULL, user_id TEXT NOT NULL, id TEXT NOT NULL, state TEXT NOT NULL)`)
+	exec(`INSERT INTO sessions (app_name, user_id, id, state) VALUES (?, ?, ?, ?)`, "agent-kourier-ax", "agent-kourier", "c1", "legacy")
+	exec(`CREATE TABLE events (id TEXT NOT NULL, session_id TEXT NOT NULL)`)
+	exec(`INSERT INTO events (id, session_id) VALUES (?, ?)`, "event-1", "c1")
 }
 
 // numberedForTest numbers the ? placeholders of query for Postgres.
@@ -114,8 +98,13 @@ func assertMainRowsKept(t *testing.T, s, fresh *Store) {
 		cs[0] != (kitstore.Context{Owner: "agent-kourier", ContextID: "c1", LastActive: time.Unix(0, 42).UTC(), Ref: ""}) {
 		t.Fatalf("its context: %+v, %v", cs, err)
 	}
-	if _, err := s.Sessions().Get(ctx, &session.GetRequest{AppName: AppName, UserID: "agent-kourier", SessionID: "c1"}); err != nil {
-		t.Fatalf("its ADK session: %v", err)
+	var state string
+	if err := s.Reader().QueryRow(ctx, `SELECT state FROM sessions WHERE id = ?`, "c1").Scan(&state); err != nil || state != "legacy" {
+		t.Fatalf("legacy ADK session changed: %q, %v", state, err)
+	}
+	var event string
+	if err := s.Reader().QueryRow(ctx, `SELECT id FROM events WHERE session_id = ?`, "c1").Scan(&event); err != nil || event != "event-1" {
+		t.Fatalf("legacy ADK event changed: %q, %v", event, err)
 	}
 	var versions []int
 	err = s.Reader().Query(ctx, `SELECT version FROM schema_migrations ORDER BY version`, nil, func(scan func(...any) error) error {
@@ -126,8 +115,8 @@ func assertMainRowsKept(t *testing.T, s, fresh *Store) {
 		versions = append(versions, v)
 		return nil
 	})
-	if err != nil || !slices.Equal(versions, []int{1, 2}) {
-		t.Fatalf("schema_migrations: %v, %v; want the main layout's 1 and 2", versions, err)
+	if err != nil || !slices.Equal(versions, []int{1, 2, 3}) {
+		t.Fatalf("schema_migrations: %v, %v; want the old migrations and the launch migration", versions, err)
 	}
 	var kit, want int
 	if err := s.Reader().QueryRow(ctx, `SELECT COUNT(*) FROM kit_schema_migrations`).Scan(&kit); err != nil {
@@ -141,12 +130,12 @@ func assertMainRowsKept(t *testing.T, s, fresh *Store) {
 func TestSQLiteOpensADatabaseOfMain(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ax.db")
 	ctx := context.Background()
-	raw, err := sql.Open(sqlite.DriverName, (&url.URL{Scheme: "file", Path: path}).String())
+	raw, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String())
 	if err != nil {
 		t.Fatal(err)
 	}
 	raw.SetMaxOpenConns(1)
-	seedMain(t, raw, "sqlite", sqlite.Dialector{Conn: raw})
+	seedMain(t, raw, "sqlite")
 	if err := raw.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -166,9 +155,6 @@ func TestSQLiteOpensADatabaseOfMain(t *testing.T) {
 	if err := s.TouchContext(asCaller("agent-kourier"), "c1"); err != nil {
 		t.Fatalf("a write after the open: %v", err)
 	}
-	if err := createSession(s, "c2"); err != nil {
-		t.Fatalf("an ADK write after the open: %v", err)
-	}
 }
 
 func TestPostgresOpensADatabaseOfMain(t *testing.T) {
@@ -179,7 +165,7 @@ func TestPostgresOpensADatabaseOfMain(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = raw.Close() }()
-	seedMain(t, raw, "postgres", postgres.New(postgres.Config{Conn: raw}))
+	seedMain(t, raw, "postgres")
 	// A lease that a replica of the main layout holds, live.
 	if _, err := raw.ExecContext(ctx, `UPDATE leadership SET holder = 'old-pod', address = 'http://old-pod:8090', epoch = 7, expires_at = now() + interval '1 hour'`); err != nil {
 		t.Fatal(err)
@@ -199,7 +185,7 @@ func TestPostgresOpensADatabaseOfMain(t *testing.T) {
 		t.Fatalf("the leadership table is %d (%v), was %d: it was recreated", after, err, oid)
 	}
 
-	// The lease still fences, the store's writes and ADK's: a replica that has not taken it writes nothing, the old
+	// The lease still fences, including the new launch table: a replica that has not taken it writes nothing, the old
 	// holder's live lease keeps another out, the same holder takes it with the next epoch, and a later take deposes it.
 	caller := asCaller("agent-kourier")
 	if err := a.TouchContext(caller, "c1"); !errors.Is(err, kitstore.ErrDeposed) {
@@ -214,9 +200,6 @@ func TestPostgresOpensADatabaseOfMain(t *testing.T) {
 	if err := a.TouchContext(caller, "c1"); err != nil {
 		t.Fatalf("the leader's write: %v", err)
 	}
-	if err := createSession(a, "c2"); err != nil {
-		t.Fatalf("the leader's ADK write: %v", err)
-	}
 	b := openPostgres(t, dsn)
 	if got, err := b.Get(caller, "t1"); err != nil || got.Version != 3 {
 		t.Fatalf("the paused task, on a second replica: %+v, %v", got, err)
@@ -226,9 +209,6 @@ func TestPostgresOpensADatabaseOfMain(t *testing.T) {
 	}
 	if err := a.TouchContext(caller, "c1"); !errors.Is(err, kitstore.ErrDeposed) {
 		t.Fatalf("the deposed leader's write: %v, want ErrDeposed", err)
-	}
-	if err := createSession(a, "c3"); !errors.Is(err, kitstore.ErrDeposed) {
-		t.Fatalf("the deposed leader's ADK write: %v, want ErrDeposed", err)
 	}
 	if err := b.TouchContext(caller, "c1"); err != nil {
 		t.Fatalf("the new leader's write: %v", err)

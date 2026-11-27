@@ -370,7 +370,7 @@ func TestTierValuesNameTheirRoute(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := "files"
-			if name == "crds" {
+			if name == "crds" || name == "ax" {
 				want = "crds"
 			}
 			if v.Config.Source != want {
@@ -381,7 +381,7 @@ func TestTierValuesNameTheirRoute(t *testing.T) {
 			if want == "files" && v.CRDs.Install != nil && *v.CRDs.Install {
 				t.Errorf("crds.install = true; want it unset or false: these files render the ConfigMap route and no CRD")
 			}
-			if want == "crds" && (v.CRDs.Install == nil || *v.CRDs.Install) {
+			if name == "crds" && (v.CRDs.Install == nil || *v.CRDs.Install) {
 				t.Errorf("crds.install = %v; want false, named in the file: the platform installs the CRDs itself", v.CRDs.Install)
 			}
 		})
@@ -395,7 +395,7 @@ func TestExplicitFilesRouteIsTheConfigMapRoute(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
 	for _, tc := range goldenCases {
-		if tc.name == "crds" {
+		if tc.name == "crds" || tc.name == "ax" {
 			continue
 		}
 		t.Run(tc.name, func(t *testing.T) {
@@ -691,7 +691,7 @@ func decodeCR(t *testing.T, kind string, o object) []error {
 func TestCRModeRendersWhatTheLoaderReads(t *testing.T) {
 	t.Parallel()
 	helmPath(t)
-	for _, dir := range []string{"fast", "ax"} {
+	for _, dir := range []string{"fast"} {
 		t.Run(dir, func(t *testing.T) {
 			t.Parallel()
 			want, err := config.Load(t.Context(), filepath.Join("../../hack/kind", dir, "agent-kourier", "config"))

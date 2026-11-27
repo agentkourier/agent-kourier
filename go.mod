@@ -22,10 +22,11 @@ require (
 	go.opentelemetry.io/proto/otlp v1.11.1
 	go.uber.org/goleak v1.3.0
 	golang.org/x/sys v0.50.0
+	google.golang.org/grpc v1.85.0
 	google.golang.org/protobuf v1.36.12
-	k8s.io/api v0.37.2
-	k8s.io/apimachinery v0.37.2
-	k8s.io/client-go v0.37.2
+	k8s.io/api v0.37.3
+	k8s.io/apimachinery v0.37.3
+	k8s.io/client-go v0.37.3
 	k8s.io/klog/v2 v2.140.0
 	modernc.org/sqlite v1.63.0
 	sigs.k8s.io/json v0.0.0-20260909141634-11ed52e25bc5
@@ -281,7 +282,6 @@ require (
 	golang.org/x/tools v0.52.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260928230214-8a89bd6388cc // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260928230214-8a89bd6388cc // indirect
-	google.golang.org/grpc v1.84.0 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect

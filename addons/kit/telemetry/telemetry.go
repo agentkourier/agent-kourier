@@ -75,7 +75,7 @@ type Spec struct {
 	Calls string
 	// TurnsHelp, OperationHelp and AuthRefusedHelp are the help of agentkourier_<Name>_turns_total,
 	// agentkourier_<Name>_operation_duration_seconds and agentkourier_<Name>_auth_refused_total: the outcomes, the
-	// operations and the reasons each add-on has. None may be empty.
+	// operations and the reasons each add-on has. Leave OperationHelp empty to omit the operation histogram.
 	TurnsHelp, OperationHelp, AuthRefusedHelp string
 	// ErrorTurns are the outcomes, besides TurnFailed, that end a turn's span with the status Error.
 	ErrorTurns []TurnOutcome
@@ -109,8 +109,8 @@ func New(spec Spec, provider trace.TracerProvider) (*Telemetry, error) {
 	if !nameRE.MatchString(spec.Name) || !nameRE.MatchString(spec.Calls) {
 		return nil, errors.New("telemetry: the add-on's name and its calls' name must be lower-case letters and digits, a letter first")
 	}
-	if spec.TurnsHelp == "" || spec.OperationHelp == "" || spec.AuthRefusedHelp == "" {
-		return nil, errors.New("telemetry: every help text of the spec must be set")
+	if spec.TurnsHelp == "" || spec.AuthRefusedHelp == "" {
+		return nil, errors.New("telemetry: turns and auth refusal help text must be set")
 	}
 	if provider == nil {
 		provider = noop.NewTracerProvider()
@@ -120,8 +120,6 @@ func New(spec Spec, provider trace.TracerProvider) (*Telemetry, error) {
 		spans: "agentkourier." + spec.Name + ".", calls: spec.Calls,
 		errorTurns: slices.Clone(spec.ErrorTurns)}
 	t.turns = prometheus.NewCounterVec(prometheus.CounterOpts{Name: prefix + "turns_total", Help: spec.TurnsHelp}, []string{"outcome"})
-	t.duration = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: prefix + "operation_duration_seconds",
-		Help: spec.OperationHelp, Buckets: durationBuckets()}, []string{"operation", "outcome"})
 	t.authRefused = prometheus.NewCounterVec(prometheus.CounterOpts{Name: prefix + "auth_refused_total", Help: spec.AuthRefusedHelp},
 		[]string{"reason"})
 	t.replays = prometheus.NewCounter(prometheus.CounterOpts{Name: prefix + "message_replays_total",
@@ -135,8 +133,14 @@ func New(spec Spec, provider trace.TracerProvider) (*Telemetry, error) {
 	t.forwarded = prometheus.NewCounterVec(prometheus.CounterOpts{Name: prefix + "forwarded_requests_total",
 		Help: "Requests to the A2A endpoint or the agent card that this replica, a standby, forwarded or could not, by outcome: forwarded, failed, cancelled, no_leader or loop."},
 		[]string{"outcome"})
-	for _, c := range []prometheus.Collector{t.turns, t.duration, t.authRefused, t.replays, t.interrupted, t.leader,
-		t.takeovers, t.forwarded, collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{})} {
+	metrics := []prometheus.Collector{t.turns, t.authRefused, t.replays, t.interrupted, t.leader,
+		t.takeovers, t.forwarded, collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{})}
+	if spec.OperationHelp != "" {
+		t.duration = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: prefix + "operation_duration_seconds",
+			Help: spec.OperationHelp, Buckets: durationBuckets()}, []string{"operation", "outcome"})
+		metrics = append(metrics, t.duration)
+	}
+	for _, c := range metrics {
 		if err := t.reg.Register(c); err != nil {
 			return nil, err
 		}
@@ -288,7 +292,7 @@ func (c *Call) End(outcome string) {
 		c.span.SetStatus(codes.Error, outcome)
 	}
 	c.span.End()
-	if c.t != nil {
+	if c.t != nil && c.t.duration != nil {
 		c.t.duration.WithLabelValues(string(c.op), outcome).Observe(time.Since(c.started).Seconds())
 	}
 }

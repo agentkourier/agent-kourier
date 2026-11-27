@@ -49,7 +49,7 @@ internal/testhooks      test-only hooks, compiled in under the testhooks build t
 internal/testutil       helpers only tests import: Eventually (poll until a condition holds), DiscardLogger; standard library only (a migrated SQLite store for a test: internal/store/sqlite/sqlitetest)
 charts/agent-kourier    Helm chart
 addons/cma              add-on: A2A server in front of a Claude Managed Agents agent, on the kit's runtime (separate module, released with the broker)
-addons/ax               add-on: ADK agent on Bedrock or the Anthropic API, on the kit's runtime, run by the chart or inside Google AX (separate module)
+addons/ax               add-on: AX Task launcher and result wrapper, on the kit's A2A runtime (separate module)
 addons/kit              the add-ons' shared Go module (each requires it through replace ../kit; released with them): limitsdoc (the guards of the add-ons' limits markers; the kit.* ones are guarded in the kit), telemetry (metrics, traces and the JSON log), store (connections, migrations, the lease and its fence; no SQLite driver), auth (the caller check), auth/oidc (its OIDC verifier, apart so that only AX links go-oidc), cluster (the leader election, a standby's forward to the leader, the leadership-lost exit), settings (the environment every add-on shares, and an add-on's own variables), runtime (Main and Run: an add-on's backend served over A2A with its optional hooks, the replay of a resent message, the check of a message before its turn, the turns' outcomes, the leader's takeover, the upkeep and the stop order), kittest (the cases every add-on runs under runtime.Run on each store; kittest/echo is its reference backend, whose marked sections docs/how-to/write-an-add-on.md includes; tests only). Add-on images build from addons/
 docs/                   the documentation site (mkdocs; docs/brand is the brand kit and is not published)
 test/{fakeslack,stubagent,e2e,fixtures,kindmanifests,chart,...}
@@ -57,7 +57,7 @@ test/crdcorpus          valid and invalid objects that the CRD schemas and the b
 hack/kind/              kind tier scripts (fast, full, ax, sandbox)
 hack/{docs,release,postgres,crdhashes}  doc generators, release scripts, Postgres test helpers, the CRD schema hashes
 hack/{ci,github,security,clip}  CI tool installer and testhooks package selection, the add-on list's hold on the workflows and the chart (hack/ci/addonlist), PR label check, scan and workflow policy, the demo clip's recording
-hack/addons.txt         the add-ons, one name per line, which hack/addons.sh reads for the Makefile and the release scripts
+hack/addons.txt         the add-ons, one name per line, which hack/addons.sh reads for the Makefile, the release scripts and release.yml
 hack/slack/             the live probe of a ChatConnection in Slack's HTTP mode, run against Slack itself before a release that touches the mode
 ```
 
@@ -66,7 +66,7 @@ hack/slack/             the live probe of a ChatConnection in Slack's HTTP mode,
 Run `make` for help. Only Go and the tools pinned in `go.mod` (`tool` directive) are needed;
 golangci-lint runs as `go tool golangci-lint`, never a global install.
 
-- `make fmt lint test build tidy`: `test` runs `go test -race ./...`, then `go test -race -tags testhooks` over the `./internal/...` packages whose test build the tag changes (`hack/ci/testhooks-packages.sh`), then the scripts' own tests (`test-scripts`: the add-on list (`hack/addons.sh`, which reads `hack/addons.txt`), kind, security policy, release gate, PR labels, the Slack HTTP-mode probe, CI tool installer, testhooks package selection, test leg split, Actions cache upkeep, docs-only classification); `go test ./...` also runs `hack/ci/addonlist`, which holds the workflows' add-on legs and the chart's add-on names to the list; `build` writes `bin/agent-kourier`.
+- `make fmt lint test build tidy`: `test` runs `go test -race ./...`, then `go test -race -tags testhooks` over the `./internal/...` packages whose test build the tag changes (`hack/ci/testhooks-packages.sh`), then the scripts' own tests (`test-scripts`: the add-on list (`hack/addons.sh`, which reads `hack/addons.txt`), kind, security policy, release gate, PR labels, the Slack HTTP-mode probe, CI tool installer, testhooks package selection, test leg split, Actions cache upkeep, docs-only classification); `go test ./...` also runs `hack/ci/addonlist`, which holds the workflows' add-on legs and the chart's add-on names to the list and runs release.yml's add-on steps (with fakes of cosign and gh) for a list of its own; `build` writes `bin/agent-kourier`.
 - `make crds` regenerates the CustomResourceDefinitions in `charts/agent-kourier/files/crds/` from the markers in `api/v1alpha1` with
   `controller-gen` (pinned as a `tool` in `go.mod`, run as `go tool controller-gen`). Run it after changing an API type or marker and commit the
   result: `TestCommittedCRDsMatchGeneration` in `make test` fails when the committed files differ from what generation produces. The
@@ -96,7 +96,7 @@ golangci-lint runs as `go tool golangci-lint`, never a global install.
   Binding stored before a tightening of the schema, and `kubectl wait`. `make e2e-crs-migration` (`hack/kind/crs-migration.sh`) moves a release between the ConfigMap
   and the custom resources and back with Helm while a session is in flight, on a fresh Postgres tier with two replicas, and puts the tier back on the ConfigMap route after (the CRDs stay under the release, so a second run needs a fresh tier).
 - AX fixtures use the separate `addons/ax` module and unmodified pinned AX/Substrate APIs; see
-  `hack/kind/ax/README.md` for shared scenarios and capability differences. `make ax-smoke` exercises Bedrock/Haiku.
+  `hack/kind/ax/README.md` for the deterministic runner, Gateway and TLS fixture, and release compatibility gate.
 - `make image` builds `agent-kourier:dev`, the production image, from the `Dockerfile` (pinned Go and distroless
   images, in `hack/kind/lib.sh`); `make image-testhooks` builds `agent-kourier-e2e/agent-kourier-testhooks:dev`, the
   labelled test image the kind tiers run and nothing pushes; `make image-check` proves the production

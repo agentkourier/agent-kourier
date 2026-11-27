@@ -41,10 +41,6 @@ func TestS2_AThreadKeepsItsContextAcrossAnAgentKourierRestart(t *testing.T) {
 		t.Errorf("the second reply is %q; want it to quote the first turn, %q", got, one)
 	}
 
-	if s.env.Tier == "ax" {
-		axSuspendResume(t, s, "memory")
-	}
-
 	restart, cancel := context.WithTimeout(s.ctx, 3*time.Minute) // a stuck rollout fails here, with its reason
 	defer cancel()
 	if err := s.pods.RolloutRestart(restart, kube.AgentKourierNamespace, kube.AgentKourierDeployment); err != nil {

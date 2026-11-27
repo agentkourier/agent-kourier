@@ -190,12 +190,30 @@ spec:
       automountServiceAccountToken: false
       containers:
       - env:
-        - name: MODEL_PROVIDER
-          value: bedrock
-        - name: MODEL_REGION
-          value: us-east-1
-        - name: MODEL_NAME
-          value: us.anthropic.claude-haiku-4-5-20251001-v1:0
+        - name: AX_ADDR
+          value: ax-server.ax-system.svc:8080
+        - name: AX_ATESPACE
+          value: kourier-ax
+        - name: AX_LAUNCHER_ID
+          value: agent-kourier-ax
+        - name: AX_TASK_TEMPLATE
+          value: /etc/agent-kourier-ax/task/task.yaml
+        - name: AX_RESULT_URL
+          value: https://ax-results.example.test/ax/results/v1
+        - name: AX_RESULT_TOKEN_FILE
+          value: /etc/agent-kourier-ax/result/token
+        - name: AX_PROMPT_KEY
+          value: prompt
+        - name: AX_HISTORY
+          value: "true"
+        - name: AX_MAX_RUNNING
+          value: "10"
+        - name: AX_POLL_INTERVAL
+          value: 2s
+        - name: AX_TURN_TIMEOUT
+          value: 30m
+        - name: AX_KEEP_FAILED
+          value: 24h
         - name: LISTEN_ADDR
           value: :8090
         - name: PUBLIC_URL
@@ -251,6 +269,12 @@ spec:
           readOnly: true
         - mountPath: /data
           name: data
+        - mountPath: /etc/agent-kourier-ax/result
+          name: result-auth
+          readOnly: true
+        - mountPath: /etc/agent-kourier-ax/task
+          name: task-template
+          readOnly: true
         - mountPath: /tmp
           name: tmp
       securityContext:
@@ -272,8 +296,59 @@ spec:
       - name: data
         persistentVolumeClaim:
           claimName: agent-kourier-ax-data
+      - name: result-auth
+        secret:
+          defaultMode: 288
+          items:
+          - key: token
+            path: token
+          secretName: ax-result-token
+      - configMap:
+          items:
+          - key: task.yaml
+            path: task.yaml
+          name: ax-task
+        name: task-template
       - emptyDir: {}
         name: tmp
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  labels:
+    app.kubernetes.io/component: ax-addon
+    app.kubernetes.io/instance: agent-kourier
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agent-kourier-ax
+    app.kubernetes.io/part-of: agent-kourier
+    app.kubernetes.io/version: dev
+    helm.sh/chart: agent-kourier-0.7.0
+  name: agent-kourier-ax-results
+  namespace: agent-kourier
+spec:
+  ingressClassName: internal
+  rules:
+  - host: ax-results.example.test
+    http:
+      paths:
+      - backend:
+          service:
+            name: agent-kourier-ax
+            port:
+              number: 8090
+        path: /ax/results/v1
+        pathType: Exact
+      - backend:
+          service:
+            name: agent-kourier-ax
+            port:
+              number: 8090
+        path: /ax/results/v1/start
+        pathType: Exact
+  tls:
+  - hosts:
+    - ax-results.example.test
+    secretName: ax-results-tls
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -375,23 +450,15 @@ spec:
         matchLabels:
           k8s-app: kube-dns
   - ports:
-    - port: 443
+    - port: 8080
       protocol: TCP
     to:
-    - ipBlock:
-        cidr: 0.0.0.0/0
-        except:
-        - 10.0.0.0/8
-        - 172.16.0.0/12
-        - 192.168.0.0/16
-        - 100.64.0.0/10
-        - 169.254.0.0/16
-  - ports:
-    - port: 80
-      protocol: TCP
-    to:
-    - ipBlock:
-        cidr: 169.254.170.23/32
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ax-system
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: ax-server
   ingress:
   - from:
     - podSelector:
@@ -408,6 +475,16 @@ spec:
       podSelector:
         matchLabels:
           app.kubernetes.io/name: prometheus
+    ports:
+    - port: 8090
+      protocol: TCP
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-system
+      podSelector:
+        matchLabels:
+          app: internal-ingress
     ports:
     - port: 8090
       protocol: TCP
@@ -475,6 +552,9 @@ metadata:
 rules:
 - apiGroups:
   - ""
+  resourceNames:
+  - ax-token
+  - slack-main
   resources:
   - secrets
   verbs:
@@ -541,8 +621,6 @@ apiVersion: v1
 automountServiceAccountToken: false
 kind: ServiceAccount
 metadata:
-  annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::111122223333:role/agent-kourier-ax
   labels:
     app.kubernetes.io/component: ax-addon
     app.kubernetes.io/instance: agent-kourier

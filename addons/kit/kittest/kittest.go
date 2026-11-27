@@ -41,7 +41,7 @@ type Subject[S runtime.Store] struct {
 	// Env are the add-on's own settings, which every replica adds to the kit's.
 	Env map[string]string
 	// Complete is the text of a message whose turn completes; Pause, of one whose turn pauses for an answer (its task
-	// input-required); Hold, of one whose turn runs until it is canceled or the add-on stops.
+	// input-required), or empty for a backend that cannot pause; Hold, of one whose turn runs until it is canceled or the add-on stops.
 	Complete, Pause, Hold string
 	// Answer is the text of an answer to Pause's question, which completes its task.
 	Answer string

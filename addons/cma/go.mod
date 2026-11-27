@@ -5,7 +5,7 @@ go 1.27.4
 require (
 	github.com/a2aproject/a2a-go/v2 v2.9.0
 	github.com/agentkourier/agent-kourier/addons/kit v0.0.0-00010101000000-000000000000
-	github.com/anthropics/anthropic-sdk-go/v2 v2.14.0
+	github.com/anthropics/anthropic-sdk-go/v2 v2.15.0
 	github.com/jackc/pgx/v5 v5.13.0
 	github.com/prometheus/client_golang v1.25.0
 	go.opentelemetry.io/otel v1.47.0

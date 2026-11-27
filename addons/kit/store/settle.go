@@ -34,6 +34,16 @@ func (s Settlement) Interrupted() int { return len(s.Failed) + len(s.Unreadable)
 // It fails every such task in the store, whichever process ran it, so call it only when no turn is running anywhere
 // on the database: before serving, and on Postgres only where no other replica serves turns from it.
 func (s *Store) SettleInterrupted(ctx context.Context, text string) (Settlement, error) {
+	return s.settle(ctx, text, running)
+}
+
+// SettlePaused fails input-required tasks before a backend that cannot resume
+// them takes over. Other add-ons continue to use SettleInterrupted alone.
+func (s *Store) SettlePaused(ctx context.Context, text string) (Settlement, error) {
+	return s.settle(ctx, text, []any{string(a2a.TaskStateInputRequired)})
+}
+
+func (s *Store) settle(ctx context.Context, text string, states []any) (Settlement, error) {
 	type interrupted struct {
 		id, contextID string
 		version       int64
@@ -41,7 +51,7 @@ func (s *Store) SettleInterrupted(ctx context.Context, text string) (Settlement,
 	}
 	var found []interrupted
 	err := s.Write(ctx, func(q Querier) error {
-		return q.Query(ctx, `SELECT id, context_id, version, payload FROM a2a_tasks WHERE state IN (`+marks(len(running))+`) ORDER BY id`, running,
+		return q.Query(ctx, `SELECT id, context_id, version, payload FROM a2a_tasks WHERE state IN (`+marks(len(states))+`) ORDER BY id`, states,
 			func(scan func(...any) error) error {
 				var it interrupted
 				if err := scan(&it.id, &it.contextID, &it.version, &it.raw); err != nil {

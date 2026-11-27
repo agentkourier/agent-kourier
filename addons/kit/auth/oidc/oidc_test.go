@@ -164,8 +164,18 @@ func TestOIDCDiscoveryIsLazyAndIdentityIsVerified(t *testing.T) {
 		t.Fatalf("keys down: %v, want auth.ErrUnavailable", err)
 	}
 	is.keysUp.Store(true)
-	if sub, err := v.Verify(request(t.Context(), good)); err != nil || sub != "service" {
-		t.Fatalf("after recovery: %q, %v; want service", sub, err)
+	// go-oidc's key set ends its fetch before it lets go of it: a Verify in that moment joins the fetch that failed and
+	// gets its error. So the first Verify after the key set is back may still be unavailable, never invalid.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		sub, err := v.Verify(request(t.Context(), good))
+		if err == nil && sub == "service" {
+			break
+		}
+		if !errors.Is(err, auth.ErrUnavailable) || time.Now().After(deadline) {
+			t.Fatalf("after recovery: %q, %v; want service", sub, err)
+		}
+		time.Sleep(time.Millisecond)
 	}
 	for _, tc := range []struct {
 		name, iss, aud, sub string

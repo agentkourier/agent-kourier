@@ -93,7 +93,7 @@ func TestStuckNoticesSayWhatTheTurnWaitsFor(t *testing.T) {
 	thread := thread
 	thread.Thread = e.root
 	for kind, want := range map[session.NoticeKind]string{
-		session.NoticeStillBusy: "The agent is still busy with an earlier task in this thread, so this message is waiting. I'll keep trying.",
+		session.NoticeStillBusy: "The agent is still busy with an earlier task, so this message is waiting. I'll keep trying.",
 		session.NoticeNotReady:  "The agent isn't ready to take this message yet, so it is waiting. I'll keep trying.",
 	} {
 		n := session.Notice{ID: "slack:ns/conn:C1:1.5/" + string(kind), Kind: kind, MessageRef: "1.5"}

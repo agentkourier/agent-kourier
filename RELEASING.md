@@ -7,8 +7,7 @@ and `ghcr.io/agentkourier/agent-kourier-echo-agent` (linux/amd64 and linux/arm64
 `examples/recipes/<agent>/agent/Dockerfile`, and the images of the two add-ons, `ghcr.io/agentkourier/agent-kourier-cma`
 (the CMA add-on) and `ghcr.io/agentkourier/agent-kourier-ax` (the AX add-on) (linux/amd64 and linux/arm64), built from
 `addons/<name>/Dockerfile` on Agent Kourier's pinned bases (`hack/addons.txt` lists the add-ons). The add-ons are versioned with Agent Kourier: each release
-tags their images with the same `vX.Y.Z`. The AX add-on's image for the route inside Google AX (`addons/ax/Dockerfile.ax`,
-`make ax-runner-image`) is not released. Nothing is released by hand.
+tags their images with the same `vX.Y.Z`. The AX add-on image also contains the command wrapper for agent images. Validate the Go API, Gateway, wrapper, and kind tests against AX v0.4.0 final before releasing the launcher. Include Workspace-bound Tasks with omitted optional defaults and explicit resource limits. Confirm that AX preserves the filled Task spec on Create and Get, and verify the runner metadata URL and output file location with the wrapped agent image.
 
 ## Cut a release
 
@@ -356,9 +355,9 @@ step reads the list with `hack/addons.sh` and reports the add-ons' images as one
 its image's reference, in the list's order); `sign` and `verify` go over every reference in it, and `publish` checks an
 existing release for, or writes in the notes, a line `- <NAME> add-on image: ...` for each, the shape by which the
 released-image rescan (`hack/security/select-release-images.sh`) selects every add-on's image. Each of the three stops
-when `addons` holds no add-on's image reference by digest. `hack/ci/addonlist`'s tests fail until the workflows and the
-chart hold the list (they run `release.yml`'s steps, with fakes of `cosign` and `gh`, for a list of their own), and the
-owner adds the new checks to the `main` ruleset. The `crd-corpus` job (`make crd-corpus`, `hack/kind/crd-corpus.sh`) brings up
+when `addons` holds no add-on's image, or a value that is not one reference by digest. `hack/ci/addonlist`'s tests fail
+until the workflows and the chart hold the list (they run `release.yml`'s steps, with fakes of `cosign` and `gh`, for a
+list of their own), and the owner adds the new checks to the `main` ruleset. The `crd-corpus` job (`make crd-corpus`, `hack/kind/crd-corpus.sh`) brings up
 a kind cluster with only the three CRDs from `charts/agent-kourier/files/crds`, with no image and no Agent Kourier, and has
 `test/crdcorpus` send every entry of its corpus to it as a server-side dry-run create. It fails when the schema refuses
 an object the broker's own validation accepts, or when an entry's `schema:` flag no longer says what the schema does with

@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ax-results
+  namespace: agent-kourier
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: ax-results}
+  template:
+    metadata:
+      labels: {app: ax-results}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - name: proxy
+        image: localhost:5003/ax-launcher-fixture:local
+        imagePullPolicy: Never
+        args: [proxy]
+        ports: [{containerPort: 8443}]
+        readinessProbe:
+          httpGet: {scheme: HTTPS, port: 8443, path: /healthz}
+        volumeMounts:
+        - {name: tls, mountPath: /tls, readOnly: true}
+      volumes:
+      - name: tls
+        secret: {secretName: ax-results-tls}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ax-results
+  namespace: agent-kourier
+spec:
+  selector: {app: ax-results}
+  ports: [{port: 443, targetPort: 8443}]
