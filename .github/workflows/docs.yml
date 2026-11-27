@@ -144,10 +144,11 @@ jobs:
 
   # External links in docs/.
   #
-  # A link to a file or directory of this repository (github.com/agentkourier/agent-kourier/blob/main/... or
-  # .../tree/main/...) is checked in the checkout, not over HTTP: --remap turns it into a file:// path. So a pull
-  # request is checked against its own tree, and github.com is not asked for some forty pages at once, a few of which
-  # it used to answer with a 503.
+  # No link is checked on github.com's file pages (/blob/): github.com answers some runners' requests for them with a
+  # 503, and a retry from the same runner can get the same answer. The two --remap rules send those links elsewhere.
+  # A link to a file or directory of this repository on main (github.com/agentkourier/agent-kourier/blob/main/... or
+  # .../tree/main/...) becomes a file:// path in the checkout, so a pull request is checked against its own tree. Any
+  # other /blob/ link is checked as the same file at the same ref on raw.githubusercontent.com.
   #
   # The check runs in up to two passes, because lychee 0.24.2 retries a timeout and a 429 (--max-retries) but not a
   # 5xx response. The first pass does not fail the job. When it finds a failing link, the second pass runs a minute
@@ -164,6 +165,7 @@ jobs:
         --max-retries 3
         --fallback-extensions md
         --remap '^https://github\.com/agentkourier/agent-kourier/(?:blob|tree)/main/(.*)$ file://${{ github.workspace }}/$1'
+        --remap '^https://github\.com/([^/]+/[^/]+)/blob/(.*)$ https://raw.githubusercontent.com/$1/$2'
         --exclude '\.svc\.cluster\.local'
         --exclude-path docs/brand
         --exclude-path docs/spikes
