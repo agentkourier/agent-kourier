@@ -180,12 +180,12 @@ jobs:
           ADDON_REFS: ${{ needs.build.outputs.addons }}
           CHART_REF: ${{ needs.build.outputs.chart }}
         run: |
-          # ADDON_REFS is the build's object of each add-on's name to its image's reference by digest; one that holds
-          # none stops the job.
+          # ADDON_REFS is the build's object of each add-on's name to its image's reference by digest, each a whole
+          # value with no space or newline; one that holds none, or any other value, stops the job.
           addons=$(jq -er '
-            if type == "object" and length > 0 and all(.[]; type == "string" and test("@sha256:[0-9a-f]{64}$"))
+            if type == "object" and length > 0 and all(.[]; type == "string" and test("\\A[^\\s@]+@sha256:[0-9a-f]{64}\\z"))
             then .[] else error("no add-on image") end' <<<"${ADDON_REFS}") ||
-            { echo "error: ADDON_REFS holds no add-on image reference by digest" >&2; exit 1; }
+            { echo "error: ADDON_REFS holds no add-on image, or one that is not a reference by digest" >&2; exit 1; }
           refs=("${IMAGE_REF}" "${PROMPT_AGENT_REF}" "${ECHO_AGENT_REF}")
           while IFS= read -r ref; do refs+=("${ref}"); done <<<"${addons}"
           refs+=("${CHART_REF}")
@@ -218,12 +218,12 @@ jobs:
           ISSUER: https://token.actions.githubusercontent.com
           IDENTITY: https://github.com/agentkourier/agent-kourier/.github/workflows/release.yml@refs/tags/${{ github.ref_name }}
         run: |
-          # ADDON_REFS is the build's object of each add-on's name to its image's reference by digest; one that holds
-          # none stops the job.
+          # ADDON_REFS is the build's object of each add-on's name to its image's reference by digest, each a whole
+          # value with no space or newline; one that holds none, or any other value, stops the job.
           addons=$(jq -er '
-            if type == "object" and length > 0 and all(.[]; type == "string" and test("@sha256:[0-9a-f]{64}$"))
+            if type == "object" and length > 0 and all(.[]; type == "string" and test("\\A[^\\s@]+@sha256:[0-9a-f]{64}\\z"))
             then .[] else error("no add-on image") end' <<<"${ADDON_REFS}") ||
-            { echo "error: ADDON_REFS holds no add-on image reference by digest" >&2; exit 1; }
+            { echo "error: ADDON_REFS holds no add-on image, or one that is not a reference by digest" >&2; exit 1; }
           refs=("${IMAGE_REF}" "${PROMPT_AGENT_REF}" "${ECHO_AGENT_REF}")
           while IFS= read -r ref; do refs+=("${ref}"); done <<<"${addons}"
           refs+=("${CHART_REF}")
@@ -258,13 +258,15 @@ jobs:
         run: |
           set -euo pipefail
           # Each add-on's line of the notes, "- <NAME> add-on image: `<reference>`" in hack/addons.txt's order, from the
-          # build's object of each add-on's name to its image's reference by digest; one that holds none stops the job.
+          # build's object of each add-on's name to its image's reference by digest, each a whole value with no space or
+          # newline; one that holds none, or any other value, stops the job.
           # The released-image rescan (hack/security/select-release-images.sh) selects an add-on's image by this shape.
           # shellcheck disable=SC2016
           addon_lines=$(jq -er '
-            if type == "object" and length > 0 and all(.[]; type == "string" and test("@sha256:[0-9a-f]{64}$"))
+            if type == "object" and length > 0 and all(.[]; type == "string" and test("\\A[^\\s@]+@sha256:[0-9a-f]{64}\\z"))
             then to_entries[] | "- \(.key | ascii_upcase) add-on image: `\(.value)`" else error("no add-on image") end' \
-            <<<"${ADDON_REFS}") || { echo "error: ADDON_REFS holds no add-on image reference by digest" >&2; exit 1; }
+            <<<"${ADDON_REFS}") ||
+            { echo "error: ADDON_REFS holds no add-on image, or one that is not a reference by digest" >&2; exit 1; }
           release_api="repos/${REPOSITORY}/releases/tags/${TAG}"
           existing="${RUNNER_TEMP}/release.json"
           error="${RUNNER_TEMP}/release-error"

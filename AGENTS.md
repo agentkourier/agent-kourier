@@ -57,7 +57,7 @@ test/crdcorpus          valid and invalid objects that the CRD schemas and the b
 hack/kind/              kind tier scripts (fast, full, ax, sandbox)
 hack/{docs,release,postgres,crdhashes}  doc generators, release scripts, Postgres test helpers, the CRD schema hashes
 hack/{ci,github,security,clip}  CI tool installer and testhooks package selection, the add-on list's hold on the workflows and the chart (hack/ci/addonlist), PR label check, scan and workflow policy, the demo clip's recording
-hack/addons.txt         the add-ons, one name per line, which hack/addons.sh reads for the Makefile and the release scripts
+hack/addons.txt         the add-ons, one name per line, which hack/addons.sh reads for the Makefile, the release scripts and release.yml
 hack/slack/             the live probe of a ChatConnection in Slack's HTTP mode, run against Slack itself before a release that touches the mode
 ```
 
@@ -66,7 +66,7 @@ hack/slack/             the live probe of a ChatConnection in Slack's HTTP mode,
 Run `make` for help. Only Go and the tools pinned in `go.mod` (`tool` directive) are needed;
 golangci-lint runs as `go tool golangci-lint`, never a global install.
 
-- `make fmt lint test build tidy`: `test` runs `go test -race ./...`, then `go test -race -tags testhooks` over the `./internal/...` packages whose test build the tag changes (`hack/ci/testhooks-packages.sh`), then the scripts' own tests (`test-scripts`: the add-on list (`hack/addons.sh`, which reads `hack/addons.txt`), kind, security policy, release gate, PR labels, the Slack HTTP-mode probe, CI tool installer, testhooks package selection, test leg split, Actions cache upkeep, docs-only classification); `go test ./...` also runs `hack/ci/addonlist`, which holds the workflows' add-on legs and the chart's add-on names to the list; `build` writes `bin/agent-kourier`.
+- `make fmt lint test build tidy`: `test` runs `go test -race ./...`, then `go test -race -tags testhooks` over the `./internal/...` packages whose test build the tag changes (`hack/ci/testhooks-packages.sh`), then the scripts' own tests (`test-scripts`: the add-on list (`hack/addons.sh`, which reads `hack/addons.txt`), kind, security policy, release gate, PR labels, the Slack HTTP-mode probe, CI tool installer, testhooks package selection, test leg split, Actions cache upkeep, docs-only classification); `go test ./...` also runs `hack/ci/addonlist`, which holds the workflows' add-on legs and the chart's add-on names to the list and runs release.yml's add-on steps (with fakes of cosign and gh) for a list of its own; `build` writes `bin/agent-kourier`.
 - `make crds` regenerates the CustomResourceDefinitions in `charts/agent-kourier/files/crds/` from the markers in `api/v1alpha1` with
   `controller-gen` (pinned as a `tool` in `go.mod`, run as `go tool controller-gen`). Run it after changing an API type or marker and commit the
   result: `TestCommittedCRDsMatchGeneration` in `make test` fails when the committed files differ from what generation produces. The

@@ -4,7 +4,7 @@
 
 17 github.com/agentkourier/agent-kourier/api/v1alpha1
 35 github.com/agentkourier/agent-kourier/cmd/agent-kourier
-1 github.com/agentkourier/agent-kourier/hack/ci/addonlist
+12 github.com/agentkourier/agent-kourier/hack/ci/addonlist
 4 github.com/agentkourier/agent-kourier/hack/ci/docsonly
 4 github.com/agentkourier/agent-kourier/hack/ci/testmtimes
 1 github.com/agentkourier/agent-kourier/hack/ci/testshards
