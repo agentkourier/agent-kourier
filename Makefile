@@ -227,14 +227,6 @@ $(addsuffix -test,$(ADDONS)): %-test: addon-test-% ## Test add-on <name>'s modul
 $(addsuffix -lint,$(ADDONS)): %-lint: addon-lint-% ## Lint add-on <name>'s module (addons/<name>) with the repository's golangci-lint and config
 $(addsuffix -image,$(ADDONS)): %-image: addon-image-% ## Build add-on <name>'s image, agent-kourier-<name>:dev, on Agent Kourier's pinned bases (hack/kind/lib.sh; Docker)
 
-# The AX add-on's own targets, beside its aliases.
-.PHONY: ax-runner-image ax-smoke
-ax-runner-image: ## Build the image of the route inside Google AX, agent-kourier-ax-runner:dev: AX's task runner, git and the agent on Debian (addons/ax/Dockerfile.ax; Docker)
-	docker build -f addons/ax/Dockerfile.ax -t agent-kourier-ax-runner:dev addons
-
-ax-smoke: ## Run the real A2A smoke on Bedrock or the Anthropic API (the sandbox file's MODEL_PROVIDER), using the existing sandbox credentials file
-	bash addons/ax/smoke.sh
-
 .PHONY: docs-agent-test docs-agent-lint docs-agent-image docs-agent-smoke docs-agent-smoke-live
 # -count=1: the smoke test reads docs/, outside the module, which go test's result cache never checks, so a reused result
 # would not see a change to the docs.
@@ -299,10 +291,10 @@ prompt-agent-image: ## Build the prompt agent image, agent-kourier-prompt-agent:
 	docker build -t agent-kourier-prompt-agent:dev $(PROMPT_AGENT)
 
 .PHONY: e2e-ax-up e2e-ax e2e-ax-down
-e2e-ax-up: ## Bring up AX/Substrate with deterministic ADK scenarios and fake Slack
+e2e-ax-up: ## Bring up AX/Substrate with a deterministic Task runner and fake Slack
 	hack/kind/up-ax.sh
 
-e2e-ax: ## Run the shared E2E scenarios and AX text-question/lifecycle scenarios
+e2e-ax: ## Run the AX Task launcher scenarios
 	hack/kind/e2e-run.sh ax
 
 e2e-ax-down: ## Tear down only the AX E2E tier

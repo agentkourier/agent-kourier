@@ -2,7 +2,10 @@
 
 package testhooks
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // AfterPost is called by the outbox between a successful post and recording it. In this build it
 // does nothing.
@@ -22,3 +25,6 @@ func Teams(Overrides) (TeamsFake, bool, error) { return TeamsFake{}, false, nil 
 
 // BeforeSend does nothing in a production build.
 func BeforeSend(context.Context, string) error { return nil }
+
+// AgentStreamTimeout uses the production watchdog default.
+func AgentStreamTimeout() time.Duration { return 0 }

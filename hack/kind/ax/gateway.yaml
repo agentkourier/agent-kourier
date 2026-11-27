@@ -1,0 +1,14 @@
+apiVersion: ax.io/v1alpha1
+kind: Gateway
+metadata:
+  name: kourier-results
+  atespace: default
+spec:
+  egress:
+    - https:
+        hostnames: [ax-results.agent-kourier.svc.cluster.local]
+        effects:
+          replaceHeaders:
+            - header: Authorization
+              prefix: "Bearer "
+              credentialUri: "ate-secret://k8s.io/default/agent-kourier/ax-result-auth/token"

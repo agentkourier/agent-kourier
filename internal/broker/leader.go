@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
+	"github.com/agentkourier/agent-kourier/internal/agent"
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/bindingcheck"
 	"github.com/agentkourier/agent-kourier/internal/chat"
@@ -20,6 +21,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/retention"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
+	"github.com/agentkourier/agent-kourier/internal/testhooks"
 	"github.com/agentkourier/agent-kourier/internal/trigger"
 )
 
@@ -116,7 +118,8 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	var platforms chat.Resolver[chat.Platform] = table
 	// The Bindings take the acknowledgment reaction of the platform of their own connection, so the platform is built first.
 	bindings, err := NewBindings(boot.Reloader, boot.Secrets, auditor, Options{
-		OnRejected: metrics.CredentialRejected, Platforms: chat.Narrow[platformCaps](platforms), fence: h.leaseFence})
+		OnRejected: metrics.CredentialRejected, Platforms: chat.Narrow[platformCaps](platforms), fence: h.leaseFence,
+		Agent: agent.Config{InactivityTimeout: testhooks.AgentStreamTimeout()}})
 	if err != nil {
 		host.closeAll()
 		return nil, err

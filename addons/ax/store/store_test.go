@@ -8,21 +8,12 @@ import (
 	"time"
 
 	"github.com/agentkourier/agent-kourier/addons/ax/store"
-	"github.com/agentkourier/agent-kourier/addons/ax/store/storetest"
 	kitstore "github.com/agentkourier/agent-kourier/addons/kit/store"
 	"github.com/agentkourier/agent-kourier/addons/kit/store/pgtest"
 	kitstoretest "github.com/agentkourier/agent-kourier/addons/kit/store/storetest"
 )
 
-func TestSQLiteConformance(t *testing.T) {
-	storetest.Run(t, SQLiteHarness())
-}
-
-func TestPostgresConformance(t *testing.T) {
-	storetest.Run(t, PostgresHarness(t))
-}
-
-// The kit's task state, on the database the agent opens: its driver, its legacy import, its migrations and ADK's.
+// The kit's task state, on the database the agent opens: its driver, its legacy import, and its launch migrations.
 func TestSQLiteTaskStateConformance(t *testing.T) {
 	kitstoretest.Run(t, kitstoretest.Harness{
 		New: sqliteLocation,
@@ -40,29 +31,6 @@ func TestPostgresTaskStateConformance(t *testing.T) {
 			return openPostgres(t, location, store.Options{Log: log}).DB
 		},
 	})
-}
-
-// SQLiteHarness opens SQLite stores in temporary directories.
-func SQLiteHarness() storetest.Harness {
-	return storetest.Harness{
-		New: sqliteLocation,
-		Open: func(t *testing.T, path string, now func() time.Time) *store.Store {
-			return openSQLite(t, path, store.Options{Now: now})
-		},
-	}
-}
-
-// PostgresHarness opens Postgres stores, each location a schema of its own that the test drops after, and has each
-// take the lease. It skips the test when pgtest.DSNEnv is unset.
-func PostgresHarness(t *testing.T) storetest.Harness {
-	t.Helper()
-	pgtest.DSN(t) // skips when there is no Postgres
-	return storetest.Harness{
-		New: pgLocation,
-		Open: func(t *testing.T, location string, now func() time.Time) *store.Store {
-			return openPostgres(t, location, store.Options{Now: now})
-		},
-	}
 }
 
 func sqliteLocation(t *testing.T) string { return filepath.Join(t.TempDir(), "ax.db") }

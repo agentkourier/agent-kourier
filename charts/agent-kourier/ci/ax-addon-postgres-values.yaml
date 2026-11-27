@@ -1,7 +1,4 @@
-# The AX add-on (addons.ax) on Postgres at two replicas, which elect a leader and forward to it, beside the minimal install: a Bedrock API
-# key from a Secret, the token in a header of the AgentBackend's (X-Ax-Token) rather than the Binding's Authorization, the add-on's image
-# by digest, its election timings and durations set, OpenTelemetry through extraEnv, metrics scraped by prometheus-operator, and the
-# NetworkPolicies with the add-on's database.
+# AX Task launcher chart fixture.
 image:
   repository: registry.example.test/agent-kourier
   tag: v0.1.0
@@ -63,11 +60,13 @@ addons:
       repository: registry.example.test/platform/agent-kourier-ax
       digest: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
     replicaCount: 2
-    model:
-      region: eu-west-1
-      name: eu.anthropic.claude-haiku-4-5-20251001-v1:0
-    bedrock:
-      apiKeySecret: {name: bedrock, key: apiKey}
+    server: {address: ax-server.ax-system.svc:8080}
+    atespace: kourier-ax
+    taskTemplate:
+      configMap: {name: ax-task, key: task.yaml}
+    resultCallback:
+      url: https://ax-results.example.test/ax/results/v1
+      tokenSecret: {name: ax-result-token}
     sessionIdleTTL: 720h
     taskRetention: "0"
     logLevel: debug
@@ -83,6 +82,13 @@ addons:
       renewDeadline: 12s
       retryPeriod: 3s
     networkPolicy:
+      server:
+        to:
+          - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ax-system}}
+            podSelector: {matchLabels: {app.kubernetes.io/name: ax-server}}
+      callbackFrom:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-system}}
+          podSelector: {matchLabels: {app: internal-ingress}}
       postgres:
         to:
           - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: db}}
