@@ -26,7 +26,7 @@ func (e *launcher) Execute(ctx context.Context, ec *a2asrv.ExecutorContext) iter
 			return
 		}
 		id := result.NewID()
-		task, _, err := e.taskForTurn(ctx, ec, id, deadline)
+		task, err := e.taskForTurn(ctx, ec, id, deadline)
 		if err != nil {
 			yield(failedTask(submitted, "AX could not prepare the Task.", ""), nil)
 			return
@@ -119,41 +119,23 @@ func (e *launcher) follow(ctx context.Context, task *a2a.Task, record store.Laun
 		}
 		if !now.Before(pollAt) && l.ResumeSent != 0 {
 			pollAt = now.Add(e.cfg.poll)
-			pollCtx, cancel := context.WithDeadline(ctx, minTime(deadline, now.Add(2*time.Second)))
-			observed, err := e.get(pollCtx, l.Name)
-			cancel()
-			if err == nil && !e.owns(observed, l) {
+			state, failed := e.pollTask(ctx, l, minTime(deadline, now.Add(2*time.Second)))
+			if failed {
 				_, _ = e.st.Decide(ctx, l.TaskID, store.Failed)
 				continue
 			}
-			if observed != nil && err == nil {
-				if missingActor(observed) || provisioningFailed(observed) || stoppedWithoutResult(observed, l) {
-					_, _ = e.st.Decide(ctx, l.TaskID, store.Failed)
-					continue
-				}
-				progress := ""
-				switch observed.GetStatus().GetState() {
-				case ax.TaskState_TASK_STATE_QUEUED:
-					if !queued {
-						queued = true
-						progress = "AX sandbox queued."
-					}
-				case ax.TaskState_TASK_STATE_RUNNING:
-					if !running {
-						running = true
-						progress = "AX sandbox running."
-					}
-				case ax.TaskState_TASK_STATE_CRASHED, ax.TaskState_TASK_STATE_DELETING:
-					_, _ = e.st.Decide(ctx, l.TaskID, store.Failed)
-					continue
-				}
-				if progress != "" && !yield(a2a.NewStatusUpdateEvent(task, a2a.TaskStateWorking,
-					a2a.NewMessageForTask(a2a.MessageRoleAgent, task, a2a.NewTextPart(progress))), nil) {
-					return
-				}
+			var progress string
+			switch {
+			case state == ax.TaskState_TASK_STATE_QUEUED && !queued:
+				queued = true
+				progress = "AX sandbox queued."
+			case state == ax.TaskState_TASK_STATE_RUNNING && !running:
+				running = true
+				progress = "AX sandbox running."
 			}
-			if code(err) == codes.NotFound {
-				_, _ = e.st.Decide(ctx, l.TaskID, store.Failed)
+			if progress != "" && !yield(a2a.NewStatusUpdateEvent(task, a2a.TaskStateWorking,
+				a2a.NewMessageForTask(a2a.MessageRoleAgent, task, a2a.NewTextPart(progress))), nil) {
+				return
 			}
 		}
 		timer := time.NewTimer(min(100*time.Millisecond, e.cfg.poll))
@@ -166,6 +148,20 @@ func (e *launcher) follow(ctx context.Context, task *a2a.Task, record store.Laun
 		case <-timer.C:
 		}
 	}
+}
+
+// pollTask returns the observed state and whether AX confirmed a launch failure.
+func (e *launcher) pollTask(ctx context.Context, launch store.Launch, deadline time.Time) (ax.TaskState, bool) {
+	ctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	task, err := e.get(ctx, launch.Name)
+	if err != nil {
+		return ax.TaskState_TASK_STATE_UNSPECIFIED, code(err) == codes.NotFound
+	}
+	state := task.GetStatus().GetState()
+	failed := !e.owns(task, launch) || missingActor(task) || provisioningFailed(task) || stoppedWithoutResult(task, launch) ||
+		state == ax.TaskState_TASK_STATE_CRASHED || state == ax.TaskState_TASK_STATE_DELETING
+	return state, failed
 }
 
 func stoppedWithoutResult(task *ax.Task, launch store.Launch) bool {
@@ -189,7 +185,7 @@ func (e *launcher) Cleanup(ctx context.Context, ec *a2asrv.ExecutorContext, res 
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 	defer cancel()
 	l, err := e.st.Launch(ctx, string(ec.TaskID))
-	if err != nil || l.Clean != 0 {
+	if err != nil || l.Clean != store.CleanPending {
 		return
 	}
 	at := e.now()

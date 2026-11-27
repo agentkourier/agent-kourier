@@ -153,10 +153,10 @@ func TestPostgresReceiptSurvivesInterruptedTakeover(t *testing.T) {
 	settled, d := launchFixtures(t, a, "settled", time.Now())
 	hash := sha256.Sum256([]byte("fixture"))
 	for _, claim := range []result.Claim{c, d} {
-		if got, err := a.Claim(ctx, claim); got != 204 || err != nil {
+		if got, err := a.Claim(ctx, claim); got != http.StatusNoContent || err != nil {
 			t.Fatalf("start: HTTP %d, %v", got, err)
 		}
-		if got, err := report(ctx, a, result.Report{Claim: claim, Output: "success", OutputSource: "file"}, hash); got != 204 || err != nil {
+		if got, err := report(ctx, a, result.Report{Claim: claim, Output: "success", OutputSource: "file"}, hash); got != http.StatusNoContent || err != nil {
 			t.Fatalf("report: HTTP %d, %v", got, err)
 		}
 	}
@@ -200,7 +200,7 @@ func TestPostgresReceiptSurvivesInterruptedTakeover(t *testing.T) {
 			t.Fatalf("after takeover %s: %+v, %v", tc.l.TaskID, stored, err)
 		}
 	}
-	if got, err := report(ctx, b, result.Report{Claim: c}, hash); got != 204 || err != nil {
+	if got, err := report(ctx, b, result.Report{Claim: c}, hash); got != http.StatusNoContent || err != nil {
 		t.Fatalf("receipt replay after interruption got %d, %v", got, err)
 	}
 	if _, err := report(ctx, a, result.Report{Claim: c}, hash); !errors.Is(err, kit.ErrDeposed) {
@@ -261,7 +261,7 @@ func TestRecoverClosesCallbacksForAnAlreadyTerminalTask(t *testing.T) {
 	if err != nil || recovered.Decision != Failed || recovered.CleanupAt == 0 {
 		t.Fatalf("recovery = %+v, %v", recovered, err)
 	}
-	if code, err := s.Claim(ctx, claim); code != 410 || err != nil {
+	if code, err := s.Claim(ctx, claim); code != http.StatusGone || err != nil {
 		t.Fatalf("late start = %d, %v", code, err)
 	}
 }

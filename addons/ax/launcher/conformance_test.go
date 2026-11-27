@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -87,12 +88,12 @@ func launcherSubject(t *testing.T) kittest.Subject[*store.Store] {
 						claim.ResultID = variable.GetValue()
 					}
 				}
-				if code, err := e.Claim(ctx, claim); code != 204 || err != nil {
+				if code, err := e.Claim(ctx, claim); code != http.StatusNoContent || err != nil {
 					return nil, status.Errorf(codes.FailedPrecondition, "fake start claim returned %d", code)
 				}
 				const output = "fixture"
 				report := result.Report{Claim: claim, Output: output, OutputSource: "file"}
-				if code, err := e.Report(ctx, report, sha256.Sum256([]byte(output))); code != 204 || err != nil {
+				if code, err := e.Report(ctx, report, sha256.Sum256([]byte(output))); code != http.StatusNoContent || err != nil {
 					return nil, status.Errorf(codes.FailedPrecondition, "fake report returned %d", code)
 				}
 				return task, nil

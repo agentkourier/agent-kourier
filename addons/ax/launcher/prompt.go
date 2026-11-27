@@ -53,14 +53,14 @@ func messageText(msg *a2a.Message) (string, error) {
 	return value, nil
 }
 
-func (e *launcher) taskForTurn(ctx context.Context, ec *a2asrv.ExecutorContext, id string, deadline time.Time) (*ax.Task, string, error) {
+func (e *launcher) taskForTurn(ctx context.Context, ec *a2asrv.ExecutorContext, id string, deadline time.Time) (*ax.Task, error) {
 	prompt, err := messageText(ec.Message)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	owner := ec.User
 	if owner == nil || !owner.Authenticated {
-		return nil, "", a2a.ErrUnauthenticated
+		return nil, a2a.ErrUnauthenticated
 	}
 	session := shortHash(e.cfg.identity + "\x00" + owner.Name + "\x00" + ec.ContextID)
 	turn := shortHash(string(ec.TaskID))
@@ -69,7 +69,7 @@ func (e *launcher) taskForTurn(ctx context.Context, ec *a2asrv.ExecutorContext, 
 	}
 	task, err := assemble(prompt)
 	if err != nil || !e.cfg.history {
-		return task, turn, err
+		return task, err
 	}
 	const historyPage = 32
 	historyLength := 8
@@ -77,7 +77,7 @@ func (e *launcher) taskForTurn(ctx context.Context, ec *a2asrv.ExecutorContext, 
 		ContextID: ec.ContextID, PageSize: historyPage, HistoryLength: &historyLength, IncludeArtifacts: true,
 	})
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	var entries []string
 	for _, old := range history.Tasks {
@@ -92,14 +92,14 @@ func (e *launcher) taskForTurn(ctx context.Context, ec *a2asrv.ExecutorContext, 
 			"\n\nCurrent user message:\n" + prompt
 		if filled, err := assemble(text); err == nil {
 			e.trimmed.Add(float64(discarded))
-			return filled, turn, nil
+			return filled, nil
 		}
 		entries = entries[1:]
 		if len(entries) == 0 {
 			e.trimmed.Add(float64(discarded + 1))
 		}
 	}
-	return task, turn, nil
+	return task, nil
 }
 
 func quoteTurn(task *a2a.Task) string {

@@ -23,11 +23,38 @@ const (
 	Interrupted = "interrupted"
 )
 
+// CleanupState is the persisted disposition of AX Task cleanup.
+type CleanupState int
+
+const (
+	// CleanPending means the launcher has yet to confirm cleanup.
+	CleanPending CleanupState = 0
+	// CleanDone means AX confirmed absence or the launch had no Task.
+	CleanDone CleanupState = 1
+	// CleanForeign means the Task failed the ownership check.
+	CleanForeign CleanupState = 2
+)
+
 // Launch records the identity of an immutable AX Task and its lifecycle.
 type Launch struct {
-	TaskID, Name, Fingerprint, ResultID, UID, ActorUID, Invocation, Decision, Receipt, Output string
-	Deadline, DrainUntil, CleanupAt                                                           int64
-	ResumeSent, Truncated, Suspended, Clean, ExitCode                                         int
+	TaskID      string // Owning A2A task ID.
+	Name        string // Deterministic AX Task name.
+	Fingerprint string // Digest of the immutable Task spec.
+	ResultID    string // Opaque callback correlation ID.
+	UID         string // AX Task metadata UID.
+	ActorUID    string // Original Substrate actor UID, once observed.
+	Invocation  string // Wrapper invocation that won the start claim.
+	Decision    string // Durable turn outcome, or empty while open.
+	Receipt     string // Hex digest of the accepted result body.
+	Output      string // Hex-encoded UTF-8 output.
+	Deadline    int64  // Result deadline in Unix nanoseconds.
+	DrainUntil  int64  // Reconciliation deadline in Unix nanoseconds, or zero after a definitive RPC response.
+	CleanupAt   int64  // Cleanup time in Unix nanoseconds, or zero until scheduled.
+	ResumeSent  int    // SQL boolean set before the first Resume RPC.
+	Truncated   int    // SQL boolean indicating the wrapper truncated the output.
+	Suspended   int    // SQL boolean set after AX confirms suspension.
+	Clean       CleanupState
+	ExitCode    int // -1 until a command result is recorded.
 }
 
 const launchColumns = `task_id, task_name, fingerprint, result_id, task_uid, actor_uid, invocation_id,
@@ -99,12 +126,9 @@ func (s *Store) Drained(ctx context.Context, id string) error {
 
 // Decide records a timeout or confirmed failure if that decision can still win.
 func (s *Store) Decide(ctx context.Context, id, decision string) (bool, error) {
-	var deadline string
 	if decision == TimedOut {
-		deadline = " AND deadline <= ?"
-	}
-	if deadline != "" {
-		return s.change(ctx, `UPDATE ax_launches SET decision = ? WHERE task_id = ? AND decision = ''`+deadline, decision, id, s.now().UnixNano())
+		return s.change(ctx, `UPDATE ax_launches SET decision = ? WHERE task_id = ? AND decision = '' AND deadline <= ?`,
+			decision, id, s.now().UnixNano())
 	}
 	return s.change(ctx, `UPDATE ax_launches SET decision = ? WHERE task_id = ? AND decision = '' AND deadline > ?`, decision, id, s.now().UnixNano())
 }
@@ -114,7 +138,7 @@ func (s *Store) RequestCancel(ctx context.Context, id string) (bool, error) {
 	var accepted bool
 	err := s.Write(ctx, func(q kit.Querier) error {
 		_, err := q.Exec(ctx, `INSERT INTO ax_launches (task_id, task_name, fingerprint, result_id, deadline, decision, clean)
-			VALUES (?, '', '', ?, ?, ?, 1) ON CONFLICT(task_id) DO NOTHING`, id, "cancel:"+id, s.now().UnixNano(), Canceled)
+			VALUES (?, '', '', ?, ?, ?, ?) ON CONFLICT(task_id) DO NOTHING`, id, "cancel:"+id, s.now().UnixNano(), Canceled, CleanDone)
 		if err != nil {
 			return err
 		}
@@ -223,9 +247,9 @@ func (s *Store) Recover(ctx context.Context, keep time.Duration) error {
 			    cleanup_at = CASE WHEN decision = ? AND EXISTS (SELECT 1 FROM a2a_tasks t
 			       WHERE t.id = ax_launches.task_id AND t.state = ?) THEN CAST(? AS BIGINT) ELSE CAST(? AS BIGINT) END,
 			    output = ''
-			WHERE clean = 0 AND cleanup_at = 0`,
+			WHERE clean = ? AND cleanup_at = 0`,
 			string(a2a.TaskStateSubmitted), string(a2a.TaskStateWorking), string(a2a.TaskStateInputRequired), Failed, Interrupted,
-			CommandFail, string(a2a.TaskStateFailed), now.Add(keep).UnixNano(), now.UnixNano())
+			CommandFail, string(a2a.TaskStateFailed), now.Add(keep).UnixNano(), now.UnixNano(), CleanPending)
 		return err
 	})
 }
@@ -240,7 +264,7 @@ func (s *Store) ScheduleCleanup(ctx context.Context, id string, at time.Time) er
 func (s *Store) PendingCleanup(ctx context.Context) ([]Launch, error) {
 	var launches []Launch
 	err := s.Reader().Query(ctx, `SELECT `+launchColumns+` FROM ax_launches
-		WHERE clean = 0 AND cleanup_at <> 0 ORDER BY cleanup_at, task_id`, nil, func(scan func(...any) error) error {
+		WHERE clean = ? AND cleanup_at <> 0 ORDER BY cleanup_at, task_id`, []any{CleanPending}, func(scan func(...any) error) error {
 		var l Launch
 		if err := l.scan(scan); err != nil {
 			return err
@@ -253,7 +277,7 @@ func (s *Store) PendingCleanup(ctx context.Context) ([]Launch, error) {
 
 // MarkClean records that AX confirmed the Task is gone.
 func (s *Store) MarkClean(ctx context.Context, id string) error {
-	_, err := s.change(ctx, `UPDATE ax_launches SET clean = 1 WHERE task_id = ?`, id)
+	_, err := s.change(ctx, `UPDATE ax_launches SET clean = ? WHERE task_id = ?`, CleanDone, id)
 	return err
 }
 
@@ -265,8 +289,8 @@ func (s *Store) MarkSuspended(ctx context.Context, id string) error {
 
 // PruneReceipts removes expired receipts with confirmed cleanup.
 func (s *Store) PruneReceipts(ctx context.Context, before time.Time) error {
-	_, err := s.change(ctx, `DELETE FROM ax_launches WHERE clean = 1 AND deadline < ? AND cleanup_at < ?`,
-		before.UnixNano(), before.UnixNano())
+	_, err := s.change(ctx, `DELETE FROM ax_launches WHERE clean = ? AND deadline < ? AND cleanup_at < ?`,
+		CleanDone, before.UnixNano(), before.UnixNano())
 	return err
 }
 
@@ -278,9 +302,9 @@ func (s *Store) ScheduleSettled(ctx context.Context, keep time.Duration) error {
 		decision = CASE WHEN decision = '' THEN ? ELSE decision END,
 		cleanup_at = CASE WHEN decision = ? AND EXISTS (SELECT 1 FROM a2a_tasks t WHERE
 		t.id = ax_launches.task_id AND t.state = ?) THEN CAST(? AS BIGINT) ELSE CAST(? AS BIGINT) END
-		WHERE clean = 0 AND cleanup_at = 0 AND EXISTS (SELECT 1 FROM a2a_tasks t
+		WHERE clean = ? AND cleanup_at = 0 AND EXISTS (SELECT 1 FROM a2a_tasks t
 		WHERE t.id = ax_launches.task_id AND t.state IN (?, ?, ?, ?))`,
-		Failed, CommandFail, string(a2a.TaskStateFailed), now.Add(keep).UnixNano(), now.UnixNano(),
+		Failed, CommandFail, string(a2a.TaskStateFailed), now.Add(keep).UnixNano(), now.UnixNano(), CleanPending,
 		string(a2a.TaskStateCompleted), string(a2a.TaskStateFailed), string(a2a.TaskStateCanceled), string(a2a.TaskStateRejected))
 	return err
 }
@@ -288,7 +312,7 @@ func (s *Store) ScheduleSettled(ctx context.Context, keep time.Duration) error {
 // MarkForeign preserves the association so an ownership mismatch cannot later
 // be mistaken for a Task that arrived without a launch record.
 func (s *Store) MarkForeign(ctx context.Context, id string) error {
-	_, err := s.change(ctx, `UPDATE ax_launches SET clean = 2 WHERE task_id = ?`, id)
+	_, err := s.change(ctx, `UPDATE ax_launches SET clean = ? WHERE task_id = ?`, CleanForeign, id)
 	return err
 }
 

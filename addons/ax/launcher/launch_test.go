@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -145,11 +146,11 @@ func TestReconcileAmbiguousAXCalls(t *testing.T) {
 					}
 					if test.claimOnFirst {
 						c := result.Claim{ResultID: l.ResultID, TaskUID: existing.Metadata.Uid, InvocationID: result.NewID()}
-						if got, err := e.st.Claim(ctx, c); got != 204 || err != nil {
+						if got, err := e.st.Claim(ctx, c); got != http.StatusNoContent || err != nil {
 							t.Errorf("start before Resume reply: %d, %v", got, err)
 						}
 						report := result.Report{Claim: c, Output: "fast result", OutputSource: "file"}
-						if got, _, err := e.st.AcceptResult(ctx, report, sha256.Sum256([]byte("result"))); got != 204 || err != nil {
+						if got, _, err := e.st.AcceptResult(ctx, report, sha256.Sum256([]byte("result"))); got != http.StatusNoContent || err != nil {
 							t.Errorf("result before Resume reply: %d, %v", got, err)
 						}
 					}
@@ -220,7 +221,7 @@ func TestCleanupReconcilesLateCreateAndRetriesDelete(t *testing.T) {
 	}
 	e.cleanPending(ctx)
 	provisional, err := e.st.Launch(ctx, l.TaskID)
-	if err != nil || provisional.Clean != 0 {
+	if err != nil || provisional.Clean != store.CleanPending {
 		t.Fatal("cleanup was cleared before Create returned")
 	}
 	close(release)
@@ -229,7 +230,7 @@ func TestCleanupReconcilesLateCreateAndRetriesDelete(t *testing.T) {
 		e.cleanPending(ctx)
 	}
 	settled, err := e.st.Launch(ctx, l.TaskID)
-	if err != nil || settled.Clean != 1 || deletes != 2 || existing != nil {
+	if err != nil || settled.Clean != store.CleanDone || deletes != 2 || existing != nil {
 		t.Fatalf("cleanup result clean=%d, deletes=%d, err=%v", settled.Clean, deletes, err)
 	}
 }
@@ -274,7 +275,7 @@ func TestObservedProgressIsAnnouncedOnce(t *testing.T) {
 		t.Fatalf("dispatch: %t, %v", ok, err)
 	}
 	claim := result.Claim{ResultID: l.ResultID, TaskUID: runner.Metadata.Uid, InvocationID: result.NewID()}
-	if got, err := e.st.Claim(ctx, claim); got != 204 || err != nil {
+	if got, err := e.st.Claim(ctx, claim); got != http.StatusNoContent || err != nil {
 		t.Fatalf("claim: %d, %v", got, err)
 	}
 	states := []ax.TaskState{
@@ -285,7 +286,7 @@ func TestObservedProgressIsAnnouncedOnce(t *testing.T) {
 	e.client = fakeAX{get: func(ctx context.Context, _ string) (*ax.Task, error) {
 		if next == len(states) {
 			r := result.Report{Claim: claim, Output: "done", OutputSource: "file"}
-			if status, _, err := e.st.AcceptResult(ctx, r, sha256.Sum256([]byte("done"))); status != 204 || err != nil {
+			if status, _, err := e.st.AcceptResult(ctx, r, sha256.Sum256([]byte("done"))); status != http.StatusNoContent || err != nil {
 				t.Fatalf("result %d, %v", status, err)
 			}
 		} else {
@@ -343,7 +344,7 @@ func TestHistoryKeepsNewestAndScopesToCallerAndThread(t *testing.T) {
 	seed(other, "different-user", "thread", "other-user-marker", "")
 	msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("current-message"))
 	exec := &a2asrv.ExecutorContext{TaskID: "current", ContextID: "thread", User: a2asrv.NewAuthenticatedUser("owner", nil), Message: msg}
-	task, _, err := e.taskForTurn(ctx, exec, result.NewID(), e.now().Add(time.Minute))
+	task, err := e.taskForTurn(ctx, exec, result.NewID(), e.now().Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +360,7 @@ func TestHistoryKeepsNewestAndScopesToCallerAndThread(t *testing.T) {
 		}
 	}
 	e.cfg.history = false
-	filled, _, err := e.taskForTurn(ctx, exec, result.NewID(), e.now().Add(time.Minute))
+	filled, err := e.taskForTurn(ctx, exec, result.NewID(), e.now().Add(time.Minute))
 	if err != nil || filled.Spec.Goal.Text != "current-message" || filled.Spec.SessionId != task.Spec.SessionId {
 		t.Fatalf("history opt-out changed the session or prompt: %v", err)
 	}
@@ -408,7 +409,7 @@ func TestCancelDuringResumeClosesClaimAndWaitsForRPC(t *testing.T) {
 		t.Fatalf("cancel %t, %v", ok, err)
 	}
 	claim := result.Claim{ResultID: l.ResultID, TaskUID: existing.Metadata.Uid, InvocationID: result.NewID()}
-	if got, err := e.st.Claim(ctx, claim); got != 410 || err != nil {
+	if got, err := e.st.Claim(ctx, claim); got != http.StatusGone || err != nil {
 		t.Fatalf("late start = %d, %v", got, err)
 	}
 	if err := e.st.ScheduleCleanup(ctx, l.TaskID, e.now()); err != nil {
@@ -423,7 +424,7 @@ func TestCancelDuringResumeClosesClaimAndWaitsForRPC(t *testing.T) {
 	e.cleanPending(ctx)
 	e.cleanPending(ctx)
 	settled, err := e.st.Launch(ctx, l.TaskID)
-	if err != nil || settled.Decision != store.Canceled || settled.Clean != 1 || deletes != 1 {
+	if err != nil || settled.Decision != store.Canceled || settled.Clean != store.CleanDone || deletes != 1 {
 		t.Fatalf("late Resume cleanup decision=%q clean=%d deletes=%d err=%v", settled.Decision, settled.Clean, deletes, err)
 	}
 }
@@ -488,13 +489,13 @@ func TestAcknowledgedSuspensionResolvesAgainstTheReceipt(t *testing.T) {
 				t.Fatal(err)
 			}
 			claim := result.Claim{ResultID: l.ResultID, TaskUID: suspended.GetMetadata().GetUid(), InvocationID: result.NewID()}
-			if got, err := e.st.Claim(ctx, claim); got != 204 || err != nil {
+			if got, err := e.st.Claim(ctx, claim); got != http.StatusNoContent || err != nil {
 				t.Fatalf("claim = %d, %v", got, err)
 			}
 			e.client = fakeAX{get: func(ctx context.Context, _ string) (*ax.Task, error) {
 				if withReceipt {
 					r := result.Report{Claim: claim, Output: "done", OutputSource: "file"}
-					if got, _, err := e.st.AcceptResult(ctx, r, sha256.Sum256([]byte("done"))); got != 204 || err != nil {
+					if got, _, err := e.st.AcceptResult(ctx, r, sha256.Sum256([]byte("done"))); got != http.StatusNoContent || err != nil {
 						t.Fatalf("report = %d, %v", got, err)
 					}
 				}

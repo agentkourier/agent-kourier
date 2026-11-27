@@ -71,10 +71,18 @@ var (
 )
 
 type config struct {
-	addr, atespace, identity, template, url, tokenFile, promptKey string
-	history                                                       bool
-	running                                                       int
-	poll, timeout, keep                                           time.Duration
+	addr      string
+	atespace  string
+	identity  string
+	template  string
+	url       string
+	tokenFile string
+	promptKey string
+	history   bool
+	running   int
+	poll      time.Duration
+	timeout   time.Duration
+	keep      time.Duration
 }
 
 func vars() []settings.Var {
@@ -82,9 +90,20 @@ func vars() []settings.Var {
 }
 
 func readConfig(v settings.Values) config {
-	return config{addr: addr.From(v), atespace: atespace.From(v), identity: identity.From(v), template: templatePath.From(v),
-		url: callbackURL.From(v), tokenFile: callbackTokenPath.From(v), promptKey: promptKey.From(v),
-		history: history.From(v), running: running.From(v), poll: poll.From(v), timeout: timeout.From(v), keep: keep.From(v)}
+	return config{
+		addr:      addr.From(v),
+		atespace:  atespace.From(v),
+		identity:  identity.From(v),
+		template:  templatePath.From(v),
+		url:       callbackURL.From(v),
+		tokenFile: callbackTokenPath.From(v),
+		promptKey: promptKey.From(v),
+		history:   history.From(v),
+		running:   running.From(v),
+		poll:      poll.From(v),
+		timeout:   timeout.From(v),
+		keep:      keep.From(v),
+	}
 }
 
 func labelSetting(key string) func(string, settings.Values) (string, error) {
@@ -111,13 +130,16 @@ func durationSetting(key, def string, low, high time.Duration) settings.Of[time.
 func readTemplate(ctx context.Context, cfg config, client ax.AXClient) (*ax.Task, error) {
 	file, err := os.Open(cfg.template)
 	if err != nil {
-		return nil, errors.New("cannot open AX_TASK_TEMPLATE")
+		return nil, fmt.Errorf("open AX_TASK_TEMPLATE: %w", err)
 	}
 	defer func() { _ = file.Close() }()
 	const limit = 128 << 10
 	data, err := io.ReadAll(io.LimitReader(file, limit+1))
-	if err != nil || len(data) > limit {
-		return nil, errors.New("cannot read AX_TASK_TEMPLATE within size limit")
+	if err != nil {
+		return nil, fmt.Errorf("read AX_TASK_TEMPLATE: %w", err)
+	}
+	if len(data) > limit {
+		return nil, errors.New("AX_TASK_TEMPLATE exceeds the size limit")
 	}
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	var task ax.Task
@@ -155,7 +177,7 @@ func readTemplate(ctx context.Context, cfg config, client ax.AXClient) (*ax.Task
 		defer cancel()
 		workspace, err := client.GetWorkspace(c, &ax.GetWorkspaceRequest{Atespace: cfg.atespace, Name: spec.Workspace.Name})
 		if err != nil {
-			return nil, errors.New("could not resolve AX Workspace profile")
+			return nil, fmt.Errorf("resolve AX Workspace profile: %w", err)
 		}
 		profile = workspace.GetSpec().GetProfile()
 	}

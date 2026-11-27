@@ -34,14 +34,14 @@ func (e *launcher) RunLeader(ctx context.Context) {
 func (e *launcher) cleanPending(ctx context.Context) {
 	if err := e.st.ScheduleSettled(ctx, e.cfg.keep); err != nil {
 		if ctx.Err() == nil {
-			e.log.WarnContext(ctx, "could not schedule AX cleanup")
+			e.log.WarnContext(ctx, "could not schedule AX cleanup", "error", err)
 		}
 		return
 	}
 	pending, err := e.st.PendingCleanup(ctx)
 	if err != nil {
 		if ctx.Err() == nil {
-			e.log.WarnContext(ctx, "could not read pending AX cleanup")
+			e.log.WarnContext(ctx, "could not read pending AX cleanup", "error", err)
 		}
 		return
 	}
@@ -168,7 +168,7 @@ func (e *launcher) sweep(ctx context.Context) {
 		}
 	}
 	if err := e.st.PruneReceipts(ctx, cutoff); err != nil && ctx.Err() == nil {
-		e.log.WarnContext(ctx, "could not prune AX receipts")
+		e.log.WarnContext(ctx, "could not prune AX receipts", "error", err)
 	}
 }
 
@@ -177,7 +177,7 @@ func (e *launcher) cleanLateTask(ctx context.Context, task *ax.Task, cutoff time
 	l, err := e.st.LaunchByName(ctx, m.Name)
 	switch {
 	case err == nil:
-		if l.Clean == 1 {
+		if l.Clean == store.CleanDone {
 			// Get again immediately before a write. A replacement between List
 			// and Get must be rejected by its UID and fingerprint.
 			e.cleanLaunch(ctx, l, e.now().UnixNano())

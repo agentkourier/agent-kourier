@@ -87,11 +87,11 @@ func TestA2AReplayAndBusyAdmission(t *testing.T) {
 				}
 			}
 			c := result.Claim{ResultID: id, TaskUID: task.Metadata.Uid, InvocationID: result.NewID()}
-			if code, err := e.Claim(ctx, c); code != 204 || err != nil {
+			if code, err := e.Claim(ctx, c); code != http.StatusNoContent || err != nil {
 				t.Errorf("claim = %d, %v", code, err)
 			}
 			report := result.Report{Claim: c, Output: "fixture output", OutputSource: "file"}
-			if code, err := e.Report(ctx, report, sha256.Sum256([]byte("fixture output"))); code != 204 || err != nil {
+			if code, err := e.Report(ctx, report, sha256.Sum256([]byte("fixture output"))); code != http.StatusNoContent || err != nil {
 				t.Errorf("result = %d, %v", code, err)
 			}
 			return task, nil

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -38,7 +39,6 @@ func Addon(version string) runtime.Addon[*store.Store] {
 		Card: runtime.Card{Name: "Agent Kourier AX", Description: "Runs agent commands in AX Tasks."},
 		Telemetry: telemetry.Spec{
 			Calls: "ax", TurnsHelp: "AX launcher turns by outcome.",
-			OperationHelp:   "Duration of AX API calls by method and outcome.",
 			AuthRefusedHelp: "Refused AX A2A requests by reason.", ErrorTurns: []telemetry.TurnOutcome{timedOut},
 		},
 		Open: func(ctx context.Context, cfg settings.Config, opts runtime.StoreOptions) (*store.Store, error) {
@@ -106,7 +106,7 @@ func build(ctx context.Context, env runtime.Env[*store.Store]) (runtime.Backend,
 	}
 	conn, err := grpc.NewClient(cfg.addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		return nil, errors.New("cannot open AX control plane client")
+		return nil, fmt.Errorf("open AX control plane client: %w", err)
 	}
 	e := &launcher{
 		cfg: cfg, client: ax.NewAXClient(conn), conn: conn, st: env.Store, log: env.Log,

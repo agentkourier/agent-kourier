@@ -228,8 +228,8 @@ func TestAX_BusyTurnCanBeCanceled(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if waiting, err := axTask(s.ctx, waiting); err != nil || waiting != nil {
-		t.Fatalf("task was admitted while one slot was occupied: %v, %v", waiting != nil, err)
+	if waitingTask, err := axTask(s.ctx, waiting); err != nil || waitingTask != nil {
+		t.Fatalf("task was admitted while one slot was occupied: %v, %v", waitingTask != nil, err)
 	}
 	var canceled a2a.Task
 	if err := axRPC(s.ctx, "CancelTask", &a2a.CancelTaskRequest{ID: task.ID}, &canceled); err != nil || canceled.Status.State != a2a.TaskStateCanceled {
