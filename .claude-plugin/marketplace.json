@@ -1,0 +1,11 @@
+{
+  "name": "agent-kourier",
+  "owner": { "name": "Agent Kourier" },
+  "plugins": [
+    {
+      "name": "agent-kourier",
+      "source": "./",
+      "description": "Agent skills for Agent Kourier: write and check a botMessage trigger offline from a saved Slack channel history."
+    }
+  ]
+}

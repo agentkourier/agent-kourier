@@ -1,0 +1,13 @@
+{
+  "name": "agent-kourier",
+  "description": "Agent skills for Agent Kourier: write and check a botMessage trigger offline from a saved Slack channel history.",
+  "author": {
+    "name": "Agent Kourier"
+  },
+  "homepage": "https://agentkourier.dev/",
+  "repository": "https://github.com/agentkourier/agent-kourier",
+  "license": "Apache-2.0",
+  "skills": [
+    "./.agents/skills/"
+  ]
+}
