@@ -55,8 +55,9 @@ func TestARunInAnOIDCTierStartsFromAFreshToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := string(raw)
-	check, refresh, job := `assert_context "${tier}"`, `if [ "${tier}" = full ]; then refresh_dex_token; fi`, `echo "==> run the Job in`
-	i, j, k := strings.Index(script, check), strings.Index(script, "if [ \"${tier}\" = full ]; then\n  refresh_dex_token\nfi"), strings.Index(script, job)
+	check, job := `assert_context "${tier}"`, `echo "==> run the Job in`
+	refresh := "if [ \"${tier}\" = full ]; then\n  refresh_dex_token\nfi"
+	i, j, k := strings.Index(script, check), strings.Index(script, refresh), strings.Index(script, job)
 	if i < 0 || j < 0 || k < 0 || i >= j || j >= k {
 		t.Errorf("e2e-run.sh has the context check at %d, the OIDC-tier refresh at %d and the Job at %d; want that order, so the token is made on the checked context, before the run", i, j, k)
 	}

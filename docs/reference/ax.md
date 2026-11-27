@@ -12,7 +12,19 @@ The launcher requests deletion after settlement, cancellation, deadline expiry, 
 
 After restart or takeover, the launcher fails unfinished A2A turns and cleans up their Tasks. An accepted receipt that was still awaiting A2A settlement is replayable as a receipt. It does not publish the interrupted result. Completed A2A tasks remain replayable under the usual retention settings.
 
+## Caller check
+
+Use a separate token file for A2A callers. The kit permits `AUTH_DISABLED=true` only on a loopback listener. For header and lease rules, see [the shared add-on limits](limits.md#every-add-on).
+
+## Sessions and their lifetime
+
+The shared A2A task and context retention settings govern conversation history. AX launch receipts have their own retention and can outlive that history.
+
 ## Settings
+
+--8<-- ".addon-settings.md:settings"
+
+### Launcher settings
 
 | Variable | Default | Helm setting |
 | --- | --- | --- |
@@ -22,7 +34,7 @@ After restart or takeover, the launcher fails unfinished A2A turns and cleans up
 | `AX_TASK_TEMPLATE` | Required | `addons.ax.taskTemplate.configMap` |
 | `AX_PROMPT_KEY` | `prompt` | `addons.ax.promptKey` |
 | `AX_RESULT_URL` | Required HTTPS URL ending in `/ax/results/v1` | `addons.ax.resultCallback.url` |
-| `AX_RESULT_TOKEN_FILE` | Required, one dedicated bearer without whitespace | `addons.ax.resultCallback.tokenSecret` |
+| `AX_RESULT_TOKEN_FILE` | Required, one dedicated bearer without whitespace or a trailing newline | `addons.ax.resultCallback.tokenSecret` |
 | `AX_HISTORY` | `true` | `addons.ax.history` |
 | `AX_MAX_RUNNING` | `10` | `addons.ax.maxRunning` |
 | `AX_POLL_INTERVAL` | `2s` | `addons.ax.pollInterval` |

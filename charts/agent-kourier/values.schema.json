@@ -372,8 +372,8 @@
             "promptKey": {"type": "string", "minLength": 1},
             "history": {"type": "boolean"},
             "maxRunning": {"type": "integer", "minimum": 1},
-            "pollInterval": {"$ref": "#/definitions/durationOrZero"},
-            "turnTimeout": {"$ref": "#/definitions/durationOrZero"},
+            "pollInterval": {"$ref": "#/definitions/nonZeroDuration"},
+            "turnTimeout": {"$ref": "#/definitions/nonZeroDuration"},
             "keepFailed": {"$ref": "#/definitions/durationOrZero"},
             "serviceAccount": {
               "type": "object",
@@ -466,6 +466,7 @@
         "key": {"type": "string", "pattern": "^[-._a-zA-Z0-9]*$", "maxLength": 253}
       }
     },
+    "nonZeroDuration": {"allOf": [{"$ref": "#/definitions/durationOrZero"}, {"not": {"pattern": "^(0|((0+(\\.0+)?)(ns|us|ms|s|m|h))+)$"}}]},
     "durationOrZero": {"type": "string", "pattern": "^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)?$", "description": "empty for the add-on's default, 0, or a Go duration"},
     "labelKey": {"type": "string", "maxLength": 317, "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$", "description": "a label key: an optional DNS subdomain prefix and a slash, then a name of at most 63 characters"},
     "labelValue": {"type": "string", "pattern": "^([A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?)?$", "description": "a label value: at most 63 characters, empty allowed"},

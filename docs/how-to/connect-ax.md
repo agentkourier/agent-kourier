@@ -16,7 +16,7 @@ FROM ${AX_AGENT_IMAGE}
 COPY --from=wrapper /usr/local/bin/agent-kourier-ax-result /usr/local/bin/agent-kourier-ax-result
 ```
 
-Provide the normal AX runner through the image or the AX runner volume. Keep your existing launcher configuration in the Workspace and Gateway. Set the Task command to the wrapper, `--`, and the agent's command and arguments. AX supplies the current prompt in `AX_GOAL_FILE` and the configured prompt key in `AX_CONFIG_FILE`. The wrapper captures `AX_OUTPUT_FILE` or the tail of stdout and stderr when there is no output file. Use a digest for the resulting agent image.
+Provide the normal AX runner through the image or the AX runner volume. Keep your existing launcher configuration in the Workspace and Gateway. Set the Task command to the wrapper, `--`, and the agent's command and arguments. AX supplies the current prompt in `AX_GOAL_FILE` and the configured prompt key in `AX_CONFIG_FILE`. Place `AX_OUTPUT_FILE` within the wrapper’s working directory. The wrapper reads a regular file there and falls back to the tail of stdout and stderr if the file is missing or unusable. Use a digest for the resulting agent image.
 
 ## Configure credentials and the callback
 
@@ -28,6 +28,8 @@ For this example, install the release as `agent-kourier` in namespace `agent-kou
 | `ax-a2a-auth` | `token` for Agent Kourier's A2A requests |
 | `ax-result-auth` | `token` for the runner callback, distinct from the A2A token |
 | `ax-results-tls` | TLS certificate and key for the private callback hostname |
+
+Store the callback token as a single value without whitespace or a trailing newline. To rotate it, pause intake, let current Tasks settle, update the Gateway credential and mounted token, then restart the launcher before resuming intake.
 
 Grant the dedicated AX atespace access to `ax-result-auth` through the Substrate credential provider. Scope the grant to an explicit Secret label. The wrapper sends an Authorization placeholder and the Gateway replaces it outside the sandbox. Configure DNS and ensure the egress Gateway trusts the certificate on the callback's HTTPS origin. AX supplies the trust bundle the wrapper uses for intercepted HTTPS.
 

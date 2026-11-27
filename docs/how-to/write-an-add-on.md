@@ -151,15 +151,20 @@ inner one's hooks itself.
 
 | Hook | Implement it when | Used by |
 |---|---|---|
-| `MessageValidator` | The backend cannot take some messages. `ValidateMessage` checks a new message, or an answer to a paused task, before a turn starts; An error wrapping `runtime.ErrBusy` returns A2A code `-32004`, which lets the broker keep a new message queued for retry. Other errors return invalid parameters. In either case, the kit starts no turn, records no message ID, and leaves a paused task paused. | Echo, both add-ons |
-| `Restorer` | The backend keeps something outside the store that the leader must reconcile when it takes over, before the interrupted turns are failed. Its error stops the takeover. | Claude Managed Agents (its sessions) |
+| `MessageValidator` | The backend cannot take some messages. `ValidateMessage` checks a new message, or an answer to a paused task, before a turn starts. An error wrapping `runtime.ErrBusy` returns A2A code `-32004`, which lets the broker keep a new message queued for retry. Other errors return invalid parameters. In either case, the kit starts no turn, records no message ID, and leaves a paused task paused. | Echo, both add-ons |
+| `MessageAdmission` | A new message must reserve backend capacity. The kit holds the reservation through the turn and releases it after cleanup, or when dispatch fails. | AX (running slots) |
+| `CancelAdmission` | The backend must record a cancellation decision before the SDK can cancel a turn. The hook can reject the request while the original turn continues. | AX (serializes cancellation with results) |
+| `Restorer` | The backend needs to reconcile its state on takeover before the kit fails interrupted turns. Its error stops the takeover. | Claude Managed Agents (sessions), AX (launch records and legacy paused turns) |
 | `Interrupter` | The backend must act on the tasks a takeover failed, before the leader serves. | Claude Managed Agents (interrupts their sessions) |
 | `ContextReleaser` | The backend keeps a context outside the store. The upkeep calls `ReleaseContext` for each context idle past `SESSION_IDLE_TTL` with no turn running, then forgets the context and its tasks. An error leaves the context for the next sweep. Wrap `runtime.ErrContextBusy` when a turn of it has begun since the store listed it. Without the hook, the store deletes idle contexts in its own transaction. | Claude Managed Agents (archives the session) |
-| `IdleReporter` | The add-on counts what the store's own deletion of idle contexts removed. | AX (sessions deleted) |
-| `TurnClassifier` | Some failed turns have an outcome of their own in the turns metric. | Claude Managed Agents (`timeout`) |
-| `Describer` | The `listening` log line should report settings of the add-on's own. | Both add-ons |
-| `Readiness` | Another server answers for the add-on's readiness: `/readyz` is its handler. | AX, beside the AX task runner |
-| `Routes` | The add-on serves routes of its own beside the kit's. | AX: `/metadata/`, proxied to the AX task runner |
+| `IdleReporter` | The add-on counts what the store's own deletion of idle contexts removed. | Optional |
+| `TurnClassifier` | Some failed turns have an outcome of their own in the turns metric. | Claude Managed Agents and AX (timeouts) |
+| `Describer` | The `listening` log line should report settings of the add-on's own. | Optional |
+| `Readiness` | Another server answers for the add-on's readiness: `/readyz` is its handler. | Optional |
+| `Routes` | The add-on serves routes of its own beside the kit's. | Optional |
+| `LeaderRoutes` | A custom HTTP endpoint must run on the serving leader. Standbys route requests to the leader. The add-on authenticates the request. | AX (start and result callbacks) |
+| `LeaderWorker` | The leader runs background work that stops when its context ends. | AX (Task cleanup) |
+| `io.Closer` | The backend owns resources that need to close when the runtime stops. After stopping turns and leader work, the kit closes the backend before releasing the lease and closing the store. | AX (RPC connection and detached launch calls) |
 
 ```go
 --8<-- "echo.go:validate"

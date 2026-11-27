@@ -5,6 +5,7 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,12 @@ import (
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/agentkourier/agent-kourier/test/e2e/kube"
 	"github.com/agentkourier/agent-kourier/test/fakeslack"
@@ -380,6 +387,18 @@ func TestAX_ReceiptBeforeTakeoverLeavesTurnInterrupted(t *testing.T) {
 		t.Fatalf("accepted receipt exposed task %q in state %q with %d artifacts", open.ID, open.Status.State, len(open.Artifacts))
 	}
 
+	ax, err := grpc.NewClient("ax-server.ax-system.svc:8080", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ax.Close() })
+	turn := sha256.Sum256([]byte(active.ID))
+	nameHash := sha256.Sum256(fmt.Appendf(nil, "agent-kourier-ax\x00%x", turn[:16]))
+	name := fmt.Sprintf("kourier-%x", nameHash[:16])
+	if exists, err := axSandboxExists(s.ctx, ax, name); err != nil || !exists {
+		t.Fatalf("task before takeover: exists=%v, %v", exists, err)
+	}
+
 	var canceled a2a.Task
 	if err := axRPC(s.ctx, "CancelTask", &a2a.CancelTaskRequest{ID: active.ID}, &canceled); err == nil || !strings.Contains(err.Error(), "-32002") {
 		t.Fatalf("CancelTask did not lose to the accepted receipt: %v", err)
@@ -396,10 +415,36 @@ func TestAX_ReceiptBeforeTakeoverLeavesTurnInterrupted(t *testing.T) {
 		t.Fatal("takeover did not settle the original turn as interrupted")
 	}
 	axReply(s, root.TS, "The agent's task failed.")
-	axCleanupLog(s, failed.ID, "absent", 0)
+	// A replica can finish cleanup before its pod is replaced by the rolling
+	// restart. Ask AX directly so that pod's transient logs are unnecessary.
+	if err := Wait(s.ctx, 3*time.Minute, "AX Task deletion after takeover", func(ctx context.Context) (bool, error) {
+		exists, err := axSandboxExists(ctx, ax, name)
+		return !exists && err == nil, err
+	}); err != nil {
+		t.Fatal(err)
+	}
 	replayed := axWaitTask(s, base, a2a.TaskStateCompleted)
 	if replayed.ID != completed.ID || len(replayed.Artifacts) != 1 {
 		t.Fatal("takeover changed the already settled turn")
+	}
+}
+
+// Query existence on the pinned AX tier without importing the add-on's AX
+// module into the broker. GetTaskRequest field 2 is the name in the default atespace.
+func axSandboxExists(ctx context.Context, conn *grpc.ClientConn, name string) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	request := &emptypb.Empty{}
+	fields := protowire.AppendTag(nil, 2, protowire.BytesType)
+	request.ProtoReflect().SetUnknown(protowire.AppendString(fields, name))
+	err := conn.Invoke(ctx, "/ax.v1alpha1.AX/GetTask", request, &emptypb.Empty{})
+	switch status.Code(err) {
+	case codes.OK:
+		return true, nil
+	case codes.NotFound:
+		return false, nil
+	default:
+		return false, err
 	}
 }
 
