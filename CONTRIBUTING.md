@@ -26,6 +26,10 @@ make fmt lint test build
 `make` with no target lists every target. The Helm chart tests skip without `helm` on your `PATH`. The
 end-to-end tiers (`make e2e-fast-up`, then `make e2e-fast`) need Docker and kind.
 
+A race build of the whole module puts several gigabytes in the Go build cache for each worktree,
+because package paths are part of the cache key. A checkout per worktree fills a disk. Check `df -h`
+before a long run, and run `go clean -cache` after merging.
+
 ## Pull requests
 
 - The pull request template lists the checks to run and what to confirm.
