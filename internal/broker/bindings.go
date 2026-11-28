@@ -358,5 +358,6 @@ func (b *Bindings) Binding(name string) (interact.Binding, error) {
 	return interact.Binding{
 		Dialect: k.dialect, Identity: src.Identity(), Platform: actorPlatform(rb.Connection.Spec), AskUser: in.AskUser, ToolApprovals: in.ToolApprovals,
 		ApproverGroups: slices.Clone(in.ApproverGroups), Timeout: in.Timeout.Duration,
+		Mentions: slices.Clone(rb.Binding.Spec.Chat.Mentions), MaxMentions: rb.Binding.Spec.Chat.MentionCap(),
 	}, nil
 }

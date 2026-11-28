@@ -245,6 +245,39 @@ func TestMentionMessage(t *testing.T) {
 	}
 }
 
+func TestQuestionMentionMessage(t *testing.T) {
+	m := render.QuestionMentionMessage(v1alpha1.ChatMention{Name: "sam", User: "U0SAM"})
+	if err := m.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	want := []chat.Part{chat.Mention{User: "U0SAM", Text: "was named as sam in the question above."}}
+	if !reflect.DeepEqual(m.Parts, want) {
+		t.Errorf("Parts = %+v, want %+v", m.Parts, want)
+	}
+	if m.Fallback != "The agent named sam in a question in this thread." {
+		t.Errorf("Fallback = %q", m.Fallback)
+	}
+}
+
+// MentionsIn scans each question independently for code fences while sharing the cap, deduplication and already set.
+func TestMentionsIn(t *testing.T) {
+	// An unclosed fence in the first question must not swallow a mention in the second question.
+	got := render.MentionsIn([]string{"check:\n```\n@sam", "@lee, may I restart the pod?"}, declared, 2)
+	if len(got.Made) != 1 || got.Made[0].Name != "lee" || got.Undeclared != 0 || got.Capped != 0 {
+		t.Errorf("unclosed fence across questions = %+v; want only lee", got)
+	}
+	// Shared cap and dedupe across questions, including capped users not counted twice.
+	got = render.MentionsIn([]string{"@sam and @lee and @payments-owner", "@sam and @payments-owner and @nobody"}, declared, 2)
+	if len(got.Made) != 2 || got.Made[0].Name != "sam" || got.Made[1].Name != "lee" || got.Capped != 1 || got.Undeclared != 1 {
+		t.Errorf("shared cap across questions = %+v; want sam, lee, capped 1, undeclared 1", got)
+	}
+	// Already mentioned users count toward the cap and are not mentioned again.
+	got = render.MentionsIn([]string{"@sam and @lee", "@payments-owner"}, declared, 2, "U0SAM")
+	if len(got.Made) != 1 || got.Made[0].Name != "lee" || got.Capped != 1 {
+		t.Errorf("with already = %+v; want lee, capped 1", got)
+	}
+}
+
 func TestMentionPrompt(t *testing.T) {
 	if got := render.MentionPrompt(nil); got != "" {
 		t.Errorf("MentionPrompt(nil) = %q, want nothing: a Binding with no mentions adds nothing to a prompt", got)

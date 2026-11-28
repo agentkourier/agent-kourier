@@ -116,16 +116,147 @@ func TestAPauseThatNamesAPersonQueuesAMention(t *testing.T) {
 	}
 }
 
-// The question of a pause is in the task's status message, which the interaction intake posts as a prompt. It is not the turn's
-// text, so a name in it notifies nobody.
-func TestAQuestionInAPauseIsNotRead(t *testing.T) {
+// A question in a pause is posted by the interaction intake, which notifies declared people through
+// Renderer.NotifyQuestionMentions with prompt-specific wording after the prompt is delivered. The reply's own run
+// does not read the task's status message itself.
+func TestAQuestionInAPauseNotifiesThroughNotifyQuestionMentions(t *testing.T) {
 	e := setup(t)
+	aud := &mentionAudit{}
+	cfg := e.cfg
+	cfg.Audit = aud
+	e.live = newRenderer(t, cfg)
+
+	// The reply run alone ignores the task's status message: only a delivered prompt notifies for it.
 	run, _ := e.startFor(t, mentionTurn(v1alpha1.OutputLive, ""))
 	question := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("@sam, may I restart the pod?"))
 	run.Handle(agent.FinalEvent{Task: &a2a.Task{ID: "t1", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired, Message: question}}})
 	e.finish(t, run)
 	if _, m, ok := e.mentionRow(t); ok {
-		t.Errorf("a row: %+v", m)
+		t.Fatalf("reply run queued a row for the pause status message: %+v", m)
+	}
+
+	target := live.MentionTarget{
+		Source:      "turn-1",
+		Binding:     "ns/b",
+		Connection:  "",
+		Channel:     "C1",
+		Thread:      e.root,
+		Mentions:    declaredPeople,
+		MaxMentions: 2,
+	}
+	e.live.NotifyQuestionMentions(t.Context(), target, []string{"@sam, may I restart the pod?"})
+	row, m, ok := e.mentionRowOf(t, declaredPeople[0])
+	if !ok {
+		t.Fatal("no row for sam from question")
+	}
+	if row.Role != store.OutboxNotice || row.Channel != "C1" || row.Thread != e.root {
+		t.Errorf("row = %+v; want a notice in the thread", row)
+	}
+	if want := render.QuestionMentionMessage(declaredPeople[0]); !reflect.DeepEqual(m, want) {
+		t.Errorf("message = %+v, want %+v", m, want)
+	}
+	// A duplicate call (e.g. pause handed off again) queues and audits nothing more.
+	e.live.NotifyQuestionMentions(t.Context(), target, []string{"@sam, may I restart the pod?"})
+	if len(aud.rows) != 1 || aud.rows[0].Name != "sam" {
+		t.Errorf("audit rows = %+v, want sam once", aud.rows)
+	}
+}
+
+// A question in a pause shares the turn's cap and deduplication with both the reply before the pause and any reply
+// after the pause is answered under the same turn, even when the reply and prompt finish concurrently.
+func TestQuestionAndReplyMentionsShareCapAndDedupeConcurrently(t *testing.T) {
+	for range 20 {
+		e := setup(t)
+		aud := &mentionAudit{}
+		cfg := e.cfg
+		cfg.Audit = aud
+		e.live = newRenderer(t, cfg)
+
+		target := live.MentionTarget{
+			Source:      "turn-1",
+			Binding:     "ns/b",
+			Channel:     "C1",
+			Thread:      e.root,
+			Mentions:    declaredPeople,
+			MaxMentions: 2,
+		}
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			run, _ := e.startFor(t, mentionTurn(v1alpha1.OutputLive, ""))
+			run.Handle(text("a", "asking @sam and @lee"))
+			run.Handle(agent.FinalEvent{Task: &a2a.Task{ID: "t1", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired}}})
+			e.finish(t, run)
+		}()
+		go func() {
+			defer wg.Done()
+			e.live.NotifyQuestionMentions(t.Context(), target, []string{"@sam and @kim, please confirm"})
+		}()
+		wg.Wait()
+
+		var made int
+		for _, p := range declaredPeople {
+			if _, _, ok := e.mentionRowOf(t, p); ok {
+				made++
+			}
+		}
+		if made != 2 {
+			t.Fatalf("made = %d rows, want exactly 2 (cap)", made)
+		}
+		if len(aud.rows) != 2 {
+			t.Fatalf("audit rows = %+v, want 2 (no duplicate audit)", aud.rows)
+		}
+		seen := map[string]bool{}
+		for _, r := range aud.rows {
+			if seen[r.User] {
+				t.Fatalf("duplicate audit row for %s: %+v", r.User, aud.rows)
+			}
+			seen[r.User] = true
+		}
+	}
+}
+
+// A turn that notifies in a question prompt and then runs on after being answered mentions only people who are new,
+// within the turn's cap across both.
+func TestAQuestionMentionCountsTowardTheTurnsLaterReply(t *testing.T) {
+	e := setup(t)
+	aud := &mentionAudit{}
+	cfg := e.cfg
+	cfg.Audit = aud
+	e.live = newRenderer(t, cfg)
+
+	target := live.MentionTarget{
+		Source:      "turn-1",
+		Binding:     "ns/b",
+		Channel:     "C1",
+		Thread:      e.root,
+		Mentions:    declaredPeople,
+		MaxMentions: 2,
+	}
+	e.live.NotifyQuestionMentions(t.Context(), target, []string{"@sam, may I restart the pod?"})
+	if err := e.ob.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile = %v", err)
+	}
+
+	turn := mentionTurn(v1alpha1.OutputLive, "")
+	turn.Recovered = true
+	run, _ := e.startFor(t, turn)
+	run.Handle(text("a", "Done. @sam @lee @kim"))
+	run.Handle(agent.FinalEvent{Task: &a2a.Task{ID: "t1", Status: a2a.TaskStatus{State: a2a.TaskStateCompleted}}})
+	e.finish(t, run)
+
+	if _, _, ok := e.mentionRowOf(t, declaredPeople[0]); !ok {
+		t.Error("missing row for sam")
+	}
+	if _, m, ok := e.mentionRowOf(t, declaredPeople[1]); !ok || !reflect.DeepEqual(m, render.MentionMessage(declaredPeople[1])) {
+		t.Errorf("lee row = %+v, %v; want reply mention message", m, ok)
+	}
+	if _, m, ok := e.mentionRowOf(t, declaredPeople[2]); ok {
+		t.Errorf("kim row past cap: %+v", m)
+	}
+	if len(aud.rows) != 2 || aud.rows[0].Name != "sam" || aud.rows[1].Name != "lee" {
+		t.Errorf("audit rows = %+v, want sam then lee", aud.rows)
 	}
 }
 

@@ -212,9 +212,11 @@ mentions that user. Each person named gets a message of their own.
     answers that it no longer has the task, as Agent Kourier then resets the session, and on every turn of an agent that
     replies with no context ID. Tell the agent in its own instructions if that matters.
 
-- **Only the text of a reply counts.** A turn that completes or pauses for an answer mentions the people its final text
-  names. A question the agent asks through a pause, which Agent Kourier posts as a prompt, is not read for names, so an
-  agent that wants someone to answer it has to name them in its reply text.
+- **Reply text and delivered question prompts count.** A turn that completes or pauses mentions the people its final
+  text names, and a question the agent asks through a pause mentions the people its question text names once Agent Kourier
+  has posted the prompt (question hints and choices are not read for names). A question prompt that is refused (`askUser: false`, an unusable pause, or a prompt that does
+  not fit) or not delivered mentions nobody, and tool approvals carry no agent question text and are not read for names.
+  A reply mention says `in the reply above`; a question mention says `in the question above`.
 
     A name in a code span or a fence does not count, though a name in a table does, even where Slack shows the table as
     code. A fence opened after a list marker (`-`, `*`, `+`, or one to nine digits and `.` or `)`, as in `1.`) or a `>`
@@ -272,10 +274,10 @@ mentions that user. Each person named gets a message of their own.
     `maxMentionsPerTurn`. Nor does a turn whose final text could not be written, even if a stream had already shown the
     name.
 
-- **One mention for each person.** A person is mentioned once a turn however often the reply names them, and two names
-  for one user are one person. A task that pauses can run on under the same turn, for example when it is answered
-  outside Slack: its later text mentions only people the turn has not mentioned yet, and `maxMentionsPerTurn` holds
-  across both.
+- **One mention for each person.** A person is mentioned once a turn however often the reply and any question prompts
+  name them, and two names for one user are one person. `maxMentionsPerTurn` holds across a turn's reply, its delivered
+  question prompts, and any later reply if a paused task runs on under the same turn (for example when it is answered
+  outside Slack).
 
     A mention Agent Kourier gave up on posting still counts, and is not tried again. Only people still in `mentions` are
     counted, so changing the list in between can take the turn over the cap, and a name given a new `user` notifies that

@@ -17,6 +17,7 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
+	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/dialect"
@@ -26,8 +27,9 @@ import (
 )
 
 // Binding is what the intake needs of a thread's Binding: whether it allows questions, whether it allows tool
-// approvals, and how long a pause waits. The two flags are independent: AskUser gates only questions and ToolApprovals
-// only approvals. A pause the Binding does not allow is turned away (refuseAskUser, autoDeny).
+// approvals, how long a pause waits, and the people a delivered question prompt may mention. The two flags are
+// independent: AskUser gates only questions and ToolApprovals only approvals. A pause the Binding does not allow
+// is turned away (refuseAskUser, autoDeny).
 type Binding struct {
 	Dialect  dialect.Dialect
 	Identity string // the Binding's service identity, for the audit rows
@@ -44,6 +46,21 @@ type Binding struct {
 	// them is refused (a press, never an ask-user answer). Empty means any non-bot member of the channel.
 	ApproverGroups []string
 	Timeout        time.Duration
+	// Mentions are the people the Binding's chat.mentions declares, and MaxMentions its chat.maxMentionsPerTurn, for
+	// notifying declared names in a delivered question prompt. Empty means none.
+	Mentions    []v1alpha1.ChatMention
+	MaxMentions int
+}
+
+// QuestionMentions is what a delivered question prompt hands to Config.NotifyQuestionMentions so that declared people
+// named in its questions are notified under the turn's cap and deduplication.
+type QuestionMentions struct {
+	Turn        string
+	Binding     string
+	Key         store.ConversationKey
+	Mentions    []v1alpha1.ChatMention
+	MaxMentions int
+	Questions   []string
 }
 
 // Lookup returns the Binding of a name; the broker implements it (WP-35h).
@@ -77,8 +94,11 @@ type Config struct {
 	// OnApprovalOutcome is called once for each pause a Binding's policy turned away, for the
 	// approval-outcome metric (WP-35f2). The outcomes are a closed set. Required.
 	OnApprovalOutcome func(binding string, outcome Outcome)
-	Now               func() time.Time // time.Now if nil
-	Logger            *slog.Logger     // slog.Default() if nil
+	// NotifyQuestionMentions notifies declared people named in a delivered question prompt, sharing the turn's
+	// cap and deduplication with the turn's reply renderer. Nil notifies nobody.
+	NotifyQuestionMentions func(ctx context.Context, req QuestionMentions)
+	Now                    func() time.Time // time.Now if nil
+	Logger                 *slog.Logger     // slog.Default() if nil
 }
 
 // Intake records pauses as interactions and posts their prompts. It is safe for concurrent use.
@@ -109,7 +129,11 @@ func New(cfg Config) (*Intake, error) {
 type Pause struct {
 	Key     store.ConversationKey
 	Binding string
-	Task    a2a.Task
+	// Turn is the turn's source ID (session.TurnRef.MessageID or sess.Turn.ID), so mentions in a delivered question
+	// prompt share the turn's cap and deduplication with its reply. Empty is a guard for callers without one and
+	// notifies nobody.
+	Turn string
+	Task a2a.Task
 	// Recovered says the task was found again after a restart. A recovered pause may already be past its
 	// original interaction deadline, so the tap gives a failed hand-off a fresh retry window.
 	Recovered bool
@@ -175,7 +199,10 @@ func (i *Intake) Paused(ctx context.Context, p Pause) error {
 			if errors.Is(err, outbox.ErrAbandoned) && in.Kind == dialect.ToolApproval {
 				return i.refuseAbandoned(ctx, p, b, row, err)
 			}
-			return err
+			if err != nil {
+				return err
+			}
+			i.notifyQuestionMentions(ctx, p, b, *in)
 		}
 	case store.InteractionAnswered: // the pause is back, so the answer did not arrive
 		return i.resend(ctx, p, b, row)
@@ -522,4 +549,24 @@ func (i *Intake) post(ctx context.Context, p Pause, row store.Interaction, in di
 		return fmt.Errorf("interact: record the prompt of %s: %w", row.ID, err)
 	}
 	return nil
+}
+
+// notifyQuestionMentions notifies declared people named in a delivered question prompt. It runs only after the prompt
+// has been posted and recorded, and never for tool approvals, which carry no agent question text.
+func (i *Intake) notifyQuestionMentions(ctx context.Context, p Pause, b Binding, in dialect.Interaction) {
+	if i.cfg.NotifyQuestionMentions == nil || in.Kind != dialect.AskUser || p.Turn == "" || len(b.Mentions) == 0 || len(in.Questions) == 0 {
+		return
+	}
+	questions := make([]string, len(in.Questions))
+	for idx, q := range in.Questions {
+		questions[idx] = q.Text
+	}
+	i.cfg.NotifyQuestionMentions(ctx, QuestionMentions{
+		Turn:        p.Turn,
+		Binding:     p.Binding,
+		Key:         p.Key,
+		Mentions:    b.Mentions,
+		MaxMentions: b.MaxMentions,
+		Questions:   questions,
+	})
 }

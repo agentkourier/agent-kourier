@@ -142,6 +142,10 @@ type Renderer struct {
 	// left is the run of each turn that ended with its task going on and a message still showing it at work, by the turn's
 	// Source, until a later run of the turn ends it or takes the message over (see endLeft).
 	left map[string]*Run
+	// mentionMu guards mentionLocks, which serializes mention checks and enqueues per turn Source so that a turn's reply
+	// and a pause prompt delivered concurrently share the turn's cap and deduplication without racing.
+	mentionMu    sync.Mutex
+	mentionLocks map[string]*mentionLock
 }
 
 // New returns a Renderer over cfg. It refuses a Config without its Sender, Platforms or Store, naming the field, so that a
@@ -179,7 +183,7 @@ func New(cfg Config) (*Renderer, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
-	return &Renderer{cfg: cfg, busyOff: map[string]*atomic.Bool{}, current: map[string]*Run{}, left: map[string]*Run{}}, nil
+	return &Renderer{cfg: cfg, busyOff: map[string]*atomic.Bool{}, current: map[string]*Run{}, left: map[string]*Run{}, mentionLocks: map[string]*mentionLock{}}, nil
 }
 
 // Wait returns once every turn started so far has ended, or with ctx's error if that comes first, so that
