@@ -119,6 +119,10 @@ type Caps struct {
 	Steps     bool
 	Ephemeral bool // Ephemeral shows a message to one person alone; otherwise it says ErrNoEphemeral and shows nothing
 	Busy      bool // MarkBusy shows a thread as busy; otherwise it says ErrNoBusy, as a platform may later even when this is set
+	// ReplaceButtons says Update replaces a message's Buttons in place, including removing them when an update carries
+	// none (Slack replaces the message's blocks; Microsoft Teams posts buttons as a separate card and leaves it in place
+	// on an update with none). Live running messages carry a Stop button only when this is set.
+	ReplaceButtons bool
 	// AckReaction is the reaction name, without colons, that Agent Kourier puts on an accepted message while it works, when a
 	// Binding's acknowledgment names none, and on a reply that waits behind a task. The API names no reaction, so each platform
 	// says which one is its own (Slack: hourglass_flowing_sand). Empty means the platform has no reactions at all: React and

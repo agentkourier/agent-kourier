@@ -150,7 +150,11 @@ func (m *Manager) fail(t *tstate, class TurnOutcome, why string, cause error) (o
 	delete(m.attempted, t.key) // it will not be sent again
 	delete(m.fresh, t.r.ID)
 	m.mu.Unlock()
-	m.notice(t, NoticeFailed, why)
+	if class == TurnUncancellable && t.taskID != "" {
+		m.noticeWithTask(t, NoticeFailed, why, t.taskID)
+	} else {
+		m.notice(t, NoticeFailed, why)
+	}
 	m.cfg.Logger.Warn("session turn failed", "key", t.key, "binding", t.sess.Binding, "message", t.r.ID, "reason", why, "error", cause)
 	if err := m.cfg.Store.MarkReplyDelivered(context.WithoutCancel(m.ctx), t.r.ID, m.cfg.Now()); err != nil {
 		return ended, err

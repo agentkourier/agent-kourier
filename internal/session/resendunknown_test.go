@@ -100,9 +100,9 @@ func TestATurnTheAgentTookAndNobodyRecordedIsNotSentWhenTheListCannotBeRead(t *t
 	}
 }
 
-// A task followed by no one, after a card too large, is not followed by itself; once the card is fixed the session can cancel it (Manager.Stop,
-// which has no caller in production yet: the notice names a restart, which TestRestartFollowsTheTaskLeftByACardOnceItIsFixed covers) and the
-// queued reply goes out. Every call of a real Agent meets the card, the read
+// A task followed by no one, after a card too large, is not followed by itself; once the card is fixed a person in the
+// channel can press Stop on the notice (Manager.Stop) or restart Agent Kourier (TestRestartFollowsTheTaskLeftByACardOnceItIsFixed)
+// and the queued reply goes out. Every call of a real Agent meets the card, the read
 // of the task first, so the fake fails that too: the thread is told at once, and the task is not read again and again until it counts as wedged.
 func TestTaskLeftByACardThatIsTooLargeIsReadOnceAndCancellableOnceTheCardIsFixed(t *testing.T) {
 	f, sink := restarted(t)
@@ -127,11 +127,11 @@ func TestTaskLeftByACardThatIsTooLargeIsReadOnceAndCancellableOnceTheCardIsFixed
 	f.recover(t)
 	testutil.Eventually(t, "the notice", func() bool { return len(sink.noticesOf(NoticeFailed)) == 1 })
 	f.retired(t)
-	if got := sink.noticesOf(NoticeFailed); got[0].Detail != cardTooLargeDetail {
-		t.Errorf("notice = %q; want %q", got[0].Detail, cardTooLargeDetail)
+	if got := sink.noticesOf(NoticeFailed); got[0].Detail != cardTooLargeDetail || got[0].TaskID != "t1" {
+		t.Errorf("notice = %+v; want Detail %q and TaskID t1", got[0], cardTooLargeDetail)
 	}
-	if !strings.Contains(cardTooLargeDetail, "restart Agent Kourier") || strings.Contains(strings.ToLower(cardTooLargeDetail), "stop") && strings.Contains(cardTooLargeDetail, "press") {
-		t.Errorf("the notice %q must say to restart once the card is fixed, and name no control that does not exist", cardTooLargeDetail)
+	if !strings.Contains(cardTooLargeDetail, "press Stop") || !strings.Contains(cardTooLargeDetail, "restart Agent Kourier") {
+		t.Errorf("the notice %q must say to press Stop or restart Agent Kourier once the card is fixed", cardTooLargeDetail)
 	}
 	if n := gets.Load(); n != 1 {
 		t.Errorf("the task was read %d times; want once: a card is no read to retry until the task counts as wedged", n)

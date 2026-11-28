@@ -274,6 +274,7 @@ type Run struct {
 	busy *busyMark
 
 	mu        sync.Mutex // guards the state below
+	taskID    a2a.TaskID
 	texts     map[a2a.ArtifactID]string
 	order     []a2a.ArtifactID
 	tool      *agent.ToolCallEvent // the latest call made, if any: the update path's status line is about it
@@ -494,7 +495,14 @@ func (u *Run) Handle(ev agent.Event) {
 		if u.timed {
 			u.progressIn(line, now)
 		}
+	case agent.StateEvent:
+		if e.TaskID != "" {
+			u.taskID = e.TaskID
+		}
 	case agent.FinalEvent:
+		if e.Task != nil && e.Task.ID != "" {
+			u.taskID = e.Task.ID
+		}
 		u.final = true
 		u.paused = e.Task != nil && (e.Task.Status.State == a2a.TaskStateInputRequired || e.Task.Status.State == a2a.TaskStateAuthRequired)
 		u.endedBadly = endingOf(e.Task) == render.EndedFailed

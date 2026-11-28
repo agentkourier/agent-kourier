@@ -30,6 +30,17 @@ func TestLimitsPage(t *testing.T) {
 	limitsdoc.Count(t, "pressTotal", p.cfg.Limits.Total)
 	limitsdoc.Count(t, "pressPerUser", p.cfg.Limits.PerUser)
 
+	sh, err := NewStopHandler(StopConfig{
+		Store: struct{ store.Presses }{}, Sessions: struct{ SessionReader }{},
+		Authorizers: chattest.Same[Authorizer](struct{ Authorizer }{}), Ephemerals: chattest.Same[Ephemeral](noEphemeral{}),
+		Stopper: struct{ Stopper }{}, Notify: func(store.Press) {},
+	})
+	if err != nil {
+		t.Fatalf("NewStopHandler: %v", err)
+	}
+	limitsdoc.Count(t, "pressTotal", sh.cfg.Limits.Total)
+	limitsdoc.Count(t, "pressPerUser", sh.cfg.Limits.PerUser)
+
 	r, err := NewRetention(RetentionConfig{Store: struct{ RetentionStore }{}, OnCleared: func(int) {}})
 	if err != nil {
 		t.Fatalf("NewRetention: %v", err)

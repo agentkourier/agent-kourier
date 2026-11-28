@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"sync"
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
@@ -191,7 +192,13 @@ func (s *Sink) QueueNotice(ctx context.Context, key session.Key, n session.Notic
 			s.log.WarnContext(ctx, "live: a notice of a kind with no wording was dropped", "kind", n.Kind, "channel", key.Channel)
 			return nil
 		}
-		post := outbox.Post{Source: n.ID, Role: store.OutboxNotice, Connection: key.Connection, Channel: key.Channel, Thread: key.Thread, Out: chat.Say(render.Notice(text, n.Detail))}
+		msg := render.Notice(text, n.Detail)
+		if n.TaskID != "" {
+			if stop := render.StopParts(key.Thread, string(n.TaskID)); len(stop) > 0 {
+				msg.Parts = append(slices.Clone(msg.Parts), stop...)
+			}
+		}
+		post := outbox.Post{Source: n.ID, Role: store.OutboxNotice, Connection: key.Connection, Channel: key.Channel, Thread: key.Thread, Out: chat.Say(msg)}
 		_, err = s.queue.Enqueue(ctx, post)
 	}
 	if errors.Is(err, store.ErrInvalid) {

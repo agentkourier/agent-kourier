@@ -29,4 +29,5 @@ func TestLimitsPageOfThePressLimits(t *testing.T) {
 	}
 	limitsdoc.Count(t, "pressTotal", h.cfg.Limits.Total)
 	limitsdoc.Count(t, "pressPerUser", h.cfg.Limits.PerUser)
+	limitsdoc.Bytes(t, "buttonIDsBytes", maxIDs)
 }

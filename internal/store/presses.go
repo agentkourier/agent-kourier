@@ -44,6 +44,10 @@ type PressLimits struct {
 	Total, PerUser int
 }
 
+// DefaultPressLimits returns the default per-connection press queue bounds shared by interaction prompts, feedback
+// buttons, and stop controls.
+func DefaultPressLimits() PressLimits { return PressLimits{Total: 1000, PerUser: 10} }
+
 // Presses persists the presses waiting to be processed. A press that has been processed is deleted:
 // the table holds only work to do.
 type Presses interface {

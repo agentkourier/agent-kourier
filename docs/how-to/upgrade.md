@@ -749,11 +749,12 @@ current values, and what else the broker bounds, are on [Limits](../reference/li
 
     - a cancel that met it is not done
     - a lookup that met it is retried like any lookup that could not reach the agent
-    - a follow that met it tells the thread `Agent Kourier could not connect to the agent: its agent card is too large to read, so the turn stopped. The task stays at the agent. Once the card is fixed, restart Agent Kourier.`
+    - a follow that met it tells the thread `Agent Kourier could not connect to the agent: its agent card is too large to read, so the turn stopped. The task stays at the agent. Once the card is fixed, press Stop or restart Agent Kourier.`
 
-    The task stays recorded and nothing follows it again by itself, and no control of the thread takes it up. Once the
-    card is fixed, a restart reads it and follows it (recovery), and it interrupts every turn of every tenant on that
-    broker while it runs. The Binding's `BackendReachable` condition reports the card.
+    The task stays recorded and nothing follows it again by itself. Once the card is fixed, a channel member can press
+    **Stop** on the notice to cancel the task and release queued replies without restarting, or restart Agent Kourier
+    so recovery reads and follows it (a restart interrupts every turn of every tenant on that broker while it runs).
+    The Binding's `BackendReachable` condition reports the card.
 
 **What the thread shows.** When a turn stops, text that arrived before the bound was passed stays shown, cut to what a
 message holds as it always was (12000 UTF-16 units in the Slack adapter, with a mark where it is cut). Then the thread

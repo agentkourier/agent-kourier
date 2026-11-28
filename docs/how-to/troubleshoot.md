@@ -84,12 +84,12 @@ On kagent 1.0 the final task holds every tool call and result of the turn again 
 and it arrives as one event. No single result has to be large. In a test with results of 300 KiB, results adding up to 1800 KiB passed, and eight of them, 2400 KiB,
 ended the turn at the final event with a reply of a few bytes.
 
-A card that is too large is told apart from these. A follow that meets it, or the read of a task that comes before a follow, says `Agent Kourier could not connect to the agent: its agent card is too large to read, so the turn stopped. The task stays at the agent. Once the card is fixed, restart Agent Kourier.`
-It cancels nothing, and leaves the task recorded and followed by no one (the turn outcome is `refused`, as for any connection that fails on a follow).
+A card that is too large is told apart from these. A follow that meets it, or the read of a task that comes before a follow, says `Agent Kourier could not connect to the agent: its agent card is too large to read, so the turn stopped. The task stays at the agent. Once the card is fixed, press Stop or restart Agent Kourier.`
+It cancels nothing, and leaves the task recorded and followed by no one (the turn outcome is `refused`, as for any connection that fails on a follow). The notice carries a **Stop** button bound to that task.
 
-Trim the card. A task that a follow met the card on is followed by no one: nothing follows it again by itself, and no control of the thread takes it up. So once the card is fixed, **restart Agent Kourier**.
+Trim the card. A task that a follow met the card on is followed by no one: nothing follows it again by itself. Once the card is fixed, a channel member can press **Stop** on the notice to cancel the task and let queued replies proceed without interrupting other threads, or **restart Agent Kourier**.
 
-Recovery then reads the recorded task and follows it, and a reply that waited behind it goes out when the task ends. Until the restart, the reply stays queued.
+If you restart Agent Kourier instead of pressing Stop, recovery reads the recorded task and follows it, and a reply that waited behind it goes out when the task ends. Until the task is stopped or the broker restarts, the reply stays queued.
 A restart interrupts every turn of every tenant on that broker while it runs.
 
 A lookup or a send that meets the card is retried like any that could not reach the agent.

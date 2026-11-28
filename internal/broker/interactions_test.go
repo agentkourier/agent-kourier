@@ -48,31 +48,40 @@ func (p pressed) DecidePress(ctx context.Context, i chat.Interaction) (chat.Pres
 
 // The handler of buttons tells the outcomes of a press apart: a button of someone else's is dropped
 // without a word, a press refused for the limit is acknowledged and logged, and a failure is returned, so
-// that Slack delivers the press again. A button that is no interaction's goes to the feedback buttons' handler, and
-// only then is it someone else's; an interaction's never reaches it.
+// that Slack delivers the press again. A button that is no interaction's goes to the feedback buttons' handler,
+// then to the stop handler, and only then is it someone else's; an earlier handler's never reaches a later one.
 func TestInteractionsHandlerDropsOtherButtonsAcksALimitAndReturnsTheRest(t *testing.T) {
 	boom := errors.New("the store is down")
 	for _, tc := range []struct {
-		name         string
-		err, fbErr   error
-		want         error
-		wantLog      string
-		wantFeedback int // presses that reached the feedback handler
+		name                   string
+		err, fbErr, stErr      error
+		want                   error
+		wantLog                string
+		wantFeedback, wantStop int
 	}{
-		{"a press recorded", nil, nil, nil, "", 0},
-		{"a feedback press recorded", interact.ErrNotInteraction, nil, nil, "", 1},
-		{"another handler's button", interact.ErrNotInteraction, feedback.ErrNotFeedback, nil, "", 1},
-		{"too many presses waiting", fmt.Errorf("interact: record a press: %w", store.ErrLimit), nil, nil, "too many presses", 0},
-		{"too many feedback presses waiting", interact.ErrNotInteraction, fmt.Errorf("feedback: record a press: %w", store.ErrLimit), nil, "too many presses", 1},
-		{"any other failure", boom, nil, boom, "", 0},
-		{"a feedback press that fails", interact.ErrNotInteraction, boom, boom, "", 1},
+		{"a press recorded", nil, nil, nil, nil, "", 0, 0},
+		{"a feedback press recorded", interact.ErrNotInteraction, nil, nil, nil, "", 1, 0},
+		{"a stop press recorded", interact.ErrNotInteraction, feedback.ErrNotFeedback, nil, nil, "", 1, 1},
+		{"another handler's button", interact.ErrNotInteraction, feedback.ErrNotFeedback, interact.ErrNotStop, nil, "", 1, 1},
+		{"too many presses waiting", fmt.Errorf("interact: record a press: %w", store.ErrLimit), nil, nil, nil, "too many presses", 0, 0},
+		{"too many feedback presses waiting", interact.ErrNotInteraction, fmt.Errorf("feedback: record a press: %w", store.ErrLimit), nil, nil, "too many presses", 1, 0},
+		{"too many stop presses waiting", interact.ErrNotInteraction, feedback.ErrNotFeedback, fmt.Errorf("interact: record a stop press: %w", store.ErrLimit), nil, "too many presses", 1, 1},
+		{"any other failure", boom, nil, nil, boom, "", 0, 0},
+		{"a feedback press that fails", interact.ErrNotInteraction, boom, nil, boom, "", 1, 0},
+		{"a stop press that fails", interact.ErrNotInteraction, feedback.ErrNotFeedback, boom, boom, "", 1, 1},
 	} {
 		for _, wait := range []bool{false, true} {
 			out := &logBuffer{}
-			var fbPresses int
+			var fbPresses, stopPresses int
 			decided := chat.PressOutcome{Decided: true, Text: "Your answer was recorded."}
 			fbDecided := chat.PressOutcome{Decided: true, Text: "Your vote is already recorded as useful."}
-			h := interactionsHandler(pressed{err: tc.err, out: decided}, pressed{err: tc.fbErr, n: &fbPresses, out: fbDecided}, slog.New(slog.NewTextHandler(out, nil)))
+			stopDecided := chat.PressOutcome{Decided: true, Text: "Stopping the task."}
+			h := interactionsHandler(
+				pressed{err: tc.err, out: decided},
+				pressed{err: tc.fbErr, n: &fbPresses, out: fbDecided},
+				pressed{err: tc.stErr, n: &stopPresses, out: stopDecided},
+				slog.New(slog.NewTextHandler(out, nil)),
+			)
 
 			press := chat.Interaction{At: chat.Ref{Channel: "C1"}, PromptID: "x"}
 			var err error
@@ -93,6 +102,9 @@ func TestInteractionsHandlerDropsOtherButtonsAcksALimitAndReturnsTheRest(t *test
 			if fbPresses != tc.wantFeedback {
 				t.Errorf("%s: %d presses reached the feedback handler, want %d", name, fbPresses, tc.wantFeedback)
 			}
+			if stopPresses != tc.wantStop {
+				t.Errorf("%s: %d presses reached the stop handler, want %d", name, stopPresses, tc.wantStop)
+			}
 			// A press waited for comes to what its own handler decided, and a press dropped or refused here to no decision.
 			want := chat.PressOutcome{}
 			switch {
@@ -101,6 +113,8 @@ func TestInteractionsHandlerDropsOtherButtonsAcksALimitAndReturnsTheRest(t *test
 				want = decided
 			case tc.fbErr == nil:
 				want = fbDecided
+			case tc.stErr == nil:
+				want = stopDecided
 			}
 			if wait && tc.want == nil && got != want {
 				t.Errorf("%s: outcome %+v, want %+v", name, got, want)
@@ -109,15 +123,20 @@ func TestInteractionsHandlerDropsOtherButtonsAcksALimitAndReturnsTheRest(t *test
 	}
 }
 
-// The press worker's one processor is the interactions' pipeline or the feedback handler, by whose press it is: a
-// feedback press by its lane, which no interaction's has.
+// The press worker's one processor is the interactions' pipeline, the feedback handler, or the stop handler, by whose
+// press it is: feedback and stop presses by their lane prefixes, which no interaction's has.
 func TestPressRouterSendsAPressToItsOwnProcessor(t *testing.T) {
-	var interactions, feedbacks []int64
+	var interactions, feedbacks, stops []int64
 	mk := func(got *[]int64) interact.PressProcessor {
 		return fakeProcessor{process: func(p store.Press) { *got = append(*got, p.Seq) }}
 	}
-	r := pressRouter{interactions: mk(&interactions), feedback: mk(&feedbacks)}
-	for _, p := range []store.Press{{Seq: 1, InteractionID: "ix-0123"}, {Seq: 2, InteractionID: "fb1|turn-1"}, {Seq: 3, InteractionID: "ix-4567"}} {
+	r := pressRouter{interactions: mk(&interactions), feedback: mk(&feedbacks), stops: mk(&stops)}
+	for _, p := range []store.Press{
+		{Seq: 1, InteractionID: "ix-0123"},
+		{Seq: 2, InteractionID: "fb1|turn-1"},
+		{Seq: 3, InteractionID: "ix-4567"},
+		{Seq: 4, InteractionID: "stop1|1700.1"},
+	} {
 		if _, err := r.Process(t.Context(), p); err != nil {
 			t.Fatal(err)
 		}
@@ -125,8 +144,8 @@ func TestPressRouterSendsAPressToItsOwnProcessor(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if !slices.Equal(interactions, []int64{1, 1, 3, 3}) || !slices.Equal(feedbacks, []int64{2, 2}) {
-		t.Errorf("interactions' pipeline got %v and the feedback handler %v; want each press processed and given up by its own", interactions, feedbacks)
+	if !slices.Equal(interactions, []int64{1, 1, 3, 3}) || !slices.Equal(feedbacks, []int64{2, 2}) || !slices.Equal(stops, []int64{4, 4}) {
+		t.Errorf("interactions=%v feedback=%v stops=%v; want each press processed and given up by its own", interactions, feedbacks, stops)
 	}
 }
 
@@ -151,6 +170,9 @@ func TestLateSessionIsNotReadyUntilItIsBound(t *testing.T) {
 	}
 	if err := late.Cancel(t.Context(), store.ConversationKey{}, "task-1", "why"); !errors.Is(err, errSessionNotReady) {
 		t.Errorf("Cancel before bind = %v, want errSessionNotReady", err)
+	}
+	if _, err := late.Stop(t.Context(), store.ConversationKey{}, "task-1", "U1"); !errors.Is(err, errSessionNotReady) {
+		t.Errorf("Stop before bind = %v, want errSessionNotReady", err)
 	}
 }
 

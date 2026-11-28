@@ -1153,9 +1153,17 @@ with the configured acknowledgment reaction when enabled, and sends queued repli
 reaches a terminal state, or when a pause ends (answered, timed out or cancelled). A reply
 sent while an interaction is pending is held the same way, and is not its answer, unless the question takes
 text replies (the `a2a` dialect's single free-text question): then the first such reply after the question is
-its answer, decided with a button's checks and audit (8.4), and never sent as a turn. A user can stop
-the active task from the thread; the stop control calls `CancelTask`, and queued replies then proceed (specified, not built: `Manager.Stop` has no
-caller and the Slack adapter handles no stop press, so a task that nothing follows is released by a restart). A turn's `messageId` is
+its answer, decided with a button's checks and audit (8.4), and never sent as a turn. A channel member (not a bot, D12) can stop
+the active task from the thread with the Stop button. While a task runs, Stop appears on live messages updated in place on platforms
+whose message edit replaces buttons in place (on Slack, alert and bot-trigger threads and non-streaming updates; Slack live streams
+do not carry blocks mid-stream, and Microsoft Teams posts buttons as a separate card that edits do not remove), and the final or
+cut-short update removes it. On every platform with buttons, Stop also appears on failure notices that leave a task recorded at the
+agent (an oversized agent card, a refused follow, rejected credentials, or an uncancellable wedged task). Presses go through the
+neutral `chat.Interaction` seam under the shared per-connection press limits (default 1000 waiting per connection, 10 per user),
+serialized per conversation, and are processed asynchronously by the press worker off the platform acknowledgement path;
+`Manager.Stop` calls `CancelTask` (three attempts in all—two retries—on transient failures, auditing `OpCancel` under the presser),
+posts `NoticeStopped` or `NoticeStopUnverified` (when the cancel answer is too large to read) for paused or stranded tasks while
+letting streaming tasks end with `NoticeTaskCanceled`, clears the recorded task, and lets queued replies proceed. A turn's `messageId` is
 `slack:<connection>:<channel>:<ts>`, so the `app_mention` and `message` events for one
 message are one turn. When `-32004` comes from a task Agent Kourier did not record, Agent Kourier
 resends with backoff (at most 60 s apart), repeating the lookup before each resend, and
