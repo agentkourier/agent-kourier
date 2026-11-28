@@ -40,7 +40,7 @@ Agents speak only A2A, so a new platform needs no change to them.
 [Install with Helm](docs/how-to/install-with-helm.md) · [Architecture](docs/explanation/architecture.md) ·
 [Release notes](docs/release-notes.md)
 
-> **Status: v0.7.0.** Install the published chart and image with
+> **Status: v0.8.0.** Install the published chart and image with
 > [Install with Helm](docs/how-to/install-with-helm.md). The `v1alpha1` resource format can change before 1.0. See
 > [Status](#status).
 >
@@ -305,10 +305,10 @@ the contract.
 
 ## Status
 
-The current release is v0.7.0:
+The current release is v0.8.0:
 
-- a signed image for `linux/amd64` and `linux/arm64`, `ghcr.io/agentkourier/agent-kourier:v0.7.0`
-- the Helm chart `oci://ghcr.io/agentkourier/charts/agent-kourier` version `0.7.0`, which pins that image by digest
+- a signed image for `linux/amd64` and `linux/arm64`, `ghcr.io/agentkourier/agent-kourier:v0.8.0`
+- the Helm chart `oci://ghcr.io/agentkourier/charts/agent-kourier` version `0.8.0`, which pins that image by digest
 
 Agent Kourier runs as one replica with a SQLite store, or as two replicas on Postgres with a
 leader election and fencing, installed with the [Helm chart](charts/agent-kourier/README.md). It writes

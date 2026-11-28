@@ -4,12 +4,58 @@ What changed in each release, newest first, and what you must do about it. The s
 [Upgrade](how-to/upgrade.md), which has a section for each change that needs one; this page says what changed and points to it.
 
 
-## AX Task launcher
+## Version 0.8.0
 
-The experimental AX add-on now starts Tasks from an operator-supplied template. It receives command
-results over authenticated HTTPS and returns them in the original thread. It keeps the add-on name
-and chart block. Existing ADK installs require new launcher settings. See
-[Upgrade the AX add-on](how-to/upgrade.md#replace-the-experimental-adk-add-on-with-the-ax-task-launcher).
+The experimental AX add-on is now a Task launcher. It no longer runs a model itself. Each turn starts one AX Task from a
+template you supply, running your own agent image. The Task sends its result back to the add-on over authenticated
+HTTPS, and Agent Kourier posts it in the thread. The add-on keeps its name, its chart block `addons.ax` and its A2A
+address. The broker, its CRDs, its database schema and its values are unchanged from 0.7.0, and so is the Claude
+Managed Agents add-on's chart block.
+
+The launcher is built and tested against AX v0.4.0-rc.2, a pre-release of AX v0.4.0. A patch release will move it to
+AX v0.4.0 once that version is released.
+
+### Breaking changes
+
+- **For an install with the AX add-on on.** The ADK agent is gone, and with it the add-on's model settings:
+  `addons.ax.model`, `addons.ax.bedrock` and `addons.ax.anthropicApiKeySecret` are removed, and so is
+  `addons.ax.networkPolicy.model`. The values schema refuses them, so a values file that still sets them fails to
+  render. The `ask_user` tool and ADK's session memory are gone too, and so are both of the old agent's routes: the
+  agent beside Agent Kourier, and the image that served A2A from inside an AX Task.
+  [Replace the experimental ADK add-on](how-to/upgrade.md#replace-the-experimental-adk-add-on-with-the-ax-task-launcher)
+  has the steps: what to keep, what to set, and what happens to turns that were running or waiting on a question.
+- **None for an install without it.** With `addons.ax` off, the chart renders what 0.7.0 rendered, apart from the
+  chart's version labels.
+
+### AX add-on (experimental)
+
+- **New settings**: the AX control plane's address (`addons.ax.server.address`), the Task template's ConfigMap
+  (`addons.ax.taskTemplate.configMap`), and the result callback (`addons.ax.resultCallback`): the HTTPS address that
+  Tasks post their results to, the Secret that holds its token, and, optionally, an Ingress for it. Also
+  `atespace`, `launcherId`, `promptKey`, `history`, `maxRunning`, `pollInterval`, `turnTimeout` and `keepFailed`.
+  The add-on's NetworkPolicy settings gain `addons.ax.networkPolicy.server`, for egress to the AX server, and
+  `addons.ax.networkPolicy.callbackFrom`, for the callback's ingress.
+- **The image** also contains the command wrapper that your agent image runs under in the Task. The wrapper claims
+  the start of one command and reports its bounded output through the callback.
+  [Connect the AX add-on](how-to/connect-ax.md) has the setup, including the Gateway the Tasks reach the callback through.
+- **Upgrade**: completed tasks stay readable. On its first start after the upgrade, the add-on fails the turns that
+  were running as interrupted, and fails questions that were waiting on an answer with a prompt to send a new message.
+
+### Other changes
+
+- **The add-on kit no longer releases a context it has just accepted a message for.** The Claude Managed Agents
+  add-on's idle sweep could archive a thread's session after accepting a new message for it. The message then started
+  a session without the thread's history, or, if it answered a paused task, found no task to answer. The sweep now
+  checks again under a lock that the message's intake shares.
+- **The release** retries an image build that fails, up to four attempts, for registries that fail briefly. The check of
+  each add-on's image reference now requires one whole reference by digest.
+
+### Dependencies
+
+- **Go modules:** the broker's `k8s.io` modules move from v0.37.2 to v0.37.3. The Claude Managed Agents add-on's
+  `anthropic-sdk-go` moves from v2.13.0 to v2.15.0. The AX add-on drops ADK, the model SDKs and GORM, and builds on
+  `github.com/google/ax` v0.4.0-rc.2.
+- **Images:** the Go builder (`golang:1.27.4`) and the runtime base images take new digests, at the same versions.
 
 ## Version 0.7.0
 

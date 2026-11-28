@@ -4,7 +4,7 @@ description: A Kubernetes-native broker that carries messages between team chat 
 type: application
 # A release (hack/release/package-chart.sh) stamps version, appVersion, image.repository and image.digest and pushes the
 # chart to oci://ghcr.io/agentkourier/charts. In the source tree they are unstamped, so image.repository has no default.
-version: 0.7.0
+version: 0.8.0
 appVersion: dev
 home: https://agentkourier.dev
 icon: https://agentkourier.dev/assets/brand/agent-kourier-mark.svg
