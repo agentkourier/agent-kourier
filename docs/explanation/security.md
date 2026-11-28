@@ -88,10 +88,11 @@ The chart grants list and watch on Secrets in these namespaces:
   value)
 - the release namespace with `store.type: postgres` (the DSN's Secret)
 - each namespace of `rbac.secretNamespaces`
-- with `config.source: files` and none of these, the release namespace
+- with `config.source: files` and none of these, the release namespace, unless the AX add-on is on
 
-With `config.source: files` such a Role covers every Secret of its namespace. With `config.source: crds` it names the Secrets
-(`resourceNames`):
+With `config.source: files` such a Role covers every Secret of its namespace, except in the release namespace while the AX add-on
+is on: there it names the Secrets as `crds` does, and the chart makes no Role there when it names none. With
+`config.source: crds` it names the Secrets (`resourceNames`):
 
 - the ones the config values and the DSN name
 - the one Secret that the broker's own ChatConnection reads, if it has one (the chart derives it from
