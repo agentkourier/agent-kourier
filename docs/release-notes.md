@@ -36,15 +36,16 @@ v0.4.0-rc.2; a patch release will move it to AX v0.4.0 once that version is rele
   the agent (`CancelTask`, tried three times on a failure that may pass), records the cancel in the audit log under the
   person who pressed, clears the task from the thread, and lets the replies queued behind it go on. If the cancel
   still fails, the press is tried again with a growing wait for up to an hour, and then, on Slack, the person is told
-  `Couldn't stop the task. Please press Stop again.`
+  `Couldn't stop the task. Please press Stop again.` A press from outside the channel or by a bot stops nothing (on
+  Microsoft Teams an outsider is told `Only members of this channel can stop this task.`), and so does a button left
+  on an older task once a newer one runs in the thread.
 - **What the thread shows.** A task that was streaming ends with the usual cancelled notice. A stranded task (or a
   paused one, for a press that arrives as it pauses) posts `The task was stopped.`, or, when an answer from the agent
   is too large to read, a notice that Agent Kourier cannot tell whether it stopped. A task the agent no longer knows
   gets `The agent no longer has this conversation, ...`, and the next message starts a fresh one.
 - **What the presser is told**, alone: `Stopping the task.`, `This task is no longer running.`, or why it could not be
   stopped. On Microsoft Teams that is only when the press is decided within 6 seconds; otherwise the presser is told
-  `Agent Kourier received your press.` A press from outside the channel or by a bot stops nothing, and so does a
-  button left on an older task once a newer one runs in the thread.
+  `Agent Kourier received your press.`
 - **Limits.** Stop presses share the press table's limits with question and feedback buttons (1000 waiting per
   connection, 10 per person), and presses in one thread run in order. The thread and task IDs in a Stop button's
   value are capped at 500 bytes together; past that the button is left off and the text still posts
