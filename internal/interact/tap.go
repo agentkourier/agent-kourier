@@ -150,7 +150,7 @@ func (t *Tap) handOff(ctx context.Context, ref session.TurnRef, task a2a.Task, c
 	}
 	t.flying[id] = struct{}{}
 	t.wg.Add(1)
-	go t.run(ctx, id, Pause{Key: ref.Key, Binding: ref.Binding, Task: task, Recovered: ref.Restarted}, cards)
+	go t.run(ctx, id, Pause{Key: ref.Key, Binding: ref.Binding, Turn: ref.MessageID, Task: task, Recovered: ref.Restarted}, cards)
 }
 
 // deadline is when the pause can no longer be answered: as the interaction's own, the task's time plus

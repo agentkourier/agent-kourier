@@ -452,6 +452,13 @@ func TestBackendCarriesTheBindingsMentions(t *testing.T) {
 	if be.MentionPrompt != render.MentionPrompt(people) {
 		t.Errorf("MentionPrompt = %q, want what render.MentionPrompt makes of the Binding's people", be.MentionPrompt)
 	}
+	ib, err := f.b.Binding("sre/oncall")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(ib.Mentions, people) || ib.MaxMentions != 3 {
+		t.Errorf("interact.Binding = %v, at most %d; want %v, at most 3", ib.Mentions, ib.MaxMentions, people)
+	}
 }
 
 func TestReloadChangesWhatBackendReturns(t *testing.T) {

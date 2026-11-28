@@ -74,7 +74,10 @@ type interactionDeps struct {
 	bindings  *Bindings
 	metrics   *Metrics
 	log       *slog.Logger
-	trace     func(step string) // a test's: told as each step of startup is done. Optional.
+	// mentions notifies declared people named in a delivered question prompt, sharing the turn's cap and deduplication
+	// with the turn's reply renderer. Optional for tests that do not construct a renderer.
+	mentions func(ctx context.Context, req interact.QuestionMentions)
+	trace    func(step string) // a test's: told as each step of startup is done. Optional.
 	// served says whether this broker serves the chat connection named conn ("namespace/name"), as opposed to its not running for now:
 	// the timeout sweep ends the interactions of one it does not serve without the agent (interact.SweepConfig.Served). Nil: every connection.
 	served func(conn string) bool
@@ -150,7 +153,7 @@ func (d interactionDeps) build(inner session.Sink) (*interactionRuntime, error) 
 	late := &lateSession{}
 	intake, err := interact.New(interact.Config{
 		Store: d.st, AuditReader: d.st, Lookup: d.bindings, Platforms: chat.Narrow[interact.Fitter](d.platforms), Outbox: d.ob, Session: late, Audit: d.auditor,
-		OnApprovalOutcome: d.metrics.ApprovalOutcome, Logger: d.log,
+		OnApprovalOutcome: d.metrics.ApprovalOutcome, NotifyQuestionMentions: d.mentions, Logger: d.log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("interactions: the intake: %w", err)

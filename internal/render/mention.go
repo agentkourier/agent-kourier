@@ -48,30 +48,39 @@ type MentionScan struct {
 // A place where the two readings still differ can only notify a declared person or not, within the cap: the adapter counts its limit
 // in escaped text, so it can cut sooner than body was. With nothing declared there is nothing to scan for, and nothing is counted.
 func Mentions(body string, declared []v1alpha1.ChatMention, limit int, already ...string) MentionScan {
+	return MentionsIn([]string{body}, declared, limit, already...)
+}
+
+// MentionsIn reads each text in bodies in order as Mentions reads one body, sharing the cap, deduplication and already set
+// across all of them while starting each body outside any code fence so an unclosed fence in one question cannot hide names
+// in the next.
+func MentionsIn(bodies []string, declared []v1alpha1.ChatMention, limit int, already ...string) MentionScan {
 	scan := MentionScan{past: slices.Clone(already)}
 	if len(declared) == 0 {
 		return scan
 	}
 	limit -= len(already)
-	code, held, opener, reread := false, body, markNone, false
-	for held != "" {
-		line, _, _ := strings.Cut(held, "\n")
-		after := held[len(line):] // the line break, if any, and the lines after it
-		ch, run, rest, mk := fenceLine(line, code, opener, reread)
-		if run >= 3 {
-			held, reread = afterFence(code, ch, run, rest, after)
-			opener = mk // what stood before the run of the opener of the block that is open
-			if code {
-				opener = markNone
+	for _, body := range bodies {
+		code, held, opener, reread := false, body, markNone, false
+		for held != "" {
+			line, _, _ := strings.Cut(held, "\n")
+			after := held[len(line):] // the line break, if any, and the lines after it
+			ch, run, rest, mk := fenceLine(line, code, opener, reread)
+			if run >= 3 {
+				held, reread = afterFence(code, ch, run, rest, after)
+				opener = mk // what stood before the run of the opener of the block that is open
+				if code {
+					opener = markNone
+				}
+				code = !code
+				continue
 			}
-			code = !code
-			continue
+			reread = false
+			if !code {
+				scan.line(line, declared, limit)
+			}
+			held = strings.TrimPrefix(after, "\n")
 		}
-		reread = false
-		if !code {
-			scan.line(line, declared, limit)
-		}
-		held = strings.TrimPrefix(after, "\n")
 	}
 	return scan
 }
@@ -377,6 +386,14 @@ func MentionMessage(m v1alpha1.ChatMention) chat.Message {
 	}
 }
 
+// QuestionMentionMessage is MentionMessage for a person named in a question prompt rather than a turn's reply.
+func QuestionMentionMessage(m v1alpha1.ChatMention) chat.Message {
+	return chat.Message{
+		Fallback: "The agent named " + m.Name + " in a question in this thread.",
+		Parts:    []chat.Part{chat.Mention{User: m.User, Text: "was named as " + m.Name + " in the question above."}},
+	}
+}
+
 // MentionPrompt is the line a session's first prompt ends with on a Binding that declares people, which tells the agent the
 // names it may use, or "" on one that declares none. Without it the model would have to guess them. It names no user: the
 // agent never supplies an ID.
@@ -388,6 +405,6 @@ func MentionPrompt(declared []v1alpha1.ChatMention) string {
 	for i, m := range declared {
 		names[i] = m.Name
 	}
-	return "To notify someone in this thread, write @name in your reply, outside code. You may use these names: " +
+	return "To notify someone in this thread, write @name in your reply or question, outside code. You may use these names: " +
 		strings.Join(names, ", ") + ". No other name notifies anyone, and neither does a user ID."
 }
