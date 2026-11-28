@@ -223,8 +223,7 @@ const (
 	// to show it (spec 8.2).
 	NoticeStopped NoticeKind = "stopped"
 	// NoticeStopUnverified says a person stopped a task that was not streaming and Agent Kourier cannot say it stopped: the answer to the
-	// cancel, or the task, was too large to read. It claims no more than that the pause is over. Manager.Stop is its only source and has no
-	// caller in production, so no person sees it yet.
+	// cancel, or the task, was too large to read. It claims no more than that the thread no longer waits for it.
 	NoticeStopUnverified NoticeKind = "stop_unverified"
 	// NoticeWedged says a task ran past maxWorkingAge and was cancelled (R17).
 	NoticeWedged NoticeKind = "wedged"
@@ -256,9 +255,10 @@ const (
 type Notice struct {
 	ID         string
 	Kind       NoticeKind
-	MessageRef string // the platform's ID of the message the notice is about
-	Reaction   string // the bare reaction name for acknowledgment notices
-	Detail     string // a short reason, fixed text: never agent output, never a secret
+	MessageRef string     // the platform's ID of the message the notice is about
+	Reaction   string     // the bare reaction name for acknowledgment notices
+	Detail     string     // a short reason, fixed text: never agent output, never a secret
+	TaskID     a2a.TaskID // non-empty when the notice offers a Stop control for a task still recorded at the agent
 }
 
 // ErrTurnContinues is the cause with which the context a Sink's Turn was given ends when the turn's task goes on without

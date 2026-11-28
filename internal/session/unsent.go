@@ -1,6 +1,7 @@
 package session
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -150,7 +151,11 @@ func (m *Manager) fail(t *tstate, class TurnOutcome, why string, cause error) (o
 	delete(m.attempted, t.key) // it will not be sent again
 	delete(m.fresh, t.r.ID)
 	m.mu.Unlock()
-	m.notice(t, NoticeFailed, why)
+	if class == TurnUncancellable && t.taskID != "" {
+		m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: cmp.Or(t.nid, t.r.ID) + "/" + string(NoticeFailed), Kind: NoticeFailed, MessageRef: t.r.MessageRef, Detail: why, TaskID: t.taskID})
+	} else {
+		m.notice(t, NoticeFailed, why)
+	}
 	m.cfg.Logger.Warn("session turn failed", "key", t.key, "binding", t.sess.Binding, "message", t.r.ID, "reason", why, "error", cause)
 	if err := m.cfg.Store.MarkReplyDelivered(context.WithoutCancel(m.ctx), t.r.ID, m.cfg.Now()); err != nil {
 		return ended, err

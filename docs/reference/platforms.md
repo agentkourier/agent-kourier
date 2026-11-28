@@ -189,8 +189,10 @@ with a summary of its arguments, cut when it is long (or its name alone, when th
 `Approved` or `Denied`, as the ending on Slack shows it.
 
 With `feedback.enabled` set, the useful and not-useful buttons are a card of their own. That card is a message that Agent Kourier
-posts in the thread right after the reply's text, or, for a reply that it edits as the agent works, after the final edit. When Agent
-Kourier replaces a card, Teams marks the message `Edited`.
+posts in the thread right after the reply's text, or, for a reply that it edits as the agent works, after the final edit. A running
+task's **Stop** button (and the **Stop** button on a failure notice for a stranded task) is posted the same way as a card of buttons
+under the message; when a running turn ends with no buttons, Teams leaves that earlier card in place, and pressing it afterwards
+answers that the task is no longer running. When Agent Kourier replaces a card, Teams marks the message `Edited`.
 
 A reply's text and its buttons are two posts because Teams did not take them as one. On a test tenant in 2026-11, Teams answered
 one message of text and a card with no ID, and showed it as two messages, the text and a card of the buttons alone, so the broker

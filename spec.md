@@ -1153,9 +1153,15 @@ with the configured acknowledgment reaction when enabled, and sends queued repli
 reaches a terminal state, or when a pause ends (answered, timed out or cancelled). A reply
 sent while an interaction is pending is held the same way, and is not its answer, unless the question takes
 text replies (the `a2a` dialect's single free-text question): then the first such reply after the question is
-its answer, decided with a button's checks and audit (8.4), and never sent as a turn. A user can stop
-the active task from the thread; the stop control calls `CancelTask`, and queued replies then proceed (specified, not built: `Manager.Stop` has no
-caller and the Slack adapter handles no stop press, so a task that nothing follows is released by a restart). A turn's `messageId` is
+its answer, decided with a button's checks and audit (8.4), and never sent as a turn. A channel member (not a bot, D12) can stop
+the active task from the thread with the Stop button (shown on live messages rendered through the update path while a task runs, and on
+failure notices that leave a task recorded at the agent such as an oversized agent card, a refused follow, rejected credentials, or an
+uncancellable wedged task; removed from live messages when the turn ends or is cut short). Presses are recorded through the neutral
+`chat.Interaction` seam under `store.PressLimits` (default 1000 total, 10 per user), serialized per thread lane (`stop1|<thread>`), and
+processed asynchronously by the press worker off the platform acknowledgement path; `Manager.Stop` calls `CancelTask` (retrying transient
+failures up to 3 times and auditing `OpCancel` under the presser), posts `NoticeStopped` or `NoticeStopUnverified` (when the cancel answer
+is too large to read) for paused or stranded tasks while letting streaming tasks end with `NoticeTaskCanceled`, clears the recorded task,
+and lets queued replies proceed. A turn's `messageId` is
 `slack:<connection>:<channel>:<ts>`, so the `app_mention` and `message` events for one
 message are one turn. When `-32004` comes from a task Agent Kourier did not record, Agent Kourier
 resends with backoff (at most 60 s apart), repeating the lookup before each resend, and

@@ -1,6 +1,7 @@
 package session
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -26,7 +27,7 @@ func (m *Manager) lost(t *tstate, err error) (outcome, error) {
 		m.rejected(t, err)
 		t.c.follow = nil  // the task stays recorded, for reconciliation
 		m.drives(t.c, "") // no longer driven, before the thread is told
-		m.notice(t, NoticeFailed, "the agent's front door refused the Binding's credentials")
+		m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: cmp.Or(t.nid, t.r.ID) + "/" + string(NoticeFailed), Kind: NoticeFailed, MessageRef: t.r.MessageRef, Detail: "the agent's front door refused the Binding's credentials", TaskID: t.taskID})
 		m.finish(t, TurnCredentialsRejected)
 		return ended, fmt.Errorf("follow turn %s: %w", t.r.ID, err)
 	case errors.Is(err, agent.ErrAgentForbidden):
@@ -56,7 +57,7 @@ func (m *Manager) lost(t *tstate, err error) (outcome, error) {
 	if errors.Is(err, dialect.ErrCardTooLarge) { // no connection was made: nothing was refused, and nothing was read of the task
 		detail, id = cardTooLargeDetail, taskNoticeID(t.key, t.taskID, noticeCardTooLarge)
 	}
-	m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: id, Kind: NoticeFailed, MessageRef: t.r.MessageRef, Detail: detail})
+	m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: id, Kind: NoticeFailed, MessageRef: t.r.MessageRef, Detail: detail, TaskID: t.taskID})
 	m.finish(t, TurnRefused)
 	return ended, fmt.Errorf("send turn %s: %w", t.r.ID, err)
 }
@@ -75,10 +76,9 @@ const tooLargeAnswerDetail = "what the agent sent after the answer was more than
 
 // cardTooLargeDetail is what the thread is told when a task cannot be followed because the connection to the agent could not be opened: its
 // agent card is past the bound. Nothing was refused and nothing was read of the task, which stays at the agent, recorded and followed by no one
-// (the outcome is TurnRefused, as for any connection that fails on a follow). Nothing follows it again by itself: once the card is fixed, a restart
-// takes it up (recovery reads it and follows it). No control of the thread does: Manager.Stop has no caller in production, and the Slack adapter
-// handles no stop. The sentence says restart, and no more.
-const cardTooLargeDetail = "Agent Kourier could not connect to the agent: its agent card is too large to read, so the turn stopped. The task stays at the agent. Once the card is fixed, restart Agent Kourier."
+// (the outcome is TurnRefused, as for any connection that fails on a follow). Nothing follows it again by itself: once the card is fixed, a person
+// in the channel can press Stop on this notice to cancel the task (Manager.Stop), or restart Agent Kourier to follow it again.
+const cardTooLargeDetail = "Agent Kourier could not connect to the agent: its agent card is too large to read, so the turn stopped. The task stays at the agent. Once the card is fixed, press Stop or restart Agent Kourier."
 
 // cancelTimeout bounds the cancel of a task whose reply was too large, as the agent's own bound on a cancel
 // (agent.Config.UnaryTimeout) does: this is the backstop for an AgentAPI that does not keep to it.
@@ -94,8 +94,7 @@ const cancelTimeout = 30 * time.Second
 // delivered, or the head would be looked up, followed and ended again, with a second notice. When the cancel took, the turn
 // is over and the cause is logged, and the queue behind it goes on: a runner that is handed an error retires. A cancel that fails
 // does not change what the thread is told: the task stays recorded, for reconciliation, as after a refusal, and the error is
-// returned. A restart follows it again, meets the same, and cancels again (a thread control that cancels it, Manager.Stop, has no caller in
-// production yet).
+// returned. A restart follows it again, meets the same, and cancels again.
 func (m *Manager) tooLarge(t *tstate, err error) (outcome, error) {
 	t.c.follow = nil
 	m.drives(t.c, "")
@@ -265,8 +264,8 @@ func running(t *a2a.Task) bool {
 // the session; one that cannot be cancelled has ended, so it is read once more and its end
 // rendered; a refused credential or identity fails; anything else is retried until SendGiveUp,
 // then reported. Every way out lets the queue go on, except where the task stays recorded and
-// the turns behind it stay held until a restart's reconciliation releases
-// the session (Manager.Stop would too, but nothing calls it in production yet).
+// the turns behind it stay held until a person stops it via Stop (Manager.Stop) or a restart's reconciliation releases
+// the session.
 func (m *Manager) wedged(t *tstate) (outcome, error) {
 	c := t.c
 	if c.cancelFrom.IsZero() {
@@ -297,7 +296,7 @@ func (m *Manager) wedged(t *tstate) (outcome, error) {
 	case kind == cancelForbidden, m.cfg.Now().Sub(c.cancelFrom) >= m.cfg.SendGiveUp:
 		m.audit(t, t.call(err))
 		c.follow = nil
-		return m.fail(t, TurnUncancellable, "the wedged task could not be cancelled; restart agent-kourier to reconcile it", err)
+		return m.fail(t, TurnUncancellable, "the wedged task could not be cancelled; press Stop to try again or restart Agent Kourier to reconcile it", err)
 	}
 	c.tries++
 	return blocked, fmt.Errorf("cancel wedged task %s: %w", t.taskID, err)

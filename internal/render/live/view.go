@@ -58,7 +58,7 @@ func (u *Run) snapshot() view {
 	for _, id := range u.order {
 		events = append(events, agent.TextEvent{ArtifactID: id, Text: u.texts[id]})
 	}
-	tool, toolState, final, paused, awaiting := u.tool, u.toolState, u.final, u.paused, u.awaiting
+	tool, toolState, final, paused, awaiting, taskID := u.tool, u.toolState, u.final, u.paused, u.awaiting, u.taskID
 	idle, begun, counts, note := u.idle, u.begun && !u.texted, u.counts(), u.note
 	var recs []stepRec
 	var dropped int
@@ -121,6 +121,18 @@ func (u *Run) snapshot() view {
 		v.pos = append(v.pos, pos)
 	}
 	v.ok = v.ok || len(v.steps) > 0
+	// While a task runs on the update path, the live message carries a Stop button bound to that task ID; the final
+	// update (or a cut-short turn) leaves it off so the button disappears when the turn stops running.
+	if !final && !u.streaming && taskID != "" {
+		if stop := render.StopParts(u.turn.Thread, string(taskID)); len(stop) > 0 {
+			if v.ok {
+				v.m.Parts = append(slices.Clone(v.m.Parts), stop...)
+			}
+			if v.post.Fallback != "" || len(v.post.Parts) > 0 {
+				v.post.Parts = append(slices.Clone(v.post.Parts), stop...)
+			}
+		}
+	}
 	return v
 }
 

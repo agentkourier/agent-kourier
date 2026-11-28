@@ -34,6 +34,7 @@ type lateSession struct {
 var (
 	_ interact.Session   = (*lateSession)(nil)
 	_ interact.Abandoner = (*lateSession)(nil)
+	_ interact.Stopper   = (*lateSession)(nil)
 )
 
 // bind sets the manager the session delegates to.
@@ -62,6 +63,15 @@ func (l *lateSession) Abandon(ctx context.Context, key store.ConversationKey, id
 		return errSessionNotReady
 	}
 	return m.Abandon(ctx, key, id, reason)
+}
+
+// Stop implements interact.Stopper.
+func (l *lateSession) Stop(ctx context.Context, key store.ConversationKey, id a2a.TaskID, by string) (bool, error) {
+	m := l.m.Load()
+	if m == nil {
+		return false, errSessionNotReady
+	}
+	return m.Stop(ctx, key, id, by)
 }
 
 // interactionDeps is what the interactions are built from: the parts of Run they share. Every part but trace is required
@@ -131,6 +141,7 @@ type interactionRuntime struct {
 	replies  *interact.TextReplies
 	pipeline *interact.Pipeline
 	votes    *feedback.Handler
+	stops    *interact.StopHandler
 	replacer *interact.Replacer
 	worker   *interact.Worker
 	// reopened is told by the session manager of the denials it took and did not deliver (session.Config.AnswerWatcher) and is
@@ -184,7 +195,14 @@ func (d interactionDeps) build(inner session.Sink) (*interactionRuntime, error) 
 	if err != nil {
 		return nil, fmt.Errorf("interactions: the feedback handler: %w", err)
 	}
-	if worker, err = interact.NewWorker(interact.WorkerConfig{Processor: pressRouter{interactions: pipeline, feedback: votes}, Presses: d.st, Logger: d.log}); err != nil {
+	stopH, err := interact.NewStopHandler(interact.StopConfig{
+		Store: d.st, Sessions: d.st, Authorizers: chat.Narrow[interact.Authorizer](d.platforms), Ephemerals: chat.Narrow[interact.Ephemeral](d.platforms), Stopper: late,
+		Notify: func(p store.Press) { worker.Submit(p) }, Outcomes: outcomes, Logger: d.log,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("interactions: the stop handler: %w", err)
+	}
+	if worker, err = interact.NewWorker(interact.WorkerConfig{Processor: pressRouter{interactions: pipeline, feedback: votes, stops: stopH}, Presses: d.st, Logger: d.log}); err != nil {
 		return nil, fmt.Errorf("interactions: the worker: %w", err)
 	}
 	tap, err := interact.NewTap(interact.TapConfig{Sink: inner, Handler: intake, Lookup: d.bindings, Logger: d.log})
@@ -197,7 +215,7 @@ func (d interactionDeps) build(inner session.Sink) (*interactionRuntime, error) 
 	if err != nil {
 		return nil, fmt.Errorf("interactions: text replies: %w", err)
 	}
-	return &interactionRuntime{tap: tap, late: late, replies: replies, pipeline: pipeline, votes: votes, replacer: replacer, worker: worker, reopened: interact.NewReopened(d.st), outcomes: outcomes, ready: ready}, nil
+	return &interactionRuntime{tap: tap, late: late, replies: replies, pipeline: pipeline, votes: votes, stops: stopH, replacer: replacer, worker: worker, reopened: interact.NewReopened(d.st), outcomes: outcomes, ready: ready}, nil
 }
 
 // newSweeper builds the timeout sweeper over the session manager mgr and the interactions r.
@@ -247,7 +265,7 @@ func (d interactionDeps) start(ctx context.Context, mgr *session.Manager, r *int
 	})
 	close(r.ready) // every text handler exists before recovery, but decisions wait for these loops
 	d.traced("start-interactions")
-	return interactionsHandler(pipeline, votes, d.log), nil
+	return interactionsHandler(pipeline, votes, r.stops, d.log), nil
 }
 
 // startLoop runs run in a goroutine of its own until its stop is called, and returns that stop: it ends
@@ -273,18 +291,18 @@ type presser interface {
 
 // pressHandler is what the chat intake calls for each press of a button, which the adapter has decoded into the neutral model:
 // Interaction for a platform that answers the press before it is decided, and DecidePress for one that waits for the decision in the
-// press's request. A prompt's button goes to the interactions' pipeline; one that is not goes to the feedback buttons' handler, and
-// one that is neither's is someone else's, and is dropped without a word. A press refused because too many wait is told to the log,
+// press's request. A prompt's button goes to the interactions' pipeline; one that is not goes to the feedback buttons' handler, then
+// the stop button's handler, and one that is none of theirs is someone else's, and is dropped without a word. A press refused because too many wait is told to the log,
 // and acknowledged, since Slack redelivering it would only add to them. Any other error leaves the press unacknowledged, for Slack to
 // deliver again. A press dropped or refused so is no decision: DecidePress says it was not decided.
 type pressHandler struct {
-	prompts, votes presser
-	log            *slog.Logger
+	prompts, votes, stops presser
+	log                   *slog.Logger
 }
 
-// interactionsHandler is the press handler over the interactions' pipeline p and the feedback buttons' handler votes.
-func interactionsHandler(p, votes presser, log *slog.Logger) pressHandler {
-	return pressHandler{prompts: p, votes: votes, log: log}
+// interactionsHandler is the press handler over the interactions' pipeline p, the feedback buttons' handler votes, and the stop handler stops.
+func interactionsHandler(p, votes, stops presser, log *slog.Logger) pressHandler {
+	return pressHandler{prompts: p, votes: votes, stops: stops, log: log}
 }
 
 // Interaction records a press for the worker (presser.Press).
@@ -298,14 +316,17 @@ func (h pressHandler) DecidePress(ctx context.Context, i chat.Interaction) (chat
 	return h.route(ctx, i, func(p presser) (chat.PressOutcome, error) { return p.DecidePress(ctx, i) })
 }
 
-// route gives i to take with the pipeline, and with the feedback handler if it is no interaction's, and reads the error.
+// route gives i to take with the pipeline, the feedback handler, and the stop handler in turn, and reads the error.
 func (h pressHandler) route(ctx context.Context, i chat.Interaction, take func(presser) (chat.PressOutcome, error)) (chat.PressOutcome, error) {
 	out, err := take(h.prompts)
 	if errors.Is(err, interact.ErrNotInteraction) {
 		out, err = take(h.votes)
 	}
+	if errors.Is(err, feedback.ErrNotFeedback) {
+		out, err = take(h.stops)
+	}
 	switch {
-	case errors.Is(err, interact.ErrNotInteraction), errors.Is(err, feedback.ErrNotFeedback):
+	case errors.Is(err, interact.ErrNotInteraction), errors.Is(err, feedback.ErrNotFeedback), errors.Is(err, interact.ErrNotStop):
 		return chat.PressOutcome{}, nil
 	case errors.Is(err, store.ErrLimit):
 		h.log.WarnContext(ctx, "interact: a press was refused, because too many presses are waiting", "channel", i.At.Channel, "err", err)
@@ -314,16 +335,20 @@ func (h pressHandler) route(ctx context.Context, i chat.Interaction, take func(p
 	return out, err
 }
 
-// pressRouter is the press worker's processor. Both kinds of button record their presses in one table, and the worker takes
-// them as they come: a feedback press, by its lane, goes to the feedback handler, and any other to the interactions'
-// pipeline.
-type pressRouter struct{ interactions, feedback interact.PressProcessor }
+// pressRouter is the press worker's processor. All button kinds record their presses in one table, and the worker takes
+// them as they come: a feedback press or a stop press goes to its own handler by lane prefix, and any other to the
+// interactions' pipeline.
+type pressRouter struct{ interactions, feedback, stops interact.PressProcessor }
 
 func (r pressRouter) pick(p store.Press) interact.PressProcessor {
-	if feedback.IsPress(p) {
+	switch {
+	case feedback.IsPress(p):
 		return r.feedback
+	case interact.IsStopPress(p):
+		return r.stops
+	default:
+		return r.interactions
 	}
-	return r.interactions
 }
 
 // Process implements interact.PressProcessor.

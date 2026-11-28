@@ -19,15 +19,14 @@ import (
 // conversation is not paused on the task named.
 var ErrNotPaused = errors.New("session: the conversation is not paused on that task")
 
-// Stop is the thread's stop control (spec 8.2), which is specified and not built: nothing calls it in production, and the Slack adapter handles
-// no stop press. It cancels the task taskID, the one the control
-// was rendered for, and the queued replies then go on. It reports false, without calling the
-// agent, when that is not the task recorded for the thread, so an old button cannot stop a newer
+// Stop is the thread's stop control (spec 8.2), called by interact.StopHandler when a channel member presses Stop.
+// It cancels the task taskID, the one the control was rendered for, and the queued replies then go on. It reports false,
+// without calling the agent, when that is not the task recorded for the thread, so an old button cannot stop a newer
 // task. The caller has already checked that by may press the button (D12). A running task's stream
-// ends cancelled, and the runner then posts NoticeTaskCanceled; a paused task has no stream, so Stop ends the pause and
-// tells the thread. It works after a restart. A failed cancel is classified as a wedged task's is
-// (see cancelActive). Stop calls the agent before it returns, so an adapter runs it off Slack's
-// 3-second acknowledgement path: enqueue the control, and act on it from the queue.
+// ends cancelled, and the runner then posts NoticeTaskCanceled; a paused or stranded task has no stream, so Stop ends the pause or clears
+// the record and tells the thread (NoticeStopped, or NoticeStopUnverified when the cancel answer could not be read). It works after a restart.
+// A failed cancel is classified as a wedged task's is (see cancelActive). Stop calls the agent before it returns, so it runs off the platform's
+// acknowledgement path, through the press queue and worker.
 func (m *Manager) Stop(ctx context.Context, key Key, taskID a2a.TaskID, by string) (stopped bool, err error) {
 	var unverified bool
 	done, paused, err := m.cancelActive(ctx, key, taskID, by, false, &unverified)
