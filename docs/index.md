@@ -127,8 +127,9 @@ the split.
 
     ---
 
-    A thread is a session that resumes after a restart; [two replicas on Postgres](explanation/high-availability.md)
-    fail over. The [delivery](explanation/delivery.md) and failover pages say what can repeat.
+    A thread is a session that resumes after a restart; two replicas on Postgres fail over. See what a
+    [restart](explanation/delivery.md) or [failover](explanation/high-availability.md#the-duplicate-that-can-still-happen)
+    can repeat.
 
     [:octicons-arrow-right-24: Architecture](explanation/architecture.md)
 
@@ -136,8 +137,8 @@ the split.
 
     ---
 
-    Experimental. Bind an agent to a Teams channel, or start a session per pull request or issue from a signed
-    webhook, such as GitHub's.
+    Experimental. Bind an agent to a Teams channel, or start a session per pull request or issue from a service's
+    signed webhook.
 
     [:octicons-arrow-right-24: Microsoft Teams](how-to/configure-teams.md) · [Webhooks](how-to/receive-webhooks.md)
 

@@ -344,7 +344,8 @@
 
 /* The home page's four cards: one column on a phone, two by two from tablet width up with every card the height of
    the tallest, and each card's links at its foot. A flex column does not collapse margins, so the children drop
-   theirs and the rule and the link line carry the spacing. */
+   theirs and the rule and the link line carry the spacing. Every card here ends in its link line: the last child
+   goes to the foot. */
 .md-typeset .grid.cards.ak-home-cards {
   grid-template-columns: minmax(0, 1fr);
 }
