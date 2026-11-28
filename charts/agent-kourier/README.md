@@ -133,7 +133,7 @@ The rest are the kind tiers' Agent Kourier, which `hack/kind` installs with this
 | Object | When | Notes |
 |---|---|---|
 | Deployment `<fullname>` | always | one container, config at `/etc/agent-kourier` (the ConfigMap of `config.source: files`; the default, `crds`, mounts none), SQLite at `/data` (with `store.type: sqlite`, strategy Recreate), `/tmp` an emptyDir; with Postgres strategy RollingUpdate (one surge, none unavailable) |
-| ServiceAccount, and a Role and RoleBinding for Secrets | the ServiceAccount with `serviceAccount.create`; the Role and RoleBinding with `rbac.create`, and with `config.source: crds` only where the chart can name a Secret | one Role in each namespace that holds a Secret the config names (with `config.source: crds`, only the Secrets the chart can name: `config.*`, the broker's own ChatConnection's Secret, if it has one (`config.chatConnection`, named like it unless `config.chatConnectionSecret` says otherwise) and `rbac.secretNames`), and in the release namespace with Postgres (the DSN's Secret). It covers every Secret of the namespace. With `config.source: crds` it names the Secrets (`resourceNames`), except in the namespaces of `rbac.secretNamespaces` |
+| ServiceAccount, and a Role and RoleBinding for Secrets | the ServiceAccount with `serviceAccount.create`; the Role and RoleBinding with `rbac.create`, and with `config.source: crds` only where the chart can name a Secret | one Role in each namespace that holds a Secret the config names (with `config.source: crds`, only the Secrets the chart can name: `config.*`, the broker's own ChatConnection's Secret, if it has one (`config.chatConnection`, named like it unless `config.chatConnectionSecret` says otherwise) and `rbac.secretNames`), and in the release namespace with Postgres (the DSN's Secret). It covers every Secret of the namespace, except in the release namespace while the AX add-on is on, where it names them as with `crds`. With `config.source: crds` it names the Secrets (`resourceNames`), except in the namespaces of `rbac.secretNamespaces` |
 | Lease `<fullname>-leader` | `store.type: postgres` | empty; the replicas elect their leader with it. Kept on `helm uninstall` (`helm.sh/resource-policy: keep`), with its release annotations, so a reinstall under the same release name adopts it. Only another release that renders the same name (`fullnameOverride`) would conflict. Do not delete it while Agent Kourier runs: Agent Kourier may not create a Lease, so leadership stops until `helm upgrade` recreates it |
 | Role and RoleBinding `<fullname>-leader` | `store.type: postgres` (`rbac.create`) | `get` and `update` on that one Lease, in the release namespace; no `create`, which cannot be limited by name |
 | ConfigMap `<fullname>-config` | `config.source: files`, unless `config.existingConfigMap` | one `*.yaml` file per resource, from `config.*` |
@@ -271,7 +271,7 @@ What the route needs:
   one Secret by name, since it cannot read the ChatConnection you apply.
 
   It is skipped when `config.chatConnections` renders that connection (its
-  `credentialsSecretRef` is granted instead, as for the one entry that is the own connection), and ignored with `files`. The chart refuses it when the broker has no
+  `credentialsSecretRef` is granted instead, as for the one entry that is the own connection), and ignored with `files`, except that with the AX add-on on, the files route's Role in the release namespace still names it there. The chart refuses it when the broker has no
   connection of its own (`config.chatConnection` empty and the list or the selector set, or every namespace), because it names the Secret of an own connection and there is none.
 - **`config.connectionNamespaces`**: the admission list, a list of namespace names (empty, the default, admits none by name). The broker serves the `ChatConnection`s of these namespaces
   beside its own, if it has one, at most 16 connections in all. Its own, if there is one, is counted first and the others oldest first (with no own connection all 16 go by age); no setting changes the 16.
@@ -334,7 +334,7 @@ Going back, with `config.source=files`, the ConfigMap returns from the same valu
 them), while the ones made by hand stay in the cluster, unread, as do the CRDs.
 
 The values of the route (`config.chatConnection`, `config.chatConnectionSecret`, `rbac.secretNames`)
-may stay set: with `files` they are ignored. So going back is the same values with `config.source: files`, except `config.connectionNamespaces` and `config.connectionNamespaceSelector`, which the chart refuses with `files`.
+may stay set: with `files` they are ignored, except that with the AX add-on on, the Role in the release namespace still names the Secrets they name there. So going back is the same values with `config.source: files`, except `config.connectionNamespaces` and `config.connectionNamespaceSelector`, which the chart refuses with `files`.
 Set the list to `[]` and the selector to `null` in the same upgrade.
 
 An install with no own connection (`config.chatConnection` empty, with the list or the selector set, or neither) sets them the same way, and needs one more thing.
@@ -453,7 +453,7 @@ The render refuses:
 
 With Postgres no volume is mounted and no claim is made.
 Agent Kourier reads the Secret through the API, like its others, so the Role below covers it. It grants list and watch on that Secret by name with `config.source: crds`, and on every Secret of the
-release namespace with `config.source: files` or with the release namespace in `rbac.secretNamespaces`.
+release namespace with `config.source: files` (by name while the AX add-on is on) or with the release namespace in `rbac.secretNamespaces` (which the chart refuses while the AX add-on is on).
 
 The DSN is read once at start. Rotate the password by changing the Secret and the database role, then restart the
 pod. An unreadable or empty Secret fails the start with an error that names the Secret and the key, never the DSN.
@@ -636,13 +636,14 @@ a secret in the ConfigMap:
 - The pod label `app.kubernetes.io/name: agent-kourier` is fixed, whatever the release is named, because NetworkPolicies elsewhere
   (the front door's, in the kind tiers) admit pods by it. Nothing else the chart makes carries it on a pod; in
   particular the token-refresh Job's pod does not.
-- **The chart's Secrets RBAC is namespace-wide on the files route, and by name with `config.source: crds`** (see Custom resources instead
+- **The chart's Secrets RBAC is namespace-wide on the files route, except in the release namespace while the AX add-on is on, and by name with `config.source: crds`** (see Custom resources instead
   of a ConfigMap; the rest of this item is the files route). Agent Kourier follows each Secret the config names with an informer of
   its own, which needs `list` and `watch` on that Secret and asks for it by name (a `metadata.name` field selector). `get` is never
   used or granted.
 
   Kubernetes authorizes such a request by `resourceNames`, so with `rbac.create: false` you can grant `list` and
-  `watch` on named Secrets instead. The chart's Roles name no Secret, so each reads every Secret in its namespace. Agent
+  `watch` on named Secrets instead. The chart's Roles on this route name no Secret, apart from the release namespace's while the AX add-on
+  is on, so each other Role reads every Secret in its namespace. Agent
   Kourier, though, keeps in memory only:
 
   - the Opaque Secrets that the config names, and of each only the keys that the config names (a Secret's other keys are not kept)

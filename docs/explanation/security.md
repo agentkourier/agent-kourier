@@ -88,10 +88,11 @@ The chart grants list and watch on Secrets in these namespaces:
   value)
 - the release namespace with `store.type: postgres` (the DSN's Secret)
 - each namespace of `rbac.secretNamespaces`
-- with `config.source: files` and none of these, the release namespace
+- with `config.source: files` and none of these, the release namespace, unless the AX add-on is on
 
-With `config.source: files` such a Role covers every Secret of its namespace. With `config.source: crds` it names the Secrets
-(`resourceNames`):
+With `config.source: files` such a Role covers every Secret of its namespace, except in the release namespace while the AX add-on
+is on: there it names the Secrets as `crds` does, and the chart makes no Role there when it names none. With
+`config.source: crds` it names the Secrets (`resourceNames`):
 
 - the ones the config values and the DSN name
 - the one Secret that the broker's own ChatConnection reads, if it has one (the chart derives it from
@@ -347,7 +348,8 @@ What bounds this is what the broker can read, and where it can connect:
 
     The Role is the grant to the broker, not to a Binding: every writer of a Binding or an AgentBackend in that namespace can have the broker use the Secrets it
     names. So a team makes the Role for its token Secret only when that team's writers may do so. `rbac.secretNamespaces` grants a whole namespace and removes that bound for it, and so does every
-    namespace-wide Role on the ConfigMap route, which is what the chart writes there.
+    namespace-wide Role on the ConfigMap route, which is what the chart writes there, apart from the release namespace while the AX
+    add-on is on.
 
     Removing a grant is not an immediate cut-off. The broker keeps a cache for each Secret it has read, and when a team deletes its Role, that cache goes on
     serving the value it holds. The broker logs the warning `secret informer cannot list or watch` for the Secret, and keeps calling the agent with the cached token, so the
