@@ -9,8 +9,8 @@ What changed in each release, newest first, and what you must do about it. The s
 The experimental AX add-on is now a Task launcher. It no longer runs a model itself. Each turn starts one AX Task from a
 template you supply, running your own agent image. The Task sends its result back to the add-on over authenticated
 HTTPS, and Agent Kourier posts it in the thread. The add-on keeps its name, its chart block `addons.ax` and its A2A
-address. The broker, its CRDs, its database schema and its values are unchanged from 0.7.0, and so is the Claude
-Managed Agents add-on's chart block.
+address. The broker's CRDs, database schema and values are unchanged from 0.7.0, and so is the Claude Managed Agents
+add-on's chart block. In threads, one notice is reworded (below).
 
 The launcher is built and tested against AX v0.4.0-rc.2, a pre-release of AX v0.4.0. A patch release will move it to
 AX v0.4.0 once that version is released.
@@ -22,10 +22,15 @@ AX v0.4.0 once that version is released.
   `addons.ax.networkPolicy.model`. The values schema refuses them, so a values file that still sets them fails to
   render. The `ask_user` tool and ADK's session memory are gone too, and so are both of the old agent's routes: the
   agent beside Agent Kourier, and the image that served A2A from inside an AX Task.
+- **The broker's Secret grants, with the AX add-on on.** The chart refuses `rbac.secretNamespaces` that names the
+  release's own namespace, so that the add-on's callback Secret stays out of the broker's reach. With `config.source: files`,
+  the broker's Role in the release namespace names single Secrets, those that `config.*` and `rbac.secretNames` name,
+  instead of granting every Secret there; a Secret the broker reads that the chart cannot see goes in `rbac.secretNames`.
   [Replace the experimental ADK add-on](how-to/upgrade.md#replace-the-experimental-adk-add-on-with-the-ax-task-launcher)
   has the steps: what to keep, what to set, and what happens to turns that were running or waiting on a question.
-- **None for an install without it.** With `addons.ax` off, the chart renders what 0.7.0 rendered, apart from the
-  chart's version labels.
+- **None for an install without it**, unless its values file still carries the removed keys under `addons.ax`: the
+  schema refuses them with the add-on off too. With `addons.ax` off, the chart renders what 0.7.0 rendered, apart from
+  the version labels and the config checksums that include them, so the broker's pod restarts on the upgrade.
 
 ### AX add-on (experimental)
 
@@ -43,19 +48,22 @@ AX v0.4.0 once that version is released.
 
 ### Other changes
 
+- **The notice for a message that waits behind an earlier task** now reads "The agent is still busy with an earlier
+  task, so this message is waiting. I'll keep trying." It no longer says "in this thread".
 - **The add-on kit no longer releases a context it has just accepted a message for.** The Claude Managed Agents
   add-on's idle sweep could archive a thread's session after accepting a new message for it. The message then started
   a session without the thread's history, or, if it answered a paused task, found no task to answer. The sweep now
   checks again under a lock that the message's intake shares.
-- **The release** retries an image build that fails, up to four attempts, for registries that fail briefly. The check of
-  each add-on's image reference now requires one whole reference by digest.
+- **The release** retries an image build that fails, up to four attempts, for registries that fail briefly. It takes
+  the add-ons from one list, and stops unless each add-on image it signs is one whole reference by digest.
 
 ### Dependencies
 
-- **Go modules:** the broker's `k8s.io` modules move from v0.37.2 to v0.37.3. The Claude Managed Agents add-on's
+- **Go modules:** the broker's `k8s.io` modules move from v0.37.2 to v0.37.3, and `google.golang.org/grpc` from v1.84.0
+  to v1.85.0. The Claude Managed Agents add-on's
   `anthropic-sdk-go` moves from v2.13.0 to v2.15.0. The AX add-on drops ADK, the model SDKs and GORM, and builds on
   `github.com/google/ax` v0.4.0-rc.2.
-- **Images:** the Go builder (`golang:1.27.4`) and the runtime base images take new digests, at the same versions.
+- **Images:** the Go builder, `golang:1.27.4`, takes a new digest at the same version. The runtime base image is 0.7.0's.
 
 ## Version 0.7.0
 

@@ -7,7 +7,7 @@ and `ghcr.io/agentkourier/agent-kourier-echo-agent` (linux/amd64 and linux/arm64
 `examples/recipes/<agent>/agent/Dockerfile`, and the images of the two add-ons, `ghcr.io/agentkourier/agent-kourier-cma`
 (the CMA add-on) and `ghcr.io/agentkourier/agent-kourier-ax` (the AX add-on) (linux/amd64 and linux/arm64), built from
 `addons/<name>/Dockerfile` on Agent Kourier's pinned bases (`hack/addons.txt` lists the add-ons). The add-ons are versioned with Agent Kourier: each release
-tags their images with the same `vX.Y.Z`. The AX add-on image also contains the command wrapper for agent images. Validate the Go API, Gateway, wrapper, and kind tests against AX v0.4.0 final before releasing the launcher. Include Workspace-bound Tasks with omitted optional defaults and explicit resource limits. Confirm that AX preserves the filled Task spec on Create and Get, and verify the runner metadata URL and output file location with the wrapped agent image.
+tags their images with the same `vX.Y.Z`. The AX add-on image also contains the command wrapper for agent images. 0.8.0 releases the launcher built and tested against AX v0.4.0-rc.2. Before the release that moves it to AX v0.4.0 final, validate the Go API, Gateway, wrapper, and kind tests against that version. Include Workspace-bound Tasks with omitted optional defaults and explicit resource limits. Confirm that AX preserves the filled Task spec on Create and Get, and verify the runner metadata URL and output file location with the wrapped agent image.
 
 ## Cut a release
 
