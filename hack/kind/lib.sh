@@ -687,6 +687,41 @@ runner_admission() {
   echo "namespace selector: $(<"${dir}/connection-namespace-selector")"
 }
 
+# HOST_PAUSE_SECONDS: the longest gap between two of wait_job's polls while the host keeps running it. A poll is a 2 second sleep and a
+# kubectl call with a 10 second request timeout, so a gap past this means the host stopped running the wait: it slept (a laptop whose lid
+# closed on battery) or froze, and the kind node's VM most likely stopped with it. The tests make no progress through such a pause, but the
+# wait's clock, the host's wall clock, keeps going. In run 8 of a release round on 2026-11-27, when the Mac's lid closed for 571 seconds, the
+# test binary's -test.timeout, which counts the node's own clock, did not fire either, and the run timed out with no stack.
+HOST_PAUSE_SECONDS=30
+
+# wait_job JOB SECONDS: poll the Job JOB in namespace e2e until it has succeeded or failed, or SECONDS of the host's clock have passed.
+# Sets JOB_RESULT (0 succeeded, 1 failed, 124 timed out) and HOST_PAUSED, the seconds of gaps between polls that were longer than
+# HOST_PAUSE_SECONDS (0 when there were none), and writes a line to stderr when such a gap ends. Each gap is one poll and its sleep,
+# so a pause in the poll that ends the wait counts too. A kubectl that fails prints nothing, which reads as a Job still running. Needs K.
+wait_job() {
+  local job=$1 wait=$2 deadline last
+  JOB_RESULT='' HOST_PAUSED=0
+  deadline=$((SECONDS + wait)) last=${SECONDS}
+  while [ -z "${JOB_RESULT}" ]; do
+    # "<succeeded>/<failed>", each empty until it is 1.
+    case "$("${K[@]}" -n e2e get job "${job}" --request-timeout=10s -o 'jsonpath={.status.succeeded}/{.status.failed}')" in
+      1/*) JOB_RESULT=0 ;;
+      */1) JOB_RESULT=1 ;;
+      *) [ "${SECONDS}" -lt "${deadline}" ] || JOB_RESULT=124 ;;
+    esac
+    [ -n "${JOB_RESULT}" ] || sleep 2
+    note_host_pause "$((SECONDS - last))"
+    last=${SECONDS}
+  done
+}
+
+# note_host_pause GAP: wait_job's count of a gap between two polls that is longer than HOST_PAUSE_SECONDS.
+note_host_pause() {
+  [ "$1" -gt "${HOST_PAUSE_SECONDS}" ] || return 0
+  HOST_PAUSED=$((HOST_PAUSED + $1))
+  echo "e2e: the wait did not run for $1s, to $(date '+%H:%M:%S'): the host slept or froze, and the kind node and the tests most likely stopped with it" >&2
+}
+
 # apply_signaler: the container signaler (fast/signaler.yaml, in namespace e2e), which S16 uses to freeze or kill an Agent Kourier replica; the fast
 # tier on two replicas only. It shares the node's PID namespace and is published nowhere. Restarted so that a rebuilt image (same tag) is
 # picked up. Needs K, HERE.

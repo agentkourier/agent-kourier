@@ -53,6 +53,7 @@ endif
 test-scripts: ## Run add-on list, kind, security policy, release gate, PR label, Slack HTTP-mode probe, CI tool installers, testhooks package selection, test leg split, Actions cache upkeep and docs-only classification tests (no cluster)
 	hack/addons_test.sh
 	hack/kind/netpol_test.sh
+	hack/kind/wait_test.sh
 	hack/security/test.sh
 	hack/release/test.sh
 	hack/github/test.sh
