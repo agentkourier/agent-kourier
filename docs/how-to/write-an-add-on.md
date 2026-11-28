@@ -55,7 +55,7 @@ backend and the reasons its caller check refuses.
 `Card` is the name and description the agent card shows, with any A2A extension the add-on speaks. The kit fills in the
 endpoint (`PUBLIC_URL`) and the version.
 
-`OIDC`, if set, builds the verifier of an OIDC caller check (package `auth/oidc`), as the AX add-on's does. Without it
+`OIDC`, if set, builds the verifier of an OIDC caller check (package `auth/oidc`). Without it
 the add-on does not read the `OIDC_*` variables.
 
 Echo has no command of its own. An add-on's `main` is one line, `runtime.Main`, with the version set at build time, as

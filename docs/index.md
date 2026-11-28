@@ -84,8 +84,8 @@ either an A2A front for an agent that has none or an agent of its own. Both add-
 
 - The [Claude Managed Agents add-on](how-to/connect-claude-managed-agents.md) puts each thread in a session of an agent
   there, with its tool approvals as buttons in the thread.
-- The [AX add-on](how-to/connect-ax.md) runs your own agent image in a Google AX Task for each turn and posts the
-  command's result in the thread.
+- The [AX add-on](how-to/connect-ax.md) starts a Google AX Task with your agent image for each accepted turn, and
+  returns the command's output, which Agent Kourier posts in the thread.
 
 The platform team runs Agent Kourier and owns the agent backends and the broker's own chat app. Each application team
 connects its own agent to its own channel with a namespaced Binding, committed next to the agent's manifests.

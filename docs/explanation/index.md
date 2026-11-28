@@ -27,7 +27,7 @@ built that way, and what it deliberately does not do.
 
     ---
 
-    Optional components released with Agent Kourier, such as the bridge to Claude Managed Agents and the AX agent, and what makes a component an add-on.
+    Optional components released with Agent Kourier, such as the bridge to Claude Managed Agents and the AX Task launcher, and what makes a component an add-on.
 
 -   **[Choose a config route](config-routes.md)**
 

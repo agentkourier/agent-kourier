@@ -25,10 +25,14 @@ flowchart TB
         DB[("Store: SQLite on a volume, or Postgres<br/>Sessions · replies · interactions · presses<br/>Outbox · audit · trace context")]
 
         subgraph Runtime["Agent runtime · managed independently"]
-            Frontdoor["Authenticated A2A endpoint<br/>kagent front door, or a TLS gateway to atenet-router"]
+            Frontdoor["Authenticated A2A endpoint<br/>kagent front door"]
             Agent["kagent-hosted agent"]
             Tools["Model, tools, and execution environment"]
-            Ax["Google AX task<br/>A2A agent behind atenet-router"]
+        end
+
+        subgraph AXPath["Google AX"]
+            AxAddon["AX add-on, run by the chart<br/>A2A front · starts Tasks · result callback"]
+            Ax["AX Task<br/>Agent image + result wrapper"]
         end
     end
 
@@ -38,7 +42,7 @@ flowchart TB
     GitOps --> Files
     GitOps --> Secrets
     GitOps -->|Runtime deployment| Agent
-    GitOps -->|Task deployment| Ax
+    GitOps -->|Task template| AxAddon
     Files --> Config
     Secrets --> Identity
     Config -.->|Routing snapshot| Intake
@@ -51,9 +55,11 @@ flowchart TB
     Intake -->|Queue a turn| Session
     Intake -->|Human answer or button press| Interact
     Session <-->|Task lifecycle and events| A2A
-    A2A <-->|A2A 1.0 JSON-RPC + streaming| Frontdoor
+    A2A <--->|A2A 1.0 JSON-RPC + streaming| Frontdoor
     Frontdoor <--> Agent
-    Frontdoor <--> Ax
+    A2A <-->|A2A 1.0 JSON-RPC + streaming| AxAddon
+    AxAddon -->|gRPC| Ax
+    Ax -.->|Result via Gateway| AxAddon
     Agent <--> Tools
 
     Session -->|Task output and pauses| Render
