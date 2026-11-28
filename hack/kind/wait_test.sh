@@ -40,8 +40,8 @@ PAUSES=(2)
 SLEEPS=0
 sleep() {
   local i=${SLEEPS}
-  # A wait_job that ignores its deadline fails here instead of spinning for ever.
-  [ "${SLEEPS}" -lt 10000 ] || { echo "FAIL: wait_job slept 10000 times: it never ended" >&2; exit 1; }
+  # A wait_job that ignores its deadline fails here instead of spinning for ever (on stdout: run sends stderr to ERR, which the trap removes).
+  [ "${SLEEPS}" -lt 10000 ] || { echo "FAIL: wait_job slept 10000 times: it never ended"; exit 1; }
   [ "${i}" -lt "${#PAUSES[@]}" ] || i=$((${#PAUSES[@]} - 1))
   SECONDS=$((SECONDS + PAUSES[i]))
   SLEEPS=$((SLEEPS + 1))
@@ -108,7 +108,8 @@ run 120
 check "polls slowed to 29 seconds are no pause" 0 "${HOST_PAUSED}"
 
 echo "== note_host_pause: the threshold, exactly"
-# wait_job counts each gap, the one that ends in its last poll included, through note_host_pause; given the gap, the edge is exact.
+# wait_job counts each gap through note_host_pause; given the gap, the edge is exact. Its call after the loop, for a pause in the poll
+# that ends the wait, has no test: the fake kubectl runs in a command substitution and cannot move this shell's SECONDS.
 HOST_PAUSED=0
 note_host_pause 30 2>"${ERR}"
 check "a gap of HOST_PAUSE_SECONDS is no pause" 0 "${HOST_PAUSED}"

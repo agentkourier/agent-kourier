@@ -690,7 +690,7 @@ runner_admission() {
 # HOST_PAUSE_SECONDS: the longest gap between two of wait_job's polls while the host keeps running it. A poll is a 2 second sleep and a
 # kubectl call with a 10 second request timeout, so a gap past this means the host stopped running the wait: it slept (a laptop whose lid
 # closed on battery) or froze, and the kind node's VM most likely stopped with it. The tests make no progress through such a pause, but the
-# wait's clock, the host's wall clock, keeps going. In a release round's run 8 of 2026-11-27, whose lid closed for 571 seconds on a Mac, the
+# wait's clock, the host's wall clock, keeps going. In run 8 of a release round on 2026-11-27, when the Mac's lid closed for 571 seconds, the
 # test binary's -test.timeout, which counts the node's own clock, did not fire either, and the run timed out with no stack.
 HOST_PAUSE_SECONDS=30
 
