@@ -342,6 +342,35 @@
   color: var(--md-primary-fg-color);
 }
 
+/* The home page's four cards: one column on a phone, two by two from tablet width up with every card the height of
+   the tallest, and each card's links at its foot. A flex column does not collapse margins, so the children drop
+   theirs and the rule and the link line carry the spacing. */
+.md-typeset .grid.cards.ak-home-cards {
+  grid-template-columns: minmax(0, 1fr);
+}
+@media screen and (min-width: 45em) {
+  .md-typeset .grid.cards.ak-home-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-rows: 1fr;
+  }
+}
+.md-typeset .grid.cards.ak-home-cards > ul > li {
+  display: flex;
+  flex-direction: column;
+}
+.md-typeset .grid.cards.ak-home-cards > ul > li > * {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+.md-typeset .grid.cards.ak-home-cards > ul > li > hr {
+  margin-top: 1em;
+  margin-bottom: 1em;
+}
+.md-typeset .grid.cards.ak-home-cards > ul > li > :last-child {
+  margin-top: auto;
+  padding-top: 1em;
+}
+
 /* The architecture map: a preview that opens full size. */
 .md-typeset .ak-map img {
   border: 1px solid var(--ak-rule);
