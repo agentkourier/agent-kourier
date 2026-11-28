@@ -23,8 +23,10 @@ CTX=kind-${CLUSTER}
 K=(kubectl --context "${CTX}")
 IMAGE=agent-kourier-e2e/runner:dev
 JOB=e2e-runner
-# How long to wait for the Job (the test binary's own timeout is 20 minutes, for the scenarios, which roll
-# Agent Kourier out and wait on it); its own activeDeadlineSeconds (1500) is the backstop.
+# How long to wait for the Job, by the host's clock (wait_job, lib.sh). The test binary's own timeout, 20 minutes for the scenarios, which
+# roll Agent Kourier out and wait on it, is shorter, so that a test that hangs fails with a stack before this wait ends; the Job's own
+# activeDeadlineSeconds (1500) is the backstop. hack/kind/wait_test.sh holds the three in that order. A host that sleeps most likely
+# stops the node, and the binary's clock with it, but not this wait: wait_job reports such a pause.
 WAIT_SECONDS=${E2E_WAIT_SECONDS:-1320}
 [[ "${WAIT_SECONDS}" =~ ^[0-9]+$ ]] || die "E2E_WAIT_SECONDS must be a whole number of seconds"
 # E2E_RUN goes into the Job's YAML as a string, and into a sed command: letters, digits and what a Go regexp of test names needs, and no
@@ -123,17 +125,8 @@ esac
 sed -e "s/@TIER@/${tier}/" -e "s|@STUB_URL@|${gate_url}|" -e "s/@CONFIG_SOURCE@/${config_source}/" -e "s/@PHASE@/${E2E_PHASE:-}/" -e "s/@SLACK_MODE@/${slack_mode}/" "${HERE}/e2e/runner.yaml" |
   { if [ -n "${E2E_RUN:-}" ]; then sed -e "s#-test.run=[^\"]*#-test.run=${E2E_RUN}#"; else cat; fi; } |
   "${K[@]}" apply -f - >/dev/null # the tier is fast or full: use_tier checked it
-result=
-deadline=$((SECONDS + WAIT_SECONDS))
-while [ -z "${result}" ]; do
-  # "<succeeded>/<failed>", each empty until it is 1.
-  case "$("${K[@]}" -n e2e get job "${JOB}" -o 'jsonpath={.status.succeeded}/{.status.failed}')" in
-    1/*) result=0 ;;
-    */1) result=1 ;;
-    *) [ "${SECONDS}" -lt "${deadline}" ] || result=124 ;;
-  esac
-  [ -n "${result}" ] || sleep 2
-done
+wait_job "${JOB}" "${WAIT_SECONDS}"
+result=${JOB_RESULT}
 
 echo "==> Job logs"
 "${K[@]}" -n e2e logs "job/${JOB}" ||
@@ -143,4 +136,5 @@ case "${result}" in
   124) echo "e2e ${tier}: timed out after ${WAIT_SECONDS}s" >&2 ;;
   *) echo "e2e ${tier}: FAILED" >&2 ;;
 esac
+[ "${HOST_PAUSED}" -eq 0 ] || echo "e2e ${tier}: the wait did not run for ${HOST_PAUSED}s in all (the host slept or froze), and most likely the tests with it: a timeout, or a failure of the test that was running, may be the pause's and not the tests'; run again with the host awake (on power, lid open)" >&2
 exit "${result}"

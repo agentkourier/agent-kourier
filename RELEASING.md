@@ -83,6 +83,12 @@ tags their images with the same `vX.Y.Z`. The AX add-on image also contains the 
 
    `make e2e-crs-scenarios` and `make e2e-crs-migration` say what they need and stop if the tier is not as they need it. A failure blocks the tag.
 
+   Keep the host awake until the runs end: a laptop stays on power with its lid open (`caffeinate -i make ...` stops idle sleep, not a lid
+   closed on battery). A host that sleeps most likely stops the kind node, so the tests stop too. The runner's wait goes on by the host's
+   clock and can time out, with no stack from the tests. `make e2e-fast`, `e2e-full`, `e2e-ax`, `e2e-teams` and `e2e-two-apps` then print
+   `the wait did not run for Ns`, and `e2e-crs-migration` writes that line to its phase log. `e2e-crs-scenarios` does not detect a pause.
+   Run that tier again: a failure the pause explains does not block the tag.
+
    The kind tiers reach only the end-to-end tests' fake Slack. When the release changes Slack's HTTP mode (the Slack
    adapter's HTTP handling, the chat listener, or the chart's chat Service and its values), also deploy that commit's image
    to an install with a ChatConnection in HTTP mode that Slack itself reaches, and run `hack/slack/http-probe.sh` against
