@@ -17,7 +17,6 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/dialect/kagentv1"
-	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
@@ -74,20 +73,9 @@ func TestQuestionMentionsWireThroughBrokerToRenderer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	questionMentions := func(ctx context.Context, req interact.QuestionMentions) {
-		renderer.NotifyQuestionMentions(ctx, live.MentionTarget{
-			Source:      req.Turn,
-			Binding:     req.Binding,
-			Connection:  req.Key.Connection,
-			Channel:     req.Key.Channel,
-			Thread:      req.Key.Thread,
-			Mentions:    req.Mentions,
-			MaxMentions: req.MaxMentions,
-		}, req.Questions)
-	}
 	deps := interactionDeps{
 		st: st, ob: ob, platforms: platforms, auditor: aud, bindings: bindings, metrics: metrics, log: log,
-		mentions: questionMentions,
+		mentions: questionMentionsTo(renderer),
 	}
 	ix, err := deps.build(live.NewSink(renderer, ob, log))
 	if err != nil {
@@ -145,6 +133,12 @@ func TestQuestionMentionsWireThroughBrokerToRenderer(t *testing.T) {
 		}
 		return true
 	})
+	if err := renderer.Wait(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// Hand the same pause off again (as on recovery): it must not queue a second mention or write a second audit row.
+	h2 := ix.tap.Turn(t.Context(), ref)
+	h2(agent.FinalEvent{Task: &task})
 	if err := renderer.Wait(t.Context()); err != nil {
 		t.Fatal(err)
 	}

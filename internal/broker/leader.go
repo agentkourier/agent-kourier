@@ -16,7 +16,6 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/teams"
 	"github.com/agentkourier/agent-kourier/internal/config"
-	"github.com/agentkourier/agent-kourier/internal/interact"
 	"github.com/agentkourier/agent-kourier/internal/outbox"
 	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/retention"
@@ -187,18 +186,9 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	// them, and the manager, which they feed.
 	stops := stopList{trace: cfg.stopTrace}
 	sd.add(stepInteractions, stops.run)
-	questionMentions := func(ctx context.Context, req interact.QuestionMentions) {
-		renderer.NotifyQuestionMentions(ctx, live.MentionTarget{
-			Source:      req.Turn,
-			Binding:     req.Binding,
-			Connection:  req.Key.Connection,
-			Channel:     req.Key.Channel,
-			Thread:      req.Key.Thread,
-			Mentions:    req.Mentions,
-			MaxMentions: req.MaxMentions,
-		}, req.Questions)
-	}
-	parts := interactionDeps{st: st, ob: quietOutbox{Sender: ob, quiet: noReplies}, platforms: platforms, auditor: auditor, bindings: bindings, metrics: metrics, log: log, mentions: questionMentions, trace: cfg.startTrace, sweepEvery: cfg.sweepEvery, orphanGrace: cfg.orphanGrace}
+	// Question mentions enqueue through renderer's outbox only after Intake.post succeeds; on a no-reply connection,
+	// quietOutbox.Send refuses the prompt with ErrInvalid first, so NotifyQuestionMentions is never reached there.
+	parts := interactionDeps{st: st, ob: quietOutbox{Sender: ob, quiet: noReplies}, platforms: platforms, auditor: auditor, bindings: bindings, metrics: metrics, log: log, mentions: questionMentionsTo(renderer), trace: cfg.startTrace, sweepEvery: cfg.sweepEvery, orphanGrace: cfg.orphanGrace}
 	ix, err := parts.build(sink)
 	if err != nil {
 		return nil, err

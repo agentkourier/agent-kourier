@@ -10,6 +10,7 @@ import (
 
 	"github.com/agentkourier/agent-kourier/api/v1alpha1"
 	"github.com/agentkourier/agent-kourier/internal/agent"
+	"github.com/agentkourier/agent-kourier/internal/audit"
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/chat/chattest"
 	"github.com/agentkourier/agent-kourier/internal/dialect/generic"
@@ -205,5 +206,57 @@ func TestTapPassesTurnSourceToPause(t *testing.T) {
 	r.pauses.mu.Unlock()
 	if got.Turn != tapRef.MessageID {
 		t.Errorf("Pause.Turn = %q, want %q", got.Turn, tapRef.MessageID)
+	}
+}
+
+func TestTextReplyTakeUpPassesTurnSourceAndNotifiesMentions(t *testing.T) {
+	r := newPressRig(t)
+	d := generic.New(time.Second)
+	at := d0
+	msg := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("@sam, which service?"))
+	msg.ID = "msg-tr-1"
+	task := a2a.Task{ID: "task-tr-1", ContextID: "ctx-1", Status: a2a.TaskStatus{State: a2a.TaskStateInputRequired, Timestamp: &at, Message: msg}}
+	if err := r.st.SetSessionTask(t.Context(), key, "ctx-1", "task-tr-1", store.TaskTurn{ID: "turn-from-session", User: "UALICE1", MessageRef: "100.1"}); err != nil {
+		t.Fatal(err)
+	}
+	b := interact.Binding{Dialect: d, AskUser: true, Timeout: 10 * time.Minute, Mentions: testMentions, MaxMentions: 2}
+	var err error
+	r.pl, err = interact.NewPipeline(pressCfg(interact.PressConfig{
+		Store: r.st, Sessions: r.st, Lookup: lookup{b},
+		Authorizers: chattest.Same[interact.Authorizer](r.az), Ephemerals: chattest.Same[interact.Ephemeral](r.eph),
+		Decider: r.d, Auditor: r.aud, Now: func() time.Time { return r.now },
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := store.Reply{ID: "reply-tr-1", Key: key, UserID: "UALICE1", MessageRef: "101.1", Text: "checkout", EnqueuedAt: r.now}
+	if _, err := r.st.EnqueueReply(t.Context(), reply); err != nil {
+		t.Fatal(err)
+	}
+
+	platform := &poster{posted: map[string]string{}}
+	ob := newOutbox(t, outbox.Config{Store: r.st, Platforms: chattest.Same[outbox.Platform](platform), Now: func() time.Time { return r.now }})
+	var notified []interact.QuestionMentions
+	pauses, err := interact.New(intakeCfg(interact.Config{
+		Store: r.st, AuditReader: r.st, Lookup: lookup{b},
+		Platforms: chattest.Same[interact.Fitter](platform), Outbox: ob, Session: r.sess,
+		Audit:                  newWriter(t, r.st, audit.Options{}),
+		NotifyQuestionMentions: func(_ context.Context, req interact.QuestionMentions) { notified = append(notified, req) },
+		Now:                    func() time.Time { return r.now },
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := make(chan struct{})
+	close(ready)
+	tr, err := interact.NewTextReplies(r.pl, pauses, ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tr.Decide(t.Context(), key, reply, task); err != nil {
+		t.Fatal(err)
+	}
+	if len(notified) != 1 || notified[0].Turn != "turn-from-session" || !reflect.DeepEqual(notified[0].Questions, []string{"@sam, which service?"}) {
+		t.Fatalf("notified = %+v; want one notification with Turn=turn-from-session", notified)
 	}
 }

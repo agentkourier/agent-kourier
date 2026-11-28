@@ -214,7 +214,7 @@ mentions that user. Each person named gets a message of their own.
 
 - **Reply text and delivered question prompts count.** A turn that completes or pauses mentions the people its final
   text names, and a question the agent asks through a pause mentions the people its question text names once Agent Kourier
-  has posted the prompt. A question prompt that is refused (`askUser: false`, an unusable pause, or a prompt that does
+  has posted the prompt (question hints and choices are not read for names). A question prompt that is refused (`askUser: false`, an unusable pause, or a prompt that does
   not fit) or not delivered mentions nobody, and tool approvals carry no agent question text and are not read for names.
   A reply mention says `in the reply above`; a question mention says `in the question above`.
 

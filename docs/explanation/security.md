@@ -689,7 +689,7 @@ Alert messages, other bots' messages, people's replies, webhook events and agent
 
 ### What an agent can reach in chat
 
-Hostile text can still steer a model, so two things are worth knowing about what a reply can do.
+Hostile text can still steer a model, so two things are worth knowing about what a reply or a delivered question prompt can do.
 
 - **A declared person can be notified.** If the Binding sets `chat.mentions`, a reply or a delivered question prompt
   that writes `@name` for a declared name makes Agent Kourier post a message that mentions that person and nobody else.

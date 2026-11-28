@@ -14,6 +14,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/feedback"
 	"github.com/agentkourier/agent-kourier/internal/interact"
+	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/retention"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -23,6 +24,21 @@ import (
 // cannot reach the intake or decider before then: the tap has no turns and text decisions wait for
 // interaction startup. It guards the shared handle rather than a production startup path.
 var errSessionNotReady = errors.New("broker: the session manager is not built yet")
+
+// questionMentionsTo adapts interact.Intake's question-mention callback to live.Renderer.NotifyQuestionMentions.
+func questionMentionsTo(renderer *live.Renderer) func(context.Context, interact.QuestionMentions) {
+	return func(ctx context.Context, req interact.QuestionMentions) {
+		renderer.NotifyQuestionMentions(ctx, live.MentionTarget{
+			Source:      req.Turn,
+			Binding:     req.Binding,
+			Connection:  req.Key.Connection,
+			Channel:     req.Key.Channel,
+			Thread:      req.Key.Thread,
+			Mentions:    req.Mentions,
+			MaxMentions: req.MaxMentions,
+		}, req.Questions)
+	}
+}
 
 // lateSession is the session the interactions use, bound to the manager once that exists (D2): the manager
 // is built with the tap as its sink, the tap hands pauses to the intake, and the intake answers through the

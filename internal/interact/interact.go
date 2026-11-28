@@ -129,8 +129,9 @@ func New(cfg Config) (*Intake, error) {
 type Pause struct {
 	Key     store.ConversationKey
 	Binding string
-	// Turn is the turn's source ID (session.TurnRef.MessageID), so mentions in a delivered question prompt share the
-	// turn's cap and deduplication with its reply. Empty notifies nobody.
+	// Turn is the turn's source ID (session.TurnRef.MessageID or sess.Turn.ID), so mentions in a delivered question
+	// prompt share the turn's cap and deduplication with its reply. Empty is a guard for callers without one and
+	// notifies nobody.
 	Turn string
 	Task a2a.Task
 	// Recovered says the task was found again after a restart. A recovered pause may already be past its

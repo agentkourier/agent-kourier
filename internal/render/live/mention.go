@@ -35,9 +35,6 @@ type mentionLock struct {
 
 func (r *Renderer) lockMentions(source string) func() {
 	r.mentionMu.Lock()
-	if r.mentionLocks == nil {
-		r.mentionLocks = map[string]*mentionLock{}
-	}
 	l := r.mentionLocks[source]
 	if l == nil {
 		l = &mentionLock{}
@@ -78,7 +75,7 @@ func (u *Run) notifyMentions(ctx context.Context) {
 	u.mu.Lock()
 	endedBadly := u.endedBadly
 	u.mu.Unlock()
-	if endedBadly || len(u.turn.Mentions) == 0 || u.owner == nil {
+	if endedBadly || len(u.turn.Mentions) == 0 {
 		return
 	}
 	u.owner.notifyMentions(ctx, MentionTarget{
