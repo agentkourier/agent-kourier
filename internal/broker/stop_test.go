@@ -26,16 +26,34 @@ import (
 )
 
 type stopTestAgent struct {
-	mu        sync.Mutex
-	cancelErr error
-	cancelled []a2a.TaskID
-	sent      []string
+	mu           sync.Mutex
+	cancelErr    error
+	cancelled    []a2a.TaskID
+	sent         []string
+	holdFirst    chan struct{}
+	firstStarted chan struct{}
 }
 
-func (a *stopTestAgent) Send(_ context.Context, msg *a2a.Message, h agent.Handler) error {
+func (a *stopTestAgent) Send(ctx context.Context, msg *a2a.Message, h agent.Handler) error {
 	a.mu.Lock()
 	a.sent = append(a.sent, msg.ID)
+	hold := a.holdFirst
+	started := a.firstStarted
+	a.holdFirst = nil
 	a.mu.Unlock()
+	if hold != nil {
+		h(agent.StateEvent{TaskID: "t-live", ContextID: "ctx-1", State: a2a.TaskStateWorking})
+		if started != nil {
+			close(started)
+		}
+		select {
+		case <-hold:
+			h(agent.FinalEvent{Task: &a2a.Task{ID: "t-live", ContextID: "ctx-1", Status: a2a.TaskStatus{State: a2a.TaskStateCanceled}}})
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	h(agent.StateEvent{TaskID: "t-next", ContextID: "ctx-1", State: a2a.TaskStateWorking})
 	h(agent.FinalEvent{Task: &a2a.Task{ID: "t-next", ContextID: "ctx-1", Status: a2a.TaskStatus{State: a2a.TaskStateCompleted}}})
 	return nil
@@ -51,10 +69,11 @@ func (*stopTestAgent) GetTask(context.Context, a2a.TaskID) (*a2a.Task, error) {
 
 func (a *stopTestAgent) CancelTask(_ context.Context, id a2a.TaskID) (*a2a.Task, error) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.cancelled = append(a.cancelled, id)
-	if a.cancelErr != nil {
-		return nil, a.cancelErr
+	err := a.cancelErr
+	a.mu.Unlock()
+	if err != nil {
+		return nil, err
 	}
 	return &a2a.Task{ID: id, ContextID: "ctx-1", Status: a2a.TaskStatus{State: a2a.TaskStateCanceled}}, nil
 }
@@ -217,4 +236,122 @@ func TestStopControlEndToEndCancelsStrandedTaskAndUnblocksQueue(t *testing.T) {
 			})
 		})
 	}
+}
+
+// Pressing Stop while a runner is actively streaming a task cancels it through CancelTask, ends the stream with
+// NoticeTaskCanceled, and unblocks queued replies behind it.
+func TestStopControlCancelsActiveRunningTaskInLiveRunner(t *testing.T) {
+	st := sqlitetest.Open(t)
+	hold := make(chan struct{})
+	started := make(chan struct{})
+	var closeHold sync.Once
+	ag := &stopTestAgent{holdFirst: hold, firstStarted: started}
+	sink := &stopTestSink{}
+	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+
+	// Wrap ag so CancelTask unblocks the live stream as a real agent does.
+	liveAg := &cancellingStopAgent{stopTestAgent: ag, onCancel: func() { closeHold.Do(func() { close(hold) }) }}
+	mgr, err := session.New(session.Config{
+		Store:         st,
+		Bindings:      stopTestBindings{b: session.Backend{ThreadTTL: time.Hour, Agent: liveAg}},
+		Audit:         stopTestAudit{},
+		Users:         stopTestUsers{},
+		Sink:          sink,
+		Questions:     st,
+		TextReply:     session.NoTextReply,
+		ThreadContext: session.NoThreadContext,
+		OnTurnEnd:     func(string, session.TurnOutcome) {},
+		Now:           func() time.Time { return now },
+		Logger:        testutil.DiscardLogger(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeHold.Do(func() { close(hold) })
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = mgr.Close(ctx)
+	})
+
+	key := store.ConversationKey{Connection: "ns/slack", Channel: "C1", Thread: "200.1"}
+	if _, err := mgr.Submit(t.Context(), session.Inbound{
+		Key: key, Binding: "ns/sre", MessageID: "msg-1", MessageRef: "200.1", UserID: "U1", Text: "investigate", Create: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	res, err := mgr.Submit(t.Context(), session.Inbound{
+		Key: key, Binding: "ns/sre", MessageID: "msg-queued-live", MessageRef: "200.2", UserID: "U1", Text: "follow up",
+	})
+	if err != nil || !res.Queued {
+		t.Fatalf("queued Submit = %+v, %v; want Queued=true", res, err)
+	}
+
+	fake := chattest.NewFake()
+	fake.AddUser(chat.User{ID: "U1"}, false)
+	fake.SetMembers("C1", "U1")
+	late := &lateSession{}
+	late.bind(mgr)
+	var worker *interact.Worker
+	stopH, err := interact.NewStopHandler(interact.StopConfig{
+		Store:       st,
+		Sessions:    st,
+		Authorizers: chattest.Same[interact.Authorizer](fake),
+		Ephemerals:  chattest.Same[interact.Ephemeral](fake),
+		Stopper:     late,
+		Notify:      func(p store.Press) { worker.Submit(p) },
+		Logger:      testutil.DiscardLogger(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err = interact.NewWorker(interact.WorkerConfig{
+		Processor: pressRouter{stops: stopH},
+		Presses:   st,
+		Logger:    testutil.DiscardLogger(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wctx, wcancel := context.WithCancel(t.Context())
+	wdone := make(chan struct{})
+	go func() { defer close(wdone); _ = worker.Run(wctx) }()
+	t.Cleanup(func() { wcancel(); <-wdone })
+
+	ph := interactionsHandler(
+		stopTestNoopPresser{err: interact.ErrNotInteraction},
+		stopTestNoopPresser{err: feedback.ErrNotFeedback},
+		stopH,
+		testutil.DiscardLogger(),
+	)
+	if err := ph.Interaction(t.Context(), chat.Interaction{
+		User:     "U1",
+		At:       chat.Ref{Conn: key.Connection, Channel: key.Channel, Thread: key.Thread, ID: "200.1"},
+		PromptID: render.StopValue{Thread: key.Thread, TaskID: "t-live"}.String(),
+		Delivery: "deliv-live-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	testutil.Eventually(t, "active task cancelled and queued reply sent", func() bool {
+		ag.mu.Lock()
+		sent := slices.Contains(ag.sent, "msg-queued-live")
+		cancelled := slices.Contains(ag.cancelled, a2a.TaskID("t-live"))
+		ag.mu.Unlock()
+		return sent && cancelled && sink.has(session.NoticeTaskCanceled)
+	})
+}
+
+type cancellingStopAgent struct {
+	*stopTestAgent
+	onCancel func()
+}
+
+func (a *cancellingStopAgent) CancelTask(ctx context.Context, id a2a.TaskID) (*a2a.Task, error) {
+	t, err := a.stopTestAgent.CancelTask(ctx, id)
+	if err == nil && a.onCancel != nil {
+		a.onCancel()
+	}
+	return t, err
 }

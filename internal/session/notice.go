@@ -45,9 +45,13 @@ func tooLargeNoticeID(t *tstate) string {
 }
 
 func (m *Manager) notice(t *tstate, kind NoticeKind, detail string) {
+	m.noticeWithTask(t, kind, detail, "")
+}
+
+func (m *Manager) noticeWithTask(t *tstate, kind NoticeKind, detail string, taskID a2a.TaskID) {
 	switch kind {
 	case NoticeWedged, NoticeDuplicateRun, NoticeRetrying:
 		telemetry.Count(m.ctx, "agentkourier_session_recovery_total", string(kind))
 	}
-	m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: cmp.Or(t.nid, t.r.ID) + "/" + string(kind), Kind: kind, MessageRef: t.r.MessageRef, Detail: detail})
+	m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: cmp.Or(t.nid, t.r.ID) + "/" + string(kind), Kind: kind, MessageRef: t.r.MessageRef, Detail: detail, TaskID: taskID})
 }

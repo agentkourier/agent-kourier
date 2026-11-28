@@ -1,7 +1,6 @@
 package session
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -152,7 +151,7 @@ func (m *Manager) fail(t *tstate, class TurnOutcome, why string, cause error) (o
 	delete(m.fresh, t.r.ID)
 	m.mu.Unlock()
 	if class == TurnUncancellable && t.taskID != "" {
-		m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: cmp.Or(t.nid, t.r.ID) + "/" + string(NoticeFailed), Kind: NoticeFailed, MessageRef: t.r.MessageRef, Detail: why, TaskID: t.taskID})
+		m.noticeWithTask(t, NoticeFailed, why, t.taskID)
 	} else {
 		m.notice(t, NoticeFailed, why)
 	}

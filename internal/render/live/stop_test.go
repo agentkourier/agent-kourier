@@ -138,3 +138,41 @@ func TestNoticeWithTaskIDCarriesStopButton(t *testing.T) {
 		t.Errorf("notice without TaskID unexpectedly carried a Stop button: %#v", out2.Message.Parts)
 	}
 }
+
+// On a platform whose Update cannot remove buttons in place (such as Microsoft Teams, Caps.ReplaceButtons false),
+// live running messages carry no Stop button so a completed reply is never left with a dead Stop card.
+func TestUpdatePathOmitsStopButtonWhenPlatformCannotReplaceButtons(t *testing.T) {
+	e := setup(t)
+	fake := chattest.NewFake()
+	caps := fake.Capabilities()
+	caps.Streams = false
+	caps.ReplaceButtons = false
+	fake.SetCaps(caps)
+	e.use(fake)
+	ob := newOutbox(t, outbox.Config{Store: e.store, Platforms: chattest.Same[outbox.Platform](fake)})
+	e.cfg.Sender = ob
+	r, err := live.New(e.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := e.hold()
+	u := r.Start(t.Context(), live.Turn{
+		Source: "turn-teams-1", Connection: "ns/teams", Channel: "C1", Thread: e.root, Mode: v1alpha1.OutputLive,
+	})
+	u.Handle(agent.StateEvent{TaskID: "task-teams", ContextID: "c1", State: a2a.TaskStateWorking})
+	u.Handle(agent.TextEvent{ArtifactID: "a1", Text: "Checking..."})
+	release()
+
+	testutil.Eventually(t, "initial post on platform without ReplaceButtons", func() bool {
+		return len(fake.Messages()) == 1
+	})
+	wantVal := render.StopValue{Thread: e.root, TaskID: "task-teams"}.String()
+	if msg := fake.Messages()[0].Out.Message; msg == nil || hasStopButton(msg.Parts, wantVal) {
+		t.Errorf("live message on ReplaceButtons=false platform carried Stop button: %#v", msg)
+	}
+
+	u.Handle(agent.FinalEvent{Task: &a2a.Task{ID: "task-teams", ContextID: "c1", Status: a2a.TaskStatus{State: a2a.TaskStateCompleted}}})
+	testutil.Eventually(t, "throttle timer armed", func() bool { return e.clk.waiting() > 0 })
+	e.clk.advance(throttle)
+	<-u.Done()
+}

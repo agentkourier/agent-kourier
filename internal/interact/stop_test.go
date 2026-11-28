@@ -296,7 +296,7 @@ func TestStopHandlerPermanentErrorsFinishWithMessage(t *testing.T) {
 	}{
 		{"unknown binding", fmt.Errorf("lookup: %w", session.ErrUnknownBinding), "This thread's agent is no longer set up, so the task cannot be stopped."},
 		{"card too large", fmt.Errorf("cancel: %w", dialect.ErrCardTooLarge), "The agent's card is still too large to read, so the task could not be stopped. Fix the card and press Stop again."},
-		{"credentials rejected", fmt.Errorf("cancel: %w", agent.ErrCredentialsRejected), "The agent refused the request to stop this task."},
+		{"credentials rejected", fmt.Errorf("cancel: %w", agent.ErrCredentialsRejected), "The agent's front door refused the credentials, so the task could not be stopped."},
 		{"forbidden", fmt.Errorf("cancel: %w", agent.ErrForbidden), "The agent refused the request to stop this task."},
 		{"agent forbidden", fmt.Errorf("cancel: %w", agent.ErrAgentForbidden), "The agent refused the request to stop this task."},
 	} {

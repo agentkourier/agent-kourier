@@ -121,9 +121,10 @@ func (u *Run) snapshot() view {
 		v.pos = append(v.pos, pos)
 	}
 	v.ok = v.ok || len(v.steps) > 0
-	// While a task runs on the update path, the live message carries a Stop button bound to that task ID; the final
-	// update (or a cut-short turn) leaves it off so the button disappears when the turn stops running.
-	if !final && !u.streaming && taskID != "" {
+	// While a task runs on the update path on a platform whose Update replaces buttons in place, the live message
+	// carries a Stop button bound to that task ID; the final update (or a cut-short turn) leaves it off so the button
+	// disappears when the turn stops running.
+	if !final && !u.streaming && u.caps.ReplaceButtons && taskID != "" {
 		if stop := render.StopParts(u.turn.Thread, string(taskID)); len(stop) > 0 {
 			if v.ok {
 				v.m.Parts = append(slices.Clone(v.m.Parts), stop...)

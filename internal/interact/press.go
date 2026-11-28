@@ -113,7 +113,7 @@ func NewPipeline(cfg PressConfig) (*Pipeline, error) {
 		cfg.Logger = slog.Default()
 	}
 	if cfg.Limits.Total <= 0 || cfg.Limits.PerUser <= 0 {
-		cfg.Limits = store.PressLimits{Total: 1000, PerUser: 10}
+		cfg.Limits = store.DefaultPressLimits()
 	}
 	if cfg.EarlyFor <= 0 {
 		cfg.EarlyFor = 2 * time.Minute

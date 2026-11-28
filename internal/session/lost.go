@@ -1,7 +1,6 @@
 package session
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -27,7 +26,7 @@ func (m *Manager) lost(t *tstate, err error) (outcome, error) {
 		m.rejected(t, err)
 		t.c.follow = nil  // the task stays recorded, for reconciliation
 		m.drives(t.c, "") // no longer driven, before the thread is told
-		m.cfg.Sink.Notice(m.ctx, t.key, Notice{ID: cmp.Or(t.nid, t.r.ID) + "/" + string(NoticeFailed), Kind: NoticeFailed, MessageRef: t.r.MessageRef, Detail: "the agent's front door refused the Binding's credentials", TaskID: t.taskID})
+		m.noticeWithTask(t, NoticeFailed, "the agent's front door refused the Binding's credentials", t.taskID)
 		m.finish(t, TurnCredentialsRejected)
 		return ended, fmt.Errorf("follow turn %s: %w", t.r.ID, err)
 	case errors.Is(err, agent.ErrAgentForbidden):

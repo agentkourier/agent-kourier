@@ -35,8 +35,10 @@ func ParseStopValue(s string) (StopValue, bool) {
 	return StopValue{Thread: p[1], TaskID: p[2]}, true
 }
 
-// StopLane is the worker lane for stop presses in thread: all stop presses in one thread serialize in order.
-func StopLane(thread string) string { return StopLanePrefix + thread }
+// StopLane is the worker lane for stop presses in channel and thread: all stop presses in one conversation serialize in order.
+func StopLane(channel, thread string) string {
+	return StopLanePrefix + channel + stopValueSep + thread
+}
 
 // StopParts returns the neutral button part that stops taskID in thread, or nil if either ID is empty or their combined length exceeds maxStopIDs.
 func StopParts(thread, taskID string) []chat.Part {

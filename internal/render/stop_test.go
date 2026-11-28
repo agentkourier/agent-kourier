@@ -68,8 +68,8 @@ func TestStopPartsBuildsValidNeutralButtonsAndRespectsCap(t *testing.T) {
 }
 
 func TestStopLaneUsesPrefix(t *testing.T) {
-	lane := render.StopLane("1700.1")
-	if lane != "stop1|1700.1" || !strings.HasPrefix(lane, render.StopLanePrefix) {
-		t.Errorf("StopLane = %q (prefix %q); want stop1|1700.1", lane, render.StopLanePrefix)
+	lane := render.StopLane("C1", "1700.1")
+	if lane != "stop1|C1|1700.1" || !strings.HasPrefix(lane, render.StopLanePrefix) {
+		t.Errorf("StopLane = %q (prefix %q); want stop1|C1|1700.1", lane, render.StopLanePrefix)
 	}
 }

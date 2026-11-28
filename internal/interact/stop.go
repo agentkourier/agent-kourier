@@ -27,12 +27,13 @@ var ErrNotStop = errors.New("interact: the pressed button is not a stop button")
 
 // Fixed texts told to the person who pressed Stop alone. None holds anything the agent or a person wrote.
 const (
-	textStopping      = "Stopping the task."
-	textStopGone      = "This task is no longer running."
-	textStopBinding   = "This thread's agent is no longer set up, so the task cannot be stopped."
-	textStopCardLarge = "The agent's card is still too large to read, so the task could not be stopped. Fix the card and press Stop again."
-	textStopRefused   = "The agent refused the request to stop this task."
-	textStopGaveUp    = "Couldn't stop the task. Please press Stop again."
+	textStopping        = "Stopping the task."
+	textStopGone        = "This task is no longer running."
+	textStopBinding     = "This thread's agent is no longer set up, so the task cannot be stopped."
+	textStopCardLarge   = "The agent's card is still too large to read, so the task could not be stopped. Fix the card and press Stop again."
+	textStopCredentials = "The agent's front door refused the credentials, so the task could not be stopped."
+	textStopRefused     = "The agent refused the request to stop this task."
+	textStopGaveUp      = "Couldn't stop the task. Please press Stop again."
 	// textStopNotMember is never told alone, since Slack refuses an ephemeral to a person outside the channel: it is
 	// the word for a platform that answers the press itself (chat.InlineDecider).
 	textStopNotMember = "Only members of this channel can stop this task."
@@ -93,7 +94,7 @@ func NewStopHandler(cfg StopConfig) (*StopHandler, error) {
 		cfg.Logger = slog.Default()
 	}
 	if cfg.Limits.Total <= 0 || cfg.Limits.PerUser <= 0 {
-		cfg.Limits = store.PressLimits{Total: 1000, PerUser: 10}
+		cfg.Limits = store.DefaultPressLimits()
 	}
 	return &StopHandler{cfg: cfg}, nil
 }
@@ -138,7 +139,7 @@ func (h *StopHandler) record(ctx context.Context, i chat.Interaction) (store.Pre
 		return store.Press{}, false, fmt.Errorf("interact: encode a stop press: %w", err)
 	}
 	press := store.Press{
-		InteractionID: render.StopLane(v.Thread),
+		InteractionID: render.StopLane(i.At.Channel, v.Thread),
 		User:          i.User,
 		Connection:    i.At.Conn,
 		Channel:       i.At.Channel,
@@ -217,7 +218,9 @@ func (h *StopHandler) process(ctx context.Context, press store.Press) (Result, s
 		return h.finish(ctx, press, to, textStopBinding)
 	case errors.Is(err, dialect.ErrCardTooLarge):
 		return h.finish(ctx, press, to, textStopCardLarge)
-	case errors.Is(err, agent.ErrCredentialsRejected), errors.Is(err, agent.ErrForbidden), errors.Is(err, agent.ErrAgentForbidden):
+	case errors.Is(err, agent.ErrCredentialsRejected):
+		return h.finish(ctx, press, to, textStopCredentials)
+	case errors.Is(err, agent.ErrForbidden), errors.Is(err, agent.ErrAgentForbidden):
 		return h.finish(ctx, press, to, textStopRefused)
 	default:
 		return Retry, "", fmt.Errorf("interact: stop task %s on %s: %w", v.TaskID, v.Thread, err)
