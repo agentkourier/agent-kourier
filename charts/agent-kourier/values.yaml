@@ -483,15 +483,15 @@ tokenRefresh:
 #       anthropicApiKeySecret: {name: anthropic, key: apiKey}
 #       auth: {tokenSecret: {name: cma-token}}
 #
-# addons.ax is the AX add-on: an ADK agent on Amazon Bedrock or the Anthropic API with one tool, ask_user, whose question the thread
-# answers. It serves A2A, so that a Binding drives it with the a2a dialect. It renders <fullname>-ax: a Deployment, a ServiceAccount whose
-# token is not mounted (the add-on does not call the Kubernetes API) and whose annotations can carry an IAM role, a ClusterIP Service on
-# port 8090, named http, and with addons.ax.store.type sqlite a PersistentVolumeClaim. The add-on serves A2A at /a2a, its agent card,
-# /healthz, /readyz and /metrics on that one port. Agent Kourier reaches it through an AgentBackend with dialect a2a and the url
-# http://<fullname>-ax.<namespace>.svc:8090/a2a, which is also the endpoint the agent card names (PUBLIC_URL). With networkPolicy.enabled
-# the add-on gets a NetworkPolicy of its own (addons.ax.networkPolicy), and with serviceMonitor.enabled a ServiceMonitor of its own, as
-# addons.cma does. For example, with the release agent-kourier in the namespace agent-kourier and an IAM role for IRSA (a route not yet
-# tested on EKS):
+# addons.ax is the AX add-on: a launcher that starts a Google AX Task from the template in addons.ax.taskTemplate for each accepted turn,
+# and returns the result that the Task's wrapper posts to addons.ax.resultCallback.url. It serves A2A, so that a Binding drives it with the
+# a2a dialect. It renders <fullname>-ax: a Deployment, a ServiceAccount whose token is not mounted (the add-on calls the AX control plane at
+# addons.ax.server.address, not the Kubernetes API), a ClusterIP Service on port 8090, named http, and with addons.ax.store.type sqlite a
+# PersistentVolumeClaim. With addons.ax.resultCallback.ingress.enabled it also renders <fullname>-ax-results, an Ingress for the two
+# callback paths. The add-on serves A2A at /a2a, its agent card, the result callback, /healthz, /readyz and /metrics on that one port.
+# Agent Kourier reaches it through an AgentBackend with dialect a2a and the url http://<fullname>-ax.<namespace>.svc:8090/a2a, which is also
+# the endpoint the agent card names (PUBLIC_URL). With networkPolicy.enabled the add-on gets a NetworkPolicy of its own
+# (addons.ax.networkPolicy), and with serviceMonitor.enabled a ServiceMonitor of its own, as addons.cma does. For example, with the release agent-kourier in the namespace agent-kourier:
 #   config:
 #     agentBackends:
 #       ax:

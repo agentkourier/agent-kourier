@@ -622,7 +622,7 @@ and I won't try it again." The log shows `session turn started` and then `sessio
 
 Now connect a real agent. If you have none yet, start with the `docs-agent` [recipe](recipes.md): a plain A2A agent
 that runs on any cluster, with no kagent. To connect your own: [kagent](connect-kagent.md),
-[any A2A agent](connect-a2a-agent.md), or an add-on the chart runs: [the AX agent on Amazon Bedrock or the Anthropic API](connect-ax.md) or
+[any A2A agent](connect-a2a-agent.md), or an add-on the chart runs: [the AX Task launcher](connect-ax.md) or
 [Claude Managed Agents](connect-claude-managed-agents.md).
 
 ## Stop it and keep the data

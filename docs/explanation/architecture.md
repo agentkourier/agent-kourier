@@ -61,9 +61,11 @@ flowchart TB
 
 ## The Google AX path
 
-The broker is the same. Only the dialect and what sits in front of the agent differ. AX has no message model of its
-own, so the agent is an A2A server run as an AX Task, such as the [AX add-on](../reference/ax.md), and it verifies the
-Binding's token itself.
+The broker is the same. The agent behind the `a2a` dialect is the [AX add-on](../reference/ax.md), a launcher the chart
+runs beside Agent Kourier. For each accepted turn it starts an AX Task from your template through AX's private gRPC
+control plane. The Task runs your agent image through the result wrapper, which posts the command's output back to the
+add-on over HTTPS through an AX Gateway; the Gateway adds the callback token outside the sandbox. The add-on returns the
+result to Agent Kourier as the turn's A2A result: the output on success, a failure without it otherwise.
 
 ```mermaid
 flowchart TB
@@ -74,17 +76,20 @@ flowchart TB
         Client["A2A client<br/>a2a dialect"]
         Render["Renderer and outbox"]
     end
-    Gateway["TLS gateway<br/>A2A endpoint and card only"]
-    Router["atenet-router<br/>ate-target-actor header"]
-    Agent["A2A agent in an AX Task<br/>verifies the Binding's token"]
+    Launcher["AX add-on<br/>A2A at /a2a and the result callback"]
+    Control["AX control plane<br/>private gRPC"]
+    Task["AX Task<br/>your agent image and the result wrapper"]
+    Gateway["AX Gateway<br/>adds the callback token"]
 
     Slack -->|message| Intake
     Intake -->|queue a turn| Session
     Session <-->|task| Client
-    Client <-->|A2A, questions as text| Gateway
-    Gateway <--> Router
-    Router <--> Agent
-    Session -->|output, questions| Render
+    Client <-->|A2A, caller token| Launcher
+    Launcher -->|start, poll, delete| Control
+    Control --> Task
+    Task -->|output over HTTPS| Gateway
+    Gateway -->|result callback| Launcher
+    Session -->|output| Render
     Render -->|post, stream, edit| Slack
 
     classDef core stroke:#326CE5,stroke-width:3px
@@ -292,8 +297,8 @@ A pinned kagent 1.0.0-alpha5 runtime check approved `add_numbers` and denied `ch
 only `add_numbers` executed. The broker's end-to-end suite verifies this with fake Slack and pinned kagent 1.0.0-alpha5.
 
 Agent Kourier sends A2A turns to the [AX add-on](../reference/ax.md). The add-on creates, resumes,
-and monitors AX Tasks through the private control plane. The Task's runner calls the add-on through
-an HTTPS endpoint configured in its Gateway. The add-on returns the terminal state and result to
+and monitors AX Tasks through the private control plane. The result wrapper in the Task calls the add-on
+through an HTTPS endpoint configured in its Gateway. The add-on returns the terminal state and result to
 Agent Kourier. See [Connect the AX add-on](../how-to/connect-ax.md).
 
 ## Source map
