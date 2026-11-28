@@ -696,15 +696,13 @@ HOST_PAUSE_SECONDS=30
 
 # wait_job JOB SECONDS: poll the Job JOB in namespace e2e until it has succeeded or failed, or SECONDS of the host's clock have passed.
 # Sets JOB_RESULT (0 succeeded, 1 failed, 124 timed out) and HOST_PAUSED, the seconds of gaps between polls that were longer than
-# HOST_PAUSE_SECONDS (0 when there were none), and writes a line to stderr when such a gap ends; a gap in the poll that ends the wait
-# counts too. Needs K.
+# HOST_PAUSE_SECONDS (0 when there were none), and writes a line to stderr when such a gap ends. Each gap is one poll and its sleep,
+# so a pause in the poll that ends the wait counts too. A kubectl that fails prints nothing, which reads as a Job still running. Needs K.
 wait_job() {
   local job=$1 wait=$2 deadline last
   JOB_RESULT='' HOST_PAUSED=0
   deadline=$((SECONDS + wait)) last=${SECONDS}
   while [ -z "${JOB_RESULT}" ]; do
-    note_host_pause "$((SECONDS - last))"
-    last=${SECONDS}
     # "<succeeded>/<failed>", each empty until it is 1.
     case "$("${K[@]}" -n e2e get job "${job}" --request-timeout=10s -o 'jsonpath={.status.succeeded}/{.status.failed}')" in
       1/*) JOB_RESULT=0 ;;
@@ -712,8 +710,9 @@ wait_job() {
       *) [ "${SECONDS}" -lt "${deadline}" ] || JOB_RESULT=124 ;;
     esac
     [ -n "${JOB_RESULT}" ] || sleep 2
+    note_host_pause "$((SECONDS - last))"
+    last=${SECONDS}
   done
-  note_host_pause "$((SECONDS - last))"
 }
 
 # note_host_pause GAP: wait_job's count of a gap between two polls that is longer than HOST_PAUSE_SECONDS.

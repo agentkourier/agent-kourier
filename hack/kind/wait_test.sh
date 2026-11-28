@@ -22,8 +22,8 @@ within() { # DESCRIPTION LOW HIGH GOT: SECONDS also counts the real time the tes
   if [ "$4" -ge "$2" ] && [ "$4" -le "$3" ]; then echo "ok: $1"; else echo "FAIL: $1: want $2 to $3, got [$4]" >&2; fails=$((fails + 1)); fi
 }
 
-# STATES: the Job's state at each poll ("<succeeded>/<failed>"), the last one repeated. kubectl runs in a command substitution, a subshell,
-# so it counts its polls in a file.
+# STATES: the Job's state at each poll ("<succeeded>/<failed>"), the last one repeated; "error" is a kubectl that fails and prints nothing,
+# as one does past its request timeout. kubectl runs in a command substitution, a subshell, so it counts its polls in a file.
 STATES=()
 fake_kubectl() {
   local n
@@ -31,6 +31,7 @@ fake_kubectl() {
   n=$(($(wc -l <"${POLLS}") + 0))
   echo poll >>"${POLLS}"
   [ "${n}" -lt "${#STATES[@]}" ] || n=$((${#STATES[@]} - 1))
+  [ "${STATES[${n}]}" != error ] || { echo "error: context deadline exceeded" >&2; return 1; }
   printf '%s' "${STATES[${n}]}"
 }
 K=(fake_kubectl --context kind-agent-kourier-fast)
@@ -75,6 +76,15 @@ run 20
 check "a Job that never ends timed out" 124 "${JOB_RESULT}"
 check "and the host did not pause" 0 "${HOST_PAUSED}"
 
+# Under set -euo pipefail: a kubectl that fails in the case's command substitution does not end the script, and reads as still running.
+STATES=(/ error error 1/) PAUSES=(2)
+run 60
+check "a Job that succeeds after two failed polls succeeded" 0 "${JOB_RESULT}"
+check "it was polled four times" 4 "$(wc -l <"${POLLS}" | tr -d ' ')"
+STATES=(error) PAUSES=(2)
+run 20
+check "polls that all fail time out" 124 "${JOB_RESULT}"
+
 echo "== wait_job: a pause of the host"
 # Run 8 of 2026-11-27, cut down: the host sleeps for 571 seconds in the middle of the wait, and the Job is still running when the wait ends.
 STATES=(/) PAUSES=(2 2 2 571 2)
@@ -108,8 +118,7 @@ run 120
 check "polls slowed to 29 seconds are no pause" 0 "${HOST_PAUSED}"
 
 echo "== note_host_pause: the threshold, exactly"
-# wait_job counts each gap through note_host_pause; given the gap, the edge is exact. Its call after the loop, for a pause in the poll
-# that ends the wait, has no test: the fake kubectl runs in a command substitution and cannot move this shell's SECONDS.
+# wait_job counts each gap, a poll and its sleep, through note_host_pause; given the gap, the edge is exact.
 HOST_PAUSED=0
 note_host_pause 30 2>"${ERR}"
 check "a gap of HOST_PAUSE_SECONDS is no pause" 0 "${HOST_PAUSED}"
@@ -128,11 +137,14 @@ deadline=$(sed -nE 's/^  activeDeadlineSeconds: ([0-9]+)$/\1/p' "${HERE}/e2e/run
 check "runner.yaml has one -test.timeout in minutes" 1 "$(printf '%s\n' "${binary}" | grep -c .)"
 check "e2e-run.sh has one default wait" 1 "$(printf '%s\n' "${wait}" | grep -c .)"
 check "runner.yaml has one activeDeadlineSeconds" 1 "$(printf '%s\n' "${deadline}" | grep -c .)"
-binary=$((binary * 60))
-[ $((binary + 60)) -le "${wait}" ] && got=yes || got=no
-check "the binary's timeout (${binary}s) ends a minute or more before the wait (${wait}s)" yes "${got}"
-[ "${wait}" -lt "${deadline}" ] && got=yes || got=no
-check "the wait (${wait}s) ends before the Job's deadline (${deadline}s)" yes "${got}"
+# Compare only numbers that parsed, so that a changed file fails the checks above and not bash's arithmetic.
+if [[ "${binary}" =~ ^[0-9]+$ && "${wait}" =~ ^[0-9]+$ && "${deadline}" =~ ^[0-9]+$ ]]; then
+  binary=$((binary * 60))
+  [ $((binary + 60)) -le "${wait}" ] && got=yes || got=no
+  check "the binary's timeout (${binary}s) ends a minute or more before the wait (${wait}s)" yes "${got}"
+  [ "${wait}" -lt "${deadline}" ] && got=yes || got=no
+  check "the wait (${wait}s) ends before the Job's deadline (${deadline}s)" yes "${got}"
+fi
 
 if [ "${fails}" -gt 0 ]; then
   echo "${fails} check(s) failed" >&2

@@ -86,7 +86,7 @@ tags their images with the same `vX.Y.Z`. The AX add-on image also contains the 
    Keep the host awake until the runs end: a laptop stays on power with its lid open (`caffeinate -i make ...` stops idle sleep, not a lid
    closed on battery). A host that sleeps most likely stops the kind node, so the tests stop too. The runner's wait goes on by the host's
    clock and can time out, with no stack from the tests. `make e2e-fast`, `e2e-full`, `e2e-ax`, `e2e-teams` and `e2e-two-apps` then print
-   `the wait did not run for Ns`, and `e2e-crs-migration` writes that line to its phase log. `e2e-crs-scenarios` does not detect a pause.
+   `the wait did not run for Ns`, and `e2e-crs-migration` writes that line to its phase and probe logs. `e2e-crs-scenarios` does not detect a pause.
    Run that tier again: a failure the pause explains does not block the tag.
 
    The kind tiers reach only the end-to-end tests' fake Slack. When the release changes Slack's HTTP mode (the Slack

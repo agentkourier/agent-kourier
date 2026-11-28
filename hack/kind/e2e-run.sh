@@ -136,5 +136,11 @@ case "${result}" in
   124) echo "e2e ${tier}: timed out after ${WAIT_SECONDS}s" >&2 ;;
   *) echo "e2e ${tier}: FAILED" >&2 ;;
 esac
-[ "${HOST_PAUSED}" -eq 0 ] || echo "e2e ${tier}: the wait did not run for ${HOST_PAUSED}s in all (the host slept or froze), and most likely the tests with it: a timeout, or a failure of the test that was running, may be the pause's and not the tests'; run again with the host awake (on power, lid open)" >&2
+if [ "${HOST_PAUSED}" -gt 0 ]; then
+  pause="the wait did not run for ${HOST_PAUSED}s in all (the host slept or froze), and most likely the tests with it"
+  case "${result}" in
+    0) echo "e2e ${tier}: ${pause}" >&2 ;;
+    *) echo "e2e ${tier}: ${pause}: a timeout, or a failure of the test that was running, may be the pause's and not the tests'; run again with the host awake (on power, lid open)" >&2 ;;
+  esac
+fi
 exit "${result}"
