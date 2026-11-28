@@ -22,15 +22,17 @@ AX v0.4.0 once that version is released.
   `addons.ax.networkPolicy.model`. The values schema refuses them, so a values file that still sets them fails to
   render. The `ask_user` tool and ADK's session memory are gone too, and so are both of the old agent's routes: the
   agent beside Agent Kourier, and the image that served A2A from inside an AX Task.
-- **The broker's Secret grants, with the AX add-on on.** The chart refuses `rbac.secretNamespaces` that names the
-  release's own namespace, so that the add-on's callback Secret stays out of the broker's reach. With `config.source: files`,
-  the broker's Role in the release namespace names single Secrets, those that `config.*` and `rbac.secretNames` name,
-  instead of granting every Secret there; a Secret the broker reads that the chart cannot see goes in `rbac.secretNames`.
+- **The broker's Secret grants, with the AX add-on on.** With `rbac.create` on (the default), the chart refuses
+  `rbac.secretNamespaces` that names the release's own namespace, so that the add-on's callback Secret stays out of the
+  broker's reach. With `config.source: files`, the broker's Role in the release namespace names single Secrets, those
+  that `config.*`, the Postgres DSN (`store.postgres.dsnSecret`) and `rbac.secretNames` name, instead of granting every
+  Secret there; a Secret the broker reads that the chart cannot see goes in `rbac.secretNames`.
   [Replace the experimental ADK add-on](how-to/upgrade.md#replace-the-experimental-adk-add-on-with-the-ax-task-launcher)
   has the steps: what to keep, what to set, and what happens to turns that were running or waiting on a question.
 - **None for an install without it**, unless its values file still carries the removed keys under `addons.ax`: the
   schema refuses them with the add-on off too. With `addons.ax` off, the chart renders what 0.7.0 rendered, apart from
-  the version labels and the config checksums that include them, so the broker's pod restarts on the upgrade.
+  the version labels, the release's image digests and, on the files route, the config checksum. The broker's pod
+  restarts on the new image, as on any release.
 
 ### AX add-on (experimental)
 
