@@ -25,8 +25,8 @@ With custom resources a Binding also has a status, which [Binding status](bindin
   task states and errors.
 - [Claude Managed Agents add-on](claude-managed-agents.md): how the add-on maps A2A to sessions and turns, what a
   restart keeps, its caller check, settings and telemetry.
-- [AX add-on](ax.md): how the add-on maps A2A to ADK, what a restart keeps, its store, caller check, settings and
-  telemetry.
+- [AX add-on](ax.md): how the add-on maps A2A turns to AX Tasks, what a restart keeps, its store, caller check,
+  settings and telemetry.
 
 ## Configuration
 
