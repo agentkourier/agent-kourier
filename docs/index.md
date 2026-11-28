@@ -20,11 +20,7 @@ hide:
 <p class="ak-hero__headline">Write the agent, not the chat integration.</p>
 
 <p class="ak-hero__pitch">Agent Kourier carries messages between your team's chat and your agents, one session per
-thread. A mention, a thread reply, or a message a trigger matches, such as an alert, goes to the agent, and its
-replies and questions come back in the same thread. The session survives a restart or failover. A signed webhook from
-a service such as GitHub, Jira Cloud, Bitbucket Cloud or Linear starts a session too, one per pull request or issue
-in the recipes, and the agent answers on that service with its own tools. Slack is supported. Microsoft Teams and webhooks are
-experimental.</p>
+thread. Replies and questions come back in the same thread, and the session survives a restart or failover.</p>
 
 <div class="ak-hero__actions">
 <a class="md-button md-button--primary" href="tutorials/first-agent-in-slack/">Try it in a kind sandbox</a>
@@ -104,7 +100,7 @@ the split.
 <figcaption>The teaser, 20 seconds, narrated with captions. <a href="demo/">Watch the full demo</a> (116 seconds), or <a href="demo/#a-cross-team-incident">a cross-team incident</a> (3 minutes).</figcaption>
 </figure>
 
-<div class="grid cards" markdown>
+<div class="grid cards ak-home-cards" markdown>
 
 -   :material-play-circle-outline:{ .lg } **Try it**
 
@@ -127,9 +123,9 @@ the split.
 
     ---
 
-    One broker between your chat and your agents: a thread is a session, conversations resume after a restart, and
-    [two replicas on Postgres](explanation/high-availability.md) fail over. The [delivery](explanation/delivery.md) and
-    failover pages say what a restart or failover can still repeat.
+    A thread is a session that resumes after a restart; two replicas on Postgres fail over. See what a
+    [restart](explanation/delivery.md) or [failover](explanation/high-availability.md#the-duplicate-that-can-still-happen)
+    can repeat.
 
     [:octicons-arrow-right-24: Architecture](explanation/architecture.md)
 
@@ -137,12 +133,10 @@ the split.
 
     ---
 
-    Experimental since 0.6.0. Bind an agent to a Teams channel, with Alertmanager's alerts read from
-    it. Or let a signed webhook from a service such as GitHub, Jira Cloud, Bitbucket Cloud or Linear start a session for each pull request
-    or issue, where the agent answers on the service itself.
+    Experimental. Bind an agent to a Teams channel, or start a session per pull request or issue from a service's
+    signed webhook.
 
-    [:octicons-arrow-right-24: Configure Microsoft Teams](how-to/configure-teams.md) ·
-    [Start agents from webhooks](how-to/receive-webhooks.md)
+    [:octicons-arrow-right-24: Microsoft Teams](how-to/configure-teams.md) · [Webhooks](how-to/receive-webhooks.md)
 
 </div>
 
