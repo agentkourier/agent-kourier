@@ -1741,7 +1741,7 @@ rollback, the rows stay, and an earlier release does not read them.
 
 ## Upgrade to the release with the Stop button
 
-An ordinary upgrade: no values, migration or metric changes.
+An ordinary upgrade: no values key, migration or metric is added, removed or renamed.
 
 - **The Binding CRD changes in a field's description only** (`chat.mentions`), and its schema hash with it. The chart
   applies it with the release when `crds.install` is true, or unset on `config.source: crds`. If you apply the CRDs
@@ -1755,9 +1755,10 @@ An ordinary upgrade: no values, migration or metric changes.
   ([Write a Binding](write-a-binding.md)). A Binding that declares people an agent may name in its questions notifies
   them after the upgrade; take a person out of `chat.mentions` if that is not wanted.
 
-**Roll back.** No stored object depends on this release. A Stop button that this release posted does nothing once the
-broker runs the release before it, which ignores the press. A Stop press still waiting in the press table when the
-broker goes back is deleted, and its presser is told `This question is no longer available.`
+**Roll back.** No stored object depends on this release. A Stop button that this release posted stops nothing once the
+broker runs the release before it: on Slack the press is dropped and the presser is told nothing; on Microsoft Teams
+the presser is told `Agent Kourier received your press.` and nothing happens. A Stop press still waiting in the press
+table when the broker goes back is deleted, and on Slack its presser is told `This question is no longer available.`
 
 ## Replace the experimental ADK add-on with the AX Task launcher
 

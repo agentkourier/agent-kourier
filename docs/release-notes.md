@@ -29,13 +29,18 @@ v0.4.0-rc.2; a patch release will move it to AX v0.4.0 once that version is rele
 - **Failure notices that leave a task at the agent** carry Stop on Slack and on Microsoft Teams: an agent card too
   large to read, a refused follow, credentials the agent's front door rejected, and a task that could not be
   cancelled. These tasks used to be released only by a restart of Agent Kourier, which interrupts every turn of every
-  tenant on that broker. The card notice now ends `Once the card is fixed, press Stop or restart Agent Kourier.`
+  tenant on that broker. The card notice now ends `Once the card is fixed, press Stop or restart Agent Kourier.`, and
+  the notice for a wedged task that could not be cancelled ends `press Stop to try again or restart Agent Kourier to
+  reconcile it`.
 - **What a press does.** Any member of the channel who is not a bot can press Stop. Agent Kourier cancels the task at
-  the agent (`CancelTask`, retried twice on a failure that may pass), records the cancel in the audit log under the
-  person who pressed, clears the task from the thread, and lets the replies queued behind it go on. A task that was
-  streaming ends with the usual cancelled notice; a paused or stranded one posts `The task was stopped.` The person who
+  the agent (`CancelTask`, tried three times on a failure that may pass), records the cancel in the audit log under the
+  person who pressed, clears the task from the thread, and lets the replies queued behind it go on. If the cancel
+  still fails, the press is tried again with a growing wait for up to an hour, and then the person is told
+  `Couldn't stop the task. Please press Stop again.` A task that was streaming ends with the usual cancelled notice. A
+  stranded task (or a paused one, for a press that arrives as it pauses) posts `The task was stopped.`, or, when the
+  answer to the cancel is too large to read, a notice that Agent Kourier cannot tell whether it stopped. The person who
   pressed is told the outcome alone (`Stopping the task.`, `This task is no longer running.`, or why it could not be
-  stopped). A press from outside the channel or by a bot stops nothing, and so does a button left on an older task once a newer one
+  stopped); on Microsoft Teams, when the press is decided within the press's wait. A press from outside the channel or by a bot stops nothing, and so does a button left on an older task once a newer one
   runs in the thread.
 - **Limits.** Stop presses share the press table's limits with question and feedback buttons (1000 waiting per
   connection, 10 per person), and presses in one thread run in order. The thread and task IDs in a Stop button's
@@ -48,7 +53,8 @@ v0.4.0-rc.2; a patch release will move it to AX v0.4.0 once that version is rele
   through a pause that names a declared person with `@name` now mentions that person once Agent Kourier has posted
   the prompt, with the fixed words `in the question above`. Only the question text is read; its hints and choices are
   not. A refused prompt (`askUser: false`, a pause that cannot be used, or a prompt that does not fit) or one that was
-  never posted mentions nobody, and tool approvals are not read for names.
+  never posted mentions nobody, and tool approvals are not read for names. The line that tells the agent the names
+  it may use now reads `To notify someone in this thread, write @name in your reply or question, outside code.`
 - **One cap and one mention a person, for the whole turn.** The reply and the turn's delivered questions share
   `chat.maxMentionsPerTurn`, and a person named in both is mentioned once. `agentkourier_mentions_total` counts the
   names in delivered questions as well as in replies. [Write a Binding](how-to/write-a-binding.md) has the rules.
