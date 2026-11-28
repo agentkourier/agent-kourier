@@ -190,7 +190,7 @@ The ConfigMap itself is not deleted: the chart did not make it, and it is the wa
 ### Grant the Secrets
 
 With the ConfigMap route the chart grants `list` and `watch` on every Secret of each namespace that holds one its config
-names, except in the release namespace while the AX add-on is on, where it names them as on `crds`. With `config.source: crds` it names the Secrets instead (`resourceNames`):
+names. With `config.source: crds` it names the Secrets instead (`resourceNames`):
 
 - the ones in your `config.*` values
 - the Postgres DSN's

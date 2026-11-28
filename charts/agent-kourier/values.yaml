@@ -194,8 +194,8 @@ store:
     # store.type postgres, and refused with sqlite. Make it yourself (by hand, Sealed Secrets, an external operator); the DSN,
     # password included, never goes in a values file (the render refuses a postgres:// URL with a password anywhere in them).
     # Agent Kourier reads it through the API like its other Secrets, which the Role below grants: list and watch on that Secret by name
-    # with config.source crds, and on every Secret of the release namespace with config.source files (by name there too while the AX
-    # add-on is on) or with the release namespace in rbac.secretNamespaces, so keep Agent Kourier's Secrets in a namespace of their own when it is shared. Percent-encode the
+    # with config.source crds, and on every Secret of the release namespace with config.source files or with the release namespace in
+    # rbac.secretNamespaces, so keep Agent Kourier's Secrets in a namespace of their own when it is shared. Percent-encode the
     # reserved characters of a password in a URL. The role in the DSN needs the right to create tables in its schema: agent-kourier
     # applies its own migrations at start.
     dsnSecret:
@@ -279,8 +279,7 @@ resources:
 # namespace-scoped Role; it never issues a get). Roles are made in each namespace that holds a referenced Secret, found from
 # config.* above, and the release namespace with store.type postgres.
 #
-# With config.source files, such a Role covers every Secret of its namespace, except in the release namespace while the AX add-on is on,
-# where it names Secrets as with crds. With config.source crds it covers only the Secrets that the
+# With config.source files, such a Role covers every Secret of its namespace. With config.source crds it covers only the Secrets that the
 # chart can name: the ones config.* and the Postgres DSN refer to, the one the broker's own ChatConnection reads, if it has one
 # (config.chatConnection, and config.chatConnectionSecret when the Secret is not named like it), and rbac.secretNames, which list and watch
 # authorize by resourceNames because Agent Kourier's requests carry a metadata.name field selector. Teams that make their own Bindings grant their own Secrets the same
@@ -297,8 +296,7 @@ rbac:
   # With config.source crds, more Secrets to grant by name, as a map of namespace to Secret names. For Secrets the chart cannot
   # see, other than the broker's own ChatConnection's (which config.chatConnection already grants): a Binding's token in the release
   # namespace, say. A team's own Secrets are the team's to grant with a Role in its namespace. Ignored with files, whose Roles are
-  # namespace-wide, so a rollback to files may keep it set; the exception is the release namespace while the AX add-on is on, whose
-  # Role names these Secrets with the others the chart can see.
+  # namespace-wide, so a rollback to files may keep it set.
   secretNames: {}
 
 # A ClusterIP Service on the metrics port (/metrics, and the health paths), which selects every pod, a standby's included. Never
