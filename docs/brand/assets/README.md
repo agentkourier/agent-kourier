@@ -46,7 +46,7 @@ HTML head:
 |---|---|
 | `avatar-1024.png` | Organisation and repository avatar; GitHub circle-crops, the mark sits at 76 percent so the wings survive |
 | `avatar-dark-1024.png` | Alternative avatar for a dark profile |
-| `social-preview-1280x640.png` | Repository Settings > Social preview |
+| `social-preview-1280x640.png` | Repository Settings > Social preview: the dark lockup, hook and category line on navy. Master: `svg/social-preview.svg` |
 | `readme-banner-2560x640.png` | The banner at the top of the project README: the dark lockup and the hook on navy, corners rounded, one image for both GitHub themes. Master: `svg/readme-banner.svg` |
 
 ## Social (`social/`)
