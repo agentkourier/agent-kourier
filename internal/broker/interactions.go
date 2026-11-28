@@ -14,6 +14,7 @@ import (
 	"github.com/agentkourier/agent-kourier/internal/chat"
 	"github.com/agentkourier/agent-kourier/internal/feedback"
 	"github.com/agentkourier/agent-kourier/internal/interact"
+	"github.com/agentkourier/agent-kourier/internal/render/live"
 	"github.com/agentkourier/agent-kourier/internal/retention"
 	"github.com/agentkourier/agent-kourier/internal/session"
 	"github.com/agentkourier/agent-kourier/internal/store"
@@ -23,6 +24,21 @@ import (
 // cannot reach the intake or decider before then: the tap has no turns and text decisions wait for
 // interaction startup. It guards the shared handle rather than a production startup path.
 var errSessionNotReady = errors.New("broker: the session manager is not built yet")
+
+// questionMentionsTo adapts interact.Intake's question-mention callback to live.Renderer.NotifyQuestionMentions.
+func questionMentionsTo(renderer *live.Renderer) func(context.Context, interact.QuestionMentions) {
+	return func(ctx context.Context, req interact.QuestionMentions) {
+		renderer.NotifyQuestionMentions(ctx, live.MentionTarget{
+			Source:      req.Turn,
+			Binding:     req.Binding,
+			Connection:  req.Key.Connection,
+			Channel:     req.Key.Channel,
+			Thread:      req.Key.Thread,
+			Mentions:    req.Mentions,
+			MaxMentions: req.MaxMentions,
+		}, req.Questions)
+	}
+}
 
 // lateSession is the session the interactions use, bound to the manager once that exists (D2): the manager
 // is built with the tap as its sink, the tap hands pauses to the intake, and the intake answers through the
@@ -74,7 +90,10 @@ type interactionDeps struct {
 	bindings  *Bindings
 	metrics   *Metrics
 	log       *slog.Logger
-	trace     func(step string) // a test's: told as each step of startup is done. Optional.
+	// mentions notifies declared people named in a delivered question prompt, sharing the turn's cap and deduplication
+	// with the turn's reply renderer. Optional for tests that do not construct a renderer.
+	mentions func(ctx context.Context, req interact.QuestionMentions)
+	trace    func(step string) // a test's: told as each step of startup is done. Optional.
 	// served says whether this broker serves the chat connection named conn ("namespace/name"), as opposed to its not running for now:
 	// the timeout sweep ends the interactions of one it does not serve without the agent (interact.SweepConfig.Served). Nil: every connection.
 	served func(conn string) bool
@@ -150,7 +169,7 @@ func (d interactionDeps) build(inner session.Sink) (*interactionRuntime, error) 
 	late := &lateSession{}
 	intake, err := interact.New(interact.Config{
 		Store: d.st, AuditReader: d.st, Lookup: d.bindings, Platforms: chat.Narrow[interact.Fitter](d.platforms), Outbox: d.ob, Session: late, Audit: d.auditor,
-		OnApprovalOutcome: d.metrics.ApprovalOutcome, Logger: d.log,
+		OnApprovalOutcome: d.metrics.ApprovalOutcome, NotifyQuestionMentions: d.mentions, Logger: d.log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("interactions: the intake: %w", err)

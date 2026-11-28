@@ -53,7 +53,13 @@ func (r *TextReplies) Decide(ctx context.Context, key store.ConversationKey, rep
 	if session.Queued(reply).Kind == session.AdmitTurn {
 		// Forced take-up is idempotent with the tap's asynchronous handoff. In particular it
 		// refuses and cancels an unusable pause before the reply is left for a later turn.
-		if err := r.pauses.Paused(ctx, Pause{Key: key, Binding: sess.Binding, Task: task}); err != nil {
+		// Pass the session's turn source when it belongs to this task so question mentions still
+		// fire if Decide is the call that posts the prompt.
+		var turn string
+		if sess.TurnTask == string(task.ID) {
+			turn = sess.Turn.ID
+		}
+		if err := r.pauses.Paused(ctx, Pause{Key: key, Binding: sess.Binding, Turn: turn, Task: task}); err != nil {
 			return session.TextReplyRetry, err
 		}
 	}

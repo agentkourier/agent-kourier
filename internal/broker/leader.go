@@ -186,7 +186,9 @@ func (h *leaderHalf) start(ctx, runCtx context.Context, chosen Connections) (<-c
 	// them, and the manager, which they feed.
 	stops := stopList{trace: cfg.stopTrace}
 	sd.add(stepInteractions, stops.run)
-	parts := interactionDeps{st: st, ob: quietOutbox{Sender: ob, quiet: noReplies}, platforms: platforms, auditor: auditor, bindings: bindings, metrics: metrics, log: log, trace: cfg.startTrace, sweepEvery: cfg.sweepEvery, orphanGrace: cfg.orphanGrace}
+	// Question mentions enqueue through renderer's outbox only after Intake.post succeeds; on a no-reply connection,
+	// quietOutbox.Send refuses the prompt with ErrInvalid first, so NotifyQuestionMentions is never reached there.
+	parts := interactionDeps{st: st, ob: quietOutbox{Sender: ob, quiet: noReplies}, platforms: platforms, auditor: auditor, bindings: bindings, metrics: metrics, log: log, mentions: questionMentionsTo(renderer), trace: cfg.startTrace, sweepEvery: cfg.sweepEvery, orphanGrace: cfg.orphanGrace}
 	ix, err := parts.build(sink)
 	if err != nil {
 		return nil, err

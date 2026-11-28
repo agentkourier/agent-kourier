@@ -689,14 +689,17 @@ Alert messages, other bots' messages, people's replies, webhook events and agent
 
 ### What an agent can reach in chat
 
-Hostile text can still steer a model, so two things are worth knowing about what a reply can do.
+Hostile text can still steer a model, so two things are worth knowing about what a reply or a delivered question prompt can do.
 
-- **A declared person can be notified.** If the Binding sets `chat.mentions`, a reply that writes `@name` for a declared
-  name makes Agent Kourier post a message that mentions that person and nobody else. Hostile alert text can steer the model
-  into naming one, or the model can repeat a name quoted from an alert, and that notifies a real person.
+- **A declared person can be notified.** If the Binding sets `chat.mentions`, a reply or a delivered question prompt
+  that writes `@name` for a declared name makes Agent Kourier post a message that mentions that person and nobody else.
+  Hostile alert text can steer the model into naming one, or the model can repeat a name quoted from an alert, and that
+  notifies a real person. Refused or undelivered question prompts notify nobody, and tool approvals are not read for
+  names.
 
     The set of people
-    is fixed in config, and `chat.maxMentionsPerTurn` caps how many one turn notifies. That cap is per turn and nothing here limits mentions across
+    is fixed in config, and `chat.maxMentionsPerTurn` caps how many one turn notifies across its reply and any delivered
+    question prompts. That cap is per turn and nothing here limits mentions across
     turns, so an alert that keeps firing can notify the same person once for each turn its trigger's limits allow. A Binding with no
     `chat.mentions` has none of this.
 
