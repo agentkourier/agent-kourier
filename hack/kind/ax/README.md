@@ -10,4 +10,4 @@ The Gateway replaces the wrapper's Authorization placeholder with the callback S
 
 After the Job finishes, run `AX_CLI=/path/to/ax hack/kind/ax/resume-fault.sh` with the same release CLI. The script pauses the dedicated tier's Substrate router until the first AX Resume fails. It checks the queued and running messages in the live Slack thread, then checks that retrying delivery completes the original Task and posts one result. It restores the router replica count, launcher deadline, and broker test watchdog on exit.
 
-0.8.0 ships the launcher tested against AX v0.4.0-rc.2. Repeat the launcher tests against AX v0.4.0 final before the release that moves the add-on to it. A wrapped agent with operator-supplied model credentials has a separate manual smoke described in the [connection guide](../../../docs/how-to/connect-ax.md).
+0.8.0 and 0.9.0 ship the launcher tested against AX v0.4.0-rc.2. Repeat the launcher tests against AX v0.4.0 final before the release that moves the add-on to it. A wrapped agent with operator-supplied model credentials has a separate manual smoke described in the [connection guide](../../../docs/how-to/connect-ax.md).

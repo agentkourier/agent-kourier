@@ -4,7 +4,7 @@ For an operator running the Helm chart: at the end, Agent Kourier runs a newer r
 audit log intact, and you know how to roll back.
 
 Each release publishes a signed multi-arch image and a chart whose default image is that image by digest, as
-[Install with Helm](install-with-helm.md#the-release) describes. The current release is `0.8.0`. To run a build that is not
+[Install with Helm](install-with-helm.md#the-release) describes. The current release is `0.9.0`. To run a build that is not
 released, see [Build from source](install-with-helm.md#build-from-source).
 
 The [release notes](../release-notes.md) say what each release changed and what is breaking. 0.2.0 makes custom resources the chart's default, so a
@@ -1738,6 +1738,26 @@ server refuses a new write of such an object. No other stored object depends on 
 On custom resources, a Teams ChatConnection deleted while this release still runs also takes its rows of
 `teams_conversations` and `teams_poll_positions` with it. On the ConfigMap route, and for one deleted after the
 rollback, the rows stay, and an earlier release does not read them.
+
+## Upgrade to the release with the Stop button
+
+An ordinary upgrade: no values, migration or metric changes.
+
+- **The Binding CRD changes in a field's description only** (`chat.mentions`), and its schema hash with it. The chart
+  applies it with the release when `crds.install` is true, or unset on `config.source: crds`. If you apply the CRDs
+  yourself, apply `charts/agent-kourier/files/crds` again. Until you do, the broker logs a warning, `the schema hash of a
+  CRD is not the one this broker was built with`, and `agentkourier_crd_schema_state` says the same; that stops nothing.
+- **Threads show a Stop button** on running replies in alert and bot-trigger threads on Slack, and on failure notices
+  that leave a task at the agent, on Slack and on Microsoft Teams ([What each platform supports](../reference/platforms.md)).
+  It uses the Slack app's interactivity, which the question and feedback buttons already need, so the app needs no new
+  scope or setting.
+- **People declared in `chat.mentions` can now be mentioned from a delivered question**, not only from a reply
+  ([Write a Binding](write-a-binding.md)). A Binding that declares people an agent may name in its questions notifies
+  them after the upgrade; take a person out of `chat.mentions` if that is not wanted.
+
+**Roll back.** No stored object depends on this release. A Stop button that this release posted does nothing once the
+broker runs the release before it, which ignores the press. A Stop press still waiting in the press table when the
+broker goes back is deleted, and its presser is told `This question is no longer available.`
 
 ## Replace the experimental ADK add-on with the AX Task launcher
 

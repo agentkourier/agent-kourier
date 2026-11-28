@@ -50,12 +50,13 @@ thread. Replies and questions come back in the same thread, and the session surv
 </div>
 </div>
 
-!!! note "Status: v0.8.0"
-    The current release is `0.8.0`: install the published chart and image with [Install with Helm](how-to/install-with-helm.md).
+!!! note "Status: v0.9.0"
+    The current release is `0.9.0`: install the published chart and image with [Install with Helm](how-to/install-with-helm.md).
     The `v1alpha1` resource format can change before 1.0. The [release notes](release-notes.md) say what changed in each release.
 
-    New in 0.8.0: the experimental AX add-on becomes a Task launcher that runs your own agent image in an AX Task
-    ([Connect the AX add-on](how-to/connect-ax.md)). The Claude Managed Agents and AX [add-ons](explanation/add-ons.md)
+    New in 0.9.0: a **Stop** button in the thread cancels the agent's task, and a question the agent asks can notify the
+    people a Binding declares ([release notes](release-notes.md#version-090)). In 0.8.0 the experimental AX add-on became
+    a Task launcher that runs your own agent image in an AX Task ([Connect the AX add-on](how-to/connect-ax.md)). The Claude Managed Agents and AX [add-ons](explanation/add-ons.md)
     arrived in 0.7.0, both experimental. Microsoft Teams ([Configure Microsoft Teams](how-to/configure-teams.md))
     and webhooks ([Start agents from webhooks](how-to/receive-webhooks.md)) arrived in 0.6.0, both experimental.
 
