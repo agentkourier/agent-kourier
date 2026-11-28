@@ -48,7 +48,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.7.0
+    helm.sh/chart: agent-kourier-0.8.0
   name: agent-kourier-config
   namespace: agent-kourier
 ---
@@ -60,7 +60,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.7.0
+    helm.sh/chart: agent-kourier-0.8.0
   name: agent-kourier
   namespace: agent-kourier
 spec:
@@ -74,7 +74,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: f608006d6113b04950b27a2d9c283c0134671cfd0133a009393719bd4f55ddd5
+        checksum/config: 98de8749eb357be76331a57acacfed0b39acf07725b3117c1f7552cde52feb1a
       labels:
         app.kubernetes.io/instance: agent-kourier
         app.kubernetes.io/name: agent-kourier
@@ -167,7 +167,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.7.0
+    helm.sh/chart: agent-kourier-0.8.0
   name: agent-kourier-data
   namespace: agent-kourier
 spec:
@@ -185,7 +185,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.7.0
+    helm.sh/chart: agent-kourier-0.8.0
   name: agent-kourier-secrets
   namespace: agent-kourier
 rules:
@@ -205,7 +205,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.7.0
+    helm.sh/chart: agent-kourier-0.8.0
   name: agent-kourier-secrets
   namespace: agent-kourier
 roleRef:
@@ -226,6 +226,6 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/name: agent-kourier
     app.kubernetes.io/version: dev
-    helm.sh/chart: agent-kourier-0.7.0
+    helm.sh/chart: agent-kourier-0.8.0
   name: agent-kourier
   namespace: agent-kourier

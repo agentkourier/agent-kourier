@@ -4,7 +4,7 @@ The AX add-on accepts A2A turns from Agent Kourier and starts an AX Task for eac
 
 ## Prepare AX and the image
 
-The launcher targets AX v0.4.0. Keep the AX gRPC service private and use dedicated launcher ownership and a dedicated Gateway for each deployment. The Gateway can inject credentials into any matching HTTPS request from its Tasks. Give its atespace access only to the Secrets it needs.
+The launcher is built and tested against AX v0.4.0-rc.2, a pre-release of AX v0.4.0. Keep the AX gRPC service private and use dedicated launcher ownership and a dedicated Gateway for each deployment. The Gateway can inject credentials into any matching HTTPS request from its Tasks. Give its atespace access only to the Secrets it needs.
 
 Copy the result wrapper into the agent image using the AX add-on image for your release as a build stage. For an existing AX image that supplies `/usr/local/bin/ax-launcher`, use this pattern. Substitute your actual image references at build time.
 

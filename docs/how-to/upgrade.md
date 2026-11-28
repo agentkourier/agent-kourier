@@ -4,7 +4,7 @@ For an operator running the Helm chart: at the end, Agent Kourier runs a newer r
 audit log intact, and you know how to roll back.
 
 Each release publishes a signed multi-arch image and a chart whose default image is that image by digest, as
-[Install with Helm](install-with-helm.md#the-release) describes. The current release is `0.7.0`. To run a build that is not
+[Install with Helm](install-with-helm.md#the-release) describes. The current release is `0.8.0`. To run a build that is not
 released, see [Build from source](install-with-helm.md#build-from-source).
 
 The [release notes](../release-notes.md) say what each release changed and what is breaking. 0.2.0 makes custom resources the chart's default, so a
@@ -1745,6 +1745,13 @@ Remove the old model-provider and model-credential settings before upgrading the
 AX control-plane address, Task template, and dedicated callback credential. The agent image now
 supplies its own model configuration. Set up the Gateway and HTTPS endpoint using
 [Connect the AX add-on](connect-ax.md) before switching over.
+
+The launcher's callback Secret lives in the release namespace and stays out of the broker's Secret grants. With the
+add-on on and `rbac.create` on (the default), the chart therefore refuses `rbac.secretNamespaces` that lists the
+release namespace: take it out and list the broker's own Secrets there in `rbac.secretNames`. With `config.source: files`,
+the broker's Role in the release namespace now names single Secrets, those of `config.*`, the Postgres DSN
+(`store.postgres.dsnSecret`) and `rbac.secretNames`, instead of every Secret there; add any other Secret there that the
+broker reads to `rbac.secretNames`.
 
 The replacement removes `ask_user`, ADK session memory, and the route that ran without AX. It
 also retires the old image that served A2A from inside an AX Task. Point those Bindings to the new

@@ -54,12 +54,13 @@ experimental.</p>
 </div>
 </div>
 
-!!! note "Status: v0.7.0"
-    The current release is `0.7.0`: install the published chart and image with [Install with Helm](how-to/install-with-helm.md).
+!!! note "Status: v0.8.0"
+    The current release is `0.8.0`: install the published chart and image with [Install with Helm](how-to/install-with-helm.md).
     The `v1alpha1` resource format can change before 1.0. The [release notes](release-notes.md) say what changed in each release.
 
-    New in 0.7.0, both experimental: the Claude Managed Agents and AX [add-ons](explanation/add-ons.md), released
-    and signed with Agent Kourier and run by its chart. Microsoft Teams ([Configure Microsoft Teams](how-to/configure-teams.md))
+    New in 0.8.0: the experimental AX add-on becomes a Task launcher that runs your own agent image in an AX Task
+    ([Connect the AX add-on](how-to/connect-ax.md)). The Claude Managed Agents and AX [add-ons](explanation/add-ons.md)
+    arrived in 0.7.0, both experimental. Microsoft Teams ([Configure Microsoft Teams](how-to/configure-teams.md))
     and webhooks ([Start agents from webhooks](how-to/receive-webhooks.md)) arrived in 0.6.0, both experimental.
 
 ## What Agent Kourier handles
