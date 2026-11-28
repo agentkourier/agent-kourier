@@ -65,7 +65,7 @@ The broker is the same. The agent behind the `a2a` dialect is the [AX add-on](..
 runs beside Agent Kourier. For each accepted turn it starts an AX Task from your template through AX's private gRPC
 control plane. The Task runs your agent image through the result wrapper, which posts the command's output back to the
 add-on over HTTPS through an AX Gateway; the Gateway adds the callback token outside the sandbox. The add-on returns the
-output to Agent Kourier as the turn's A2A result.
+result to Agent Kourier as the turn's A2A result: the output on success, a failure without it otherwise.
 
 ```mermaid
 flowchart TB
@@ -84,7 +84,7 @@ flowchart TB
     Slack -->|message| Intake
     Intake -->|queue a turn| Session
     Session <-->|task| Client
-    Client <-->|A2A, bearer token| Launcher
+    Client <-->|A2A, caller token| Launcher
     Launcher -->|start, poll, delete| Control
     Control --> Task
     Task -->|output over HTTPS| Gateway
