@@ -348,7 +348,8 @@ What bounds this is what the broker can read, and where it can connect:
 
     The Role is the grant to the broker, not to a Binding: every writer of a Binding or an AgentBackend in that namespace can have the broker use the Secrets it
     names. So a team makes the Role for its token Secret only when that team's writers may do so. `rbac.secretNamespaces` grants a whole namespace and removes that bound for it, and so does every
-    namespace-wide Role on the ConfigMap route, which is what the chart writes there.
+    namespace-wide Role on the ConfigMap route, which is what the chart writes there, apart from the release namespace while the AX
+    add-on is on.
 
     Removing a grant is not an immediate cut-off. The broker keeps a cache for each Secret it has read, and when a team deletes its Role, that cache goes on
     serving the value it holds. The broker logs the warning `secret informer cannot list or watch` for the Secret, and keeps calling the agent with the cached token, so the

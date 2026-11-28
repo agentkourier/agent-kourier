@@ -453,7 +453,7 @@ The render refuses:
 
 With Postgres no volume is mounted and no claim is made.
 Agent Kourier reads the Secret through the API, like its others, so the Role below covers it. It grants list and watch on that Secret by name with `config.source: crds`, and on every Secret of the
-release namespace with `config.source: files` (by name while the AX add-on is on) or with the release namespace in `rbac.secretNamespaces`.
+release namespace with `config.source: files` (by name while the AX add-on is on) or with the release namespace in `rbac.secretNamespaces` (which the chart refuses while the AX add-on is on).
 
 The DSN is read once at start. Rotate the password by changing the Secret and the database role, then restart the
 pod. An unreadable or empty Secret fails the start with an error that names the Secret and the key, never the DSN.
@@ -643,7 +643,7 @@ a secret in the ConfigMap:
 
   Kubernetes authorizes such a request by `resourceNames`, so with `rbac.create: false` you can grant `list` and
   `watch` on named Secrets instead. The chart's Roles on this route name no Secret, apart from the release namespace's while the AX add-on
-  is on, so each other reads every Secret in its namespace. Agent
+  is on, so each other Role reads every Secret in its namespace. Agent
   Kourier, though, keeps in memory only:
 
   - the Opaque Secrets that the config names, and of each only the keys that the config names (a Secret's other keys are not kept)

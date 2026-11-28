@@ -197,7 +197,7 @@ store:
     # password included, never goes in a values file (the render refuses a postgres:// URL with a password anywhere in them).
     # Agent Kourier reads it through the API like its other Secrets, which the Role below grants: list and watch on that Secret by name
     # with config.source crds, and on every Secret of the release namespace with config.source files (by name there too while the AX
-    # add-on is on) or with the release namespace in rbac.secretNamespaces, so keep Agent Kourier's Secrets in a namespace of their own when it is shared. Percent-encode the
+    # add-on is on) or with the release namespace in rbac.secretNamespaces (which the AX add-on refuses), so keep Agent Kourier's Secrets in a namespace of their own when it is shared. Percent-encode the
     # reserved characters of a password in a URL. The role in the DSN needs the right to create tables in its schema: agent-kourier
     # applies its own migrations at start.
     dsnSecret:
@@ -294,7 +294,8 @@ resources:
 rbac:
   create: true
   # More namespaces to grant the Role in, for every Secret of the namespace. Needed with config.existingConfigMap, which the chart cannot
-  # read. With crds a namespace listed here is namespace-wide, whatever rbac.secretNames says of it.
+  # read. With crds a namespace listed here is namespace-wide, whatever rbac.secretNames says of it. With the AX add-on on, the chart refuses
+  # the release namespace here: list the broker's Secrets there in rbac.secretNames instead, existingConfigMap included.
   secretNamespaces: []
   # With config.source crds, more Secrets to grant by name, as a map of namespace to Secret names. For Secrets the chart cannot
   # see, other than the broker's own ChatConnection's (which config.chatConnection already grants): a Binding's token in the release
