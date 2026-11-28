@@ -493,7 +493,7 @@ To serve `team-a` alone, uncomment `config:` and `connectionNamespaces`. To admi
 
 ```sh
 kubectl create namespace agent-kourier
-helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.8.0 \
+helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.9.0 \
   -n agent-kourier -f my-values.yaml
 ```
 

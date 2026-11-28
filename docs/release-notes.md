@@ -4,6 +4,76 @@ What changed in each release, newest first, and what you must do about it. The s
 [Upgrade](how-to/upgrade.md), which has a section for each change that needs one; this page says what changed and points to it.
 
 
+## Version 0.9.0
+
+A thread gets a **Stop** button for its agent's task, and a question the agent asks through a pause can notify the
+people a Binding declares in `chat.mentions`. Nothing in the values or the database schema changes. The Binding CRD
+changes only in a field's description, and its schema hash with it
+([the upgrade](how-to/upgrade.md#upgrade-to-the-release-with-the-stop-button)). The AX add-on still builds on AX
+v0.4.0-rc.2; a patch release will move it to AX v0.4.0 once that version is released.
+
+### Breaking changes
+
+- **None.** No values key, metric, label or CRD field is removed or renamed, and no migration runs. Two things change
+  what a thread shows, below: a button on running replies and some failure notices, and mention messages after a
+  delivered question.
+
+### Stop a task from the thread
+
+- **Where the button is.** On Slack, a reply that Agent Kourier edits as the agent works carries a **Stop** button
+  bound to the running task: the replies in alert and bot-trigger threads, and any reply on the update path. The
+  final edit, or the edit of a turn cut short, takes the button off. Replies to a person's mention or thread reply
+  stream through Slack's streaming API, which carries no buttons mid-stream, and `chat.output: final` posts nothing
+  until the end, so neither shows Stop while it runs. On Microsoft Teams no running reply carries Stop, because an edit
+  cannot remove the separate card that Teams posts buttons on.
+- **Failure notices that leave a task at the agent** carry Stop on Slack and on Microsoft Teams: an agent card too
+  large to read, a refused follow, credentials the agent's front door rejected, and a task that could not be
+  cancelled. These tasks used to be released only by a restart of Agent Kourier, which interrupts every turn of every
+  tenant on that broker. The card notice now ends `Once the card is fixed, press Stop or restart Agent Kourier.`, and
+  the notice for a wedged task that could not be cancelled ends `press Stop to try again or restart Agent Kourier to
+  reconcile it`.
+- **What a press does.** Any member of the channel who is not a bot can press Stop. Agent Kourier cancels the task at
+  the agent (`CancelTask`, tried three times on a failure that may pass), records the cancel in the audit log under the
+  person who pressed, clears the task from the thread, and lets the replies queued behind it go on. If the cancel
+  still fails, the press is tried again with a growing wait for up to an hour, and then, on Slack, the person is told
+  `Couldn't stop the task. Please press Stop again.` A press from outside the channel or by a bot stops nothing (on
+  Microsoft Teams an outsider is told `Only members of this channel can stop this task.`), and so does a button left
+  on an older task once a newer one runs in the thread.
+- **What the thread shows.** A task that was streaming ends with the usual cancelled notice. A stranded task (or a
+  paused one, for a press that arrives as it pauses) posts `The task was stopped.`, or, when an answer from the agent
+  is too large to read, a notice that Agent Kourier cannot tell whether it stopped. A task the agent no longer knows
+  gets `The agent no longer has this conversation, ...`, and the next message starts a fresh one.
+- **What the presser is told**, alone: `Stopping the task.`, `This task is no longer running.`, or why it could not be
+  stopped. On Microsoft Teams that is only when the press is decided within 6 seconds; otherwise the presser is told
+  `Agent Kourier received your press.`
+- **Limits.** Stop presses share the press table's limits with question and feedback buttons (1000 waiting per
+  connection, 10 per person), and presses in one thread run in order. The thread and task IDs in a Stop button's
+  value are capped at 500 bytes together; past that the button is left off and the text still posts
+  ([Limits](reference/limits.md)). The webhook platform posts no messages and has no Stop.
+
+### Mentions from a delivered question
+
+- **A pause question can notify a declared person.** On a Binding that sets `chat.mentions`, a question the agent asks
+  through a pause that names a declared person with `@name` now mentions that person once Agent Kourier has posted
+  the prompt, with the fixed words `in the question above`. Only the question text is read; its hints and choices are
+  not. A refused prompt (`askUser: false`, a pause that cannot be used, or a prompt that does not fit) or one that was
+  never posted mentions nobody, and tool approvals are not read for names. The line Agent Kourier adds to a session's
+  first message, on a Binding that declares people, now begins `To notify someone in this thread, write @name in your
+  reply or question, outside code.`; a session started before the upgrade keeps the old line.
+- **One cap and one mention a person, for the whole turn.** The reply and the turn's delivered questions share
+  `chat.maxMentionsPerTurn`, and a person named in both is mentioned once. `agentkourier_mentions_total` counts the
+  names in delivered questions as well as in replies. [Write a Binding](how-to/write-a-binding.md) has the rules.
+
+### Other changes
+
+- **The documentation site's home page** has a shorter opening and four cards of even height.
+- **The end-to-end runner** reports a host that slept during a run: `the wait did not run for Ns`
+  ([RELEASING.md](https://github.com/agentkourier/agent-kourier/blob/main/RELEASING.md#cut-a-release)).
+
+### Dependencies
+
+- **None changed.** The Go modules and the base images are 0.8.0's.
+
 ## Version 0.8.0
 
 The experimental AX add-on is now a Task launcher. It no longer runs a model itself. Each turn starts one AX Task from a

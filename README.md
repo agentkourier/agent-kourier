@@ -60,13 +60,13 @@ Install the chart and its CRDs:
 
 ```sh
 kubectl create namespace agent-kourier
-helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.8.0 \
+helm install agent-kourier oci://ghcr.io/agentkourier/charts/agent-kourier --version 0.9.0 \
   -n agent-kourier
 ```
 
 The pod starts and is ready with no `ChatConnection` to serve. Next, create a Secret for your Slack app and apply three
 resources (a `ChatConnection`, an `AgentBackend`, and a `Binding`), or generate starter files interactively with
-`docker run --rm -it --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work ghcr.io/agentkourier/agent-kourier:v0.8.0 init`.
+`docker run --rm -it --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work ghcr.io/agentkourier/agent-kourier:v0.9.0 init`.
 
 Follow [Install with Helm](docs/how-to/install-with-helm.md) for the full walk-through, or
 [Your first agent in Slack](docs/tutorials/first-agent-in-slack.md) to try Agent Kourier in a kind cluster against your
@@ -328,10 +328,10 @@ exposes; see [backend reference](docs/reference/agentbackend.md) for the contrac
 
 ## Release and operations
 
-The current release is v0.8.0:
+The current release is v0.9.0:
 
-- a signed image for `linux/amd64` and `linux/arm64`, `ghcr.io/agentkourier/agent-kourier:v0.8.0`
-- the Helm chart `oci://ghcr.io/agentkourier/charts/agent-kourier` version `0.8.0`, which pins that image by digest
+- a signed image for `linux/amd64` and `linux/arm64`, `ghcr.io/agentkourier/agent-kourier:v0.9.0`
+- the Helm chart `oci://ghcr.io/agentkourier/charts/agent-kourier` version `0.9.0`, which pins that image by digest
 
 Agent Kourier runs as one replica with a SQLite store, or as two replicas on Postgres with a
 leader election and fencing, installed with the [Helm chart](charts/agent-kourier/README.md). It writes
