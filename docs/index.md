@@ -20,11 +20,7 @@ hide:
 <p class="ak-hero__headline">Write the agent, not the chat integration.</p>
 
 <p class="ak-hero__pitch">Agent Kourier carries messages between your team's chat and your agents, one session per
-thread. A mention, a thread reply, or a message a trigger matches, such as an alert, goes to the agent, and its
-replies and questions come back in the same thread. The session survives a restart or failover. A signed webhook from
-a service such as GitHub, Jira Cloud, Bitbucket Cloud or Linear starts a session too, one per pull request or issue
-in the recipes, and the agent answers on that service with its own tools. Slack is supported. Microsoft Teams and webhooks are
-experimental.</p>
+thread. Replies and questions come back in the same thread, and the session survives a restart or failover.</p>
 
 <div class="ak-hero__actions">
 <a class="md-button md-button--primary" href="tutorials/first-agent-in-slack/">Try it in a kind sandbox</a>
