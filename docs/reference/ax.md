@@ -1,6 +1,6 @@
 # AX add-on
 
-The AX add-on starts a Task on the private AX control plane for each accepted A2A turn. It polls AX for sandbox progress. The runner's authenticated callback supplies the command result. See [Connect the AX add-on](../how-to/connect-ax.md) for the installation and Task template.
+The AX add-on starts a Task on the private AX control plane for each accepted A2A turn. It polls AX for sandbox progress. The result wrapper's authenticated callback supplies the command result. See [Connect the AX add-on](../how-to/connect-ax.md) for the installation and Task template.
 
 ## Turn lifecycle
 

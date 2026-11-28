@@ -39,7 +39,7 @@ The alternative is a client per platform: one for kagent's controller API, one f
 next runtime. Three reasons it was not built that way.
 
 - **For AX, the add-on translates turns into Tasks.** AX's API manages sandbox lifecycle. The
-  [AX add-on](../how-to/connect-ax.md) uses that API and translates runner results back to A2A.
+  [AX add-on](../how-to/connect-ax.md) uses that API and translates the result wrapper's callbacks back to A2A.
 - **For kagent, nothing internal is needed.** kagent's A2A gateway creates a session when a message carries no context
   ID, so a client that speaks public A2A and one published extension is enough. That keeps Agent Kourier clear of
   kagent's internal APIs, which were changing quickly through the 1.0 alphas.

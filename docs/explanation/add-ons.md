@@ -75,5 +75,6 @@ module and a second agent protocol beside A2A, for one vendor.
 With an add-on, the broker keeps one contract, A2A ([Why A2A](why-a2a.md)). The price is the hop and a store of the
 add-on's own, which keeps its tasks and sessions across a restart.
 
-The AX add-on is an agent, so it was never a candidate for a backend type. It is an add-on, and not an example, so that
+The AX add-on fronts AX Tasks over A2A, as the Claude Managed Agents add-on fronts its sessions, so the same reasoning
+keeps AX's control-plane API out of the broker. It is an add-on, and not an example, so that
 it is released, scanned and deployed like the broker: the chart runs it, and a release pins its image.
