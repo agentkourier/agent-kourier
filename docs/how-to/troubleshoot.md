@@ -323,7 +323,8 @@ With `config.source: crds` it grants them for the Secrets named. That grant also
 has one, and takes `rbac.secretNames` for the other ones the chart cannot see.
 
 A `config.existingConfigMap` whose Secrets are outside the release namespace needs `rbac.secretNamespaces`. The chart cannot read the
-ConfigMap to find the namespaces, and grants only the release namespace when it finds none.
+ConfigMap to find the namespaces, and grants only the release namespace when it finds none. With the AX add-on on, it does not grant
+the release namespace that way: list the broker's Secrets there in `rbac.secretNames`, or the broker cannot read them.
 
 ## The pod exits with code 2 and the error says `load config`
 

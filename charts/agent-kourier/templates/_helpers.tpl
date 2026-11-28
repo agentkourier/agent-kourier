@@ -242,7 +242,8 @@ Checks that no values file can get past. Included by the Deployment, which every
 {{- end -}}
 {{- end -}}
 {{- end -}}
-{{- /* With files, config.chatConnection, config.chatConnectionSecret and rbac.secretNames are ignored, and the chart does not refuse them: a rollback to files keeps the values
+{{- /* With files, config.chatConnection, config.chatConnectionSecret and rbac.secretNames are ignored (except that with the AX add-on on, rbac.yaml still names the
+       Secrets they name in the release namespace), and the chart does not refuse them: a rollback to files keeps the values
        it had, in an incident, and they are harmless there. config.connectionNamespaces and config.connectionNamespaceSelector are the exceptions and are refused above: ignoring
        them would silently stop serving the ChatConnections of the admitted namespaces, which is not harmless, so a rollback to files sets the list to [] and the selector to null
        in the same upgrade. */ -}}
